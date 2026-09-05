@@ -74,6 +74,13 @@ spec:
               value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
             - name: OCTOGEE_CUSTOMER_HOSTING_PROJECT_ID
               value: {{ required "global.customerHostingProjectId is required" (.Values.global).customerHostingProjectId | quote }}
+            {{- $computer := (.Values.global).computer | default dict }}
+            {{- if $computer.enabled }}
+            - name: GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL
+              value: {{ required "global.computer.serviceAccountEmail is required" $computer.serviceAccountEmail | quote }}
+            - name: GATEWAY_COMPUTER_PROJECT_ID
+              value: {{ required "global.computer.projectId is required" $computer.projectId | quote }}
+            {{- end }}
             - name: PROJECT_RUNNER_IMAGE
               value: "{{ required "global.projectRunnerImage.repository is required" (.Values.global).projectRunnerImage.repository }}:{{ required "global.projectRunnerImage.tag is required" (.Values.global).projectRunnerImage.tag }}@{{ required "global.projectRunnerImage.digest is required" (.Values.global).projectRunnerImage.digest }}"
             - name: PROJECT_RUN_BROKER_URL

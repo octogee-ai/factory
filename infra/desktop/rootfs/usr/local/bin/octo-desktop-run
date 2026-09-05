@@ -15,8 +15,13 @@ bind="${OCTO_BIND:-0.0.0.0}"
 stamp() { printf '%s %s\n' "$(date +%s.%N)" "$*" | tee -a "$log_dir/timeline.log"; }
 
 children=()
+browser_pid=""
 shutdown() {
   stamp "shutdown requested"
+  if [[ -n "$browser_pid" ]]; then
+    kill "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" || true
+  fi
   for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
   wait || true
   exit 0
@@ -43,7 +48,7 @@ wait_for_socket_or_exit() {
 }
 
 start_hyprland() {
-  Hyprland >"$log_dir/hyprland.log" 2>&1 &
+  start-hyprland >"$log_dir/hyprland.log" 2>&1 &
   local pid=$!
   children+=("$pid")
   local sig
@@ -98,6 +103,17 @@ export WAYLAND_DISPLAY="$(wayland_socket)"
 export OCTO_OUTPUT_NAME="$output" OCTO_COMPOSITOR="$compositor"
 stamp "output ${output} configured ${resolution}@${refresh}"
 
+/usr/local/bin/octo-seat-input >"$log_dir/seat-input.log" 2>&1 &
+input_pid=$!
+children+=("$input_pid")
+for _ in $(seq 1 100); do
+  grep -q '^ready$' "$log_dir/seat-input.log" && break
+  kill -0 "$input_pid" 2>/dev/null || { stamp "ERROR virtual input seat exited before becoming ready"; cat "$log_dir/seat-input.log" >&2; exit 1; }
+  sleep 0.1
+done
+grep -q '^ready$' "$log_dir/seat-input.log" || { stamp "ERROR virtual input seat never became ready"; exit 1; }
+stamp "virtual input seat ready"
+
 wayvnc --output="$output" "$bind" "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
 children+=($!)
 stamp "wayvnc listening on ${vnc_port}"
@@ -110,10 +126,10 @@ OCTO_BIND="$bind" python3 /usr/local/bin/octo-desktop-control "$control_port" >"
 children+=($!)
 stamp "control api on ${control_port}"
 
-chromium --ozone-platform=wayland --disable-gpu --no-sandbox --no-first-run \
-  --start-maximized --password-store=basic "${OCTO_HOME_URL:-https://octogee.com}" \
+/usr/local/bin/octo-desktop-browser \
   >"$log_dir/chromium.log" 2>&1 &
-children+=($!)
+browser_pid=$!
+children+=("$browser_pid")
 stamp "chromium launched"
 
 wait -n || true

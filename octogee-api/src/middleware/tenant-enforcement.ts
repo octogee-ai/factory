@@ -58,9 +58,14 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/fleet/builder-runtime-state/download-url",
   "/internal/fleet/builder-runtime-state/snapshot-urls",
   "/internal/fleet/builder-runtime-state/prune",
+  "/internal/fleet/computer-home/checkpoint-url",
+  "/internal/fleet/computer-home/commit",
+  "/internal/fleet/computer-home/download-url",
+  "/internal/fleet/computer-home/prune",
   "/internal/fleet/openclaw-boot/claim",
   "/internal/fleet/openclaw-boot/healthy",
   "/internal/fleet/uid-for-slug",
+  "/internal/fleet/vm-runtime",
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw-control/mattermost/authorize",
@@ -106,6 +111,13 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-productivity/obsidian/notes/search",
   "/internal/agent-productivity/obsidian/notes/read",
   "/internal/agent-productivity/obsidian/notes/write",
+]);
+
+export const FINAL_HOME_CHECKPOINT_ROUTES = new Set([
+  "/internal/fleet/vm-runtime",
+  "/internal/fleet/computer-home/checkpoint-url",
+  "/internal/fleet/computer-home/commit",
+  "/internal/fleet/computer-home/prune",
 ]);
 
 function isSelfScopedInternalBrokerRoute(path: string): boolean {
@@ -271,6 +283,9 @@ async function gatewayBindingAuthorized(
   }
   if (routeIsPlatformWideNotificationProducer(req)) {
     return false;
+  }
+  if (bound.finalHomeCheckpoint) {
+    return FINAL_HOME_CHECKPOINT_ROUTES.has(req.path);
   }
 
   // These brokers perform route-specific authorization from their own body

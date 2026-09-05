@@ -44,13 +44,15 @@ function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
     deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
     deleteCredentialSecrets: vi.fn(async () => undefined),
     deleteAuthUser: vi.fn(async () => undefined),
+    deleteComputer: vi.fn(async () => true),
+    deleteComputerHome: vi.fn(async () => ({ deleted: 2 })),
     log: vi.fn(),
     ...overrides,
   };
 }
 
 describe("nukeUserCloudSide — happy path", () => {
-  it("runs all seven erasure steps and reports each as ok", async () => {
+  it("runs all nine erasure steps and reports each as ok", async () => {
     const deps = mkDeps();
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.map((r) => `${r.key}:${r.ok}`)).toEqual([
@@ -59,11 +61,54 @@ describe("nukeUserCloudSide — happy path", () => {
       "storage:true",
       "hosting:true",
       "credentials:true",
+      "computer:true",
+      "computer-home:true",
       "firestore:true",
       "auth:true",
     ]);
-    
+    expect(deps.deleteComputer).toHaveBeenCalledWith("uid-alice");
     expect(results.find((r) => r.key === "hosting")).toMatchObject({ ok: true });
+  });
+
+  it("sweeps the home checkpoints only after the computer is gone and journals the object count", async () => {
+    const deps = mkDeps();
+    const results = await nukeUserCloudSide(mkCtx(), deps);
+    expect(deps.deleteComputerHome).toHaveBeenCalledWith("alice");
+    expect(vi.mocked(deps.deleteComputer!).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.deleteComputerHome).mock.invocationCallOrder[0],
+    );
+    expect(results.find((r) => r.key === "computer-home")).toEqual({
+      key: "computer-home",
+      ok: true,
+      detail: "2 objects",
+    });
+  });
+
+  it("still sweeps the home checkpoints on a pod-only fleet, and skips only without a slug", async () => {
+    const podOnly = mkDeps({ deleteComputer: undefined });
+    await nukeUserCloudSide(mkCtx(), podOnly);
+    expect(podOnly.deleteComputerHome).toHaveBeenCalledWith("alice");
+
+    const unprovisioned = mkDeps();
+    const results = await nukeUserCloudSide(mkCtx({ slug: "" }), unprovisioned);
+    expect(unprovisioned.deleteComputerHome).not.toHaveBeenCalled();
+    expect(results.find((r) => r.key === "computer-home")).toEqual({ key: "computer-home", ok: true, skipped: true });
+  });
+
+  it("fails the computer-home step loudly and blocks auth deletion when the sweep fails", async () => {
+    const deps = mkDeps({ deleteComputerHome: vi.fn(async () => { throw new Error("storage 403"); }) });
+    const results = await nukeUserCloudSide(mkCtx(), deps);
+    expect(results.find((r) => r.key === "computer-home")).toEqual({ key: "computer-home", ok: false, error: "storage 403" });
+    expect(results.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
+  });
+
+  it("skips the computer step on a pod-only fleet and blocks auth deletion when the computer survives", async () => {
+    const podOnly = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteComputer: undefined }));
+    expect(podOnly.find((r) => r.key === "computer")).toEqual({ key: "computer", ok: true, skipped: true });
+
+    const stuck = await nukeUserCloudSide(mkCtx(), mkDeps({ deleteComputer: vi.fn(async () => { throw new Error("compute 403"); }) }));
+    expect(stuck.find((r) => r.key === "computer")).toMatchObject({ ok: false, error: "compute 403" });
+    expect(stuck.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
   });
 
   it("Gitea step deletes every repo + the user", async () => {
@@ -149,7 +194,7 @@ describe("nukeUserCloudSide — partial failure", () => {
     });
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.find((r) => r.key === "auth")?.ok).toBe(false);
-    expect(results).toHaveLength(7);
+    expect(results).toHaveLength(9);
   });
 });
 

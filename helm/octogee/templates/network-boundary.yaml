@@ -1,4 +1,5 @@
 {{- if .Values.networkPolicy.enforceDefaultDeny }}
+{{- $computer := (.Values.global).computer | default dict }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -140,7 +141,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: [glm-controller, llm-broker, octogee-artifact-worker, octogee-cron, octogee-gateway, octogee-project-publisher]
+                values: [glm-controller, llm-broker, octogee-artifact-worker, octogee-cron, octogee-gateway, octogee-project-publisher, octogee-vm-bridge]
       ports:
         - protocol: TCP
           port: 3001
@@ -251,6 +252,14 @@ spec:
       ports:
         - protocol: TCP
           port: 3003
+    {{- if $computer.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "global.computer.cidr is required" $computer.cidr }}
+      ports:
+        - protocol: TCP
+          port: 3003
+    {{- end }}
     - to:
         - podSelector:
             matchLabels:
@@ -314,6 +323,14 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+    {{- if $computer.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "global.computer.cidr is required" $computer.cidr }}
+      ports:
+        - protocol: TCP
+          port: 3001
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

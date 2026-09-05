@@ -16,6 +16,7 @@ import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/sha
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { requestBuilderActivationLease } from "./builder-activation-lease.js";
+import { addAdminComputerRoutes } from "./admin-computer-router.js";
 import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
@@ -3009,6 +3010,7 @@ export function addAdminFleetRoutes(router, deps) {
                 : {}),
         });
     }
+    addAdminComputerRoutes(router, { db, journal: runAdminFleetMutation });
     router.get("/platform-runtime-config", async (_req, res, next) => {
         try {
             res.json(await readPlatformRuntimeConfig(db));

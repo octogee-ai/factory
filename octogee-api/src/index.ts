@@ -45,6 +45,7 @@ import { createAgentAccessRoutes } from "./routes/agent-access.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
+import { createComputerAccessBrokerRoutes } from "./routes/computer-access-broker.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
@@ -105,6 +106,7 @@ import {
   createTenantBindingMetrics,
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
+import { createGatewayIdentityReviewer } from "./lib/gateway-identity-reviewer.js";
 import { createVoiceCatalog, type VoiceCatalog } from "./voice/catalog.js";
 import { parseVoiceRelayConfig, type VoiceRelayConfig } from "./voice/config.js";
 import {
@@ -164,6 +166,11 @@ const TENANT_BOUND_API_ROUTES = new Set([
 ]);
 export const GATEWAY_CREDENTIAL_ROUTES = new Set([
   "/internal/connectors/access-token",
+  "/internal/fleet/vm-runtime",
+  "/internal/fleet/computer-home/checkpoint-url",
+  "/internal/fleet/computer-home/commit",
+  "/internal/fleet/computer-home/download-url",
+  "/internal/fleet/computer-home/prune",
   "/internal/fleet/assigned-users",
   "/internal/fleet/configured-builder-bootstrap",
   "/internal/fleet/npm-registry-credentials",
@@ -517,31 +524,31 @@ export function createApp(opts: CreateAppOptions = {}) {
   const featurePolicy = product.featurePolicy;
   app.locals.postHogShutdown = product.postHog.shutdown;
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
-  const tenantBindingReviewer = opts.tenantBindingReviewer ?? createKubernetesTokenReviewer({
+  const tenantBindingReviewer = opts.tenantBindingReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
-  });
+  }, { namespace });
   const tenantBindingHealth = createTenantBindingHealthState();
   const tenantBindingMiddleware = createTenantBindingMiddleware({
     reviewer: tenantBindingReviewer,
     metrics: tenantBindingMetrics,
   });
   const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db });
-  const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createKubernetesTokenReviewer({
+  const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
     audience: GATEWAY_CREDENTIAL_TOKEN_AUDIENCE,
-  });
+  }, { namespace });
   const gatewayCredentialAuth = createGatewayCredentialAuth({
     reviewer: gatewayCredentialReviewer,
     db,
     namespace,
   });
-  const sidecarBrokerReviewer = opts.sidecarBrokerReviewer ?? createKubernetesTokenReviewer({
+  const sidecarBrokerReviewer = opts.sidecarBrokerReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
     audience: SIDECAR_BROKER_TOKEN_AUDIENCE,
-  });
+  }, { namespace });
   const sidecarBrokerAuth = createGatewayCredentialAuth({
     reviewer: sidecarBrokerReviewer,
     db,
@@ -779,6 +786,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     requireAuthenticatedUid,
     createAutomationAuthorizationBrokerRoutes({ db }),
   );
+  app.use("/internal/computer", requireAuthenticatedUid, createComputerAccessBrokerRoutes({ db }));
   app.use(
     "/internal/agent-imports",
     requireAuthenticatedUid,

@@ -38,6 +38,8 @@ export type NukeCloudStepKey =
   | "storage"
   | "hosting"
   | "credentials"
+  | "computer"
+  | "computer-home"
   | "firestore"
   | "auth";
 
@@ -46,6 +48,7 @@ export interface NukeCloudStepResult {
   ok: boolean;
   skipped?: boolean;
   error?: string;
+  detail?: string;
 }
 
 export interface NukeCloudDeps {
@@ -71,6 +74,9 @@ export interface NukeCloudDeps {
 deleteAuthUser: (uid: string) => Promise<void>;
 
 deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
+
+  deleteComputer?: (uid: string) => Promise<boolean>;
+  deleteComputerHome: (slug: string) => Promise<{ deleted: number }>;
   log?: (msg: string) => void;
 }
 
@@ -149,6 +155,28 @@ if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
     }),
   );
 
+  if (deps.deleteComputer) {
+    const deleteComputer = deps.deleteComputer;
+    results.push(
+      await runStep("computer", log, async () => {
+        await deleteComputer(ctx.uid);
+      }),
+    );
+  } else {
+    results.push({ key: "computer", ok: true, skipped: true });
+  }
+
+  if (!ctx.slug) {
+    results.push({ key: "computer-home", ok: true, skipped: true });
+  } else {
+    results.push(
+      await runStep("computer-home", log, async () => {
+        const { deleted } = await deps.deleteComputerHome(ctx.slug);
+        return `${deleted} ${deleted === 1 ? "object" : "objects"}`;
+      }),
+    );
+  }
+
   const hostingFailed = results.some((result) => result.key === "hosting" && !result.ok);
   if (hostingFailed) {
     results.push({ key: "firestore", ok: true, skipped: true });
@@ -177,12 +205,12 @@ if (ctx.skipAuth || earlierFailure) {
 async function runStep(
   key: NukeCloudStepKey,
   log: (msg: string) => void,
-  body: () => Promise<void>,
+  body: () => Promise<string | void>,
 ): Promise<NukeCloudStepResult> {
   try {
-    await body();
-    log(`[nuke-cloud] step ${key} ✅`);
-    return { key, ok: true };
+    const detail = await body();
+    log(detail ? `[nuke-cloud] step ${key} ✅ ${detail}` : `[nuke-cloud] step ${key} ✅`);
+    return detail ? { key, ok: true, detail } : { key, ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log(`[nuke-cloud] step ${key} ⚠ ${message}`);

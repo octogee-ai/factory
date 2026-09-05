@@ -143,6 +143,11 @@ function app(opts: {
   a.post("/internal/fleet/builder-runtime-state/download-url", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/snapshot-urls", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/prune", enforcement, handler);
+  a.post("/internal/fleet/computer-home/checkpoint-url", enforcement, handler);
+  a.post("/internal/fleet/computer-home/commit", enforcement, handler);
+  a.post("/internal/fleet/computer-home/download-url", enforcement, handler);
+  a.post("/internal/fleet/computer-home/prune", enforcement, handler);
+  a.post("/internal/fleet/vm-runtime", enforcement, handler);
   a.post("/internal/fleet/uid-for-slug", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
@@ -801,6 +806,53 @@ describe("tenant enforcement middleware", () => {
     expect(snapshot.status).toBe(200);
     expect(prune.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("passes computer-home checkpoint routes to their VM-bound authorization and rejects a claimed foreign gateway", async () => {
+    const target = app({
+      boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242" },
+      gateways: { bender: configuredBender() },
+    });
+    const routes = ["checkpoint-url", "commit", "download-url", "prune"] as const;
+
+    for (const route of routes) {
+      const own = await request(target)
+        .post(`/internal/fleet/computer-home/${route}`)
+        .send({ gatewayId: "bender", slug: "victim", size: 1 });
+      const foreign = await request(target)
+        .post(`/internal/fleet/computer-home/${route}`)
+        .send({ gatewayId: "other", slug: "victim", size: 1 });
+      expect(own.status, route).toBe(200);
+      expect(foreign.status, route).toBe(403);
+    }
+  });
+
+  it("limits a retired computer's final-checkpoint binding to the runtime bundle and checkpoint upload routes", async () => {
+    const target = app({
+      boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242", finalHomeCheckpoint: true },
+      gateways: { bender: configuredBender({ desiredStatus: "retired" }) },
+    });
+    const send = (path: string, body: Record<string, unknown> = { gatewayId: "bender", slug: "alice", size: 1 }) =>
+      request(target).post(path).send(body);
+
+    for (const path of ["/internal/fleet/vm-runtime", "/internal/fleet/computer-home/checkpoint-url", "/internal/fleet/computer-home/commit", "/internal/fleet/computer-home/prune"]) {
+      expect((await send(path)).status, path).toBe(200);
+    }
+    for (const path of [
+      "/internal/fleet/computer-home/download-url",
+      "/internal/fleet/user-snapshot",
+      "/internal/fleet/configured-builder-bootstrap",
+      "/internal/fleet/builder-runtime-state/download-url",
+      "/internal/openclaw-control/authorize",
+      "/internal/byok/agent-usage-status",
+      "/internal/agent-projects/list",
+      "/internal/agent-access/prepare",
+    ]) {
+      expect((await send(path)).status, path).toBe(403);
+    }
+    expect((await send("/internal/probe", { uid: "alice" })).status).toBe(403);
+    expect((await send("/internal/probe", { gatewayId: "bender" })).status).toBe(403);
+    expect((await send("/internal/fleet/computer-home/commit", { gatewayId: "other", slug: "alice", size: 1 })).status).toBe(403);
   });
 
   it("allows any pod of the gateway's own Deployment — identity, never lifecycle (GATEWAY-SIMPLE-ROLL-SPEC)", async () => {

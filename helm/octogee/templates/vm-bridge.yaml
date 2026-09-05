@@ -1,0 +1,176 @@
+{{- $computer := (.Values.global).computer | default dict -}}
+{{- if $computer.enabled }}
+{{- $cidr := required "global.computer.cidr is required" $computer.cidr -}}
+{{- $ns := .Release.Namespace -}}
+{{- $llmPort := .Values.llmBroker.port | default 3010 -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: octogee-vm-bridge-nginx
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 1024; }
+    stream {
+      resolver {{ .Values.networkPolicy.nodeLocalDnsCidr | trimSuffix "/32" }} valid=30s;
+      log_format bridge '$remote_addr -> $server_port $status $bytes_sent/$bytes_received';
+      access_log /dev/stdout bridge;
+      server { listen 3001; set $api octogee-api.{{ $ns }}.svc.cluster.local; proxy_pass $api:3001; }
+      server { listen 8065; set $mm mattermost.{{ $ns }}.svc.cluster.local; proxy_pass $mm:8065; }
+      server { listen 3000; set $git octogee-gitea-http.{{ $ns }}.svc.cluster.local; proxy_pass $git:3000; }
+      server { listen 22; set $ssh octogee-gitea-ssh.{{ $ns }}.svc.cluster.local; proxy_pass $ssh:22; }
+      server { listen {{ $llmPort }}; set $llm llm-broker.{{ $ns }}.svc.cluster.local; proxy_pass $llm:{{ $llmPort }}; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octogee-vm-bridge
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+    app: octogee-vm-bridge
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: octogee-vm-bridge
+  template:
+    metadata:
+      labels:
+        app: octogee-vm-bridge
+      annotations:
+        checksum/nginx: {{ list $ns $llmPort .Values.networkPolicy.nodeLocalDnsCidr | toJson | sha256sum | trunc 16 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "0"
+      containers:
+        - name: nginx
+          image: {{ printf "%s:%s" (required "global.computer.bridge.image.repository is required" $computer.bridge.image.repository) (required "global.computer.bridge.image.tag is required" ($computer.bridge.image.tag | toString)) | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - { name: api, containerPort: 3001 }
+            - { name: mattermost, containerPort: 8065 }
+            - { name: gitea-http, containerPort: 3000 }
+            - { name: gitea-ssh, containerPort: 22 }
+            - { name: llm-broker, containerPort: {{ $llmPort }} }
+          readinessProbe:
+            tcpSocket:
+              port: api
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: api
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          volumeMounts:
+            - { name: nginx-conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: octogee-vm-bridge-nginx
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: octogee-vm-bridge
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+    app: octogee-vm-bridge
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+    - {{ $cidr }}
+  selector:
+    app: octogee-vm-bridge
+  ports:
+    - { name: api, port: 3001, targetPort: 3001 }
+    - { name: mattermost, port: 8065, targetPort: 8065 }
+    - { name: gitea-http, port: 3000, targetPort: 3000 }
+    - { name: gitea-ssh, port: 22, targetPort: 22 }
+    - { name: llm-broker, port: {{ $llmPort }}, targetPort: {{ $llmPort }} }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: octogee-vm-bridge
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-vm-bridge
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: {{ $cidr }}
+      ports:
+        - { protocol: TCP, port: 3001 }
+        - { protocol: TCP, port: 8065 }
+        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: 22 }
+        - { protocol: TCP, port: {{ $llmPort }} }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-api
+      ports:
+        - { protocol: TCP, port: 3001 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mattermost
+      ports:
+        - { protocol: TCP, port: 8065 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gitea
+      ports:
+        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: 2222 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app: llm-broker
+      ports:
+        - { protocol: TCP, port: {{ $llmPort }} }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: octogee-computer-tokenreview-{{ $ns }}
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: User
+    name: {{ required "global.computer.serviceAccountEmail is required" $computer.serviceAccountEmail }}
+{{- end }}

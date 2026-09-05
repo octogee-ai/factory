@@ -78,6 +78,7 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
       deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
       deleteCredentialSecrets: vi.fn(async () => undefined),
       deleteAuthUser: vi.fn(async () => undefined),
+      deleteComputerHome: vi.fn(async () => ({ deleted: 1 })),
       log: vi.fn(),
     },
     now: () => 5_000,
@@ -87,7 +88,7 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
 }
 
 describe("createDeprovisionCustomerHandler — happy path", () => {
-  it("returns success=true and reports unmount-gateway + 7 cloud steps", async () => {
+  it("returns success=true and reports unmount-gateway + 8 cloud steps", async () => {
     const deps = mkDeps();
     const handler = createDeprovisionCustomerHandler(deps);
     const ctx = mkCtx();
@@ -104,9 +105,12 @@ describe("createDeprovisionCustomerHandler — happy path", () => {
       "storage:done",
       "hosting:done",
       "credentials:done",
+      "computer:skipped",
+      "computer-home:done",
       "firestore:done",
       "auth:done",
     ]);
+    expect(ctx.reported.find((s) => s.name === "computer-home")).toMatchObject({ detail: "1 object" });
   });
 
   it("calls unmountFromGateway with gateway + slug from cleanup context", async () => {
@@ -197,6 +201,7 @@ describe("createDeprovisionCustomerHandler — cloud step failure", () => {
         deleteCustomerStorage: vi.fn(),
         deleteCredentialSecrets: vi.fn(),
         deleteAuthUser: vi.fn(),
+        deleteComputerHome: vi.fn(async () => ({ deleted: 0 })),
         log: vi.fn(),
       },
     });

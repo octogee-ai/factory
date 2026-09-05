@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import type { GatewayVmAddress } from "./gateway-address.js";
 import {
   FieldValue,
   type DocumentReference,
@@ -64,6 +65,8 @@ export interface RSyncMigrationTransferDeps {
   privateKey: string;
   fleetControllerPort: string;
   resolveGatewayUrl: (gatewayId: string) => string;
+  resolveGatewayVm?: (transportId: string) => Promise<GatewayVmAddress | null>;
+  wait?: (ms: number) => Promise<void>;
   runCommand?: CommandRunner;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
@@ -139,6 +142,30 @@ export function migrationTransferTaskId(input: {
 
 function sanitizeDocId(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+const VM_READY_TIMEOUT_MS = 60_000;
+const VM_READY_POLL_MS = 2_000;
+
+async function waitForTargetVmReady(
+  fetchImpl: typeof globalThis.fetch,
+  wait: (ms: number) => Promise<void>,
+  now: () => number,
+  target: { name: string; baseUrl: string },
+): Promise<void> {
+  const deadline = now() + VM_READY_TIMEOUT_MS;
+  let lastStatus = "unreachable";
+  while (now() < deadline) {
+    try {
+      const res = await fetchImpl(`${target.baseUrl}/surge-ready`);
+      if (res.ok) return;
+      lastStatus = `HTTP ${res.status}`;
+    } catch (err) {
+      lastStatus = err instanceof Error ? err.message : String(err);
+    }
+    await wait(VM_READY_POLL_MS);
+  }
+  throw new Error(`migration target ${target.name} did not become Ready: ${lastStatus}`);
 }
 
 async function waitForTargetPodReady(
@@ -343,6 +370,25 @@ async function resolveRunningGatewayPod(params: {
   return { name: item.metadata!.name!, podIP: item.status!.podIP! };
 }
 
+interface GatewayEndpoint {
+  name: string;
+  podIP: string;
+  vm: boolean;
+}
+
+async function resolveGatewayEndpoint(params: {
+  namespace: string;
+  transportId: string;
+  runCommand: CommandRunner;
+  requireReady: boolean;
+  resolveGatewayVm?: (transportId: string) => Promise<GatewayVmAddress | null>;
+}): Promise<GatewayEndpoint> {
+  const vm = params.resolveGatewayVm ? await params.resolveGatewayVm(params.transportId) : null;
+  if (vm) return { name: vm.instanceName, podIP: vm.internalIp, vm: true };
+  const pod = await resolveRunningGatewayPod(params);
+  return { ...pod, vm: false };
+}
+
 function podBaseUrl(podIP: string, port: string): string {
   const host = podIP.includes(":") ? `[${podIP}]` : podIP;
   return `http://${host}:${port}`;
@@ -357,6 +403,7 @@ export function createRsyncMigrationTransfer(
   const workerId = deps.workerId ?? DEFAULT_WORKER_ID;
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
   const log = deps.log ?? (() => undefined);
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   const control = <Resp>(opts: {
     transportId: string;
@@ -398,20 +445,22 @@ export function createRsyncMigrationTransfer(
     );
 
     let targetPrepareAttempted = false;
-    let targetPod: { name: string; podIP: string } | undefined;
+    let targetPod: GatewayEndpoint | undefined;
     try {
       const [sourcePod, resolvedTargetPod] = await Promise.all([
-        resolveRunningGatewayPod({
+        resolveGatewayEndpoint({
           namespace: deps.namespace,
           transportId: fromTransportId,
           runCommand,
           requireReady: true,
+          resolveGatewayVm: deps.resolveGatewayVm,
         }),
-        resolveRunningGatewayPod({
+        resolveGatewayEndpoint({
           namespace: deps.namespace,
           transportId: toTransportId,
           runCommand,
           requireReady: false,
+          resolveGatewayVm: deps.resolveGatewayVm,
         }),
       ]);
       targetPod = resolvedTargetPod;
@@ -469,7 +518,13 @@ export function createRsyncMigrationTransfer(
         body: finishBody as unknown as Record<string, unknown>,
         baseUrl: targetBaseUrl,
       });
-      if (mode === "final") await waitForTargetPodReady(runCommand, deps.namespace, targetPod.name);
+      if (mode === "final") {
+        if (targetPod.vm) {
+          await waitForTargetVmReady(fetchImpl, wait, now, { name: targetPod.name, baseUrl: targetBaseUrl });
+        } else {
+          await waitForTargetPodReady(runCommand, deps.namespace, targetPod.name);
+        }
+      }
       await markTaskSucceeded(claimed.ref, now);
       // The target committed the import and told us which post-commit step it could
       // not confirm. Aborting here would unmount work that landed and send the retry

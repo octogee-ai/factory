@@ -105,6 +105,7 @@ import {
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { requestBuilderActivationLease } from "./builder-activation-lease.js";
+import { addAdminComputerRoutes } from "./admin-computer-router.js";
 import {
   GatewayRetirementConflictError,
   claimGatewayRetirementAtomic,
@@ -4415,6 +4416,8 @@ export function addAdminFleetRoutes(
       : {}),
     });
   }
+
+  addAdminComputerRoutes(router, { db, journal: runAdminFleetMutation });
 
   router.get("/platform-runtime-config", async (_req, res, next) => {
     try {

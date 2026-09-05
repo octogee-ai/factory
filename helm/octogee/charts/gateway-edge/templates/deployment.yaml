@@ -61,6 +61,17 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- $computer := (.Values.global).computer | default dict }}
+            {{- if $computer.enabled }}
+            - name: GATEWAY_VM_ROUTES_FILE
+              value: /etc/octogee/vm-routes/routes.json
+            {{- end }}
+          {{- if $computer.enabled }}
+          volumeMounts:
+            - name: vm-routes
+              mountPath: /etc/octogee/vm-routes
+              readOnly: true
+          {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -87,6 +98,13 @@ spec:
           resources:
             {{- $routerResources := $router.resources | default .Values.resources -}}
             {{- toYaml $routerResources | nindent 12 }}
+      {{- if ((.Values.global).computer | default dict).enabled }}
+      volumes:
+        - name: vm-routes
+          configMap:
+            name: octogee-vm-routes
+            optional: true
+      {{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

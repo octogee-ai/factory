@@ -67,6 +67,11 @@ export interface GatewayVmSpec {
     serviceAccountEmail: string;
     subnetwork: string;
 }
+export declare const GATEWAY_VM_ORIGINS: readonly ["warm-pool", "cold"];
+export type GatewayVmOrigin = (typeof GATEWAY_VM_ORIGINS)[number];
+export declare const GATEWAY_VM_STOP_REASONS: readonly ["idle", "preempted", "operator"];
+export type GatewayVmStopReason = (typeof GATEWAY_VM_STOP_REASONS)[number];
+export declare function isGatewayVmStopReason(value: unknown): value is GatewayVmStopReason;
 export interface GatewayVmState {
     instanceName: string;
     zone: string;
@@ -74,10 +79,105 @@ export interface GatewayVmState {
     internalIp: string | null;
     status: string | null;
     provisioningModel: GatewayVmProvisioningModel | null;
+    origin?: GatewayVmOrigin;
+    stopReason: GatewayVmStopReason | null;
+    parkedCheckpoint?: GatewayVmParkedCheckpoint;
     updatedAt: number;
 }
-export declare const GATEWAY_VM_INSTANCE_PREFIX = "octogee-gw-";
-export declare function gatewayVmInstanceName(gatewayId: string): string;
+export declare const GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES: readonly ["fresh", "stale"];
+export type GatewayVmParkedCheckpointOutcome = (typeof GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES)[number];
+export interface GatewayVmParkedCheckpoint {
+    outcome: GatewayVmParkedCheckpointOutcome;
+    requestedAt: number | null;
+    completedAt: number | null;
+}
+export declare function isGatewayVmParkedCheckpoint(value: unknown): value is GatewayVmParkedCheckpoint;
+export declare const BUILDER_PARKED_COMPUTER_FIELD = "provisioning.computer";
+export interface BuilderParkedComputer {
+    instanceName: string;
+    zone: string;
+    instanceId: string | null;
+    gatewayId: string;
+    parkedAt: number;
+    checkpoint: GatewayVmParkedCheckpoint;
+}
+export declare function isBuilderParkedComputer(value: unknown): value is BuilderParkedComputer;
+export declare function readBuilderParkedComputer(userData: Record<string, unknown> | undefined): BuilderParkedComputer | null;
+export declare const GLM_GATEWAY_VM_SUBCOLLECTION = "vm";
+export declare const GLM_GATEWAY_VM_RUNTIME_DOC = "runtime";
+export declare function gatewayVmRuntimeDocPath(gatewayId: string): string;
+export interface GatewayVmRuntimeMount {
+    volume: string;
+    mountPath: string;
+    readOnly: boolean;
+    subPath: string | null;
+}
+export interface GatewayVmRuntimeContainer {
+    name: string;
+    image: string;
+    env: Record<string, string>;
+    command: string[] | null;
+    args: string[] | null;
+    mounts: GatewayVmRuntimeMount[];
+}
+export type GatewayVmRuntimeVolume = {
+    name: string;
+    kind: "emptyDir";
+} | {
+    name: string;
+    kind: "identityToken";
+    audience: string;
+} | {
+    name: string;
+    kind: "kubernetesApi";
+};
+export interface GatewayVmRuntimeBundle {
+    version: string;
+    gatewayId: string;
+    imageRepository: string;
+    imageTag: string;
+    init: GatewayVmRuntimeContainer | null;
+    containers: GatewayVmRuntimeContainer[];
+    volumes: GatewayVmRuntimeVolume[];
+    hostAliases: Record<string, string>;
+    kubernetes: {
+        apiHost: string;
+        apiPort: string;
+        caCert: string;
+    };
+    renderedAt: number;
+}
+export declare function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRuntimeBundle;
+export interface GatewayVmRuntimeResponse {
+    bundle: GatewayVmRuntimeBundle;
+    homeCheckpoint: {
+        requestedAt: number | null;
+        completedAt: number | null;
+    };
+}
+export declare const COMPUTER_HOME_CHECKPOINT_MAX_BYTES: number;
+export declare const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
+export declare const COMPUTER_HOME_CHECKPOINT_NAME_RE: RegExp;
+export declare const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
+export interface GatewayVmHomeCheckpoint {
+    name: string;
+    size: number;
+    sha256: string;
+    instanceId: string | null;
+    completedAt: number;
+}
+export interface GatewayVmHomeState {
+    checkpointRequestedAt: number | null;
+    checkpointAcknowledgedAt?: number | null;
+    parkRequestedAt?: number;
+    lastCheckpoint: GatewayVmHomeCheckpoint | null;
+}
+export declare function homeCheckpointOutstanding(home: Partial<GatewayVmHomeState> | null | undefined): boolean;
+export declare function isGatewayVmHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint;
+export declare function computerHomeCheckpointName(at: number): string;
+export declare function gatewayVmPodName(gatewayId: string, instanceId: string): string;
+export declare const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
+export declare function builderComputerInstanceName(environment: string, ownerUid: string): string;
 export interface GatewayModelBrokerLimits {
     spendWindowUsd?: number | null;
     spendWeekUsd?: number | null;
@@ -204,6 +304,7 @@ export interface OperationStep {
     startedAt?: number;
     completedAt?: number;
     error?: string;
+    detail?: string;
 }
 export interface Operation {
     id: string;

@@ -18,6 +18,7 @@ services:
       OCTO_RESOLUTION: ${OCTO_RESOLUTION:-1920x1080}
       OCTO_REFRESH: ${OCTO_REFRESH:-30}
       OCTO_HOME_URL: ${OCTO_HOME_URL:-https://octogee.com}
+      OCTO_CHROMIUM_NO_SANDBOX: ${OCTO_CHROMIUM_NO_SANDBOX:-1}
     volumes:
       - octo-home:/home/octo
     tmpfs:

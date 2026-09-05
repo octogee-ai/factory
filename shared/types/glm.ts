@@ -104,6 +104,16 @@ export interface GatewayVmSpec {
   subnetwork: string;
 }
 
+export const GATEWAY_VM_ORIGINS = ["warm-pool", "cold"] as const;
+export type GatewayVmOrigin = (typeof GATEWAY_VM_ORIGINS)[number];
+
+export const GATEWAY_VM_STOP_REASONS = ["idle", "preempted", "operator"] as const;
+export type GatewayVmStopReason = (typeof GATEWAY_VM_STOP_REASONS)[number];
+
+export function isGatewayVmStopReason(value: unknown): value is GatewayVmStopReason {
+  return typeof value === "string" && (GATEWAY_VM_STOP_REASONS as readonly string[]).includes(value);
+}
+
 export interface GatewayVmState {
   instanceName: string;
   zone: string;
@@ -111,12 +121,169 @@ export interface GatewayVmState {
   internalIp: string | null;
   status: string | null;
   provisioningModel: GatewayVmProvisioningModel | null;
+  origin?: GatewayVmOrigin;
+  stopReason: GatewayVmStopReason | null;
+  parkedCheckpoint?: GatewayVmParkedCheckpoint;
   updatedAt: number;
 }
 
-export const GATEWAY_VM_INSTANCE_PREFIX = "octogee-gw-";
+export const GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES = ["fresh", "stale"] as const;
+export type GatewayVmParkedCheckpointOutcome = (typeof GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES)[number];
+
+export interface GatewayVmParkedCheckpoint {
+  outcome: GatewayVmParkedCheckpointOutcome;
+  requestedAt: number | null;
+  completedAt: number | null;
+}
+
+export function isGatewayVmParkedCheckpoint(value: unknown): value is GatewayVmParkedCheckpoint {
+  const c = value as Partial<GatewayVmParkedCheckpoint> | null;
+  return !!c
+    && typeof c.outcome === "string" && (GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES as readonly string[]).includes(c.outcome)
+    && (c.requestedAt === null || typeof c.requestedAt === "number")
+    && (c.completedAt === null || typeof c.completedAt === "number");
+}
+
+export const BUILDER_PARKED_COMPUTER_FIELD = "provisioning.computer";
+
+export interface BuilderParkedComputer {
+  instanceName: string;
+  zone: string;
+  instanceId: string | null;
+  gatewayId: string;
+  parkedAt: number;
+  checkpoint: GatewayVmParkedCheckpoint;
+}
+
+export function isBuilderParkedComputer(value: unknown): value is BuilderParkedComputer {
+  const p = value as Partial<BuilderParkedComputer> | null;
+  return !!p
+    && typeof p.instanceName === "string" && p.instanceName.length > 0
+    && typeof p.zone === "string" && p.zone.length > 0
+    && (p.instanceId === null || typeof p.instanceId === "string")
+    && typeof p.gatewayId === "string" && p.gatewayId.length > 0
+    && typeof p.parkedAt === "number" && Number.isFinite(p.parkedAt)
+    && isGatewayVmParkedCheckpoint(p.checkpoint);
+}
+
+export function readBuilderParkedComputer(userData: Record<string, unknown> | undefined): BuilderParkedComputer | null {
+  const provisioning = userData?.provisioning;
+  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return null;
+  const computer = (provisioning as Record<string, unknown>).computer;
+  return isBuilderParkedComputer(computer) ? computer : null;
+}
+
+export const GLM_GATEWAY_VM_SUBCOLLECTION = "vm";
+export const GLM_GATEWAY_VM_RUNTIME_DOC = "runtime";
+
+export function gatewayVmRuntimeDocPath(gatewayId: string): string {
+  return `${GLM_GATEWAYS_COLLECTION}/${gatewayId}/${GLM_GATEWAY_VM_SUBCOLLECTION}/${GLM_GATEWAY_VM_RUNTIME_DOC}`;
+}
+
+export interface GatewayVmRuntimeMount {
+  volume: string;
+  mountPath: string;
+  readOnly: boolean;
+  subPath: string | null;
+}
+
+export interface GatewayVmRuntimeContainer {
+  name: string;
+  image: string;
+  env: Record<string, string>;
+  command: string[] | null;
+  args: string[] | null;
+  mounts: GatewayVmRuntimeMount[];
+}
+
+export type GatewayVmRuntimeVolume =
+  | { name: string; kind: "emptyDir" }
+  | { name: string; kind: "identityToken"; audience: string }
+  | { name: string; kind: "kubernetesApi" };
+
+export interface GatewayVmRuntimeBundle {
+  version: string;
+  gatewayId: string;
+  imageRepository: string;
+  imageTag: string;
+  init: GatewayVmRuntimeContainer | null;
+  containers: GatewayVmRuntimeContainer[];
+  volumes: GatewayVmRuntimeVolume[];
+  hostAliases: Record<string, string>;
+  kubernetes: { apiHost: string; apiPort: string; caCert: string };
+  renderedAt: number;
+}
+
+export function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRuntimeBundle {
+  const b = value as Partial<GatewayVmRuntimeBundle> | null;
+  return !!b
+    && typeof b.version === "string" && b.version.length > 0
+    && typeof b.gatewayId === "string" && b.gatewayId.length > 0
+    && typeof b.imageRepository === "string"
+    && typeof b.imageTag === "string"
+    && Array.isArray(b.containers) && b.containers.length > 0
+    && Array.isArray(b.volumes)
+    && !!b.hostAliases && typeof b.hostAliases === "object"
+    && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
+}
+
+export interface GatewayVmRuntimeResponse {
+  bundle: GatewayVmRuntimeBundle;
+  homeCheckpoint: { requestedAt: number | null; completedAt: number | null };
+}
+
+export const COMPUTER_HOME_CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+export const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
+export const COMPUTER_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;
+export const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
+
+export interface GatewayVmHomeCheckpoint {
+  name: string;
+  size: number;
+  sha256: string;
+  instanceId: string | null;
+  completedAt: number;
+}
+
+export interface GatewayVmHomeState {
+  checkpointRequestedAt: number | null;
+  checkpointAcknowledgedAt?: number | null;
+  parkRequestedAt?: number;
+  lastCheckpoint: GatewayVmHomeCheckpoint | null;
+}
+
+export function homeCheckpointOutstanding(home: Partial<GatewayVmHomeState> | null | undefined): boolean {
+  const requestedAt = home?.checkpointRequestedAt;
+  if (typeof requestedAt !== "number") return false;
+  const completedAt = home?.lastCheckpoint?.completedAt;
+  return typeof completedAt !== "number" || completedAt < requestedAt
+    || typeof home?.checkpointAcknowledgedAt !== "number" || home.checkpointAcknowledgedAt < requestedAt;
+}
+
+export function isGatewayVmHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint {
+  const c = value as Partial<GatewayVmHomeCheckpoint> | null;
+  return !!c
+    && typeof c.name === "string" && COMPUTER_HOME_CHECKPOINT_NAME_RE.test(c.name)
+    && typeof c.size === "number" && Number.isSafeInteger(c.size) && c.size > 0 && c.size <= COMPUTER_HOME_CHECKPOINT_MAX_BYTES
+    && typeof c.sha256 === "string" && /^[a-f0-9]{64}$/u.test(c.sha256)
+    && (c.instanceId === null || typeof c.instanceId === "string")
+    && typeof c.completedAt === "number" && Number.isFinite(c.completedAt);
+}
+
+export function computerHomeCheckpointName(at: number): string {
+  const date = new Date(at);
+  if (!Number.isFinite(date.getTime())) throw new Error("computer-home checkpoint time is invalid");
+  return `${date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.tar.gz`;
+}
+
+export function gatewayVmPodName(gatewayId: string, instanceId: string): string {
+  if (!/^\d+$/.test(instanceId)) throw new Error(`gatewayVmPodName: instance id must be numeric, got ${instanceId}`);
+  return `octogee-gateway-${gatewayId}-vm-${instanceId}`;
+}
+
+export const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
 const GCE_INSTANCE_NAME_MAX = 63;
-const GATEWAY_VM_NAME_HASH_LENGTH = 8;
+const GCE_INSTANCE_NAME_HASH_LENGTH = 8;
 
 function fnv1a32Hex(input: string): string {
   let hash = 0x811c9dc5;
@@ -127,20 +294,26 @@ function fnv1a32Hex(input: string): string {
   return hash.toString(16).padStart(8, "0");
 }
 
-export function gatewayVmInstanceName(gatewayId: string): string {
-  const trimmed = gatewayId.trim();
-  if (!trimmed) throw new Error("gatewayVmInstanceName: gatewayId is empty");
+function gceInstanceName(prefix: string, raw: string, what: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error(`${what} is empty`);
   const normalized = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  if (!normalized) throw new Error(`gatewayVmInstanceName: gatewayId ${JSON.stringify(gatewayId)} has no usable characters`);
-  const full = `${GATEWAY_VM_INSTANCE_PREFIX}${normalized}`;
+  if (!normalized) throw new Error(`${what} ${JSON.stringify(raw)} has no usable characters`);
+  const full = `${prefix}${normalized}`;
   if (full.length <= GCE_INSTANCE_NAME_MAX) return full;
-  const suffix = fnv1a32Hex(trimmed).slice(0, GATEWAY_VM_NAME_HASH_LENGTH);
-  const budget = GCE_INSTANCE_NAME_MAX - GATEWAY_VM_INSTANCE_PREFIX.length - suffix.length - 1;
-  return `${GATEWAY_VM_INSTANCE_PREFIX}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
+  const suffix = fnv1a32Hex(trimmed).slice(0, GCE_INSTANCE_NAME_HASH_LENGTH);
+  const budget = GCE_INSTANCE_NAME_MAX - prefix.length - suffix.length - 1;
+  return `${prefix}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
+}
+
+export function builderComputerInstanceName(environment: string, ownerUid: string): string {
+  const env = environment.trim().toLowerCase();
+  if (!/^[a-z0-9]+$/.test(env)) throw new Error(`builderComputerInstanceName: environment ${JSON.stringify(environment)} is not a name segment`);
+  return gceInstanceName(`${BUILDER_COMPUTER_INSTANCE_PREFIX}${env}-`, ownerUid, "builderComputerInstanceName: ownerUid");
 }
 
 export interface GatewayModelBrokerLimits {
@@ -571,6 +744,7 @@ export interface OperationStep {
   startedAt?: number;
   completedAt?: number;
   error?: string;
+  detail?: string;
 }
 
 export interface Operation {

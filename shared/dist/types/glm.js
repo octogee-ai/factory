@@ -17,9 +17,89 @@ export function resolveGatewayRuntime(value) {
     return isGatewayRuntime(value) ? value : "cluster";
 }
 export const GATEWAY_VM_PROVISIONING_MODELS = ["SPOT", "STANDARD"];
-export const GATEWAY_VM_INSTANCE_PREFIX = "octogee-gw-";
+export const GATEWAY_VM_ORIGINS = ["warm-pool", "cold"];
+export const GATEWAY_VM_STOP_REASONS = ["idle", "preempted", "operator"];
+export function isGatewayVmStopReason(value) {
+    return typeof value === "string" && GATEWAY_VM_STOP_REASONS.includes(value);
+}
+export const GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES = ["fresh", "stale"];
+export function isGatewayVmParkedCheckpoint(value) {
+    const c = value;
+    return !!c
+        && typeof c.outcome === "string" && GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES.includes(c.outcome)
+        && (c.requestedAt === null || typeof c.requestedAt === "number")
+        && (c.completedAt === null || typeof c.completedAt === "number");
+}
+export const BUILDER_PARKED_COMPUTER_FIELD = "provisioning.computer";
+export function isBuilderParkedComputer(value) {
+    const p = value;
+    return !!p
+        && typeof p.instanceName === "string" && p.instanceName.length > 0
+        && typeof p.zone === "string" && p.zone.length > 0
+        && (p.instanceId === null || typeof p.instanceId === "string")
+        && typeof p.gatewayId === "string" && p.gatewayId.length > 0
+        && typeof p.parkedAt === "number" && Number.isFinite(p.parkedAt)
+        && isGatewayVmParkedCheckpoint(p.checkpoint);
+}
+export function readBuilderParkedComputer(userData) {
+    const provisioning = userData?.provisioning;
+    if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning))
+        return null;
+    const computer = provisioning.computer;
+    return isBuilderParkedComputer(computer) ? computer : null;
+}
+export const GLM_GATEWAY_VM_SUBCOLLECTION = "vm";
+export const GLM_GATEWAY_VM_RUNTIME_DOC = "runtime";
+export function gatewayVmRuntimeDocPath(gatewayId) {
+    return `${GLM_GATEWAYS_COLLECTION}/${gatewayId}/${GLM_GATEWAY_VM_SUBCOLLECTION}/${GLM_GATEWAY_VM_RUNTIME_DOC}`;
+}
+export function isGatewayVmRuntimeBundle(value) {
+    const b = value;
+    return !!b
+        && typeof b.version === "string" && b.version.length > 0
+        && typeof b.gatewayId === "string" && b.gatewayId.length > 0
+        && typeof b.imageRepository === "string"
+        && typeof b.imageTag === "string"
+        && Array.isArray(b.containers) && b.containers.length > 0
+        && Array.isArray(b.volumes)
+        && !!b.hostAliases && typeof b.hostAliases === "object"
+        && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
+}
+export const COMPUTER_HOME_CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+export const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
+export const COMPUTER_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;
+export const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
+export function homeCheckpointOutstanding(home) {
+    const requestedAt = home?.checkpointRequestedAt;
+    if (typeof requestedAt !== "number")
+        return false;
+    const completedAt = home?.lastCheckpoint?.completedAt;
+    return typeof completedAt !== "number" || completedAt < requestedAt
+        || typeof home?.checkpointAcknowledgedAt !== "number" || home.checkpointAcknowledgedAt < requestedAt;
+}
+export function isGatewayVmHomeCheckpoint(value) {
+    const c = value;
+    return !!c
+        && typeof c.name === "string" && COMPUTER_HOME_CHECKPOINT_NAME_RE.test(c.name)
+        && typeof c.size === "number" && Number.isSafeInteger(c.size) && c.size > 0 && c.size <= COMPUTER_HOME_CHECKPOINT_MAX_BYTES
+        && typeof c.sha256 === "string" && /^[a-f0-9]{64}$/u.test(c.sha256)
+        && (c.instanceId === null || typeof c.instanceId === "string")
+        && typeof c.completedAt === "number" && Number.isFinite(c.completedAt);
+}
+export function computerHomeCheckpointName(at) {
+    const date = new Date(at);
+    if (!Number.isFinite(date.getTime()))
+        throw new Error("computer-home checkpoint time is invalid");
+    return `${date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.tar.gz`;
+}
+export function gatewayVmPodName(gatewayId, instanceId) {
+    if (!/^\d+$/.test(instanceId))
+        throw new Error(`gatewayVmPodName: instance id must be numeric, got ${instanceId}`);
+    return `octogee-gateway-${gatewayId}-vm-${instanceId}`;
+}
+export const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
 const GCE_INSTANCE_NAME_MAX = 63;
-const GATEWAY_VM_NAME_HASH_LENGTH = 8;
+const GCE_INSTANCE_NAME_HASH_LENGTH = 8;
 function fnv1a32Hex(input) {
     let hash = 0x811c9dc5;
     for (let index = 0; index < input.length; index += 1) {
@@ -28,23 +108,29 @@ function fnv1a32Hex(input) {
     }
     return hash.toString(16).padStart(8, "0");
 }
-export function gatewayVmInstanceName(gatewayId) {
-    const trimmed = gatewayId.trim();
+function gceInstanceName(prefix, raw, what) {
+    const trimmed = raw.trim();
     if (!trimmed)
-        throw new Error("gatewayVmInstanceName: gatewayId is empty");
+        throw new Error(`${what} is empty`);
     const normalized = trimmed
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, "-")
         .replace(/-+/g, "-")
         .replace(/^-|-$/g, "");
     if (!normalized)
-        throw new Error(`gatewayVmInstanceName: gatewayId ${JSON.stringify(gatewayId)} has no usable characters`);
-    const full = `${GATEWAY_VM_INSTANCE_PREFIX}${normalized}`;
+        throw new Error(`${what} ${JSON.stringify(raw)} has no usable characters`);
+    const full = `${prefix}${normalized}`;
     if (full.length <= GCE_INSTANCE_NAME_MAX)
         return full;
-    const suffix = fnv1a32Hex(trimmed).slice(0, GATEWAY_VM_NAME_HASH_LENGTH);
-    const budget = GCE_INSTANCE_NAME_MAX - GATEWAY_VM_INSTANCE_PREFIX.length - suffix.length - 1;
-    return `${GATEWAY_VM_INSTANCE_PREFIX}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
+    const suffix = fnv1a32Hex(trimmed).slice(0, GCE_INSTANCE_NAME_HASH_LENGTH);
+    const budget = GCE_INSTANCE_NAME_MAX - prefix.length - suffix.length - 1;
+    return `${prefix}${normalized.slice(0, budget).replace(/-$/, "")}-${suffix}`;
+}
+export function builderComputerInstanceName(environment, ownerUid) {
+    const env = environment.trim().toLowerCase();
+    if (!/^[a-z0-9]+$/.test(env))
+        throw new Error(`builderComputerInstanceName: environment ${JSON.stringify(environment)} is not a name segment`);
+    return gceInstanceName(`${BUILDER_COMPUTER_INSTANCE_PREFIX}${env}-`, ownerUid, "builderComputerInstanceName: ownerUid");
 }
 export const GATEWAY_CONTROL_IDENTITY_MODES = ["shared-operator", "per-user"];
 export const DEFAULT_GATEWAY_CONTROL_IDENTITY = "shared-operator";

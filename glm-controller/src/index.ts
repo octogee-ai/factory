@@ -11,6 +11,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   isOperatorManaged,
+  resolveGatewayRuntime,
   isOperationAuditRow,
   builderGatewayServiceAccountName,
   resolveOperationOrigin,
@@ -20,7 +21,6 @@ import {
   type HelmInstancesMap,
   type OperationAuditRecord,
   type Operation,
-  type GatewayVmSpec,
   type GatewayVmState,
 } from "@octogee/shared/types/glm";
 import {
@@ -157,11 +157,24 @@ import {
   verifyGatewayRetirementClaimAtomic,
 } from "@octogee/core/gateway-retirement-claim";
 import { createRetireGatewayHandler } from "./handlers/retire-gateway.js";
+import { readFileSync } from "node:fs";
 import { createGatewayServiceAccountTeardown } from "./lib/gateway-gsa.js";
+import { gatewayFleetBaseUrl, gatewayVmAddress } from "./lib/gateway-address.js";
+import { createComputerReadinessProbe, createSurgeEndpointLister } from "./vm-computer-endpoints.js";
+import {
+  createRuntimeDispatchingHelmRunner,
+  createVmGatewayRuntime,
+  type VmGatewayRuntime,
+  parseGatewayVmSpec,
+  resolveBuilderRuntimePolicy,
+  stampGatewayRuntime,
+} from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
+import { readHomeCheckpointCompletedAt, requestHomeCheckpoint } from "./lib/home-checkpoint.js";
+import { clearParkedComputer, readParkedComputer } from "./lib/parked-computer.js";
 import {
   createRolloutHandler,
   planDesiredReleaseActivation,
@@ -192,6 +205,7 @@ import {
   verifyCustomerFirestoreErasure,
 } from "./lib/customer-ops/customer-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
+import { deleteComputerHomeObjects } from "./lib/customer-ops/computer-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
   readAssignedSlugsForGateway,
@@ -304,6 +318,7 @@ import {
 } from "./shared-gateway-pool-bootstrap.js";
 import { PRIMARY_SHARED_GATEWAY_ID } from "@octogee/shared/types/shared-gateway-pool";
 import { startSharedGatewayAutoscaler } from "./shared-gateway-autoscaler.js";
+import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -336,6 +351,12 @@ const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
 const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
+const BUILDER_RUNTIME_POLICY = resolveBuilderRuntimePolicy(process.env);
+const BUILDER_VM_SPEC = BUILDER_RUNTIME_POLICY === "gce-vm" ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
+const BUILDER_VM_WARM_POOL = parseVmWarmPoolConfig(process.env);
+const VM_WARM_POOL_RECONCILE_MS = 60_000;
+const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker"] as const;
+const vmGatewayRuntimeRef: { current?: VmGatewayRuntime } = {};
 const NAMESPACE = (function () {
   const namespace = process.env.K8S_NAMESPACE;
   if (!namespace) {
@@ -368,6 +389,7 @@ const GATEWAY_VALUES_FILE = (function () {
   return `${GATEWAY_CHART}/${ENVIRONMENT_SETTINGS.gatewayValuesFile}`;
 })();
 const PIN_ENV = ENVIRONMENT_SETTINGS.pinEnvironment;
+const COMPUTER_ENVIRONMENT = NAMESPACE.endsWith("-test") ? "test" : "prod";
 
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
 const GATEWAY_HEARTBEAT_POLL_MS = 15_000;
@@ -488,6 +510,37 @@ function deploymentNameForInstance(gatewayId: string): string {
 
 function gatewayServiceInternalUrl(gatewayId: string): string {
   return `http://${deploymentNameForInstance(gatewayId)}.${NAMESPACE}.svc.cluster.local:18789`;
+}
+
+export function gatewayComputeProjectId(env: Record<string, string | undefined> = process.env): string {
+  const project = env.GATEWAY_COMPUTE_PROJECT_ID?.trim() || env.GKE_WORKLOAD_IDENTITY_PROJECT?.trim();
+  if (!project) throw new Error("GATEWAY_COMPUTE_PROJECT_ID (or GKE_WORKLOAD_IDENTITY_PROJECT) is required: gateway VMs live in the cluster's VPC project");
+  return project;
+}
+
+function createGatewayComputeClient(logFn: (msg: string) => void) {
+  return createGatewayVmClient({
+    projectId: gatewayComputeProjectId(),
+    log: logFn,
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: () => Date.now(),
+    request: async ({ url, method, body }) => {
+      const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+      const client = await auth.getClient();
+      const res = await client.request<unknown>({ url, method, ...(body === undefined ? {} : { data: body }) });
+      return { status: res.status, data: res.data };
+    },
+  });
+}
+
+async function isVmGateway(db: Firestore, gatewayId: string): Promise<boolean> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  return snap.exists && resolveGatewayRuntime((snap.data() as Record<string, unknown>).runtime) === "gce-vm";
+}
+
+async function readGatewayVmAddress(db: Firestore, gatewayId: string) {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  return gatewayVmAddress(snap.exists ? snap.data() : undefined);
 }
 
 export function versionFromImageTag(imageTag: string | undefined): string {
@@ -1178,6 +1231,14 @@ async function upsertGateway(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
   );
+  await stampGatewayRuntime({
+    db,
+    gatewayId: gateway.gatewayId,
+    gatewayClass: gateway.gatewayClass,
+    policy: BUILDER_RUNTIME_POLICY,
+    vmSpec: BUILDER_VM_SPEC,
+    log,
+  });
   await db
     .collection(GLM_GATEWAYS_COLLECTION)
     .doc(gateway.gatewayId)
@@ -2088,10 +2149,15 @@ function buildHeartbeatPollerCoreDeps(
   listGatewayDocs: () => Promise<HeartbeatPollDocLike[]>,
 ): Omit<GatewayHeartbeatPollerDeps, "evictSlug"> {
   const polledHeartbeats = new Map<string, unknown>();
+  const polledHeartbeatDocs = new Map<string, unknown>();
   const fetchFleetState = createFleetStateFetcher({
     privateKey,
-    resolveBaseUrl: (gatewayId) =>
-      `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`,
+    resolveBaseUrl: (gatewayId) => gatewayFleetBaseUrl({
+      runtimeDoc: polledHeartbeatDocs.get(gatewayId),
+      gatewayId,
+      namespace: NAMESPACE,
+      port: FLEET_CONTROLLER_PORT,
+    }),
     timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
     log,
   });
@@ -2099,7 +2165,11 @@ function buildHeartbeatPollerCoreDeps(
     listGatewayIds: async () => {
       const docs = informer.glmGateways() ?? await listGatewayDocs();
       polledHeartbeats.clear();
-      for (const doc of docs) polledHeartbeats.set(doc.id, doc.data()?.[HEARTBEAT_FIELD]);
+      polledHeartbeatDocs.clear();
+      for (const doc of docs) {
+        polledHeartbeats.set(doc.id, doc.data()?.[HEARTBEAT_FIELD]);
+        polledHeartbeatDocs.set(doc.id, doc.data());
+      }
       return heartbeatPollInstanceIds(docs);
     },
     fetchFleetState,
@@ -2175,6 +2245,7 @@ export function buildGatewayHeartbeatPollerDeps(
       });
     },
     onUnreachable: async (gatewayId: string) => {
+      await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId);
       const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       const gateway = projectGatewayDesiredRootForGateway(
         snapshot.exists ? snapshot.data() : undefined,
@@ -2358,7 +2429,16 @@ function buildSurgeHandoffDeps(input: {
       privateKey,
       log,
     }),
-    listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
+    listPods: createSurgeEndpointLister({
+      readRuntimeDoc: async (gatewayId) =>
+        (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data(),
+      listPods: (gatewayId) => listSurgePods(runKubectl, NAMESPACE, gatewayId),
+      readComputerReady: createComputerReadinessProbe({
+        port: FLEET_CONTROLLER_PORT,
+        timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
+        log,
+      }),
+    }),
     readAssignments: async (gatewayId) => {
       const [assignments, userSnapshot] = await Promise.all([
         readAssignmentDocsForGateway(db, gatewayId),
@@ -2450,7 +2530,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     backend: createConfiguredGatewayModelKeyIssuerBackend(process.env),
     log,
   });
-  const helm =
+  const clusterHelm =
     process.env.HELM_RUNNER_MODE === "stub"
       ? createLoggingHelmRunner(log)
       : createHelmSubprocessRunner({
@@ -2459,6 +2539,41 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
           ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
           ensureServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
         });
+  const vmRuntime = BUILDER_VM_SPEC
+    ? createVmGatewayRuntime({
+      db,
+      namespace: NAMESPACE,
+      environment: COMPUTER_ENVIRONMENT,
+      runHelm: spawnHelm,
+      runKubectl,
+      vm: createGatewayComputeClient(log),
+      vmSpec: BUILDER_VM_SPEC,
+      bridgeServiceName: process.env.GATEWAY_VM_BRIDGE_SERVICE ?? "octogee-vm-bridge",
+      hostAliasNames: GATEWAY_VM_HOST_ALIASES.map((service) => `${service}.${NAMESPACE}.svc.cluster.local`),
+      kubernetes: {
+        apiHost: requireEnv("GATEWAY_VM_KUBERNETES_API_HOST", "gateway VMs need the cluster's private control-plane endpoint for TokenReview"),
+        apiPort: process.env.GATEWAY_VM_KUBERNETES_API_PORT ?? "443",
+        caCert: readFileSync(process.env.GATEWAY_VM_KUBERNETES_CA_PATH ?? "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "utf8"),
+      },
+      routesConfigMap: process.env.GATEWAY_VM_ROUTES_CONFIGMAP ?? "octogee-vm-routes",
+      ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
+      readDesiredStatus: async (gatewayId) => {
+        const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+        return projectGatewayDesiredRootForGateway(snap.exists ? snap.data() : undefined, gatewayId)?.desiredStatus ?? null;
+      },
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now: () => Date.now(),
+      log,
+    })
+    : null;
+  vmGatewayRuntimeRef.current = vmRuntime ?? undefined;
+  const helm = vmRuntime
+    ? createRuntimeDispatchingHelmRunner({
+        cluster: clusterHelm,
+        vm: vmRuntime,
+        isVmGateway: (gatewayId) => isVmGateway(db, gatewayId),
+      })
+    : clusterHelm;
   const kubeOps =
     process.env.KUBE_OPS_MODE === "stub"
       ? createLoggingKubeOps(log)
@@ -2625,6 +2740,18 @@ async function main(): Promise<void> {
       recordMaxCapacity: recordSharedGatewayMaxCapacity,
     }, SHARED_GATEWAY_AUTOSCALER_MS),
   );
+  if (BUILDER_VM_SPEC) {
+    stoppers.push(
+      startVmWarmPoolReconciler({
+        vm: createGatewayComputeClient(log),
+        vmSpec: BUILDER_VM_SPEC,
+        environment: COMPUTER_ENVIRONMENT,
+        config: BUILDER_VM_WARM_POOL,
+        now: () => Date.now(),
+        log,
+      }, VM_WARM_POOL_RECONCILE_MS),
+    );
+  }
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
@@ -2787,6 +2914,7 @@ function createMigrationClientBuilder(
         privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT,
         resolveGatewayUrl: resolveSync,
+        resolveGatewayVm: (transportId) => readGatewayVmAddress(db, transportId),
         log: logFn,
       }),
     };
@@ -3226,7 +3354,7 @@ async function buildHandlers(
       return readMountedCustomers(runtime as unknown as Record<string, unknown>);
     },
     helmUninstallGateway: async (gatewayId) => {
-      await helm.removeInstance({ namespace: NAMESPACE, gatewayId });
+      await helm.removeInstance({ namespace: NAMESPACE, gatewayId, awaitHomeCheckpoint: true });
     },
     readAssignmentsForGateway: async (gatewayId) => {
       const assignments = await readAssignmentDocsForGateway(db, gatewayId);
@@ -3404,33 +3532,32 @@ async function buildHandlers(
   });
 
   const gatewayVm = createGatewayVmHandler({
-    vm: createGatewayVmClient({
-      projectId: requireEnv("GOOGLE_CLOUD_PROJECT", "gateway VM allocation must target this env's GCP project"),
-      log: logFn,
-      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
-      now: () => Date.now(),
-      request: async ({ url, method, body }) => {
-        const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
-        const client = await auth.getClient();
-        const res = await client.request<unknown>({ url, method, ...(body === undefined ? {} : { data: body }) });
-        return { status: res.status, data: res.data };
-      },
-    }),
+    vm: createGatewayComputeClient(logFn),
     readGateway: async (gatewayId) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       if (!snap.exists) return null;
       const data = snap.data() as Record<string, unknown>;
-      return {
-        runtime: data.runtime,
-        vmSpec: (data.vmSpec as GatewayVmSpec | undefined) ?? null,
-        vm: (data.vm as GatewayVmState | undefined) ?? null,
-        ownerUid: typeof data.ownerUid === "string" ? data.ownerUid : null,
-      };
+      return { runtime: data.runtime, vm: (data.vm as GatewayVmState | undefined) ?? null };
     },
     writeVmState: async (gatewayId, vm) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ vm });
     },
-    environment: NAMESPACE,
+    requestHomeCheckpoint: (gatewayId, requestedAt) => requestHomeCheckpoint(db, gatewayId, requestedAt),
+    readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(db, gatewayId),
+    clearHomeCheckpointRequest: async (gatewayId) => {
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ "vmHome.checkpointRequestedAt": FieldValue.delete() });
+    },
+    clearVmForReplacement: async (gatewayId) => {
+      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({
+        vm: null,
+        vmInstance: FieldValue.delete(),
+        vmSpec: FieldValue.delete(),
+        "vmHome.checkpointRequestedAt": FieldValue.delete(),
+      });
+    },
+    readParkedComputer: (ownerUid) => readParkedComputer(db, ownerUid),
+    clearParkedComputer: (ownerUid) => clearParkedComputer(db, ownerUid),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     log: logFn,
   });
@@ -3918,6 +4045,16 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
     deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
+    deleteComputerHome: (slug: string) => deleteComputerHomeObjects(getStorage().bucket(), slug),
+    ...(BUILDER_VM_SPEC
+      ? {
+          deleteComputer: async (uid: string) => {
+            const runtime = vmGatewayRuntimeRef.current;
+            if (!runtime) throw new Error("the VM gateway runtime is not initialised; cannot delete the Builder's computer");
+            return runtime.deleteComputer(uid);
+          },
+        }
+      : {}),
     deleteHostingSites: async (slug: string, projectSlugs: string[]) => {
       const result = await retireWorkspaceBeforeLegacyHostingDeletion({
         retirement: projectHostingRetirement,
@@ -4022,7 +4159,7 @@ async function resolveGatewayUrlFromFirestore(
   if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
     throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
   }
-  return `http://octogee-gateway-${gatewayId}.${NAMESPACE}.svc.cluster.local:${FLEET_CONTROLLER_PORT}`;
+  return gatewayFleetBaseUrl({ runtimeDoc: runtime, gatewayId, namespace: NAMESPACE, port: FLEET_CONTROLLER_PORT });
 }
 
 // A pending Helm release is auto-recoverable only for a RUNNING durable root

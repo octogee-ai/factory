@@ -156,6 +156,7 @@ function deriveStepStatus(r: NukeCloudStepResult): StepStatus {
 function stepResultToOperationStep(r: NukeCloudStepResult, completedAt: number): OperationStep {
   const step: OperationStep = { name: r.key, status: deriveStepStatus(r), completedAt };
   if (r.error) step.error = r.error;
+  if (r.detail) step.detail = r.detail;
   return step;
 }
 

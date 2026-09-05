@@ -35,4 +35,14 @@ for _ in $(seq 1 50); do
 done
 [[ -S /run/seatd.sock ]] || { echo "ERROR: seatd did not create /run/seatd.sock" >&2; exit 1; }
 
-exec runuser -u octo -- /usr/local/bin/octo-desktop-session
+runuser -u octo -- /usr/local/bin/octo-desktop-session &
+session_pid=$!
+stop_session() {
+  trap '' TERM INT
+  runuser -u octo -- /usr/local/bin/octo-desktop-stop
+  kill "$session_pid" 2>/dev/null || true
+  wait "$session_pid" || true
+  exit 0
+}
+trap stop_session TERM INT
+wait "$session_pid"

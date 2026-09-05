@@ -1,0 +1,1054 @@
+[
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "labels": {
+    "app.kubernetes.io/instance": "octogee-gw-b-x",
+    "app.kubernetes.io/managed-by": "Helm",
+    "app.kubernetes.io/name": "octogee-gateway",
+    "gateway-instance": "b-x",
+    "helm.sh/chart": "octogee-gateway-0.1.0"
+   },
+   "name": "octogee-gateway-ingress-b-x",
+   "namespace": "default"
+  },
+  "spec": {
+   "ingress": [
+    {
+     "from": [
+      {
+       "podSelector": {
+        "matchLabels": {
+         "app": "gateway-router"
+        }
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3001,
+       "protocol": "TCP"
+      }
+     ]
+    },
+    {
+     "from": [
+      {
+       "podSelector": {
+        "matchLabels": {
+         "app": "glm-controller"
+        }
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3003,
+       "protocol": "TCP"
+      }
+     ]
+    },
+    {
+     "from": [
+      {
+       "podSelector": {
+        "matchLabels": {
+         "app": "mattermost-callback-router"
+        }
+       }
+      },
+      {
+       "podSelector": {
+        "matchLabels": {
+         "app": "octogee-api"
+        }
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3001,
+       "protocol": "TCP"
+      }
+     ]
+    },
+    {
+     "from": [
+      {
+       "podSelector": {
+        "matchLabels": {
+         "app": "octogee-gateway"
+        }
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3003,
+       "protocol": "TCP"
+      },
+      {
+       "port": 30873,
+       "protocol": "TCP"
+      }
+     ]
+    },
+    {
+     "from": [
+      {
+       "namespaceSelector": {
+        "matchLabels": {
+         "kubernetes.io/metadata.name": "gke-gmp-system"
+        }
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 9092,
+       "protocol": "TCP"
+      }
+     ]
+    }
+   ],
+   "podSelector": {
+    "matchLabels": {
+     "app": "octogee-gateway",
+     "gateway-instance": "b-x"
+    }
+   },
+   "policyTypes": [
+    "Ingress"
+   ]
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "labels": {
+    "app": "octogee-gateway",
+    "app.kubernetes.io/instance": "octogee-gw-b-x",
+    "app.kubernetes.io/managed-by": "Helm",
+    "app.kubernetes.io/name": "octogee-gateway",
+    "gateway-instance": "b-x",
+    "helm.sh/chart": "octogee-gateway-0.1.0"
+   },
+   "name": "octogee-gateway-b-x",
+   "namespace": "octogee-test"
+  },
+  "spec": {
+   "minAvailable": 1,
+   "selector": {
+    "matchLabels": {
+     "app": "octogee-gateway",
+     "gateway-instance": "b-x"
+    }
+   },
+   "unhealthyPodEvictionPolicy": "AlwaysAllow"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "labels": {
+    "app.kubernetes.io/instance": "octogee-gw-b-x",
+    "app.kubernetes.io/managed-by": "Helm",
+    "app.kubernetes.io/name": "octogee-gateway",
+    "gateway-instance": "b-x",
+    "helm.sh/chart": "octogee-gateway-0.1.0"
+   },
+   "name": "octogee-gateway-b-x",
+   "namespace": "default"
+  },
+  "spec": {
+   "ports": [
+    {
+     "name": "http",
+     "port": 18789,
+     "targetPort": 18789
+    },
+    {
+     "name": "runner-metrics",
+     "port": 9092,
+     "targetPort": 9092
+    },
+    {
+     "name": "fleet-http",
+     "port": 3003,
+     "targetPort": 3003
+    }
+   ],
+   "selector": {
+    "app": "octogee-gateway",
+    "gateway-instance": "b-x"
+   },
+   "type": "ClusterIP"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "labels": {
+    "app.kubernetes.io/instance": "octogee-gw-b-x",
+    "app.kubernetes.io/managed-by": "Helm",
+    "app.kubernetes.io/name": "gateway-edge",
+    "gateway-instance": "b-x",
+    "helm.sh/chart": "octogee-gateway-0.1.0"
+   },
+   "name": "gateway-edge-b-x",
+   "namespace": "default"
+  },
+  "spec": {
+   "ports": [
+    {
+     "name": "http",
+     "port": 3001,
+     "targetPort": 3001
+    }
+   ],
+   "selector": {
+    "app": "octogee-gateway",
+    "gateway-instance": "b-x"
+   },
+   "type": "ClusterIP"
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "labels": {
+    "app": "octogee-gateway",
+    "app.kubernetes.io/instance": "octogee-gw-b-x",
+    "app.kubernetes.io/managed-by": "Helm",
+    "app.kubernetes.io/name": "octogee-gateway",
+    "gateway-class": "builder",
+    "gateway-instance": "b-x",
+    "gateway-profile": "builder",
+    "helm.sh/chart": "octogee-gateway-0.1.0"
+   },
+   "name": "octogee-gateway-b-x",
+   "namespace": "default"
+  },
+  "spec": {
+   "replicas": 1,
+   "selector": {
+    "matchLabels": {
+     "app": "octogee-gateway",
+     "gateway-instance": "b-x"
+    }
+   },
+   "strategy": {
+    "type": "Recreate"
+   },
+   "template": {
+    "metadata": {
+     "annotations": {
+      "octogee.ai/builder-slug": "mama",
+      "octogee.ai/owner-uid": "UidA"
+     },
+     "labels": {
+      "app": "octogee-gateway",
+      "gateway-class": "builder",
+      "gateway-id": "b-x",
+      "gateway-image": "main.abc123",
+      "gateway-instance": "b-x",
+      "gateway-profile": "builder",
+      "octogee.ai/builder-slug": "mama",
+      "tier": "s"
+     }
+    },
+    "spec": {
+     "affinity": {
+      "podAntiAffinity": {
+       "preferredDuringSchedulingIgnoredDuringExecution": [
+        {
+         "podAffinityTerm": {
+          "labelSelector": {
+           "matchLabels": {
+            "app": "octogee-gateway"
+           }
+          },
+          "namespaceSelector": {},
+          "topologyKey": "topology.kubernetes.io/zone"
+         },
+         "weight": 100
+        }
+       ],
+       "requiredDuringSchedulingIgnoredDuringExecution": [
+        {
+         "labelSelector": {
+          "matchLabels": {
+           "app": "octogee-gateway"
+          }
+         },
+         "namespaceSelector": {},
+         "topologyKey": "kubernetes.io/hostname"
+        }
+       ]
+      }
+     },
+     "automountServiceAccountToken": false,
+     "containers": [
+      {
+       "env": [
+        {
+         "name": "HOME",
+         "value": "/home/node"
+        },
+        {
+         "name": "OPENCLAW_CONTROL_IDENTITY",
+         "value": "shared-operator"
+        },
+        {
+         "name": "NPM_CONFIG_CACHE",
+         "value": "/home/node/.npm-cache"
+        },
+        {
+         "name": "CUSTOMERS_DIR",
+         "value": "/home/node/.openclaw/customers"
+        },
+        {
+         "name": "AGENTS_DIR",
+         "value": "/home/node/.openclaw/agents"
+        },
+        {
+         "name": "K8S_NAMESPACE",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.namespace"
+          }
+         }
+        },
+        {
+         "name": "POD_UID",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.uid"
+          }
+         }
+        },
+        {
+         "name": "GCLOUD_PROJECT",
+         "value": "octogee-test"
+        },
+        {
+         "name": "CLOUDSDK_CORE_PROJECT",
+         "value": "octogee-test"
+        },
+        {
+         "name": "GCP_PROJECT_ID",
+         "value": "octogee-test"
+        },
+        {
+         "name": "FIREBASE_PROJECT_ID",
+         "value": "octogee-test"
+        },
+        {
+         "name": "AGENT_PREFIX",
+         "value": "octogee-"
+        },
+        {
+         "name": "GATEWAY_ID",
+         "value": "b-x"
+        },
+        {
+         "name": "GATEWAY_REVISION_ID",
+         "value": "b-x"
+        },
+        {
+         "name": "GATEWAY_BUILDER_SLUG",
+         "value": "mama"
+        },
+        {
+         "name": "GATEWAY_OWNER_UID",
+         "value": "UidA"
+        },
+        {
+         "name": "GATEWAY_IMAGE_TAG",
+         "value": "main.abc123"
+        },
+        {
+         "name": "GATEWAY_PROFILE",
+         "value": "builder"
+        },
+        {
+         "name": "GATEWAY_CLASS",
+         "value": "builder"
+        },
+        {
+         "name": "ANTHROPIC_BASE_URL",
+         "value": "http://llm-broker.octogee-test.svc.cluster.local:3010"
+        },
+        {
+         "name": "OPENROUTER_BASE_URL",
+         "value": "http://llm-broker.octogee-test.svc.cluster.local:3010/v1"
+        },
+        {
+         "name": "PLATFORM_OPENAI_BASE_URL",
+         "value": "http://llm-broker.octogee-test.svc.cluster.local:3010/v1"
+        },
+        {
+         "name": "OPENAI_EMBEDDINGS_ENABLED",
+         "value": "true"
+        },
+        {
+         "name": "OPENAI_EMBEDDINGS_MODEL",
+         "value": "text-embedding-3-small"
+        },
+        {
+         "name": "UV_THREADPOOL_SIZE",
+         "value": "4"
+        },
+        {
+         "name": "NODE_OPTIONS",
+         "value": "--no-deprecation --max-old-space-size=3072"
+        },
+        {
+         "name": "GITHUB_ORG",
+         "value": "octogee"
+        },
+        {
+         "name": "MM_URL",
+         "value": "http://mattermost.octogee-test.svc.cluster.local:8065"
+        },
+        {
+         "name": "MM_SITE_URL",
+         "value": "https://mattermost-test.octogee.com"
+        },
+        {
+         "name": "MM_INTERACTIONS_CALLBACK_BASE_URL",
+         "value": "http://mattermost-callback-router.octogee-test.svc.cluster.local:3001/internal/openclaw/mattermost/b-x"
+        },
+        {
+         "name": "MM_INTERACTIONS_ALLOWED_SOURCE_IPS",
+         "value": "127.0.0.1"
+        },
+        {
+         "name": "GIT_API_URL",
+         "value": "http://octogee-gitea-http.octogee-test.svc.cluster.local:3000/api/v1"
+        },
+        {
+         "name": "GIT_SSH_HOST",
+         "value": "octogee-gitea-ssh.octogee-test.svc.cluster.local"
+        },
+        {
+         "name": "API_PUBLIC_URL",
+         "value": "https://api-test.octogee.com"
+        },
+        {
+         "name": "APP_URL",
+         "value": "https://app-test.octogee.com"
+        },
+        {
+         "name": "OPENCLAW_LOG_LEVEL",
+         "value": "info"
+        },
+        {
+         "name": "FLEET_CONTROLLER_PORT",
+         "value": "3003"
+        },
+        {
+         "name": "OCTOGEE_BUILDER_NPM_FALLBACK_REGISTRY",
+         "value": "https://registry.npmjs.org/"
+        },
+        {
+         "name": "MIGRATION_RSYNC_PORT",
+         "value": "30873"
+        },
+        {
+         "name": "FLEET_CONTROLLER_PUBLIC_KEY",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "public-key",
+           "name": "octogee-fleet-controller"
+          }
+         }
+        },
+        {
+         "name": "GATEWAY_EDGE_INTERNAL_URL",
+         "value": "http://127.0.0.1:3001"
+        },
+        {
+         "name": "GITEA_ADMIN_BROKER_URL",
+         "value": "http://octogee-api.octogee-test.svc.cluster.local:3001"
+        },
+        {
+         "name": "FLEET_BROKER_URL",
+         "value": "http://octogee-api.octogee-test.svc.cluster.local:3001"
+        },
+        {
+         "name": "OCTOGEE_API_SA_TOKEN_PATH",
+         "value": "/var/run/secrets/octogee-gateway-broker/token"
+        },
+        {
+         "name": "OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH",
+         "value": "/var/run/secrets/octogee-gateway-credentials/token"
+        },
+        {
+         "name": "OPENCLAW_GATEWAY_TOKEN",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "token",
+           "name": "gateway-auth-token-b-x"
+          }
+         }
+        }
+       ],
+       "image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123",
+       "lifecycle": {
+        "preStop": {
+         "exec": {
+          "command": [
+           "sh",
+           "-c",
+           "timeout 10s /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prestop-flush.ts\n"
+          ]
+         }
+        }
+       },
+       "livenessProbe": {
+        "failureThreshold": 5,
+        "httpGet": {
+         "path": "/health",
+         "port": 3003
+        },
+        "initialDelaySeconds": 0,
+        "periodSeconds": 60,
+        "timeoutSeconds": 10
+       },
+       "name": "gateway",
+       "ports": [
+        {
+         "containerPort": 18789
+        },
+        {
+         "containerPort": 9092,
+         "name": "runner-metrics"
+        },
+        {
+         "containerPort": 3003,
+         "name": "fleet-http"
+        },
+        {
+         "containerPort": 30873,
+         "name": "migration-rsync"
+        }
+       ],
+       "readinessProbe": {
+        "failureThreshold": 3,
+        "httpGet": {
+         "path": "/surge-ready",
+         "port": 3003
+        },
+        "initialDelaySeconds": 0,
+        "periodSeconds": 5,
+        "successThreshold": 1,
+        "timeoutSeconds": 3
+       },
+       "resources": {
+        "limits": {
+         "cpu": "1000m",
+         "ephemeral-storage": "4Gi",
+         "memory": "4Gi"
+        },
+        "requests": {
+         "cpu": "1000m",
+         "ephemeral-storage": "4Gi",
+         "memory": "4Gi"
+        }
+       },
+       "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+         "drop": [
+          "ALL"
+         ]
+        },
+        "readOnlyRootFilesystem": false
+       },
+       "startupProbe": {
+        "failureThreshold": 60,
+        "httpGet": {
+         "path": "/startup-ready",
+         "port": 3003
+        },
+        "initialDelaySeconds": 15,
+        "periodSeconds": 10,
+        "timeoutSeconds": 10
+       },
+       "volumeMounts": [
+        {
+         "mountPath": "/home/node",
+         "name": "data"
+        },
+        {
+         "mountPath": "/octogee/scripts/secret-resolver.mjs",
+         "name": "secret-resolver",
+         "readOnly": true,
+         "subPath": "secret-resolver.mjs"
+        },
+        {
+         "mountPath": "/var/run/secrets/octogee-gateway-broker",
+         "name": "gateway-broker-sa-token",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/var/run/secrets/octogee-gateway-credentials",
+         "name": "gateway-credential-sa-token",
+         "readOnly": true
+        }
+       ]
+      },
+      {
+       "env": [
+        {
+         "name": "PORT",
+         "value": "3001"
+        },
+        {
+         "name": "K8S_NAMESPACE",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.namespace"
+          }
+         }
+        },
+        {
+         "name": "K8S_SERVICE_ACCOUNT_NAME",
+         "value": "octogee-gw-b-x"
+        },
+        {
+         "name": "OPENCLAW_GATEWAY_URL",
+         "value": "http://127.0.0.1:18789"
+        },
+        {
+         "name": "GATEWAY_API_URL",
+         "value": "http://127.0.0.1:18789"
+        },
+        {
+         "name": "OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH",
+         "value": "/var/run/octogee/openclaw-device-auth/token"
+        },
+        {
+         "name": "OPENCLAW_CONFIG",
+         "value": "/home/node/.openclaw/system_config/openclaw.json"
+        },
+        {
+         "name": "OPENCLAW_CONTROL_IDENTITY",
+         "value": "shared-operator"
+        },
+        {
+         "name": "GATEWAY_ID",
+         "value": "b-x"
+        },
+        {
+         "name": "GATEWAY_REVISION_ID",
+         "value": "b-x"
+        },
+        {
+         "name": "GATEWAY_BUILDER_SLUG",
+         "value": "mama"
+        },
+        {
+         "name": "GATEWAY_OWNER_UID",
+         "value": "UidA"
+        },
+        {
+         "name": "GATEWAY_PROFILE",
+         "value": "builder"
+        },
+        {
+         "name": "GATEWAY_CLASS",
+         "value": "builder"
+        },
+        {
+         "name": "OPENROUTER_BASE_URL",
+         "value": "http://llm-broker.octogee-test.svc.cluster.local:3010/v1"
+        },
+        {
+         "name": "PLATFORM_OPENAI_BASE_URL",
+         "value": "http://llm-broker.octogee-test.svc.cluster.local:3010/v1"
+        },
+        {
+         "name": "MM_INTERNAL_URL",
+         "value": "http://mattermost.octogee-test.svc.cluster.local:8065"
+        },
+        {
+         "name": "MM_PUBLIC_URL",
+         "value": "http://mattermost.octogee-test.svc.cluster.local:8065"
+        },
+        {
+         "name": "FIREBASE_PROJECT",
+         "value": "octogee-test"
+        },
+        {
+         "name": "OPENCLAW_RUNTIME_BROKER_URL",
+         "value": "http://octogee-api.octogee-test.svc.cluster.local:3001"
+        },
+        {
+         "name": "CONNECTOR_TOKEN_BROKER_URL",
+         "value": "http://octogee-api.octogee-test.svc.cluster.local:3001"
+        },
+        {
+         "name": "WORKSPACE_COMMIT_PROOF_BROKER_URL",
+         "value": "http://octogee-api.octogee-test.svc.cluster.local:3001"
+        },
+        {
+         "name": "FLEET_BROKER_URL",
+         "value": "http://octogee-api.octogee-test.svc.cluster.local:3001"
+        },
+        {
+         "name": "OCTOGEE_API_SA_TOKEN_PATH",
+         "value": "/var/run/secrets/octogee-api/token"
+        },
+        {
+         "name": "OCTOGEE_GATEWAY_CREDENTIAL_TOKEN_PATH",
+         "value": "/var/run/secrets/octogee-gateway-credentials/token"
+        },
+        {
+         "name": "OCTOGEE_SIDECAR_BROKER_TOKEN_PATH",
+         "value": "/var/run/secrets/octogee-sidecar-broker/token"
+        },
+        {
+         "name": "OCTOGEE_ALLOWED_WS_ORIGINS",
+         "value": "https://app-test.octogee.com,https://app-octogee-test.web.app"
+        },
+        {
+         "name": "GITEA_PUBLIC_BASE_URL",
+         "value": "https://git-test.octogee.com"
+        },
+        {
+         "name": "OCTOGEE_AGENT_CONTROL_SIGNING_SECRET",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "secret",
+           "name": "agent-control-signing"
+          }
+         }
+        },
+        {
+         "name": "AGENT_CONTROL_ROUTER_KEY",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "secret",
+           "name": "agent-control-router"
+          }
+         }
+        },
+        {
+         "name": "BYOT_SYNC_INTERNAL_SIGNING_SECRET",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "secret",
+           "name": "byot-sync-internal"
+          }
+         }
+        },
+        {
+         "name": "OPENCLAW_GATEWAY_TOKEN",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "token",
+           "name": "gateway-auth-token-b-x"
+          }
+         }
+        },
+        {
+         "name": "GATEWAY_EDGE_INTERNAL_URL",
+         "value": "http://localhost:3001"
+        },
+        {
+         "name": "API_PUBLIC_URL",
+         "value": "https://api-test.octogee.com"
+        },
+        {
+         "name": "APP_URL",
+         "value": "https://app-test.octogee.com"
+        },
+        {
+         "name": "FIREBASE_PROJECT_ID",
+         "value": "octogee-test"
+        },
+        {
+         "name": "GATEWAY_SERVICE_ACCOUNT",
+         "value": "octogee-gateway@octogee-test.iam.gserviceaccount.com"
+        },
+        {
+         "name": "GCLOUD_PROJECT",
+         "value": "octogee-test"
+        },
+        {
+         "name": "GCP_PROJECT_ID",
+         "value": "octogee-test"
+        },
+        {
+         "name": "GITEA_ORG",
+         "value": "octogee"
+        },
+        {
+         "name": "SITE_URL",
+         "value": "https://octogee-test.web.app"
+        }
+       ],
+       "image": "us-docker.pkg.dev/octogee/octogee/gateway-edge:main.abc123",
+       "livenessProbe": {
+        "httpGet": {
+         "path": "/health",
+         "port": 3001
+        },
+        "initialDelaySeconds": 0,
+        "periodSeconds": 30
+       },
+       "name": "gateway-edge",
+       "ports": [
+        {
+         "containerPort": 3001,
+         "name": "gateway-edge"
+        }
+       ],
+       "readinessProbe": {
+        "httpGet": {
+         "path": "/health",
+         "port": 3001
+        },
+        "initialDelaySeconds": 0,
+        "periodSeconds": 10
+       },
+       "resources": {
+        "limits": {
+         "cpu": "500m",
+         "memory": "512Mi"
+        },
+        "requests": {
+         "cpu": "100m",
+         "memory": "256Mi"
+        }
+       },
+       "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+         "drop": [
+          "ALL"
+         ]
+        },
+        "readOnlyRootFilesystem": true
+       },
+       "startupProbe": {
+        "failureThreshold": 60,
+        "httpGet": {
+         "path": "/health",
+         "port": 3001
+        },
+        "initialDelaySeconds": 5,
+        "periodSeconds": 10,
+        "timeoutSeconds": 2
+       },
+       "volumeMounts": [
+        {
+         "mountPath": "/home/node",
+         "name": "data"
+        },
+        {
+         "mountPath": "/tmp",
+         "name": "tmp"
+        },
+        {
+         "mountPath": "/var/run/octogee/openclaw-device-auth",
+         "name": "openclaw-device-auth"
+        },
+        {
+         "mountPath": "/var/run/secrets/octogee-api",
+         "name": "octogee-api-sa-token",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/var/run/secrets/octogee-gateway-credentials",
+         "name": "gateway-credential-sa-token",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/var/run/secrets/octogee-sidecar-broker",
+         "name": "sidecar-broker-sa-token",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+         "name": "k8s-api-token",
+         "readOnly": true
+        }
+       ]
+      }
+     ],
+     "initContainers": [
+      {
+       "command": [
+        "sh",
+        "-c",
+        "set -eu\n# -rn, not -a/-p: fsGroup owns /home/node, and preserving\n# source owner/timestamps needs FOWNER, which restricted PSA denies.\ncp -rn /etc/skel/. /home/node/\nmkdir -p /home/node/.npm-cache\ninstall -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs\n"
+       ],
+       "env": [
+        {
+         "name": "OPENCLAW_GATEWAY_TOKEN",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "token",
+           "name": "gateway-auth-token-b-x"
+          }
+         }
+        }
+       ],
+       "image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123",
+       "name": "fix-perms",
+       "resources": {
+        "requests": {
+         "cpu": "50m",
+         "memory": "32Mi"
+        }
+       },
+       "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+         "drop": [
+          "ALL"
+         ]
+        },
+        "runAsNonRoot": true
+       },
+       "volumeMounts": [
+        {
+         "mountPath": "/home/node",
+         "name": "data"
+        },
+        {
+         "mountPath": "/octogee-secret-resolver",
+         "name": "secret-resolver"
+        }
+       ]
+      }
+     ],
+     "nodeSelector": {
+      "cloud.google.com/compute-class": "octogee-gateway-test"
+     },
+     "runtimeClassName": "gvisor",
+     "securityContext": {
+      "fsGroup": 1000,
+      "fsGroupChangePolicy": "OnRootMismatch",
+      "runAsGroup": 1000,
+      "runAsNonRoot": true,
+      "runAsUser": 1000,
+      "seccompProfile": {
+       "type": "RuntimeDefault"
+      }
+     },
+     "serviceAccountName": "octogee-gw-b-x",
+     "terminationGracePeriodSeconds": 30,
+     "volumes": [
+      {
+       "emptyDir": {},
+       "name": "data"
+      },
+      {
+       "emptyDir": {},
+       "name": "secret-resolver"
+      },
+      {
+       "emptyDir": {
+        "sizeLimit": "1Gi"
+       },
+       "name": "tmp"
+      },
+      {
+       "name": "octogee-api-sa-token",
+       "projected": {
+        "sources": [
+         {
+          "serviceAccountToken": {
+           "audience": "octogee-api",
+           "expirationSeconds": 3600,
+           "path": "token"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "name": "gateway-broker-sa-token",
+       "projected": {
+        "sources": [
+         {
+          "serviceAccountToken": {
+           "audience": "octogee-api",
+           "expirationSeconds": 3600,
+           "path": "token"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "name": "gateway-credential-sa-token",
+       "projected": {
+        "sources": [
+         {
+          "serviceAccountToken": {
+           "audience": "octogee-api-gateway-credentials",
+           "expirationSeconds": 3600,
+           "path": "token"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "name": "sidecar-broker-sa-token",
+       "projected": {
+        "sources": [
+         {
+          "serviceAccountToken": {
+           "audience": "octogee-api-sidecar-broker",
+           "expirationSeconds": 3600,
+           "path": "token"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "emptyDir": {},
+       "name": "openclaw-device-auth"
+      },
+      {
+       "name": "k8s-api-token",
+       "projected": {
+        "sources": [
+         {
+          "serviceAccountToken": {
+           "expirationSeconds": 3600,
+           "path": "token"
+          }
+         },
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "ca.crt",
+             "path": "ca.crt"
+            }
+           ],
+           "name": "kube-root-ca.crt"
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+]

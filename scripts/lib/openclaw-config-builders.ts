@@ -1,5 +1,6 @@
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
+import { applyComputerBrowserAgentPolicy } from "./openclaw-computer-browser.js";
 import {
   CUSTOMER_CODE_DENIED_TOOLS,
   CUSTOMER_WORKFLOW_TOOLS as WORKSPACE_COACH_ALLOWED_TOOLS,
@@ -456,10 +457,11 @@ export function buildSafeDefaultAgent(): Record<string, unknown> {
   };
 }
 
-function withoutDefault(agent: unknown): unknown {
+function prepareGatewayAgentEntry(agent: unknown): unknown {
   if (agent === null || typeof agent !== "object" || Array.isArray(agent)) return agent;
-  const entry = { ...(agent as Record<string, unknown>) };
+  const entry = structuredClone(agent as Record<string, unknown>);
   delete entry.default;
+  applyComputerBrowserAgentPolicy(entry);
   return entry;
 }
 
@@ -474,7 +476,7 @@ export function gatewayAgentRoster(
       !Array.isArray(agent) &&
       (agent as { id?: unknown }).id === SAFE_DEFAULT_AGENT_ID
     ));
-  const withoutExistingDefault = retained.map(withoutDefault);
+  const withoutExistingDefault = retained.map(prepareGatewayAgentEntry);
   if (!builderSlug) return [buildSafeDefaultAgent(), ...withoutExistingDefault];
   return withoutExistingDefault;
 }

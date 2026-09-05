@@ -6,6 +6,18 @@ global:
   deploymentTargetId: ""
   deploymentProjectId: ""
   customerHostingProjectId: ""
+  computer:
+    enabled: false
+    projectId: ""
+    serviceAccountEmail: ""
+    cidr: ""
+    kubernetesApiHost: ""
+    bridge:
+      image:
+        repository: nginxinc/nginx-unprivileged
+        tag: 1.27-alpine
+    vmSpec: {}
+    warmPoolSize: 0
   projectRunnerImage:
     repository: ""
     tag: latest

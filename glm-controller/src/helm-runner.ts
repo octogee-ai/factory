@@ -64,6 +64,7 @@ gatewayServiceAccount?: string;
 removeInstance(opts: {
     namespace: string;
     gatewayId: string;
+    awaitHomeCheckpoint?: boolean;
   }): Promise<void>;
 
   // gatewayIds of releases stuck in a helm pending-* state (an interrupted

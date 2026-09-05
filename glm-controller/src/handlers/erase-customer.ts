@@ -182,6 +182,7 @@ async function reportCloudErasure(
       name: result.key,
       status: cloudStepStatus(result),
       ...(result.error ? { error: result.error } : {}),
+      ...(result.detail ? { detail: result.detail } : {}),
     });
   }
 }

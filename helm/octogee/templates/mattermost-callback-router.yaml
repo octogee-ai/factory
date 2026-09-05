@@ -142,3 +142,12 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+    {{- $computer := (.Values.global).computer | default dict }}
+    {{- if $computer.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "global.computer.cidr is required" $computer.cidr }}
+      ports:
+        - protocol: TCP
+          port: 3001
+    {{- end }}

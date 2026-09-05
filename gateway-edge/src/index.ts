@@ -31,7 +31,9 @@ import { createSharingRoutes } from "./routes/sharing.js";
 import { createProjectCreateRoutes } from "./routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "./routes/projects/repo-source.js";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
-import { createGatewayRouter } from "./public-router.js";
+import { createGatewayRouter, type GatewayRouterSurface } from "./public-router.js";
+import { createVmRoutesResolver } from "./vm-routes.js";
+import { gatewayEdgeServiceName } from "@octogee/shared/types/gateway-releases";
 import {
   createRollRosterGate,
   createRollRosterStore,
@@ -58,6 +60,14 @@ import {
   type OpenClawControlAuthorizationCache,
 } from "./openclaw-control/broker.js";
 import { installGatewayEdgeUnhandledRejectionPolicy } from "./process-rejection-policy.js";
+import {
+  attachComputerVncWsRoute,
+  createComputerRouter,
+  createComputerTicketStore,
+  resolveComputerEndpoints,
+} from "./routes/computer.js";
+import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
+import { resolveComputerAccess } from "./lib/computer-access-broker.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
@@ -74,6 +84,7 @@ let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
 let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
+const computerTickets = createComputerTicketStore();
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -253,6 +264,12 @@ function mountSidecarLocalitySurface(app: Express, options: {
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
+  mountApi(app, "/computer", createComputerRouter({
+    localGatewayId: () => process.env.GATEWAY_ID ?? null,
+    resolveAccess: resolveComputerAccess,
+    computer: resolveComputerEndpoints(process.env),
+    tickets: computerTickets,
+  }));
   // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
   // claude-sso/device-auth managers accept the pod's OPENCLAW_GATEWAY_TOKEN —
   // octogee-api can't hold a per-gateway token. The flow write brokers back.
@@ -302,9 +319,22 @@ if (process.env.NODE_ENV !== "test") {
       });
     });
   } else if (process.env.GATEWAY_EDGE_MODE === "router") {
+    const namespace = process.env.K8S_NAMESPACE || "default";
+    const routerLog = (message: string, meta?: Record<string, unknown>) => logger.error(message, meta);
+    const vmRoutesFile = process.env.GATEWAY_VM_ROUTES_FILE;
+    const resolveVmOrigin = vmRoutesFile
+      ? createVmRoutesResolver({ filePath: vmRoutesFile, edgePort: 3001, log: routerLog })
+      : null;
     const server = createGatewayRouter({
-      namespace: process.env.K8S_NAMESPACE || "default",
-      log: (message, meta) => logger.error(message, meta),
+      namespace,
+      log: routerLog,
+      ...(resolveVmOrigin
+        ? {
+            targetOriginForGateway: (_surface: GatewayRouterSurface, serviceId: string) =>
+              resolveVmOrigin(serviceId)
+              ?? `http://${gatewayEdgeServiceName(serviceId)}.${namespace}.svc.cluster.local:3001`,
+          }
+        : {}),
     });
     server.listen(PORT, () => {
       logger.info(`gateway-router boot — listening on port ${PORT}`, {
@@ -381,6 +411,16 @@ if (process.env.NODE_ENV !== "test") {
   );
   loadChatProxyModule().then((chatProxy) => {
     chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
+    const computer = resolveComputerEndpoints(process.env);
+    if (computer) {
+      attachComputerVncWsRoute({
+        router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
+        tickets: computerTickets,
+        vncUrl: computer.vncUrl,
+        isAllowedOrigin: isAllowedWsOrigin,
+        log: (message, meta) => logger.warn(message, meta),
+      });
+    }
     if (process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED === "true") {
       attachOpenClawControlWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,

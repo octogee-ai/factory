@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Bootstraps the gateway registration agent on an Octogee computer: waits for a
+# gateway identity in instance metadata (a warm-pool member boots without one
+# and receives it when Cowboy claims it), pulls the pinned gateway image with
+# the VM's own service account, and runs the agent from that image against the
+# host Docker socket. Everything else (tokens, bundle, containers) is the
+# agent's job; see scripts/lib/vm-gateway-agent.
+set -euo pipefail
+
+STATE_ROOT="${OCTO_VM_STATE_ROOT:-/srv/octogee}"
+META="http://169.254.169.254/computeMetadata/v1"
+ASSIGNMENT_POLL_SECONDS="${OCTO_ASSIGNMENT_POLL_SECONDS:-5}"
+
+meta() { curl -fsS --connect-timeout 2 --max-time 5 -H 'Metadata-Flavor: Google' "$META/$1"; }
+attr() { curl -fsS --connect-timeout 2 --max-time 5 -H 'Metadata-Flavor: Google' "$META/instance/attributes/$1" 2>/dev/null || true; }
+
+for _ in $(seq 1 60); do meta instance/id >/dev/null 2>&1 && break; sleep 2; done
+
+# The agent (root) may read the metadata server; the gateway runtime (uid 1000)
+# may not: the VM's identity reaches the runtime only as the token files the
+# agent writes, the same posture the pod has.
+iptables -C OUTPUT -d 169.254.169.254 -m owner --uid-owner 1000 -j REJECT 2>/dev/null \
+  || iptables -I OUTPUT -d 169.254.169.254 -m owner --uid-owner 1000 -j REJECT
+
+install -d -m 0755 "$STATE_ROOT" "$STATE_ROOT/volumes" "$STATE_ROOT/tokens"
+
+# Metadata is re-read on every poll: the assignment arrives through
+# instances.setMetadata on a running pool member, never through a reboot.
+waiting=0
+while :; do
+  GATEWAY_ID="$(attr gateway-id)"
+  GATEWAY_IMAGE="$(attr gateway-image)"
+  OCTOGEE_API_URL="$(attr octogee-api-url)"
+  [ -n "$GATEWAY_ID" ] && [ -n "$GATEWAY_IMAGE" ] && [ -n "$OCTOGEE_API_URL" ] && break
+  if [ "$waiting" -eq 0 ]; then
+    echo "octo-gateway-agent: no gateway assigned yet (gateway-id, gateway-image, octogee-api-url); polling metadata every ${ASSIGNMENT_POLL_SECONDS}s"
+    waiting=1
+  fi
+  sleep "$ASSIGNMENT_POLL_SECONDS"
+done
+echo "octo-gateway-agent: assigned to gateway $GATEWAY_ID"
+
+REGISTRY="${GATEWAY_IMAGE%%/*}"
+meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
+  | docker login -u oauth2accesstoken --password-stdin "$REGISTRY" >/dev/null
+docker pull -q "$GATEWAY_IMAGE" >/dev/null
+
+docker rm -f octo-gateway-agent >/dev/null 2>&1 || true
+docker run --rm --name octo-gateway-agent \
+  --network host --user 0:0 \
+  --entrypoint /octogee/scripts/node_modules/.bin/tsx \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$STATE_ROOT:$STATE_ROOT" \
+  -v "/home/octo:$STATE_ROOT/desktop-home" \
+  -v /run/octogee-desktop:/run/octogee-desktop \
+  -e GATEWAY_ID="$GATEWAY_ID" \
+  -e OCTOGEE_API_URL="$OCTOGEE_API_URL" \
+  -e VM_STATE_ROOT="$STATE_ROOT" \
+  -w /octogee/scripts \
+  "$GATEWAY_IMAGE" /octogee/scripts/entrypoints/vm-gateway-agent.ts &
+agent_pid=$!
+stop_agent() {
+  docker stop --time 20 octo-gateway-agent >/dev/null || true
+  wait "$agent_pid" || true
+}
+trap stop_agent EXIT
+trap 'exit 0' TERM INT
+while kill -0 "$agent_pid" 2>/dev/null; do
+  sleep "$ASSIGNMENT_POLL_SECONDS"
+  if [[ "$(attr gateway-image)" != "$GATEWAY_IMAGE" || "$(attr gateway-id)" != "$GATEWAY_ID" || "$(attr octogee-api-url)" != "$OCTOGEE_API_URL" ]]; then
+    echo "octo-gateway-agent: bootstrap metadata changed; restarting the agent"
+    exit 0
+  fi
+done
+wait "$agent_pid"

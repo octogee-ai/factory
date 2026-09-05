@@ -29,7 +29,15 @@ export type ReviewResult =
       audiences: string[];
       podName?: string;
       podUid?: string;
+      computeInstance?: ComputeInstanceIdentity;
     };
+
+export interface ComputeInstanceIdentity {
+  projectId: string;
+  zone: string;
+  instanceId: string;
+  instanceName: string;
+}
 
 export type Reviewer = (jwt: string) => Promise<ReviewResult>;
 

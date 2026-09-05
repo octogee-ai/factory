@@ -1,7 +1,8 @@
 [Unit]
 Description=Octogee computer desktop session (Hyprland, wayvnc, noVNC, control API, Chromium)
-After=octo-seatd.service network-online.target
+After=octo-seatd.service network-online.target user-runtime-dir@1000.service
 Wants=octo-seatd.service network-online.target
+Requires=user-runtime-dir@1000.service
 
 [Service]
 User=octo
@@ -14,8 +15,8 @@ Environment=OCTO_RESOLUTION=1920x1080
 Environment=OCTO_REFRESH=60
 Environment=OCTO_BIND=127.0.0.1
 Environment=OCTO_HOME_URL=https://octogee.com
-ExecStartPre=+/usr/bin/install -d -o octo -g octo -m 0700 /run/user/1000
 ExecStart=/usr/local/bin/octo-desktop-session
+ExecStop=/usr/local/bin/octo-desktop-stop
 StandardOutput=journal+console
 StandardError=journal
 Restart=always

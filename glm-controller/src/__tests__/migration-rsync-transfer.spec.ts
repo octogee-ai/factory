@@ -583,3 +583,74 @@ describe("createRsyncMigrationTransfer", () => {
     expect(store["mig-2__final"]).toMatchObject({ status: "succeeded", attempt: 2 });
   });
 });
+
+describe("createRsyncMigrationTransfer with a VM target", () => {
+  const VM_IP = ["172", "20", "0", "9"].join(".");
+
+  function vmTransfer(store: Store, calls: string[], fetchImpl: typeof fetch, kubectlCalls: Array<{ command: string; args: string[] }>) {
+    return createRsyncMigrationTransfer({
+      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: fetchImpl,
+      runCommand: makeCommandRunner(kubectlCalls),
+      resolveGatewayVm: async (transportId) => transportId === "gw-to"
+        ? { instanceName: "octogee-gw-gw-to", internalIp: VM_IP }
+        : null,
+      wait: async () => {},
+      now: () => Date.now(),
+    });
+  }
+
+  it("addresses the target by its VM IP, never lists its pods, and waits on its fleet endpoint after a final import", async () => {
+    const store: Store = {};
+    const calls: string[] = [];
+    const kubectlCalls: Array<{ command: string; args: string[] }> = [];
+    const base = makeFetch(calls, VM_IP);
+    let readyPolls = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `http://${VM_IP}:${FLEET_CONTROLLER_PORT}/surge-ready`) {
+        readyPolls += 1;
+        return new Response(readyPolls < 3 ? "not yet" : "ok", { status: readyPolls < 3 ? 503 : 200 });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+
+    await expect(vmTransfer(store, calls, fetchImpl, kubectlCalls)({
+      migrationId: "to-vm", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
+    })).resolves.toMatchObject({ imported: true });
+
+    expect(calls.filter((url) => url.includes("/prepare-rsync-import/"))).toEqual([
+      `http://${VM_IP}:${FLEET_CONTROLLER_PORT}/prepare-rsync-import/gw-to`,
+    ]);
+    expect(readyPolls).toBe(3);
+    const selectors = kubectlCalls.map((c) => c.args[c.args.indexOf("-l") + 1] ?? "");
+    expect(selectors.some((s) => s.includes("gateway-instance=gw-from"))).toBe(true);
+    expect(selectors.some((s) => s.includes("gateway-instance=gw-to"))).toBe(false);
+    expect(kubectlCalls.some((c) => c.args.includes("wait"))).toBe(false);
+    expect(store["to-vm__final"].status).toBe("succeeded");
+  });
+
+  it("fails a final import when the VM's fleet endpoint never answers", async () => {
+    const store: Store = {};
+    const calls: string[] = [];
+    const base = makeFetch(calls, VM_IP);
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/surge-ready")) throw new Error("ECONNREFUSED");
+      return base(input, init);
+    }) as typeof fetch;
+    let clock = 0;
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: fetchImpl, runCommand: makeCommandRunner([]),
+      resolveGatewayVm: async (id) => id === "gw-to" ? { instanceName: "octogee-gw-gw-to", internalIp: VM_IP } : null,
+      wait: async () => { clock += 30_000; },
+      now: () => clock,
+    });
+    await expect(transfer({
+      migrationId: "to-vm-unready", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
+    })).rejects.toThrow("target octogee-gw-gw-to did not become Ready: ECONNREFUSED");
+    expect(calls.some((url) => url.includes("/abort-rsync-import/"))).toBe(true);
+  });
+});

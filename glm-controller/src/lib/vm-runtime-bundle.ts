@@ -1,0 +1,236 @@
+import { createHash } from "node:crypto";
+import type {
+  GatewayVmRuntimeBundle,
+  GatewayVmRuntimeContainer,
+  GatewayVmRuntimeMount,
+  GatewayVmRuntimeVolume,
+} from "@octogee/shared/types/glm";
+
+interface JsonScan {
+  depth: number;
+  start: number;
+  inString: boolean;
+  escaped: boolean;
+}
+
+function scanStringChar(scan: JsonScan, ch: string): void {
+  if (scan.escaped) scan.escaped = false;
+  else if (ch === "\\") scan.escaped = true;
+  else if (ch === '"') scan.inString = false;
+}
+
+function scanStructuralChar(scan: JsonScan, ch: string, index: number, text: string, items: unknown[]): void {
+  if (ch === '"') {
+    scan.inString = true;
+  } else if (ch === "{" || ch === "[") {
+    if (scan.depth === 0) scan.start = index;
+    scan.depth += 1;
+  } else if (ch === "}" || ch === "]") {
+    scan.depth -= 1;
+    if (scan.depth === 0 && scan.start >= 0) {
+      items.push(JSON.parse(text.slice(scan.start, index + 1)));
+      scan.start = -1;
+    }
+  }
+}
+
+export function parseConcatenatedJson(text: string): unknown[] {
+  const items: unknown[] = [];
+  const scan: JsonScan = { depth: 0, start: -1, inString: false, escaped: false };
+  for (let i = 0; i < text.length; i += 1) {
+    if (scan.inString) scanStringChar(scan, text[i]);
+    else scanStructuralChar(scan, text[i], i, text, items);
+  }
+  if (scan.depth !== 0) throw new Error("concatenated JSON ended inside a value");
+  return items;
+}
+
+export function helmTemplateArgsFromUpgradeArgs(upgradeArgs: readonly string[]): string[] {
+  if (upgradeArgs[0] !== "upgrade" || upgradeArgs[1] !== "--install") {
+    throw new Error("expected helm upgrade --install argv");
+  }
+  const dropped = new Set(["--server-side=true", "--force-conflicts", "--take-ownership", "--wait"]);
+  const rest = upgradeArgs.slice(2).filter((arg) => !dropped.has(arg) && !arg.startsWith("--timeout="));
+  return ["template", ...rest];
+}
+
+interface K8sEnvVar {
+  name: string;
+  value?: string;
+  valueFrom?: {
+    secretKeyRef?: { name: string; key: string };
+    fieldRef?: { fieldPath: string };
+  };
+}
+
+interface K8sVolumeMount {
+  name: string;
+  mountPath: string;
+  readOnly?: boolean;
+  subPath?: string;
+}
+
+interface K8sContainer {
+  name: string;
+  image: string;
+  command?: string[];
+  args?: string[];
+  env?: K8sEnvVar[];
+  volumeMounts?: K8sVolumeMount[];
+}
+
+interface K8sVolume {
+  name: string;
+  emptyDir?: Record<string, unknown>;
+  projected?: {
+    sources?: Array<{
+      serviceAccountToken?: { audience?: string; path?: string };
+      configMap?: { name: string };
+    }>;
+  };
+}
+
+interface K8sDeployment {
+  kind?: string;
+  metadata?: { name?: string };
+  spec?: {
+    template?: {
+      spec?: {
+        initContainers?: K8sContainer[];
+        containers?: K8sContainer[];
+        volumes?: K8sVolume[];
+      };
+    };
+  };
+}
+
+export interface RenderVmRuntimeBundleInput {
+  gatewayId: string;
+  namespace: string;
+  imageRepository: string;
+  imageTag: string;
+  manifests: unknown[];
+  readSecret: (name: string, key: string) => Promise<string>;
+  hostAliases: Record<string, string>;
+  kubernetes: { apiHost: string; apiPort: string; caCert: string };
+  now: () => number;
+}
+
+export const VM_POD_UID_PLACEHOLDER = "";
+
+function findDeployment(manifests: unknown[]): K8sDeployment {
+  const deployments = manifests.filter(
+    (item): item is K8sDeployment => !!item && typeof item === "object" && (item as K8sDeployment).kind === "Deployment",
+  );
+  if (deployments.length !== 1) {
+    throw new Error(`expected exactly one Deployment in the rendered chart, found ${deployments.length}`);
+  }
+  return deployments[0];
+}
+
+async function renderEnv(
+  env: K8sEnvVar[] | undefined,
+  input: Pick<RenderVmRuntimeBundleInput, "namespace" | "readSecret">,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const entry of env ?? []) {
+    if (entry.value !== undefined) {
+      out[entry.name] = entry.value;
+      continue;
+    }
+    const secret = entry.valueFrom?.secretKeyRef;
+    if (secret) {
+      out[entry.name] = await input.readSecret(secret.name, secret.key);
+      continue;
+    }
+    const fieldPath = entry.valueFrom?.fieldRef?.fieldPath;
+    if (fieldPath === "metadata.namespace") {
+      out[entry.name] = input.namespace;
+      continue;
+    }
+    if (fieldPath === "metadata.uid") {
+      out[entry.name] = VM_POD_UID_PLACEHOLDER;
+      continue;
+    }
+    throw new Error(`env ${entry.name}: unsupported valueFrom ${JSON.stringify(entry.valueFrom ?? {})}`);
+  }
+  return out;
+}
+
+function renderMounts(mounts: K8sVolumeMount[] | undefined, volumes: Set<string>): GatewayVmRuntimeMount[] {
+  return (mounts ?? []).map((mount) => {
+    if (!volumes.has(mount.name)) throw new Error(`volumeMount ${mount.name} has no volume`);
+    return {
+      volume: mount.name,
+      mountPath: mount.mountPath,
+      readOnly: mount.readOnly === true,
+      subPath: mount.subPath ?? null,
+    };
+  });
+}
+
+function renderVolume(volume: K8sVolume): GatewayVmRuntimeVolume {
+  if (volume.emptyDir) return { name: volume.name, kind: "emptyDir" };
+  const sources = volume.projected?.sources ?? [];
+  const token = sources.find((source) => source.serviceAccountToken)?.serviceAccountToken;
+  if (!token) throw new Error(`volume ${volume.name}: only emptyDir and projected service-account-token volumes are supported`);
+  if (typeof token.audience === "string" && token.audience.length > 0) {
+    return { name: volume.name, kind: "identityToken", audience: token.audience };
+  }
+  return { name: volume.name, kind: "kubernetesApi" };
+}
+
+export const GATEWAY_EDGE_CONTAINER_NAME = "gateway-edge";
+export const GATEWAY_COMPUTER_ENV = {
+  GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777",
+  GATEWAY_COMPUTER_VNC_URL: "ws://127.0.0.1:6080",
+} as const;
+
+async function renderContainer(
+  container: K8sContainer,
+  input: RenderVmRuntimeBundleInput,
+  volumes: Set<string>,
+): Promise<GatewayVmRuntimeContainer> {
+  let env = await renderEnv(container.env, input);
+  if (container.name === GATEWAY_EDGE_CONTAINER_NAME) env = { ...env, ...GATEWAY_COMPUTER_ENV };
+  else if (container.name === "gateway") {
+    env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_CONTROL_URL: GATEWAY_COMPUTER_ENV.GATEWAY_COMPUTER_CONTROL_URL };
+  }
+  return {
+    name: container.name,
+    image: container.image,
+    env,
+    command: container.command ?? null,
+    args: container.args ?? null,
+    mounts: renderMounts(container.volumeMounts, volumes),
+  };
+}
+
+export function bundleVersion(bundle: Omit<GatewayVmRuntimeBundle, "version" | "renderedAt">): string {
+  return createHash("sha256").update(JSON.stringify(bundle)).digest("hex").slice(0, 16);
+}
+
+export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): Promise<GatewayVmRuntimeBundle> {
+  const deployment = findDeployment(input.manifests);
+  const podSpec = deployment.spec?.template?.spec;
+  if (!podSpec?.containers?.length) throw new Error("rendered Deployment has no containers");
+  const volumes = (podSpec.volumes ?? []).map(renderVolume);
+  const volumeNames = new Set(volumes.map((volume) => volume.name));
+  const init = podSpec.initContainers?.[0]
+    ? await renderContainer(podSpec.initContainers[0], input, volumeNames)
+    : null;
+  if ((podSpec.initContainers?.length ?? 0) > 1) throw new Error("rendered Deployment has more than one init container");
+  const containers: GatewayVmRuntimeContainer[] = [];
+  for (const container of podSpec.containers) containers.push(await renderContainer(container, input, volumeNames));
+  const unversioned = {
+    gatewayId: input.gatewayId,
+    imageRepository: input.imageRepository,
+    imageTag: input.imageTag,
+    init,
+    containers,
+    volumes,
+    hostAliases: input.hostAliases,
+    kubernetes: input.kubernetes,
+  };
+  return { version: bundleVersion(unversioned), ...unversioned, renderedAt: input.now() };
+}

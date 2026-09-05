@@ -7,7 +7,7 @@ import {
   isValidGatewayId,
   isValidNewGatewayId,
   builderGatewayServiceAccountName,
-  gatewayVmInstanceName,
+  builderComputerInstanceName,
   isGatewayRuntime,
   resolveGatewayRuntime,
   resolveGatewayClass,
@@ -23,6 +23,8 @@ import {
   isOperationAuditRow,
   OPERATION_AUDIT_RECORD_TYPE,
   OPERATION_AUDIT_SCHEMA_VERSION,
+  homeCheckpointOutstanding,
+  readBuilderParkedComputer,
 } from "./glm";
 
 describe("managedBy ownership", () => {
@@ -356,23 +358,66 @@ describe("gateway runtime + VM naming", () => {
     expect(isGatewayRuntime("local")).toBe(false);
   });
 
-  it("derives a GCE instance name from the gateway id", () => {
-    expect(gatewayVmInstanceName("b-mama-3-abc-hobby")).toBe("octogee-gw-b-mama-3-abc-hobby");
-    expect(gatewayVmInstanceName("Shared_A")).toBe("octogee-gw-shared-a");
-    expect(gatewayVmInstanceName("  x  ")).toBe("octogee-gw-x");
+  it("names the Builder's computer by environment and owner, not by the per-lease gateway id", () => {
+    expect(builderComputerInstanceName("test", "UidAbc123")).toBe("octogee-computer-test-uidabc123");
+    expect(builderComputerInstanceName("prod", "UidAbc123")).toBe("octogee-computer-prod-uidabc123");
+    expect(builderComputerInstanceName("test", "  x_y  ")).toBe("octogee-computer-test-x-y");
+    expect(() => builderComputerInstanceName("octogee-test", "uid")).toThrow(/not a name segment/);
   });
 
-  it("keeps long ids within the 63-character GCE limit with a stable hash suffix", () => {
-    const longId = `b-${"mountain-mama-".repeat(6)}7-lease-pro`;
-    const name = gatewayVmInstanceName(longId);
+  it("keeps long owner ids within the 63-character GCE limit with a stable hash suffix", () => {
+    const longUid = `${"mountain-mama-".repeat(6)}7-lease-pro`;
+    const name = builderComputerInstanceName("prod", longUid);
     expect(name.length).toBeLessThanOrEqual(63);
-    expect(name).toMatch(/^octogee-gw-[a-z0-9-]+-[0-9a-f]{8}$/);
-    expect(gatewayVmInstanceName(longId)).toBe(name);
-    expect(gatewayVmInstanceName(`${longId}-x`)).not.toBe(name);
+    expect(name).toMatch(/^octogee-computer-prod-[a-z0-9-]+-[0-9a-f]{8}$/);
+    expect(builderComputerInstanceName("prod", longUid)).toBe(name);
+    expect(builderComputerInstanceName("prod", `${longUid}-x`)).not.toBe(name);
   });
 
   it("refuses an id with nothing to name", () => {
-    expect(() => gatewayVmInstanceName("")).toThrow(/empty/);
-    expect(() => gatewayVmInstanceName("___")).toThrow(/no usable characters/);
+    expect(() => builderComputerInstanceName("test", "")).toThrow(/empty/);
+    expect(() => builderComputerInstanceName("test", "___")).toThrow(/no usable characters/);
+  });
+});
+
+describe("homeCheckpointOutstanding", () => {
+  it("does not acknowledge a request with a periodic snapshot uploaded after that request", () => {
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: null, lastCheckpoint: { completedAt: 5_000 } as never } as never)).toBe(true);
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 900, lastCheckpoint: { completedAt: 5_000 } as never } as never)).toBe(true);
+  });
+
+  it("requires the completed snapshot to acknowledge the request", () => {
+    expect(homeCheckpointOutstanding(undefined)).toBe(false);
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: null, lastCheckpoint: null })).toBe(false);
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: 1_000, lastCheckpoint: null })).toBe(true);
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: 1_000, lastCheckpoint: { completedAt: 999 } as never })).toBe(true);
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 1_000, lastCheckpoint: { completedAt: 1_000 } as never })).toBe(false);
+    expect(homeCheckpointOutstanding({ checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 1_000, lastCheckpoint: { completedAt: 5_000 } as never })).toBe(false);
+  });
+});
+
+describe("readBuilderParkedComputer", () => {
+  const parked = {
+    instanceName: "octogee-computer-test-uida",
+    zone: "us-west1-b",
+    instanceId: "4242",
+    gatewayId: "b-x",
+    parkedAt: 2_000,
+    checkpoint: { outcome: "fresh", requestedAt: 1_000, completedAt: 1_500 },
+  };
+
+  it("reads a well-formed parked computer from the Builder's provisioning record", () => {
+    expect(readBuilderParkedComputer({ provisioning: { computer: parked } })).toEqual(parked);
+    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, instanceId: null, checkpoint: { outcome: "stale", requestedAt: null, completedAt: null } } } }))
+      .toMatchObject({ instanceId: null, checkpoint: { outcome: "stale" } });
+  });
+
+  it("returns null for a missing or malformed record instead of a partial one", () => {
+    expect(readBuilderParkedComputer(undefined)).toBeNull();
+    expect(readBuilderParkedComputer({})).toBeNull();
+    expect(readBuilderParkedComputer({ provisioning: { openclaw: { gatewayId: "b-x" } } })).toBeNull();
+    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, zone: "" } } })).toBeNull();
+    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, checkpoint: { outcome: "fresh" } } } })).toBeNull();
+    expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, checkpoint: { ...parked.checkpoint, outcome: "unknown" } } } })).toBeNull();
   });
 });

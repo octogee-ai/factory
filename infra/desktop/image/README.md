@@ -33,14 +33,20 @@ infra/desktop/image/build.sh --project octogee-test
    `UEFI_COMPATIBLE`.
 
 The image carries no credentials: no password login, no authorized keys, no
-SSH host keys. `octo-metadata-ssh-keys.service` installs keys for `octo` from
+SSH host keys. `octo-metadata-ssh-keys.service` reconciles keys for `octo` from
 the instance or project `ssh-keys` metadata at boot, which is how `test.sh`
 gets in and how an operator gets in until the registration agent exists.
+The timer removes revoked keys, honors `block-project-ssh-keys`, and filters
+expired [Google SSH metadata entries](https://docs.cloud.google.com/compute/docs/connect/add-ssh-keys).
+Active expiring keys also receive OpenSSH's `expiry-time` option, so expiration
+continues to apply during a metadata outage. Failed or malformed metadata
+leaves the current file intact and logs a failure for retry.
 
 ## Test
 
 ```bash
 infra/desktop/image/test.sh --project octogee-test --stop-start
+python3 -m unittest infra/desktop/image/test_acceptance.py
 ```
 
 Boots the newest image in the family (or `--image <name>`), waits for SSH,
@@ -48,6 +54,8 @@ checks the modules and units, waits for the desktop to report a Chromium
 client on the loopback control API, takes a screenshot, drives a navigation
 and verifies it through the window title, optionally stops and starts the VM
 to prove the home persists, prints a results block, and deletes the VM.
+Missing modules, inactive services, a compositor that needed a service restart,
+and missing browser-profile persistence all fail acceptance.
 With `--keep` the VM stays, the key lands next to the screenshot, and the
 script prints the SSH tunnel to open noVNC at `http://localhost:6080/vnc.html`
 and take over the desktop.
@@ -57,13 +65,26 @@ and take over the desktop.
 | Unit | Role |
 | --- | --- |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
+| `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |
 | `octo-desktop.service` | as `octo`: Hyprland on the `vkms` output at 1920x1080, wayvnc, noVNC over websockify, the control API, Chromium; everything bound to 127.0.0.1 |
+| `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
 | `octo-metadata-ssh-keys.service` | installs `octo:` keys from GCE metadata before sshd |
-| `docker.service` | hosts the gateway container in phase 2 |
+| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set (a warm-pool member boots without them and is assigned later through `setMetadata`), then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket |
+| `docker.service` | hosts the gateway and gateway-edge containers the agent manages |
 
 Power: `HandlePowerKey=poweroff`, so a GCE stop completes on the ACPI signal
 instead of waiting for the timeout. `octo` has passwordless sudo: this is the
 Builder's own computer and the Builder class is full power.
+SDDM is masked because this image's desktop service owns the display. The
+runtime-directory dependency prevents logind from mounting over live Wayland
+sockets when the first SSH session opens.
+
+Checkpoint freeze covers desktop processes and Omarchy applications launched
+through the user's systemd manager. The gateway agent separately pauses its
+runtime containers. Arbitrary operator processes started in SSH sessions are
+outside these scopes. During restore, the user manager is stopped and masked
+in `/run` so an SSH reconnect cannot restart native applications against the
+home being replaced; the lifecycle start action removes that hold.
 
 ## Pins
 

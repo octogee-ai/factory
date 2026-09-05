@@ -57,6 +57,23 @@ spec:
               value: {{ required "glm-controller.kmsKeyName is required" .Values.kmsKeyName | quote }}
             - name: GKE_WORKLOAD_IDENTITY_PROJECT
               value: {{ required "glm-controller.workloadIdentityProject is required" .Values.workloadIdentityProject | quote }}
+            {{- $computer := (.Values.global).computer | default dict }}
+            {{- if $computer.enabled }}
+            - name: GATEWAY_BUILDER_RUNTIME
+              value: "gce-vm"
+            - name: GATEWAY_COMPUTE_PROJECT_ID
+              value: {{ required "global.computer.projectId is required" $computer.projectId | quote }}
+            - name: GATEWAY_VM_SPEC_JSON
+              value: {{ required "global.computer.vmSpec is required" $computer.vmSpec | toJson | quote }}
+            - name: GATEWAY_VM_KUBERNETES_API_HOST
+              value: {{ required "global.computer.kubernetesApiHost is required" $computer.kubernetesApiHost | quote }}
+            - name: GATEWAY_VM_BRIDGE_SERVICE
+              value: "octogee-vm-bridge"
+            - name: GATEWAY_VM_ROUTES_CONFIGMAP
+              value: "octogee-vm-routes"
+            - name: GATEWAY_VM_WARM_POOL_SIZE
+              value: {{ $computer.warmPoolSize | default 0 | quote }}
+            {{- end }}
             - name: FLEET_CONTROLLER_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:

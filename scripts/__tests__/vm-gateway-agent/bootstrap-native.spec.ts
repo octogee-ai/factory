@@ -1,0 +1,59 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+const mock = `#!/usr/bin/python3
+import json, os, pathlib, sys, time
+root=pathlib.Path(os.environ['BOOTSTRAP_FIXTURE'])
+command=pathlib.Path(sys.argv[0]).name
+args=sys.argv[1:]
+if command == 'curl':
+    key=args[-1].split('/')[-1]
+    print({'id':'4242','token':'{"access_token":"fixture-token"}'}.get(key, (root/key).read_text() if (root/key).exists() else ''))
+elif command == 'docker':
+    with (root/'events').open('a') as out: out.write(json.dumps(args)+'\\n')
+    if args[0] == 'login': sys.stdin.read()
+    if args[0] == 'run':
+        while not (root/'stopped').exists(): time.sleep(0.02)
+    if args[0] == 'stop': (root/'stopped').touch()
+`;
+
+describe("native VM bootstrap supervision", () => {
+  it.each(["gateway-image", "gateway-id", "octogee-api-url"])("stops the old registration agent when %s changes without stopping runtime containers", async (attribute) => {
+    const root = await mkdtemp(`${tmpdir()}/octogee-bootstrap-`);
+    roots.push(root);
+    await mkdir(`${root}/bin`);
+    for (const name of ["curl", "docker", "iptables"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+    const assignment = { "gateway-id": "b-fixture", "gateway-image": "registry.invalid/gateway@sha256:old", "octogee-api-url": "https://api.invalid" };
+    for (const [key, value] of Object.entries(assignment)) await writeFile(`${root}/${key}`, value);
+    const script = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin/octo-gateway-agent");
+    const child = spawn("bash", [script], {
+      env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, BOOTSTRAP_FIXTURE: root, OCTO_VM_STATE_ROOT: `${root}/state`, OCTO_ASSIGNMENT_POLL_SECONDS: "0.05" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    const done = new Promise<number | null>((accept, reject) => { child.once("close", accept); child.once("error", reject); });
+    const timer = setTimeout(() => child.kill("SIGTERM"), 8_000);
+    try {
+      await expect.poll(async () => readFile(`${root}/events`, "utf8").catch(() => ""), { timeout: 5_000 }).toContain('"run"');
+      await writeFile(`${root}/${attribute}`, `${assignment[attribute as keyof typeof assignment]}-updated`);
+      expect(await done, output).toBe(0);
+      expect(output).toContain("bootstrap metadata changed; restarting the agent");
+      const events = (await readFile(`${root}/events`, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+      expect(events.filter((args) => args[0] === "stop")).toEqual([["stop", "--time", "20", "octo-gateway-agent"]]);
+      expect(events.find((args) => args[0] === "run")).toContain(`/home/octo:${root}/state/desktop-home`);
+      expect(events.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "octo-gateway-agent"]]);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null) child.kill("SIGTERM");
+      await done;
+    }
+  });
+});

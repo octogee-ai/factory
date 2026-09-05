@@ -51,4 +51,13 @@ spec:
       ports:
         - protocol: TCP
           port: 8065
+    {{- if ((.Values.global).computer | default dict).enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-vm-bridge
+      ports:
+        - protocol: TCP
+          port: 8065
+    {{- end }}
 {{- end }}

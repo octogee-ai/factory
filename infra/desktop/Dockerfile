@@ -32,6 +32,10 @@ RUN set -eux; \
     meson setup /tmp/wlrctl/build /tmp/wlrctl -Dman-pages=disabled --buildtype=release; \
     ninja -C /tmp/wlrctl/build
 
+COPY rootfs/usr/share/omarchy/octo-desktop /tmp/octo-desktop
+RUN bash /tmp/octo-desktop/build-seat-input.sh \
+      /tmp/wlrctl/protocol/virtual-keyboard-unstable-v1.xml /tmp/octo-seat-input
+
 ARG NOVNC_VERSION=1.6.0
 ARG NOVNC_SHA256=5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa
 RUN set -eux; \
@@ -86,13 +90,13 @@ RUN set -eux; \
       wayvnc grim wtype wl-clipboard slurp \
       labwc wlr-randr \
       chromium xorg-xwayland \
-      foot noto-fonts noto-fonts-emoji ttf-jetbrains-mono; \
+      foot noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono; \
     rm -f /tmp/stubs.pkg.tar.zst; \
     pacman -Scc --noconfirm
 
 ARG WEBSOCKIFY_VERSION=0.13.0
 RUN set -eux; \
-    pacman -S --noconfirm --needed python-pip; \
+    pacman -S --noconfirm --needed python-pip python-websocket-client; \
     pip install --break-system-packages --no-cache-dir "websockify==${WEBSOCKIFY_VERSION}"; \
     pacman -Scc --noconfirm
 
@@ -105,6 +109,7 @@ RUN set -eux; \
     chown -R 1000:1000 /opt/octo-home-seed
 
 COPY --from=stubs /tmp/wlrctl/build/wlrctl /usr/local/bin/wlrctl
+COPY --from=stubs /tmp/octo-seat-input /usr/local/bin/octo-seat-input
 COPY --from=stubs /tmp/novnc /opt/novnc
 COPY rootfs/ /
 RUN chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/*

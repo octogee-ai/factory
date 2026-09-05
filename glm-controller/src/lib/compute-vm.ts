@@ -19,6 +19,7 @@ export interface CreateGatewayVmInput {
   zone: string;
   machineType: string;
   imageFamily: string;
+  imageProject?: string;
   diskSizeGb: number;
   provisioningModel: GatewayVmProvisioningModel;
   serviceAccountEmail: string;
@@ -34,6 +35,28 @@ export interface GatewayVmDescription {
   instanceId: string | null;
   internalIp: string | null;
   provisioningModel: GatewayVmProvisioningModel | null;
+  gatewayId: string | null;
+  labels: Record<string, string>;
+  labelFingerprint: string | null;
+  metadata: Record<string, string>;
+  metadataFingerprint: string | null;
+  creationTimestamp: string | null;
+}
+
+export interface ListGatewayVmsInput {
+  zone: string;
+  labels: Record<string, string>;
+}
+
+export type GuardedWriteOutcome = "applied" | "conflict";
+
+export interface StartGatewayVmResult {
+  fellBackToStandard: boolean;
+}
+
+export interface BindGatewayVmInput {
+  labels: Record<string, string>;
+  metadata: Record<string, string>;
 }
 
 export interface CreateGatewayVmResult {
@@ -46,8 +69,14 @@ export interface CreateGatewayVmResult {
 export interface GatewayVmClient {
   create(input: CreateGatewayVmInput): Promise<CreateGatewayVmResult>;
   describe(instanceName: string, zone: string): Promise<GatewayVmDescription | null>;
+  find(instanceName: string): Promise<GatewayVmDescription | null>;
+  findByLabels(labels: Record<string, string>): Promise<GatewayVmDescription | null>;
+  list(input: ListGatewayVmsInput): Promise<GatewayVmDescription[]>;
+  bind(instanceName: string, zone: string, input: BindGatewayVmInput): Promise<void>;
+  setMetadata(instanceName: string, zone: string, input: { fingerprint: string; items: Record<string, string> }): Promise<GuardedWriteOutcome>;
+  setLabels(instanceName: string, zone: string, input: { fingerprint: string; labels: Record<string, string> }): Promise<GuardedWriteOutcome>;
   stop(instanceName: string, zone: string): Promise<void>;
-  start(instanceName: string, zone: string): Promise<void>;
+  start(instanceName: string, zone: string): Promise<StartGatewayVmResult>;
   delete(instanceName: string, zone: string): Promise<boolean>;
 }
 
@@ -65,6 +94,9 @@ const SPOT_EXHAUSTED_CODES = new Set([
   "ZONE_RESOURCE_POOL_EXHAUSTED",
   "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
 ]);
+const FINGERPRINT_MISMATCH_CODES = new Set(["CONDITION_NOT_MET"]);
+export const GATEWAY_VM_NETWORK_TAG = "octogee-computer";
+const GATEWAY_ID_METADATA_KEY = "gateway-id";
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 
@@ -74,12 +106,31 @@ interface ComputeOperation {
   error?: { errors?: Array<{ code?: string; message?: string }> };
 }
 
+interface ComputeMetadataItem {
+  key?: string;
+  value?: string;
+}
+
 interface ComputeInstance {
   id?: string;
   name?: string;
+  zone?: string;
   status?: string;
+  creationTimestamp?: string;
   networkInterfaces?: Array<{ networkIP?: string }>;
   scheduling?: { provisioningModel?: string };
+  labels?: Record<string, string>;
+  labelFingerprint?: string;
+  metadata?: { fingerprint?: string; items?: ComputeMetadataItem[] };
+}
+
+interface ComputeInstanceList {
+  items?: ComputeInstance[];
+  nextPageToken?: string;
+}
+
+interface ComputeAggregatedInstances {
+  items?: Record<string, { instances?: ComputeInstance[] }>;
 }
 
 function statusOf(err: unknown): number | undefined {
@@ -92,8 +143,74 @@ function isProvisioningModel(value: unknown): value is GatewayVmProvisioningMode
   return value === "SPOT" || value === "STANDARD";
 }
 
+function isSpotExhausted(err: unknown): boolean {
+  return err instanceof ComputeOperationError && err.codes.some((code) => SPOT_EXHAUSTED_CODES.has(code));
+}
+
+function schedulingFor(provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
+  return provisioningModel === "SPOT"
+    ? { provisioningModel: "SPOT", instanceTerminationAction: "STOP", automaticRestart: false, onHostMaintenance: "TERMINATE" }
+    : { provisioningModel: "STANDARD", automaticRestart: true, onHostMaintenance: "MIGRATE" };
+}
+
+function metadataItems(metadata: Record<string, string>): Array<{ key: string; value: string }> {
+  return Object.entries(metadata).map(([key, value]) => ({ key, value }));
+}
+
+function nonEmpty(value: string | undefined): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function labelFilter(labels: Record<string, string>): string {
+  return Object.entries(labels).map(([key, value]) => `(labels.${key} = ${JSON.stringify(value)})`).join(" AND ");
+}
+
+function metadataRecord(items: ComputeMetadataItem[] | undefined): Record<string, string> {
+  const metadata: Record<string, string> = {};
+  for (const item of items ?? []) {
+    if (typeof item.key === "string" && item.key.length > 0) metadata[item.key] = item.value ?? "";
+  }
+  return metadata;
+}
+
+function zoneOf(instance: ComputeInstance, fallback: string): string {
+  const segment = instance.zone?.split("/").at(-1);
+  return segment && segment.length > 0 ? segment : fallback;
+}
+
+function carriesLabels(labels: Record<string, string>): (instance: ComputeInstance) => boolean {
+  return (instance) => Object.entries(labels).every(([key, value]) => instance.labels?.[key] === value);
+}
+
+function ambiguousByName(instanceName: string, matches: ComputeInstance[]): string {
+  return `find ${instanceName}: ${matches.length} instances named ${instanceName} (${matches.map((m) => zoneOf(m, "?")).join(", ")})`;
+}
+
+function ambiguousByLabels(filter: string, matches: ComputeInstance[]): string {
+  const where = matches.map((m) => [m.name ?? "?", "in", zoneOf(m, "?")].join(" ")).join(", ");
+  return `find ${filter}: ${matches.length} instances match (${where})`;
+}
+
+function describeInstance(instance: ComputeInstance, instanceName: string, zone: string): GatewayVmDescription {
+  const model = instance.scheduling?.provisioningModel;
+  const metadata = metadataRecord(instance.metadata?.items);
+  return {
+    name: instance.name ?? instanceName,
+    zone,
+    status: instance.status ?? "UNKNOWN",
+    instanceId: nonEmpty(instance.id),
+    internalIp: instance.networkInterfaces?.[0]?.networkIP ?? null,
+    provisioningModel: isProvisioningModel(model) ? model : null,
+    gatewayId: nonEmpty(metadata[GATEWAY_ID_METADATA_KEY]),
+    labels: { ...(instance.labels ?? {}) },
+    labelFingerprint: nonEmpty(instance.labelFingerprint),
+    metadata,
+    metadataFingerprint: nonEmpty(instance.metadata?.fingerprint),
+    creationTimestamp: nonEmpty(instance.creationTimestamp),
+  };
+}
+
 export function instanceInsertBody(projectId: string, input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
-  const spot = provisioningModel === "SPOT";
   return {
     name: input.instanceName,
     machineType: `zones/${input.zone}/machineTypes/${input.machineType}`,
@@ -102,7 +219,7 @@ export function instanceInsertBody(projectId: string, input: CreateGatewayVmInpu
         boot: true,
         autoDelete: true,
         initializeParams: {
-          sourceImage: `projects/${projectId}/global/images/family/${input.imageFamily}`,
+          sourceImage: `projects/${input.imageProject ?? projectId}/global/images/family/${input.imageFamily}`,
           diskSizeGb: String(input.diskSizeGb),
           diskType: `zones/${input.zone}/diskTypes/pd-ssd`,
         },
@@ -112,14 +229,11 @@ export function instanceInsertBody(projectId: string, input: CreateGatewayVmInpu
     serviceAccounts: [
       { email: input.serviceAccountEmail, scopes: ["https://www.googleapis.com/auth/cloud-platform"] },
     ],
-    scheduling: spot
-      ? { provisioningModel: "SPOT", instanceTerminationAction: "STOP", automaticRestart: false, onHostMaintenance: "TERMINATE" }
-      : { provisioningModel: "STANDARD", automaticRestart: true, onHostMaintenance: "MIGRATE" },
+    scheduling: schedulingFor(provisioningModel),
     shieldedInstanceConfig: { enableSecureBoot: false, enableVtpm: true, enableIntegrityMonitoring: true },
+    tags: { items: [GATEWAY_VM_NETWORK_TAG] },
     labels: input.labels,
-    metadata: {
-      items: Object.entries(input.metadata).map(([key, value]) => ({ key, value })),
-    },
+    metadata: { items: metadataItems(input.metadata) },
   };
 }
 
@@ -149,24 +263,97 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     }
   }
 
-  async function describe(instanceName: string, zone: string): Promise<GatewayVmDescription | null> {
-    let data: ComputeInstance;
+  async function readInstance(instanceName: string, zone: string): Promise<ComputeInstance | null> {
     try {
       const res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}`, method: "GET" });
-      data = (res.data ?? {}) as ComputeInstance;
+      return (res.data ?? {}) as ComputeInstance;
     } catch (err) {
       if (statusOf(err) === 404) return null;
       throw err;
     }
-    const model = data.scheduling?.provisioningModel;
-    return {
-      name: data.name ?? instanceName,
-      zone,
-      status: data.status ?? "UNKNOWN",
-      instanceId: typeof data.id === "string" && data.id.length > 0 ? data.id : null,
-      internalIp: data.networkInterfaces?.[0]?.networkIP ?? null,
-      provisioningModel: isProvisioningModel(model) ? model : null,
-    };
+  }
+
+  async function describe(instanceName: string, zone: string): Promise<GatewayVmDescription | null> {
+    const instance = await readInstance(instanceName, zone);
+    return instance ? describeInstance(instance, instanceName, zone) : null;
+  }
+
+  async function aggregatedFind(
+    filter: string,
+    keep: (instance: ComputeInstance) => boolean,
+    ambiguity: (matches: ComputeInstance[]) => string,
+  ): Promise<GatewayVmDescription | null> {
+    const res = await deps.request({ url: `${base}/aggregated/instances?filter=${encodeURIComponent(filter)}`, method: "GET" });
+    const items = ((res.data ?? {}) as ComputeAggregatedInstances).items ?? {};
+    const matches = Object.values(items).flatMap((scope) => scope.instances ?? []).filter(keep);
+    if (matches.length > 1) throw new Error(ambiguity(matches));
+    return matches.length === 1 ? describeInstance(matches[0], matches[0].name ?? "unknown", zoneOf(matches[0], "")) : null;
+  }
+
+  function find(instanceName: string): Promise<GatewayVmDescription | null> {
+    return aggregatedFind(`name = "${instanceName}"`, (instance) => instance.name === instanceName, (matches) => ambiguousByName(instanceName, matches));
+  }
+
+  function findByLabels(labels: Record<string, string>): Promise<GatewayVmDescription | null> {
+    const filter = labelFilter(labels);
+    return aggregatedFind(filter, carriesLabels(labels), (matches) => ambiguousByLabels(filter, matches));
+  }
+
+  async function list(input: ListGatewayVmsInput): Promise<GatewayVmDescription[]> {
+    const members: GatewayVmDescription[] = [];
+    let pageToken: string | undefined;
+    do {
+      const params = new URLSearchParams({ filter: labelFilter(input.labels) });
+      if (pageToken) params.set("pageToken", pageToken);
+      const res = await deps.request({ url: `${base}/zones/${input.zone}/instances?${params.toString()}`, method: "GET" });
+      const page = (res.data ?? {}) as ComputeInstanceList;
+      for (const item of page.items ?? []) members.push(describeInstance(item, item.name ?? "unknown", input.zone));
+      pageToken = nonEmpty(page.nextPageToken) ?? undefined;
+    } while (pageToken);
+    return members;
+  }
+
+  async function guardedWrite(instanceName: string, zone: string, verb: "setMetadata" | "setLabels", body: Record<string, unknown>): Promise<GuardedWriteOutcome> {
+    let res: { status: number; data?: unknown };
+    try {
+      res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/${verb}`, method: "POST", body });
+    } catch (err) {
+      if (statusOf(err) === 412) return "conflict";
+      throw err;
+    }
+    if (res.status === 412) return "conflict";
+    try {
+      await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `${verb} ${instanceName}`);
+    } catch (err) {
+      if (err instanceof ComputeOperationError && err.codes.some((code) => FINGERPRINT_MISMATCH_CODES.has(code))) return "conflict";
+      throw err;
+    }
+    return "applied";
+  }
+
+  async function bind(instanceName: string, zone: string, input: BindGatewayVmInput): Promise<void> {
+    const instance = await readInstance(instanceName, zone);
+    if (!instance) throw new Error(`bind ${instanceName}: instance is absent`);
+    if (!instance.labelFingerprint || !instance.metadata?.fingerprint) {
+      throw new Error(`bind ${instanceName}: compute returned no label/metadata fingerprint`);
+    }
+    const labelsRes = await deps.request({
+      url: `${base}/zones/${zone}/instances/${instanceName}/setLabels`,
+      method: "POST",
+      body: { labelFingerprint: instance.labelFingerprint, labels: input.labels },
+    });
+    await waitForOperation(zone, (labelsRes.data ?? {}) as ComputeOperation, `setLabels ${instanceName}`);
+    const merged = new Map<string, string>();
+    for (const item of instance.metadata.items ?? []) {
+      if (typeof item.key === "string" && typeof item.value === "string") merged.set(item.key, item.value);
+    }
+    for (const [key, value] of Object.entries(input.metadata)) merged.set(key, value);
+    const metadataRes = await deps.request({
+      url: `${base}/zones/${zone}/instances/${instanceName}/setMetadata`,
+      method: "POST",
+      body: { fingerprint: instance.metadata.fingerprint, items: [...merged].map(([key, value]) => ({ key, value })) },
+    });
+    await waitForOperation(zone, (metadataRes.data ?? {}) as ComputeOperation, `setMetadata ${instanceName}`);
   }
 
   async function insert(input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Promise<"created" | "exists"> {
@@ -193,8 +380,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     try {
       outcome = await insert(input, provisioningModel);
     } catch (err) {
-      const exhausted = err instanceof ComputeOperationError && err.codes.some((code) => SPOT_EXHAUSTED_CODES.has(code));
-      if (!(exhausted && provisioningModel === "SPOT")) throw err;
+      if (!(isSpotExhausted(err) && provisioningModel === "SPOT")) throw err;
       deps.log(`[gateway-vm] ${input.instanceName}: spot capacity exhausted in ${input.zone}; retrying on-demand`);
       provisioningModel = "STANDARD";
       fellBackToStandard = true;
@@ -218,6 +404,24 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `${action} ${instanceName}`);
   }
 
+  async function start(instanceName: string, zone: string): Promise<StartGatewayVmResult> {
+    try {
+      await lifecycle("start", instanceName, zone);
+      return { fellBackToStandard: false };
+    } catch (err) {
+      if (!isSpotExhausted(err)) throw err;
+    }
+    deps.log(`[gateway-vm] ${instanceName}: spot capacity exhausted in ${zone}; restarting on-demand`);
+    const res = await deps.request({
+      url: `${base}/zones/${zone}/instances/${instanceName}/setScheduling`,
+      method: "POST",
+      body: schedulingFor("STANDARD"),
+    });
+    await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setScheduling ${instanceName}`);
+    await lifecycle("start", instanceName, zone);
+    return { fellBackToStandard: true };
+  }
+
   async function remove(instanceName: string, zone: string): Promise<boolean> {
     let res: { status: number; data?: unknown };
     try {
@@ -236,8 +440,14 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
   return {
     create,
     describe,
+    find,
+    findByLabels,
+    list,
+    bind,
+    setMetadata: (name, zone, input) => guardedWrite(name, zone, "setMetadata", { fingerprint: input.fingerprint, items: metadataItems(input.items) }),
+    setLabels: (name, zone, input) => guardedWrite(name, zone, "setLabels", { labelFingerprint: input.fingerprint, labels: input.labels }),
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
-    start: (instanceName, zone) => lifecycle("start", instanceName, zone),
+    start,
     delete: remove,
   };
 }

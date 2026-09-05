@@ -58,6 +58,17 @@ wait_ssh() {
   gcloud compute instances get-serial-port-output "$NAME" --zone "$ZONE" --project "$PROJECT" 2>/dev/null | tail -20 >&2
   return 1
 }
+wait_desktop() {
+  local health="" restarts
+  for _ in $(seq 1 60); do
+    health="$(vssh 'curl -fsS -m 3 http://127.0.0.1:7777/health' 2>/dev/null || true)"
+    [[ "$health" == *chromium* ]] && break
+    sleep 2
+  done
+  [[ "$health" == *chromium* ]] || { echo "desktop never reported a chromium client; health=$health" >&2; vssh 'journalctl -u octo-desktop --no-pager | tail -30; tail -20 ~/.local/state/octo-desktop/*.log' >&2 || true; return 1; }
+  restarts="$(vssh 'systemctl show octo-desktop.service --property=NRestarts --value')"
+  [[ "$restarts" == 0 ]] || { echo "desktop required $restarts service restarts to become healthy" >&2; return 1; }
+}
 
 image_args=(--image-family "$FAMILY" --image-project "$PROJECT")
 [[ -n "$IMAGE" ]] && image_args=(--image "$IMAGE" --image-project "$PROJECT")
@@ -74,13 +85,11 @@ log "ssh up after $((t_ssh - t_create)) s at $IP"
 image_id="$(vssh 'cat /etc/octogee-computer-image 2>/dev/null || echo unknown')"
 boot="$(vssh 'systemd-analyze 2>/dev/null | head -1')"
 modules="$(vssh 'lsmod | grep -c -E "^vkms|^vgem"')"
-units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docker.service | tr "\n" " "')"
-for _ in $(seq 1 60); do
-  health="$(vssh 'curl -fsS -m 3 http://127.0.0.1:7777/health' 2>/dev/null || true)"
-  [[ "$health" == *chromium* ]] && break
-  sleep 2
-done
-[[ "$health" == *chromium* ]] || { echo "desktop never reported a chromium client; health=$health" >&2; vssh 'journalctl -u octo-desktop --no-pager | tail -30; tail -20 ~/.local/state/octo-desktop/*.log' >&2 || true; exit 1; }
+units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docker.service octo-desktop-lifecycle.service | tr "\n" " "')"
+[[ "$modules" == 2 ]] || { echo "required DRM modules missing: ${modules}/2 loaded" >&2; exit 1; }
+read -r -a unit_states <<< "$units"
+[[ "${unit_states[*]}" == 'active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
+wait_desktop
 t_desktop=$(date +%s)
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
@@ -103,7 +112,8 @@ if [[ "$STOP_START" == 1 ]]; then
   IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
   wait_ssh 300
   t_back=$(date +%s)
-  after="$(vssh 'cat ~/persist-marker 2>/dev/null; ls ~/.config/chromium/Default/Cookies >/dev/null 2>&1 && echo profile-present')"
+  wait_desktop
+  after="$(vssh 'cat ~/persist-marker 2>/dev/null; if test -f ~/.config/octogee-chromium/Default/Cookies; then echo profile-present; fi')"
   if [[ "$after" == *"$marker"* && "$after" == *profile-present* ]]; then persist="yes ($((t_back - t_start)) s start to ssh)"; else persist="NO: $after"; fi
 fi
 
@@ -117,7 +127,8 @@ cat <<RESULT
 | Create to desktop healthy (Chromium mapped) | $((t_desktop - t_create)) s |
 | Guest boot (systemd-analyze) | ${boot} |
 | vkms + vgem loaded | ${modules}/2 |
-| Units (seatd, desktop, docker) | ${units} |
+| Units (seatd, desktop, docker, lifecycle) | ${units} |
+| Desktop service restarts needed | 0 |
 | Input verified (typed URL changed window title) | ${input_verified} ("${title_before}" → "${title_after:-}") |
 | Home survives stop/start | ${persist} |
 | Screenshot | ${work}/screenshot.png (deleted with the workdir unless --keep) |
@@ -137,3 +148,4 @@ Delete when done:
 KEEP
 fi
 [[ "$input_verified" == yes ]]
+[[ "$STOP_START" == 0 || "$persist" == yes* ]]

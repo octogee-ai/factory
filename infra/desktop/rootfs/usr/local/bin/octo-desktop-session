@@ -30,4 +30,14 @@ if [[ -f "$hypr_config" ]] && ! grep -Fq "$policy" "$hypr_config"; then
   printf '\nrequire("%s")\n' "$policy" >> "$hypr_config"
 fi
 
-exec dbus-run-session -- /usr/local/bin/octo-desktop-run
+dbus-run-session -- /usr/local/bin/octo-desktop-run &
+session_pid=$!
+stop_session() {
+  trap '' TERM INT
+  /usr/local/bin/octo-desktop-stop
+  kill "$session_pid" 2>/dev/null || true
+  wait "$session_pid" || true
+  exit 0
+}
+trap stop_session TERM INT
+wait "$session_pid"

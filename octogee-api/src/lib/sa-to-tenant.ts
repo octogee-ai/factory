@@ -1,5 +1,8 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { homeCheckpointOutstanding } from "@octogee/shared/types/glm";
+import { findComputerRuntimeForInstance } from "./computer-runtime-observation.js";
+import type { ReviewResult } from "./token-review.js";
 import {
   effectiveGatewayServiceAccountNameForGateway,
   readGatewayAuthorization,
@@ -13,6 +16,7 @@ export type BoundTenant =
       saName?: string;
       podName?: string;
       podUid?: string;
+      finalHomeCheckpoint?: true;
     }
   | {
       kind: "platform";
@@ -84,6 +88,7 @@ function attachGateway(
   gatewayId: string,
   ownerUid: string | null,
   result: "ok",
+  finalHomeCheckpoint = false,
 ): SaToTenantResult {
   return {
     attached: true,
@@ -92,6 +97,7 @@ function attachGateway(
       kind: "gateway",
       gatewayId,
       ...(ownerUid ? { ownerUid } : {}),
+      ...(finalHomeCheckpoint ? { finalHomeCheckpoint: true as const } : {}),
     },
   };
 }
@@ -144,6 +150,38 @@ async function bindCustomGatewaySa(
     authorization.config.ownerUid,
     "ok",
   );
+}
+
+export interface ComputeInstanceTenantIdentity {
+  instanceId: string;
+}
+
+export async function mapComputeInstanceToTenant(
+  db: GatewayRootFirestore,
+  identity: ComputeInstanceTenantIdentity,
+): Promise<SaToTenantResult> {
+  if (!identity.instanceId) return { attached: false, result: "malformed_sa" };
+  const runtime = await findComputerRuntimeForInstance(db, identity.instanceId);
+  if (!runtime) return { attached: false, result: "unknown_tenant" };
+  const authorization = await readGatewayAuthorization(db, runtime.gatewayId);
+  if (!authorization) return { attached: false, result: "unknown_tenant" };
+  if (authorization.gateway.desiredStatus === "retired") {
+    if (!homeCheckpointOutstanding(runtime.home)) return { attached: false, result: "unknown_tenant" };
+    return attachGateway(runtime.gatewayId, authorization.config.ownerUid, "ok", true);
+  }
+  return attachGateway(runtime.gatewayId, authorization.config.ownerUid, "ok");
+}
+
+export async function mapReviewToTenant(
+  db: GatewayRootFirestore,
+  review: Extract<ReviewResult, { authenticated: true }>,
+  expectedNamespace = process.env.K8S_NAMESPACE ?? "octogee",
+): Promise<SaToTenantResult> {
+  if (review.computeInstance) {
+    if (review.namespace !== expectedNamespace) return { attached: false, result: "ns_mismatch" };
+    return mapComputeInstanceToTenant(db, review.computeInstance);
+  }
+  return mapSaToTenant(db, { namespace: review.namespace, saName: review.saName }, expectedNamespace);
 }
 
 export async function mapSaToTenant(

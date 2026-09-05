@@ -49,4 +49,15 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+    {{- if ((.Values.global).computer | default dict).enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: octogee-vm-bridge
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 2222
+    {{- end }}
 {{- end }}

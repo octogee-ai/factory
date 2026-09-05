@@ -1,4 +1,28 @@
+import { readComputerRuntimeObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
+import {
+  COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
+  COMPUTER_HOME_CHECKPOINT_KEEP,
+  COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
+  computerHomeCheckpointName,
+  gatewayVmRuntimeDocPath,
+  isGatewayVmRuntimeBundle,
+  resolveGatewayRuntime,
+  homeCheckpointOutstanding,
+  type GatewayVmHomeCheckpoint,
+  type GatewayVmHomeState,
+  type GatewayVmRuntimeResponse,
+} from "@octogee/shared/types/glm";
+import {
+  ComputerHomeCheckpointError,
+  computerHomeCheckpointPath,
+  computerHomeCheckpointsPrefix,
+  computerHomeCurrentPath,
+  createGcsComputerHomeStore,
+  validComputerHomeCheckpointName,
+  validSha256,
+  type ComputerHomeStore,
+} from "../lib/computer-home-checkpoint.js";
 import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
@@ -21,6 +45,10 @@ import type {
   BuilderRuntimeStateRecoveryTier,
   FleetBrokerBlobSignedUrl,
   FleetBrokerBuilderRuntimeStatePruneResult,
+  FleetBrokerComputerHomeCheckpointCommit,
+  FleetBrokerComputerHomeCheckpointUrl,
+  FleetBrokerComputerHomeDownload,
+  FleetBrokerComputerHomePruneResult,
   FleetBrokerBuilderRuntimeStateSnapshotUrls,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
@@ -209,6 +237,7 @@ interface FleetBrokerRouteDeps {
   applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
   pruneBuilderRuntimeState?: PruneBuilderRuntimeState;
+  computerHomeStore?: ComputerHomeStore;
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
@@ -1722,6 +1751,7 @@ type ResolvedFleetBrokerRouteDeps = {
   applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
   pruneBuilderRuntimeState: PruneBuilderRuntimeState;
+  computerHomeStore: ComputerHomeStore;
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
@@ -1781,6 +1811,7 @@ function resolveFleetBrokerRouteImplementations(
     applyCoachIdentity: opts.applyCoachIdentity ?? defaultApplyCoachIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
     pruneBuilderRuntimeState: opts.pruneBuilderRuntimeState ?? defaultPruneBuilderRuntimeState,
+    computerHomeStore: opts.computerHomeStore ?? createGcsComputerHomeStore(),
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
     executeChatHistory: opts.executeChatHistory ?? defaultExecuteChatHistory,
     resolveChatIdentity: opts.resolveChatIdentity ?? defaultResolveChatIdentity,
@@ -2752,7 +2783,158 @@ function installGatewayOpsRoutes(
     });
   });
 
+  installComputerHomeRoutes(router, deps);
   installOpenClawBootRoutes(router, deps);
+}
+
+async function requireComputerHomeScope(
+  db: Firestore,
+  req: Request,
+  res: Response,
+): Promise<{ bound: GatewayBinding; slug: string; instanceId: string } | null> {
+  const bound = boundGateway(req, res);
+  if (!bound) return null;
+  const slug = typeof req.body?.slug === "string" ? req.body.slug : "";
+  if (!isValidUsername(slug)) {
+    res.status(400).json({ error: "invalid_slug" });
+    return null;
+  }
+  if (!bound.podUid) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  const [glm, gatewaySnap] = await Promise.all([
+    readComputerRuntimeObservation(db, bound.gatewayId),
+    db.doc(`${GATEWAYS_COLLECTION}/${bound.gatewayId}`).get(),
+  ]);
+  const vm = glm?.vm as { instanceId?: unknown } | null | undefined;
+  const gateway = projectGatewayDesiredRootForGateway(gatewaySnap.exists ? gatewaySnap.data() : undefined, bound.gatewayId);
+  if (
+    resolveGatewayRuntime(glm?.runtime) !== "gce-vm" ||
+    vm?.instanceId !== bound.podUid ||
+    !computerHomeGatewayEligible(gateway, slug, bound.finalHomeCheckpoint === true)
+  ) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return { bound, slug, instanceId: bound.podUid };
+}
+
+function computerHomeGatewayEligible(
+  gateway: (ReturnType<typeof projectGatewayDesiredRootForGateway> & { retirementClaim?: unknown }) | null,
+  slug: string,
+  finalHomeCheckpoint: boolean,
+): boolean {
+  if (gateway === null) return false;
+  const lifecycleAdmits = finalHomeCheckpoint
+    ? gateway.desiredStatus === "retired"
+    : gateway.desiredStatus === "running" && gateway.retireAfter == null && gateway.retirementClaim == null;
+  return lifecycleAdmits &&
+    gateway.gatewayClass === "builder" &&
+    gateway.builderSlug === slug &&
+    typeof gateway.ownerUid === "string";
+}
+
+function respondComputerHomeError(res: Response, error: unknown): boolean {
+  if (!(error instanceof ComputerHomeCheckpointError)) return false;
+  res.status(409).json({ error: error.code });
+  return true;
+}
+
+function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
+  const { db, createBlobSignedUrl, computerHomeStore, now } = deps;
+
+  router.post("/computer-home/checkpoint-url", async (req, res) => {
+    const scope = await requireComputerHomeScope(db, req, res);
+    if (!scope) return;
+    const size = finiteNonNegative(objectBody(req).size);
+    if (size === null || size === 0 || size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
+      res.status(400).json({ error: "invalid_size" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const name = computerHomeCheckpointName(now());
+      const upload = await createBlobSignedUrl({
+        gcsPath: computerHomeCheckpointPath(scope.slug, name),
+        action: "write",
+        contentType: COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
+        ifGenerationMatch: 0,
+      });
+      const response: FleetBrokerComputerHomeCheckpointUrl = { name, upload };
+      res.json(response);
+    });
+  });
+
+  router.post("/computer-home/commit", async (req, res) => {
+    const scope = await requireComputerHomeScope(db, req, res);
+    if (!scope) return;
+    const body = objectBody(req);
+    const name = validComputerHomeCheckpointName(body.name);
+    const sha256 = validSha256(body.sha256);
+    const size = finiteNonNegative(body.size);
+    const requestedAt = body.requestedAt === null ? null : finiteNonNegative(body.requestedAt);
+    if ((body.requestedAt !== null && requestedAt === null) || (requestedAt !== null && requestedAt > now())
+      || !name || !sha256 || size === null || size === 0 || size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
+      res.status(400).json({ error: "invalid_checkpoint" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      let checkpoint: GatewayVmHomeCheckpoint = { name, size, sha256, instanceId: scope.instanceId, completedAt: now() };
+      try {
+        checkpoint = await computerHomeStore.commit({
+          checkpointPath: computerHomeCheckpointPath(scope.slug, name),
+          currentPath: computerHomeCurrentPath(scope.slug),
+          checkpoint,
+        });
+      } catch (error) {
+        if (respondComputerHomeError(res, error)) return;
+        throw error;
+      }
+      const home: Pick<GatewayVmHomeState, "lastCheckpoint" | "checkpointAcknowledgedAt"> = { lastCheckpoint: checkpoint, checkpointAcknowledgedAt: requestedAt };
+      await recordComputerHomeCheckpoint(db, scope.bound.gatewayId, home);
+      const response: FleetBrokerComputerHomeCheckpointCommit = { name, size, sha256, completedAt: checkpoint.completedAt };
+      res.json(response);
+    });
+  });
+
+  router.post("/computer-home/download-url", async (req, res) => {
+    const scope = await requireComputerHomeScope(db, req, res);
+    if (!scope) return;
+    await runBrokered(res, async () => {
+      const current = await computerHomeStore.readCurrent(computerHomeCurrentPath(scope.slug));
+      if (!current) {
+        res.status(404).json({ error: "no_checkpoint" });
+        return;
+      }
+      const download = await createBlobSignedUrl({
+        gcsPath: computerHomeCheckpointPath(scope.slug, current.name),
+        action: "read",
+      });
+      const response: FleetBrokerComputerHomeDownload = {
+        name: current.name,
+        size: current.size,
+        sha256: current.sha256,
+        completedAt: current.completedAt,
+        download,
+      };
+      res.json(response);
+    });
+  });
+
+  router.post("/computer-home/prune", async (req, res) => {
+    const scope = await requireComputerHomeScope(db, req, res);
+    if (!scope) return;
+    await runBrokered(res, async () => {
+      const current = await computerHomeStore.readCurrent(computerHomeCurrentPath(scope.slug));
+      const deleted = await computerHomeStore.prune({
+        checkpointsPrefix: computerHomeCheckpointsPrefix(scope.slug),
+        currentName: current?.name ?? null,
+        keep: COMPUTER_HOME_CHECKPOINT_KEEP,
+      });
+      const response: FleetBrokerComputerHomePruneResult = { deleted };
+      res.json(response);
+    });
+  });
 }
 
 // A chat-broker caller is validated in three layers:
@@ -3056,6 +3238,33 @@ function respondWebResearchError(res: Response, error: unknown): void {
   res.status(502).json({ error: "Web research provider failed", code: "provider_error" });
 }
 
+function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
+  const { db } = deps;
+  router.post("/vm-runtime", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const [snap, observation] = await Promise.all([
+      db.doc(gatewayVmRuntimeDocPath(bound.gatewayId)).get(),
+      readComputerRuntimeObservation(db, bound.gatewayId),
+    ]);
+    const bundle = snap.exists ? snap.data() : undefined;
+    if (!isGatewayVmRuntimeBundle(bundle) || bundle.gatewayId !== bound.gatewayId) {
+      res.status(404).json({ error: "vm_runtime_not_rendered" });
+      return;
+    }
+    const home = observation?.vmHome as Partial<GatewayVmHomeState> | undefined;
+    const response: GatewayVmRuntimeResponse = {
+      bundle,
+      homeCheckpoint: {
+        requestedAt: typeof home?.checkpointRequestedAt === "number" ? home.checkpointRequestedAt : null,
+        completedAt: !homeCheckpointOutstanding(home) && typeof home?.lastCheckpoint?.completedAt === "number" ? home.lastCheckpoint.completedAt : null,
+      },
+    };
+    res.set("cache-control", "no-store");
+    res.json(response);
+  });
+}
+
 function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db, renderAvatar, applyCoachIdentity } = deps;
 
@@ -3219,6 +3428,7 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
   installSnapshotRoutes(router, deps, platformAdminMmUserId);
   installProvisioningRoutes(router, deps);
   installGatewayOpsRoutes(router, deps);
+  installVmRuntimeRoutes(router, deps);
   installAgentRoutes(router, deps);
   return router;
 }

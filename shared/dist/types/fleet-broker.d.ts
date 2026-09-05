@@ -122,6 +122,22 @@ export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
 export interface FleetBrokerBuilderRuntimeStatePruneResult {
     deleted: number;
 }
+export interface FleetBrokerComputerHomeCheckpointUrl {
+    name: string;
+    upload: FleetBrokerBlobSignedUrl;
+}
+export interface FleetBrokerComputerHomeCheckpointCommit {
+    name: string;
+    size: number;
+    sha256: string;
+    completedAt: number;
+}
+export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHomeCheckpointCommit {
+    download: FleetBrokerBlobSignedUrl;
+}
+export interface FleetBrokerComputerHomePruneResult {
+    deleted: number;
+}
 export type FleetBrokerOpenClawBootAction = "start" | "doctor";
 export interface FleetBrokerOpenClawBootClaim {
     action: FleetBrokerOpenClawBootAction;

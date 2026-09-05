@@ -20,6 +20,7 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   isOperatorManaged,
+  resolveGatewayRuntime,
   resolveUserGatewayControlState,
   type OperationAttemptRecord,
 } from "@octogee/shared/types/glm";
@@ -2471,6 +2472,25 @@ async function readTerminalLeaseOperationSnapshots(
   });
 }
 
+export function placementPodDiagnosticsScope(
+  gatewayIds: readonly string[],
+  runtimes: ReadonlyMap<string, Record<string, unknown>>,
+): {
+  clusterGatewayIds: string[];
+  vmDiagnostics: Record<string, PlacementPolicyPodDiagnostics>;
+} {
+  const clusterGatewayIds: string[] = [];
+  const vmDiagnostics: Record<string, PlacementPolicyPodDiagnostics> = {};
+  for (const gatewayId of gatewayIds) {
+    if (resolveGatewayRuntime(runtimes.get(gatewayId)?.runtime) === "gce-vm") {
+      vmDiagnostics[gatewayId] = { status: "unknown", totalPods: 0, readyPods: 0 };
+    } else {
+      clusterGatewayIds.push(gatewayId);
+    }
+  }
+  return { clusterGatewayIds, vmDiagnostics };
+}
+
 function placementPolicyIdleMs(value: unknown, fallbackIdleMs: number): number {
   if (value === undefined) return fallbackIdleMs;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -2868,19 +2888,23 @@ async function readPlacementPolicySnapshot(
     fallbackIdleMs,
   );
   const runtimes = docsById(runtimeDocs);
-  const kubernetesByGatewayId = await input.readGatewayPodDiagnosticsBatch({
-    namespace: input.namespace,
-    gatewayIds: gatewayDocs.map((doc) => doc.id),
-    includeReplicaSets: true,
-  }).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    input.log(`[placement-policy] Kubernetes diagnostics unreadable; treating fleet as unknown: ${message}`);
-    return Object.fromEntries(gatewayDocs.map((doc) => [doc.id, {
-      status: "unknown",
-      totalPods: 0,
-      readyPods: 0,
-    }]));
-  });
+  const diagnosticsScope = placementPodDiagnosticsScope(gatewayDocs.map((doc) => doc.id), runtimes);
+  const kubernetesByGatewayId = {
+    ...diagnosticsScope.vmDiagnostics,
+    ...await input.readGatewayPodDiagnosticsBatch({
+      namespace: input.namespace,
+      gatewayIds: diagnosticsScope.clusterGatewayIds,
+      includeReplicaSets: true,
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      input.log(`[placement-policy] Kubernetes diagnostics unreadable; treating fleet as unknown: ${message}`);
+      return Object.fromEntries(diagnosticsScope.clusterGatewayIds.map((gatewayId) => [gatewayId, {
+        status: "unknown",
+        totalPods: 0,
+        readyPods: 0,
+      }]));
+    }),
+  };
   await persistKubernetesObservations(db, runtimeDocs, kubernetesByGatewayId, now, {
     log: input.log,
     namespace: input.namespace,

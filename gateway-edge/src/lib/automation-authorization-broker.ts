@@ -24,7 +24,7 @@ function trimTrailingSlashes(value: string): string {
   return value.slice(0, end);
 }
 
-function trustedBrokerBaseUrl(
+export function trustedBrokerBaseUrl(
   value: string,
   env: Record<string, string | undefined>,
 ): string {

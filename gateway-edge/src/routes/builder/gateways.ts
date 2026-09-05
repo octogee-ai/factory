@@ -129,13 +129,13 @@ function builderViewOf({
   };
 }
 
-interface GatewayWorkspaceScope {
+export interface GatewayWorkspaceScope {
   gatewayId: string;
   workspaceSlug: string;
   ownerUid: string;
 }
 
-type DocumentReader = (path: string) => Promise<{ exists: boolean; data(): unknown }>;
+export type DocumentReader = (path: string) => Promise<{ exists: boolean; data(): unknown }>;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -192,7 +192,7 @@ async function sharedGatewayWorkspaceScope(
   return currentOwnerScope(get, gatewayId, workspaceSlug, ownerUid);
 }
 
-async function workspaceScopeFor(
+export async function workspaceScopeFor(
   authorization: DurableGatewayAuthorization,
   workspaceSlug: string | null | undefined,
   get: DocumentReader,
@@ -211,7 +211,7 @@ async function workspaceScopeFor(
   return privateGatewayWorkspaceScope(authorization, workspaceSlug, get);
 }
 
-async function principalAccess(
+export async function principalAccess(
   scope: GatewayWorkspaceScope,
   uid: string,
   get: DocumentReader,

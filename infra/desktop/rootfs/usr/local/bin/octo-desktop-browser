@@ -1,0 +1,27 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+sandbox_args=()
+case "${OCTO_CHROMIUM_NO_SANDBOX-0}" in
+  0) ;;
+  1) sandbox_args+=(--no-sandbox) ;;
+  *) printf '%s\n' 'OCTO_CHROMIUM_NO_SANDBOX must be 0 or 1' >&2; exit 2 ;;
+esac
+
+if (( $# == 0 )); then
+  set -- --start-maximized --restore-last-session
+  has_session=false
+  for session in "$HOME"/.config/octogee-chromium/Default/Sessions/Session_*; do
+    if [[ -f "$session" && -s "$session" ]]; then
+      has_session=true
+      break
+    fi
+  done
+  if [[ "$has_session" == false ]]; then
+    set -- "$@" "${OCTO_HOME_URL:-https://octogee.com}"
+  fi
+fi
+
+exec chromium --ozone-platform=wayland --disable-gpu "${sandbox_args[@]}" --no-first-run --password-store=basic \
+  --user-data-dir="$HOME/.config/octogee-chromium" \
+  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 "$@"

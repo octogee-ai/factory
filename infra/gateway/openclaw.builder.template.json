@@ -116,6 +116,7 @@
       "octogee_board_card_move",
       "octogee_board_card_comment",
       "workspace_commit",
+      "computer",
       "brave_search",
       "tavily_search",
       "tavily_extract",
@@ -244,6 +245,7 @@
       "octogee-status-tools",
       "octogee-ops-tools",
       "octogee-web-tools",
+      "octogee-computer-tools",
       "octogee-workspace-tools",
       "octogee-activity-tools",
       "parallel",
@@ -342,6 +344,10 @@
       },
       "parallel": {
         "enabled": true
+      },
+      "octogee-computer-tools": {
+        "enabled": true,
+        "config": {}
       }
     }
   }

@@ -3,7 +3,7 @@ import { Counter, type Registry } from "prom-client";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { isWellFormedServiceAccountJwt } from "../../../gateway-edge/src/middleware/security.js";
 import {
-  mapSaToTenant,
+  mapReviewToTenant,
   type BoundTenant,
   type TenantBindingResult,
 } from "../lib/sa-to-tenant.js";
@@ -14,6 +14,7 @@ import {
   type Reviewer,
 } from "../lib/token-review.js";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
+import { gatewayVmPodName } from "@octogee/shared/types/glm";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -45,7 +46,7 @@ export interface TenantBindingLogger {
 
 export interface TenantBindingMiddlewareOptions {
   reviewer?: Reviewer;
-  db?: Parameters<typeof mapSaToTenant>[0];
+  db?: Parameters<typeof mapReviewToTenant>[0];
   namespace?: string;
   metrics: TenantBindingMetrics;
   logger?: TenantBindingLogger;
@@ -137,11 +138,7 @@ export function createTenantBindingMiddleware(
 
     let mapped;
     try {
-      mapped = await mapSaToTenant(
-        db,
-        { namespace: review.namespace, saName: review.saName },
-        namespace,
-      );
+      mapped = await mapReviewToTenant(db, review, namespace);
     } catch (err) {
       record(opts.metrics, req, "reviewer_error");
       warn(logger, "tenant lookup failed", {
@@ -157,7 +154,9 @@ export function createTenantBindingMiddleware(
           ? {
               ...mapped.tenant,
               saName: review.saName,
-              podName: review.podName,
+              podName: review.computeInstance
+                ? gatewayVmPodName(mapped.tenant.gatewayId, review.computeInstance.instanceId)
+                : review.podName,
               podUid: review.podUid,
             }
           : mapped.tenant;

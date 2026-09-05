@@ -67,12 +67,14 @@ cat <<RESULT
 | Metric | Value |
 | --- | --- |
 | Image size | $(( image_size / 1024 / 1024 )) MiB |
-| Container start to control API healthy | $(printf '%.1f' "$(echo "$t_ready - $t0" | bc)") s |
-| Container start to Chromium window mapped | $(printf '%.1f' "$(echo "$t_chromium - $t0" | bc)") s |
+| Container start to control API healthy | $(python3 -c 'import sys; print(f"{float(sys.argv[2])-float(sys.argv[1]):.1f}")' "$t0" "$t_ready") s |
+| Container start to Chromium window mapped | $(python3 -c 'import sys; print(f"{float(sys.argv[2])-float(sys.argv[1]):.1f}")' "$t0" "$t_chromium") s |
 | Idle CPU / memory | $idle |
 | CPU / memory during screenshot loop | $busy |
-| Screenshot latency (avg of 10) | $(printf '%.2f' "$(echo "($shot_t1 - $shot_t0) / 10" | bc -l)") s |
+| Screenshot latency (avg of 10) | $(python3 -c 'import sys; print(f"{(float(sys.argv[2])-float(sys.argv[1]))/10:.2f}")' "$shot_t0" "$shot_t1") s |
 | Input verified (typed URL changed window title) | $input_verified ("$title_before" → "$title_after") |
 | Compositor | $compositor (health: $(jq -r .compositor "$out_dir/health.json")) |
 | Screenshot artifacts | $out_dir/screenshot.png, $out_dir/after-navigate.png |
 RESULT
+
+[[ "$input_verified" == yes ]] || { echo "desktop input acceptance failed" >&2; exit 1; }

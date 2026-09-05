@@ -50,6 +50,16 @@ immediately with the aquamarine error above. If the host has more than one
 DRM device, set `AQ_DRM_DEVICES=/dev/dri/cardN` to pick one. Host port 5900 is
 often taken by macOS Screen Sharing; override with `OCTO_VNC_PORT=15900`.
 
+Chromium's sandbox is enabled by default in the launcher and on Builder VMs.
+The Docker development recipe explicitly sets `OCTO_CHROMIUM_NO_SANDBOX=1`
+because the container's default restrictions block Chromium's user namespaces
+(`unshare --user --map-root-user true` fails with `Operation not permitted`).
+This opt-out belongs only to the development container; it is absent from VM
+configuration. Set `OCTO_CHROMIUM_NO_SANDBOX=0` when using a container runtime
+that permits the sandbox. The launcher accepts only `0` or `1` and fails before
+starting Chromium for any other value. Docker acceptance with the opt-out does
+not verify Chromium sandbox isolation; native VM acceptance does.
+
 GPU-less (any host, including Apple Silicon under Rosetta):
 
 ```bash
@@ -72,9 +82,60 @@ window, samples CPU and memory idle and under a screenshot loop, drives one
 navigation through the control API, and prints a results block for the table
 below.
 
+## OpenClaw browser acceptance
+
+The Builder VM uses OpenClaw's built-in `browser` tool with the `computer`
+profile. That profile attaches to Chromium at `127.0.0.1:9222` and cannot launch
+another browser. `/usr/local/bin/octo-desktop-browser` is the common launcher for the
+session and desktop app opens. Its profile is
+`/home/octo/.config/octogee-chromium`, uses `--password-store=basic`, and is
+included in desktop-home checkpoints. CDP is not published by Docker or the
+VM bridge. Only the owner coach receives the first-class browser tool; project
+agents are denied it. This tool policy does not isolate processes or prevent
+an agent with unrestricted exec from reaching the VM's loopback services.
+
+`acceptance/openclaw-browser.mts` runs the real OpenClaw browser implementation,
+opens a local fixture, types and clicks through snapshot references, evaluates
+the result, and records both the tool screenshot and the desktop capture.
+Run it in an isolated computer's network namespace with the Octogee worktree
+and an installed OpenClaw source checkout available:
+
+```bash
+export OPENCLAW_SOURCE_DIR=/path/to/openclaw
+export OCTOGEE_ACCEPT_ISOLATED_COMPUTER=1
+export OCTOGEE_ACCEPT_OUTPUT=/tmp/computer-browser-acceptance
+OCTOGEE_ACCEPT_PHASE=seed node --import "$OPENCLAW_SOURCE_DIR/node_modules/tsx/dist/loader.mjs" \
+  infra/desktop/acceptance/openclaw-browser.mts
+```
+
+The seed phase stores a persistent HttpOnly cookie and localStorage value in
+the isolated profile. Stop/start the desktop or restore its checkpoint onto a
+fresh computer, then run the same command with `OCTOGEE_ACCEPT_PHASE=verify`.
+Verification refuses to reseed the cookie or storage; both must survive.
+The output directory holds JSON tool results, native screenshots and a
+throwaway OpenClaw state directory. The fixture's permission to navigate
+loopback URLs applies only to this acceptance process.
+
+To accept an immutable installed OpenClaw artifact, set `OPENCLAW_PACKAGE_DIR`
+to its `node_modules/openclaw` directory and run the same harness with Node's
+native TypeScript support:
+
+```bash
+OPENCLAW_PACKAGE_DIR=/path/to/installed/node_modules/openclaw \
+  OCTOGEE_ACCEPT_PHASE=seed node infra/desktop/acceptance/openclaw-browser.mts
+```
+
+Artifact mode imports the package's built plugin loader and tool resolver,
+checks owner/project/custom-agent tool policy, and executes the tool returned
+by actual plugin registration. Results record the package version and runtime
+directory separately from source-checkout acceptance. Set
+`OCTOGEE_ACCEPT_OPENCLAW_VERSION` to require an expected package version, or use
+`OCTOGEE_ACCEPT_PHASE=discover` to validate registration and policy without
+touching the desktop.
+
 ## Control API
 
-The stand-in for the OpenClaw computer tool. Coordinates are absolute pixels on
+The native transport for the OpenClaw `computer` tool. Coordinates are absolute pixels on
 the headless output.
 
 | Route | Body | Effect |
@@ -175,3 +236,37 @@ the first key is required or the first keystroke after a focus change is lost
 - [x] Boot the installed disk as a native GCE image (`omarchy-spike-v1`) and repeat: same result
 - [ ] Same session scripts run inside a QEMU/KVM Omarchy VM with virtio-gpu and no host GPU
 - [ ] CPU, memory, image size and time-to-ready recorded above
+
+## Native OpenClaw computer acceptance
+
+Run against an isolated 1920×1080 desktop container with its control port bound to
+127.0.0.1:17777. The harness loads the real OpenClaw plugin, opens a local Documents
+fixture, and repeats screenshot/click/type/key/scroll/exec actions five times. It
+checks exact Unicode text and button/scroll state through native window titles.
+It prints the private temporary directory containing screenshots and results.
+Set `OCTO_ACCEPTANCE_OUTPUT` to choose an explicit output directory.
+
+```bash
+OPENCLAW_SOURCE_DIR=/path/to/openclaw \
+TSX_TSCONFIG_PATH=/path/to/openclaw/tsconfig.json \
+OCTO_ACCEPTANCE_CONTAINER=octo-desktop \
+node --import ./scripts/node_modules/tsx/dist/loader.mjs infra/desktop/acceptance-computer.mts
+```
+
+Install the scripts and `octogee-computer-tools` package dependencies first.
+The fixture creates one file under the container's Documents directory; use a
+dedicated acceptance profile. No model API call or human VNC connection is needed.
+
+For an immutable installed artifact, point `OPENCLAW_PACKAGE_DIR` at its
+`node_modules/openclaw` directory. This imports the package's built plugin loader
+and tool resolver and records its manifest version and runtime mode in results:
+
+```bash
+OPENCLAW_PACKAGE_DIR=/path/to/installed/node_modules/openclaw \
+OCTO_ACCEPTANCE_CONTAINER=octo-desktop \
+node infra/desktop/acceptance-computer.mts
+```
+
+Set `OCTOGEE_ACCEPT_OPENCLAW_VERSION` to reject an unexpected package version
+before loading tools or touching the desktop. Package mode takes precedence when
+both runtime directory variables are set.

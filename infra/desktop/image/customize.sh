@@ -13,9 +13,9 @@ log() { printf '%s %s\n' "$(date -u +%H:%M:%S) [customize]" "$*"; }
 
 log "packages"
 pacman -Sy --noconfirm --needed \
-  wayvnc grim wtype wl-clipboard slurp jq python python-pip bc \
+  wayvnc grim wtype wl-clipboard slurp jq python python-pip python-websocket-client bc \
   meson ninja wayland wayland-protocols libxkbcommon git \
-  chromium xorg-xwayland noto-fonts noto-fonts-emoji ttf-jetbrains-mono >/tmp/pacman.log 2>&1 \
+  chromium xorg-xwayland noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono >/tmp/pacman.log 2>&1 \
   || { tail -20 /tmp/pacman.log; exit 1; }
 
 log "wlrctl ${WLRCTL_REF}"
@@ -24,6 +24,8 @@ git -c advice.detachedHead=false clone -q --depth 1 --branch "$WLRCTL_REF" https
 meson setup /tmp/wlrctl/build /tmp/wlrctl -Dman-pages=disabled --buildtype=release >/dev/null
 ninja -C /tmp/wlrctl/build >/dev/null
 install -m 0755 /tmp/wlrctl/build/wlrctl /usr/local/bin/wlrctl
+bash "$HERE/desktop-rootfs/usr/share/omarchy/octo-desktop/build-seat-input.sh" \
+  /tmp/wlrctl/protocol/virtual-keyboard-unstable-v1.xml /usr/local/bin/octo-seat-input
 rm -rf /tmp/wlrctl
 
 log "novnc ${NOVNC_VERSION} + websockify ${WEBSOCKIFY_VERSION}"
@@ -48,7 +50,10 @@ sed -i -E 's/^#?timeout:.*/timeout: 0/' /boot/limine.conf
 grep -q '^timeout: 0' /boot/limine.conf || printf 'timeout: 0\n' >> /boot/limine.conf
 sed -i -E '/^[[:space:]]*cmdline:/ { s/ resume=[^ ]+ resume_offset=[0-9]+//; s/ quiet splash loglevel=0 systemd\.show_status=false rd\.udev\.log_level=0 vt\.global_cursor_default=0//; /console=ttyS0/! s/$/ console=tty0 console=ttyS0,115200n8 loglevel=4/ }' /boot/limine.conf
 systemctl unmask NetworkManager-wait-online.service
-systemctl enable octo-seatd.service octo-desktop.service octo-metadata-ssh-keys.timer sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
+loginctl enable-linger octo
+systemctl enable octo-seatd.service octo-desktop.service octo-desktop-lifecycle.service octo-metadata-ssh-keys.timer octo-gateway-agent.service sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
+systemctl disable sddm.service
+systemctl mask sddm.service
 systemctl disable --now cups.service cups.path avahi-daemon.service bluetooth.service >/dev/null 2>&1 || true
 
 log "identity reset + cleanup"

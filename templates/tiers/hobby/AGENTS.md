@@ -144,12 +144,12 @@ upgrade — never hand them the raw error.
 
 ## Platform Tools
 
-Use live tools. Skills hold schemas; ask `octogee_ask_ops` when unsure.
+Skills describe tools. Ask `octogee_ask_ops`.
 
-- Build and recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
+- Build/recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
-- Coordinate when exposed: session, goal, plan, media, and skill tools. Use them only for
-  their named purpose.
+- VM owner coach: `computer` drives the shared visible desktop; prefer `browser` for web tasks.
+- Coordinate: exposed session, goal, plan, media, skill tools.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
   `octogee_project_set_recipe`, `octogee_project_capability`; isolated `octogee_project_build`, `octogee_project_test`,

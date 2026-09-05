@@ -7,8 +7,8 @@ import {
 import { isWellFormedServiceAccountJwt } from "../../../gateway-edge/src/middleware/security.js";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
-import { mapSaToTenant, type BoundTenant } from "../lib/sa-to-tenant.js";
-import type { Reviewer } from "../lib/token-review.js";
+import { mapReviewToTenant, type BoundTenant } from "../lib/sa-to-tenant.js";
+import type { ReviewResult, Reviewer } from "../lib/token-review.js";
 
 type GatewayBinding = Extract<BoundTenant, { kind: "gateway" }>;
 
@@ -16,9 +16,9 @@ export interface GatewayCredentialAuthOptions {
   reviewer: Reviewer;
   tokenHeader?: string;
   audience?: string;
-  db?: Parameters<typeof mapSaToTenant>[0];
+  db?: Parameters<typeof mapReviewToTenant>[0];
   namespace?: string;
-  mapIdentity?: (identity: { namespace: string; saName: string }) => Promise<BoundTenant | null>;
+  mapIdentity?: (review: Extract<ReviewResult, { authenticated: true }>) => Promise<BoundTenant | null>;
   logger?: Pick<typeof defaultLogger, "warn">;
 }
 
@@ -28,14 +28,9 @@ function exactPodMatch(
   bound: GatewayBinding,
   review: Extract<Awaited<ReturnType<Reviewer>>, { authenticated: true }>,
 ): boolean {
-  return Boolean(
-    bound.podName
-    && bound.podUid
-    && bound.saName
-    && review.saName === bound.saName
-    && review.podName === bound.podName
-    && review.podUid === bound.podUid,
-  );
+  if (!bound.podName || !bound.podUid || !bound.saName || review.saName !== bound.saName) return false;
+  if (review.computeInstance) return review.computeInstance.instanceId === bound.podUid;
+  return review.podName === bound.podName && review.podUid === bound.podUid;
 }
 
 export function createGatewayCredentialAuth(
@@ -46,8 +41,8 @@ export function createGatewayCredentialAuth(
   const logger = opts.logger ?? defaultLogger;
   const tokenHeader = opts.tokenHeader ?? GATEWAY_CREDENTIAL_TOKEN_HEADER;
   const audience = opts.audience ?? GATEWAY_CREDENTIAL_TOKEN_AUDIENCE;
-  const mapIdentity = opts.mapIdentity ?? (async (identity) => {
-    const mapped = await mapSaToTenant(db, identity, namespace);
+  const mapIdentity = opts.mapIdentity ?? (async (review) => {
+    const mapped = await mapReviewToTenant(db, review, namespace);
     return mapped.attached ? mapped.tenant : null;
   });
 
@@ -65,10 +60,7 @@ export function createGatewayCredentialAuth(
         || review.namespace !== namespace
         || !exactPodMatch(bound, review)
       ) return false;
-      const credentialTenant = await mapIdentity({
-        namespace: review.namespace,
-        saName: review.saName,
-      });
+      const credentialTenant = await mapIdentity(review);
       return credentialTenant?.kind === "gateway"
         && credentialTenant.gatewayId === bound.gatewayId;
     };

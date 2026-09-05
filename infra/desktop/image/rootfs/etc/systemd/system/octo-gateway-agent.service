@@ -1,0 +1,15 @@
+[Unit]
+Description=Octogee gateway registration agent
+Wants=network-online.target docker.service octo-desktop-lifecycle.service
+After=network-online.target docker.service octo-desktop-lifecycle.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/octo-gateway-agent
+Restart=always
+RestartSec=10
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
