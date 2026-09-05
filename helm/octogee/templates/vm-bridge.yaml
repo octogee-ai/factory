@@ -135,6 +135,12 @@ spec:
         - { protocol: TCP, port: {{ $llmPort }} }
   egress:
     - to:
+        - ipBlock:
+            cidr: {{ required "networkPolicy.nodeLocalDnsCidr is required" .Values.networkPolicy.nodeLocalDnsCidr }}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
         - podSelector:
             matchLabels:
               app: octogee-api
