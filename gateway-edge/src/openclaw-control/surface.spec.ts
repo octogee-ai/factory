@@ -1805,6 +1805,91 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
+  it.each([
+    ["delegated-config", "allowed"], ["native-co-owner", "allowed"],
+    ["delegated-read", "denied"], ["delegated-config", "unsafe"],
+    ["delegated-config", "service-auth-failure"], ["delegated-config", "service-timeout"],
+  ] as const)("handles %s config edits with %s service outcome", async (profile, outcome) => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-service-config-"));
+    tempDirs.push(openclawDir);
+    const config: Record<string, unknown> = { agents: { defaults: { timeoutSeconds: 60 } } };
+    reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" });
+    const retained: Array<{ release(): Promise<void> }> = [];
+    const calls: Array<{ method: string; user: string | undefined }> = [];
+    const upstream = http.createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    wss.on("connection", (ws, req) => {
+      const user = req.headers["x-octogee-user"] as string | undefined;
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        calls.push({ method: frame.method, user });
+        if (user === "svc:gateway-edge" && frame.method === "connect" && outcome === "service-auth-failure") {
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { code: "FORBIDDEN", message: "service denied" } }));
+          return;
+        }
+        if (user === "svc:gateway-edge" && frame.method === "config.patch" && outcome === "service-timeout") return;
+        let payload: unknown;
+        if (frame.method === "connect") payload = { type: "hello-ok", features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] } };
+        else if (frame.method === "config.get") payload = { raw: JSON.stringify(config), hash: "hash-1" };
+        else if (frame.method === "config.patch" && user !== "svc:gateway-edge") {
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { code: "FORBIDDEN", message: "missing scope: operator.admin" } }));
+          return;
+        } else payload = { applied: true };
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload }));
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const testEnv = { ...env(upstreamPort, openclawDir), OPENCLAW_CONTROL_IDENTITY: "per-user" };
+    const device = generateIdentity();
+    const edge = http.createServer();
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({ router, env: testEnv, sessions: manager, authorize: async () => true,
+      proxyIdentity: {
+        enabled: true, userHeaders: () => ({ "x-octogee-user": "uid-helper" }),
+        serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge" }), deviceIdentity: () => device,
+        connectScopes: () => ["operator.read", "operator.write"], syncRole: async () => {},
+      }, rpcTimeoutMs: 300,
+      retainMutationLeaseUntilProcessReplacement: (lease) => { retained.push(lease); },
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, { headers: { cookie: issue(manager, profile), origin: "https://api.octogee.com" } });
+    const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      browser.once("error", reject);
+      browser.once("close", () => resolve({ closed: true }));
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "read", method: "config.get", params: {} }));
+        else if (frame.id === "read") browser.send(JSON.stringify({ type: "req", id: "write", method: "config.patch", params: { raw: JSON.stringify(outcome === "unsafe" ? { unknownSetting: "forbidden" } : { agents: { defaults: { timeoutSeconds: 90 } } }), baseHash: "hash-1" } }));
+        else if (frame.id === "write") resolve(frame);
+      });
+    });
+    browser.terminate();
+    for (const client of wss.clients) client.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    if (outcome === "allowed") {
+      expect(result.ok).toBe(true);
+      expect(calls.filter((call) => call.method === "config.patch")).toEqual([{ method: "config.patch", user: "svc:gateway-edge" }]);
+    } else if (outcome === "service-timeout") {
+      expect(result.ok === false || result.closed === true).toBe(true);
+      expect(calls.filter((call) => call.method === "config.patch")).toEqual([{ method: "config.patch", user: "svc:gateway-edge" }]);
+      await vi.waitFor(() => expect(retained).toHaveLength(1));
+      expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
+      await retained[0].release();
+    } else {
+      expect(result.ok).not.toBe(true);
+      expect(calls.filter((call) => call.method === "config.patch")).toEqual([]);
+      expect(retained).toEqual([]);
+      await vi.waitFor(() => expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(false));
+      const retryLease = acquireSystemConfigSyncLeaseSync({ openclawDir });
+      expect(retryLease).not.toBeNull();
+      retryLease?.release();
+    }
+  });
+
   it("carries each person's identity to OpenClaw and settles their role before forwarding connect", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upgradeHeaders: Array<Record<string, unknown>> = [];

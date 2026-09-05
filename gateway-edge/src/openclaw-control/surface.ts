@@ -38,6 +38,7 @@ import {
   sanitizeOpenClawControlServerFrame,
   type OpenClawConnectIdentity,
 } from "./connect-rewrite.js";
+import { executeServiceConfigMutation } from "./config-mutation.js";
 import {
   createOpenClawControlProxyIdentity,
   type OpenClawControlProxyIdentity,
@@ -927,6 +928,7 @@ interface PendingRpc {
   responseProjector?: (frame: Record<string, unknown>) => Record<string, unknown>;
   lease: OpenClawControlLease;
   mutationLease?: SystemConfigMutationLease;
+  mutationDispatched: boolean;
   timer: NodeJS.Timeout;
 }
 
@@ -1243,7 +1245,10 @@ class OpenClawControlSocketBridge {
     }
     for (const id of [...this.pending.keys()]) {
       const item = this.takePending(id);
-      if (item?.mutationLease) this.retainMutationLease(item.mutationLease, reason);
+      if (item?.mutationLease) {
+        if (item.mutationDispatched) this.retainMutationLease(item.mutationLease, reason);
+        else this.releaseMutationLease(item.mutationLease);
+      }
     }
   }
 
@@ -1279,6 +1284,7 @@ class OpenClawControlSocketBridge {
       internal?: boolean;
       proposed?: Record<string, unknown>;
       mutationLease?: SystemConfigMutationLease;
+      mutationDispatched?: boolean;
       responseProjector?: (frame: Record<string, unknown>) => Record<string, unknown>;
       timerMs?: number;
     } = {},
@@ -1303,6 +1309,7 @@ class OpenClawControlSocketBridge {
       responseProjector: options.responseProjector,
       lease,
       mutationLease: options.mutationLease,
+      mutationDispatched: options.mutationDispatched ?? true,
       timer,
     });
     this.pending.set(id, pendingRpc);
@@ -1320,7 +1327,8 @@ class OpenClawControlSocketBridge {
       this.closeBoth("request-timeout");
       return;
     }
-    this.quarantine(id, pendingRpc.timeoutMs, expired?.mutationLease);
+    if (expired?.mutationLease && !expired.mutationDispatched) this.releaseMutationLease(expired.mutationLease);
+    this.quarantine(id, pendingRpc.timeoutMs, expired?.mutationDispatched ? expired.mutationLease : undefined);
     if (this.args.browser.readyState === WebSocket.OPEN) {
       this.args.browser.send(openClawControlTimeoutError({ type: "req", id, method, params: {} }));
       this.args.metrics?.rpc(this.metricsIdentity, category, "timeout");
@@ -1650,17 +1658,50 @@ class OpenClawControlSocketBridge {
     this.track(frame.id, frame.method, decision.category, lease, {
       proposed: decision.proposedConfig,
       mutationLease,
+      mutationDispatched: !this.serviceConfigMutation(decision),
       timerMs: remainingMs,
       ...mattermostProjectionOptions(mattermost),
     });
+    await this.dispatchAllowed(frame, decision, mattermost, deadlineAt);
+    this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
+  }
+
+  private async dispatchAllowed(
+    frame: BrowserRpcFrame,
+    decision: OpenClawControlRpcDecision,
+    mattermost: MattermostChatPreparation | null,
+    deadlineAt: number,
+  ): Promise<void> {
+    const outbound = decision.outbound ?? frame;
+    if (this.serviceConfigMutation(decision)) {
+      await this.forwardServiceConfigMutation(frame, outbound, deadlineAt);
+      return;
+    }
     try {
-      const outbound = decision.outbound ?? frame;
       this.upstreamSocket().send(JSON.stringify(mattermostOutboundFrame(outbound, mattermost)));
     } catch (error) {
       this.settlePending(frame.id);
       throw error;
     }
-    this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
+  }
+
+  private serviceConfigMutation(decision: OpenClawControlRpcDecision): boolean {
+    return this.args.proxyIdentity.enabled && decision.category === "config_mutation";
+  }
+
+  private async forwardServiceConfigMutation(frame: BrowserRpcFrame, outbound: Record<string, unknown>, deadlineAt: number): Promise<void> {
+    const response = await executeServiceConfigMutation({
+      base: openClawControlUpstreamBase(this.args.env),
+      headers: this.args.proxyIdentity.serviceHeaders(),
+      frame: { id: frame.id, method: frame.method, params: outbound.params },
+      deadlineAt,
+      canSend: () => !this.closing && this.pending.has(frame.id),
+      onDispatch: () => {
+        const pending = this.pending.get(frame.id);
+        if (pending) pending.mutationDispatched = true;
+      },
+    });
+    if (!this.closing) this.handleUpstreamMessage(response);
   }
 
   private async acquireMutationLease(

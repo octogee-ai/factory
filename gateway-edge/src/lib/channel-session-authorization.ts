@@ -313,12 +313,12 @@ async function callerCredentials(
     : null;
 }
 
-export async function authorizeChannel(
+export async function authorizeChannelCredentials(
   uid: string,
   channelId: string,
   expectedWorkspaceSlug?: string,
   options: ChannelAuthorizationOptions = {},
-): Promise<AuthorizedChannel | ForbiddenChannel | null> {
+): Promise<AuthorizedChannelCredentials | ForbiddenChannel | null> {
   const [target, credentials] = await abortable(Promise.all([
     resolveTarget(channelId, expectedWorkspaceSlug, options),
     callerCredentials(uid, options.signal),
@@ -354,7 +354,31 @@ export async function authorizeChannel(
   return {
     forbidden: false as const,
     target,
-    client,
+    token: credentials.token,
     callerMmUserId: liveUserId,
+  };
+}
+
+export interface AuthorizedChannelCredentials extends Omit<AuthorizedChannel, "client"> {
+  token: string;
+}
+
+export async function authorizeChannel(
+  uid: string,
+  channelId: string,
+  expectedWorkspaceSlug?: string,
+  options: ChannelAuthorizationOptions = {},
+): Promise<AuthorizedChannel | ForbiddenChannel | null> {
+  const access = await authorizeChannelCredentials(uid, channelId, expectedWorkspaceSlug, options);
+  if (!access || access.forbidden) return access;
+  return {
+    forbidden: false,
+    target: access.target,
+    callerMmUserId: access.callerMmUserId,
+    client: createChannelSessionMattermostClient({
+      baseUrl: process.env.MM_INTERNAL_URL ?? "",
+      token: access.token,
+      signal: options.signal,
+    }),
   };
 }

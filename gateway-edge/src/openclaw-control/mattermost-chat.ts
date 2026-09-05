@@ -6,8 +6,8 @@ import {
 import { parseAgentId } from "@octogee/shared/types/identity";
 
 import {
-  authorizeChannel,
-  listWorkspaceChannelCandidates,
+  type authorizeChannel,
+  type listWorkspaceChannelCandidates,
   type AuthorizedChannel,
   type WorkspaceChannelCandidate,
 } from "../lib/channel-session-authorization.js";
@@ -16,6 +16,7 @@ import {
   type MattermostModelPost,
 } from "../lib/channel-session-model-control.js";
 import type { OpenClawControlSession } from "./session.js";
+import { createBrokeredMattermostAccess } from "./mattermost-broker.js";
 
 const MAX_MESSAGE_BYTES = 128 * 1024;
 const MAX_HISTORY_POSTS = 20_000;
@@ -1586,10 +1587,11 @@ export function createMattermostControlChat(options: {
   authorize?: Authorize;
   listWorkspaceChannels?: ListWorkspaceChannels;
 } = {}): MattermostControlChat {
-  const authorize = options.authorize ?? authorizeChannel;
-  const listWorkspaceChannels = options.listWorkspaceChannels ?? listWorkspaceChannelCandidates;
   return {
     async prepare(frame, session, signal) {
+      const broker = createBrokeredMattermostAccess(session);
+      const authorize = options.authorize ?? broker.authorize;
+      const listWorkspaceChannels = options.listWorkspaceChannels ?? broker.listWorkspaceChannels;
       if (
         frame.method !== "sessions.list" &&
         frame.method !== "chat.history" &&

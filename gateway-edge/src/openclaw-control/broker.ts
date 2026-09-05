@@ -45,11 +45,12 @@ function baseUrl(env: NodeJS.ProcessEnv): string {
   return value.trim().replace(/\/$/u, "");
 }
 
-async function post(
+export async function postOpenClawControlBroker(
   path: string,
   body: Record<string, unknown>,
   env: NodeJS.ProcessEnv,
   fetchImpl?: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const url = `${baseUrl(env)}${path}`;
   const timeout = AbortSignal.timeout(OPENCLAW_CONTROL_BROKER_TIMEOUT_MS);
@@ -58,7 +59,7 @@ async function post(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: timeout,
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     }, { fetchImpl });
   } catch (error) {
     throw new OpenClawControlBrokerError(
@@ -116,7 +117,7 @@ export async function redeemOpenClawControlTicket(args: {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
 }): Promise<OpenClawControlRedemptionResponse | null> {
-  const res = await post("/internal/openclaw-control/redeem", {
+  const res = await postOpenClawControlBroker("/internal/openclaw-control/redeem", {
     gatewayId: args.gatewayId,
     revisionId: args.revisionId,
     sessionId: args.sessionId,
@@ -164,7 +165,7 @@ export async function authorizeOpenClawControlSession(args: {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
 }): Promise<boolean> {
-  const res = await post("/internal/openclaw-control/authorize", {
+  const res = await postOpenClawControlBroker("/internal/openclaw-control/authorize", {
     gatewayId: args.gatewayId,
     revisionId: args.revisionId,
     sessionId: args.sessionId,

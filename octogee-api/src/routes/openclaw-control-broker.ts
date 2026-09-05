@@ -751,9 +751,81 @@ async function authorizeControlSession(
   }
 }
 
+interface MattermostBrokerDependencies {
+  authorize: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").authorizeChannelCredentials;
+  listChannels: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").listWorkspaceChannelCandidates;
+}
+
+const mattermostDefaults: MattermostBrokerDependencies = {
+  authorize: async (...args) => (await import("../../../gateway-edge/src/lib/channel-session-authorization.js")).authorizeChannelCredentials(...args),
+  listChannels: async (...args) => (await import("../../../gateway-edge/src/lib/channel-session-authorization.js")).listWorkspaceChannelCandidates(...args),
+};
+
+function validMattermostRequest(body: Record<string, unknown> | null, operation: "authorize" | "channels"): body is Record<string, unknown> {
+  const keys = ["gatewayId", "revisionId", "sessionId"];
+  if (operation === "authorize") keys.push("channelId", "requireActiveLedger");
+  if (!body || !exactKeys(body, keys) || !validSessionId(body.sessionId)) return false;
+  return operation === "channels" || (typeof body.channelId === "string" &&
+    /^[a-z0-9]{26}$/u.test(body.channelId) &&
+    (body.requireActiveLedger === undefined || typeof body.requireActiveLedger === "boolean"));
+}
+
+async function controlMattermostRequest(
+  context: BrokerContext & { mattermost: MattermostBrokerDependencies; operation: "authorize" | "channels" },
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const { mattermost, operation } = context;
+  res.setHeader("cache-control", "no-store");
+  if (!requestFits(req)) {
+    res.status(413).json({ error: "request-too-large" });
+    return;
+  }
+  const bound = boundGateway(req, res);
+  if (!bound) return;
+  const body = record(req.body);
+  if (!validMattermostRequest(body, operation)) {
+    res.status(400).json({ error: INVALID_REQUEST });
+    return;
+  }
+  try {
+    const access = await context.db.runTransaction((tx) => sessionAccessInTransaction({
+      db: context.db, tx, gatewayId: bound.gatewayId,
+      revisionId: body.revisionId as string,
+      sessionHash: openClawControlSessionHash(body.sessionId as string), now: context.now(),
+    }));
+    if (access.kind !== "allowed") {
+      sendSessionAccessFailure(access, res);
+      return;
+    }
+    if (access.session.brokerProfile !== "native-owner" && access.session.brokerProfile !== "native-co-owner") {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    const signal = AbortSignal.timeout(5_000);
+    const { uid, workspaceSlug } = access.session;
+    if (operation === "channels") {
+      res.json(await mattermost.listChannels(workspaceSlug, signal));
+      return;
+    }
+    const channel = await mattermost.authorize(uid, body.channelId as string, workspaceSlug, {
+      requireActiveLedger: body.requireActiveLedger === true, signal,
+    });
+    if (!channel || channel.forbidden) {
+      res.status(channel?.forbidden ? 403 : 404).json({ error: "channel-unavailable" });
+      return;
+    }
+    res.json(channel);
+  } catch (error) {
+    next(error);
+  }
+}
+
 export function createOpenClawControlBrokerRoutes(args: {
   db: Firestore;
   now?: () => number;
+  mattermost?: MattermostBrokerDependencies;
 }): Router {
   const router = Router();
   const context: BrokerContext = {
@@ -762,5 +834,9 @@ export function createOpenClawControlBrokerRoutes(args: {
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));
   router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
+  for (const operation of ["authorize", "channels"] as const) {
+    router.post(`/mattermost/${operation}`, (req, res, next) =>
+      controlMattermostRequest({ ...context, mattermost: args.mattermost ?? mattermostDefaults, operation }, req, res, next));
+  }
   return router;
 }
