@@ -147,6 +147,21 @@ export function openClawDeviceSubject(gatewayId: string, uid: string): string {
   return `octogee-openclaw-device:v1:${gatewayId}:${uid}`;
 }
 
+export function openClawProxyOrigin(env: NodeJS.ProcessEnv = process.env): string {
+  const error = "per-user proxy authentication requires API_PUBLIC_URL to be an HTTP(S) origin";
+  let url: URL;
+  try {
+    url = new URL(env.API_PUBLIC_URL ?? "");
+  } catch {
+    throw new Error(error);
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password
+    || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error(error);
+  }
+  return url.origin;
+}
+
 export interface OpenClawProxyIdentity {
   user: string;
   clientAddress?: string;

@@ -1337,6 +1337,7 @@ describe("token resolution", () => {
   afterEach(() => {
     const fs = require("node:fs") as typeof import("node:fs");
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     if (origEnv === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
     else process.env.OPENCLAW_GATEWAY_TOKEN = origEnv;
     if (origConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
@@ -1558,7 +1559,8 @@ describe("token resolution", () => {
 expect(captured?.auth).toBeUndefined();
   });
 
-  it("connects with an attributable in-pod service identity and no token when the gateway trusts the proxy", async () => {
+  it("connects with an attributable in-pod service identity and allowed origin without a token", async () => {
+    vi.stubEnv("API_PUBLIC_URL", "https://api-test.octogee.com/");
     const network = vi.mocked(os.networkInterfaces).mockReturnValue({
       lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
       eth0: [{ address: "10.8.0.4", family: "IPv4", internal: false, netmask: "255.255.255.0", mac: "00:00:00:00:00:01", cidr: "10.8.0.4/24" }],
@@ -1610,6 +1612,7 @@ expect(captured?.auth).toBeUndefined();
       "x-octogee-user": "svc:octogee-provisioner",
       "x-octogee-proxy": "1",
       "x-forwarded-for": "10.8.0.4",
+      origin: "https://api-test.octogee.com",
     });
     expect(captured?.client).toMatchObject({ id: "openclaw-control-ui", mode: "ui" });
     expect(captured?.auth).toBeUndefined();
@@ -1629,6 +1632,13 @@ expect(captured?.auth).toBeUndefined();
       delete process.env.OPENCLAW_CONTROL_IDENTITY;
       network.mockRestore();
     }
+  });
+
+  it.each([undefined, "", "not-a-url", "https://api.test/path", "https://user:pass@api.test", "https://api.test/?query=1", "https://api.test/#fragment", "file:///tmp/api"])("refuses per-user service RPC with invalid API_PUBLIC_URL %s", (origin) => {
+    vi.stubEnv("OPENCLAW_CONTROL_IDENTITY", "per-user");
+    vi.stubEnv("API_PUBLIC_URL", origin);
+    expect(() => createGatewayRpc({ allowLegacyGatewayTokenFallback: true }))
+      .toThrow("per-user proxy authentication requires API_PUBLIC_URL to be an HTTP(S) origin");
   });
 
   it("silently tolerates a missing/malformed openclaw.json when legacy fallback is enabled", async () => {

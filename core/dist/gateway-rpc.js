@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { OpenclawWireError, startConnectChallengeTracker, waitForWsOpen, sendWsRequest, } from "@octogee/shared/types/openclaw-wire-core";
-import { OPENCLAW_CONTROL_UI_CLIENT_ID, OPENCLAW_CONTROL_UI_CLIENT_MODE, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, isPerUserControlIdentity, openClawProxyIdentityHeaders, } from "@octogee/shared/types/openclaw-proxy-identity";
+import { OPENCLAW_CONTROL_UI_CLIENT_ID, OPENCLAW_CONTROL_UI_CLIENT_MODE, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, isPerUserControlIdentity, openClawProxyIdentityHeaders, openClawProxyOrigin, } from "@octogee/shared/types/openclaw-proxy-identity";
 import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
@@ -586,10 +586,13 @@ function resolveGatewayAuth(opts) {
     if (!opts.allowLegacyGatewayTokenFallback)
         return {};
     if (isPerUserControlIdentity()) {
-        return { proxyIdentity: openClawProxyIdentityHeaders({
-                user: IN_POD_SERVICE_IDENTITY,
-                clientAddress: inPodProxyClientAddress(),
-            }) };
+        return { proxyIdentity: {
+                ...openClawProxyIdentityHeaders({
+                    user: IN_POD_SERVICE_IDENTITY,
+                    clientAddress: inPodProxyClientAddress(),
+                }),
+                origin: openClawProxyOrigin(),
+            } };
     }
     const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
     if (typeof fromEnv === "string" && fromEnv.length > 0)

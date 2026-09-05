@@ -18,6 +18,7 @@ import {
   openClawDeviceRequestScopes,
   openClawDeviceSubject,
   openClawProxyIdentityHeaders,
+  openClawProxyOrigin,
   openClawRoleForBrokerProfile,
   type OpenClawOperatorRole,
 } from "@octogee/shared/types/openclaw-proxy-identity";
@@ -139,11 +140,12 @@ export function createOpenClawControlProxyIdentity(
   const roleFor = (session: OpenClawControlProxyIdentitySession): OpenClawOperatorRole =>
     openClawRoleForBrokerProfile(session.brokerProfile);
 
+  const identityHeaders = (user: string, clientAddress: string | undefined): Record<string, string> => ({
+    ...openClawProxyIdentityHeaders({ user, clientAddress }),
+    origin: openClawProxyOrigin(env),
+  });
   const serviceHeaders = (): Record<string, string> =>
-    openClawProxyIdentityHeaders({
-      user: OPENCLAW_EDGE_SERVICE_IDENTITY,
-      clientAddress: fallbackAddress(),
-    });
+    identityHeaders(OPENCLAW_EDGE_SERVICE_IDENTITY, fallbackAddress());
 
   const identityUrl = (): URL => {
     const url = new URL("/", options.upstreamBase());
@@ -154,7 +156,7 @@ export function createOpenClawControlProxyIdentity(
   const ensureProfile = async (uid: string): Promise<void> => {
     const ws = await openSocket({
       url: identityUrl(),
-      headers: openClawProxyIdentityHeaders({ user: uid, clientAddress: fallbackAddress() }),
+      headers: identityHeaders(uid, fallbackAddress()),
       timeoutMs,
     });
     ws.close();
@@ -188,10 +190,7 @@ export function createOpenClawControlProxyIdentity(
   return {
     enabled,
     userHeaders: (session, req) =>
-      openClawProxyIdentityHeaders({
-        user: session.uid,
-        clientAddress: openClawControlClientAddress(req, fallbackAddress),
-      }),
+      identityHeaders(session.uid, openClawControlClientAddress(req, fallbackAddress)),
     serviceHeaders,
     deviceIdentity: (session) =>
       deriveDeviceIdentity({

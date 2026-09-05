@@ -86,7 +86,7 @@ async function mockGateway(
 
 function identityFor(gateway: MockGateway, env: NodeJS.ProcessEnv = {}) {
   return createOpenClawControlProxyIdentity({
-    env: { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_GATEWAY_TOKEN: "pod-secret", ...env },
+    env: { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_GATEWAY_TOKEN: "pod-secret", API_PUBLIC_URL: "https://api-test.octogee.com/", ...env },
     upstreamBase: () => gateway.base,
     timeoutMs: 2_000,
     podAddress: () => "10.8.0.4",
@@ -115,6 +115,7 @@ describe("OpenClaw control proxy identity", () => {
     ]);
     expect(gateway.connects.every((connect) => connect.headers["x-octogee-proxy"] === "1")).toBe(true);
     expect(gateway.connects.every((connect) => connect.headers["x-forwarded-for"] === "10.8.0.4")).toBe(true);
+    expect(gateway.connects.every((connect) => connect.headers.origin === "https://api-test.octogee.com")).toBe(true);
     expect(gateway.connects[0]!.params).toMatchObject({
       client: { id: "openclaw-control-ui", mode: "ui" },
       role: "operator",
@@ -127,6 +128,13 @@ describe("OpenClaw control proxy identity", () => {
     ]);
     expect(gateway.calls[2]!.params).toEqual({ profileId: "profile-1", role: "trusted-helper" });
     expect(gateway.profiles[0]).toEqual({ id: "profile-1", emails: ["uid-helper"], role: "trusted-helper" });
+  });
+
+  it("uses the configured API origin for user and service connections", async () => {
+    const identity = identityFor(await mockGateway());
+    expect(identity.serviceHeaders().origin).toBe("https://api-test.octogee.com");
+    expect(identity.userHeaders(helper, { socket: { remoteAddress: "10.1.2.3" } as never }).origin)
+      .toBe("https://api-test.octogee.com");
   });
 
   it("leaves an already-correct role alone and corrects a stale one", async () => {

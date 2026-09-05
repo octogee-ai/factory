@@ -17,6 +17,7 @@ import {
   OPENCLAW_PROVISIONER_SERVICE_IDENTITY,
   isPerUserControlIdentity,
   openClawProxyIdentityHeaders,
+  openClawProxyOrigin,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 import { log as defaultLog } from "./config.js";
 import {
@@ -1019,10 +1020,13 @@ function resolveGatewayAuth(opts: GatewayRpcClientOptions): GatewayRpcAuth {
   if (typeof opts.token === "string" && opts.token.length > 0) return { token: opts.token };
   if (!opts.allowLegacyGatewayTokenFallback) return {};
   if (isPerUserControlIdentity()) {
-    return { proxyIdentity: openClawProxyIdentityHeaders({
-      user: IN_POD_SERVICE_IDENTITY,
-      clientAddress: inPodProxyClientAddress(),
-    }) };
+    return { proxyIdentity: {
+      ...openClawProxyIdentityHeaders({
+        user: IN_POD_SERVICE_IDENTITY,
+        clientAddress: inPodProxyClientAddress(),
+      }),
+      origin: openClawProxyOrigin(),
+    } };
   }
   const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof fromEnv === "string" && fromEnv.length > 0) return { token: fromEnv };
