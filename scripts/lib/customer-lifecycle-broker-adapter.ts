@@ -130,11 +130,9 @@ import { createBrokeredBlobStore } from "./blob-sync-broker.js";
 import {
   activationManifestAgentIds,
   applyOpenClawActivationManifest,
-  LegacyActivationManifestFingerprintError,
   MIGRATION_ACTIVATION_DIR,
   readActivationManifest,
   removeActivationManifest,
-  type MigrationActivationManifest,
 } from "./migration-activation-manifest.js";
 import { discardUnusableAgentStores } from "./unusable-agent-store.js";
 import {
@@ -1157,28 +1155,12 @@ async function prepareKeyImportDir(slug: string): Promise<string> {
   return OPENCLAW_DIR;
 }
 
-async function readImportedActivationManifest(
-  ctx: BrokerCtx,
-  slug: string,
-): Promise<MigrationActivationManifest> {
-  try {
-    return await readActivationManifest(OPENCLAW_DIR, slug);
-  } catch (error) {
-    if (!(error instanceof LegacyActivationManifestFingerprintError)) throw error;
-    const desiredSnapshot = await snapshotForSlug(ctx, slug);
-    if (!desiredSnapshot) throw error;
-    return readActivationManifest(OPENCLAW_DIR, slug, {
-      legacyAppliedFingerprint: snapshotConfigFingerprint(desiredSnapshot),
-    });
-  }
-}
-
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
-  const manifest = await readImportedActivationManifest(ctx, slug);
+  const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   const runtimeProjectCheckoutScope = ctx.projectCheckoutScope?.(slug)

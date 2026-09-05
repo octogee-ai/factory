@@ -273,23 +273,16 @@ describe("migration activation manifest", () => {
     });
   });
 
-  it("normalizes the previous rollout manifest with the target desired fingerprint", async () => {
+  it.each([true, false])("rejects a version-one manifest with fingerprint present=%s", async (hasFingerprint) => {
     const dir = await mkTmp();
-    const legacy = { ...manifest(), version: 1 } as Record<string, unknown>;
-    delete legacy.appliedFingerprint;
+    const previous = { ...manifest(), version: 1 } as Record<string, unknown>;
+    if (!hasFingerprint) delete previous.appliedFingerprint;
     const manifestPath = path.join(dir, activationManifestTarPath("alice"));
     await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-    await fs.writeFile(manifestPath, `${JSON.stringify(legacy)}\n`, "utf-8");
+    await fs.writeFile(manifestPath, `${JSON.stringify(previous)}\n`, "utf-8");
 
-    await expect(readActivationManifest(dir, "alice", {
-      legacyAppliedFingerprint: "target-desired-fingerprint",
-    })).resolves.toMatchObject({
-      version: 2,
-      slug: "alice",
-      appliedFingerprint: "target-desired-fingerprint",
-    });
     await expect(readActivationManifest(dir, "alice")).rejects.toThrow(
-      "legacy activation manifest requires target fingerprint",
+      "activation manifest version/slug mismatch",
     );
   });
 

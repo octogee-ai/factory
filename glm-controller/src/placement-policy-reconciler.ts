@@ -279,7 +279,6 @@ export interface RetireOwnedGatewayInput {
   uid: string;
   builderSlug: string;
   gatewayId: string;
-  legacyNonDisposable?: boolean;
   leaseId?: string;
   generation?: number;
   telemetryFenceOperationId?: string;
@@ -750,6 +749,7 @@ async function retireUnentitledOwnedGateways(
 ): Promise<void> {
   const ownedGateways = context.state.gateways.filter(
     (gateway) => gateway.ownerUid === user.uid &&
+      gateway.disposable === true &&
       gateway.gatewayClass !== "shared" &&
       !isOperatorManaged(gateway.managedBy) &&
       gateway.desiredStatus !== "retired",
@@ -759,13 +759,6 @@ async function retireUnentitledOwnedGateways(
       uid: user.uid,
       builderSlug,
       gatewayId: gateway.gatewayId,
-      ...(gateway.disposable ? {} : {
-        legacyNonDisposable: true,
-        authoritativeGatewayId: sharedAuthorityGatewayId(
-          context,
-          currentGatewayId(user.data),
-        ) ?? context.state.defaultGatewayId,
-      }),
     });
     if (retired) context.result.retired += 1;
     else {
@@ -776,77 +769,6 @@ async function retireUnentitledOwnedGateways(
       });
     }
   }
-}
-
-function legacyLeaseTarget(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  lease: BuilderActivationLease,
-): ContinuousPlacementOwnedGateway | null {
-  const targetGatewayId = lease.targetGatewayId;
-  const target = targetGatewayId ? context.gateways.get(targetGatewayId) : null;
-  return target &&
-    target.ownerUid === user.uid &&
-    target.gatewayClass !== "shared" &&
-    target.disposable !== true
-    ? target
-    : null;
-}
-
-async function reconcileLegacyOwnerLease(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  builderSlug: string,
-  current: string | null,
-  target: ContinuousPlacementOwnedGateway,
-): Promise<void> {
-  const sharedGatewayId = sharedAuthorityGatewayId(context, current);
-  if (!sharedGatewayId) {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: NO_ACCEPTING_SHARED_GATEWAY,
-      reason: "no configured shared gateway can receive the legacy owner runtime",
-    });
-    return;
-  }
-  if (current !== sharedGatewayId) {
-    if (adoptActiveMigration(context, user.uid, sharedGatewayId)) return;
-    const fromGatewayId = current ?? target.gatewayId;
-    const sourceEpoch = sourceAssignmentEpoch(context, fromGatewayId, user.uid);
-    await context.deps.enqueueMigration({
-      uid: user.uid,
-      builderSlug,
-      fromGatewayId,
-      toGatewayId: sharedGatewayId,
-      source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-      operationId: continuousPlacementMigrationOperationId({
-        uid: user.uid,
-        builderSlug,
-        fromGatewayId,
-        toGatewayId: sharedGatewayId,
-        sourceAssignmentEpoch: sourceEpoch,
-      }),
-    });
-    projectSharedGatewayPlacement(context, sharedGatewayId);
-    context.result.enqueued += 1;
-    return;
-  }
-  const retired = await context.deps.retireOwnedGateway({
-    uid: user.uid,
-    builderSlug,
-    gatewayId: target.gatewayId,
-    legacyNonDisposable: true,
-    authoritativeGatewayId: sharedGatewayId,
-  });
-  if (retired) {
-    context.result.retired += 1;
-    return;
-  }
-  blockPlacement(context, {
-    uid: user.uid,
-    code: "legacy-owner-runtime-retirement-fence",
-    reason: `legacy owner runtime ${target.gatewayId} did not satisfy retirement fences`,
-  });
 }
 
 async function assignMissingPlacement(
@@ -1981,11 +1903,6 @@ async function reconcileActivationLease(
   const target = lease.targetGatewayId
     ? context.gateways.get(lease.targetGatewayId)
     : null;
-  const legacyTarget = legacyLeaseTarget(context, user, lease);
-  if (legacyTarget) {
-    await reconcileLegacyOwnerLease(context, user, builderSlug, current, legacyTarget);
-    return true;
-  }
   if (isOperatorManaged(target?.managedBy)) {
     blockPlacement(context, {
       uid: user.uid,
@@ -3569,11 +3486,6 @@ function retirementAllocationMatches(
   request: RetireOwnedGatewayInput,
 ): boolean {
   const allocation = record(root.allocation);
-  if (request.legacyNonDisposable) {
-    return root.ownerUid === request.uid &&
-      root.gatewayClass !== "shared" &&
-      allocation?.kind !== DISPOSABLE_BUILDER_ALLOCATION_KIND;
-  }
   const allocationIdentityMatches = request.leaseId === undefined ||
     (
       allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
@@ -3621,54 +3533,6 @@ async function assertRetirementAuthorityFence(input: {
     throw new GatewayRetirementConflictError(
       `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
     );
-  }
-}
-
-async function assertLegacyRetirementAuthorityFence(input: {
-  db: Firestore;
-  transaction: Transaction;
-  request: RetireOwnedGatewayInput;
-  now: number;
-}): Promise<void> {
-  const { db, transaction, request, now } = input;
-  if (!request.authoritativeGatewayId) {
-    throw new GatewayRetirementConflictError(
-      `legacy owner runtime ${request.gatewayId} has no shared authority target`,
-    );
-  }
-  const userRef = db.collection("users").doc(request.uid);
-  const assignmentRef = db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(request.authoritativeGatewayId)
-    .collection("assignments")
-    .doc(request.uid);
-  const [userSnapshot, assignmentSnapshot] = await Promise.all([
-    transaction.get(userRef),
-    transaction.get(assignmentRef),
-  ]);
-  const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-  const openclaw = record(record(userData?.provisioning)?.openclaw);
-  const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-  if (
-    !userSnapshot.exists ||
-    openclaw?.gatewayId !== request.authoritativeGatewayId ||
-    assignment?.uid !== request.uid ||
-    assignment.gatewayId !== request.authoritativeGatewayId ||
-    assignment.state !== "serving"
-  ) {
-    throw new GatewayRetirementConflictError(
-      `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
-    );
-  }
-  const lease = record(openclaw.activationLease);
-  if (lease?.targetGatewayId === request.gatewayId) {
-    transaction.update(userRef, {
-      "provisioning.openclaw.activationLease": {
-        ...lease,
-        status: "parked",
-        parkedAt: now,
-      },
-    });
   }
 }
 
@@ -3758,9 +3622,7 @@ async function retireOwnedGatewayFirestore(
           gatewayId: request.gatewayId,
           uid: request.uid,
           builderSlug: request.builderSlug,
-          reason: request.legacyNonDisposable
-            ? "legacy-owner-runtime-removed"
-            : "builder-activity-ended",
+          reason: "builder-activity-ended",
         },
         steps: [],
         gatewayId: request.gatewayId,
@@ -3782,20 +3644,11 @@ async function retireOwnedGatewayFirestore(
             `gateway ${request.gatewayId} no longer matches disposable allocation for ${request.uid}`,
           );
         }
-        if (request.legacyNonDisposable) {
-          await assertLegacyRetirementAuthorityFence({
-            db: input.db,
-            transaction,
-            request,
-            now,
-          });
-        } else {
-          await assertRetirementAuthorityFence({
-            db: input.db,
-            transaction,
-            request,
-          });
-        }
+        await assertRetirementAuthorityFence({
+          db: input.db,
+          transaction,
+          request,
+        });
         await assertZeroWorkloadRecoveryReceipt({
           db: input.db,
           transaction,

@@ -7,8 +7,6 @@ import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 import { reconcileBuilderAgentEntry, reconcileCustomerAgentEntry, } from "./system-config-invariants.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
-export class LegacyActivationManifestFingerprintError extends Error {
-}
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -115,28 +113,19 @@ function validateManifestAgent(value, slug, expectedId, expectedAccount) {
         bindings: normalizedBindings,
     };
 }
-function manifestAppliedFingerprint(value, slug, legacyAppliedFingerprint) {
-    const appliedFingerprint = value.version === 2
-        ? value.appliedFingerprint
-        : legacyAppliedFingerprint;
-    if (typeof appliedFingerprint === "string" && appliedFingerprint.length > 0) {
-        return appliedFingerprint;
-    }
-    if (value.version === 1) {
-        throw new LegacyActivationManifestFingerprintError(`[migration-activation:${slug}] legacy activation manifest requires target fingerprint`);
-    }
-    throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
-}
-function validateManifestShape(value, slug, opts = {}) {
+function validateManifestShape(value, slug) {
     if (!isRecord(value)) {
         throw new Error(`[migration-activation:${slug}] activation manifest is not an object`);
     }
     const agentId = expectedAgentId(slug);
     const accountId = expectedAccountId(slug);
-    if (value.slug !== slug || (value.version !== 1 && value.version !== 2)) {
+    if (value.slug !== slug || value.version !== 2) {
         throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
     }
-    const appliedFingerprint = manifestAppliedFingerprint(value, slug, opts.legacyAppliedFingerprint);
+    const appliedFingerprint = value.appliedFingerprint;
+    if (typeof appliedFingerprint !== "string" || appliedFingerprint.length === 0) {
+        throw new Error(`[migration-activation:${slug}] activation manifest version/slug mismatch`);
+    }
     const workspace = validateManifestAgent(value, slug, agentId, accountId);
     const rawProjects = value.projectAgents;
     if (rawProjects !== undefined && !Array.isArray(rawProjects)) {
@@ -317,10 +306,10 @@ export async function writeActivationManifest(rootDir, manifest) {
     await fs.writeFile(fullPath, `${JSON.stringify(manifest)}\n`, "utf-8");
     return { cwd: rootDir, path: relPath };
 }
-export async function readActivationManifest(openclawDir, slug, opts = {}) {
+export async function readActivationManifest(openclawDir, slug) {
     const manifestPath = activationManifestDiskPath(openclawDir, slug);
     const raw = await fs.readFile(manifestPath, "utf-8");
-    return validateManifestShape(JSON.parse(raw), slug, opts);
+    return validateManifestShape(JSON.parse(raw), slug);
 }
 export async function removeActivationManifest(openclawDir, slug) {
     const manifestDir = path.join(openclawDir, MIGRATION_ACTIVATION_DIR, slug);
