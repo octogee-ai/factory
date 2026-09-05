@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DatabaseSync } from "node:sqlite";
 
-import { OpenclawWireError } from "@octogee/core/gateway-rpc";
+import { OpenClawSecretsApplyError } from "@octogee/core/agent-model-token-materializer";
 import {
   _resetBrokerProfileLogStateForTests,
   materializeDeferredBrokerProfiles,
@@ -87,7 +87,7 @@ describe("broker profile retry (level-triggered)", () => {
     materializeDeferredBrokerProfiles((m) => logs.push(m), {
       agentsDir,
       readConfig,
-      secretsApply: { rpc: { secretsApply: apply } },
+      secretsApply: { apply },
       secretsReload: { secretsReload: reload },
     });
 
@@ -96,11 +96,9 @@ describe("broker profile retry (level-triggered)", () => {
     logs = [];
     applyOutcome = "refuse";
     reloadFails = false;
-    apply = vi.fn(async ({ plan }: Parameters<typeof writeAppliedProfiles>[1] extends infer P
-      ? { plan: P }
-      : never) => {
+    apply = vi.fn(async (plan: Parameters<typeof writeAppliedProfiles>[1]) => {
       if (applyOutcome === "refuse") {
-        throw new OpenclawWireError("rpc-error", "gateway is not accepting secrets yet");
+        throw new OpenClawSecretsApplyError("secret provider unavailable", 1);
       }
       writeAppliedProfiles(agentsDir, plan);
       return { mode: "write", changed: true };
@@ -115,15 +113,15 @@ describe("broker profile retry (level-triggered)", () => {
     fs.rmSync(agentsDir, { recursive: true, force: true });
   });
 
-  it("applies the profiles through openclaw's secrets.apply RPC rather than writing the store", async () => {
+  it("applies the profiles through openclaw's standard secrets apply", async () => {
     seedAgentStore(agentsDir, AGENT);
     applyOutcome = "accept";
 
     await sweep();
 
-    expect(apply).toHaveBeenCalledWith({
-      plan: expect.objectContaining({ generatedBy: "manual", targets: expect.any(Array) }),
-    });
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({ generatedBy: "manual", targets: expect.any(Array) }),
+    );
   });
 
   it("reloads the active secret snapshot after profiles are accepted", async () => {
@@ -133,6 +131,7 @@ describe("broker profile retry (level-triggered)", () => {
     await sweep();
 
     expect(reload).toHaveBeenCalledOnce();
+    expect(apply.mock.invocationCallOrder[0]).toBeLessThan(reload.mock.invocationCallOrder[0]);
   });
 
   it("shares one in-flight sweep across overlapping startup and retry callers", async () => {
@@ -142,9 +141,7 @@ describe("broker profile retry (level-triggered)", () => {
     const applyBlocked = new Promise<void>((resolve) => {
       releaseApply = resolve;
     });
-    apply = vi.fn(async ({ plan }: Parameters<typeof writeAppliedProfiles>[1] extends infer P
-      ? { plan: P }
-      : never) => {
+    apply = vi.fn(async (plan: Parameters<typeof writeAppliedProfiles>[1]) => {
       await applyBlocked;
       writeAppliedProfiles(agentsDir, plan);
       return { mode: "write", changed: true };
@@ -243,7 +240,7 @@ describe("broker profile retry (level-triggered)", () => {
   it("survives an unreadable config rather than killing the timer", async () => {
     await materializeDeferredBrokerProfiles((m) => logs.push(m), {
       agentsDir,
-      secretsApply: { rpc: { secretsApply: apply } },
+      secretsApply: { apply },
       readConfig: () => {
         throw new Error("config gone");
       },

@@ -41,12 +41,6 @@ export interface SecretsReloadResult {
     warningCount?: number;
     ok?: boolean;
 }
-export interface SecretsApplyRpcResult {
-    mode?: string;
-    changed?: boolean;
-    changedFiles?: string[];
-    warningCount?: number;
-}
 export interface GatewayRestartRequestResult {
     ok: true;
     status: "scheduled" | "deferred" | "coalesced";
@@ -197,10 +191,6 @@ export interface GatewayRpcClient {
     channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
     channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
     secretsReload(): Promise<SecretsReloadResult>;
-    secretsApply(params: {
-        plan: object;
-        dryRun?: boolean;
-    }): Promise<SecretsApplyRpcResult>;
     gatewayRestartRequest(params: {
         reason: string;
         skipDeferral?: boolean;

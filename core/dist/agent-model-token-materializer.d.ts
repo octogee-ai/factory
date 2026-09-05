@@ -1,4 +1,5 @@
 import { type ApplyOpenClawSecretsPlanOptions, type AuthProfileApiKeyTarget } from "./openclaw-secrets-apply.js";
+export { OpenClawSecretsApplyError } from "./openclaw-secrets-apply.js";
 export declare const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 export declare const OPENROUTER_BROKER_PROFILE_ID = "platform-openrouter:default";
 export declare const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
@@ -105,7 +106,6 @@ export interface BrokerProfileSweepOptions {
     openRouter?: OpenRouterBrokerCatalogInput;
     openAi?: OpenRouterBrokerCatalogInput;
     logFn?: (m: string) => void;
-    /** Child-process seam for `openclaw secrets apply`. */
     secretsApply?: ApplyOpenClawSecretsPlanOptions;
 }
 /**

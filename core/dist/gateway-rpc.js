@@ -23,16 +23,6 @@ function parseSecretsReloadPayload(payload) {
     }
     return p;
 }
-function parseSecretsApplyPayload(payload) {
-    if (!payload || typeof payload !== "object") {
-        throw new OpenclawWireError(INVALID_RESPONSE, "secrets.apply returned non-object payload");
-    }
-    const p = payload;
-    if (p.changed !== undefined && typeof p.changed !== "boolean") {
-        throw new OpenclawWireError(INVALID_RESPONSE, `secrets.apply payload.changed must be a boolean when present (got ${typeof p.changed})`);
-    }
-    return payload;
-}
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
 const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
 /**
@@ -536,13 +526,6 @@ export function createGatewayRpc(opts = {}) {
         agentsDelete: (params) => callAgentsDelete(call, params),
         async secretsReload() {
             return parseSecretsReloadPayload(await call("secrets.reload", {}));
-        },
-        async secretsApply(params) {
-            return parseSecretsApplyPayload(await call("secrets.apply", {
-                plan: params.plan,
-                allowExec: true,
-                ...(params.dryRun !== undefined ? { dryRun: params.dryRun } : {}),
-            }));
         },
         async isGatewayUp(timeoutMs) {
             const t = timeoutMs ?? connectTimeoutMs;
