@@ -10,6 +10,7 @@ import {
 import { containsAsciiControlCharacter } from "../lib/text-validation.js";
 import { postOpenClawControlBroker } from "./broker.js";
 import type { OpenClawControlSession } from "./session.js";
+import { watchMattermostChannelEvents } from "./mattermost-events.js";
 
 const MATTERMOST_ID = /^[a-z0-9]{26}$/u;
 
@@ -40,7 +41,11 @@ function validCredentials(value: unknown, workspaceSlug: string): value is Autho
 export function createBrokeredMattermostAccess(
   session: OpenClawControlSession,
   options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch } = {},
-): { authorize: typeof authorizeChannel; listWorkspaceChannels: typeof listWorkspaceChannelCandidates } {
+): {
+  authorize: typeof authorizeChannel;
+  listWorkspaceChannels: typeof listWorkspaceChannelCandidates;
+  watchChannel: (channelId: string, agentId: string, onChange: () => void, signal: AbortSignal) => Promise<void>;
+} {
   const env = options.env ?? process.env;
   const binding = { gatewayId: session.gatewayId, revisionId: session.revisionId, sessionId: session.sessionId };
   function checkScope(uid: string, workspaceSlug: string | undefined): void {
@@ -53,6 +58,17 @@ export function createBrokeredMattermostAccess(
       { ...binding, ...body }, env, options.fetchImpl, signal);
   }
   return {
+    async watchChannel(channelId, agentId, onChange, signal) {
+      const response = await request("authorize", { channelId, requireActiveLedger: true }, signal);
+      if (!response.ok) throw new ChannelSessionMattermostError(`Mattermost event broker returned ${response.status}`);
+      const access: unknown = await response.json();
+      if (!validCredentials(access, session.workspaceSlug) || access.target.agentId !== agentId) {
+        throw new ChannelSessionMattermostError("Mattermost event broker returned invalid credentials");
+      }
+      await watchMattermostChannelEvents({
+        baseUrl: env.MM_INTERNAL_URL ?? "", token: access.token, channelId, onChange, signal,
+      });
+    },
     async authorize(uid, channelId, workspaceSlug, authorization = {}) {
       checkScope(uid, workspaceSlug);
       const response = await request("authorize", {

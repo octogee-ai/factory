@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBrokeredMattermostAccess } from "./mattermost-broker.js";
 import type { OpenClawControlSession } from "./session.js";
+import { watchMattermostChannelEvents } from "./mattermost-events.js";
+
+vi.mock("./mattermost-events.js", () => ({ watchMattermostChannelEvents: vi.fn().mockResolvedValue(undefined) }));
 
 const session = {
   sessionId: "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70", uid: "owner", gatewayId: "builder", revisionId: "builder",
@@ -12,6 +15,27 @@ const env = { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test", MM_INTERNAL_UR
 const access = { forbidden: false, token: "personal-token-123456", callerMmUserId: "m".repeat(26), target: { ownerUid: "owner", workspaceSlug: "alice", agentId: "ws-alice-coach", agentMmUserId: "b".repeat(26) } };
 
 describe("Mattermost Control UI credential broker", () => {
+  it.each([
+    { status: 403, body: {} },
+    { status: 200, body: { ...access, target: { ...access.target, workspaceSlug: "victim" } } },
+    { status: 200, body: { ...access, target: { ...access.target, agentId: "victim" } } },
+  ])("opens no change feed for denied or mismatched broker credentials ($status)", async ({ status, body }) => {
+    vi.mocked(watchMattermostChannelEvents).mockClear();
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json(body, { status }));
+    await expect(createBrokeredMattermostAccess(session, { env, fetchImpl }).watchChannel(
+      channelId, access.target.agentId, vi.fn(), new AbortController().signal,
+    )).rejects.toThrow(/broker/);
+    expect(watchMattermostChannelEvents).not.toHaveBeenCalled();
+  });
+  it("binds the change feed to the freshly authorized caller and channel", async () => {
+    vi.mocked(watchMattermostChannelEvents).mockClear();
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json(access));
+    const signal = new AbortController().signal;
+    const onChange = vi.fn();
+    await createBrokeredMattermostAccess(session, { env, fetchImpl }).watchChannel(channelId, access.target.agentId, onChange, signal);
+    expect(watchMattermostChannelEvents).toHaveBeenCalledWith({ baseUrl: env.MM_INTERNAL_URL, token: access.token, channelId, onChange, signal });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject({ sessionId: session.sessionId, channelId, requireActiveLedger: true });
+  });
   it("uses the opaque control session to obtain directory and caller credentials without Firestore", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(Response.json([{ channelId }])).mockResolvedValueOnce(Response.json(access));
     const broker = createBrokeredMattermostAccess(session, { env, fetchImpl });

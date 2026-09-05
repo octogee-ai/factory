@@ -1273,6 +1273,71 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
+  it("invalidates canonical Mattermost history on channel changes and stops its feed on disconnect", async () => {
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ server: upstream });
+    upstreamWs.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: frame.method === "connect"
+          ? { type: "hello-ok", features: { methods: ["chat.history"] } } : { messages: [] } }));
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+    const router = new WsUpgradeRouter();
+    let changed: (() => void) | undefined;
+    const feedSignals: AbortSignal[] = [];
+    const run = vi.fn((onChange: () => void, signal: AbortSignal) => {
+      changed = onChange;
+      feedSignals.push(signal);
+      return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    const sessionKey = "agent:ws-alice-coach:mattermost:group:" + "a".repeat(26);
+    attachOpenClawControlWsRoute({ router, env: env(upstreamPort), sessions: manager,
+      authorize: async () => true, loadGatewayToken: async () => "gateway-secret",
+      mattermostChat: { prepare: async (frame) => ({ kind: "upstream", project: (reply) => reply,
+        watch: { sessionKey: frame.params.sessionKey as string, agentId: "ws-alice-coach", run } }) },
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    const received: Record<string, unknown>[] = [];
+    browser.on("message", (data) => {
+      const frame = JSON.parse(data.toString());
+      received.push(frame);
+      if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+      else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "history", method: "chat.history", params: { sessionKey } }));
+    });
+    try {
+      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      changed!();
+      await vi.waitFor(() => expect(received).toContainEqual({ type: "event", event: "sessions.changed",
+        payload: { key: sessionKey, sessionKey, agentId: "ws-alice-coach", phase: "message", reason: "message" } }));
+      browser.send(JSON.stringify({ type: "req", id: "history-again", method: "chat.history", params: { sessionKey } }));
+      await vi.waitFor(() => expect(received.some((frame) => frame.id === "history-again")).toBe(true));
+      expect(run).toHaveBeenCalledTimes(1);
+      for (let index = 1; index <= 8; index += 1) {
+        browser.send(JSON.stringify({ type: "req", id: `history-${index}`, method: "chat.history", params: {
+          sessionKey: `agent:ws-alice-coach:mattermost:group:${String.fromCharCode(97 + index).repeat(26)}`,
+        } }));
+        await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(index + 1));
+      }
+      expect(feedSignals[0].aborted).toBe(true);
+      expect(feedSignals.filter((signal) => !signal.aborted)).toHaveLength(8);
+      browser.close();
+      await vi.waitFor(() => expect(feedSignals.every((signal) => signal.aborted)).toBe(true));
+    } finally {
+      browser.terminate();
+      for (const client of upstreamWs.clients) client.terminate();
+      await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    }
+  });
+
   it("includes Mattermost discovery in the RPC deadline and aborts its work", async () => {
     const upstream = http.createServer();
     const upstreamWs = new WebSocketServer({ noServer: true });

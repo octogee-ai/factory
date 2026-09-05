@@ -95,6 +95,11 @@ export type MattermostChatPreparation =
       kind: "upstream";
       upstreamParams?: Record<string, unknown>;
       project(frame: Record<string, unknown>): Record<string, unknown>;
+      watch?: {
+        sessionKey: string;
+        agentId: string;
+        run(onChange: () => void, signal: AbortSignal): Promise<void>;
+      };
     };
 
 export interface MattermostControlChat {
@@ -1610,9 +1615,17 @@ export function createMattermostControlChat(options: {
             signal,
           );
         }
-        return frame.method === "chat.send"
-          ? await prepareSend(frame, session, authorize, signal)
-          : await prepareHistory(frame, session, authorize, signal);
+        if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, signal);
+        const history = await prepareHistory(frame, session, authorize, signal);
+        const route = parseChannelScopedMattermostSessionRoute(frame.params.sessionKey);
+        if (history?.kind === "upstream" && route) {
+          history.watch = {
+            sessionKey: frame.params.sessionKey as string,
+            agentId: route.agentId,
+            run: (onChange, watchSignal) => broker.watchChannel(route.primaryChannelId, route.agentId, onChange, watchSignal),
+          };
+        }
+        return history;
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
         return unavailableResponse(frame, error);

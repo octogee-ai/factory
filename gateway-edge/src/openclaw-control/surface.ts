@@ -1043,6 +1043,7 @@ class OpenClawControlSocketBridge {
   private readonly pending = new Map<string, PendingRpc>();
   private readonly admittingIds = new Set<string>();
   private readonly mattermostPreparations = new Map<string, ActiveMattermostPreparation>();
+  private readonly mattermostWatches = new Map<string, AbortController>();
   private readonly timedOut = new Map<string, SystemConfigMutationLease | undefined>();
   private quarantineTimer?: NodeJS.Timeout;
   private authorizationTimer?: NodeJS.Timeout;
@@ -1201,6 +1202,8 @@ class OpenClawControlSocketBridge {
     if (this.authorizationTimer) clearInterval(this.authorizationTimer);
     if (this.quarantineTimer) clearTimeout(this.quarantineTimer);
     this.bufferedConnect = undefined;
+    for (const watch of this.mattermostWatches.values()) watch.abort();
+    this.mattermostWatches.clear();
     for (const [id, preparation] of this.mattermostPreparations) {
       this.mattermostPreparations.delete(id);
       clearTimeout(preparation.timer);
@@ -1648,6 +1651,7 @@ class OpenClawControlSocketBridge {
       this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
       return;
     }
+    if (mattermost?.kind === "upstream" && mattermost.watch) this.watchMattermost(mattermost.watch);
     const mutationLease = await this.acquireMutationLease(frame, decision, lease);
     if (mutationLease === null) return;
     const remainingMs = deadlineAt - Date.now();
@@ -1664,6 +1668,31 @@ class OpenClawControlSocketBridge {
     });
     await this.dispatchAllowed(frame, decision, mattermost, deadlineAt);
     this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
+  }
+
+  private watchMattermost(watch: NonNullable<Extract<MattermostChatPreparation, { kind: "upstream" }>["watch"]>): void {
+    if (this.mattermostWatches.has(watch.sessionKey)) return;
+    if (this.mattermostWatches.size >= 8) {
+      const oldest = this.mattermostWatches.keys().next().value!;
+      this.mattermostWatches.get(oldest)!.abort();
+      this.mattermostWatches.delete(oldest);
+    }
+    const controller = new AbortController();
+    this.mattermostWatches.set(watch.sessionKey, controller);
+    void watch.run(() => {
+      if (controller.signal.aborted || browserCannotReceive(this.closing, this.args.browser)) return;
+      this.args.browser.send(JSON.stringify({
+        type: "event", event: "sessions.changed",
+        payload: { key: watch.sessionKey, sessionKey: watch.sessionKey, agentId: watch.agentId, phase: "message", reason: "message" },
+      }));
+    }, controller.signal).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      logger.error("OpenClaw Dashboard Mattermost change feed failed", {
+        gatewayId: this.activeSession.gatewayId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.closeBoth("mattermost-feed-unavailable");
+    });
   }
 
   private async dispatchAllowed(
