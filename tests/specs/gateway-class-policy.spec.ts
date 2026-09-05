@@ -313,6 +313,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       keep: true,
     });
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toContain("read");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toContain("ls");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).not.toContain("grep");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).not.toContain("find");
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toEqual(
       expect.arrayContaining([
         "octogee_project_build",

@@ -76,10 +76,12 @@ describe("buildCustomerAgent", () => {
     );
   });
 
-  it("gives project agents workspace-scoped discovery without direct terminal access", () => {
+  it("gives project agents native directory listing without custom search or direct terminal access", () => {
     expect(PROJECT_AGENT_ALLOWED_TOOLS).toEqual(
-      expect.arrayContaining(["read", "grep", "find", "ls"]),
+      expect.arrayContaining(["read", "ls"]),
     );
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).not.toContain("grep");
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).not.toContain("find");
     expect(PROJECT_AGENT_DENIED_TOOLS).toEqual(expect.arrayContaining(["exec", "process"]));
   });
 

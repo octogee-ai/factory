@@ -1,24 +1,24 @@
 # OpenClaw current build
 
 Octogee builds its gateway from a released OpenClaw tag, or an explicitly
-selected release-branch snapshot, plus the Octogee overlay. `current.json`
+selected upstream branch snapshot, plus the Octogee overlay. `current.json`
 selects the two write-once GCS artifacts; the build resolves their exact generations and derives a new
 immutable `octogee-gateway-base:inputs-…` tag. No step here deploys TEST or
 PROD.
 
-## Refresh a tag or selected release branch
+## Refresh a tag or selected branch
 
 Start from a clean OpenClaw checkout with `origin` pointing at
 `openclaw/openclaw` and `ceckert` at the Octogee fork. Fetch the selected ref,
 lock its full commit at the start, and cut the matching overlay branch. For a
-tag, verify its peeled commit. For a release branch, record the locked snapshot
+tag, verify its peeled commit. For a branch, record the locked snapshot
 honestly; a package version alone does not make it a GA release:
 
 ```bash
 cd /path/to/openclaw
-git fetch origin release/2026.9.2
+git fetch origin main
 UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)
-git switch -c octogee/gateway-scaling-patches-release-2026.9.2 "$UPSTREAM_SHA"
+git switch -c codex/openclaw-current-recut "$UPSTREAM_SHA"
 ```
 
 Port the prior overlay oldest-first, then audit every patch against the
@@ -77,29 +77,39 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The selected build is the operator-requested `release/2026.9.2` snapshot,
-locked to [upstream commit `3928bad9badfcb6c7d140530435e806fb8092190`](https://github.com/openclaw/openclaw/commit/3928bad9badfcb6c7d140530435e806fb8092190),
-with [overlay head `c423a5b51be2890274f22f4b9603dbb66ec8cac9`](https://github.com/ceckert/openclaw/commit/c423a5b51be2890274f22f4b9603dbb66ec8cac9).
-The package version is `2026.9.2`; this is a locked branch snapshot, not a
+The selected build is the operator-requested upstream `main` snapshot,
+locked to [upstream commit `5702b8011812e26cf5ec3301116a9465683707b5`](https://github.com/openclaw/openclaw/commit/5702b8011812e26cf5ec3301116a9465683707b5),
+with [overlay head `a3f78b8fcb40d8e2aff291c591cb04d753ef021c`](https://github.com/ceckert/openclaw/commit/a3f78b8fcb40d8e2aff291c591cb04d753ef021c)
+on `ceckert/openclaw:octogee/gateway-scaling-patches-main`.
+The package version is `2026.9.1`; this is a locked branch snapshot, not a
 claim to have built a GA tag.
 
-Its write-once artifacts are `openclaw-fork-c423a5b5.tgz` at generation
-`1788632584904766` (SHA-256 `14abc71e4dddb86285b9d8221475d58557dd07fa5e42a841faaff3827260055b`)
-and `openclaw-mattermost-d0351cb4.tgz` at generation `1788632588002265`
-(SHA-256 `d0351cb46e697bae9aad3d22a4e9a7ac5437abf05764f4e81b89adec94b81cbb`).
+Its write-once artifacts are `openclaw-fork-a3f78b8f.tgz` at generation
+`1788635329937525` (SHA-256 `4528b269d58bc40a661ff5ac41d8fe14c5487c094f04838bfa5d953db6be578e`)
+and `openclaw-mattermost-aac59ca7.tgz` at generation `1788635332875879`
+(SHA-256 `aac59ca7e013dfce7c125775d6382fe10e15c111b8b78cdc2c09f25514c4ce72`).
 Both artifacts passed isolated npm installation and runtime entry checks;
 the installed root reports the exact overlay commit above.
 
-While this recut was being validated, upstream main adopted native sandbox
-directory listing in [PR #136110](https://github.com/openclaw/openclaw/pull/136110).
-That change is absent from the locked release snapshot. The contributor
-discovery PR can now reuse upstream's `ls` and `readDirectory` seam; the
-corresponding release-overlay code can be removed when its base includes that
-implementation and the remaining authority and search contracts are verified.
+Only the Mattermost integration remains: 33 changed files, including tests and
+generated metadata. The locked-main run passed 1,313 focused tests, the full
+check, channel/config metadata and SDK surface checks, and independent P0–P2
+review. A fresh full build from the committed overlay passed before packing.
 
-| Patch area | release/2026.9.2 assessment | Why Octogee carries it / removal gate |
+This snapshot includes upstream's native sandbox directory listing from
+[PR #136110](https://github.com/openclaw/openclaw/pull/136110). An isolated real
+Docker invocation of the production tool factory exposed only `apply_patch`,
+`edit`, `ls`, `read`, and `write` under a minimal filesystem-only policy. Native
+`ls` passed nested listing, pagination, quoted filenames, and discovery after a
+write; outside paths and symlink escapes were rejected. Neither `exec` nor
+`process` was exposed. That satisfies Octogee's directory-discovery requirement;
+recursive `find`/`grep` are not required. The entire discovery patch is dropped,
+and [PR #122899 is closed with this proof](https://github.com/openclaw/openclaw/pull/122899#issuecomment-5554030414).
+Octogee's project-agent policies no longer advertise the removed tools.
+
+| Patch area | Locked main assessment | Why Octogee carries it / removal gate |
 | --- | --- | --- |
-| Sandbox-backed file discovery | Retained from [OpenClaw PR #122899](https://github.com/openclaw/openclaw/pull/122899), including inherited ignore rules, traversal exclusions, cancellation, and worker authority checks. The locked release has no equivalent native registration. | Required by Octogee's restricted filesystem-only configurations, not every full-power Builder. Remove when upstream provides sandbox-backed `ls`, `find`, and `grep` without requiring `exec` or `process`. |
+| Sandbox-backed file discovery | Dropped in full. Use upstream's native `ls` and `readDirectory`, with no custom recursive search, directory producer, SDK subpath, or path/stat changes. | The verified native listing path meets Octogee's need without granting shell access. Do not retain optional `find`/`grep` as a new removal gate. |
 | Resolved-secret reuse | Dropped. Cross-write caching was an optional performance optimization, not an Octogee correctness requirement. | Accept upstream's normal resolution cost and keep the resolver available. There is no custom stale-value lifecycle to maintain. |
 | Custom `secrets.apply` RPC | Dropped. Upstream's existing batched `secrets apply` CLI uses the same apply engine; the old bootstrap-latency rationale did not hold in fresh measurements. | Octogee uses the asynchronous standard CLI and the existing reload path. No upstream RPC addition is required. |
 | No-archive session deletion | Dropped. Standard upstream deletion archives transcripts using bounded worker-backed cleanup. [OpenClaw PR #137428](https://github.com/openclaw/openclaw/pull/137428) stays closed. | Ops Agent keeps per-request isolation and accepts archive retention. Durable scoped Ops conversations would be a separate product change, not a reason to retain this flag. |

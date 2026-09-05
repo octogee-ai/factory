@@ -256,8 +256,6 @@ export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "read",
-  "grep",
-  "find",
   "ls",
   "write",
   "edit",
