@@ -403,6 +403,7 @@ async function observeOnce(
   }
 
   for (const event of events) {
+    if (event.involvedObject.namespace && event.involvedObject.namespace !== deps.namespace) continue;
     const key = eventKey(event);
     if (seenEvents.has(key)) continue;
     seenEvents.set(key, (deps.now ?? Date.now)());
