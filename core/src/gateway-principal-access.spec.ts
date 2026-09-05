@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   GATEWAY_PERMISSION_SETS,
-  gatewayAccessGrantId,
+  workspaceAgentAccessGrantId,
   isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
 } from "./gateway-principal-access.js";
@@ -15,7 +15,7 @@ const gateway = {
 
 function grant(overrides: Record<string, unknown> = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gatewayId: "bender",
     workspaceSlug: "alex",
     ownerUid: "owner",
@@ -92,7 +92,9 @@ describe("gateway principal access", () => {
     [grant({ expiresAt: 999 }), "grant_expired"],
     [grant({ permissionSetIds: ["trusted-helper.v2"] }), "grant_invalid"],
     [grant({ permissionSetIds: [] }), "grant_invalid"],
-    [grant({ gatewayId: "other" }), "grant_invalid"],
+    [grant({ ownerUid: "other" }), "grant_invalid"],
+    [grant({ workspaceSlug: "other" }), "grant_invalid"],
+    [grant({ schemaVersion: 1 }), "grant_invalid"],
   ] as const)("fails closed for invalid grant state: %s", (candidate, reason) => {
     expect(resolveGatewayPrincipalAccess({
       gateway,
@@ -101,6 +103,13 @@ describe("gateway principal access", () => {
       isWorkspaceMember: true,
       now: 1_000,
     })).toEqual({ kind: "denied", reason });
+  });
+
+  it("keeps a workspace grant across gateway replacement without changing its expiry or revision", () => {
+    expect(resolveGatewayPrincipalAccess({
+      gateway: { ...gateway, gatewayId: "replacement" }, uid: "helper",
+      grant: grant({ expiresAt: 2000 }), isWorkspaceMember: true, now: 1000,
+    })).toMatchObject({ kind: "delegate", grantRevision: 3, expiresAt: 2000 });
   });
 
   it("denies an otherwise active grant immediately when membership is absent", () => {
@@ -113,13 +122,27 @@ describe("gateway principal access", () => {
     })).toEqual({ kind: "denied", reason: "membership_required" });
   });
 
+  it("admits team members permanently without a support grant and keeps support elevation separate", () => {
+    const input = { gateway: { ...gateway, teamAccess: true }, uid: "helper", isWorkspaceMember: true, now: 1000 };
+    for (const candidate of [null, grant({ state: "revoked" }), grant({ expiresAt: 999 })]) {
+      expect(resolveGatewayPrincipalAccess({ ...input, grant: candidate })).toMatchObject({
+        kind: "member", brokerProfile: "native-member", expiresAt: null, config: false, grantRevision: null,
+      });
+    }
+    expect(resolveGatewayPrincipalAccess({ ...input, grant: grant({ expiresAt: 2000 }) })).toMatchObject({
+      kind: "delegate", brokerProfile: "native-member-helper", expiresAt: 2000, config: true,
+    });
+    expect(resolveGatewayPrincipalAccess({ ...input, grant: null, isWorkspaceMember: false })).toMatchObject({ kind: "denied" });
+    expect(resolveGatewayPrincipalAccess({ ...input, gateway, grant: null })).toMatchObject({ kind: "denied" });
+  });
+
   it("uses a stable collision-resistant document id", () => {
-    expect(gatewayAccessGrantId("bender", "alex", "helper")).toMatch(/^[a-f0-9]{64}$/u);
-    expect(gatewayAccessGrantId("ab", "c", "d")).not.toBe(
-      gatewayAccessGrantId("a", "bc", "d"),
+    expect(workspaceAgentAccessGrantId("owner", "alex", "helper")).toMatch(/^[a-f0-9]{64}$/u);
+    expect(workspaceAgentAccessGrantId("ab", "c", "d")).not.toBe(
+      workspaceAgentAccessGrantId("a", "bc", "d"),
     );
-    expect(gatewayAccessGrantId("bender", "alex", "helper")).not.toBe(
-      gatewayAccessGrantId("bender", "other-workspace", "helper"),
+    expect(workspaceAgentAccessGrantId("owner", "alex", "helper")).not.toBe(
+      workspaceAgentAccessGrantId("owner", "other-workspace", "helper"),
     );
   });
 

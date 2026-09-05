@@ -123,7 +123,7 @@ function finiteNumber(value: unknown): value is number {
 }
 
 function brokerProfile(value: unknown): OpenClawBrokerProfile | null {
-  return value === "native-owner" || value === "native-co-owner" ||
+  return value === "native-owner" || value === "native-member" || value === "native-member-helper" || value === "native-co-owner" ||
     value === "delegated-config" || value === "delegated-read"
     ? value
     : null;
@@ -134,7 +134,7 @@ function ticketBinding(
   rawPermissionSetIds: unknown,
   grantRevision: unknown,
 ): { ids: GatewayPermissionSetId[]; grantRevision: number | null } | null {
-  if (profile === "native-owner") {
+  if (profile === "native-owner" || profile === "native-member") {
     return Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0 &&
       grantRevision === null
       ? { ids: [], grantRevision: null }

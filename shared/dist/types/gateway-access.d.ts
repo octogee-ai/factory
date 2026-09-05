@@ -1,6 +1,6 @@
 export declare const GATEWAY_ACCESS_PERMISSION_SET_IDS: readonly ["agent-viewer.v1", "trusted-helper.v1", "co-owner.v1"];
 export type GatewayAccessPermissionSetId = (typeof GATEWAY_ACCESS_PERMISSION_SET_IDS)[number];
-export type GatewayAccessRole = "owner" | "co-owner" | "trusted-helper" | "agent-viewer";
+export type GatewayAccessRole = "owner" | "member" | "co-owner" | "trusted-helper" | "agent-viewer";
 export interface GatewayAccessCapabilities {
     dashboard: boolean;
     config: boolean;

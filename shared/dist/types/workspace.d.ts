@@ -14,6 +14,7 @@ export interface Workspace {
     name: string;
     ownerDisplayName: string;
     visibility: WorkspaceVisibility;
+    gatewayAccessMode?: 'personal' | 'team';
     vibe?: WorkspaceVibe;
     mattermost: WorkspaceMattermost;
     gitea: WorkspaceGitea;

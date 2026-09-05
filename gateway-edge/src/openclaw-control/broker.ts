@@ -81,8 +81,8 @@ function validAccessBinding(
   ids: GatewayPermissionSetId[] | null,
   grantRevision: unknown,
 ): boolean {
-  if (profile === "native-owner") return ids?.length === 0 && grantRevision === null;
-  const delegatedProfile = profile === "native-co-owner" || profile === "delegated-config" ||
+  if (profile === "native-owner" || profile === "native-member") return ids?.length === 0 && grantRevision === null;
+  const delegatedProfile = profile === "native-member-helper" || profile === "native-co-owner" || profile === "delegated-config" ||
     profile === "delegated-read";
   return delegatedProfile && ids !== null && Number.isSafeInteger(grantRevision) &&
     (grantRevision as number) >= 1;

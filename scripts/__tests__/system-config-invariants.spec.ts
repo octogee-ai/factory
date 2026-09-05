@@ -217,7 +217,9 @@ describe("system config platform invariants", () => {
       ...env,
       GATEWAY_CLASS: "builder",
       OPENCLAW_CONTROL_IDENTITY: "per-user",
+      GATEWAY_BUILDER_SLUG: "alice",
     });
     expect((candidate.gateway as { auth: { mode: string } }).auth.mode).toBe("trusted-proxy");
+    expect(candidate.gateway).toMatchObject({ roles: { definitions: { "team-member": { agents: ["octogee-alice-coach"] } } } });
   });
 });

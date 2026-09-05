@@ -53,12 +53,13 @@ function issue(
   manager: OpenClawControlSessionManager,
   brokerProfile: OpenClawBrokerProfile = "native-owner",
 ): string {
-  const permissionSetByProfile: Record<Exclude<OpenClawBrokerProfile, "native-owner">, GatewayPermissionSetId> = {
+  const permissionSetByProfile: Record<Exclude<OpenClawBrokerProfile, "native-owner" | "native-member">, GatewayPermissionSetId> = {
+    "native-member-helper": "trusted-helper.v1",
     "native-co-owner": "co-owner.v1",
     "delegated-config": "trusted-helper.v1",
     "delegated-read": "agent-viewer.v1",
   };
-  const permissionSetIds = brokerProfile === "native-owner"
+  const permissionSetIds = brokerProfile === "native-owner" || brokerProfile === "native-member"
     ? []
     : [permissionSetByProfile[brokerProfile]];
   return manager.issue({
@@ -69,7 +70,7 @@ function issue(
     revisionId: "bender-r7",
     brokerProfile,
     permissionSetIds,
-    grantRevision: brokerProfile === "native-owner" ? null : 1,
+    grantRevision: brokerProfile === "native-owner" || brokerProfile === "native-member" ? null : 1,
     absoluteExpiresAt: 3_601_000,
   }).cookie.split(";", 1)[0];
 }
@@ -187,6 +188,19 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       revisionId: "bender-r7",
       sessionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
     }));
+  });
+  it.each([
+    ["delegated-config", ["trusted-helper.v1"], 1, "settings/agents"],
+    ["delegated-read", ["agent-viewer.v1"], 1, "settings/agents"],
+    ["native-member", [], null, "new"],
+    ["native-member-helper", ["trusted-helper.v1"], 1, "new"],
+  ] as const)("lands %s on a page it can use", async (brokerProfile, ids, grantRevision, page) => {
+    const response = await request(appWith({ env: env(), sessions: sessions(), redeem: async (input) => ({
+      uid: "uid-member", gatewayId: input.gatewayId, workspaceSlug: "alice", revisionId: input.revisionId,
+      brokerProfile, permissionSetIds: [...ids], grantRevision, expiresAt: 3_601_000,
+    }) })).get(`/api/g/bender/openclaw/launch/${"a".repeat(43)}`);
+    expect(response.status).toBe(303);
+    expect(response.headers.location).toBe(`/g/bender/openclaw/${page}`);
   });
 
   it("returns a branded relaunch document only to an unauthenticated Dashboard navigation", async () => {

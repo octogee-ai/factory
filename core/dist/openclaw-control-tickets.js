@@ -46,13 +46,13 @@ function finiteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
 }
 function brokerProfile(value) {
-    return value === "native-owner" || value === "native-co-owner" ||
+    return value === "native-owner" || value === "native-member" || value === "native-member-helper" || value === "native-co-owner" ||
         value === "delegated-config" || value === "delegated-read"
         ? value
         : null;
 }
 function ticketBinding(profile, rawPermissionSetIds, grantRevision) {
-    if (profile === "native-owner") {
+    if (profile === "native-owner" || profile === "native-member") {
         return Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0 &&
             grantRevision === null
             ? { ids: [], grantRevision: null }

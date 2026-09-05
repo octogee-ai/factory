@@ -10,6 +10,7 @@ export interface SystemConfigInvariantContext {
     apiOrigin?: string;
     controlIdentity?: GatewayControlIdentityMode;
     ownerUid?: string;
+    workspaceSlug?: string;
 }
 type ExactInvariant = {
     kind: "exact";

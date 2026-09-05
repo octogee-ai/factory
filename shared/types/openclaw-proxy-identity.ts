@@ -66,6 +66,7 @@ export function openClawIdentityScopes(ownerUid?: string | null): Record<string,
 
 export const OPENCLAW_OPERATOR_ROLE_NAMES = [
   "member",
+  "team-member",
   "service",
   "owner",
   "co-owner",
@@ -78,6 +79,7 @@ export const OPENCLAW_OPERATOR_ROLES = Object.freeze({
   default: "member",
   definitions: Object.freeze({
     member: { sessions: { others: "none" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
+    "team-member": { sessions: { others: "none" }, agents: [] as string[], scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_QUESTIONS] },
     service: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
     owner: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
     "co-owner": {
@@ -94,6 +96,15 @@ export const OPENCLAW_OPERATOR_ROLES = Object.freeze({
   }),
 });
 
+export function openClawOperatorRoles(workspaceSlug?: string): typeof OPENCLAW_OPERATOR_ROLES {
+  const roles = structuredClone(OPENCLAW_OPERATOR_ROLES);
+  if (workspaceSlug) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(workspaceSlug)) throw new Error("invalid gateway workspace slug");
+    roles.definitions["team-member"].agents = [`octogee-${workspaceSlug}-coach`];
+  }
+  return roles;
+}
+
 export function openClawRoleScopes(role: OpenClawOperatorRole): string[] {
   return [...OPENCLAW_OPERATOR_ROLES.definitions[role].scopes];
 }
@@ -105,12 +116,16 @@ export function openClawDeviceRequestScopes(role: OpenClawOperatorRole): string[
 
 export type OpenClawBrokerProfileLike =
   | "native-owner"
+  | "native-member"
+  | "native-member-helper"
   | "native-co-owner"
   | "delegated-config"
   | "delegated-read";
 
 const ROLE_BY_BROKER_PROFILE: Record<OpenClawBrokerProfileLike, OpenClawOperatorRole> = {
   "native-owner": "owner",
+  "native-member": "team-member",
+  "native-member-helper": "team-member",
   "native-co-owner": "co-owner",
   "delegated-config": "trusted-helper",
   "delegated-read": "viewer",

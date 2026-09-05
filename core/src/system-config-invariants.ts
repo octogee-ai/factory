@@ -1,6 +1,6 @@
 import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
 import {
-  OPENCLAW_OPERATOR_ROLES,
+  openClawOperatorRoles,
   OPENCLAW_TRUSTED_PROXIES,
   OPENCLAW_TRUSTED_PROXY_AUTH,
   openClawIdentityScopes,
@@ -22,6 +22,7 @@ export interface SystemConfigInvariantContext {
   apiOrigin?: string;
   controlIdentity?: GatewayControlIdentityMode;
   ownerUid?: string;
+  workspaceSlug?: string;
 }
 
 type ExactInvariant = {
@@ -381,7 +382,7 @@ function customerToolInvariants(): PlatformInvariant[] {
   ];
 }
 
-function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefined): PlatformInvariant[] {
+function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefined, workspaceSlug: string | undefined): PlatformInvariant[] {
   return [
     { kind: "exact", path: "gateway.auth.mode", value: perUser ? "trusted-proxy" : "token" },
     {
@@ -395,7 +396,7 @@ function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefine
       value: perUser ? openClawIdentityScopes(ownerUid) : ABSENT,
     },
     { kind: "exact", path: "gateway.trustedProxies", value: perUser ? [...OPENCLAW_TRUSTED_PROXIES] : ABSENT },
-    { kind: "exact", path: "gateway.roles", value: perUser ? OPENCLAW_OPERATOR_ROLES : ABSENT },
+    { kind: "exact", path: "gateway.roles", value: perUser ? openClawOperatorRoles(workspaceSlug) : ABSENT },
   ];
 }
 
@@ -414,7 +415,7 @@ export function platformInvariantTable(
     { kind: "exact", path: "gateway.port", value: 18789 },
     { kind: "exact", path: "gateway.mode", value: "local" },
     { kind: "exact", path: "gateway.bind", value: "lan" },
-    ...controlIdentityInvariants(perUser, context.ownerUid),
+    ...controlIdentityInvariants(perUser, context.ownerUid, context.workspaceSlug),
     { kind: "exact", path: "gateway.auth.token", value: ABSENT },
     { kind: "exact", path: "gateway.auth.password", value: ABSENT },
     { kind: "exact", path: "gateway.auth.allowTailscale", value: ABSENT },

@@ -19,7 +19,7 @@ import {
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
 import {
   GATEWAY_ACCESS_GRANTS_COLLECTION,
-  gatewayAccessGrantId,
+  workspaceAgentAccessGrantId,
   isCanonicalWorkspaceMembership,
   permissionSetIds,
   resolveGatewayPrincipalAccess,
@@ -146,7 +146,7 @@ function accessBindingMatches(
 }
 
 interface ScopedPrincipalAccess {
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string };
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; teamAccess: boolean };
   principal: GatewayPrincipalAccess | null;
   assignmentMissing: boolean;
 }
@@ -170,14 +170,16 @@ async function storedOwnerScope(
   if (gatewayClass !== "shared" && authorization.config.builderSlug !== args.workspaceSlug) {
     return null;
   }
-  const workspace = gatewayClass === "shared"
-    ? await args.tx.get(args.db.doc(`workspaces/${args.workspaceSlug}`))
-    : null;
+  const workspace = await args.tx.get(args.db.doc(`workspaces/${args.workspaceSlug}`));
   const ownerUid = gatewayClass === "shared"
-    ? workspace?.data()?.ownerUid
+    ? workspace.data()?.ownerUid
     : authorization.config.ownerUid;
   if (typeof ownerUid !== "string" || !ownerUid) return null;
-  const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid };
+  const workspaceData = workspace.data();
+  const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
+    teamAccess: workspaceData?.ownerUid === ownerUid && workspaceData?.gatewayAccessMode === "team" &&
+      authorization.config.builderAccess?.controlIdentity === "per-user",
+  };
   const owner = await args.tx.get(args.db.doc(`users/${ownerUid}`));
   return {
     scope,
@@ -200,8 +202,8 @@ async function storedGranteePrincipal(
 ): Promise<GatewayPrincipalAccess> {
   const [grantSnap, memberSnap] = await Promise.all([
     args.tx.get(args.db.doc(
-      `${GATEWAY_ACCESS_GRANTS_COLLECTION}/${gatewayAccessGrantId(
-        scope.gatewayId,
+      `${GATEWAY_ACCESS_GRANTS_COLLECTION}/${workspaceAgentAccessGrantId(
+        scope.ownerUid,
         scope.workspaceSlug,
         args.uid,
       )}`,
@@ -252,7 +254,7 @@ async function storedPrincipalAccess(args: {
 function auditPrincipalDenial(args: {
   db: Firestore;
   tx: Transaction;
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string };
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; teamAccess: boolean };
   uid: string;
   principal: GatewayPrincipalAccess;
   now: number;
@@ -305,7 +307,7 @@ export function openClawControlSessionHash(sessionId: string): string {
 }
 
 function controlProfile(value: unknown): OpenClawBrokerProfile | null {
-  return value === "native-owner" || value === "native-co-owner" ||
+  return value === "native-owner" || value === "native-member" || value === "native-member-helper" || value === "native-co-owner" ||
     value === "delegated-config" || value === "delegated-read"
     ? value
     : null;
@@ -319,7 +321,7 @@ function controlSessionBinding(
   const ids = Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0
     ? []
     : permissionSetIds(rawPermissionSetIds);
-  if (profile === "native-owner") {
+  if (profile === "native-owner" || profile === "native-member") {
     return ids?.length === 0 && grantRevision === null ? { ids: [], revision: null } : null;
   }
   return ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
@@ -578,7 +580,7 @@ function rejectRedeemPrincipal(args: {
   attempt: RedeemAttempt;
   inspected: RedeemableTicket;
   principal: GatewayPrincipalAccess | null;
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string } | null;
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; teamAccess: boolean } | null;
   tx: Transaction;
 }): RedeemResult {
   if (args.principal && args.scope) {
@@ -799,7 +801,7 @@ async function controlMattermostRequest(
       sendSessionAccessFailure(access, res);
       return;
     }
-    if (access.session.brokerProfile !== "native-owner" && access.session.brokerProfile !== "native-co-owner") {
+    if (!["native-owner", "native-co-owner", "native-member", "native-member-helper"].includes(access.session.brokerProfile)) {
       res.status(403).json({ error: "forbidden" });
       return;
     }

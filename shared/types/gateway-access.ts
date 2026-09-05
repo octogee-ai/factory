@@ -9,6 +9,7 @@ export type GatewayAccessPermissionSetId =
 
 export type GatewayAccessRole =
   | "owner"
+  | "member"
   | "co-owner"
   | "trusted-helper"
   | "agent-viewer";

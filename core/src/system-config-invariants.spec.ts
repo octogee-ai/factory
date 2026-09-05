@@ -91,7 +91,7 @@ describe("system config platform invariants", () => {
   });
 
   it("switches a per-user Builder gateway to trusted-proxy auth with grants for services and the owner", () => {
-    const perUser = { ...builder, controlIdentity: "per-user" as const, ownerUid: "uid-owner" };
+    const perUser = { ...builder, controlIdentity: "per-user" as const, ownerUid: "uid-owner", workspaceSlug: "alice" };
     const config: Record<string, unknown> = {
       gateway: { auth: { mode: "token", token: "leaked", identityScopes: { "x@y": ["operator.admin"] } } },
     };
@@ -122,8 +122,9 @@ describe("system config platform invariants", () => {
     expect(gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
     expect(gateway.roles.default).toBe("member");
     expect(gateway.roles.definitions.member.scopes).toContain("operator.admin");
+    expect(gateway.roles.definitions["team-member"].agents).toEqual(["octogee-alice-coach"]);
     expect(Object.keys(gateway.roles.definitions).sort()).toEqual(
-      ["co-owner", "member", "owner", "service", "trusted-helper", "viewer"],
+      ["co-owner", "member", "owner", "service", "team-member", "trusted-helper", "viewer"],
     );
     expect(platformInvariantViolations(config, perUser)).toEqual([]);
   });

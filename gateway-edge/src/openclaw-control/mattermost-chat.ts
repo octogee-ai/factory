@@ -89,17 +89,19 @@ export interface OpenClawControlRequestFrame extends Record<string, unknown> {
   params: Record<string, unknown>;
 }
 
+export interface MattermostChannelWatch {
+  sessionKey: string;
+  agentId: string;
+  run(onChange: () => void, signal: AbortSignal): Promise<void>;
+}
+
 export type MattermostChatPreparation =
-  | { kind: "response"; frame: Record<string, unknown> }
+  | { kind: "response"; frame: Record<string, unknown>; watch?: MattermostChannelWatch }
   | {
       kind: "upstream";
       upstreamParams?: Record<string, unknown>;
       project(frame: Record<string, unknown>): Record<string, unknown>;
-      watch?: {
-        sessionKey: string;
-        agentId: string;
-        run(onChange: () => void, signal: AbortSignal): Promise<void>;
-      };
+      watch?: MattermostChannelWatch;
     };
 
 export interface MattermostControlChat {
@@ -622,13 +624,15 @@ function projectSessionsList(
   upstream: Record<string, unknown>,
   authorizedRows: readonly ProjectedMattermostSession[],
   params: SessionsListProjectionParams,
+  nativeAgentId?: string,
 ): Record<string, unknown> {
   if (upstream.type !== "res" || upstream.ok !== true) return upstream;
   const payload = record(upstream.payload);
   if (!payload || !completeSessionsListPayload(payload)) return invalidSessionsListUpstream(frame);
   const nativeRows = nativeSessionRows(payload.sessions as readonly unknown[]);
   if (!nativeRows) return invalidSessionsListUpstream(frame);
-  const sessions = mergeAuthorizedSessions(nativeRows, authorizedRows, params);
+  const scopedNativeRows = nativeAgentId ? nativeRows.filter((row) => String(row.key).startsWith(`agent:${nativeAgentId}:`)) : nativeRows;
+  const sessions = mergeAuthorizedSessions(scopedNativeRows, authorizedRows, params);
   if (!sessions) return invalidSessionsListUpstream(frame);
 
   const limit = params.limit ?? SESSION_LIST_DEFAULT_LIMIT;
@@ -1442,7 +1446,9 @@ async function prepareSessionsList(
       offset: 0,
       limit: SESSION_LIST_SOURCE_LIMIT,
     },
-    project: (upstream) => projectSessionsList(frame, upstream, authorizedRows, params),
+    project: (upstream) => projectSessionsList(frame, upstream, authorizedRows, params,
+      session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper"
+        ? `octogee-${session.workspaceSlug}-coach` : undefined),
   };
 }
 
@@ -1486,6 +1492,9 @@ async function prepareHistory(
     return rpcError(frame, "UNAVAILABLE", "Mattermost channel history exceeds the recovery window");
   }
   const page = pageHistory(history.messages, params.offset, params.limit, history.reachedEnd);
+  if (session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper") {
+    return rpcSuccess(frame, { sessionKey: params.sessionKey, ...page });
+  }
   return {
     kind: "upstream",
     project: (upstream) => projectUpstreamHistory(upstream, page),
@@ -1597,14 +1606,7 @@ export function createMattermostControlChat(options: {
       const broker = createBrokeredMattermostAccess(session);
       const authorize = options.authorize ?? broker.authorize;
       const listWorkspaceChannels = options.listWorkspaceChannels ?? broker.listWorkspaceChannels;
-      if (
-        frame.method !== "sessions.list" &&
-        frame.method !== "chat.history" &&
-        frame.method !== "chat.startup" &&
-        frame.method !== "chat.send"
-      ) {
-        return null;
-      }
+      if (!["sessions.list", "chat.history", "chat.startup", "chat.send"].includes(frame.method)) return null;
       try {
         if (frame.method === "sessions.list") {
           return await prepareSessionsList(
@@ -1618,7 +1620,7 @@ export function createMattermostControlChat(options: {
         if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, signal);
         const history = await prepareHistory(frame, session, authorize, signal);
         const route = parseChannelScopedMattermostSessionRoute(frame.params.sessionKey);
-        if (history?.kind === "upstream" && route) {
+        if (history && route && (history.kind === "upstream" || history.frame.ok === true)) {
           history.watch = {
             sessionKey: frame.params.sessionKey as string,
             agentId: route.agentId,

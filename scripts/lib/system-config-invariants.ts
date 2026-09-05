@@ -30,6 +30,7 @@ export function systemConfigInvariantContextFromEnv(
     ...(env.API_PUBLIC_URL ? { apiOrigin: env.API_PUBLIC_URL } : {}),
     controlIdentity: resolveControlIdentityFromEnv(env),
     ...(resolveOwnerUidFromEnv(env) ? { ownerUid: resolveOwnerUidFromEnv(env) } : {}),
+    ...(env.GATEWAY_BUILDER_SLUG ? { workspaceSlug: env.GATEWAY_BUILDER_SLUG } : {}),
   };
 }
 

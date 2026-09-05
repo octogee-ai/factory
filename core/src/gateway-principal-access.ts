@@ -12,6 +12,8 @@ export const GATEWAY_PERMISSION_SET_IDS = [
 export type GatewayPermissionSetId = (typeof GATEWAY_PERMISSION_SET_IDS)[number];
 export type OpenClawBrokerProfile =
   | "native-owner"
+  | "native-member"
+  | "native-member-helper"
   | "native-co-owner"
   | "delegated-config"
   | "delegated-read";
@@ -68,13 +70,14 @@ export const GATEWAY_PERMISSION_SETS: Readonly<
 });
 
 export interface GatewayPrincipalGateway {
+  teamAccess?: boolean;
   gatewayId: string;
   ownerUid: string | null;
   workspaceSlug: string | null;
 }
 
 export interface ResolvedGatewayAccess {
-  kind: "owner" | "delegate";
+  kind: "owner" | "delegate" | "member";
   permissionSetIds: GatewayPermissionSetId[];
   brokerProfile: OpenClawBrokerProfile | null;
   dashboard: boolean;
@@ -97,7 +100,6 @@ export type GatewayPrincipalAccess =
   | { kind: "denied"; reason: GatewayAccessDenialReason };
 
 interface ParsedGrant {
-  gatewayId: string;
   workspaceSlug: string;
   ownerUid: string;
   granteeUid: string;
@@ -155,11 +157,10 @@ export function timestampMillis(value: unknown): number | null | undefined {
 
 function parseGrant(value: unknown): ParsedGrant | null {
   const input = record(value);
-  if (!input || input.schemaVersion !== 1) return null;
+  if (!input || input.schemaVersion !== 2) return null;
   const ids = permissionSetIds(input.permissionSetIds);
   const expiresAt = timestampMillis(input.expiresAt);
   if (
-    !nonEmptyString(input.gatewayId) ||
     !nonEmptyString(input.workspaceSlug) ||
     !nonEmptyString(input.ownerUid) ||
     !nonEmptyString(input.granteeUid) ||
@@ -170,7 +171,6 @@ function parseGrant(value: unknown): ParsedGrant | null {
     expiresAt === undefined
   ) return null;
   return {
-    gatewayId: input.gatewayId,
     workspaceSlug: input.workspaceSlug,
     ownerUid: input.ownerUid,
     granteeUid: input.granteeUid,
@@ -193,13 +193,12 @@ function grantMatchesPrincipal(
   gateway: GatewayPrincipalGateway,
   uid: string,
 ): boolean {
-  return grant.gatewayId === gateway.gatewayId &&
-    grant.workspaceSlug === gateway.workspaceSlug &&
+  return grant.workspaceSlug === gateway.workspaceSlug &&
     grant.ownerUid === gateway.ownerUid &&
     grant.granteeUid === uid;
 }
 
-export function resolveGatewayPrincipalAccess(input: {
+function resolveGrantedGatewayPrincipalAccess(input: {
   gateway: GatewayPrincipalGateway;
   uid: string;
   grant: unknown;
@@ -246,13 +245,27 @@ export function resolveGatewayPrincipalAccess(input: {
   };
 }
 
-export function gatewayAccessGrantId(
-  gatewayId: string,
+export function resolveGatewayPrincipalAccess(input: Parameters<typeof resolveGrantedGatewayPrincipalAccess>[0]): GatewayPrincipalAccess {
+  const access = resolveGrantedGatewayPrincipalAccess(input);
+  if (access.kind === "owner" || !input.gateway.ownerUid || !input.gateway.workspaceSlug ||
+    input.gateway.teamAccess !== true || !input.isWorkspaceMember) return access;
+  if (access.kind === "delegate" && access.permissionSetIds.includes("co-owner.v1")) return access;
+  if (access.kind === "delegate" && access.permissionSetIds.includes("trusted-helper.v1")) {
+    return { ...access, brokerProfile: "native-member-helper" };
+  }
+  return {
+    kind: "member", brokerProfile: "native-member", permissionSetIds: [],
+    dashboard: true, config: false, workspaceManagement: false, grantRevision: null, expiresAt: null,
+  };
+}
+
+export function workspaceAgentAccessGrantId(
+  ownerUid: string,
   workspaceSlug: string,
   granteeUid: string,
 ): string {
   return createHash("sha256")
-    .update(gatewayId)
+    .update(ownerUid)
     .update("\0")
     .update(workspaceSlug)
     .update("\0")

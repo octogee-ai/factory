@@ -25,6 +25,7 @@ export interface Workspace {
   
   ownerDisplayName: string;
   visibility: WorkspaceVisibility;
+  gatewayAccessMode?: 'personal' | 'team';
 
 vibe?: WorkspaceVibe;
   mattermost: WorkspaceMattermost;

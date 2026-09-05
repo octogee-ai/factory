@@ -25,7 +25,7 @@ export declare const OPENCLAW_TRUSTED_PROXY_AUTH: Readonly<{
     }>;
 }>;
 export declare function openClawIdentityScopes(ownerUid?: string | null): Record<string, string[]>;
-export declare const OPENCLAW_OPERATOR_ROLE_NAMES: readonly ["member", "service", "owner", "co-owner", "trusted-helper", "viewer"];
+export declare const OPENCLAW_OPERATOR_ROLE_NAMES: readonly ["member", "team-member", "service", "owner", "co-owner", "trusted-helper", "viewer"];
 export type OpenClawOperatorRole = (typeof OPENCLAW_OPERATOR_ROLE_NAMES)[number];
 export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
     default: "member";
@@ -36,6 +36,13 @@ export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
             };
             agents: string;
             scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
+        };
+        "team-member": {
+            sessions: {
+                others: string;
+            };
+            agents: string[];
+            scopes: string[];
         };
         service: {
             sessions: {
@@ -74,9 +81,10 @@ export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
         };
     }>;
 }>;
+export declare function openClawOperatorRoles(workspaceSlug?: string): typeof OPENCLAW_OPERATOR_ROLES;
 export declare function openClawRoleScopes(role: OpenClawOperatorRole): string[];
 export declare function openClawDeviceRequestScopes(role: OpenClawOperatorRole): string[];
-export type OpenClawBrokerProfileLike = "native-owner" | "native-co-owner" | "delegated-config" | "delegated-read";
+export type OpenClawBrokerProfileLike = "native-owner" | "native-member" | "native-member-helper" | "native-co-owner" | "delegated-config" | "delegated-read";
 export declare function openClawRoleForBrokerProfile(profile: OpenClawBrokerProfileLike): OpenClawOperatorRole;
 export declare function resolveControlIdentityFromEnv(env?: NodeJS.ProcessEnv): GatewayControlIdentity;
 export declare function isPerUserControlIdentity(env?: NodeJS.ProcessEnv): boolean;

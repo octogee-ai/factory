@@ -15,6 +15,7 @@ import {
   openClawDeviceRequestScopes,
   openClawDeviceSubject,
   openClawIdentityScopes,
+  openClawOperatorRoles,
   openClawProxyIdentityHeaders,
   openClawRoleForBrokerProfile,
   resolveControlIdentityFromEnv,
@@ -23,6 +24,17 @@ import {
 } from "./openclaw-proxy-identity";
 
 describe("OpenClaw proxy identity contract", () => {
+  it("limits ordinary Team members to the workspace coach and their own sessions", () => {
+    const roles = openClawOperatorRoles("ceckert-test");
+    expect(roles.definitions["team-member"]).toEqual({
+      sessions: { others: "none" }, agents: ["octogee-ceckert-test-coach"],
+      scopes: ["operator.read", "operator.write", "operator.questions"],
+    });
+    expect(openClawOperatorRoles().definitions["team-member"].agents).toEqual([]);
+    expect(roles.definitions.member.scopes).toContain("operator.admin");
+    expect(openClawRoleForBrokerProfile("native-member")).toBe("team-member");
+    expect(openClawRoleForBrokerProfile("native-member-helper")).toBe("team-member");
+  });
   it("activates only on the explicit per-user environment value", () => {
     expect(resolveControlIdentityFromEnv({})).toBe("shared-operator");
     expect(resolveControlIdentityFromEnv({ OPENCLAW_CONTROL_IDENTITY: "per-user" })).toBe("per-user");
@@ -78,7 +90,7 @@ describe("OpenClaw proxy identity contract", () => {
     expect(OPENCLAW_OPERATOR_ROLES.definitions.member.scopes).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
     expect(OPENCLAW_OPERATOR_ROLES.definitions.member.sessions.others).toBe("none");
     expect(Object.keys(OPENCLAW_OPERATOR_ROLES.definitions).sort()).toEqual(
-      ["co-owner", "member", "owner", "service", "trusted-helper", "viewer"],
+      ["co-owner", "member", "owner", "service", "team-member", "trusted-helper", "viewer"],
     );
   });
 

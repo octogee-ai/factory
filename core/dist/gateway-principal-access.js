@@ -94,12 +94,11 @@ export function timestampMillis(value) {
 }
 function parseGrant(value) {
     const input = record(value);
-    if (!input || input.schemaVersion !== 1)
+    if (!input || input.schemaVersion !== 2)
         return null;
     const ids = permissionSetIds(input.permissionSetIds);
     const expiresAt = timestampMillis(input.expiresAt);
-    if (!nonEmptyString(input.gatewayId) ||
-        !nonEmptyString(input.workspaceSlug) ||
+    if (!nonEmptyString(input.workspaceSlug) ||
         !nonEmptyString(input.ownerUid) ||
         !nonEmptyString(input.granteeUid) ||
         !ids ||
@@ -109,7 +108,6 @@ function parseGrant(value) {
         expiresAt === undefined)
         return null;
     return {
-        gatewayId: input.gatewayId,
         workspaceSlug: input.workspaceSlug,
         ownerUid: input.ownerUid,
         granteeUid: input.granteeUid,
@@ -129,12 +127,11 @@ function delegateProfile(ids) {
     return null;
 }
 function grantMatchesPrincipal(grant, gateway, uid) {
-    return grant.gatewayId === gateway.gatewayId &&
-        grant.workspaceSlug === gateway.workspaceSlug &&
+    return grant.workspaceSlug === gateway.workspaceSlug &&
         grant.ownerUid === gateway.ownerUid &&
         grant.granteeUid === uid;
 }
-export function resolveGatewayPrincipalAccess(input) {
+function resolveGrantedGatewayPrincipalAccess(input) {
     if (!input.gateway.ownerUid || !input.gateway.workspaceSlug) {
         return { kind: "denied", reason: "gateway_unowned" };
     }
@@ -176,9 +173,24 @@ export function resolveGatewayPrincipalAccess(input) {
         expiresAt: grant.expiresAt,
     };
 }
-export function gatewayAccessGrantId(gatewayId, workspaceSlug, granteeUid) {
+export function resolveGatewayPrincipalAccess(input) {
+    const access = resolveGrantedGatewayPrincipalAccess(input);
+    if (access.kind === "owner" || !input.gateway.ownerUid || !input.gateway.workspaceSlug ||
+        input.gateway.teamAccess !== true || !input.isWorkspaceMember)
+        return access;
+    if (access.kind === "delegate" && access.permissionSetIds.includes("co-owner.v1"))
+        return access;
+    if (access.kind === "delegate" && access.permissionSetIds.includes("trusted-helper.v1")) {
+        return { ...access, brokerProfile: "native-member-helper" };
+    }
+    return {
+        kind: "member", brokerProfile: "native-member", permissionSetIds: [],
+        dashboard: true, config: false, workspaceManagement: false, grantRevision: null, expiresAt: null,
+    };
+}
+export function workspaceAgentAccessGrantId(ownerUid, workspaceSlug, granteeUid) {
     return createHash("sha256")
-        .update(gatewayId)
+        .update(ownerUid)
         .update("\0")
         .update(workspaceSlug)
         .update("\0")

@@ -27,7 +27,7 @@ import {
 } from "@octogee/core/openclaw-control-tickets";
 import {
   GATEWAY_ACCESS_GRANTS_COLLECTION,
-  gatewayAccessGrantId,
+  workspaceAgentAccessGrantId,
   isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
   type GatewayPrincipalAccess,
@@ -47,6 +47,7 @@ const NOT_READY = "not-ready";
 
 function accessRole(access: ResolvedGatewayAccess): GatewayControlListEntry["via"] {
   if (access.kind === "owner") return "owner";
+  if (access.kind === "member") return "member";
   if (access.permissionSetIds.includes("co-owner.v1")) return "co-owner";
   if (access.permissionSetIds.includes("trusted-helper.v1")) return "trusted-helper";
   if (access.permissionSetIds.includes("agent-viewer.v1")) return "agent-viewer";
@@ -226,12 +227,18 @@ async function principalAccess(
       now,
     });
   }
-  const [grantSnap, membershipSnap] = await Promise.all([
-    get(`${GATEWAY_ACCESS_GRANTS_COLLECTION}/${gatewayAccessGrantId(gatewayId, workspaceSlug, uid)}`),
+  const [grantSnap, membershipSnap, workspaceSnap, gatewaySnap] = await Promise.all([
+    get(`${GATEWAY_ACCESS_GRANTS_COLLECTION}/${workspaceAgentAccessGrantId(ownerUid, workspaceSlug, uid)}`),
     get(`workspaces/${workspaceSlug}/members/${uid}`),
+    get(`workspaces/${workspaceSlug}`),
+    get(`gateways/${gatewayId}`),
   ]);
+  const workspace = workspaceSnap.data() as { ownerUid?: string; gatewayAccessMode?: string } | undefined;
   return resolveGatewayPrincipalAccess({
-    gateway: { gatewayId, ownerUid, workspaceSlug },
+    gateway: { gatewayId, ownerUid, workspaceSlug,
+      teamAccess: workspaceSnap.exists && workspace?.ownerUid === ownerUid && workspace.gatewayAccessMode === "team" &&
+        gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId)?.config.builderAccess?.controlIdentity === "per-user",
+    },
     uid,
     grant: grantSnap.exists ? grantSnap.data() : null,
     isWorkspaceMember: membershipSnap.exists &&
@@ -241,13 +248,14 @@ async function principalAccess(
 }
 
 async function builderGatewayCandidates(uid: string) {
-  const [userSnap, ownedSnap, grantSnap] = await Promise.all([
+  const [userSnap, ownedSnap, grantSnap, membershipsSnap] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     db.collection("gateways").where("ownerUid", "==", uid).get(),
     db.collection(GATEWAY_ACCESS_GRANTS_COLLECTION)
       .where("granteeUid", "==", uid)
       .where("state", "==", "active")
       .get(),
+    db.collectionGroup("members").where("id", "==", uid).get(),
   ]);
   const user = record(userSnap.exists ? userSnap.data() : undefined);
   const assignedOpenClaw = record(record(user?.provisioning)?.openclaw);
@@ -255,9 +263,28 @@ async function builderGatewayCandidates(uid: string) {
   const selfWorkspaceSlug = slugFromAssignedUser(user ?? undefined);
   const delegatedRoots = await Promise.all(grantSnap.docs.map(async (grant) => {
     const data = grant.data() as Record<string, unknown>;
-    if (typeof data.gatewayId !== "string" || typeof data.workspaceSlug !== "string") return null;
-    const root = await db.doc(`gateways/${data.gatewayId}`).get();
+    if (data.schemaVersion !== 2 || typeof data.ownerUid !== "string" || typeof data.workspaceSlug !== "string") return null;
+    const owner = await db.doc(`users/${data.ownerUid}`).get();
+    const ownerData = record(owner.exists ? owner.data() : undefined);
+    const assignment = record(record(ownerData?.provisioning)?.openclaw);
+    const gatewayId = assignment?.gatewayId;
+    if (typeof gatewayId !== "string" || !userAssignmentMatchesGateway(ownerData ?? undefined, gatewayId, data.workspaceSlug)) return null;
+    const root = await db.doc(`gateways/${gatewayId}`).get();
     return root.exists ? { root, workspaceSlug: data.workspaceSlug } : null;
+  }));
+  const teamRoots = await Promise.all(membershipsSnap.docs.map(async (member) => {
+    if (!isCanonicalWorkspaceMembership(member.data())) return null;
+    const workspaceRef = member.ref.parent.parent;
+    if (!workspaceRef || workspaceRef.parent.id !== "workspaces") return null;
+    const workspace = await workspaceRef.get();
+    const data = workspace.data();
+    if (data?.gatewayAccessMode !== "team" || typeof data.ownerUid !== "string") return null;
+    const owner = await db.doc(`users/${data.ownerUid}`).get();
+    const ownerData = owner.data();
+    const gatewayId = record(record(ownerData?.provisioning)?.openclaw)?.gatewayId;
+    if (typeof gatewayId !== "string" || !userAssignmentMatchesGateway(ownerData, gatewayId, workspace.id)) return null;
+    const root = await db.doc(`gateways/${gatewayId}`).get();
+    return root.exists ? { root, workspaceSlug: workspace.id } : null;
   }));
   const assignedRoot = selfGatewayId && selfWorkspaceSlug
     ? await db.doc(`gateways/${selfGatewayId}`).get()
@@ -267,7 +294,7 @@ async function builderGatewayCandidates(uid: string) {
     ...(assignedRoot?.exists && selfWorkspaceSlug
       ? [{ root: assignedRoot, workspaceSlug: selfWorkspaceSlug }]
       : []),
-    ...delegatedRoots.filter((item): item is { root: typeof ownedSnap.docs[number]; workspaceSlug: string } => item !== null),
+    ...[...delegatedRoots, ...teamRoots].filter((item): item is { root: typeof ownedSnap.docs[number]; workspaceSlug: string } => item !== null),
   ];
 }
 

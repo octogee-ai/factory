@@ -60,10 +60,10 @@ function sessionBinding(
   const ids = Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0
     ? []
     : permissionSetIds(rawPermissionSetIds);
-  if (profile === "native-owner") {
+  if (profile === "native-owner" || profile === "native-member") {
     return ids?.length === 0 && grantRevision === null ? { ids: [], revision: null } : null;
   }
-  const delegated = profile === "native-co-owner" || profile === "delegated-config" ||
+  const delegated = profile === "native-member-helper" || profile === "native-co-owner" || profile === "delegated-config" ||
     profile === "delegated-read";
   return delegated && ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
     ? { ids, revision: grantRevision as number }

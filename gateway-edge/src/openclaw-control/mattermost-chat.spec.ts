@@ -892,6 +892,20 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     expect(JSON.stringify(response)).not.toContain("sqlite-cursor");
   });
 
+  it("serves a Team member canonical channel history without reading another runtime user's session", async () => {
+    const authorize = vi.fn(async () => authorized({
+      listChannelPosts: vi.fn(async () => ({ posts: committedPosts(), reachedEnd: true })),
+    }));
+    const prepared = await createMattermostControlChat({ authorize }).prepare({
+      type: "req", id: "member-history", method: "chat.startup", params: { sessionKey, agentId, limit: 800 },
+    }, { ...session(), uid: "uid-member", brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    expect(prepared?.kind).toBe("response");
+    if (prepared?.kind !== "response") throw new Error("expected canonical response");
+    expect(prepared.frame).toMatchObject({ ok: true, payload: { sessionKey, messages: expect.any(Array) } });
+    expect(prepared.watch?.sessionKey).toBe(sessionKey);
+    expect(authorize).toHaveBeenCalledWith("uid-member", channelId, "alice", { requireActiveLedger: true });
+  });
+
   it("continues paging for every post referenced by a delivered answer commit", async () => {
     const [commit, commentary, answer, root] = committedPosts();
     const listChannelPosts = vi.fn()
@@ -1126,6 +1140,17 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
       },
     });
     expect(listWorkspaceChannels).not.toHaveBeenCalled();
+  });
+  it("removes formerly owned private-project sessions before paginating Team discovery", async () => {
+    const adapter = createMattermostControlChat({ authorize: vi.fn(), listWorkspaceChannels: async () => [] });
+    const prepared = await adapter.prepare({ type: "req", id: "list-member", method: "sessions.list", params: {} },
+      { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    if (prepared?.kind !== "upstream") throw new Error("expected native session projection");
+    const own = { key: "agent:octogee-alice-coach:personal", updatedAt: 1 };
+    expect(prepared.project({ type: "res", ok: true, payload: {
+      sessions: [own, { key: "agent:octogee-alice-proj-private:formerly-owned", updatedAt: 2 }],
+      count: 2, totalCount: 2, hasMore: false, nextOffset: null,
+    } })).toMatchObject({ payload: { count: 1, totalCount: 1, sessions: [own] } });
   });
 
   it("preserves valid native direct and threaded Mattermost sessions in the roster", async () => {

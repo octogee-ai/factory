@@ -253,6 +253,8 @@ function invariantContext(env: NodeJS.ProcessEnv, gatewayId: string): SystemConf
       gatewayId,
       apiOrigin: apiOrigin(env),
       controlIdentity: resolveControlIdentityFromEnv(env),
+      ownerUid: env.GATEWAY_OWNER_UID,
+      workspaceSlug: env.GATEWAY_BUILDER_SLUG,
     };
 }
 
@@ -675,6 +677,12 @@ function defaultProxyIdentity(env: NodeJS.ProcessEnv): OpenClawControlProxyIdent
   });
 }
 
+function controlLandingPage(profile: OpenClawControlSession["brokerProfile"]): string {
+  if (profile === "delegated-config" || profile === "delegated-read") return "settings/agents";
+  if (profile === "native-member" || profile === "native-member-helper") return "new";
+  return "";
+}
+
 // eslint-disable-next-line max-lines-per-function -- launch and asset proxy routes share one session, policy, and metrics closure.
 export function createOpenClawControlHttpRouter(
   options: CreateOpenClawControlHttpRouterOptions,
@@ -739,7 +747,8 @@ export function createOpenClawControlHttpRouter(
       });
       securityHeaders(res, frameAncestor);
       res.setHeader("set-cookie", issued.cookie);
-      res.setHeader("location", `/g/${gatewayId}/openclaw/`);
+      const page = controlLandingPage(redeemed.brokerProfile);
+      res.setHeader("location", `/g/${gatewayId}/openclaw/${page}`);
       outcome = "ok";
       res.status(303).end();
     } catch (error) {
@@ -1369,6 +1378,7 @@ class OpenClawControlSocketBridge {
       frame,
       request?.method,
       this.activeSession.brokerProfile,
+      this.activeSession.workspaceSlug,
     );
     if (projected) {
       this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));
@@ -1642,6 +1652,7 @@ class OpenClawControlSocketBridge {
       expireBeforeForward();
       return;
     }
+    if (mattermost?.watch) this.watchMattermost(mattermost.watch);
     if (mattermost?.kind === "response") {
       releaseRequest();
       this.args.browser.send(sanitizeOpenClawControlServerFrame(
@@ -1651,7 +1662,6 @@ class OpenClawControlSocketBridge {
       this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
       return;
     }
-    if (mattermost?.kind === "upstream" && mattermost.watch) this.watchMattermost(mattermost.watch);
     const mutationLease = await this.acquireMutationLease(frame, decision, lease);
     if (mutationLease === null) return;
     const remainingMs = deadlineAt - Date.now();

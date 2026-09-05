@@ -4,6 +4,7 @@ import {
 } from "@octogee/core/system-config-invariants";
 import JSON5 from "json5";
 import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
+import { parseChannelScopedMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
 import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
 
 export type OpenClawControlRpcCategory =
@@ -83,6 +84,44 @@ export const OPENCLAW_CONTROL_ALLOWED_METHODS = Object.freeze([
   "tools.invoke",
 ]);
 const DELEGATED_READ_METHODS = new Set(delegatedInventory.delegatedReadMethods);
+const TEAM_MEMBER_METHODS = new Set([
+  "health", "status", "gateway.identity.get", "models.list", "agents.list", "agent.identity.get",
+  "users.self", "users.prefs.get", "users.prefs.set", "users.setDisplayName", "users.setAvatar",
+  "chat.metadata", "chat.startup", "chat.history", "chat.send", "chat.abort",
+  "sessions.list", "sessions.subscribe", "sessions.unsubscribe", "sessions.create", "sessions.patch",
+  "sessions.delete", "sessions.reset", "sessions.resolve", "sessions.compact", "sessions.preview",
+  "sessions.messages.subscribe", "sessions.messages.unsubscribe",
+]);
+const TEAM_MEMBER_EVENTS = new Set(["connect.challenge", "chat", "sessions.changed", "tick", "shutdown"]);
+const TEAM_SESSION_METHODS = new Set([
+  "agent.identity.get", "chat.metadata", "chat.startup", "chat.history", "chat.send", "chat.abort",
+  "sessions.create", "sessions.patch", "sessions.delete", "sessions.reset", "sessions.resolve",
+  "sessions.compact", "sessions.preview",
+  "sessions.messages.subscribe", "sessions.messages.unsubscribe",
+]);
+
+function memberTargetAllowed(request: Record<string, unknown>, workspaceSlug: string | undefined): boolean {
+  const method = String(request.method);
+  if (!TEAM_SESSION_METHODS.has(method)) return true;
+  if (!workspaceSlug) return false;
+  const params = record(request.params)!;
+  if (["chat.startup", "chat.history", "chat.send"].includes(method) &&
+    parseChannelScopedMattermostSessionRoute(params.sessionKey)) return true;
+  const agentId = `octogee-${workspaceSlug}-coach`;
+  if (params.agentId !== undefined && params.agentId !== agentId) return false;
+  const key = params.sessionKey ?? params.key;
+  if (key !== undefined) return typeof key === "string" && key.startsWith(`agent:${agentId}:`);
+  return params.agentId === agentId && ["sessions.create", "agent.identity.get", "chat.metadata"].includes(method);
+}
+
+function memberSessionsPayload(value: unknown, workspaceSlug: string | undefined): Record<string, unknown> {
+  const payload = record(value) ?? {};
+  const prefix = workspaceSlug ? `agent:octogee-${workspaceSlug}-coach:` : null;
+  const sessions = Array.isArray(payload.sessions)
+    ? payload.sessions.filter((row) => prefix && typeof record(row)?.key === "string" &&
+      String(record(row)!.key).startsWith(prefix) && !parseChannelScopedMattermostSessionRoute(record(row)!.key)) : [];
+  return { ...payload, sessions, count: sessions.length, totalCount: sessions.length };
+}
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 const ARRAY_IDENTITY_KEYS = ["id", "agentId", "accountId", "key"] as const;
@@ -655,10 +694,30 @@ export function evaluateOpenClawControlRpc(
   return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
 }
 
+const MEMBER_HELPER_PROFILE = "native-member-helper";
+const DELEGATED_CONFIG_PROFILE = "delegated-config";
+
+function isMemberProfile(profile: OpenClawBrokerProfile): boolean {
+  return profile === "native-member" || profile === MEMBER_HELPER_PROFILE;
+}
+
+function profileCanConfigure(profile: OpenClawBrokerProfile): boolean {
+  return profile === DELEGATED_CONFIG_PROFILE || profile === MEMBER_HELPER_PROFILE;
+}
+
+function profileMethods(profile: OpenClawBrokerProfile): ReadonlySet<string> {
+  if (profile === "native-member") return TEAM_MEMBER_METHODS;
+  const delegated = profileCanConfigure(profile)
+    ? new Set([...DELEGATED_READ_METHODS, ...CONFIG_MUTATION_METHODS])
+    : DELEGATED_READ_METHODS;
+  if (profile === MEMBER_HELPER_PROFILE) return new Set([...TEAM_MEMBER_METHODS, ...delegated]);
+  return delegated;
+}
+
 export function evaluateDelegatedOpenClawControlRpc(
   frame: unknown,
   context: OpenClawControlRpcPolicyContext,
-  profile: "delegated-read" | "delegated-config",
+  profile: "delegated-read" | typeof DELEGATED_CONFIG_PROFILE,
 ): OpenClawControlRpcDecision {
   const decision = evaluateOpenClawControlRpc(frame, context);
   if (!decision.allowed) return decision;
@@ -668,7 +727,7 @@ export function evaluateDelegatedOpenClawControlRpc(
     return { allowed: false, category: "read", reason: METHOD_UNAVAILABLE };
   }
   if (decision.category === "read" && DELEGATED_READ_METHODS.has(method)) return decision;
-  if (profile === "delegated-config" && decision.category === "config_mutation") {
+  if (profile === DELEGATED_CONFIG_PROFILE && decision.category === "config_mutation") {
     const proposed = decision.proposedConfig;
     const current = context.currentConfig?.raw;
     return proposed && current && delegatedMutationIsSafe(current, proposed)
@@ -686,7 +745,18 @@ export function evaluateOpenClawControlRpcForProfile(
   if (profile === "native-owner") {
     return evaluateNativeOwnerOpenClawControlRpc(frame, context);
   }
-  return profile === "delegated-read" || profile === "delegated-config"
+  if (isMemberProfile(profile)) {
+    const parsed = parsedOpenClawControlRequest(frame);
+    if ("allowed" in parsed) return parsed;
+    if (context.installedMethods.has(parsed.method) && TEAM_MEMBER_METHODS.has(parsed.method)) {
+      if (!memberTargetAllowed(parsed.request, context.invariantContext.workspaceSlug)) return unavailableMethodDecision();
+      return { allowed: true, category: "unknown", outbound: structuredClone(parsed.request) };
+    }
+    return profile === MEMBER_HELPER_PROFILE
+      ? evaluateDelegatedOpenClawControlRpc(frame, context, DELEGATED_CONFIG_PROFILE)
+      : unavailableMethodDecision();
+  }
+  return profile === "delegated-read" || profile === DELEGATED_CONFIG_PROFILE
     ? evaluateDelegatedOpenClawControlRpc(frame, context, profile)
     : evaluateOpenClawControlRpc(frame, context);
 }
@@ -709,6 +779,10 @@ export function projectOpenClawHelloForProfile(
     return projected;
   }
   const auth = record(payload.auth);
+  if (isMemberProfile(profile)) {
+    payload.snapshot = {};
+    if (Array.isArray(features?.events)) features.events = features.events.filter((event) => TEAM_MEMBER_EVENTS.has(String(event)));
+  }
   if (auth) {
     auth.scopes = Array.isArray(auth.scopes)
       ? auth.scopes.filter((scope): scope is string =>
@@ -716,15 +790,13 @@ export function projectOpenClawHelloForProfile(
       : [];
   }
   if (!Array.isArray(features?.methods)) return projected;
-  const allowed = profile === "delegated-config"
-    ? new Set([...DELEGATED_READ_METHODS, ...CONFIG_MUTATION_METHODS])
-    : DELEGATED_READ_METHODS;
+  const allowed = profileMethods(profile);
   features.methods = features.methods.filter(
     (method): method is string => typeof method === "string" && allowed.has(method),
   );
   features.octogeeAccess = {
     profile,
-    canConfigure: profile === "delegated-config",
+    canConfigure: profileCanConfigure(profile),
     canUseShell: false,
   };
   return projected;
@@ -1022,18 +1094,60 @@ function projectDelegatedConnectChallenge(
     : null;
 }
 
+function projectMemberEvent(frame: Record<string, unknown>, workspaceSlug?: string): Record<string, unknown> | null {
+  if (frame.type !== "event" || typeof frame.event !== "string" || !TEAM_MEMBER_EVENTS.has(frame.event)) return null;
+  if (frame.event === "chat" || frame.event === "sessions.changed") {
+    const sessionKey = record(frame.payload)?.sessionKey;
+    if (!workspaceSlug || typeof sessionKey !== "string" ||
+      !sessionKey.startsWith(`agent:octogee-${workspaceSlug}-coach:`) || parseChannelScopedMattermostSessionRoute(sessionKey)) return null;
+  }
+  return structuredClone(frame);
+}
+
+function projectMemberSubscription(payload: Record<string, unknown> | null, workspaceSlug?: string): unknown {
+  if (!payload?.list) return payload;
+  return { ...payload, list: memberSessionsPayload(payload.list, workspaceSlug) };
+}
+
+function projectMemberFrame(
+  frame: Record<string, unknown>,
+  requestedMethod: string | undefined,
+  profile: OpenClawBrokerProfile,
+  workspaceSlug?: string,
+): Record<string, unknown> | null | undefined {
+  if (record(frame.payload)?.type === "hello-ok") return projectOpenClawHelloForProfile(frame, profile);
+  if (!requestedMethod) {
+    return projectMemberEvent(frame, workspaceSlug);
+  }
+  if (requestedMethod === "agents.list" && frame.ok === true) {
+    const coach = workspaceSlug ? `octogee-${workspaceSlug}-coach` : null;
+    const payload = record(frame.payload);
+    const agents = Array.isArray(payload?.agents) ? payload.agents.filter((agent) => record(agent)?.id === coach) : [];
+    return { ...frame, payload: { defaultId: coach, selectionRequired: false, mainKey: "main", scope: "per-sender", agents } };
+  }
+  if (requestedMethod === "health" || requestedMethod === "status") return projectDelegatedReadResponse(frame, requestedMethod);
+  if (requestedMethod === "sessions.subscribe" && frame.ok === true) {
+    const payload = record(frame.payload);
+    return { ...frame, payload: projectMemberSubscription(payload, workspaceSlug) };
+  }
+  if (TEAM_MEMBER_METHODS.has(requestedMethod)) return structuredClone(frame);
+  return undefined;
+}
+
 export function projectOpenClawServerFrameForProfile(
   frame: Record<string, unknown>,
   requestedMethod: string | undefined,
   profile: OpenClawBrokerProfile,
+  workspaceSlug?: string,
 ): Record<string, unknown> | null {
-  if (profile === "native-owner") {
-    return structuredClone(frame);
-  }
-  if (profile === "native-co-owner") {
+  if (["native-owner", "native-co-owner"].includes(profile)) {
     return record(frame.payload)?.type === "hello-ok"
       ? projectOpenClawHelloForProfile(frame, profile)
       : structuredClone(frame);
+  }
+  if (isMemberProfile(profile)) {
+    const memberFrame = projectMemberFrame(frame, requestedMethod, profile, workspaceSlug);
+    if (memberFrame !== undefined) return memberFrame;
   }
   if (requestedMethod === "config.get" && frame.type === "res") {
     return projectDelegatedConfigGet(frame);

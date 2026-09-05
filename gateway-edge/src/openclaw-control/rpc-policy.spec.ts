@@ -39,6 +39,61 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
+  it("admits team chat and personal session methods without support or administrative authority", () => {
+    const methods = ["chat.metadata", "chat.send", "chat.history", "chat.startup", "sessions.list", "sessions.create", "users.self"];
+    const forbidden = ["config.patch", "users.setRole", "browser.request", "tools.invoke", "exec.approval.resolve", "device.pair.approve"];
+    const context = policyContext({ installedMethods: new Set([...methods, ...forbidden]), invariantContext: { ...invariantContext, workspaceSlug: "alice" } });
+    for (const profile of ["native-member", "native-member-helper"] as const) {
+      for (const method of methods) {
+        expect(evaluateOpenClawControlRpcForProfile(request(method, { agentId: "octogee-alice-coach", sessionKey: "agent:octogee-alice-coach:personal" }), context, profile)).toMatchObject({ allowed: true });
+      }
+      for (const method of forbidden.filter((method) => method !== "config.patch")) {
+        expect(evaluateOpenClawControlRpcForProfile(request(method), context, profile)).toMatchObject({ allowed: false });
+      }
+      const message = { type: "event", event: "chat", payload: { sessionKey: "agent:octogee-alice-coach:personal", state: "final", message: "own session" } };
+      expect(projectOpenClawServerFrameForProfile(message, undefined, profile, "alice")).toEqual(message);
+    }
+    expect(evaluateOpenClawControlRpcForProfile(request("config.patch"), context, "native-member")).toMatchObject({ allowed: false });
+  });
+  it("suppresses global owner heartbeat previews and cron payloads for Team members", () => {
+    for (const profile of ["native-member", "native-member-helper"] as const) {
+      for (const event of ["heartbeat", "cron", "presence", "health"]) {
+        expect(projectOpenClawServerFrameForProfile({ type: "event", event,
+          payload: { preview: "owner secret", to: "private destination" },
+        }, undefined, profile)).toBeNull();
+      }
+    }
+  });
+  it("keeps private-project agents out of Team personal chat and discovery", () => {
+    const context = policyContext({ installedMethods: new Set(["chat.send", "sessions.create", "agent.identity.get"]),
+      invariantContext: { ...invariantContext, workspaceSlug: "alice" } });
+    for (const method of ["chat.send", "sessions.create", "agent.identity.get"]) {
+      expect(evaluateOpenClawControlRpcForProfile(request(method, {
+        agentId: "octogee-alice-proj-private", sessionKey: "agent:octogee-alice-proj-private:personal",
+      }), context, "native-member")).toMatchObject({ allowed: false });
+    }
+    const response = projectOpenClawServerFrameForProfile({ type: "res", ok: true, payload: {
+      agents: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-private", name: "Secret" }],
+    } }, "agents.list", "native-member", "alice");
+    expect(response).toMatchObject({ payload: { defaultId: "octogee-alice-coach", agents: [{ id: "octogee-alice-coach" }] } });
+    const hello = projectOpenClawHelloForProfile({ type: "res", payload: { type: "hello-ok",
+      features: { methods: [], events: ["chat", "heartbeat"] }, snapshot: { health: { preview: "secret" }, presence: ["owner"] },
+    } }, "native-member");
+    expect(hello).toMatchObject({ payload: { snapshot: {}, features: { events: ["chat"] } } });
+    expect(projectOpenClawServerFrameForProfile({ type: "event", event: "chat", payload: { message: "unscoped" } }, undefined, "native-member")).toBeNull();
+    expect(projectOpenClawServerFrameForProfile({ type: "event", event: "chat", payload: {
+      sessionKey: "agent:octogee-alice-proj-private:formerly-owned", message: "private project",
+    } }, undefined, "native-member", "alice")).toBeNull();
+    expect(projectOpenClawServerFrameForProfile({ type: "event", event: "sessions.changed", payload: {
+      sessionKey: "agent:octogee-alice-coach:mattermost:group:aaaaaaaaaaaaaaaaaaaaaaaaaa", message: "unbrokered channel",
+    } }, undefined, "native-member", "alice")).toBeNull();
+    const own = { key: "agent:octogee-alice-coach:personal" };
+    expect(projectOpenClawServerFrameForProfile({ type: "res", ok: true, payload: { subscribed: true, list: { sessions: [own,
+      { key: "agent:octogee-alice-coach:mattermost:group:aaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      { key: "agent:octogee-alice-proj-private:formerly-owned" },
+    ] } } }, "sessions.subscribe", "native-member", "alice")).toMatchObject({ payload: { list: { sessions: [own] } } });
+  });
+
   it("retains delegated restrictions while OpenClaw owns the native owner's method contract", () => {
     const unsafeDelegatedRead = request("config.patch", {
       raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 30 } } }),
