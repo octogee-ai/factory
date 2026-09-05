@@ -3,15 +3,6 @@ import {
   type ReleaseDoc,
 } from "@octogee/shared/types/gateway-releases";
 
-// Admin Fleet "Releases" section projection. Releases are the DESIRED history
-// (append-only intent); revisions are the OBSERVED realizations — the Fleet card
-// keeps that distinction visible by rendering them as separate sections. This
-// module is deliberately cycle-free (imports only shared types) so the admin
-// router can consume it without the projectGatewaySummary import cycle that
-// gateway-release-projection.ts carries.
-
-// One release row: `live`/`desired` mark the gateway's current pointers;
-// `rolledBackFrom` names the release this entry restored when it is a rollback.
 export interface ReleaseHistoryEntry {
   release: number;
   imageRepository: string;
