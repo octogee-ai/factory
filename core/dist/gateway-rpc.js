@@ -569,6 +569,14 @@ export function createGatewayRpc(opts = {}) {
     };
 }
 const IN_POD_SERVICE_IDENTITY = OPENCLAW_PROVISIONER_SERVICE_IDENTITY;
+function inPodProxyClientAddress() {
+    const address = Object.values(os.networkInterfaces())
+        .flatMap((entries) => entries ?? [])
+        .find((entry) => !entry.internal && entry.family === "IPv4")?.address;
+    if (!address)
+        throw new Error("per-user service RPC requires a non-loopback IPv4 address");
+    return address;
+}
 function resolveGatewayAuth(opts) {
     if (typeof opts.deviceToken === "string" && opts.deviceToken.length > 0) {
         return { deviceToken: opts.deviceToken };
@@ -578,7 +586,10 @@ function resolveGatewayAuth(opts) {
     if (!opts.allowLegacyGatewayTokenFallback)
         return {};
     if (isPerUserControlIdentity()) {
-        return { proxyIdentity: openClawProxyIdentityHeaders({ user: IN_POD_SERVICE_IDENTITY }) };
+        return { proxyIdentity: openClawProxyIdentityHeaders({
+                user: IN_POD_SERVICE_IDENTITY,
+                clientAddress: inPodProxyClientAddress(),
+            }) };
     }
     const fromEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
     if (typeof fromEnv === "string" && fromEnv.length > 0)

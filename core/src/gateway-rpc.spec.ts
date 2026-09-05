@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import * as crypto from "node:crypto";
+import * as os from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   OpenclawWireError,
@@ -11,6 +12,11 @@ import {
   type GatewayRpcClient,
 } from "./gateway-rpc.js";
 import type { DeviceIdentity } from "./gateway-device-identity.js";
+
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return { ...original, networkInterfaces: vi.fn(original.networkInterfaces) };
+});
 
 function makeTestIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
@@ -1552,7 +1558,11 @@ describe("token resolution", () => {
 expect(captured?.auth).toBeUndefined();
   });
 
-  it("connects with the in-pod service identity and no token when the gateway trusts the proxy", async () => {
+  it("connects with an attributable in-pod service identity and no token when the gateway trusts the proxy", async () => {
+    const network = vi.mocked(os.networkInterfaces).mockReturnValue({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
+      eth0: [{ address: "10.8.0.4", family: "IPv4", internal: false, netmask: "255.255.255.0", mac: "00:00:00:00:00:01", cidr: "10.8.0.4/24" }],
+    });
     const fs = require("node:fs") as typeof import("node:fs");
     fs.writeFileSync(
       configPath,
@@ -1591,6 +1601,7 @@ expect(captured?.auth).toBeUndefined();
       await rpc.isGatewayUp(500);
     } finally {
       delete process.env.OPENCLAW_CONTROL_IDENTITY;
+      network.mockRestore();
       await rpc.close();
       await srv.close();
     }
@@ -1598,11 +1609,26 @@ expect(captured?.auth).toBeUndefined();
     expect(srv.lastUpgradeHeaders()).toMatchObject({
       "x-octogee-user": "svc:octogee-provisioner",
       "x-octogee-proxy": "1",
+      "x-forwarded-for": "10.8.0.4",
     });
     expect(captured?.client).toMatchObject({ id: "openclaw-control-ui", mode: "ui" });
     expect(captured?.auth).toBeUndefined();
     expect(captured?.device).toBeUndefined();
     expect(captured?.scopes).toBeUndefined();
+  });
+
+  it("refuses per-user service RPC when no non-loopback client address is available", () => {
+    const network = vi.mocked(os.networkInterfaces).mockReturnValue({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
+    });
+    process.env.OPENCLAW_CONTROL_IDENTITY = "per-user";
+    try {
+      expect(() => createGatewayRpc({ allowLegacyGatewayTokenFallback: true }))
+        .toThrow("per-user service RPC requires a non-loopback IPv4 address");
+    } finally {
+      delete process.env.OPENCLAW_CONTROL_IDENTITY;
+      network.mockRestore();
+    }
   });
 
   it("silently tolerates a missing/malformed openclaw.json when legacy fallback is enabled", async () => {
