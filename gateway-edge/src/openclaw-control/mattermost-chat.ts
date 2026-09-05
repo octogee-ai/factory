@@ -77,7 +77,6 @@ const SESSION_LIST_SYNTHESIS_FILTERS = new Set([
   "involvingMe",
   "involvingProfileId",
   "label",
-  "ownerFirst",
   "ownerId",
   "spawnedBy",
 ]);

@@ -1141,6 +1141,25 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     });
     expect(listWorkspaceChannels).not.toHaveBeenCalled();
   });
+  it("includes authorized channels absent from a Team member's private store with owner-first ordering", async () => {
+    const adapter = createMattermostControlChat({
+      authorize: vi.fn(async (_uid: string, id: string) => id === deniedChannelId
+        ? { forbidden: true as const }
+        : authorized({ getJson: vi.fn(async () => ({
+          id: channelId, team_id: "t".repeat(26), type: "P", name: "alice-general",
+          display_name: "General", create_at: 10, update_at: 20, delete_at: 0, last_post_at: 40,
+        })) })),
+      listWorkspaceChannels: async () => [{ channelId }, { channelId: deniedChannelId }],
+    });
+    const prepared = await adapter.prepare({ type: "req", id: "member-owner-first", method: "sessions.list",
+      params: { ownerFirst: true, limit: 60 } },
+    { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    if (prepared?.kind !== "upstream") throw new Error("expected native session projection");
+    expect(prepared.project({ type: "res", ok: true, payload: {
+      sessions: [], count: 0, totalCount: 0, hasMore: false, nextOffset: null,
+    } })).toMatchObject({ payload: { count: 1, sessions: [{ key: sessionKey, displayName: "General" }] } });
+  });
+
   it("removes formerly owned private-project sessions before paginating Team discovery", async () => {
     const adapter = createMattermostControlChat({ authorize: vi.fn(), listWorkspaceChannels: async () => [] });
     const prepared = await adapter.prepare({ type: "req", id: "list-member", method: "sessions.list", params: {} },
