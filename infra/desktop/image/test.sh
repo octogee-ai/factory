@@ -83,12 +83,13 @@ t_ssh=$(date +%s)
 log "ssh up after $((t_ssh - t_create)) s at $IP"
 
 image_id="$(vssh 'cat /etc/octogee-computer-image 2>/dev/null || echo unknown')"
+vssh 'sudo systemd-analyze verify /etc/systemd/system/octo-*.service'
 boot="$(vssh 'systemd-analyze 2>/dev/null | head -1')"
 modules="$(vssh 'lsmod | grep -c -E "^vkms|^vgem"')"
-units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docker.service octo-desktop-lifecycle.service | tr "\n" " "')"
+units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docker.service octo-desktop-lifecycle.service octo-gateway-agent.service | tr "\n" " "')"
 [[ "$modules" == 2 ]] || { echo "required DRM modules missing: ${modules}/2 loaded" >&2; exit 1; }
 read -r -a unit_states <<< "$units"
-[[ "${unit_states[*]}" == 'active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
+[[ "${unit_states[*]}" == 'active active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
 wait_desktop
 t_desktop=$(date +%s)
 
@@ -127,7 +128,7 @@ cat <<RESULT
 | Create to desktop healthy (Chromium mapped) | $((t_desktop - t_create)) s |
 | Guest boot (systemd-analyze) | ${boot} |
 | vkms + vgem loaded | ${modules}/2 |
-| Units (seatd, desktop, docker, lifecycle) | ${units} |
+| Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
 | Desktop service restarts needed | 0 |
 | Input verified (typed URL changed window title) | ${input_verified} ("${title_before}" → "${title_after:-}") |
 | Home survives stop/start | ${persist} |

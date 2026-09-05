@@ -50,11 +50,13 @@ python3 -m unittest infra/desktop/image/test_acceptance.py
 ```
 
 Boots the newest image in the family (or `--image <name>`), waits for SSH,
-checks the modules and units, waits for the desktop to report a Chromium
+verifies every installed Octogee service executable with `systemd-analyze`,
+checks the modules and all five services (including the registration agent),
+waits for the desktop to report a Chromium
 client on the loopback control API, takes a screenshot, drives a navigation
 and verifies it through the window title, optionally stops and starts the VM
 to prove the home persists, prints a results block, and deletes the VM.
-Missing modules, inactive services, a compositor that needed a service restart,
+Missing modules, non-executable service commands, inactive services, a compositor that needed a service restart,
 and missing browser-profile persistence all fail acceptance.
 With `--keep` the VM stays, the key lands next to the screenshot, and the
 script prints the SSH tunnel to open noVNC at `http://localhost:6080/vnc.html`

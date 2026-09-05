@@ -40,7 +40,7 @@ log "desktop session files"
 cp -R --no-preserve=all "$HERE/desktop-rootfs/." /
 cp -R --no-preserve=all "$HERE/rootfs/." /
 chown -R root:root /usr/local/bin/octo-shims /usr/share/omarchy/octo-desktop /etc/systemd/system/octo-*.service /etc/systemd/system/octo-*.timer /etc/systemd/logind.conf.d/octo-desktop.conf /etc/modules-load.d/octo-desktop.conf /etc/sudoers.d/octo-desktop /usr/local/bin/octo-desktop-* /usr/local/bin/octo-metadata-ssh-keys
-chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys
+chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys /usr/local/bin/octo-gateway-agent
 chmod 0440 /etc/sudoers.d/octo-desktop
 rm -f /etc/sudoers.d/zz-octo-nopasswd
 visudo -cf /etc/sudoers.d/octo-desktop >/dev/null
