@@ -95,5 +95,5 @@ backendConfig:
     port: 8080
 
 disposableGateway:
-  idleMs: "1800000"
+  idleMs: "5400000"
   idleWarningMs: "300000"

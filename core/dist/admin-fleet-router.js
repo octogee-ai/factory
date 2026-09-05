@@ -1,6 +1,7 @@
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, isOperatorManaged, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
+import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
@@ -2975,6 +2976,17 @@ async function retryActivationLeaseReturn(db, transaction, input) {
     rearmBuilderReturnOperation(db, transaction, retryLease.returnOperationId);
     return { kind: "retried" };
 }
+async function readPlatformRuntimeConfig(db) {
+    const snapshot = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
+    const stored = snapshot.data()?.disposableGatewayIdleMs;
+    if (stored === undefined) {
+        return { disposableGatewayIdleMs: DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS };
+    }
+    if (typeof stored !== "number" || !Number.isSafeInteger(stored) || stored < 0) {
+        throw new Error("config/orchestrator.disposableGatewayIdleMs must be a nonnegative safe integer");
+    }
+    return { disposableGatewayIdleMs: stored };
+}
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(router, deps) {
     const { db, logger } = deps;
@@ -2997,6 +3009,42 @@ export function addAdminFleetRoutes(router, deps) {
                 : {}),
         });
     }
+    router.get("/platform-runtime-config", async (_req, res, next) => {
+        try {
+            res.json(await readPlatformRuntimeConfig(db));
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.patch("/platform-runtime-config", async (req, res, next) => {
+        try {
+            const body = req.body;
+            if (!isPlainRecord(body) || Object.keys(body).length !== 1 ||
+                typeof body.disposableGatewayIdleMs !== "number" ||
+                !Number.isSafeInteger(body.disposableGatewayIdleMs) || body.disposableGatewayIdleMs < 0) {
+                res.status(400).json({ error: "disposableGatewayIdleMs must be the only field and a nonnegative safe integer" });
+                return;
+            }
+            const config = { disposableGatewayIdleMs: body.disposableGatewayIdleMs };
+            const previous = await readPlatformRuntimeConfig(db);
+            await runAdminFleetMutation({
+                req,
+                what: "set platform gateway idle return duration",
+                why: ADMIN_FLEET_REQUEST_REASON,
+                target: { configPath: FLEET_RUNTIME_CONFIG_DOC_PATH },
+                preActionStatus: { ...previous },
+                mutation: { ...config },
+                action: async () => {
+                    await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(config, { merge: true });
+                },
+            });
+            res.json(config);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
     async function handleActiveCustomerDeletion(input) {
         const lifecycle = input.lifecycle;
         if (!customerDeletionIsActive(lifecycle))

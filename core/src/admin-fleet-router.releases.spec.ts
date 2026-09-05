@@ -1257,3 +1257,75 @@ describe("P1-5 endpoint gaps", () => {
   });
 
 });
+
+
+describe("platform runtime configuration", () => {
+  it.each([{}, { "config/orchestrator": { sharedGatewayIds: ["shared-a"] } }])(
+    "defaults an absent idle override to 90 minutes",
+    async (seed) => {
+      const { app } = mkApp(seed);
+      const response = await request(app).get("/platform-runtime-config");
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ disposableGatewayIdleMs: 5_400_000 });
+    },
+  );
+
+  it.each([0, 1_800_000, 5_400_000])("reads persisted idle duration %s", async (idleMs) => {
+    const { app } = mkApp({ "config/orchestrator": { disposableGatewayIdleMs: idleMs } });
+    const response = await request(app).get("/platform-runtime-config");
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ disposableGatewayIdleMs: idleMs });
+  });
+
+  it.each([null, -1, 0.5, "5400000", Number.MAX_SAFE_INTEGER + 1])(
+    "fails loudly for malformed persisted idle duration %s", async (idleMs) => {
+      const { app } = mkApp({ "config/orchestrator": { disposableGatewayIdleMs: idleMs } });
+      expect((await request(app).get("/platform-runtime-config")).status).toBe(500);
+    },
+  );
+
+  it.each([0, 5_400_000])("journals and saves idle duration %s without replacing other settings", async (idleMs) => {
+    const { app, store } = mkApp({
+      "config/orchestrator": { disposableGatewayIdleMs: 1_800_000, sharedGatewayIds: ["shared-a"] },
+    });
+    const response = await request(app).patch("/platform-runtime-config")
+      .send({ disposableGatewayIdleMs: idleMs });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ disposableGatewayIdleMs: idleMs });
+    expect(store.get("config/orchestrator")).toEqual({
+      disposableGatewayIdleMs: idleMs, sharedGatewayIds: ["shared-a"],
+    });
+    expect(auditsIn(store)).toEqual([expect.objectContaining({
+      outcome: "completed",
+      preActionStatus: { disposableGatewayIdleMs: 1_800_000 },
+      target: { configPath: "config/orchestrator" },
+      mutation: { disposableGatewayIdleMs: idleMs },
+    })]);
+  });
+
+  it("does not save a setting when journaling fails", async () => {
+    const { app, store } = mkApp({
+      "config/orchestrator": { disposableGatewayIdleMs: 1_800_000 },
+    }, { failTransactions: true });
+    expect((await request(app).patch("/platform-runtime-config")
+      .send({ disposableGatewayIdleMs: 5_400_000 })).status).toBe(500);
+    expect(store.get("config/orchestrator")).toEqual({ disposableGatewayIdleMs: 1_800_000 });
+  });
+
+  it("creates a missing override document", async () => {
+    const { app, store } = mkApp();
+    expect((await request(app).patch("/platform-runtime-config")
+      .send({ disposableGatewayIdleMs: 5_400_000 })).status).toBe(200);
+    expect(store.get("config/orchestrator")).toEqual({ disposableGatewayIdleMs: 5_400_000 });
+  });
+
+  it.each([{}, [], { other: 1 }, { disposableGatewayIdleMs: 1, other: 1 },
+    ...[null, -1, 0.5, "5400000", Number.MAX_SAFE_INTEGER + 1]
+      .map((disposableGatewayIdleMs) => ({ disposableGatewayIdleMs }))])(
+    "rejects invalid patches %j without a write", async (body) => {
+      const { app, store } = mkApp();
+      expect((await request(app).patch("/platform-runtime-config").send(body)).status).toBe(400);
+      expect(store.size).toBe(0);
+    },
+  );
+});

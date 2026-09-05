@@ -3,6 +3,10 @@ import type { ModelCatalogProvider } from "./model-catalog.js";
 import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, type SignupOfferBudgetPolicy } from "./signup-offer.js";
 export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
 export type { SignupOfferBudgetPolicy };
+export declare const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS: number;
+export interface PlatformRuntimeConfig {
+    disposableGatewayIdleMs: number;
+}
 export declare const PLATFORM_CONFIG_COLLECTION = "platformConfig";
 export declare const PLATFORM_MODEL_CONFIG_DOC = "models";
 export declare const PLATFORM_CONNECT_CONFIG_DOC = "connect";

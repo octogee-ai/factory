@@ -18,6 +18,12 @@ export {
 };
 export type { SignupOfferBudgetPolicy };
 
+export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 90 * 60_000;
+
+export interface PlatformRuntimeConfig {
+  disposableGatewayIdleMs: number;
+}
+
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
 // invalid doc → the compiled default below, so the free tier always has a
