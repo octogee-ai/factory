@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+for port in 3001 3003 30873; do
+  ufw allow proto tcp from 10.117.0.0/17 to any port "$port"
+done

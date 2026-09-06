@@ -769,6 +769,9 @@ function seedSystemConfigIfMissing(
 ): boolean {
   const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
   if (fs.existsSync(configPath)) return false;
+  if (gitExec(repoDir, ["symbolic-ref", "HEAD", MAIN_REF]) === null) {
+    throw new Error(`[system_config] initial branch selection failed for ${slug}`);
+  }
   fs.writeFileSync(configPath, seedConfigContents(templatePath, env), "utf-8");
   atomicWrite(path.join(repoDir, SYSTEM_CONFIG_METADATA_FILENAME), `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,

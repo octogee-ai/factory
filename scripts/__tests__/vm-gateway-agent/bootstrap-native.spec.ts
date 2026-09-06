@@ -15,6 +15,8 @@ args=sys.argv[1:]
 if command == 'curl':
     key=args[-1].split('/')[-1]
     print({'id':'4242','token':'{"access_token":"fixture-token"}'}.get(key, (root/key).read_text() if (root/key).exists() else ''))
+elif command == 'ufw':
+    with (root/'events').open('a') as out: out.write(json.dumps(['ufw', *args])+'\\n')
 elif command == 'docker':
     with (root/'events').open('a') as out: out.write(json.dumps(args)+'\\n')
     if args[0] == 'login': sys.stdin.read()
@@ -28,10 +30,13 @@ describe("native VM bootstrap supervision", () => {
     const root = await mkdtemp(`${tmpdir()}/octogee-bootstrap-`);
     roots.push(root);
     await mkdir(`${root}/bin`);
-    for (const name of ["curl", "docker", "iptables"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+    for (const name of ["curl", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
     const assignment = { "gateway-id": "b-fixture", "gateway-image": "registry.invalid/gateway@sha256:old", "octogee-api-url": "https://api.invalid" };
     for (const [key, value] of Object.entries(assignment)) await writeFile(`${root}/${key}`, value);
-    const script = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin/octo-gateway-agent");
+    const binaries = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin");
+    const script = `${root}/bootstrap`;
+    await writeFile(`${root}/bin/octo-gateway-firewall`, await readFile(`${binaries}/octo-gateway-firewall`), { mode: 0o755 });
+    await writeFile(script, (await readFile(`${binaries}/octo-gateway-agent`, "utf8")).replace("/usr/local/bin/octo-gateway-firewall", `${root}/bin/octo-gateway-firewall`));
     const child = spawn("bash", [script], {
       env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, BOOTSTRAP_FIXTURE: root, OCTO_VM_STATE_ROOT: `${root}/state`, OCTO_ASSIGNMENT_POLL_SECONDS: "0.05" },
       stdio: ["ignore", "pipe", "pipe"],
@@ -47,6 +52,7 @@ describe("native VM bootstrap supervision", () => {
       expect(await done, output).toBe(0);
       expect(output).toContain("bootstrap metadata changed; restarting the agent");
       const events = (await readFile(`${root}/events`, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+      expect(events.slice(0, 3)).toEqual([3001, 3003, 30873].map((port) => ["ufw", "allow", "proto", "tcp", "from", "10.117.0.0/17", "to", "any", "port", String(port)]));
       expect(events.filter((args) => args[0] === "stop")).toEqual([["stop", "--time", "20", "octo-gateway-agent"]]);
       expect(events.find((args) => args[0] === "run")).toContain(`/home/octo:${root}/state/desktop-home`);
       expect(events.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "octo-gateway-agent"]]);

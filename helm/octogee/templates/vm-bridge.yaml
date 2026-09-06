@@ -22,7 +22,7 @@ data:
       server { listen 3001; set $api octogee-api.{{ $ns }}.svc.cluster.local; proxy_pass $api:3001; }
       server { listen 8065; set $mm mattermost.{{ $ns }}.svc.cluster.local; proxy_pass $mm:8065; }
       server { listen 3000; set $git octogee-gitea-http.{{ $ns }}.svc.cluster.local; proxy_pass $git:3000; }
-      server { listen 22; set $ssh octogee-gitea-ssh.{{ $ns }}.svc.cluster.local; proxy_pass $ssh:22; }
+      server { listen 2222; set $ssh octogee-gitea-ssh.{{ $ns }}.svc.cluster.local; proxy_pass $ssh:2222; }
       server { listen {{ $llmPort }}; set $llm llm-broker.{{ $ns }}.svc.cluster.local; proxy_pass $llm:{{ $llmPort }}; }
     }
 ---
@@ -43,7 +43,7 @@ spec:
       labels:
         app: octogee-vm-bridge
       annotations:
-        checksum/nginx: {{ list $ns $llmPort .Values.networkPolicy.nodeLocalDnsCidr | toJson | sha256sum | trunc 16 }}
+        checksum/nginx: {{ list $ns $llmPort .Values.networkPolicy.nodeLocalDnsCidr 2222 2222 | toJson | sha256sum | trunc 16 }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -67,7 +67,7 @@ spec:
             - { name: api, containerPort: 3001 }
             - { name: mattermost, containerPort: 8065 }
             - { name: gitea-http, containerPort: 3000 }
-            - { name: gitea-ssh, containerPort: 22 }
+            - { name: gitea-ssh, containerPort: 2222 }
             - { name: llm-broker, containerPort: {{ $llmPort }} }
           readinessProbe:
             tcpSocket:
@@ -109,7 +109,7 @@ spec:
     - { name: api, port: 3001, targetPort: 3001 }
     - { name: mattermost, port: 8065, targetPort: 8065 }
     - { name: gitea-http, port: 3000, targetPort: 3000 }
-    - { name: gitea-ssh, port: 22, targetPort: 22 }
+    - { name: gitea-ssh, port: 2222, targetPort: 2222 }
     - { name: llm-broker, port: {{ $llmPort }}, targetPort: {{ $llmPort }} }
 ---
 apiVersion: networking.k8s.io/v1
@@ -131,7 +131,7 @@ spec:
         - { protocol: TCP, port: 3001 }
         - { protocol: TCP, port: 8065 }
         - { protocol: TCP, port: 3000 }
-        - { protocol: TCP, port: 22 }
+        - { protocol: TCP, port: 2222 }
         - { protocol: TCP, port: {{ $llmPort }} }
   egress:
     - to:

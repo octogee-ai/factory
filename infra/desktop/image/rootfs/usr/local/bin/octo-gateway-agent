@@ -22,6 +22,8 @@ for _ in $(seq 1 60); do meta instance/id >/dev/null 2>&1 && break; sleep 2; don
 iptables -C OUTPUT -d 169.254.169.254 -m owner --uid-owner 1000 -j REJECT 2>/dev/null \
   || iptables -I OUTPUT -d 169.254.169.254 -m owner --uid-owner 1000 -j REJECT
 
+/usr/local/bin/octo-gateway-firewall
+
 install -d -m 0755 "$STATE_ROOT" "$STATE_ROOT/volumes" "$STATE_ROOT/tokens"
 
 # Metadata is re-read on every poll: the assignment arrives through

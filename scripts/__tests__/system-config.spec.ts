@@ -359,6 +359,26 @@ describe("system_config restore", () => {
     })).rejects.toThrow(/initial push failed/);
   });
 
+  it("seeds main when an empty remote clones with a different default branch", async () => {
+    const remote = path.join(dir, "remote.git");
+    execFileSync("git", ["init", "--bare", "--initial-branch=master", remote], { stdio: "pipe" });
+    fs.rmSync(repoDir, { recursive: true });
+    execFileSync("git", ["clone", remote, repoDir], { stdio: "pipe" });
+    execFileSync("git", ["-C", repoDir, "config", "user.name", "Test"]);
+    execFileSync("git", ["-C", repoDir, "config", "user.email", "test@example.test"]);
+    fs.writeFileSync(templatePath, '{"agents":{"list":[]}}\n');
+    vi.mocked(gitExec).mockImplementation((cwd, args) => {
+      try { return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
+      catch { return null; }
+    });
+
+    await expect(restoreSystemConfigForSlug("acme", {
+      openclawDir, templatePath, env: {}, log: () => {},
+    })).resolves.toMatchObject({ seeded: true, restored: true });
+    expect(execFileSync("git", ["-C", repoDir, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" }).trim()).toBe("main");
+    expect(execFileSync("git", ["--git-dir", remote, "show", "refs/heads/main:openclaw.json"], { encoding: "utf8" })).toContain('"agents"');
+  });
+
   it("seeds a reused checkout only when both local and remote history are empty", async () => {
     fs.writeFileSync(templatePath, '{"agents":{"list":[]}}\n');
     vi.mocked(gitExec).mockImplementation((_cwd: string, argsArgv: string[]) => {

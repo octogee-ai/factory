@@ -23,6 +23,7 @@ import {
   resolveGatewayRuntime,
   resolveUserGatewayControlState,
   type OperationAttemptRecord,
+  type GatewayRuntime,
 } from "@octogee/shared/types/glm";
 import {
   commitPlacementAtomic,
@@ -167,6 +168,7 @@ export function placementKubernetesStatus(
 }
 
 export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway {
+  runtime?: GatewayRuntime;
   kubernetesStatus?: PlacementPolicyKubernetesStatus;
   serving?: boolean;
   runtimeStatus?: string;
@@ -856,7 +858,7 @@ function disposableTargetActivationReady(gateway: PlacementPolicyGateway): boole
     return false;
   }
   if (gateway.ready) return true;
-  return gateway.kubernetesStatus === "not-ready" &&
+  return (gateway.runtime === "gce-vm" || gateway.kubernetesStatus === "not-ready") &&
     gateway.serving === true &&
     gateway.runtimeStatus === "booting" &&
     gateway.heartbeatFresh === true &&
@@ -2778,8 +2780,11 @@ function gatewayRuntimeStartedAt(value: unknown): number | null {
   return isGatewayRuntimeDoc(value) ? millis(value.heartbeat.startedAt) : null;
 }
 
-function gatewayRuntimeStatus(value: unknown): string | undefined {
-  return isGatewayRuntimeDoc(value) ? value.heartbeat.status : undefined;
+function gatewayRuntimeObservation(value: Record<string, unknown> | undefined) {
+  return {
+    runtime: resolveGatewayRuntime(value?.runtime),
+    runtimeStatus: isGatewayRuntimeDoc(value) ? value.heartbeat.status : undefined,
+  };
 }
 
 function placementGatewayFromDocument(input: {
@@ -2819,9 +2824,9 @@ function placementGatewayFromDocument(input: {
     disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
     allocation: root.allocation ?? null,
     ready: runtimeReady,
+    ...gatewayRuntimeObservation(runtimeData),
     kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
     serving: runtime?.lifecycle === "serving",
-    runtimeStatus: gatewayRuntimeStatus(runtimeData),
     heartbeatFresh,
     runtimeStartedAt: gatewayRuntimeStartedAt(runtime),
     liveReleaseReady: [
