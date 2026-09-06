@@ -1176,6 +1176,23 @@ describe("fleet CLI args", () => {
       path: "/api/admin/gateways/canary",
     });
     expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "replace-computer", "canary", "--idempotency-key=k1", "--apply",
+    ]))).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways/canary/computer/replace",
+      body: {},
+      idempotencyKey: "k1",
+    });
+    for (const argv of [
+      ["--env=test", "gw", "replace-computer", "canary", "false"],
+      ["--env=test", "gw", "replace-computer", "canary", "--apply=true"],
+      ["--env=test", "gw", "replace-computer", "canary", "--idempotency-key"],
+      ["--env=test", "gw", "replace-computer", "canary", "--force"],
+      ["--env=test", "gw", "replace-computer"],
+    ]) {
+      expect(() => resolveFleetGatewayMutation(parseFleetArgs(argv))).toThrow();
+    }
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "override", "canary",
     ]))).toEqual({
       method: "PATCH",

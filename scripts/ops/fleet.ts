@@ -213,6 +213,18 @@ const VERBS: readonly VerbHelp[] = [
     writes: true,
   },
   {
+    verb: "gw replace-computer",
+    summary: "Replace a VM gateway's computer with a fresh one from the current image family.",
+    args: "<gw-id> [--idempotency-key=<key>] [--apply]",
+    description:
+      "Uses POST /api/admin/gateways/:id/computer/replace. Cowboy takes a final desktop-home checkpoint, deletes the VM, and the next convergence creates one from the current octogee-computer image and restores the checkpoint. Dry-run by default; pass --apply to send the request.",
+    examples: [
+      "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e",
+      "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e --apply",
+    ],
+    writes: true,
+  },
+  {
     verb: "gw restart",
     summary: "Restart a gateway through the Admin API, or force-delete its exact pod.",
     args: "<gw-id> [--force] [--idempotency-key=<key>] [--apply]",
@@ -497,6 +509,27 @@ function requiredGatewayId(args: ParsedFleetArgs, command: string): string {
   return gatewayId;
 }
 
+export function resolveFleetGatewayTarget(args: ParsedFleetArgs, command: string): { gatewayId: string; idempotencyKey?: string } {
+  if (args.positional.length !== 3 || args.positional[0] !== "gw" || args.positional[1] !== command.slice(3)) {
+    throw new Error(`${command} requires exactly <gw-id> and no extra positional arguments`);
+  }
+  const allowedFlags = new Set(["apply", "idempotency-key"]);
+  for (const name of Object.keys(args.flags)) {
+    if (!allowedFlags.has(name)) throw new Error(`${command} does not accept --${name}`);
+  }
+  if (args.flags.apply !== undefined && args.flags.apply !== true) {
+    throw new Error(`${command} --apply must be a bare flag`);
+  }
+  const idempotency = args.flags["idempotency-key"];
+  if (idempotency !== undefined && (typeof idempotency !== "string" || idempotency.length === 0)) {
+    throw new Error(`${command} --idempotency-key requires a non-empty value`);
+  }
+  return {
+    gatewayId: requiredGatewayId(args, command),
+    ...(typeof idempotency === "string" ? { idempotencyKey: idempotency } : {}),
+  };
+}
+
 export interface FleetGatewayRestart {
   gatewayId: string;
   force: boolean;
@@ -602,6 +635,15 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
     case "retire": {
       const gatewayId = requiredGatewayId(args, "gw retire");
       return withIdempotency({ method: "DELETE", path: `/api/admin/gateways/${gatewayId}` });
+    }
+    case "replace-computer": {
+      const target = resolveFleetGatewayTarget(args, "gw replace-computer");
+      return {
+        method: "POST",
+        path: `/api/admin/gateways/${target.gatewayId}/computer/replace`,
+        body: {},
+        ...(target.idempotencyKey ? { idempotencyKey: target.idempotencyKey } : {}),
+      };
     }
     case "restart": {
       const restart = resolveFleetGatewayRestart(args);
