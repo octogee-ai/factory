@@ -47,7 +47,19 @@ export function applyComputerBrowserAgentPolicy(
   if (!builderComputer(env)) return;
   const ownerSlug = env.GATEWAY_BUILDER_SLUG?.trim();
   const ownerCoach = ownerSlug && agent.id === `octogee-${ownerSlug}-coach`;
-  if (ownerCoach) return;
+  if (ownerCoach) {
+    const tools = agent.tools;
+    if (!tools || typeof tools !== "object" || Array.isArray(tools)) return;
+    const policy = tools as JsonObject;
+    for (const key of ["allow", "alsoAllow"] as const) {
+      if (policy[key] === undefined) continue;
+      policy[key] = [...new Set([...stringList(policy, key), ...DESKTOP_TOOLS])];
+    }
+    const deny = stringList(policy, "deny").filter((tool) => !DESKTOP_TOOLS.includes(tool as typeof DESKTOP_TOOLS[number]));
+    if (deny.length > 0) policy.deny = deny;
+    else Reflect.deleteProperty(policy, "deny");
+    return;
+  }
   const tools = objectAt(agent, "tools");
   tools.deny = [...new Set([...stringList(tools, "deny"), ...DESKTOP_TOOLS])];
 }

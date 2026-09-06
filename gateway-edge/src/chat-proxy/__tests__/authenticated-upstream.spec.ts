@@ -425,6 +425,7 @@ describe("openAuthenticatedUpstream", () => {
     const deps = depsForTest();
     vi.mocked(deps.fetchGatewayAuth).mockResolvedValue({ source: "trusted-proxy" });
     vi.mocked(deps.openUpstream).mockResolvedValue(fakeSocket("proxy"));
+    vi.stubEnv("API_PUBLIC_URL", "https://api-test.octogee.com");
 
     const ws = await openAuthenticatedUpstream({
       gatewayId: "default",
@@ -440,6 +441,7 @@ describe("openAuthenticatedUpstream", () => {
       "x-octogee-user": "svc:gateway-edge",
       "x-octogee-proxy": "1",
       "x-forwarded-for": "10.128.0.75",
+      origin: "https://api-test.octogee.com",
     });
     expect(params.token).toBeUndefined();
     expect(params.deviceToken).toBeUndefined();

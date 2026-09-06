@@ -5,6 +5,7 @@ import type { DeviceIdentity } from "@octogee/shared/types/device-identity";
 import {
   OPENCLAW_EDGE_SERVICE_IDENTITY,
   openClawProxyIdentityHeaders,
+  openClawProxyOrigin,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 
 import { getOpenClawDeviceIdentity } from "./device-identity.js";
@@ -99,7 +100,10 @@ function connectWithProxyIdentity(
     identity: deps.getIdentity(),
     timeoutMs: opts.timeoutMs,
     proxyIdentity: {
-      headers: openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY, clientAddress }),
+      headers: {
+        ...openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY, clientAddress }),
+        origin: openClawProxyOrigin(),
+      },
     },
   });
 }

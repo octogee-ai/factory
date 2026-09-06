@@ -31,6 +31,30 @@ describe("computer browser runtime", () => {
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
+  it("extends the owner coach's own tool policy so the agent step keeps the desktop tools", () => {
+    const config = {
+      tools: { profile: "coding", alsoAllow: ["workspace_commit"] },
+      agents: {
+        entries: {
+          "octogee-owner-coach": { tools: { profile: "coding", alsoAllow: ["workspace_commit"], deny: ["exec", "browser"] } },
+          "octogee-owner-proj-site-coach": { tools: { profile: "minimal", alsoAllow: ["read"] } },
+        },
+      },
+    };
+    applyOpenClawComputerBrowserConfig(config, vmEnv);
+    expect(config.agents.entries["octogee-owner-coach"].tools).toEqual({
+      profile: "coding",
+      alsoAllow: ["workspace_commit", "browser", "computer"],
+      deny: ["exec"],
+    });
+    expect(config.agents.entries["octogee-owner-proj-site-coach"].tools).toEqual({
+      profile: "minimal",
+      alsoAllow: ["read"],
+      deny: ["browser", "computer"],
+    });
+    expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
+  });
+
   it("keeps the restored tool list and adds the desktop tools once", () => {
     const config = {
       tools: { profile: "coding", alsoAllow: ["workspace_commit", "computer"] },
