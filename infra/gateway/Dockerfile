@@ -157,9 +157,10 @@ COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
 COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
+COPY infra/gateway/verify-runtime-image.sh /usr/local/bin/verify-runtime-image
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
 ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/libexec/octogee-builder-toolchain \
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
       false) \
@@ -178,6 +179,10 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /
         && exit 2 \
         ;; \
     esac
+
+# ── Runtime image gate ──────────────────────────────────────────────────────
+ARG IMAGE_PROFILE=gateway
+RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE"
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc

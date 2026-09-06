@@ -389,27 +389,39 @@ describe("gateway base image", () => {
   });
 
   it("proves the final Builder image retains its boot-critical payloads", () => {
-    for (const filePath of [
-      "cloudbuild-operator-final.yaml",
-      "cloudbuild-operator-final-extra.yaml",
-    ]) {
-      const cloudbuild = readRepoFile(filePath);
+    const cloudbuild = readRepoFile("cloudbuild-operator-final.yaml");
+    const dockerfile = readRepoFile("infra/gateway/Dockerfile");
+    const gate = readRepoFile("infra/gateway/verify-runtime-image.sh");
 
-      expect(cloudbuild).toContain(
-        'find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
-      );
-      expect(cloudbuild).not.toContain(
-        '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
-      );
-      expect(cloudbuild).toContain('test -e "$$(npm root -g)/@anthropic-ai/claude-code"');
-      expect(cloudbuild).toContain('test -e "$$(npm root -g)/@openai/codex"');
-      expect(cloudbuild).toContain("test -x /usr/local/bin/claude");
-      expect(cloudbuild).toContain("test -x /usr/local/bin/codex");
-      expect(cloudbuild).toContain("test -x /usr/bin/chromium");
-      expect(cloudbuild).toContain('test ! -e "$$(npm root -g)/@sparticuz/chromium"');
-      expect(cloudbuild).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
-      expect(cloudbuild).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
-    }
+    expect(cloudbuild).toContain("--build-arg=IMAGE_PROFILE=builder");
+    expect(dockerfile).toContain('RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE"');
+    expect(gate).toContain("staged_plugin \"$plugin\" || fail \"@openclaw/$plugin is absent");
+    expect(gate).toContain("for plugin in parallel-plugin codex; do");
+    expect(gate).toContain("! staged_plugin mattermost");
+    expect(gate).toContain('"$global_root/@anthropic-ai/claude-code"');
+    expect(gate).toContain('"$global_root/@openai/codex"');
+    expect(gate).toContain('test -x "$tool_bin/claude"');
+    expect(gate).toContain('test -x "$tool_bin/codex"');
+    expect(gate).toContain('test -x "$chromium_bin"');
+    expect(gate).toContain('test ! -e "$global_root/@sparticuz/chromium"');
+    expect(gate).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
+    expect(gate).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
+
+    const extraCloudbuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
+    expect(extraCloudbuild).toContain(
+      'find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
+    );
+    expect(extraCloudbuild).not.toContain(
+      '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
+    );
+    expect(extraCloudbuild).toContain('test -e "$$(npm root -g)/@anthropic-ai/claude-code"');
+    expect(extraCloudbuild).toContain('test -e "$$(npm root -g)/@openai/codex"');
+    expect(extraCloudbuild).toContain("test -x /usr/local/bin/claude");
+    expect(extraCloudbuild).toContain("test -x /usr/local/bin/codex");
+    expect(extraCloudbuild).toContain("test -x /usr/bin/chromium");
+    expect(extraCloudbuild).toContain('test ! -e "$$(npm root -g)/@sparticuz/chromium"');
+    expect(extraCloudbuild).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
+    expect(extraCloudbuild).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
   });
 
   it("validates the extra Builder candidate against the current Mattermost schema", () => {
