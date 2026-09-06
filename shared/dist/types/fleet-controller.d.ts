@@ -251,3 +251,9 @@ export type VerifyMigrationResponse = {
 export declare const MIGRATION_ID_HEADER = "X-Migration-Id";
 export declare const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
 export declare const MIGRATION_MODE_HEADER = "X-Migration-Mode";
+export interface MigrationProgressRequestBody extends MigrationRequestBody {
+    source: string;
+    phase: string;
+    status: "pending" | "running" | "done" | "failed" | "skipped";
+    elapsedMs?: number;
+}

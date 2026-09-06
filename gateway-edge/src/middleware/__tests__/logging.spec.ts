@@ -189,6 +189,64 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     });
   });
 
+  it.each([
+    "/internal/fleet/assignment-roster",
+    "/internal/byok/agent-model-token",
+    "/internal/openclaw/activity/agent-identity",
+  ])("keeps successful internal polling at DEBUG: %s", (path) => {
+    process.env.LOG_LEVEL = "info";
+    const { req, res, fire } = fakeReqRes("POST", path, 200);
+    requestLogger(req, res, vi.fn());
+    Object.defineProperty(req, "path", { value: path.slice(path.lastIndexOf("/")) });
+    fire("finish");
+    expect(logSpy).not.toHaveBeenCalled();
+    process.env.LOG_LEVEL = "debug";
+    fire("finish");
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "DEBUG", path,
+    });
+  });
+
+  it("retains the full mounted route in a failed internal request", () => {
+    const path = "/internal/fleet/assignment-roster";
+    const { req, res, fire } = fakeReqRes("POST", path, 503);
+    requestLogger(req, res, vi.fn());
+    Object.defineProperty(req, "path", { value: "/assignment-roster" });
+    fire("finish");
+    expect(JSON.parse(errSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "ERROR", path, status: 503,
+    });
+  });
+
+  it("successful metrics scrapes are quiet at INFO and available at DEBUG", () => {
+    process.env.LOG_LEVEL = "info";
+    const first = fakeReqRes("GET", "/metrics", 200);
+    requestLogger(first.req, first.res, vi.fn());
+    first.fire("finish");
+    expect(logSpy).not.toHaveBeenCalled();
+
+    process.env.LOG_LEVEL = "debug";
+    const second = fakeReqRes("GET", "/metrics", 200);
+    requestLogger(second.req, second.res, vi.fn());
+    second.fire("finish");
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "DEBUG", path: "/metrics", status: 200,
+    });
+  });
+
+  it.each([401, 404, 500])("failed metrics scrapes remain visible: %s", (status) => {
+    process.env.LOG_LEVEL = "info";
+    const { req, res, fire } = fakeReqRes("GET", "/metrics", status);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    const spy = status >= 500 ? errSpy : warnSpy;
+    expect(spy).toHaveBeenCalledOnce();
+    expect(JSON.parse(spy.mock.calls[0][0] as string)).toMatchObject({
+      severity: status >= 500 ? "ERROR" : "WARNING", path: "/metrics", status,
+    });
+  });
+
   it("non-probe path still logs at INFO regardless of LOG_LEVEL", () => {
     delete process.env.LOG_LEVEL;
     const { req, res, fire } = fakeReqRes("GET", "/api/foo", 200);

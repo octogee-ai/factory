@@ -1,3 +1,5 @@
+import { createMigrationProgress } from "./migration-progress.js";
+import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { OperationStatus } from "@octogee/shared/types/glm";
 import type {
@@ -79,6 +81,7 @@ const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const CONFIGURED_BUILDER_TARGET_RELEASE_RETRY_DELAY_MS = 7_000;
 
 export interface SurgeCustomerHandoffDeps {
+  reportMigrationProgress: (input: { gatewayId: string; targetPod: SurgePod; event: MigrationProgressRequestBody }) => Promise<unknown>;
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
   readPodHealth: (pod: SurgePod, gatewayId: string) => Promise<SurgePodHealth | null>;
   readAssignments: (gatewayId: string) => Promise<SurgeAssignment[]>;
@@ -564,10 +567,19 @@ async function transferAssignments(
   const touchedSlugs: string[] = [];
   try {
     for (const assignment of assignments) {
-      await gateServingAssignments(deps, input.gatewayId, [assignment], ownedBy);
-      const sourceSystemConfigCommit = await finalizeSourceForAssignment(deps, context, assignment);
+      const progress = createMigrationProgress({
+        log: (message) => deps.log(`${message} migrationId=${ownedBy} builder=${assignment.slug}`),
+        send: (event) => deps.reportMigrationProgress({
+          gatewayId: input.gatewayId,
+          targetPod,
+          event: { ...event, migrationId: ownedBy, slug: assignment.slug, source: context.sourcePod.name },
+        }),
+      });
+      await progress.run("gate-source", () => gateServingAssignments(deps, input.gatewayId, [assignment], ownedBy));
+      const sourceSystemConfigCommit = await progress.run("quiesce-and-finalize-source", () => finalizeSourceForAssignment(deps, context, assignment));
       touchedSlugs.push(assignment.slug);
-      await copyAndVerifyAssignment(deps, context, assignment, sourceSystemConfigCommit);
+      await progress.run("transfer-and-verify", () => copyAndVerifyAssignment(deps, context, assignment, sourceSystemConfigCommit));
+      await progress.report("serving-handoff", "pending");
     }
   } catch (error) {
     if (configTransferModeFor(input) === "activation-manifest") {
@@ -1080,6 +1092,7 @@ async function settleReleasedTarget(
   input: ReconcileSurgeCustomerHandoffInput,
   context: {
     source: SurgeSourceSelection;
+    target: SurgePod;
     targetHealth: SurgePodHealth;
     ownedBy: string;
     observedPodUids: readonly string[];
@@ -1106,7 +1119,19 @@ async function settleReleasedTarget(
     ownedBy,
     { observedPodUids },
   );
+  const pending = assignments.filter((assignment) => assignment.state === "quiescing" && assignment.updatedByOperationId === ownedBy);
   await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
+  for (const assignment of pending) {
+    const progress = createMigrationProgress({
+      log: (message) => deps.log(`${message} migrationId=${ownedBy} builder=${assignment.slug}`),
+      send: (event) => deps.reportMigrationProgress({
+        gatewayId: input.gatewayId,
+        targetPod: context.target,
+        event: { ...event, migrationId: ownedBy, slug: assignment.slug, source: input.gatewayId },
+      }),
+    });
+    await progress.report("serving-handoff", "done");
+  }
   return { ready: true };
 }
 
@@ -1167,7 +1192,7 @@ async function settleOrGateTarget(
     prelaunchTransferEligible(targetHealth);
   if (targetHealth.status !== "ready" && !heldPrelaunchTarget) return { ready: false };
   if (target.ready) {
-    return settleReleasedTarget(deps, input, { source, targetHealth, ownedBy, observedPodUids });
+    return settleReleasedTarget(deps, input, { source, target, targetHealth, ownedBy, observedPodUids });
   }
   if (await disposableBuilderPrelaunchReserved(deps, input, source, targetHealth)) {
     return { ready: true };

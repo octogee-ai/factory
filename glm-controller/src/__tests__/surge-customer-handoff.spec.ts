@@ -89,6 +89,7 @@ function harness(input: {
   let targetReleaseCalls = 0;
   const operationId = "surge-default-target-uid";
   const deps: SurgeCustomerHandoffDeps = {
+    reportMigrationProgress: vi.fn(async () => undefined),
     listPods: vi.fn(async () => {
       const pods = input.pods ?? [oldPod, targetPod];
       return {
@@ -612,6 +613,10 @@ describe("surge customer handoff", () => {
       "release:target-uid",
     ]);
     expect(h.assignments().every((item) => item.updatedByOperationId === h.operationId)).toBe(true);
+    const progress = vi.mocked(h.deps.reportMigrationProgress).mock.calls.map(([input]) => input);
+    expect(progress.every((input) => input.targetPod.uid === targetPod.uid)).toBe(true);
+    expect(progress.map((input) => `${input.event.slug}:${input.event.phase}:${input.event.status}`)).toContain("alice:quiesce-and-finalize-source:done");
+    expect(progress.at(-1)?.event).toMatchObject({ slug: "bob", phase: "serving-handoff", status: "pending" });
   });
 
   it("carries no state across an openclaw version change — gates, then releases a blank target", async () => {

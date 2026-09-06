@@ -227,14 +227,18 @@ export interface StartStuckOpReaperDeps extends StuckOpReaperDeps {
 export function startStuckOpReaper(deps: StartStuckOpReaperDeps): () => void {
   const tick = deps.runTick ?? runStuckOpReaperTick;
   let stopped = false;
+  let running = false;
   const timer = setInterval(() => {
-    if (stopped) return;
+    if (stopped || running) return;
+    running = true;
     (async () => {
       try {
         await tick(deps);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         deps.log(`[stuck-op-reaper] ⚠ tick failed — ${message}`);
+      } finally {
+        running = false;
       }
     })();
   }, deps.intervalMs);

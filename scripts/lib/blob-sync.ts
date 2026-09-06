@@ -8,6 +8,7 @@ import {
   type ManifestStore,
 } from "@octogee/core/workspace-manifest";
 import {
+  dlog,
   log,
   CUSTOMERS_DIR,
   BLOB_SYNC_MAX_CONCURRENT,
@@ -397,7 +398,7 @@ function logSummary(
   counts: { downloadCount: number; uploadCount: number; cleanupCount: number },
 ): void {
   if (counts.downloadCount === 0 && counts.uploadCount === 0 && counts.cleanupCount === 0) {
-    log(`[blob-sync] ${slug} up to date`);
+    dlog(`[blob-sync] ${slug} up to date`);
     return;
   }
   const parts: string[] = [];

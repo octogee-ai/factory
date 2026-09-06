@@ -474,7 +474,6 @@ function disableCodex(config) {
   config.plugins.entries ??= {};
   config.plugins.entries.codex = {
     enabled: false,
-    config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
   };
 }
 
@@ -607,7 +606,7 @@ function disableCustomerAutomationsAndSkillWrites(config) {
   config.skills.workshop ??= {};
   config.skills.workshop.autonomous = { mode: "off" };
   config.skills.workshop.approvalPolicy = "pending";
-  config.skills.workshop.allowSymlinkTargetWrites = false;
+  delete config.skills.workshop.allowSymlinkTargetWrites;
 }
 
 function mattermostAccountSecretRef(accountId) {

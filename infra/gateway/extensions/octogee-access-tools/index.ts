@@ -27,7 +27,7 @@ interface ToolContext {
 interface PluginApi {
   pluginConfig?: unknown;
   registerTool: (factory: (context: ToolContext) => unknown, meta: { name: string }) => void;
-  logger?: { info?: (message: string) => void };
+  logger?: { debug?: (message: string) => void };
 }
 
 function preparedOperation(operation: unknown): "grant" | "change" | "revoke" {
@@ -139,6 +139,6 @@ export default definePluginEntry({
         }
       },
     }), { name: "delegated_access" });
-    api.logger?.info?.("[access-tools] delegated_access registered");
+    api.logger?.debug?.("[access-tools] delegated_access registered");
   },
 });

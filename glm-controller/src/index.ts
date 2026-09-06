@@ -1,3 +1,4 @@
+import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
 import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
@@ -2350,6 +2351,7 @@ function startControllerBackgroundTasks({
       idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
       now: () => Date.now(),
       log,
+      debug: (message) => logger.debug(message),
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
@@ -3152,6 +3154,10 @@ async function buildHandlers(
   });
 
   const migrateCustomer = createMigrateCustomerHandler({
+    reportMigrationProgress: async (gatewayId, event) => {
+      const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+      await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);
+    },
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
       db, now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),

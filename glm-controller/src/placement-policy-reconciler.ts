@@ -301,6 +301,7 @@ export interface AssignInitialPlacementInput {
 export interface PlacementPolicyReconcilerDeps {
   now(): number;
   log(message: string): void;
+  debug?(message: string): void;
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
   allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
@@ -2073,7 +2074,7 @@ async function reconcilePlacementUser(
 ): Promise<void> {
   const openclaw = record(record(user.data.provisioning)?.openclaw);
   if (isOperatorManaged(openclaw?.managedBy)) {
-    context.deps.log(`[placement-policy] ${user.uid} is operator-managed — observing only`);
+    context.deps.debug?.(`[placement-policy] ${user.uid} is operator-managed — observing only`);
     return;
   }
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
@@ -2414,6 +2415,7 @@ interface FirestorePlacementPolicyInput {
   idleMs: number;
   now(): number;
   log(message: string): void;
+  debug?(message: string): void;
   ensureAuthSecret(input: { namespace: string; gatewayId: string }): Promise<unknown>;
   readGatewayPodDiagnostics(input: {
     namespace: string;
@@ -3806,6 +3808,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
   return {
     now: input.now,
     log: input.log,
+    debug: input.debug,
     readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),

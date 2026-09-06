@@ -108,7 +108,6 @@ const brokerPluginConfig = {
 };
 const disabledCodexPlugin = {
   enabled: false,
-  config: { appServer: { sandbox: "workspace-write", approvalPolicy: "never" } },
 };
 
 function canonicalAgentAuthProfiles(agentId: string) {
@@ -358,7 +357,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.cron).toEqual({ triggers: { enabled: false }, keep: true });
     expect(out.skills).toEqual({
       load: { watch: true },
-      workshop: { autonomous: { mode: "off" }, approvalPolicy: "pending", allowSymlinkTargetWrites: false, maxPending: 10 },
+      workshop: { autonomous: { mode: "off" }, approvalPolicy: "pending", maxPending: 10 },
     });
     expect(out.channels.mattermost).toMatchObject({
       baseUrl: "${MM_URL}",

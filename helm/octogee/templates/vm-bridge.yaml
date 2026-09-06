@@ -18,7 +18,11 @@ data:
     stream {
       resolver {{ .Values.networkPolicy.nodeLocalDnsCidr | trimSuffix "/32" }} valid=30s;
       log_format bridge '$remote_addr -> $server_port $status $bytes_sent/$bytes_received';
-      access_log /dev/stdout bridge;
+      map "$status:$bytes_sent:$bytes_received" $bridge_loggable {
+        "200:0:0" 0;
+        default 1;
+      }
+      access_log /dev/stdout bridge if=$bridge_loggable;
       server { listen 3001; set $api octogee-api.{{ $ns }}.svc.cluster.local; proxy_pass $api:3001; }
       server { listen 8065; set $mm mattermost.{{ $ns }}.svc.cluster.local; proxy_pass $mm:8065; }
       server { listen 3000; set $git octogee-gitea-http.{{ $ns }}.svc.cluster.local; proxy_pass $git:3000; }
@@ -43,7 +47,7 @@ spec:
       labels:
         app: octogee-vm-bridge
       annotations:
-        checksum/nginx: {{ list $ns $llmPort .Values.networkPolicy.nodeLocalDnsCidr 2222 2222 | toJson | sha256sum | trunc 16 }}
+        checksum/nginx: {{ list $ns $llmPort .Values.networkPolicy.nodeLocalDnsCidr 2222 2222 "quiet-empty-probes" | toJson | sha256sum | trunc 16 }}
     spec:
       automountServiceAccountToken: false
       securityContext:

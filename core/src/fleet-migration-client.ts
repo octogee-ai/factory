@@ -9,6 +9,7 @@ import {
   MIGRATION_VERIFY_TIMEOUT_MS,
   type FlushGatewayResponse,
   type ImportResponse,
+  type MigrationProgressRequestBody,
   type QuiesceResponse,
   type RestoreMigrationResponse,
   type UnmountResponse,
@@ -392,4 +393,24 @@ async function migrationRpcError(path: string, response: Response): Promise<Migr
   const options: MigrationRpcErrorOptions = { status: response.status };
   if (typeof details.code === "string") options.code = details.code;
   return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);
+}
+
+export async function reportMigrationProgress(
+  deps: MigrationClientDeps,
+  gatewayId: string,
+  body: MigrationProgressRequestBody,
+): Promise<void> {
+  const post = createSignedJsonPoster({
+    privateKey: deps.privateKey,
+    resolveGatewayUrl: deps.resolveGatewayUrl,
+    fetchWithTimeout: createFetchWithTimeout(deps.fetch ?? globalThis.fetch),
+  });
+  await post({
+    transportId: gatewayId,
+    path: `/migration-progress/${gatewayId}`,
+    gatewayId,
+    migrationId: body.migrationId,
+    body: { ...body },
+    timeoutMs: 2_000,
+  });
 }

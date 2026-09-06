@@ -1,3 +1,5 @@
+import { createMigrationProgress } from "../migration-progress.js";
+import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput } from "../lib/native-computer-return.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
@@ -58,6 +60,7 @@ type PlacementResolution =
   | { ok: false; reason: string };
 
 export interface MigrateCustomerDeps {
+  reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
@@ -154,6 +157,13 @@ async function runOrdinaryMigrationV2(input: {
     input,
     state: initialized,
     scopeChanged: ordinaryV2ScopeChanged(input, initialized),
+    progress: createMigrationProgress({
+      now: input.deps.now,
+      log: (message) => input.deps.log(`${message} migrationId=${input.migrationId} builder=${input.slug}`),
+      send: (event) => input.deps.reportMigrationProgress(input.targets.toGatewayId, {
+        ...event, migrationId: input.migrationId, slug: input.slug, source: input.targets.fromGatewayId,
+      }),
+    }),
   };
   while (execution.state.phase !== "complete" && execution.state.phase !== "aborted") {
     const outcome = await runOrdinaryV2Iteration(execution);
@@ -182,6 +192,7 @@ interface OrdinaryV2Input {
 }
 
 interface OrdinaryV2Execution {
+  progress: ReturnType<typeof createMigrationProgress>;
   input: OrdinaryV2Input;
   state: CustomerMigrationV2State;
   scopeChanged: boolean;
@@ -326,9 +337,16 @@ function requiresSourceResumeBeforeRetry(
 async function runOrdinaryV2Iteration(
   execution: OrdinaryV2Execution,
 ): Promise<OperationResult | "continue" | "stop"> {
+  let phase = execution.state.phase;
+  await execution.progress.report(phase, "running");
   try {
     const cancelled = await cancellationResult(execution);
-    if (cancelled) return cancelled;
+    if (cancelled || execution.state.phase !== phase) {
+      await execution.progress.report(phase, "skipped");
+      if (cancelled) return cancelled;
+      phase = execution.state.phase;
+      await execution.progress.report(phase, "running");
+    }
     if (execution.scopeChanged && !isAbortPhase(execution.state.phase)) {
       throw new Error("durable customer migration V2 scope changed");
     }
@@ -341,11 +359,16 @@ async function runOrdinaryV2Iteration(
       resolveOperationOrigin(execution.input.op.origin) === "automatic",
     );
     const next = await advanceCustomerMigrationV2(execution.state, driverDeps);
-    if (next === execution.state) return "stop";
+    if (next === execution.state) {
+      await execution.progress.report(phase, "pending");
+      return "stop";
+    }
     execution.state = next;
     await persistV2(execution.input.ctx, execution.state);
+    await execution.progress.report(phase, "done");
     return "continue";
   } catch (error) {
+    await execution.progress.report(phase, "failed");
     return ordinaryV2IterationFailure(execution, error);
   }
 }
@@ -569,7 +592,8 @@ async function provisionCustomerOnTarget(input: {
   automatic: boolean;
   nativeReturn?: NativeComputerReturn | null;
 }): Promise<OperationResult> {
-  const { deps, ctx, targets, uid, slug, migrationId, automatic } = input;
+  const { deps, targets, uid, slug, migrationId, automatic } = input;
+  const ctx = destinationProgressContext(input);
   deps.log(
     `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
     `provision-fresh (${input.stateMigration.reason})`,
@@ -1024,9 +1048,27 @@ async function runProvisionFreshV2(
 async function provisionCustomerOnTargetV2(
   input: ProvisionFreshV2Input,
 ): Promise<OperationResult> {
-  const initialized = await initializeProvisionFreshV2(input);
+  const initialized = await initializeProvisionFreshV2({ ...input, ctx: destinationProgressContext(input) });
   if ("success" in initialized) return initialized;
   return runProvisionFreshV2(initialized);
+}
+
+function destinationProgressContext(input: Pick<ProvisionFreshV2Input, "deps" | "ctx" | "targets" | "slug" | "migrationId">): OperationContext {
+  const { deps, ctx, targets, slug, migrationId } = input;
+  const progress = createMigrationProgress({
+    now: deps.now,
+    log: (message) => deps.log(`${message} migrationId=${migrationId} builder=${slug}`),
+    send: (event) => deps.reportMigrationProgress(targets.toGatewayId, {
+      ...event, migrationId, slug, source: targets.fromGatewayId,
+    }),
+  });
+  return {
+    ...ctx,
+    reportStep: async (step) => {
+      await ctx.reportStep(step);
+      await progress.report(step.name, step.status);
+    },
+  };
 }
 
 async function reportFreshStep(
@@ -1378,6 +1420,23 @@ async function executeMigration(
     }
     return url;
   });
+  const progress = createMigrationProgress({
+    now: deps.now,
+    log: (message) => deps.log(`${message} migrationId=${prepared.migrationId} builder=${prepared.user.slug}`),
+    send: (event) => deps.reportMigrationProgress(prepared.toGatewayId, {
+      ...event,
+      migrationId: prepared.migrationId,
+      slug: prepared.user.slug,
+      source: prepared.user.currentGatewayId,
+    }),
+  });
+  const destinationContext: OperationContext = {
+    ...ctx,
+    reportStep: async (step) => {
+      await ctx.reportStep(step);
+      await progress.report(step.name, step.status);
+    },
+  };
   const result = await runMigration(
     {
       migrationId: prepared.migrationId,
@@ -1390,7 +1449,7 @@ async function executeMigration(
       projectCheckoutScope: prepared.projectCheckoutScope,
       includeActivationManifest: true,
     },
-    buildRunnerDeps({ deps, client, ctx, automatic, operationId }),
+    buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId }),
   );
   return {
     steps: [],

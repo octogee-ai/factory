@@ -180,10 +180,14 @@ spec:
                 command:
                   - sh
                   - -c
-                  - >
-                    timeout {{ .Values.preStopFlush.timeoutSeconds | default 10 }}s
-                    /octogee/scripts/node_modules/.bin/tsx
-                    /octogee/scripts/entrypoints/prestop-flush.ts
+                  - |
+                    exec > /proc/1/fd/1 2> /proc/1/fd/2
+                    timeout {{ .Values.preStopFlush.timeoutSeconds | default 10 }}s /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prestop-flush.ts
+                    status=$?
+                    if [ "$status" -ne 0 ]; then
+                      echo "🔴 [prestop-flush] failed exitCode=$status" >&2
+                    fi
+                    exit "$status"
           {{- end }}
           env:
             - name: HOME

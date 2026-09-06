@@ -297,9 +297,11 @@ function aliceSnapshot(
 
 describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  const originalLogLevel = process.env.LOG_LEVEL;
   let tempStateDir: string | null = null;
 
   beforeEach(() => {
+    process.env.LOG_LEVEL = "info";
     mocks.readActivationManifest.mockReset();
     mocks.applyOpenClawActivationManifest.mockReset();
     mocks.removeActivationManifest.mockReset();
@@ -334,6 +336,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 
   afterEach(async () => {
+    if (originalLogLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = originalLogLevel;
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
@@ -506,7 +510,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
     await adapter.activateImportedCustomer("tester10");
 
-    expect(configGet).toHaveBeenCalledTimes(4);
+    expect(configGet).toHaveBeenCalledTimes(3);
     expect(configGet.mock.invocationCallOrder[2]).toBeLessThan(
       rpc.secretsReload.mock.invocationCallOrder[0]!,
     );
@@ -653,7 +657,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     }
   });
 
-  it("keeps imported-customer activation focused on runtime activation", async () => {
+  it.each([["info", 2], ["debug", 3]] as const)("keeps activation diagnostics at %s with %i config reads", async (level, reads) => {
+    process.env.LOG_LEVEL = level;
     const client = mkClient();
     const log = vi.fn();
     const rpc = {
@@ -662,7 +667,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         },
       })),
-      configGet: vi.fn(async () => configSnapshot({})),
+      configGet: vi.fn(async () => configSnapshot({ agents: { entries: { "octogee-tester10-coach": { model: "test/model" } } } })),
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
@@ -676,6 +681,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       appliedFingerprint: "fp-tester10",
     });
 
+    expect(rpc.configGet).toHaveBeenCalledTimes(reads);
+    if (level === "debug") expect(log).toHaveBeenCalledWith(expect.stringContaining('model="test/model"'));
     expect(client.uidForSlug).not.toHaveBeenCalled();
     expect(client.userSnapshot).not.toHaveBeenCalled();
     expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();

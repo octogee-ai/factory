@@ -159,6 +159,7 @@ function mkDeps(options: HarnessOptions = {}) {
       events.push(`cutover:${commit.fromGatewayId}->${commit.toGatewayId}:mirror=${commit.flipMirror}`);
     }),
     resolveGatewayUrl: vi.fn(async (gatewayId: string) => `http://${gatewayId}.svc:3003`),
+    reportMigrationProgress: vi.fn(async () => undefined),
     buildClient: vi.fn(() => client),
     resolveSourcePlacement: vi.fn(async () => ({
       release: 1,
@@ -472,6 +473,18 @@ describe("migrate-customer — openclaw version gate", () => {
     expect(client.verifyTarget).not.toHaveBeenCalled();
     expect(deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
     expect(deps.readGatewayOpenclawVersion).not.toHaveBeenCalledWith("gw-green");
+  });
+
+  it.each([false, true])("forwards fresh migration success and failure with durable=%s", async (durable) => {
+    const success = mkDeps({ durable, openclawVersions: CROSS_VERSION });
+    await createMigrateCustomerHandler(success.deps)(mkOp({}), success.ctx);
+    expect(success.deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "quiesce-source", status: "running", source: "gw-blue" }));
+    expect(success.deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "quiesce-source", status: "done" }));
+    const client = happyClient();
+    (client.flushGateway as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("flush refused"));
+    const failed = mkDeps({ client, durable, openclawVersions: CROSS_VERSION });
+    await createMigrateCustomerHandler(failed.deps)(mkOp({}), failed.ctx);
+    expect(failed.deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "flush-source", status: "failed" }));
   });
 
   it("skips the state transfer across an openclaw version change and lets the destination re-provision", async () => {
@@ -1110,6 +1123,8 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(result.error).toMatch(/superseded/u);
+    expect(deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "preSynced", status: "skipped" }));
+    expect(deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "abortIntent", status: "running" }));
     expect(persisted.map((state) => state.phase)).toContain("abortIntent");
     expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
     expect(events).toContain("assignment:gw-blue:serving");

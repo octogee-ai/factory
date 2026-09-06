@@ -245,9 +245,13 @@ export function startGatewayHeartbeatPoller(
 ): () => void {
   const streaks: EvictionStreaks = new Map();
   const inFlight: EvictionInFlight = new Set();
-  const timer = setInterval(
-    () => void pollGatewayHeartbeatsOnce(deps, streaks, inFlight),
-    intervalMs,
-  );
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void pollGatewayHeartbeatsOnce(deps, streaks, inFlight)
+      .catch((error) => deps.log(`[gateway-poll] ⚠ tick failed: ${errMsg(error)}`))
+      .finally(() => { running = false; });
+  }, intervalMs);
   return () => clearInterval(timer);
 }

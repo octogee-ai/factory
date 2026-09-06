@@ -210,3 +210,18 @@ async function migrationRpcError(path, response) {
         options.code = details.code;
     return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);
 }
+export async function reportMigrationProgress(deps, gatewayId, body) {
+    const post = createSignedJsonPoster({
+        privateKey: deps.privateKey,
+        resolveGatewayUrl: deps.resolveGatewayUrl,
+        fetchWithTimeout: createFetchWithTimeout(deps.fetch ?? globalThis.fetch),
+    });
+    await post({
+        transportId: gatewayId,
+        path: `/migration-progress/${gatewayId}`,
+        gatewayId,
+        migrationId: body.migrationId,
+        body: { ...body },
+        timeoutMs: 2_000,
+    });
+}

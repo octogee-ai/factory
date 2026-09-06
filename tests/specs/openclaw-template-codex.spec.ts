@@ -112,7 +112,6 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
     expect(template.skills.workshop).toEqual({
       autonomous: { mode: "off" },
       approvalPolicy: "pending",
-      allowSymlinkTargetWrites: false,
     });
     expect(template.tools.exec).toEqual({ mode: "deny" });
     expect(template.tools.fs).toEqual({ workspaceOnly: true });

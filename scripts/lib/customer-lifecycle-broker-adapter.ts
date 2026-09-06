@@ -51,6 +51,8 @@ import {
 } from "./customer-lifecycle.js";
 
 import {
+  dlog,
+  logLevel,
   AGENTS_DIR,
   CUSTOMER_KEYS_DIR,
   CUSTOMERS_DIR,
@@ -924,7 +926,7 @@ async function applyRemoveCustomerConfigPatch(
       currentSlug: remaining[0]!,
       desiredAccountIds: [],
       evictionSlugs: remaining.slice(1),
-    }, ctx.log);
+    }, dlog);
     discardMattermostRoutingActivationForCustomers(OPENCLAW_DIR, remaining);
   }
   await updateMattermostAccountSecrets(OPENCLAW_DIR, {
@@ -965,15 +967,11 @@ async function waitForAccountHealthy(
 }
 
 async function logActivatedCoachModel(ctx: BrokerCtx, slug: string): Promise<void> {
+  if (logLevel() !== "debug") return;
   try {
     const agentId = customerCoachAgentId(slug);
     const { config } = await ctx.rpc.configGet();
-    const list = (config as { agents?: { list?: unknown[] } } | undefined)?.agents?.list;
-    const agent = Array.isArray(list)
-      ? (list.find((e) => !!e && typeof e === "object" && (e as { id?: unknown }).id === agentId) as
-          | { model?: unknown }
-          | undefined)
-      : undefined;
+    const agent = (config as { agents?: { entries?: Record<string, { model?: unknown }> } }).agents?.entries?.[agentId];
     ctx.log(
       `[import:${slug}] post-activation coach model=${JSON.stringify(agent?.model ?? null)} (config-patch hot-reload)`,
     );
@@ -1004,7 +1002,6 @@ async function scheduleBootGreetingCron(
 }
 
 async function quiesceCustomer(
-  log: (msg: string) => void,
   slug: string,
   timeoutMs: number,
 ): Promise<{ drained: boolean; runningCount: number }> {
@@ -1017,7 +1014,7 @@ async function quiesceCustomer(
       runningCount += sessions.filter((s) => s.status === "running").length;
     }
     if (runningCount === 0) return { drained: true, runningCount: 0 };
-    log(`[quiesce:${slug}] ${runningCount} running session(s); waiting`);
+    dlog(`[quiesce:${slug}] ${runningCount} running session(s); waiting`);
     await new Promise<void>((r) => setTimeout(r, 1_000));
   }
   return { drained: false, runningCount };
@@ -1359,7 +1356,7 @@ async function stopRetainedConfiguredBuilderAccounts(ctx: BrokerCtx, slug: strin
       currentSlug: slug,
       desiredAccountIds: [],
       evictionSlugs: [],
-    }, ctx.log);
+    }, dlog);
   } catch (error) {
     ctx.log(
       `[remove:${slug}] configured Builder chat accounts were not stopped ` +
@@ -1383,7 +1380,7 @@ async function removeImportedCustomerBySlug(
     clearMigratingInPin(CUSTOMERS_DIR, slug);
     ctx.configRemovedForEviction.delete(slug);
     await stopRetainedConfiguredBuilderAccounts(ctx, slug);
-    ctx.log(`[remove:${slug}] retained configured Builder overlay during imported cleanup`);
+    dlog(`[remove:${slug}] retained configured Builder overlay during imported cleanup`);
     return { wasMounted: true, steps: [], retained: true };
   }
   const remaining = await applyRemoveCustomerConfigPatch(
@@ -1545,7 +1542,7 @@ export function buildBrokeredLifecycleAdapter(
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
-    quiesceCustomer: (slug, timeoutMs) => quiesceCustomer(opts.log, slug, timeoutMs),
+    quiesceCustomer,
     listExportPaths,
     prepareImportDir,
     prepareKeyImportDir,

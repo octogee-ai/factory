@@ -399,6 +399,7 @@ export interface SurgePodTransportOptions {
 
 export type SurgePodTransport = Pick<
   SurgeCustomerHandoffDeps,
+  | "reportMigrationProgress"
   | "readPodHealth"
   | "quiesce"
   | "stopSourceOpenClaw"
@@ -779,6 +780,11 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
   };
 
   return {
+    reportMigrationProgress: ({ gatewayId, targetPod, event }) => control(targetPod, gatewayId, "migration-progress", {
+      operationId: event.migrationId,
+      body: { ...event },
+      timeoutMs: 2_000,
+    }),
     readPodHealth: (pod, gatewayId) => readSurgePodHealth({
       fetch: fetchImpl,
       privateKey: opts.privateKey,

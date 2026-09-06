@@ -11,11 +11,11 @@ const templateRaw = readFileSync(
 describe("openclaw.template.json agent bootstrap", () => {
   it("starts without a permanent platform persona or operator-id placeholders", () => {
     const template = JSON.parse(templateRaw) as {
-      agents: { list: unknown[] };
+      agents: { entries: Record<string, unknown> };
       channels: { mattermost: { accounts: Record<string, unknown>; defaultAccount?: string } };
     };
 
-    expect(template.agents.list).toEqual([]);
+    expect(template.agents.entries).toEqual({});
     expect(template.channels.mattermost.accounts).toEqual({});
     expect(template.channels.mattermost).not.toHaveProperty("defaultAccount");
     expect(templateRaw).not.toContain("OPERATOR_AGENT_ID");

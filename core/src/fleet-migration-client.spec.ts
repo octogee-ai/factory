@@ -11,6 +11,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import {
   createMigrationClient,
+  reportMigrationProgress,
   isDefinitiveConfigRpcRejection,
   MigrationTransportError,
 } from "./fleet-migration-client";
@@ -792,4 +793,15 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     expect(signals[0]).toBeInstanceOf(AbortSignal);
     expect(MIGRATION_VERIFY_TIMEOUT_MS).toBeGreaterThan(0);
   });
+});
+
+
+it("signs destination progress for its target gateway and preserves HTTP failure", async () => {
+  const event = { migrationId: "m1", slug: "alice", source: "gw-old", phase: "quiesce-source", status: "done" as const, elapsedMs: 12 };
+  const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({ ok: true })));
+  await reportMigrationProgress({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://gw-new", fetch: fakeFetch }, "gw-new", event);
+  expect(calls[0].url).toBe("http://gw-new/migration-progress/gw-new");
+  expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-new"), JSON.stringify(event)));
+  const failed = captureFetch(() => new Response("offline", { status: 503 }));
+  await expect(reportMigrationProgress({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://gw-new", fetch: failed.fakeFetch }, "gw-new", event)).rejects.toThrow();
 });

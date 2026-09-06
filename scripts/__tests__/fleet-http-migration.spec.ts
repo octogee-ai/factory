@@ -10,6 +10,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Readable, Writable } from "node:stream";
 import {
+  createMigrationProgressHandler,
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
@@ -232,7 +233,7 @@ const sink = new Writable({
 }
 
 describe("sendPushStateImportResponse", () => {
-  it("relays successful target import responses and logs the target gateway", async () => {
+  it("relays successful target responses without duplicating destination progress on the source", async () => {
     const { res, getStatus, getBody } = mkResponse();
     const log = vi.fn();
     const importResponse = new Response(
@@ -249,9 +250,7 @@ describe("sendPushStateImportResponse", () => {
 
     expect(getStatus()).toBe(200);
     expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", imported: true });
-    expect(log).toHaveBeenCalledWith(
-      "[migration-http] ✅ push-state migrationId=mig-1 slug=chris target=gw-b done",
-    );
+    expect(log).not.toHaveBeenCalled();
   });
 });
 
@@ -3347,6 +3346,7 @@ describe("createPushStateHandler", () => {
     let signalSeen: AbortSignal | undefined;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       signalSeen = init?.signal ?? undefined;
+      signalSeen?.throwIfAborted();
       return await new Promise<Response>((_resolve, reject) => {
         signalSeen?.addEventListener(
           "abort",
@@ -3813,5 +3813,34 @@ describe("findPathTraversalViolation", () => {
     ], slug);
     expect(v).toContain("absolute path");
     expect(v).toContain("/etc/passwd");
+  });
+});
+
+
+describe("destination migration progress", () => {
+  it("accepts the migration runner's rollback phase names", async () => {
+    const body = { migrationId: "mig-1", slug: "chris", source: "gw-old", phase: "rollback:unmount-target", status: "running" };
+    const { res, getStatus } = mkResponse();
+    await createMigrationProgressHandler(mkDeps())(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), res, vi.fn());
+    expect(getStatus()).toBe(200);
+  });
+  it.each([["running", "🟡"], ["pending", "🟡"], ["done", "🟢"], ["failed", "🔴"]])("logs %s with its outcome color", async (status, icon) => {
+    const body = { migrationId: "mig-1", slug: "chris", source: "gw-old", phase: "quiesce-source", status, elapsedMs: 123 };
+    const deps = mkDeps();
+    const { res, getStatus } = mkResponse();
+    await createMigrationProgressHandler(deps)(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), res, vi.fn());
+    expect(getStatus()).toBe(200);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(`${icon} [migration] migrationId=mig-1 builder=chris source=gw-old target=gw-a phase=quiesce-source status=${status} elapsedMs=123`));
+  });
+  it.each([{ status: "green" }, { phase: "x\ninjected" }, { elapsedMs: -1 }, { source: "x\ninjected" }])("rejects malformed progress %j", async (invalid) => {
+    const body = { migrationId: "mig-1", slug: "chris", source: "gw-old", phase: "copy", status: "done", elapsedMs: 1, ...invalid };
+    const { res, getStatus } = mkResponse();
+    await createMigrationProgressHandler(mkDeps())(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), res, vi.fn());
+    expect(getStatus()).toBe(400);
+  });
+  it("rejects unsigned progress", async () => {
+    const { res, getStatus } = mkResponse();
+    await createMigrationProgressHandler(mkDeps())(mkRequest({ migrationId: "mig-1", slug: "chris" }), res, vi.fn());
+    expect(getStatus()).toBe(401);
   });
 });

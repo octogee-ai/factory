@@ -86,7 +86,7 @@
         "runTimeoutSeconds": 900
       }
     },
-    "list": []
+    "entries": {}
   },
   "tools": {
     "profile": "coding",
@@ -199,8 +199,7 @@
       "autonomous": {
         "mode": "off"
       },
-      "approvalPolicy": "pending",
-      "allowSymlinkTargetWrites": false
+      "approvalPolicy": "pending"
     }
   },
   "bindings": [],

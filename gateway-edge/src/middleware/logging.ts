@@ -9,19 +9,16 @@ function logLevel(): string {
   return (process.env.LOG_LEVEL ?? "info").toLowerCase();
 }
 
-// Kubelet liveness/readiness probes hit these every few seconds —
-// success is pure noise, but a failure still wants to surface.
-// requestLogger routes probe-path 2xx/3xx through `debug` and lets
-// 4xx/5xx fall back to warn/error. Keep in sync with the actual
-// routes registered in src/index.ts (`/health`, `/api/health`) and
-// any future probe paths the chart's livenessProbe / readinessProbe
-// in helm/octogee-gateway/templates/deployment.yaml points at.
-const PROBE_PATHS = new Set([
+const ROUTINE_PATHS = new Set([
   "/health",
   "/healthz",
   "/ready",
   "/readyz",
   "/api/health",
+  "/metrics",
+  "/internal/fleet/assignment-roster",
+  "/internal/byok/agent-model-token",
+  "/internal/openclaw/activity/agent-identity",
 ]);
 
 export function redactRequestPath(path: string): string {
@@ -72,15 +69,16 @@ export const logger = {
 
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
   const start = Date.now();
+  const requestPath = req.path;
+  const path = redactRequestPath(requestPath);
   res.on("finish", () => {
     const duration = Date.now() - start;
-    const path = redactRequestPath(req.path);
     let level: "error" | "warn" | "debug" | "info";
     if (res.statusCode >= 500) level = "error";
-    else if (res.statusCode >= 400 && PROBE_PATHS.has(req.path)) level = "warn";
+    else if (res.statusCode >= 400 && ROUTINE_PATHS.has(requestPath)) level = "warn";
     else if (res.statusCode === 404 && req.route === undefined) level = "debug";
     else if (res.statusCode >= 400) level = "warn";
-    else if (PROBE_PATHS.has(req.path)) level = "debug";
+    else if (ROUTINE_PATHS.has(requestPath)) level = "debug";
     else level = "info";
     logger[level](`${req.method} ${path} ${res.statusCode} ${duration}ms`, {
       method: req.method,

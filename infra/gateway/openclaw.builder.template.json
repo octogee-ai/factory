@@ -86,7 +86,7 @@
         "runTimeoutSeconds": 900
       }
     },
-    "list": []
+    "entries": {}
   },
   "browser": {
     "enabled": false,

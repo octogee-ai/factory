@@ -34,6 +34,7 @@ import {
   createPrepareRsyncImportHandler,
   createPushRsyncStateHandler,
   createPushStateHandler,
+  createMigrationProgressHandler,
   createQuiesceHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -1910,6 +1911,7 @@ function registerMigrationRoutes(
   processControlDeps: SurgeOpenClawProcessHandlerDeps,
 ): void {
   app.post("/restore/:gatewayId", createRestoreHandler(migrationDeps));
+  app.post("/migration-progress/:gatewayId", createMigrationProgressHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));

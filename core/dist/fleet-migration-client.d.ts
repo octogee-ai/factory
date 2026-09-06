@@ -1,4 +1,4 @@
-import { type FlushGatewayResponse, type ImportResponse, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -80,3 +80,4 @@ export declare class MigrationTransportError extends Error {
 }
 export declare function isDefinitiveConfigRpcRejection(error: unknown): boolean;
 export declare function createMigrationClient(deps: MigrationClientDeps): MigrationClient;
+export declare function reportMigrationProgress(deps: MigrationClientDeps, gatewayId: string, body: MigrationProgressRequestBody): Promise<void>;
