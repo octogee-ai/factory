@@ -21,7 +21,7 @@ const workflowTools = [
   "octogee_board_card_move",
   "octogee_board_card_comment",
   "workspace_commit",
-  "computer",
+  "octogee_computer",
   "brave_search",
   "tavily_search",
   "tavily_extract",

@@ -61,7 +61,11 @@ export function applyOpenClawComputerBrowserConfig(
   plugins.allow = [...new Set([...stringList(plugins, "allow"), "browser"])];
   objectAt(objectAt(plugins, "entries"), "browser").enabled = true;
   const tools = objectAt(config, "tools");
-  tools.alsoAllow = [...new Set([...stringList(tools, "alsoAllow"), "browser"])];
+  tools.alsoAllow = [...new Set([
+    ...stringList(tools, "alsoAllow").filter((tool) => tool !== "computer"),
+    "browser",
+    "octogee_computer",
+  ])];
   const agents = objectAt(config, "agents");
   if (agents.list !== undefined) {
     if (!Array.isArray(agents.list)) throw new Error("OpenClaw computer browser requires agents.list array");

@@ -214,7 +214,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_board_card_comment",
   "delegated_access",
   "workspace_commit",
-  "computer",
+  "octogee_computer",
   "brave_search",
   "tavily_search",
   "tavily_extract",

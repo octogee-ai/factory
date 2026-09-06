@@ -29,6 +29,18 @@ describe("computer browser runtime", () => {
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
+  it("enables the desktop tool when restoring a configuration with the reserved computer tool", () => {
+    const config = {
+      tools: { profile: "coding", alsoAllow: ["workspace_commit", "computer"] },
+      agents: { entries: { "octogee-owner-coach": {} } },
+    };
+    applyOpenClawComputerBrowserConfig(config, vmEnv);
+    expect(config.tools.alsoAllow).toContain("octogee_computer");
+    expect(config.tools.alsoAllow).not.toContain("computer");
+    expect(config.tools.alsoAllow).toContain("workspace_commit");
+    expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
+  });
+
   it("restricts later provisioned project agents before they enter the live roster", () => {
     for (const [key, value] of Object.entries(vmEnv)) vi.stubEnv(key, value);
     const agents = [
