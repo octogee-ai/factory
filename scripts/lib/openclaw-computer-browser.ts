@@ -23,6 +23,18 @@ function stringList(parent: JsonObject, key: string): string[] {
 }
 
 export const DESKTOP_TOOLS = ["browser", "computer"] as const;
+export const DESKTOP_NODE_DENIED_COMMANDS = [
+  "system.run",
+  "system.run.prepare",
+  "system.which",
+  "system.execApprovals.get",
+  "system.execApprovals.set",
+  "terminal.upload",
+  "fs.listDir",
+  "browser.proxy",
+  "browser.proxy.upload.v1",
+  "mcp.tools.call.v1",
+] as const;
 
 function builderComputer(env: NodeJS.ProcessEnv): boolean {
   return env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "gce-vm";
@@ -64,6 +76,8 @@ export function applyOpenClawComputerBrowserConfig(
   objectAt(objectAt(plugins, "entries"), "browser").enabled = true;
   const tools = objectAt(config, "tools");
   tools.alsoAllow = [...new Set([...stringList(tools, "alsoAllow"), ...DESKTOP_TOOLS])];
+  const commands = objectAt(objectAt(objectAt(config, "gateway"), "nodes"), "commands");
+  commands.deny = [...new Set([...stringList(commands, "deny"), ...DESKTOP_NODE_DENIED_COMMANDS])];
   const agents = objectAt(config, "agents");
   if (agents.list !== undefined) {
     if (!Array.isArray(agents.list)) throw new Error("OpenClaw computer browser requires agents.list array");

@@ -1,4 +1,5 @@
 import { type ApplyOpenClawSecretsPlanOptions, type AuthProfileApiKeyTarget } from "./openclaw-secrets-apply.js";
+import { type ModelInputModality } from "@octogee/shared/types/model-catalog";
 export { OpenClawSecretsApplyError } from "./openclaw-secrets-apply.js";
 export declare const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 export declare const OPENROUTER_BROKER_PROFILE_ID = "platform-openrouter:default";
@@ -27,6 +28,7 @@ export interface OpenRouterBrokerModelInput {
     baseUrl: string;
     model: string;
     contextTokens?: number;
+    input?: readonly ModelInputModality[];
 }
 export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
     apiKey: string;
@@ -35,28 +37,26 @@ export interface OpenRouterBrokerProviderConfig {
     api: "openai-completions";
     baseUrl: string;
     apiKey: string;
-    models: Array<{
-        id: string;
-        name: string;
-        contextTokens?: number;
-        contextWindow?: number;
-    }>;
+    models: OpenRouterBrokerModelConfig[];
+}
+export interface OpenRouterBrokerModelConfig {
+    id: string;
+    name: string;
+    contextTokens?: number;
+    contextWindow?: number;
+    input?: ModelInputModality[];
 }
 export interface OpenRouterBrokerModelsJson {
     providers: Record<string, {
         api: "openai-completions";
         baseUrl: string;
         apiKey: string;
-        models: Array<{
-            id: string;
-            name: string;
-            contextTokens?: number;
-            contextWindow?: number;
-        }>;
+        models: OpenRouterBrokerModelConfig[];
     }>;
 }
 export declare function agentModelTokenSecretId(agentId: string, provider?: AgentModelBrokerProvider): string;
 export declare function openRouterBrokerProviderConfig(input: OpenRouterBrokerProviderConfigInput): OpenRouterBrokerProviderConfig;
+export declare function openRouterBrokerModelConfig(input: Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">): OpenRouterBrokerModelConfig;
 export declare function agentModelTokenProfileEntry(agentId: string): AnthropicBrokerProfileEntry;
 export declare function openRouterBrokerProfileEntry(agentId: string): OpenRouterBrokerProfileEntry;
 export interface OpenAiBrokerProfileEntry {
@@ -72,7 +72,7 @@ export declare function openAiBrokerProfileEntry(agentId: string): OpenAiBrokerP
 export declare function openRouterBrokerModelsJson(agentId: string, input: OpenRouterBrokerModelInput): OpenRouterBrokerModelsJson;
 export interface OpenRouterBrokerCatalogInput {
     baseUrl: string;
-    models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens">>;
+    models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">>;
 }
 export declare function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;

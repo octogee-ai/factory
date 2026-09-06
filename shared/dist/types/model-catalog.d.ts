@@ -3,6 +3,8 @@ export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
 export declare const MODEL_REASONING_EFFORTS: readonly ["high", "xhigh"];
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
 export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
+export declare const MODEL_INPUT_MODALITIES: readonly ["text", "image"];
+export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 export interface ModelCatalogEntry {
     provider: ModelCatalogProvider;
     id: string;
@@ -10,6 +12,7 @@ export interface ModelCatalogEntry {
     source: ModelCatalogSource;
     aliases?: readonly string[];
     contextTokens?: number;
+    input?: readonly ModelInputModality[];
     reasoningEfforts: readonly ModelReasoningEffort[];
     defaultReasoningEffort?: ModelReasoningEffort;
 }

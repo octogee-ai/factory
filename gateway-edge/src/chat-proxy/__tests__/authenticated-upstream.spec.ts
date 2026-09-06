@@ -21,6 +21,7 @@ function depsForTest(): AuthenticatedUpstreamDeps {
   const identity = generateIdentity();
   return {
     fetchGatewayAuth: vi.fn(),
+    serviceClientAddress: vi.fn(() => "10.128.0.75"),
     openUpstream: vi.fn(),
     requestDevicePairBootstrapToken: vi.fn(async () => "test-bootstrap-token"),
     clearGatewayDeviceToken: vi.fn(async () => undefined),
@@ -438,12 +439,22 @@ describe("openAuthenticatedUpstream", () => {
     expect(params.proxyIdentity?.headers).toMatchObject({
       "x-octogee-user": "svc:gateway-edge",
       "x-octogee-proxy": "1",
+      "x-forwarded-for": "10.128.0.75",
     });
     expect(params.token).toBeUndefined();
     expect(params.deviceToken).toBeUndefined();
     expect(params.bootstrapToken).toBeUndefined();
     expect(deps.requestDevicePairBootstrapToken).not.toHaveBeenCalled();
     expect(deps.persistGatewayDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it("refuses a service identity connect when no attributable client address exists", async () => {
+    const deps = depsForTest();
+    vi.mocked(deps.fetchGatewayAuth).mockResolvedValue({ source: "trusted-proxy" });
+    deps.serviceClientAddress = vi.fn(() => undefined);
+    await expect(openAuthenticatedUpstream({ gatewayId: "default", url: "http://127.0.0.1:18789" }, deps))
+      .rejects.toThrow("non-loopback IPv4 address");
+    expect(deps.openUpstream).not.toHaveBeenCalled();
   });
 
   it("retries a proxy-identity connect without clearing any device or legacy credential", async () => {

@@ -39,6 +39,12 @@ describe("MODEL_CATALOG", () => {
     });
   });
 
+  it("marks the GPT models as image-capable and leaves the others text-only", () => {
+    expect(modelCatalogEntryFor("openrouter", "openai/gpt-5.6-luna")?.input).toEqual(["text", "image"]);
+    expect(modelCatalogEntryFor("openai", "gpt-5.4-mini")?.input).toEqual(["text", "image"]);
+    expect(modelCatalogEntryFor("openrouter", "z-ai/glm-5.2")?.input).toBeUndefined();
+  });
+
   it("carries GPT-5.4 Mini on the OpenAI platform provider", () => {
     expect(modelCatalogForProvider("openai").map((e) => e.id)).toEqual(["gpt-5.4-mini"]);
     const entry = modelCatalogEntryFor("openai", "gpt-5.4-mini");

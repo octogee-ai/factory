@@ -15,9 +15,11 @@ import {
   materializeBrokerProfilesForAgents,
   missingPlatformBrokerProfileTargets,
   openAiCatalogInputForBaseUrl,
+  openRouterCatalogInputForBaseUrl,
   platformBrokerProfileTargets,
   upsertOpenAiBrokerCatalog,
   upsertOpenRouterBrokerCatalog,
+  openRouterBrokerModelConfig,
   openRouterBrokerProviderConfig,
   openRouterBrokerModelsJson,
   upsertOpenRouterBrokerModel,
@@ -262,6 +264,24 @@ describe("agent-model-token catalogs", () => {
   });
 });
 
+describe("model-readiness: image input", () => {
+  it("declares image input for vision models so OpenClaw offers the computer tool", () => {
+    expect(openRouterBrokerModelConfig({ model: "openai/gpt-5.6-luna", contextTokens: 1_050_000, input: ["text", "image"] }))
+      .toEqual({
+        id: "openai/gpt-5.6-luna",
+        name: "openai/gpt-5.6-luna",
+        contextTokens: 1_050_000,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      });
+    expect(openRouterBrokerModelConfig({ model: "z-ai/glm-5.2" })).not.toHaveProperty("input");
+    expect(openRouterCatalogInputForBaseUrl("http://broker/v1").models.find((m) => m.model === "openai/gpt-5.6-luna"))
+      .toMatchObject({ input: ["text", "image"] });
+    expect(openAiCatalogInputForBaseUrl("http://broker/v1").models.find((m) => m.model === "gpt-5.4-mini"))
+      .toMatchObject({ input: ["text", "image"] });
+  });
+});
+
 describe("model-readiness: openrouter catalog upsert", () => {
   let agentDir: string;
   beforeEach(() => {
@@ -361,7 +381,7 @@ describe("openAiCatalogInputForBaseUrl", () => {
     const input = openAiCatalogInputForBaseUrl(
       "http://llm-broker.octogee.svc.cluster.local:3010/v1",
     );
-    expect(input.models).toEqual([{ model: "gpt-5.4-mini", contextTokens: 400_000 }]);
+    expect(input.models).toEqual([{ model: "gpt-5.4-mini", contextTokens: 400_000, input: ["text", "image"] }]);
   });
 });
 
@@ -661,6 +681,7 @@ describe("openRouterCatalogInputForBaseUrl", () => {
     expect(input.models).toContainEqual({
       model: "openai/gpt-5.6-luna",
       contextTokens: 1_050_000,
+      input: ["text", "image"],
     });
   });
 });

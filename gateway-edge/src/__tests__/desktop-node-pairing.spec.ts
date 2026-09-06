@@ -19,12 +19,13 @@ describe("desktop node pairing", () => {
       pending: [
         desktopRequest,
         { ...desktopRequest, requestId: "req-v6", remoteIp: "::ffff:127.0.0.1" },
+        { ...desktopRequest, requestId: "req-unreported", remoteIp: undefined },
         { ...desktopRequest, requestId: "req-remote", remoteIp: "10.0.0.9" },
         { ...desktopRequest, requestId: "req-other-name", displayName: "laptop" },
       ],
       paired: [],
     });
-    expect(requests.map((request) => request.requestId)).toEqual(["req-desktop", "req-v6"]);
+    expect(requests.map((request) => request.requestId)).toEqual(["req-desktop", "req-v6", "req-unreported"]);
     expect(requests[0].commands).toEqual(["computer.act", "screen.snapshot"]);
   });
 

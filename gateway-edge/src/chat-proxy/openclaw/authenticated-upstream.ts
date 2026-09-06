@@ -23,9 +23,11 @@ import {
   type OpenUpstreamParams,
   type RequestDevicePairBootstrapTokenParams,
 } from "./upstream.js";
+import { podClientAddress } from "../../openclaw-control/proxy-identity.js";
 
 export interface AuthenticatedUpstreamDeps {
   fetchGatewayAuth(opts: FetchGatewayAuthOptions): Promise<GatewayOpenClawAuth>;
+  serviceClientAddress(): string | undefined;
   openUpstream(params: OpenUpstreamParams): Promise<WebSocket>;
   requestDevicePairBootstrapToken(params: RequestDevicePairBootstrapTokenParams): Promise<string>;
   clearGatewayDeviceToken(): Promise<void>;
@@ -36,6 +38,7 @@ export interface AuthenticatedUpstreamDeps {
 
 const productionDeps: AuthenticatedUpstreamDeps = {
   fetchGatewayAuth,
+  serviceClientAddress: podClientAddress,
   openUpstream,
   requestDevicePairBootstrapToken,
   clearGatewayDeviceToken,
@@ -87,12 +90,16 @@ function connectWithProxyIdentity(
   opts: AuthenticatedUpstreamOptions,
   deps: AuthenticatedUpstreamDeps,
 ): Promise<WebSocket> {
+  const clientAddress = deps.serviceClientAddress();
+  if (!clientAddress) {
+    throw new OpenclawWireError("auth-failed", "service identity upstream requires a non-loopback IPv4 address");
+  }
   return deps.openUpstream({
     url: opts.url,
     identity: deps.getIdentity(),
     timeoutMs: opts.timeoutMs,
     proxyIdentity: {
-      headers: openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY }),
+      headers: openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY, clientAddress }),
     },
   });
 }

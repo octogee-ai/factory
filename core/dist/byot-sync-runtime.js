@@ -9,7 +9,7 @@ import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvi
 import { codexAuthJsonPath, purgeCustomerOauthRuntimeArtifacts, restoreByosubCredentials, } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
-import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
+import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { DEFAULT_FREE_TIER_MODEL_REF, parseBuilderAgentModelDefault, } from "@octogee/shared/types/platform-config";
@@ -1145,13 +1145,7 @@ function customerBrokerModelProviders() {
             api: "openai-completions",
             baseUrl: input.baseUrl,
             apiKey: OPENAI_BROKER_PROFILE_ID,
-            models: input.models.map((model) => ({
-                id: model.model,
-                name: model.model,
-                ...(typeof model.contextTokens === "number"
-                    ? { contextTokens: model.contextTokens, contextWindow: model.contextTokens }
-                    : {}),
-            })),
+            models: input.models.map(openRouterBrokerModelConfig),
         };
     }
     return providers;

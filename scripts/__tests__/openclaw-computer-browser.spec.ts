@@ -24,6 +24,8 @@ describe("computer browser runtime", () => {
     expect(config.plugins.entries.browser.enabled).toBe(true);
     expect(config.plugins.allow).toContain("browser");
     expect(config.tools.alsoAllow).toEqual(expect.arrayContaining(["browser", "computer"]));
+    expect(config.gateway.nodes.commands.deny).toEqual(expect.arrayContaining(["system.run", "terminal.upload", "browser.proxy"]));
+    expect(config.gateway.nodes.commands.deny).not.toEqual(expect.arrayContaining(["computer.act", "screen.snapshot"]));
     expect(config.agents.list[0]).not.toHaveProperty("tools");
     expect(config.agents.list[1].tools.deny).toEqual(expect.arrayContaining(["browser", "computer"]));
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);

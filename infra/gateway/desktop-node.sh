@@ -23,6 +23,7 @@ export WAYLAND_DISPLAY="$socket"
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=Hyprland
 export CUA_DRIVER_RS_ENABLE_WAYLAND=1
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/octogee-desktop-node-has-no-session-bus
 
 until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
   echo "desktop-node: waiting for the gateway on 127.0.0.1:18789"

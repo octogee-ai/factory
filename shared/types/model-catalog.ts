@@ -11,6 +11,8 @@ export const MODEL_REASONING_EFFORTS = ["high", "xhigh"] as const;
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
 
 export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
+export const MODEL_INPUT_MODALITIES = ["text", "image"] as const;
+export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
 export interface ModelCatalogEntry {
   provider: ModelCatalogProvider;
@@ -19,6 +21,7 @@ export interface ModelCatalogEntry {
   source: ModelCatalogSource;
   aliases?: readonly string[];
   contextTokens?: number;
+  input?: readonly ModelInputModality[];
   reasoningEfforts: readonly ModelReasoningEffort[];
   defaultReasoningEffort?: ModelReasoningEffort;
 }
@@ -71,6 +74,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     label: "GPT-5.6 Luna",
     source: "openrouter",
     contextTokens: 1_050_000,
+    input: ["text", "image"],
     reasoningEfforts: ["high", "xhigh"],
   },
   {
@@ -79,6 +83,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     label: "GPT-5.4 Mini",
     source: "openai",
     contextTokens: 400_000,
+    input: ["text", "image"],
     reasoningEfforts: [],
   },
 ];

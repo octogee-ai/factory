@@ -38,13 +38,14 @@ export function openRouterBrokerProviderConfig(input) {
         ],
     };
 }
-function openRouterBrokerModelConfig(input) {
+export function openRouterBrokerModelConfig(input) {
     return {
         id: input.model,
         name: input.model,
         ...(typeof input.contextTokens === "number"
             ? { contextTokens: input.contextTokens, contextWindow: input.contextTokens }
             : {}),
+        ...(input.input ? { input: [...input.input] } : {}),
     };
 }
 export function agentModelTokenProfileEntry(agentId) {
@@ -92,6 +93,7 @@ export function openRouterCatalogInputForBaseUrl(baseUrl) {
         models: modelCatalogForProvider("openrouter").map((entry) => ({
             model: entry.id,
             ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+            ...(entry.input ? { input: entry.input } : {}),
         })),
     };
 }
@@ -101,6 +103,7 @@ export function openAiCatalogInputForBaseUrl(baseUrl) {
         models: modelCatalogForProvider("openai").map((entry) => ({
             model: entry.id,
             ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+            ...(entry.input ? { input: entry.input } : {}),
         })),
     };
 }
@@ -114,7 +117,7 @@ export function openRouterBrokerCatalogJson(_agentId, input) {
                 api: "openai-completions",
                 baseUrl: input.baseUrl,
                 apiKey: OPENROUTER_BROKER_PROFILE_ID,
-                models: input.models.map((model) => openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl })),
+                models: input.models.map(openRouterBrokerModelConfig),
             },
         },
     };
@@ -225,7 +228,7 @@ function upsertPlatformBrokerCatalog(agentDir, input, ids) {
         api: "openai-completions",
         baseUrl: input.baseUrl,
         apiKey: ids.profileId,
-        models: input.models.map((model) => openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl })),
+        models: input.models.map((model) => openRouterBrokerModelConfig(model)),
     };
     const next = {
         ...current,

@@ -47,6 +47,7 @@ import {
   OPENAI_BROKER_PROFILE_ID,
   openRouterCatalogInputForBaseUrl,
   openRouterBrokerCatalogJson,
+  openRouterBrokerModelConfig,
   materializeBrokerProfilesForAgents,
 } from "./agent-model-token-materializer.js";
 import {
@@ -1534,13 +1535,7 @@ function customerBrokerModelProviders(): Record<string, unknown> {
       api: "openai-completions",
       baseUrl: input.baseUrl,
       apiKey: OPENAI_BROKER_PROFILE_ID,
-      models: input.models.map((model) => ({
-        id: model.model,
-        name: model.model,
-        ...(typeof model.contextTokens === "number"
-          ? { contextTokens: model.contextTokens, contextWindow: model.contextTokens }
-          : {}),
-      })),
+      models: input.models.map(openRouterBrokerModelConfig),
     };
   }
   return providers;

@@ -5,6 +5,7 @@
 // catalog) is enforced at the LLM broker, never on the pod.
 export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai"];
 export const MODEL_REASONING_EFFORTS = ["high", "xhigh"];
+export const MODEL_INPUT_MODALITIES = ["text", "image"];
 export const MODEL_CATALOG = [
     {
         provider: "anthropic",
@@ -53,6 +54,7 @@ export const MODEL_CATALOG = [
         label: "GPT-5.6 Luna",
         source: "openrouter",
         contextTokens: 1_050_000,
+        input: ["text", "image"],
         reasoningEfforts: ["high", "xhigh"],
     },
     {
@@ -61,6 +63,7 @@ export const MODEL_CATALOG = [
         label: "GPT-5.4 Mini",
         source: "openai",
         contextTokens: 400_000,
+        input: ["text", "image"],
         reasoningEfforts: [],
     },
 ];

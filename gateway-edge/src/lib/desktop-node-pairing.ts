@@ -2,7 +2,8 @@ import { GATEWAY_DESKTOP_NODE_NAME } from "@octogee/shared/types/glm";
 
 const IPV4_MAPPED_PREFIX = "::ffff:";
 
-function isLoopbackAddress(address: string): boolean {
+function isLocalNodeAddress(address: string): boolean {
+  if (address === "") return true;
   const ipv4 = address.startsWith(IPV4_MAPPED_PREFIX) ? address.slice(IPV4_MAPPED_PREFIX.length) : address;
   return ipv4 === "127.0.0.1" || address === "::1";
 }
@@ -53,7 +54,7 @@ export function desktopNodePairingRequests(
   }
   return record.pending
     .map(pendingRequest)
-    .filter((request) => request.displayName === nodeName && isLoopbackAddress(request.remoteIp));
+    .filter((request) => request.displayName === nodeName && isLocalNodeAddress(request.remoteIp));
 }
 
 export async function approveDesktopNodePairing(deps: DesktopNodePairingDeps): Promise<string[]> {

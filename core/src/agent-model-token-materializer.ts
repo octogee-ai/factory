@@ -11,7 +11,7 @@ import {
   type ApplyOpenClawSecretsPlanOptions,
   type AuthProfileApiKeyTarget,
 } from "./openclaw-secrets-apply.js";
-import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
+import { modelCatalogForProvider, type ModelInputModality } from "@octogee/shared/types/model-catalog";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
 export { OpenClawSecretsApplyError } from "./openclaw-secrets-apply.js";
@@ -53,6 +53,7 @@ export interface OpenRouterBrokerModelInput {
   baseUrl: string;
   model: string;
   contextTokens?: number;
+  input?: readonly ModelInputModality[];
 }
 
 export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
@@ -63,7 +64,15 @@ export interface OpenRouterBrokerProviderConfig {
   api: "openai-completions";
   baseUrl: string;
   apiKey: string;
-  models: Array<{ id: string; name: string; contextTokens?: number; contextWindow?: number }>;
+  models: OpenRouterBrokerModelConfig[];
+}
+
+export interface OpenRouterBrokerModelConfig {
+  id: string;
+  name: string;
+  contextTokens?: number;
+  contextWindow?: number;
+  input?: ModelInputModality[];
 }
 
 export interface OpenRouterBrokerModelsJson {
@@ -71,7 +80,7 @@ export interface OpenRouterBrokerModelsJson {
     api: "openai-completions";
     baseUrl: string;
     apiKey: string;
-    models: Array<{ id: string; name: string; contextTokens?: number; contextWindow?: number }>;
+    models: OpenRouterBrokerModelConfig[];
   }>;
 }
 
@@ -96,15 +105,16 @@ export function openRouterBrokerProviderConfig(
   };
 }
 
-function openRouterBrokerModelConfig(
-  input: OpenRouterBrokerModelInput,
-): { id: string; name: string; contextTokens?: number; contextWindow?: number } {
+export function openRouterBrokerModelConfig(
+  input: Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">,
+): OpenRouterBrokerModelConfig {
   return {
     id: input.model,
     name: input.model,
     ...(typeof input.contextTokens === "number"
       ? { contextTokens: input.contextTokens, contextWindow: input.contextTokens }
       : {}),
+    ...(input.input ? { input: [...input.input] } : {}),
   };
 }
 
@@ -162,7 +172,7 @@ export function openRouterBrokerModelsJson(
 
 export interface OpenRouterBrokerCatalogInput {
   baseUrl: string;
-  models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens">>;
+  models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">>;
 }
 
 export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput {
@@ -171,6 +181,7 @@ export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBro
     models: modelCatalogForProvider("openrouter").map((entry) => ({
       model: entry.id,
       ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+      ...(entry.input ? { input: entry.input } : {}),
     })),
   };
 }
@@ -181,6 +192,7 @@ export function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerC
     models: modelCatalogForProvider("openai").map((entry) => ({
       model: entry.id,
       ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+      ...(entry.input ? { input: entry.input } : {}),
     })),
   };
 }
@@ -198,9 +210,7 @@ export function openRouterBrokerCatalogJson(
         api: "openai-completions",
         baseUrl: input.baseUrl,
         apiKey: OPENROUTER_BROKER_PROFILE_ID,
-        models: input.models.map((model) =>
-          openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl }),
-        ),
+        models: input.models.map(openRouterBrokerModelConfig),
       },
     },
   };
@@ -370,7 +380,7 @@ function upsertPlatformBrokerCatalog(
     baseUrl: input.baseUrl,
     apiKey: ids.profileId,
     models: input.models.map((model) =>
-      openRouterBrokerModelConfig({ ...model, baseUrl: input.baseUrl }),
+      openRouterBrokerModelConfig(model),
     ),
   };
   const next = {
