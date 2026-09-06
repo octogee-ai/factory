@@ -2030,7 +2030,9 @@ async function verifyMigrationResponse(
   deps: MigrationHandlerDeps,
   body: VerifyMigrationRequestBody,
 ): Promise<VerifyMigrationResponse> {
-  if (body.configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+  if (body.configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER ||
+      (deps.adapter.isBuilderGateway?.() === true &&
+       deps.adapter.isConfiguredBuilderCustomer?.(body.slug) === true)) {
     const checks = configuredBuilderVerifyChecks(deps, body.slug);
     return {
       migrationId: body.migrationId,

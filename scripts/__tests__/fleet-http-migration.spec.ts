@@ -894,11 +894,15 @@ describe("createVerifyHandler", () => {
     });
   });
 
-  it("verifies an attached configured Builder overlay without requiring a canonical Mattermost coach", async () => {
+  it.each([
+    { configTransferMode: undefined, overlayPresent: true },
+    { configTransferMode: "configured-builder-system-config", overlayPresent: true },
+    { configTransferMode: undefined, overlayPresent: false },
+  ])("verifies configured Builder readiness (mode=$configTransferMode, overlay=$overlayPresent)", async ({ configTransferMode, overlayPresent }) => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
-      configuredBuilderOverlayPresent: vi.fn(() => true),
+      configuredBuilderOverlayPresent: vi.fn(() => overlayPresent),
       hasWorkspaceGitDir: vi.fn(() => true),
       hasGitRemote: vi.fn(() => true),
       customerCoachWiredInOpenclawConfig: vi.fn(() => false),
@@ -907,7 +911,7 @@ describe("createVerifyHandler", () => {
     const body = {
       migrationId: "mig-builder-verify",
       slug: "chris",
-      configTransferMode: "configured-builder-system-config",
+      ...(configTransferMode ? { configTransferMode } : {}),
     };
     const response = mkResponse();
 
@@ -917,15 +921,15 @@ describe("createVerifyHandler", () => {
       vi.fn(),
     );
 
-    expect(response.getStatus()).toBe(200);
+    expect(response.getStatus()).toBe(overlayPresent ? 200 : 409);
     expect(response.getBody()).toEqual({
       migrationId: "mig-builder-verify",
       slug: "chris",
-      ready: true,
+      ready: overlayPresent,
       configTransferMode: "configured-builder-system-config",
       checks: {
         customerDir: true,
-        configuredBuilderOverlay: true,
+        configuredBuilderOverlay: overlayPresent,
         mountMarked: true,
         workspaceGit: true,
         gitRemote: true,
