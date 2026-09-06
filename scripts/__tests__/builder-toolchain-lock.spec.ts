@@ -45,7 +45,7 @@ const NPM_PACKAGES = {
   "@sparticuz/chromium": "149.0.0",
   "firebase-tools": "15.28.2",
   "npm-check-updates": "23.1.0",
-  "pnpm": "12.0.0",
+  "pnpm": "12.1.0",
   "tsx": "4.23.13",
   "typescript": "5.9.3",
 };
@@ -78,7 +78,7 @@ function groupsFixture(): BuilderToolGroups {
         npmPackages: {
           "firebase-tools": "15.28.2",
           "npm-check-updates": "23.1.0",
-          "pnpm": "12.0.0",
+          "pnpm": "12.1.0",
           "tsx": "4.23.13",
           "typescript": "5.9.3",
         },
@@ -163,7 +163,7 @@ async function writePinnedInputs(home: string): Promise<{
     allowScripts: {
       "@anthropic-ai/claude-code@2.1.251": true,
       "esbuild@0.28.2": true,
-      "pnpm@12.0.0": true,
+      "pnpm@12.1.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     },
