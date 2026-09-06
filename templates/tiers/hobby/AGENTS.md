@@ -148,14 +148,14 @@ Skills describe tools. Ask `octogee_ask_ops`.
 
 - Build/recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
-- VM owner coach: `computer` drives the shared visible desktop; prefer `browser` for web tasks.
-- Coordinate: exposed session, goal, plan, media, skill tools.
+- VM owner coach: `computer` drives the Builder-visible desktop; web: `browser navigate` current tab, or `focus` after `open`.
+- Coordinate: session, goal, plan, media, skill tools.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
   `octogee_project_set_recipe`, `octogee_project_capability`; isolated `octogee_project_build`, `octogee_project_test`,
   `octogee_project_preview`, `octogee_project_run_status`.
 - Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
-- Delivery: `workspace_commit`; publish successful builds with `octogee_project_publish` after Builder approval.
+- Delivery: `workspace_commit`; `octogee_project_publish` successful builds after Builder approval.
 - Account: `octogee_status`; `delegated_access` for owner-requested temporary access.
 - Google (bearer-blind): `octogee_google_calendar_events`/`octogee_google_calendar_create`/`octogee_google_calendar_create_approved`/`octogee_google_calendar_update`/`octogee_google_calendar_update_approved`/`octogee_google_calendar_delete`/`octogee_google_calendar_delete_approved`,
   `octogee_google_gmail_search`/`octogee_google_gmail_get`/`octogee_google_gmail_triage`/`octogee_google_gmail_triage_approved`/`octogee_google_gmail_draft_create`/`octogee_google_gmail_draft_create_approved`/`octogee_google_gmail_draft_send`/`octogee_google_gmail_draft_send_approved`, `octogee_google_drive_read`,
