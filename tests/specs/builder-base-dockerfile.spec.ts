@@ -78,12 +78,20 @@ describe("Builder base build authority", () => {
     expect(workflow).toContain('SENTINEL="${AR_REPO}/octogee-gateway-base:${GATEWAY_BASE_TAG}"');
   });
 
-  it("builds Builder images without scheduling the operator toolkit or base", () => {
-    expect(workflow).toContain("  builder-base:");
-    expect(workflow).toContain("needs: [builder-base, matrix-setup]");
+  it("builds the Builder base and final image in one job without scheduling the operator toolkit or base", () => {
+    expect(workflow).not.toContain("  builder-base:");
+    expect(workflow).not.toContain("needs.builder-base");
+    expect(workflow).toContain("  operator-image:\n    needs: matrix-setup\n");
     expect(workflow).toContain(
-      "_BUILDER_BASE_TAG=${{ needs.builder-base.outputs.tag }}",
+      'echo "builder_base_tag=${{ needs.matrix-setup.outputs.canonical_builder_base_tag }}" >> "$GITHUB_OUTPUT"',
     );
+    expect(workflow).toContain(
+      "_BUILDER_BASE_TAG=${{ steps.vars.outputs.builder_base_tag }}",
+    );
+    const baseBuild = workflow.indexOf("name: Build Builder base");
+    const finalBuild = workflow.indexOf("name: Build Builder final image from Builder base");
+    expect(baseBuild).toBeGreaterThan(workflow.indexOf("  operator-image:"));
+    expect(finalBuild).toBeGreaterThan(baseBuild);
     expect(workflow).not.toContain("  operator-toolkit:");
     expect(workflow).not.toContain("  operator-base:");
     expect(workflow).not.toContain("cloudbuild-operator-toolkit.yaml");
