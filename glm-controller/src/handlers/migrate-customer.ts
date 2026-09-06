@@ -1,3 +1,4 @@
+import type { NativeComputerReturn, NativeComputerReturnInput } from "../lib/native-computer-return.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2State,
@@ -57,6 +58,7 @@ type PlacementResolution =
   | { ok: false; reason: string };
 
 export interface MigrateCustomerDeps {
+  prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
 
@@ -565,6 +567,7 @@ async function provisionCustomerOnTarget(input: {
   migrationId: string;
   stateMigration: RollStateMigrationDecision;
   automatic: boolean;
+  nativeReturn?: NativeComputerReturn | null;
 }): Promise<OperationResult> {
   const { deps, ctx, targets, uid, slug, migrationId, automatic } = input;
   deps.log(
@@ -594,17 +597,20 @@ async function provisionCustomerOnTarget(input: {
       state: "quiescing",
       createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
     });
-    await step("quiesce-source", () => client.quiesce({
-      migrationId,
-      gatewayId: targets.fromGatewayId,
-      slug,
-    }));
-    await step("flush-source", () => client.flushGateway({
-      migrationId,
-      gatewayId: targets.fromGatewayId,
-      slug,
-      reason: "migration-final",
-    }));
+    if (!input.nativeReturn?.checkpointRequested) {
+      await step("quiesce-source", () => client.quiesce({
+        migrationId,
+        gatewayId: targets.fromGatewayId,
+        slug,
+      }));
+      await step("flush-source", () => client.flushGateway({
+        migrationId,
+        gatewayId: targets.fromGatewayId,
+        slug,
+        reason: "migration-final",
+      }));
+    }
+    if (input.nativeReturn) await step("checkpoint-native-computer", input.nativeReturn.checkpoint);
     await step("cutover-firestore", () => deps.commitCutover({
       uid,
       slug,
@@ -614,6 +620,18 @@ async function provisionCustomerOnTarget(input: {
       automatic,
     }));
   } catch (error) {
+    if (input.nativeReturn) {
+      const current = await deps.readUser(uid);
+      if (current?.currentGatewayId === targets.toGatewayId) {
+        await input.nativeReturn.release();
+        await discardSourceFootprint(deps, ctx, { client, migrationId, gatewayId: targets.fromGatewayId, slug });
+        return { steps: [], success: true, rolledBack: false };
+      }
+      if (current?.currentGatewayId !== targets.fromGatewayId) {
+        throw new Error("native return ownership changed; checkpoint retained");
+      }
+      await input.nativeReturn.release();
+    }
     await restoreSourceServing(deps, {
       ...sourceAssignment,
       state: "serving",
@@ -621,6 +639,7 @@ async function provisionCustomerOnTarget(input: {
     });
     return { steps: [], success: false, error: errorMessage(error), rolledBack: true };
   }
+  if (input.nativeReturn) await input.nativeReturn.release();
   await discardSourceFootprint(deps, ctx, {
     client,
     migrationId,
@@ -1168,7 +1187,9 @@ function resumeDurableMigration(
 async function executeProvisionFresh(input: ProvisionFreshV2Input & {
   stateMigration: RollStateMigrationDecision;
   durable: boolean;
+  nativeReturn?: NativeComputerReturn | null;
 }): Promise<OperationResult> {
+  if (input.nativeReturn && input.durable) throw new Error("native computer returns require a Shared target");
   if (input.durable) return provisionCustomerOnTargetV2(input);
   return provisionCustomerOnTarget({
     deps: input.deps,
@@ -1180,7 +1201,26 @@ async function executeProvisionFresh(input: ProvisionFreshV2Input & {
     migrationId: input.migrationId,
     stateMigration: input.stateMigration,
     automatic: input.automatic,
+    nativeReturn: input.nativeReturn,
   });
+}
+
+function nativeReturnDecision(identity: RollStateMigrationDecision, native: NativeComputerReturn | null): RollStateMigrationDecision {
+  return native ? { ...identity, strategy: PROVISION_FRESH, reason: "preserve native computer state; provision standard coach on Shared" } : identity;
+}
+
+async function finishNativeReturnAfterCutover(deps: MigrateCustomerDeps, op: Operation, ctx: OperationContext, user: UserGatewayInfo): Promise<void> {
+  if (typeof op.input.fromGatewayId !== "string" || typeof op.input.uid !== "string") return;
+  const gatewayId = op.input.fromGatewayId;
+  const native = await deps.prepareNativeComputerReturn({
+    fromGatewayId: gatewayId, toGatewayId: user.currentGatewayId,
+    uid: op.input.uid, slug: user.slug, operationId: op.id,
+  });
+  if (!native) return;
+  await native.release();
+  const url = await deps.resolveGatewayUrl(gatewayId);
+  const client = deps.buildClient(() => url);
+  await discardSourceFootprint(deps, ctx, { client, gatewayId, slug: user.slug, migrationId: deps.genMigrationId(op.id) });
 }
 
 async function prepareMigration(
@@ -1205,6 +1245,7 @@ async function prepareMigration(
     user.currentGatewayId === request.toGatewayId &&
     isControllerConvergenceSource(migrationInput.source)
   ) {
+    await finishNativeReturnAfterCutover(deps, op, ctx, user);
     return { result: { steps: [], success: true, rolledBack: false } };
   }
   const migrationId = deps.genMigrationId(op.id);
@@ -1226,7 +1267,15 @@ async function prepareMigration(
       };
     }
     const automatic = resolveOperationOrigin(op.origin) === "automatic";
-    const stateMigration = await decideCustomerStateMigration(deps, resolved.targets);
+    const nativeReturn = await deps.prepareNativeComputerReturn({
+      fromGatewayId: resolved.targets.fromGatewayId,
+      toGatewayId: resolved.targets.toGatewayId,
+      uid: request.uid,
+      slug: user.slug,
+      operationId: op.id,
+    });
+    const identityDecision = await decideCustomerStateMigration(deps, resolved.targets);
+    const stateMigration = nativeReturnDecision(identityDecision, nativeReturn);
     const durable = await deps.useDurableMigration(
       user.currentGatewayId,
       request.toGatewayId,
@@ -1244,6 +1293,7 @@ async function prepareMigration(
           stateMigration,
           automatic,
           durable,
+          nativeReturn,
         }),
         stateMigration,
       };

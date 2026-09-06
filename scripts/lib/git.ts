@@ -1810,6 +1810,22 @@ function pushRequired(
     state === "ahead" || state === "no-remote-branch" || state === "unknown";
 }
 
+function mergeIdenticalCheckpoints(
+  target: RepositorySyncTarget,
+  options: { state: WorkspaceRemoteState; strict: boolean; sourceKind?: string },
+  runGit: GitRunner,
+): WorkspaceRemoteState {
+  const { state, strict, sourceKind } = options;
+  if (!strict || sourceKind === "github" || target.kind !== "workspace" || state !== "diverged") return state;
+  const localTree = runGit(target.dir, ["rev-parse", "HEAD^{tree}"]);
+  const remoteTree = runGit(target.dir, ["rev-parse", "FETCH_HEAD^{tree}"]);
+  if (!localTree || localTree !== remoteTree) return state;
+  if (runGit(target.dir, ["merge", "--no-edit", "FETCH_HEAD"]) === null) {
+    throw new Error(`${target.label}: identical-tree checkpoint merge failed`);
+  }
+  return "ahead";
+}
+
 // eslint-disable-next-line max-params -- sync policy and injected mutation controls are intentionally explicit
 function syncOneRepository(
   slug: string,
@@ -1855,7 +1871,15 @@ function syncOneRepository(
     const committed = commitPendingChanges
       ? commitLocalChanges(target.dir, target.label, strict, runGit)
       : false;
-    const remoteState = classifyRemoteState(target.dir, keyArg, runGit, githubToken);
+    const remoteState = mergeIdenticalCheckpoints(
+      target,
+      {
+        state: classifyRemoteState(target.dir, keyArg, runGit, githubToken),
+        strict,
+        sourceKind: source?.kind,
+      },
+      runGit,
+    );
     observed = remoteState;
     if (remoteState === "diverged") {
       reportDivergedWorkspace(target.dir, target.label, runGit);

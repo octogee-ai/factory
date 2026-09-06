@@ -501,6 +501,42 @@ describe("workspace divergence", () => {
       .toBe(testGitExec(workspace, ["rev-parse", "HEAD"]));
   });
 
+  it("merges identical-tree workspace checkpoints without discarding either history", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    advanceRemoteFromASibling("alice", remote);
+    commitLocally(workspace, "SIBLING.md", "written by the other pod\n");
+    execFileSync("git", ["commit", "--amend", "-q", "-m", "local checkpoint"], { cwd: workspace });
+    const localHead = testGitExec(workspace, ["rev-parse", "HEAD"])!;
+    const remoteHead = testGitExec(remote, ["rev-parse", "main"])!;
+    const tree = testGitExec(workspace, ["rev-parse", "HEAD^{tree}"]);
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).resolves.toEqual({ diverged: [] });
+    expect(testGitExec(workspace, ["rev-parse", "HEAD^{tree}"])).toBe(tree);
+    expect(testGitExec(remote, ["rev-parse", "main"])).toBe(testGitExec(workspace, ["rev-parse", "HEAD"]));
+    expect(testGitExec(workspace, ["merge-base", "--is-ancestor", localHead, "HEAD"])).toBe("");
+    expect(testGitExec(workspace, ["merge-base", "--is-ancestor", remoteHead, "HEAD"])).toBe("");
+  });
+
+  it.each(["merge", "push"])("blocks the flush when identical-tree checkpoint %s fails", async (failure) => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    advanceRemoteFromASibling("alice", remote);
+    commitLocally(workspace, "SIBLING.md", "written by the other pod\n");
+    execFileSync("git", ["commit", "--amend", "-q", "-m", "local checkpoint"], { cwd: workspace });
+    const remoteHead = testGitExec(remote, ["rev-parse", "main"]);
+    const runGit = (cwd: string, args: string[]): string | null =>
+      args[0] === failure ? null : testGitExec(cwd, args);
+
+    await expect(syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: runGit,
+      prepareRepository: prepareTestRepository,
+    })).rejects.toThrow(failure === "merge" ? /checkpoint merge failed/ : /push failed/);
+    expect(testGitExec(remote, ["rev-parse", "main"])).toBe(remoteHead);
+  });
+
   it("fails a strict flush on divergence rather than reporting a durable checkpoint", async () => {
     const { workspace, remote } = initWorkspaceWithRemote("alice");
     commitLocally(workspace, "LOCAL.md", "written here\n");

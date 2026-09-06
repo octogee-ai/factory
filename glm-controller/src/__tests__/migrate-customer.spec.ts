@@ -148,6 +148,7 @@ function mkDeps(options: HarnessOptions = {}) {
       currentGatewayId: options.sourceGatewayId ?? "gw-blue",
     })),
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
+    prepareNativeComputerReturn: vi.fn(async () => null),
     readGatewayOpenclawVersion: vi.fn(async (gatewayId: string) =>
       options.openclawVersions
         ? options.openclawVersions[gatewayId] ?? null
@@ -191,6 +192,71 @@ function mkDeps(options: HarnessOptions = {}) {
   } as unknown as OperationContext;
   return { deps, ctx, client, events, steps, persisted };
 }
+
+describe("native computer return", () => {
+  it.each([false, true])("checkpoints native state before Shared cutover (resumed=%s)", async (requested) => {
+    const { deps, ctx, client, events } = mkDeps();
+    const native = {
+      checkpointRequested: requested,
+      checkpoint: vi.fn(async () => { events.push("native-checkpoint"); }),
+      release: vi.fn(async () => {}),
+    };
+    deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+    expect(result.success).toBe(true);
+    expect(native.checkpoint).toHaveBeenCalledOnce();
+    expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(client.unmount).toHaveBeenCalledOnce();
+    expect(client.flushGateway).toHaveBeenCalledTimes(requested ? 0 : 1);
+    expect(native.release).toHaveBeenCalledOnce();
+  });
+
+  it("finishes source cleanup when a retry finds the native return already cut over", async () => {
+    const { deps, ctx, client } = mkDeps({ sourceGatewayId: "gw-green" });
+    const native = { checkpointRequested: true, checkpoint: vi.fn(), release: vi.fn(async () => {}) };
+    deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    const result = await createMigrateCustomerHandler(deps)(mkOp({ input: {
+      uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+    } }), ctx);
+    expect(result.success).toBe(true);
+    expect(native.release).toHaveBeenCalledOnce();
+    expect(client.unmount).toHaveBeenCalledOnce();
+    expect(client.flushGateway).not.toHaveBeenCalled();
+    expect(native.checkpoint).not.toHaveBeenCalled();
+  });
+
+  it("rolls forward after an uncertain cutover response when Shared already owns the Builder", async () => {
+    const { deps, ctx, client } = mkDeps();
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    vi.mocked(deps.commitCutover).mockImplementation(async () => {
+      vi.mocked(deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
+      throw new Error("lost response");
+    });
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(native.release).toHaveBeenCalledOnce();
+    expect(client.unmount).toHaveBeenCalledOnce();
+    expect(deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+  });
+
+  it("keeps the source assignment when the native checkpoint fails", async () => {
+    const { deps, ctx, client } = mkDeps();
+    const native = {
+      checkpointRequested: false,
+      checkpoint: vi.fn(async () => { throw new Error("checkpoint timed out"); }),
+      release: vi.fn(async () => {}),
+    };
+    deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: true, error: "checkpoint timed out" });
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+    expect(client.unmount).not.toHaveBeenCalled();
+    expect(native.release).toHaveBeenCalledOnce();
+    expect(deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
+  });
+});
 
 describe("migrate-customer — input validation", () => {
   it.each([

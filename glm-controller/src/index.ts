@@ -1,3 +1,4 @@
+import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
@@ -3151,6 +3152,9 @@ async function buildHandlers(
   });
 
   const migrateCustomer = createMigrateCustomerHandler({
+    prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
+      db, now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    }, input),
     readUser: async (uid) => {
       const doc = await db.collection("users").doc(uid).get();
       if (!doc.exists) return null;
