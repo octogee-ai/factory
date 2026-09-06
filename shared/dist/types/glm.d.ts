@@ -177,6 +177,10 @@ export declare function isGatewayVmHomeCheckpoint(value: unknown): value is Gate
 export declare function computerHomeCheckpointName(at: number): string;
 export declare function gatewayVmPodName(gatewayId: string, instanceId: string): string;
 export declare const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
+export declare const GATEWAY_DESKTOP_NODE_CONTAINER = "desktop-node";
+export declare const GATEWAY_DESKTOP_NODE_STATE_VOLUME = "desktop-node-state";
+export declare const GATEWAY_DESKTOP_NODE_NAME = "octogee-desktop";
+export declare const GATEWAY_DESKTOP_RUNTIME_DIR = "/run/user/1000";
 export declare function builderComputerInstanceName(environment: string, ownerUid: string): string;
 export interface GatewayModelBrokerLimits {
     spendWindowUsd?: number | null;

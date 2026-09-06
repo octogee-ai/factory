@@ -746,7 +746,6 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     },
   },
   "octogee-workspace-tools": { enabled: true, config: {} },
-  "octogee-computer-tools": { enabled: true, config: {} },
   parallel: { enabled: true },
 } as const;
 

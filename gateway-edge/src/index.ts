@@ -25,7 +25,8 @@ import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
-import { createAgentImportRuntime } from "./lib/agent-import-runtime.js";
+import { createAgentImportRuntime, invokeLocalOpenClaw } from "./lib/agent-import-runtime.js";
+import { startDesktopNodePairing } from "./lib/desktop-node-pairing.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
 import { createSharingRoutes } from "./routes/sharing.js";
 import { createProjectCreateRoutes } from "./routes/projects/create.js";
@@ -264,12 +265,19 @@ function mountSidecarLocalitySurface(app: Express, options: {
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
+  const computer = resolveComputerEndpoints(process.env);
   mountApi(app, "/computer", createComputerRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
     resolveAccess: resolveComputerAccess,
-    computer: resolveComputerEndpoints(process.env),
+    computer,
     tickets: computerTickets,
   }));
+  if (computer) {
+    startDesktopNodePairing({
+      invoke: (method, params) => invokeLocalOpenClaw(method, params),
+      log: (message, fields) => logger.info(message, fields),
+    });
+  }
   // connect/status/sso-submit run HERE (the customer's own pod) so the in-pod
   // claude-sso/device-auth managers accept the pod's OPENCLAW_GATEWAY_TOKEN —
   // octogee-api can't hold a per-gateway token. The flow write brokers back.

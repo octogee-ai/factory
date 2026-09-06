@@ -133,22 +133,35 @@ directory separately from source-checkout acceptance. Set
 `OCTOGEE_ACCEPT_PHASE=discover` to validate registration and policy without
 touching the desktop.
 
+## Native computer acceptance
+
+`acceptance/native-computer.sh` drives the desktop through OpenClaw's own path:
+it authenticates to the co-located gateway as a local-direct operator, checks that
+the `octogee-desktop` node is connected and paired with `computer.act` and
+`screen.snapshot`, takes a snapshot, then types a URL into Chromium with
+`computer.act` and waits for the window title to change. Run it inside the
+Builder VM's gateway container:
+
+```bash
+gcloud compute ssh <instance> --project octogee --zone us-central1-a --tunnel-through-iap \
+  --command 'sudo docker exec -i octogee-gateway bash -s' < infra/desktop/acceptance/native-computer.sh
+```
+
+The image acceptance in `image/test.sh` boots the desktop without a gateway, so it
+verifies only the observation routes; this script is the input acceptance.
+
 ## Control API
 
-The native transport for the OpenClaw `computer` tool. Coordinates are absolute pixels on
-the headless output.
+Observation endpoints for gateway-edge and the PWA viewer. Agent input does not
+pass through here: the `desktop-node` container (gateway image, OpenClaw
+`cua-computer` node host) runs inside this Wayland session and fulfils the
+coach's built-in `computer` tool.
 
-| Route | Body | Effect |
-| --- | --- | --- |
-| `GET /health` | | `{ok, compositor, output, monitors, clients}` |
-| `GET /screenshot` | | PNG of the output (grim, wlr-screencopy) |
-| `GET /windows` | | toplevels `{class, title, …}` (hyprctl or wlrctl) |
-| `POST /click` | `{x, y, button?}` | virtual pointer move + click (wlrctl) |
-| `POST /move` | `{x, y}` | virtual pointer move |
-| `POST /type` | `{text}` | virtual keyboard text (wtype) |
-| `POST /key` | `{keys}` e.g. `ctrl+l`, `Return` | modifier chord |
-| `POST /scroll` | `{x, y, dy}` | scroll at a point |
-| `POST /exec` | `{argv: [...]}` | launch a desktop app, no shell |
+| Route | Effect |
+| --- | --- |
+| `GET /health` | `{ok, compositor, output, monitors, clients}` |
+| `GET /screenshot` | PNG of the output (grim, wlr-screencopy) |
+| `GET /windows` | toplevels `{class, title, …}` (hyprctl or wlrctl) |
 
 ## Image shape
 
@@ -237,36 +250,3 @@ the first key is required or the first keystroke after a focus change is lost
 - [ ] Same session scripts run inside a QEMU/KVM Omarchy VM with virtio-gpu and no host GPU
 - [ ] CPU, memory, image size and time-to-ready recorded above
 
-## Native OpenClaw computer acceptance
-
-Run against an isolated 1920×1080 desktop container with its control port bound to
-127.0.0.1:17777. The harness loads the real OpenClaw plugin, opens a local Documents
-fixture, and repeats screenshot/click/type/key/scroll/exec actions five times. It
-checks exact Unicode text and button/scroll state through native window titles.
-It prints the private temporary directory containing screenshots and results.
-Set `OCTO_ACCEPTANCE_OUTPUT` to choose an explicit output directory.
-
-```bash
-OPENCLAW_SOURCE_DIR=/path/to/openclaw \
-TSX_TSCONFIG_PATH=/path/to/openclaw/tsconfig.json \
-OCTO_ACCEPTANCE_CONTAINER=octo-desktop \
-node --import ./scripts/node_modules/tsx/dist/loader.mjs infra/desktop/acceptance-computer.mts
-```
-
-Install the scripts and `octogee-computer-tools` package dependencies first.
-The fixture creates one file under the container's Documents directory; use a
-dedicated acceptance profile. No model API call or human VNC connection is needed.
-
-For an immutable installed artifact, point `OPENCLAW_PACKAGE_DIR` at its
-`node_modules/openclaw` directory. This imports the package's built plugin loader
-and tool resolver and records its manifest version and runtime mode in results:
-
-```bash
-OPENCLAW_PACKAGE_DIR=/path/to/installed/node_modules/openclaw \
-OCTO_ACCEPTANCE_CONTAINER=octo-desktop \
-node infra/desktop/acceptance-computer.mts
-```
-
-Set `OCTOGEE_ACCEPT_OPENCLAW_VERSION` to reject an unexpected package version
-before loading tools or touching the desktop. Package mode takes precedence when
-both runtime directory variables are set.

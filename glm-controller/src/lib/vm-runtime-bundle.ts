@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
-import type {
-  GatewayVmRuntimeBundle,
-  GatewayVmRuntimeContainer,
-  GatewayVmRuntimeMount,
-  GatewayVmRuntimeVolume,
+import {
+  GATEWAY_DESKTOP_NODE_CONTAINER,
+  GATEWAY_DESKTOP_NODE_NAME,
+  GATEWAY_DESKTOP_NODE_STATE_VOLUME,
+  GATEWAY_DESKTOP_RUNTIME_DIR,
+  type GatewayVmRuntimeBundle,
+  type GatewayVmRuntimeContainer,
+  type GatewayVmRuntimeMount,
+  type GatewayVmRuntimeVolume,
 } from "@octogee/shared/types/glm";
 
 interface JsonScan {
@@ -180,7 +184,9 @@ function renderVolume(volume: K8sVolume): GatewayVmRuntimeVolume {
   return { name: volume.name, kind: "kubernetesApi" };
 }
 
+export const GATEWAY_CONTAINER_NAME = "gateway";
 export const GATEWAY_EDGE_CONTAINER_NAME = "gateway-edge";
+export const GATEWAY_DESKTOP_NODE_COMMAND = "/usr/local/bin/octogee-desktop-node";
 export const GATEWAY_COMPUTER_ENV = {
   GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777",
   GATEWAY_COMPUTER_VNC_URL: "ws://127.0.0.1:6080",
@@ -193,9 +199,7 @@ async function renderContainer(
 ): Promise<GatewayVmRuntimeContainer> {
   let env = await renderEnv(container.env, input);
   if (container.name === GATEWAY_EDGE_CONTAINER_NAME) env = { ...env, ...GATEWAY_COMPUTER_ENV };
-  else if (container.name === "gateway") {
-    env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_CONTROL_URL: GATEWAY_COMPUTER_ENV.GATEWAY_COMPUTER_CONTROL_URL };
-  }
+  else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm" };
   return {
     name: container.name,
     image: container.image,
@@ -203,6 +207,23 @@ async function renderContainer(
     command: container.command ?? null,
     args: container.args ?? null,
     mounts: renderMounts(container.volumeMounts, volumes),
+  };
+}
+
+export function renderDesktopNode(gateway: GatewayVmRuntimeContainer): GatewayVmRuntimeContainer {
+  const secret = gateway.env.OPENCLAW_GATEWAY_TOKEN;
+  if (!secret) throw new Error("desktop node requires the gateway container's OPENCLAW_GATEWAY_TOKEN");
+  return {
+    name: GATEWAY_DESKTOP_NODE_CONTAINER,
+    image: gateway.image,
+    env: {
+      OPENCLAW_GATEWAY_PASSWORD: secret,
+      OCTOGEE_DESKTOP_NODE_NAME: GATEWAY_DESKTOP_NODE_NAME,
+      XDG_RUNTIME_DIR: GATEWAY_DESKTOP_RUNTIME_DIR,
+    },
+    command: [GATEWAY_DESKTOP_NODE_COMMAND],
+    args: null,
+    mounts: [{ volume: GATEWAY_DESKTOP_NODE_STATE_VOLUME, mountPath: "/home/node/.openclaw", readOnly: false, subPath: null }],
   };
 }
 
@@ -222,6 +243,10 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
   if ((podSpec.initContainers?.length ?? 0) > 1) throw new Error("rendered Deployment has more than one init container");
   const containers: GatewayVmRuntimeContainer[] = [];
   for (const container of podSpec.containers) containers.push(await renderContainer(container, input, volumeNames));
+  const gateway = containers.find((container) => container.name === GATEWAY_CONTAINER_NAME);
+  if (!gateway) throw new Error("rendered Deployment has no gateway container");
+  containers.push(renderDesktopNode(gateway));
+  volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" });
   const unversioned = {
     gatewayId: input.gatewayId,
     imageRepository: input.imageRepository,

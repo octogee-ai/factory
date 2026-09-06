@@ -109,6 +109,7 @@ describe("system config platform invariants", () => {
           "conversations_send",
           "conversations_turn",
           "browser",
+          "computer",
         ],
         exec: { mode: "deny" },
         sessions: { visibility: "self" },

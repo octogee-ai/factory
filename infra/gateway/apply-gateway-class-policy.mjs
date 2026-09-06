@@ -31,6 +31,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "conversations_send",
   "conversations_turn",
   "browser",
+  "computer",
 ];
 export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "workspace_commit",
@@ -159,6 +160,7 @@ const PROJECT_AGENT_DENIED_TOOLS = [
   "conversations_send",
   "conversations_turn",
   "browser",
+  "computer",
 ];
 export const CUSTOMER_APPROVED_PLUGINS = [
   "mattermost",

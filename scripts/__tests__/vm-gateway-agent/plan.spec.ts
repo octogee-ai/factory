@@ -85,6 +85,33 @@ describe("planBundle", () => {
     expect(desktopBinds(planContainer(bundle, bundle.containers[0], ctx, "init").config)).toEqual([]);
   });
 
+  it("gives only the desktop node the desktop's Wayland runtime directory", () => {
+    const bundle = bundleFixture();
+    bundle.containers.push({
+      name: "desktop-node",
+      image: bundle.containers[0].image,
+      env: { OPENCLAW_GATEWAY_PASSWORD: "gwtoken", XDG_RUNTIME_DIR: "/run/user/1000" },
+      command: ["/usr/local/bin/octogee-desktop-node"],
+      args: null,
+      mounts: [{ volume: "desktop-node-state", mountPath: "/home/node/.openclaw", readOnly: false, subPath: null }],
+    });
+    bundle.volumes.push({ name: "desktop-node-state", kind: "emptyDir" });
+    const plan = planBundle(bundle, ctx);
+    const binds = (index: number) => (plan.services[index].config.HostConfig as { Binds: string[] }).Binds;
+    expect(plan.services[2].name).toBe("octogee-desktop-node");
+    expect(plan.services[2].config).toMatchObject({
+      User: "1000:1000",
+      Entrypoint: ["/usr/local/bin/octogee-desktop-node"],
+      HostConfig: { NetworkMode: "host", RestartPolicy: { Name: "unless-stopped" } },
+    });
+    expect(binds(2)).toEqual([
+      "/srv/octogee/volumes/desktop-node-state:/home/node/.openclaw",
+      "/run/user/1000:/run/user/1000",
+    ]);
+    expect(binds(0)).not.toContain("/run/user/1000:/run/user/1000");
+    expect(binds(1)).not.toContain("/run/user/1000:/run/user/1000");
+  });
+
   it("refuses a mount onto an unknown volume and lists each image once", () => {
     const bundle = bundleFixture();
     bundle.containers[0].mounts.push({ volume: "ghost", mountPath: "/x", readOnly: true, subPath: null });

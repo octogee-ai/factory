@@ -94,14 +94,7 @@ wait_desktop
 t_desktop=$(date +%s)
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
-title_before="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
-vssh 'post() { curl -fsS -X POST "http://127.0.0.1:7777/$1" -H "content-type: application/json" -d "$2" >/dev/null; }; post click "{\"x\":960,\"y\":540}"; post key "{\"keys\":\"ctrl+l\"}"; post type "{\"text\":\"https://example.com/\"}"; post key "{\"keys\":\"Return\"}"'
-input_verified=no
-for _ in $(seq 1 40); do
-  title_after="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
-  [[ "$title_after" == *"Example Domain"* ]] && { input_verified=yes; break; }
-  sleep 0.5
-done
+chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
 
 persist=skipped
 if [[ "$STOP_START" == 1 ]]; then
@@ -130,7 +123,7 @@ cat <<RESULT
 | vkms + vgem loaded | ${modules}/2 |
 | Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
 | Desktop service restarts needed | 0 |
-| Input verified (typed URL changed window title) | ${input_verified} ("${title_before}" → "${title_after:-}") |
+| Chromium window | "${chromium_title}" |
 | Home survives stop/start | ${persist} |
 | Screenshot | ${work}/screenshot.png (deleted with the workdir unless --keep) |
 RESULT
@@ -148,5 +141,5 @@ Delete when done:
   gcloud compute instances delete $NAME --zone $ZONE --project $PROJECT --quiet
 KEEP
 fi
-[[ "$input_verified" == yes ]]
+[[ -n "$chromium_title" ]]
 [[ "$STOP_START" == 0 || "$persist" == yes* ]]

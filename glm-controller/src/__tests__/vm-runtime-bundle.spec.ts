@@ -4,6 +4,7 @@ import { isGatewayVmRuntimeBundle } from "@octogee/shared/types/glm";
 import {
   helmTemplateArgsFromUpgradeArgs,
   parseConcatenatedJson,
+  renderDesktopNode,
   renderVmRuntimeBundle,
 } from "../lib/vm-runtime-bundle";
 
@@ -64,7 +65,7 @@ describe("renderVmRuntimeBundle", () => {
     expect(bundle.init?.name).toBe("fix-perms");
     expect(bundle.init?.command?.[0]).toBe("sh");
     expect(bundle.init?.env.OPENCLAW_GATEWAY_TOKEN).toBe("gwtoken");
-    expect(bundle.containers.map((c) => c.name)).toEqual(["gateway", "gateway-edge"]);
+    expect(bundle.containers.map((c) => c.name)).toEqual(["gateway", "gateway-edge", "desktop-node"]);
 
     const gateway = bundle.containers[0];
     expect(gateway.image).toBe("us-docker.pkg.dev/octogee/octogee/gateway:main.abc123");
@@ -104,7 +105,7 @@ describe("renderVmRuntimeBundle", () => {
     expect(bundle.renderedAt).toBe(1_000);
   });
 
-  it("connects only VM services to the visible desktop and gates the agent tool by runtime", async () => {
+  it("connects only the edge to the visible desktop and marks the gateway's runtime", async () => {
     const bundle = await render();
     const [gateway, edge] = bundle.containers;
     expect(edge.name).toBe("gateway-edge");
@@ -112,10 +113,34 @@ describe("renderVmRuntimeBundle", () => {
       GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777",
       GATEWAY_COMPUTER_VNC_URL: "ws://127.0.0.1:6080",
     });
-    expect(gateway.env).toMatchObject({ GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777" });
+    expect(gateway.env).toMatchObject({ GATEWAY_RUNTIME_KIND: "gce-vm" });
+    expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_CONTROL_URL");
     expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_VNC_URL");
     expect(bundle.init?.env).not.toHaveProperty("GATEWAY_RUNTIME_KIND");
-    expect(bundle.init?.env).not.toHaveProperty("GATEWAY_COMPUTER_CONTROL_URL");
+  });
+
+  it("runs the desktop node from the gateway image with the gateway's own credential", async () => {
+    const bundle = await render();
+    const gateway = bundle.containers[0];
+    const node = bundle.containers.at(-1)!;
+    expect(node.name).toBe("desktop-node");
+    expect(node.image).toBe(gateway.image);
+    expect(node.command).toEqual(["/usr/local/bin/octogee-desktop-node"]);
+    expect(node.env).toMatchObject({
+      OCTOGEE_DESKTOP_NODE_NAME: "octogee-desktop",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+    });
+    expect(node.mounts).toEqual([
+      { volume: "desktop-node-state", mountPath: "/home/node/.openclaw", readOnly: false, subPath: null },
+    ]);
+    expect(bundle.volumes).toContainEqual({ name: "desktop-node-state", kind: "emptyDir" });
+    expect(node.env.OPENCLAW_GATEWAY_PASSWORD).toBe(gateway.env.OPENCLAW_GATEWAY_TOKEN);
+    expect(node.env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
+  });
+
+  it("refuses to render a desktop node without the gateway secret", () => {
+    const gateway = { name: "gateway", image: "img", env: {}, command: null, args: null, mounts: [] };
+    expect(() => renderDesktopNode(gateway)).toThrow("OPENCLAW_GATEWAY_TOKEN");
   });
 
   it("versions the bundle by content, not by render time", async () => {

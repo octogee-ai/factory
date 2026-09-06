@@ -23,21 +23,19 @@ describe("computer browser runtime", () => {
     });
     expect(config.plugins.entries.browser.enabled).toBe(true);
     expect(config.plugins.allow).toContain("browser");
-    expect(config.tools.alsoAllow).toContain("browser");
+    expect(config.tools.alsoAllow).toEqual(expect.arrayContaining(["browser", "computer"]));
     expect(config.agents.list[0]).not.toHaveProperty("tools");
-    expect(config.agents.list[1].tools.deny).toContain("browser");
+    expect(config.agents.list[1].tools.deny).toEqual(expect.arrayContaining(["browser", "computer"]));
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
-  it("enables the desktop tool when restoring a configuration with the reserved computer tool", () => {
+  it("keeps the restored tool list and adds the desktop tools once", () => {
     const config = {
       tools: { profile: "coding", alsoAllow: ["workspace_commit", "computer"] },
       agents: { entries: { "octogee-owner-coach": {} } },
     };
     applyOpenClawComputerBrowserConfig(config, vmEnv);
-    expect(config.tools.alsoAllow).toContain("octogee_computer");
-    expect(config.tools.alsoAllow).not.toContain("computer");
-    expect(config.tools.alsoAllow).toContain("workspace_commit");
+    expect(config.tools.alsoAllow).toEqual(["workspace_commit", "computer", "browser"]);
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
@@ -51,8 +49,8 @@ describe("computer browser runtime", () => {
     const before = structuredClone(agents);
     expect(gatewayAgentRoster(agents)).toEqual([
       { id: "octogee-owner-coach" },
-      { id: "octogee-owner-proj-site-coach", tools: { deny: ["browser"] } },
-      { id: "another-agent", tools: { profile: "full", deny: ["browser"] } },
+      { id: "octogee-owner-proj-site-coach", tools: { deny: ["browser", "computer"] } },
+      { id: "another-agent", tools: { profile: "full", deny: ["browser", "computer"] } },
     ]);
     expect(agents).toEqual(before);
   });
@@ -64,10 +62,10 @@ describe("computer browser runtime", () => {
     expect(config.plugins.entries.browser.enabled).toBe(true);
   });
 
-  it("denies the browser for every agent when the VM has no assigned owner", () => {
+  it("denies the desktop tools for every agent when the VM has no assigned owner", () => {
     const config = { agents: { entries: { "octogee-owner-coach": {} } } };
     applyOpenClawComputerBrowserConfig(config, { ...vmEnv, GATEWAY_BUILDER_SLUG: "" });
-    expect(config.agents.entries["octogee-owner-coach"]).toEqual({ tools: { deny: ["browser"] } });
+    expect(config.agents.entries["octogee-owner-coach"]).toEqual({ tools: { deny: ["browser", "computer"] } });
   });
 
   it.each([
@@ -85,11 +83,11 @@ describe("computer browser runtime", () => {
     const config = template();
     config.browser.profiles = { custom: { cdpUrl: "http://127.0.0.1:9444", attachOnly: true } };
     config.tools.deny = ["browser"];
-    config.agents.list = [{ id: "octogee-owner-proj-site-coach", tools: { deny: ["browser"] } }];
+    config.agents.list = [{ id: "octogee-owner-proj-site-coach", tools: { deny: ["computer", "browser"] } }];
     applyOpenClawComputerBrowserConfig(config, vmEnv);
     expect(config.browser.profiles.custom).toEqual({ cdpUrl: "http://127.0.0.1:9444", attachOnly: true });
     expect(config.tools.deny).toEqual(["browser"]);
-    expect(config.agents.list[0].tools.deny).toEqual(["browser"]);
+    expect(config.agents.list[0].tools.deny).toEqual(["computer", "browser"]);
   });
 
   it("rejects malformed owned config rather than silently replacing it", () => {

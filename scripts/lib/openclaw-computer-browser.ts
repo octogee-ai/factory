@@ -22,6 +22,8 @@ function stringList(parent: JsonObject, key: string): string[] {
   return value;
 }
 
+export const DESKTOP_TOOLS = ["browser", "computer"] as const;
+
 function builderComputer(env: NodeJS.ProcessEnv): boolean {
   return env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "gce-vm";
 }
@@ -35,7 +37,7 @@ export function applyComputerBrowserAgentPolicy(
   const ownerCoach = ownerSlug && agent.id === `octogee-${ownerSlug}-coach`;
   if (ownerCoach) return;
   const tools = objectAt(agent, "tools");
-  tools.deny = [...new Set([...stringList(tools, "deny"), "browser"])];
+  tools.deny = [...new Set([...stringList(tools, "deny"), ...DESKTOP_TOOLS])];
 }
 
 export function applyOpenClawComputerBrowserConfig(
@@ -61,11 +63,7 @@ export function applyOpenClawComputerBrowserConfig(
   plugins.allow = [...new Set([...stringList(plugins, "allow"), "browser"])];
   objectAt(objectAt(plugins, "entries"), "browser").enabled = true;
   const tools = objectAt(config, "tools");
-  tools.alsoAllow = [...new Set([
-    ...stringList(tools, "alsoAllow").filter((tool) => tool !== "computer"),
-    "browser",
-    "octogee_computer",
-  ])];
+  tools.alsoAllow = [...new Set([...stringList(tools, "alsoAllow"), ...DESKTOP_TOOLS])];
   const agents = objectAt(config, "agents");
   if (agents.list !== undefined) {
     if (!Array.isArray(agents.list)) throw new Error("OpenClaw computer browser requires agents.list array");

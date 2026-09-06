@@ -21,7 +21,6 @@ const workflowTools = [
   "octogee_board_card_move",
   "octogee_board_card_comment",
   "workspace_commit",
-  "octogee_computer",
   "brave_search",
   "tavily_search",
   "tavily_extract",
@@ -107,6 +106,7 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
       "conversations_send",
       "conversations_turn",
       "browser",
+      "computer",
     ]);
     expect(template.cron).toEqual({ triggers: { enabled: false } });
     expect(template.skills.workshop).toEqual({

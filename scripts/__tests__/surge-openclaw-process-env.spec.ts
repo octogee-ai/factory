@@ -29,4 +29,24 @@ describe("surge OpenClaw supervisor process environment", () => {
     expect(env.GATEWAY_ID).toBe("bender");
     expect(source.OPENCLAW_GATEWAY_TOKEN).toBe("pod-token");
   });
+
+  it("hands a per-user VM gateway the pod secret as the local-direct password for its desktop node", () => {
+    const env = openClawProcessEnv({
+      OPENCLAW_GATEWAY_TOKEN: "pod-token",
+      OPENCLAW_CONTROL_IDENTITY: "per-user",
+      GATEWAY_RUNTIME_KIND: "gce-vm",
+    });
+
+    expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("pod-token");
+  });
+
+  it("keeps cluster Builder gateways password-free", () => {
+    const env = openClawProcessEnv({
+      OPENCLAW_GATEWAY_TOKEN: "pod-token",
+      OPENCLAW_CONTROL_IDENTITY: "per-user",
+    });
+
+    expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_PASSWORD");
+  });
 });

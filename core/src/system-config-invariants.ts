@@ -87,7 +87,6 @@ const REQUIRED_PLUGINS = [
   "octogee-board-tools",
   "octogee-status-tools",
   "octogee-web-tools",
-  "octogee-computer-tools",
   "octogee-workspace-tools",
   "parallel",
 ] as const;
@@ -142,7 +141,6 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },
   "octogee-workspace-tools": {},
-  "octogee-computer-tools": {},
 };
 
 const PLATFORM_PLUGIN_CONFIG_FIELDS: Readonly<Record<string, unknown>> = {
@@ -175,6 +173,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "conversations_send",
   "conversations_turn",
   "browser",
+  "computer",
 ] as const;
 
 const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
@@ -214,7 +213,6 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_board_card_comment",
   "delegated_access",
   "workspace_commit",
-  "octogee_computer",
   "brave_search",
   "tavily_search",
   "tavily_extract",

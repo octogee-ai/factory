@@ -113,7 +113,10 @@ const OPENCLAW_BINARY = "/usr/local/bin/openclaw";
 // tree and a supervisor restart can reap an orphaned group by recorded pid.
 export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   if (!isPerUserControlIdentity(env)) return { ...env };
-  const { OPENCLAW_GATEWAY_TOKEN: _podToken, ...rest } = env;
+  const { OPENCLAW_GATEWAY_TOKEN: podToken, ...rest } = env;
+  if (env.GATEWAY_RUNTIME_KIND === "gce-vm" && podToken) {
+    return { ...rest, OPENCLAW_GATEWAY_PASSWORD: podToken };
+  }
   return rest;
 }
 

@@ -327,7 +327,7 @@ describe("per-user control identity — pod token stays out of the OpenClaw proc
 
   it("spawns the Builder OpenClaw process through the identity-aware environment filter", () => {
     expect(supervisor).toMatch(/env:\s*openClawProcessEnv\(\)/);
-    expect(supervisor).toMatch(/OPENCLAW_GATEWAY_TOKEN: _podToken/);
+    expect(supervisor).toMatch(/OPENCLAW_GATEWAY_TOKEN: podToken, \.\.\.rest/);
   });
 
   it("threads the control identity to both gateway containers from one chart value", () => {

@@ -144,7 +144,7 @@ COPY --chown=node:node templates/ /octogee/templates/
 # with restricted perms (observed at OC 2026.5.12: "Couldn't create
 # temporary file /tmp/apt.conf.XXXX for passing config to apt-key").
 RUN chmod 1777 /tmp \
-    && apt-get update && apt-get install -y --no-install-recommends gettext-base \
+    && apt-get update && apt-get install -y --no-install-recommends gettext-base libx11-6 libxi6 libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Entrypoint + config templates ──────────────────────────────────────────
@@ -153,12 +153,13 @@ COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/inf
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
 COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
 ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/libexec/octogee-builder-toolchain \
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/libexec/octogee-builder-toolchain \
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
       false) \

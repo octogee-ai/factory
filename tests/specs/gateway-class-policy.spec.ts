@@ -281,6 +281,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "conversations_send",
       "conversations_turn",
       "browser",
+      "computer",
     ]);
     expect(out.tools.alsoAllow).toEqual(workflowTools);
     expect(out.tools.deny).not.toEqual(expect.arrayContaining(customerStructuredTools));
@@ -305,7 +306,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee_project_publish",
     ]));
     expect(out.agents.list[0].tools.allow).toBeUndefined();
-    expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "automations", "conversations_send"]));
+    expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "computer", "automations", "conversations_send"]));
     expect(out.agents.list[1].tools).toMatchObject({ profile: "minimal", alsoAllow: [], fs: { workspaceOnly: true } });
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools).toMatchObject({
       profile: "minimal",

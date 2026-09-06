@@ -3,28 +3,16 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
-from urllib.parse import urlparse
-from urllib.request import urlopen
 
 OUTPUT = os.environ.get("OCTO_OUTPUT_NAME", "OCTOGEE")
 COMPOSITOR = os.environ.get("OCTO_COMPOSITOR", "hyprland")
-BUTTONS = {"left": "left", "right": "right", "middle": "middle"}
-KEYBOARD_SETTLE_MS = "150"
 ACTION_LOCK = Lock()
 
 
-def run(argv, input_bytes=None, timeout=15):
-    return subprocess.run(argv, input=input_bytes, capture_output=True, timeout=timeout)
-
-
-def run_checked(argv, timeout=15, input_bytes=None):
-    out = run(argv, timeout=timeout, input_bytes=input_bytes)
-    if out.returncode != 0:
-        raise RuntimeError("%s failed (%d): %s" % (argv[0], out.returncode, out.stderr.decode(errors="replace").strip()))
-    return out
+def run(argv, timeout=15):
+    return subprocess.run(argv, capture_output=True, timeout=timeout)
 
 
 def hyprctl_json(*args):
@@ -56,77 +44,12 @@ def monitors():
     return [m.get("name") for m in json.loads(out.stdout or b"[]")]
 
 
-def pointer_move(x, y):
-    run_checked(["wlrctl", "pointer", "move", "-100000", "-100000"])
-    run_checked(["wlrctl", "pointer", "move", str(int(x)), str(int(y))])
-
-
 def screenshot_png():
     out = run(["grim", "-o", OUTPUT, "-t", "png", "-"], timeout=30)
     if out.returncode != 0:
         raise RuntimeError(out.stderr.decode(errors="replace"))
     return out.stdout
 
-
-def cdp_call(connection, request_id, method, params=None):
-    connection.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
-    while True:
-        response = json.loads(connection.recv())
-        if response.get("id") != request_id:
-            continue
-        if "error" in response:
-            raise RuntimeError("Chromium %s failed: %s" % (method, response["error"]))
-        return response.get("result", {})
-
-
-def insert_chromium_text(text, active):
-    import websocket
-    with urlopen("http://127.0.0.1:9222/json/list", timeout=3) as response:
-        pages = json.load(response)
-    title = active.get("title", "").removesuffix(" - Chromium")
-    candidates = [page for page in pages if page.get("type") == "page" and page.get("title") == title]
-    for page in candidates:
-        endpoint = page.get("webSocketDebuggerUrl", "")
-        url = urlparse(endpoint)
-        if url.scheme != "ws" or url.hostname != "127.0.0.1" or url.port != 9222 or url.username or url.password or not url.path.startswith("/devtools/page/"):
-            raise RuntimeError("Chromium returned a nonlocal page endpoint")
-        with closing(websocket.create_connection(endpoint, timeout=3, suppress_origin=True)) as connection:
-            focus = cdp_call(connection, 1, "Runtime.evaluate", {
-                "expression": "document.visibilityState === 'visible' && document.hasFocus()",
-                "returnByValue": True,
-            })
-            if focus.get("result", {}).get("value") is not True:
-                continue
-            current = hyprctl_json("activewindow")
-            if current.get("address") != active.get("address") or current.get("title") != active.get("title"):
-                raise RuntimeError("desktop focus changed before typing")
-            cdp_call(connection, 2, "Input.insertText", {"text": text})
-            return True
-    return False
-
-
-def type_text(text):
-    if COMPOSITOR == "hyprland":
-        active = hyprctl_json("activewindow")
-        if active.get("class") == "chromium":
-            if insert_chromium_text(text, active):
-                return
-            if any(ord(char) > 0xffff for char in text):
-                raise ValueError("Chromium chrome cannot receive non-BMP key events; focus a page text field or use the browser tool")
-    run_checked(["wtype", "-s", KEYBOARD_SETTLE_MS, "-", "-s", KEYBOARD_SETTLE_MS],
-                input_bytes=text.encode())
-
-
-def press_keys(chord):
-    keys = chord.split("+")
-    argv = ["wtype", "-s", KEYBOARD_SETTLE_MS]
-    for mod in keys[:-1]:
-        argv += ["-M", mod]
-    argv += ["-k", keys[-1]]
-    for mod in reversed(keys[:-1]):
-        argv += ["-m", mod]
-    argv += ["-s", KEYBOARD_SETTLE_MS]
-    run_checked(argv)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -138,11 +61,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-    def _json_body(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length) if length else b"{}"
-        return json.loads(raw or b"{}")
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.command, fmt % args))
@@ -165,36 +83,6 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, windows())
                 else:
                     self._send(404, {"error": "not found"})
-        except Exception as exc:  # noqa: BLE001
-            self._send(500, {"error": str(exc)})
-
-    def do_POST(self):
-        try:
-            body = self._json_body()
-            with ACTION_LOCK:
-                if self.path == "/click":
-                    pointer_move(body["x"], body["y"])
-                    button = BUTTONS[body.get("button", "left")]
-                    run_checked(["wlrctl", "pointer", "click", button])
-                elif self.path == "/move":
-                    pointer_move(body["x"], body["y"])
-                elif self.path == "/type":
-                    type_text(str(body["text"]))
-                elif self.path == "/key":
-                    press_keys(str(body["keys"]))
-                elif self.path == "/scroll":
-                    pointer_move(body["x"], body["y"])
-                    dy = int(body.get("dy", 3))
-                    run_checked(["wlrctl", "pointer", "scroll", str(dy), "0"])
-                elif self.path == "/exec":
-                    argv = body["argv"]
-                    if not isinstance(argv, list) or not argv:
-                        raise ValueError("argv must be a non-empty list")
-                    subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    self._send(404, {"error": "not found"})
-                    return
-                self._send(200, {"ok": True})
         except Exception as exc:  # noqa: BLE001
             self._send(500, {"error": str(exc)})
 
