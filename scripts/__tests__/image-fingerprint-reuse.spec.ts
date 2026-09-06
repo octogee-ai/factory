@@ -49,8 +49,8 @@ describe("image-fingerprint-reuse.sh check", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
-        '  *"tags list"*"tags/abc1234"*) exit 0 ;;',
+        `  *"images describe"*":if-deadbeef "*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *"images describe"*":abc1234 "*) echo "ERROR: Image not found." >&2; exit 1 ;;',
         '  *"artifacts tags create abc1234"*) exit 0 ;;',
         '  *) exit 1 ;;',
         "esac",
@@ -66,7 +66,7 @@ describe("image-fingerprint-reuse.sh check", () => {
     expect(result.stdout).toContain("fingerprint=deadbeef");
     expect(result.stdout).toContain("exists=true");
     const calls = readFileSync(log, "utf8");
-    expect(calls).toContain("artifacts docker tags list us-west1-docker.pkg.dev/octogee/octogee");
+    expect(calls).toContain("artifacts docker images describe us-west1-docker.pkg.dev/octogee/octogee/octogee-api:if-deadbeef --project=octogee");
     expect(calls).toContain(
       `artifacts tags create abc1234 --location=us-west1 --repository=octogee --package=octogee-api --version=${cachedDigest}`,
     );
@@ -79,8 +79,8 @@ describe("image-fingerprint-reuse.sh check", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
-        '  *"tags list"*"tags/abc1234"*) exit 0 ;;',
+        `  *"images describe"*":if-deadbeef "*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *"images describe"*":abc1234 "*) echo "ERROR: Image not found." >&2; exit 1 ;;',
         '  *"artifacts tags create abc1234"*) exit 0 ;;',
         '  *) exit 1 ;;',
         "esac",
@@ -138,8 +138,8 @@ describe("image-fingerprint-reuse.sh check", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
-        '  *"tags list"*"tags/abc1234"*) exit 0 ;;',
+        `  *"images describe"*":if-deadbeef "*) echo "${cachedDigest}"; exit 0 ;;`,
+        '  *"images describe"*":abc1234 "*) echo "ERROR: Image not found." >&2; exit 1 ;;',
         '  *"artifacts tags create abc1234"*) exit 1 ;;',
         '  *) exit 0 ;;',
         "esac",
@@ -164,8 +164,8 @@ describe("image-fingerprint-reuse.sh check", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
-        `  *"tags list"*"tags/abc1234"*) if [ -f "$RACE_MARKER" ]; then echo "${builtDigest}"; fi; exit 0 ;;`,
+        `  *"images describe"*":if-deadbeef "*) echo "${cachedDigest}"; exit 0 ;;`,
+        `  *"images describe"*":abc1234 "*) if [ -f "$RACE_MARKER" ]; then echo "${builtDigest}"; exit 0; fi; echo "ERROR: Image not found." >&2; exit 1 ;;`,
         '  *"artifacts tags create abc1234"*) touch "$RACE_MARKER"; exit 1 ;;',
         '  *) exit 0 ;;',
         "esac",
@@ -191,8 +191,8 @@ describe("image-fingerprint-reuse.sh record", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
-        '  *"tags list"*"tags/if-deadbeef"*) exit 0 ;;',
+        `  *"images describe"*":abc1234 "*) echo "${builtDigest}"; exit 0 ;;`,
+        '  *"images describe"*":if-deadbeef "*) echo "ERROR: Image not found." >&2; exit 1 ;;',
         '  *"artifacts tags create if-deadbeef"*) exit 0 ;;',
         '  *) exit 0 ;;',
         "esac",
@@ -238,8 +238,8 @@ describe("image-fingerprint-reuse.sh record", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
-        '  *"tags list"*"tags/if-deadbeef"*) exit 0 ;;',
+        `  *"images describe"*":abc1234 "*) echo "${builtDigest}"; exit 0 ;;`,
+        '  *"images describe"*":if-deadbeef "*) echo "ERROR: Image not found." >&2; exit 1 ;;',
         '  *"artifacts tags create if-deadbeef"*) exit 1 ;;',
         '  *) exit 0 ;;',
         "esac",
@@ -265,8 +265,8 @@ describe("image-fingerprint-reuse.sh record", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
-        `  *"tags list"*"tags/if-deadbeef"*) if [ -f "$RACE_MARKER" ]; then echo "${cachedDigest}"; fi; exit 0 ;;`,
+        `  *"images describe"*":abc1234 "*) echo "${builtDigest}"; exit 0 ;;`,
+        `  *"images describe"*":if-deadbeef "*) if [ -f "$RACE_MARKER" ]; then echo "${cachedDigest}"; exit 0; fi; echo "ERROR: Image not found." >&2; exit 1 ;;`,
         '  *"artifacts tags create if-deadbeef"*) touch "$RACE_MARKER"; exit 1 ;;',
         '  *) exit 0 ;;',
         "esac",
@@ -308,8 +308,8 @@ describe("image-fingerprint-reuse.sh record", () => {
       directory,
       [
         'case "$*" in',
-        `  *"tags list"*"tags/abc1234"*) echo "${builtDigest}"; exit 0 ;;`,
-        `  *"tags list"*"tags/if-deadbeef"*) echo "${cachedDigest}"; exit 0 ;;`,
+        `  *"images describe"*":abc1234 "*) echo "${builtDigest}"; exit 0 ;;`,
+        `  *"images describe"*":if-deadbeef "*) echo "${cachedDigest}"; exit 0 ;;`,
         '  *) exit 0 ;;',
         "esac",
       ].join("\n"),

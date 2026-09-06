@@ -26,10 +26,12 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$GCLOUD_CALLS"
 attempt="$(( $(cat "$GCLOUD_STATE") + 1 ))"
 printf '%s\\n' "$attempt" > "$GCLOUD_STATE"
+not_found() { printf '%s\\n' 'ERROR: (gcloud.artifacts.docker.images.describe) Image not found.' >&2; exit 1; }
 case "$FAKE_GCLOUD_MODE" in
   found) printf '%s\\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
-  absent) ;;
-  multiple) printf '%s\\n%s\\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
+  absent) not_found ;;
+  repository_missing) printf '%s\\n' 'ERROR: (gcloud.artifacts.docker.images.describe) NOT_FOUND: Repository "octogee" not found in location "us-central1".' >&2; exit 1 ;;
+  empty) ;;
   invalid) printf '%s\\n' 'not-a-digest' ;;
   error) printf '%s\\n' 'permission denied' >&2; exit 42 ;;
   unavailable_then_found)
@@ -38,6 +40,7 @@ case "$FAKE_GCLOUD_MODE" in
     ;;
   rate_limited_then_absent)
     if [ "$attempt" -eq 1 ]; then printf '%s\\n' 'RESOURCE_EXHAUSTED: HTTP 429 Too Many Requests' >&2; exit 1; fi
+    not_found
     ;;
   server_error_then_found)
     if [ "$attempt" -eq 1 ]; then printf '%s\\n' 'ResponseError: status=[503]' >&2; exit 1; fi
@@ -83,29 +86,26 @@ afterEach(() => {
 });
 
 describe("release digest tag lookup", () => {
-  it("returns the immutable digest for one exact tag", () => {
+  it("returns the immutable digest from one direct image describe of the exact tag", () => {
     const result = runLookup("found");
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
-    expect(result.calls).toContain(
-      "artifacts docker tags list us-central1-docker.pkg.dev/octogee/octogee",
-    );
-    expect(result.calls).toContain(
-      "--filter=tag=projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/tags/deadbeef",
-    );
-    expect(result.calls).toContain("--limit=2");
-    expect(result.calls).toContain("--format=value(version)");
+    expect(result.calls.trim().split("\n")).toEqual([
+      "artifacts docker images describe us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest:deadbeef --project=octogee --format=value(image_summary.digest)",
+    ]);
+    expect(result.calls).not.toContain("tags list");
   });
 
-  it("returns status 3 only for an empty successful lookup", () => {
+  it("returns status 3 silently when the registry reports the tag absent", () => {
     const result = runLookup("absent");
 
     expect(result.status).toBe(3);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
+    expect(result.sleeps).toBe("");
   });
 
   it("fails loudly when Artifact Registry lookup fails", () => {
@@ -113,6 +113,15 @@ describe("release digest tag lookup", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("permission denied");
+    expect(result.calls.trim().split("\n")).toHaveLength(1);
+    expect(result.sleeps).toBe("");
+  });
+
+  it("does not mistake a missing repository for an absent tag", () => {
+    const result = runLookup("repository_missing");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('NOT_FOUND: Repository "octogee" not found');
     expect(result.calls.trim().split("\n")).toHaveLength(1);
     expect(result.sleeps).toBe("");
   });
@@ -154,10 +163,27 @@ describe("release digest tag lookup", () => {
     expect(result.sleeps.trim().split("\n")).toEqual(["2", "4", "8", "16", "30"]);
   });
 
-  it.each(["multiple", "invalid"])("rejects %s lookup output", (mode) => {
+  it.each(["empty", "invalid"])("rejects %s describe output instead of treating it as absent", (mode) => {
     const result = runLookup(mode);
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("invalid digest lookup result");
+  });
+
+  it.each([
+    ["us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest@sha256:abc", "digest references"],
+    ["us-central1-docker.pkg.dev/octogee/octogee/release-digest-manifest", "untagged references"],
+    ["us-central1-docker.pkg.dev/other/repo/release-digest-manifest:deadbeef", "references outside the repository"],
+  ])("rejects %s (%s) before calling the registry", (reference) => {
+    const directory = mkdtempSync(join(tmpdir(), "release-digest-tag-lookup-"));
+    temporaryDirectories.push(directory);
+    const result = spawnSync(
+      helper,
+      ["us-central1-docker.pkg.dev/octogee/octogee", "octogee", reference],
+      { encoding: "utf8", env: { ...process.env, PATH: `${directory}:${process.env.PATH ?? ""}` } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid tag reference");
   });
 });
