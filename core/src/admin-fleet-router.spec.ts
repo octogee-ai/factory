@@ -8,6 +8,7 @@ import {
   projectBuilderRuntime,
   projectDisposableFleetCapacity,
   projectGatewayReservation,
+  projectGatewayControl,
   projectGatewaySummary,
   resolveFleetDeploymentSettings,
   shapeOperationsHistoryRecord,
@@ -18,6 +19,57 @@ import {
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
+
+describe("projectGatewayControl", () => {
+  const root = {
+    gatewayId: "gw-1",
+    imageRepository: "repo",
+    imageTag: "tag",
+    desiredStatus: "running",
+    createdBy: "test",
+    desiredRelease: 3,
+    liveRelease: 2,
+  };
+
+  it("exposes operator control and every mutable config knob with explicit nulls", () => {
+    const control = projectGatewayControl(
+      {
+        ...root,
+        managedBy: "operator",
+        gatewayClass: "builder",
+        sizingTier: "m",
+        ownerUid: "uid-1",
+        builderSlug: "alice",
+        modelBrokerLimits: { rpm: 10 },
+      } as never,
+      { runtime: "gce-vm", vm: { instanceName: "octogee-computer-prod-uid", zone: "us-central1-a", status: "TERMINATED" } },
+    );
+
+    expect(control).toMatchObject({
+      managedBy: "operator",
+      desiredStatus: "running",
+      desiredRelease: 3,
+      liveRelease: 2,
+      runtime: "gce-vm",
+      gatewayClass: "builder",
+      imageProfile: "builder",
+      sizingTier: "m",
+      ownerUid: "uid-1",
+      builderSlug: "alice",
+      modelBrokerLimits: { rpm: 10 },
+      openclawOverrides: null,
+      builderAccess: null,
+      gcpProject: null,
+      serviceAccountName: null,
+      vm: { instanceName: "octogee-computer-prod-uid", status: "TERMINATED" },
+    });
+  });
+
+  it("defaults an unmanaged cluster gateway to cowboy control with no VM", () => {
+    const control = projectGatewayControl(root as never, undefined);
+    expect(control).toMatchObject({ managedBy: "cowboy", runtime: "cluster", gatewayClass: "shared", vm: null, liveRelease: 2 });
+  });
+});
 
 describe("projectGatewayReservation", () => {
   afterEach(() => vi.unstubAllEnvs());

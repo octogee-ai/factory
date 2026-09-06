@@ -1,5 +1,5 @@
 import { FieldValue, } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, isOperatorManaged, resolveGatewayClass, resolveGatewayImageProfile, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidGatewayId, isValidNewGatewayId, isGatewayClass, isGatewayProfile, isOperatorManaged, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -1265,6 +1265,41 @@ const OP_STATUSES = new Set([
     "failed",
     "rolled-back",
 ]);
+export function projectGatewayControl(root, glmData) {
+    const profileInput = {
+        gatewayClass: root.gatewayClass,
+        imageProfile: root.imageProfile,
+        profile: root.profile ?? undefined,
+    };
+    return {
+        managedBy: isOperatorManaged(root.managedBy) ? "operator" : "cowboy",
+        desiredStatus: root.desiredStatus,
+        desiredRelease: releaseNumberOrNull(root.desiredRelease),
+        liveRelease: releaseNumberOrNull(root.liveRelease),
+        runtime: resolveGatewayRuntime(glmData?.runtime),
+        gatewayClass: resolveGatewayClass(profileInput),
+        imageProfile: resolveGatewayImageProfile(profileInput),
+        profile: orNull(root.profile),
+        sizingTier: orNull(root.sizingTier),
+        ownerUid: orNull(root.ownerUid),
+        builderSlug: orNull(root.builderSlug),
+        gcpProject: orNull(root.gcpProject),
+        serviceAccountName: orNull(root.serviceAccountName),
+        builderAccess: orNull(root.builderAccess),
+        modelBrokerLimits: orNull(root.modelBrokerLimits),
+        openclawOverrides: orNull(root.openclawOverrides),
+        vm: recordOrNull(glmData?.vm),
+    };
+}
+function orNull(value) {
+    return value ?? null;
+}
+function releaseNumberOrNull(value) {
+    return typeof value === "number" ? value : null;
+}
+function recordOrNull(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
 function asStringOrNull(v) {
     return typeof v === "string" && v.length > 0 ? v : null;
 }
@@ -3547,8 +3582,9 @@ export function addAdminFleetRoutes(router, deps) {
     router.get("/gateways/:id/details", async (req, res, next) => {
         try {
             const id = req.params.id;
-            const [runtime, usersSnap, opsSnap] = await Promise.all([
+            const [runtime, glmSnap, usersSnap, opsSnap] = await Promise.all([
                 readDurableGatewayRuntime(db, id),
+                db.collection(GLM_GATEWAYS_COLLECTION).doc(id).get(),
                 db.collection("users").get(),
                 db
                     .collection(GLM_OPERATIONS_COLLECTION)
@@ -3579,6 +3615,7 @@ export function addAdminFleetRoutes(router, deps) {
             res.json({
                 mountedCustomers,
                 recentOperations,
+                control: projectGatewayControl(runtime.root, glmSnap.exists ? glmSnap.data() : undefined),
                 generatedAt: new Date().toISOString(),
             });
         }

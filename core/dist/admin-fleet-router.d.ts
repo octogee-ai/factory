@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { type Firestore } from "firebase-admin/firestore";
-import { type GatewayClass, type GatewayImageProfile, type GatewayProfile } from "@octogee/shared/types/glm";
+import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
+import { type GatewayDoc } from "@octogee/shared/types/gateway-releases";
 import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
+import { type GatewayMutableConfig } from "./gateway-live-release.js";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
@@ -91,6 +93,7 @@ interface FirestoreDocLike {
     id: string;
     data(): GlmDoc;
 }
+type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
 export interface FleetRuntimeSettings {
     gatewayImageRepository: string;
 }
@@ -186,6 +189,26 @@ export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<R
     staleActivations: number;
     oldestActivationAgeMs: number | null;
 };
+export interface AdminGatewayControlProjection {
+    managedBy: "cowboy" | "operator";
+    desiredStatus: string;
+    desiredRelease: number | null;
+    liveRelease: number | null;
+    runtime: GatewayRuntime;
+    gatewayClass: GatewayClass;
+    imageProfile: GatewayImageProfile;
+    profile: GatewayProfile | null;
+    sizingTier: string | null;
+    ownerUid: string | null;
+    builderSlug: string | null;
+    gcpProject: string | null;
+    serviceAccountName: string | null;
+    builderAccess: Record<string, unknown> | null;
+    modelBrokerLimits: Record<string, unknown> | null;
+    openclawOverrides: Record<string, unknown> | null;
+    vm: GatewayVmState | null;
+}
+export declare function projectGatewayControl(root: DurableGatewayRoot, glmData: Record<string, unknown> | undefined): AdminGatewayControlProjection;
 interface RolloutBodyError {
     status: number;
     body: Record<string, unknown>;

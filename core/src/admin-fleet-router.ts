@@ -29,10 +29,13 @@ import {
   isOperatorManaged,
   resolveGatewayClass,
   resolveGatewayImageProfile,
+  resolveGatewayRuntime,
   deriveGatewayIdentity,
   type GatewayClass,
   type GatewayImageProfile,
   type GatewayProfile,
+  type GatewayRuntime,
+  type GatewayVmState,
   type OperationAuditAliasPlan,
   type OperationAuditDocument,
 } from "@octogee/shared/types/glm";
@@ -2046,6 +2049,68 @@ const OP_STATUSES = new Set([
 interface StripeRefs {
   customerIds: string[];
   subscriptionIds: string[];
+}
+
+export interface AdminGatewayControlProjection {
+  managedBy: "cowboy" | "operator";
+  desiredStatus: string;
+  desiredRelease: number | null;
+  liveRelease: number | null;
+  runtime: GatewayRuntime;
+  gatewayClass: GatewayClass;
+  imageProfile: GatewayImageProfile;
+  profile: GatewayProfile | null;
+  sizingTier: string | null;
+  ownerUid: string | null;
+  builderSlug: string | null;
+  gcpProject: string | null;
+  serviceAccountName: string | null;
+  builderAccess: Record<string, unknown> | null;
+  modelBrokerLimits: Record<string, unknown> | null;
+  openclawOverrides: Record<string, unknown> | null;
+  vm: GatewayVmState | null;
+}
+
+export function projectGatewayControl(
+  root: DurableGatewayRoot,
+  glmData: Record<string, unknown> | undefined,
+): AdminGatewayControlProjection {
+  const profileInput = {
+    gatewayClass: root.gatewayClass,
+    imageProfile: root.imageProfile,
+    profile: root.profile ?? undefined,
+  };
+  return {
+    managedBy: isOperatorManaged(root.managedBy) ? "operator" : "cowboy",
+    desiredStatus: root.desiredStatus,
+    desiredRelease: releaseNumberOrNull(root.desiredRelease),
+    liveRelease: releaseNumberOrNull(root.liveRelease),
+    runtime: resolveGatewayRuntime(glmData?.runtime),
+    gatewayClass: resolveGatewayClass(profileInput),
+    imageProfile: resolveGatewayImageProfile(profileInput),
+    profile: orNull(root.profile),
+    sizingTier: orNull(root.sizingTier),
+    ownerUid: orNull(root.ownerUid),
+    builderSlug: orNull(root.builderSlug),
+    gcpProject: orNull(root.gcpProject),
+    serviceAccountName: orNull(root.serviceAccountName),
+    builderAccess: orNull(root.builderAccess as Record<string, unknown> | null | undefined),
+    modelBrokerLimits: orNull(root.modelBrokerLimits as Record<string, unknown> | null | undefined),
+    openclawOverrides: orNull(root.openclawOverrides),
+    vm: recordOrNull(glmData?.vm) as GatewayVmState | null,
+  };
+}
+
+function orNull<T>(value: T | null | undefined): T | null {
+  return value ?? null;
+}
+
+function releaseNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 interface DrawerMountedCustomer {
@@ -5064,8 +5129,9 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id = req.params.id as string;
-        const [runtime, usersSnap, opsSnap] = await Promise.all([
+        const [runtime, glmSnap, usersSnap, opsSnap] = await Promise.all([
           readDurableGatewayRuntime(db, id),
+          db.collection(GLM_GATEWAYS_COLLECTION).doc(id).get(),
           db.collection("users").get(),
           db
             .collection(GLM_OPERATIONS_COLLECTION)
@@ -5100,6 +5166,10 @@ router.get(
         res.json({
           mountedCustomers,
           recentOperations,
+          control: projectGatewayControl(
+            runtime.root,
+            glmSnap.exists ? (glmSnap.data() as Record<string, unknown> | undefined) : undefined,
+          ),
           generatedAt: new Date().toISOString(),
         });
       } catch (e) {

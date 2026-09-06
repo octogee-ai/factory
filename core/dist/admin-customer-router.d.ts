@@ -59,4 +59,10 @@ export interface AdminCustomerRouterDeps {
     }) => string[];
     getWorkspaceMmContext: (uid: string, userDataHint: Record<string, unknown>) => Promise<WorkspaceMmContextLite | null>;
 }
+export interface AdminCustomerPlacementProjection {
+    managedBy: "cowboy" | "operator";
+    gatewayId: string | null;
+    gatewayProfile: string | null;
+}
+export declare function projectCustomerPlacement(openclaw: unknown): AdminCustomerPlacementProjection;
 export declare function addAdminCustomerRoutes(router: Router, deps: AdminCustomerRouterDeps): Router;

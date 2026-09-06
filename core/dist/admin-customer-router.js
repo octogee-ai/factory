@@ -1,6 +1,7 @@
 import { buildCustomerSummary, toISODate, } from "./admin-shape.js";
 import { getTierConfig } from "@octogee/shared/types/billing-tiers";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { isOperatorManaged, readBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
@@ -248,6 +249,16 @@ function applyCustomerFilters(items, f) {
         result = result.filter((c) => c.byotActive === (f.byotFilter === "on"));
     }
     return result;
+}
+export function projectCustomerPlacement(openclaw) {
+    const record = openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
+        ? openclaw
+        : {};
+    return {
+        managedBy: isOperatorManaged(record.managedBy) ? "operator" : "cowboy",
+        gatewayId: typeof record.gatewayId === "string" ? record.gatewayId : null,
+        gatewayProfile: typeof record.gatewayProfile === "string" ? record.gatewayProfile : null,
+    };
 }
 const OPS_FIELD_MAP = {
     setTier: "selectedTier",
@@ -550,6 +561,8 @@ export function addAdminCustomerRoutes(router, deps) {
                     activatedAgents: provisioning.openclaw?.activatedAgents || [],
                     provisionedAt: toISODate(provisioning.openclaw?.provisionedAt),
                 },
+                placement: projectCustomerPlacement(provisioning.openclaw),
+                computer: readBuilderParkedComputer(d),
                 mattermost: {
                     connected: !!d.mattermost?.userId,
                     userId: d.mattermost?.userId || null,

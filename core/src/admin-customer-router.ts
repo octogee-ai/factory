@@ -14,6 +14,7 @@ import {
 } from "./admin-shape.js";
 import { getTierConfig, type TierName } from "@octogee/shared/types/billing-tiers";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { isOperatorManaged, readBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import {
@@ -394,6 +395,23 @@ function applyCustomerFilters(
   return result;
 }
 
+export interface AdminCustomerPlacementProjection {
+  managedBy: "cowboy" | "operator";
+  gatewayId: string | null;
+  gatewayProfile: string | null;
+}
+
+export function projectCustomerPlacement(openclaw: unknown): AdminCustomerPlacementProjection {
+  const record = openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
+    ? (openclaw as Record<string, unknown>)
+    : {};
+  return {
+    managedBy: isOperatorManaged(record.managedBy) ? "operator" : "cowboy",
+    gatewayId: typeof record.gatewayId === "string" ? record.gatewayId : null,
+    gatewayProfile: typeof record.gatewayProfile === "string" ? record.gatewayProfile : null,
+  };
+}
+
 const OPS_FIELD_MAP: Record<string, string> = {
   setTier: "selectedTier",
 };
@@ -756,6 +774,8 @@ router.get(
             activatedAgents: provisioning.openclaw?.activatedAgents || [],
             provisionedAt: toISODate(provisioning.openclaw?.provisionedAt),
           },
+          placement: projectCustomerPlacement(provisioning.openclaw),
+          computer: readBuilderParkedComputer(d as Record<string, unknown>),
           mattermost: {
             connected: !!d.mattermost?.userId,
             userId: d.mattermost?.userId || null,

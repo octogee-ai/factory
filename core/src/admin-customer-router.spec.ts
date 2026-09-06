@@ -265,6 +265,41 @@ describe("mergeDailyUsage", () => {
   });
 });
 
+describe("GET /api/admin/customer/:uid — placement and parked computer", () => {
+  it("projects operator placement and the parked computer with its checkpoint state", async () => {
+    const computer = {
+      instanceName: "octogee-computer-prod-uid-1",
+      zone: "us-central1-a",
+      instanceId: "123",
+      gatewayId: "alice-m-1",
+      parkedAt: 1_800_000_000_000,
+      checkpoint: { outcome: "fresh", requestedAt: 1_799_999_000_000, completedAt: 1_799_999_500_000 },
+    };
+    const app = makeApp({
+      "users/uid-1": customerDoc({
+        provisioning: {
+          openclaw: { status: "complete", slug: "builder", managedBy: "operator", gatewayId: "alice-m-1", gatewayProfile: "builder" },
+          computer,
+        },
+      }),
+    });
+
+    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+
+    expect(res.body.placement).toEqual({ managedBy: "operator", gatewayId: "alice-m-1", gatewayProfile: "builder" });
+    expect(res.body.computer).toEqual(computer);
+  });
+
+  it("defaults to cowboy placement with no computer when the user has never been placed", async () => {
+    const app = makeApp({ "users/uid-1": customerDoc() });
+
+    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+
+    expect(res.body.placement).toEqual({ managedBy: "cowboy", gatewayId: null, gatewayProfile: null });
+    expect(res.body.computer).toBeNull();
+  });
+});
+
 describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
   it("serves USD from the broker ledger and never the legacy $0 fields", async () => {
     const app = makeApp({
