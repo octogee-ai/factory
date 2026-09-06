@@ -151,7 +151,7 @@ async function runOrdinaryMigrationV2(input: {
   slug: string;
   migrationId: string;
 }): Promise<OperationResult> {
-  const initialized = await initializeMigrationV2(input, MIGRATE_STATE);
+  const initialized = await initializeMigrationV2(input);
   if ("success" in initialized) return initialized;
   const execution = {
     input,
@@ -213,7 +213,6 @@ function assertRootOwner(
 
 async function initializeMigrationV2(
   input: OrdinaryV2Input,
-  strategy: "migrate-state" | "provision-fresh",
 ): Promise<CustomerMigrationV2State | OperationResult> {
   const { op, ctx, deps, targets, uid, slug, migrationId } = input;
   if (targets.toRelease === null) {
@@ -228,7 +227,7 @@ async function initializeMigrationV2(
   assertRootOwner(targetRootFence, uid, slug, "target");
   const state: CustomerMigrationV2State = {
     phase: "initialized",
-    strategy,
+    strategy: MIGRATE_STATE,
     operationId: op.id,
     migrationId,
     uid,
@@ -673,7 +672,7 @@ async function provisionCustomerOnTarget(input: {
   return { steps: [], success: true, rolledBack: false };
 }
 
-interface ProvisionFreshV2Input {
+interface MigrationExecutionInput {
   deps: MigrateCustomerDeps;
   ctx: OperationContext;
   op: Operation;
@@ -684,376 +683,7 @@ interface ProvisionFreshV2Input {
   automatic: boolean;
 }
 
-interface ProvisionFreshV2Execution {
-  input: ProvisionFreshV2Input;
-  state: CustomerMigrationV2State;
-  sourceAssignment: Parameters<MigrateCustomerDeps["setAssignmentState"]>[0];
-}
-
-async function initializeProvisionFreshV2(
-  input: ProvisionFreshV2Input,
-): Promise<ProvisionFreshV2Execution | OperationResult> {
-  const { deps, ctx, op, targets, uid, slug, migrationId, automatic } = input;
-  let initialized: CustomerMigrationV2State | OperationResult;
-  try {
-    initialized = await initializeMigrationV2({
-      op,
-      ctx,
-      deps,
-      targets,
-      uid,
-      slug,
-      migrationId,
-    }, PROVISION_FRESH);
-  } catch (error) {
-    return failure(errorMessage(error), false);
-  }
-  if ("success" in initialized) return initialized;
-  const state = initialized;
-  const declaredSourceGatewayId = typeof op.input.fromGatewayId === "string"
-    ? op.input.fromGatewayId
-    : null;
-  const scopeChanged = [
-    state.operationId !== op.id,
-    state.migrationId !== deps.genMigrationId(op.id),
-    op.input.uid !== state.uid,
-    op.input.toGatewayId !== state.targetGatewayId,
-    declaredSourceGatewayId !== null && declaredSourceGatewayId !== state.sourceGatewayId,
-  ].some(Boolean);
-  const execution: ProvisionFreshV2Execution = {
-    input,
-    state,
-    sourceAssignment: {
-      gatewayId: targets.fromGatewayId,
-      uid,
-      slug,
-      epoch: targets.fromEpoch,
-      updatedByOperationId: op.id,
-      automatic,
-      state: "quiescing",
-    },
-  };
-  const revalidation = await revalidateResumedProvisionFresh(execution);
-  if (revalidation) return revalidation;
-  if (
-    scopeChanged &&
-    execution.state.phase !== "cutover" &&
-    execution.state.phase !== "sourceRetired"
-  ) {
-    return abortProvisionFreshV2(
-      execution,
-      new Error("durable provision-fresh migration input changed"),
-    );
-  }
-  if (execution.state.phase === "initialized") {
-    deps.log(
-      `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
-      "provision-fresh (durable fenced cutover)",
-    );
-  }
-  return execution;
-}
-
-async function persistProvisionFreshV2Phase(
-  execution: ProvisionFreshV2Execution,
-  state: CustomerMigrationV2State,
-): Promise<OperationResult | null> {
-  execution.state = state;
-  try {
-    await persistV2(execution.input.ctx, state);
-    return null;
-  } catch (error) {
-    return failure(v2RetryError(error), false);
-  }
-}
-
-async function abortProvisionFreshV2(
-  execution: ProvisionFreshV2Execution,
-  error: unknown,
-): Promise<OperationResult> {
-  const { deps } = execution.input;
-  try {
-    await deps.setAssignmentState({
-      ...execution.sourceAssignment,
-      state: "serving",
-      createIfMissing: false,
-    });
-  } catch (restoreError) {
-    deps.log(
-      `[migrate-customer] ❌ FAILED to restore assignment serving for ` +
-      `uid=${execution.sourceAssignment.uid} on ${execution.sourceAssignment.gatewayId}: ` +
-      `${errorMessage(restoreError)} — the customer stays quiescing`,
-    );
-    return failure(v2RetryError(restoreError), false);
-  }
-  const aborted: CustomerMigrationV2State = {
-    ...execution.state,
-    phase: "aborted",
-    abortFromPhase: execution.state.phase,
-    abortReason: errorMessage(error),
-    abortedAt: deps.now(),
-  };
-  const persistenceFailure = await persistProvisionFreshV2Phase(execution, aborted);
-  if (persistenceFailure) return persistenceFailure;
-  return {
-    steps: [],
-    success: false,
-    error: errorMessage(error),
-    rolledBack: true,
-  };
-}
-
-function provisionFreshPhaseNeedsRevalidation(
-  phase: CustomerMigrationV2State["phase"],
-): boolean {
-  return phase === "initialized" ||
-    phase === "freshSourceQuiesced" ||
-    phase === "freshCutoverReady";
-}
-
-async function freshCutoverOwnership(
-  execution: ProvisionFreshV2Execution,
-): Promise<"source" | "target" | OperationResult> {
-  const { deps } = execution.input;
-  const state = execution.state;
-  let currentUser: UserGatewayInfo | null;
-  try {
-    currentUser = await deps.readUser(state.uid);
-  } catch (error) {
-    return failure(v2RetryError(error), false);
-  }
-  if (currentUser === null || currentUser.slug !== state.slug) {
-    return failure(v2RetryError(
-      new Error("cannot verify fresh cutover ownership"),
-    ), false);
-  }
-  if (currentUser.currentGatewayId === state.targetGatewayId) return "target";
-  if (currentUser.currentGatewayId === state.sourceGatewayId) return "source";
-  return failure(v2RetryError(
-    new Error(
-      `fresh cutover ownership moved to unexpected gateway ` +
-      currentUser.currentGatewayId,
-    ),
-  ), false);
-}
-
-async function revalidateResumedProvisionFresh(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult | null> {
-  const { deps, op, targets } = execution.input;
-  const state = execution.state;
-  if (
-    op.customerMigrationV2 === undefined ||
-    !provisionFreshPhaseNeedsRevalidation(state.phase)
-  ) {
-    return null;
-  }
-  if (state.phase === "freshCutoverReady") {
-    const ownership = await freshCutoverOwnership(execution);
-    if (typeof ownership !== "string") return ownership;
-    if (ownership === "target") {
-      return advanceProvisionFreshCutoverReady(execution);
-    }
-  }
-  try {
-    const decision = await decideCustomerStateMigration(deps, targets);
-    if (decision.strategy === PROVISION_FRESH) return null;
-    return abortProvisionFreshV2(
-      execution,
-      new Error(
-        "fenced openclaw identity no longer authorizes provision-fresh migration",
-      ),
-    );
-  } catch (error) {
-    return abortProvisionFreshV2(execution, error);
-  }
-}
-
-async function provisionFreshSourceClient(
-  execution: ProvisionFreshV2Execution,
-): Promise<MigrationClient> {
-  const { deps } = execution.input;
-  const gatewayId = execution.state.sourceGatewayId;
-  const sourceUrl = await deps.resolveGatewayUrl(gatewayId);
-  return deps.buildClient((transportId) => {
-    if (transportId !== gatewayId) {
-      throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
-    }
-    return sourceUrl;
-  });
-}
-
-async function advanceProvisionFreshInitialized(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult | null> {
-  const { deps, ctx, targets, migrationId, slug } = execution.input;
-  try {
-    await assertV2InitialBindings(execution.state, deps);
-    const client = await provisionFreshSourceClient(execution);
-    await deps.setAssignmentState({
-      ...execution.sourceAssignment,
-      createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
-    });
-    await reportFreshStep(deps, ctx, "quiesce-source", () => client.quiesce({
-      migrationId,
-      gatewayId: targets.fromGatewayId,
-      slug,
-    }));
-    await reportFreshStep(deps, ctx, "flush-source", () => client.flushGateway({
-      migrationId,
-      gatewayId: targets.fromGatewayId,
-      slug,
-      reason: "migration-final",
-    }));
-    return persistProvisionFreshV2Phase(execution, {
-      ...execution.state,
-      phase: "freshSourceQuiesced",
-    });
-  } catch (error) {
-    return abortProvisionFreshV2(execution, error);
-  }
-}
-
-async function advanceProvisionFreshSourceQuiesced(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult | null> {
-  return persistProvisionFreshV2Phase(execution, {
-    ...execution.state,
-    phase: "freshCutoverReady",
-  });
-}
-
-async function advanceProvisionFreshCutoverReady(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult | null> {
-  const { deps, ctx, automatic } = execution.input;
-  const state = execution.state;
-  try {
-    await reportFreshStep(deps, ctx, "cutover-firestore", () => deps.commitV2Cutover({
-      strategy: PROVISION_FRESH,
-      operationId: state.operationId,
-      migrationId: state.migrationId,
-      sourceGatewayId: state.sourceGatewayId,
-      sourceEpoch: state.sourceEpoch,
-      sourceRelease: state.sourceRelease,
-      sourceAssignmentMode: state.sourceAssignmentMode,
-      sourceRootFence: state.sourceRootFence,
-      targetGatewayId: state.targetGatewayId,
-      targetRelease: state.targetRelease,
-      targetRootFence: state.targetRootFence,
-      uid: state.uid,
-      slug: state.slug,
-      automatic,
-    }));
-  } catch (error) {
-    if (classifyCustomerMigrationV2Error(error) === "retry") {
-      return failure(v2RetryError(error), false);
-    }
-    return abortProvisionFreshV2(execution, error);
-  }
-  return persistProvisionFreshV2Phase(execution, {
-    ...state,
-    phase: "cutover",
-    cutoverAt: deps.now(),
-  });
-}
-
-async function cleanupProvisionFreshSource(
-  execution: ProvisionFreshV2Execution,
-): Promise<void> {
-  const { deps, ctx } = execution.input;
-  const state = execution.state;
-  try {
-    const client = await provisionFreshSourceClient(execution);
-    await discardSourceFootprint(deps, ctx, {
-      client,
-      migrationId: state.migrationId,
-      gatewayId: state.sourceGatewayId,
-      slug: state.slug,
-    });
-  } catch (error) {
-    deps.log(
-      `[migrate-customer] ⚠ source cleanup unavailable after fresh durable cutover ` +
-      `gateway=${state.sourceGatewayId} slug=${state.slug}: ${errorMessage(error)}`,
-    );
-  }
-}
-
-async function advanceProvisionFreshCutover(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult | null> {
-  await cleanupProvisionFreshSource(execution);
-  return persistProvisionFreshV2Phase(execution, {
-    ...execution.state,
-    phase: "sourceRetired",
-    sourceRetiredAt: execution.input.deps.now(),
-  });
-}
-
-async function advanceProvisionFreshSourceRetired(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult | null> {
-  return persistProvisionFreshV2Phase(execution, {
-    ...execution.state,
-    phase: "complete",
-    completedAt: execution.input.deps.now(),
-  });
-}
-
-const PROVISION_FRESH_ADVANCE = {
-  initialized: advanceProvisionFreshInitialized,
-  freshSourceQuiesced: advanceProvisionFreshSourceQuiesced,
-  freshCutoverReady: advanceProvisionFreshCutoverReady,
-  cutover: advanceProvisionFreshCutover,
-  sourceRetired: advanceProvisionFreshSourceRetired,
-} as const;
-
-async function runProvisionFreshV2(
-  execution: ProvisionFreshV2Execution,
-): Promise<OperationResult> {
-  while (true) {
-    const { state } = execution;
-    if ((state.strategy ?? MIGRATE_STATE) !== PROVISION_FRESH) {
-      return failure("durable provision-fresh migration strategy changed", false);
-    }
-    if (state.phase === "complete") {
-      return { steps: [], success: true, rolledBack: false };
-    }
-    if (state.phase === "aborted") {
-      return {
-        steps: [],
-        success: false,
-        error: state.abortReason ?? "durable provision-fresh migration aborted",
-        rolledBack: true,
-      };
-    }
-    if (
-      state.phase !== "cutover" &&
-      state.phase !== "sourceRetired" &&
-      await execution.input.ctx.cancellationRequested?.()
-    ) {
-      return abortProvisionFreshV2(execution, new Error("customer migration cancelled"));
-    }
-    const advance = PROVISION_FRESH_ADVANCE[
-      state.phase as keyof typeof PROVISION_FRESH_ADVANCE
-    ];
-    if (!advance) {
-      return failure(`invalid durable provision-fresh migration phase: ${state.phase}`, false);
-    }
-    const result = await advance(execution);
-    if (result) return result;
-  }
-}
-
-async function provisionCustomerOnTargetV2(
-  input: ProvisionFreshV2Input,
-): Promise<OperationResult> {
-  const initialized = await initializeProvisionFreshV2({ ...input, ctx: destinationProgressContext(input) });
-  if ("success" in initialized) return initialized;
-  return runProvisionFreshV2(initialized);
-}
-
-function destinationProgressContext(input: Pick<ProvisionFreshV2Input, "deps" | "ctx" | "targets" | "slug" | "migrationId">): OperationContext {
+function destinationProgressContext(input: Pick<MigrationExecutionInput, "deps" | "ctx" | "targets" | "slug" | "migrationId">): OperationContext {
   const { deps, ctx, targets, slug, migrationId } = input;
   const progress = createMigrationProgress({
     now: deps.now,
@@ -1196,6 +826,52 @@ function terminalDurableMigrationResult(
       };
 }
 
+async function recoverPersistedFreshMigration(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  ctx: OperationContext,
+  state: CustomerMigrationV2State,
+): Promise<OperationResult> {
+  const scopeMatches = [
+    state.operationId === op.id,
+    state.migrationId === deps.genMigrationId(op.id),
+    state.uid === op.input.uid,
+    state.targetGatewayId === op.input.toGatewayId,
+    op.input.fromGatewayId === undefined || op.input.fromGatewayId === state.sourceGatewayId,
+  ].every(Boolean);
+  if (!scopeMatches) return failure("persisted fresh migration input changed", false);
+  const automatic = resolveOperationOrigin(op.origin) === "automatic";
+  try {
+    const user = await deps.readUser(state.uid);
+    if (!user || user.slug !== state.slug) throw new Error("cannot verify persisted fresh migration owner");
+    if (user.currentGatewayId === state.targetGatewayId) {
+      await deps.commitV2Cutover({ ...state, strategy: PROVISION_FRESH, automatic });
+      const url = await deps.resolveGatewayUrl(state.sourceGatewayId);
+      await discardSourceFootprint(deps, ctx, {
+        client: deps.buildClient(() => url), gatewayId: state.sourceGatewayId,
+        migrationId: state.migrationId, slug: state.slug,
+      });
+      await persistV2(ctx, { ...state, phase: "complete", completedAt: deps.now() });
+      return { steps: [], success: true, rolledBack: false };
+    }
+    if (user.currentGatewayId !== state.sourceGatewayId) throw new Error("persisted fresh migration ownership changed");
+    if (state.phase === "cutover" || state.phase === "sourceRetired") throw new Error("persisted fresh cutover lost target ownership");
+    const abortReason = "retired fresh migration cancelled before cutover; retry with durable state transfer";
+    await persistV2(ctx, { ...state, phase: "abortIntent", abortReason });
+    if (state.sourceAssignmentMode === "assigned") {
+      await deps.setAssignmentState({
+        gatewayId: state.sourceGatewayId, uid: state.uid, slug: state.slug,
+        state: "serving", epoch: state.sourceEpoch, updatedByOperationId: state.operationId,
+        createIfMissing: false, automatic,
+      });
+    }
+    await persistV2(ctx, { ...state, phase: "aborted", abortReason });
+    return { steps: [], success: false, rolledBack: true, error: abortReason };
+  } catch (error) {
+    return failure(v2RetryError(error), false);
+  }
+}
+
 function resumeDurableMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1203,18 +879,7 @@ function resumeDurableMigration(
 ): Promise<OperationResult> | null {
   const state = op.customerMigrationV2;
   if (!state) return null;
-  if ((state.strategy ?? MIGRATE_STATE) === PROVISION_FRESH) {
-    return provisionCustomerOnTargetV2({
-      deps,
-      op,
-      ctx,
-      targets: durableMigrationTargets(state),
-      uid: state.uid,
-      slug: state.slug,
-      migrationId: state.migrationId,
-      automatic: resolveOperationOrigin(op.origin) === "automatic",
-    });
-  }
+  if (state.strategy === PROVISION_FRESH) return recoverPersistedFreshMigration(deps, op, ctx, state);
   return runOrdinaryMigrationV2({
     op,
     ctx,
@@ -1226,13 +891,12 @@ function resumeDurableMigration(
   });
 }
 
-async function executeProvisionFresh(input: ProvisionFreshV2Input & {
+async function executeProvisionFresh(input: MigrationExecutionInput & {
   stateMigration: RollStateMigrationDecision;
   durable: boolean;
   nativeReturn?: NativeComputerReturn | null;
 }): Promise<OperationResult> {
   if (input.nativeReturn && input.durable) throw new Error("native computer returns require a Shared target");
-  if (input.durable) return provisionCustomerOnTargetV2(input);
   return provisionCustomerOnTarget({
     deps: input.deps,
     ctx: input.ctx,
@@ -1475,29 +1139,11 @@ async function decideCustomerStateMigration(
       `${targets.toRelease ?? "unknown"}`,
     );
   }
-  const decision = decideRollStateMigration({
+  return decideRollStateMigration({
     sourceOpenclawVersion,
     targetOpenclawVersion: openclawVersionFromGatewayImageTag(targetArtifact.imageTag),
     targetOpenclawSourceSha: targetArtifact.openclawSourceSha,
   });
-  if (
-    decision.sourceOpenclawVersion === null ||
-    decision.sourceOpenclawSourceSha === null
-  ) {
-    throw new Error(
-      `source gateway ${targets.fromGatewayId} reports no complete openclaw identity`,
-    );
-  }
-  if (
-    decision.targetOpenclawVersion === null ||
-    decision.targetOpenclawSourceSha === null
-  ) {
-    throw new Error(
-      `target gateway ${targets.toGatewayId} release ${targets.toRelease} ` +
-      "records no complete openclaw identity",
-    );
-  }
-  return decision;
 }
 
 function withStateMigration(

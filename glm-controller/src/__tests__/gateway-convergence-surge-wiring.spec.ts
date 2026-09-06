@@ -355,7 +355,7 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "mark-live" });
   });
 
-  it("skips state migration when the release changes the openclaw version", async () => {
+  it("migrates state when the release changes the openclaw version", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
     const upgrade: ReleasePayload = { ...artifact, imageTag: "8886d40-oc2026.7.2-beta.7" };
 
@@ -377,7 +377,7 @@ describe("gateway convergence surge wiring", () => {
     }));
   });
 
-  it("skips state migration when the live gateway reports no openclaw version", async () => {
+  it("migrates state when the live gateway reports no openclaw version", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
 
     await refineGatewayConvergenceAction({
@@ -391,7 +391,7 @@ describe("gateway convergence surge wiring", () => {
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
       stateMigration: expect.objectContaining({
-        strategy: "provision-fresh",
+        strategy: "migrate-state",
         sourceOpenclawVersion: null,
         targetOpenclawVersion: "2026.7.1",
       }),

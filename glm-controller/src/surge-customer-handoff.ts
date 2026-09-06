@@ -1021,39 +1021,14 @@ async function migrateAssignmentsAndReleaseTarget(
   const heldSourceSlugs: string[] = [];
   let targetReleaseAttempted = false;
   try {
-    let freshConfiguredBuilderAssignment: SurgeAssignment | undefined;
-    if (input.stateMigration.strategy === "provision-fresh") {
-      deps.log(
-        `[surge-handoff] skipping state migration; the replacement provisions fresh ` +
-        `gateway=${input.gatewayId} — ${input.stateMigration.reason}`,
-      );
-      if (configuredBuilderProcessGateRequired(input)) {
-        if (assignments.length !== 1) {
-          throw new Error(
-            `configured Builder fresh replacement requires exactly one assignment on ${input.gatewayId}`,
-          );
-        }
-        freshConfiguredBuilderAssignment = assignments[0]!;
-      }
-    } else {
-      await migrateAssignedState(deps, {
-        input,
-        assignments,
-        sourcePod,
-        targetPod,
-        ownedBy,
-        heldSourceSlugs,
-      });
-    }
-    if (freshConfiguredBuilderAssignment) {
-      await holdTargetOpenClaw(deps, {
-        gatewayId: input.gatewayId,
-        slug: freshConfiguredBuilderAssignment.slug,
-        operationId: ownedBy,
-        targetPod,
-      });
-      reservedTargetSlugs.push(freshConfiguredBuilderAssignment.slug);
-    }
+    await migrateAssignedState(deps, {
+      input,
+      assignments,
+      sourcePod,
+      targetPod,
+      ownedBy,
+      heldSourceSlugs,
+    });
     await gateServingAssignments(deps, input.gatewayId, assignments, ownedBy);
     targetReleaseAttempted = true;
     await releaseTargetWithConfirmation(deps, {
