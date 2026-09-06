@@ -2869,10 +2869,15 @@ function rearmableBuilderReturnOperation(input) {
         return false;
     const operationInput = operation.input;
     const terminalStatus = operation.status === "failed" || operation.status === "rolled-back";
+    const steps = operation.steps;
+    const failedBeforeSourceQuiesce = operation.rolledBack === false &&
+        Array.isArray(steps) && steps.length === 1 &&
+        isPlainRecord(steps[0]) && steps[0].name === "keys-sync-state" &&
+        steps[0].status === "failed";
     return [
         operation.kind === OP_KIND_MIGRATE_CUSTOMER,
         terminalStatus,
-        operation.rolledBack === true,
+        operation.rolledBack === true || failedBeforeSourceQuiesce,
         operation.origin === "automatic",
         operation.createdBy === "glm-controller-placement-policy",
         operation.inputUid === input.uid,

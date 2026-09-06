@@ -1865,7 +1865,12 @@ describe("manual disposable runtime return", () => {
     });
   });
 
-  it("rearms the exact failed automatic Builder return", async () => {
+  it.each([
+    { label: "completed rollback", rolledBack: true, steps: [], expected: 202 },
+    { label: "first key transfer failure", rolledBack: false, steps: [{ name: "keys-sync-state", status: "failed" }], expected: 202 },
+    { label: "unknown failure without rollback", rolledBack: false, steps: [], expected: 409 },
+    { label: "source quiesce without rollback", rolledBack: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "failed" }], expected: 409 },
+  ])("safely handles return retry after $label", async ({ rolledBack, steps, expected }) => {
     const targetGatewayId = "run-alice";
     const operationId = `builder-return-${targetGatewayId}`;
     const { app, state } = mkAdminFleetRouteApp({
@@ -1922,7 +1927,8 @@ describe("manual disposable runtime return", () => {
           gatewayId: "shared-blue",
           attempts: 1,
           attemptHistory: [{ attempt: 1, error: "checkpoint failed" }],
-          rolledBack: true,
+          rolledBack,
+          steps,
           error: "checkpoint failed",
           completedAt: 2,
           output: { ignored: true },
@@ -1940,7 +1946,12 @@ describe("manual disposable runtime return", () => {
     await request(app)
       .post("/customers/uid-alice/activation-lease/return/retry")
       .send({ operationId })
-      .expect(202, { status: "return-retried", operationId });
+      .expect(expected);
+
+    if (expected === 409) {
+      expect(state.operations[operationId].status).toBe("failed");
+      return;
+    }
 
     expect(state.operations[operationId]).toMatchObject({
       kind: "migrate-customer",

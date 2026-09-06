@@ -1,0 +1,20 @@
+{{- if and .Values.global.computer.enabled .Values.gatewayFleet.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-vm-migration-ingress
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: octogee-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: {{ required "global.computer.cidr is required" .Values.global.computer.cidr | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.global.migrationRsyncPort | default "30873" }}
+{{- end }}
