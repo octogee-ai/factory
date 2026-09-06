@@ -2870,10 +2870,16 @@ function rearmableBuilderReturnOperation(input) {
     const operationInput = operation.input;
     const terminalStatus = operation.status === "failed" || operation.status === "rolled-back";
     const steps = operation.steps;
+    const error = operation.error;
+    const readinessPreflightFailure = Array.isArray(steps) && steps.length === 0 &&
+        typeof error === "string" && [
+        `source gateway ${operationInput.fromGatewayId} is not migration-ready (`,
+        `target gateway ${operationInput.toGatewayId} is not migration-ready (`,
+    ].some((prefix) => error.startsWith(prefix));
     const failedBeforeSourceQuiesce = operation.rolledBack === false &&
-        Array.isArray(steps) && steps.length === 1 &&
-        isPlainRecord(steps[0]) && steps[0].name === "keys-sync-state" &&
-        steps[0].status === "failed";
+        (readinessPreflightFailure || (Array.isArray(steps) && steps.length === 1 &&
+            isPlainRecord(steps[0]) && steps[0].name === "keys-sync-state" &&
+            steps[0].status === "failed"));
     return [
         operation.kind === OP_KIND_MIGRATE_CUSTOMER,
         terminalStatus,

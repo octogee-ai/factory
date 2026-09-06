@@ -1,3 +1,4 @@
+import { gatewayVmPodName } from "@octogee/shared/types/glm";
 import type {
   GatewayVmRuntimeBundle,
   GatewayVmRuntimeContainer,
@@ -54,7 +55,7 @@ function mountsKubernetesApi(bundle: GatewayVmRuntimeBundle, container: GatewayV
 
 export function envFor(bundle: GatewayVmRuntimeBundle, container: GatewayVmRuntimeContainer, ctx: PlanContext): string[] {
   const env: Record<string, string> = { ...container.env };
-  if ("POD_UID" in env) env.POD_UID = ctx.instanceId;
+  if ("POD_UID" in env) env.POD_UID = gatewayVmPodName(bundle.gatewayId, ctx.instanceId);
   if (mountsKubernetesApi(bundle, container)) {
     env.KUBERNETES_SERVICE_HOST = bundle.kubernetes.apiHost;
     env.KUBERNETES_SERVICE_PORT = bundle.kubernetes.apiPort;

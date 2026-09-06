@@ -1868,9 +1868,12 @@ describe("manual disposable runtime return", () => {
   it.each([
     { label: "completed rollback", rolledBack: true, steps: [], expected: 202 },
     { label: "first key transfer failure", rolledBack: false, steps: [{ name: "keys-sync-state", status: "failed" }], expected: 202 },
+    { label: "source readiness preflight failure", rolledBack: false, steps: [], error: "source gateway run-alice is not migration-ready (desiredStatus=running, desiredRelease=8, liveRelease=7); requires running or draining with a converged release", expected: 202 },
+    { label: "target readiness preflight failure", rolledBack: false, steps: [], error: "target gateway shared-blue is not migration-ready (desiredStatus=running, desiredRelease=8, liveRelease=7); requires running with a converged release", expected: 202 },
+    { label: "another gateway readiness failure", rolledBack: false, steps: [], error: "source gateway run-bob is not migration-ready (desiredStatus=running)", expected: 409 },
     { label: "unknown failure without rollback", rolledBack: false, steps: [], expected: 409 },
     { label: "source quiesce without rollback", rolledBack: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "failed" }], expected: 409 },
-  ])("safely handles return retry after $label", async ({ rolledBack, steps, expected }) => {
+  ])("safely handles return retry after $label", async ({ rolledBack, steps, expected, error = "checkpoint failed" }) => {
     const targetGatewayId = "run-alice";
     const operationId = `builder-return-${targetGatewayId}`;
     const { app, state } = mkAdminFleetRouteApp({
@@ -1929,7 +1932,7 @@ describe("manual disposable runtime return", () => {
           attemptHistory: [{ attempt: 1, error: "checkpoint failed" }],
           rolledBack,
           steps,
-          error: "checkpoint failed",
+          error,
           completedAt: 2,
           output: { ignored: true },
           input: {

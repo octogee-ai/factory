@@ -1,3 +1,8 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createSurgeReadinessGate } from "../../lib/surge-readiness";
+import { createSurgeOpenClawProcessGate } from "../../lib/surge-openclaw-process-gate";
 import { describe, expect, it } from "vitest";
 import { imagesToPull, planBundle, planContainer, runningVersion } from "../../lib/vm-gateway-agent/plan";
 import { bundleFixture } from "./fixture";
@@ -18,7 +23,7 @@ describe("planBundle", () => {
     const gateway = plan.services[0];
     expect(gateway.name).toBe("octogee-gateway");
     expect(gateway.config.Image).toBe("us-central1-docker.pkg.dev/octogee/octogee/gateway:main.abc");
-    expect(gateway.config.Env).toEqual(["GATEWAY_ID=b-x", "POD_UID=4242", "K8S_NAMESPACE=octogee-test"]);
+    expect(gateway.config.Env).toEqual(["GATEWAY_ID=b-x", "POD_UID=octogee-gateway-b-x-vm-4242", "K8S_NAMESPACE=octogee-test"]);
     expect((gateway.config.HostConfig as { Binds: string[] }).Binds).toEqual([
       "/srv/octogee/volumes/data:/home/node",
       "/srv/octogee/volumes/secret-resolver/secret-resolver.mjs:/octogee/scripts/secret-resolver.mjs:ro",
@@ -36,6 +41,37 @@ describe("planBundle", () => {
     ]));
     expect((edge.config.HostConfig as { Binds: string[] }).Binds).toContain("/srv/octogee/tokens/k8s-api-token:/var/run/secrets/kubernetes.io/serviceaccount:ro");
     expect((edge.config.HostConfig as { RestartPolicy: { Name: string } }).RestartPolicy).toEqual({ Name: "unless-stopped" });
+  });
+
+  it("gives a reused VM a fresh process identity without changing it on a release update", () => {
+    const first = bundleFixture();
+    const next = { ...first, gatewayId: "b-next" };
+    const env = (bundle: typeof first) => planBundle(bundle, ctx).services[0].config.Env as string[];
+    expect(env(first)).toContain("POD_UID=octogee-gateway-b-x-vm-4242");
+    expect(env(next)).toContain("POD_UID=octogee-gateway-b-next-vm-4242");
+    expect(env({ ...next, version: "v2" })).toContain("POD_UID=octogee-gateway-b-next-vm-4242");
+  });
+
+  it("keeps a new activation held when its VM home contains an earlier gateway's readiness", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vm-reuse-"));
+    const uid = (gatewayId: string) => {
+      const env = planBundle({ ...bundleFixture(), gatewayId }, ctx).services[0].config.Env as string[];
+      return env.find((entry) => entry.startsWith("POD_UID="))!.slice("POD_UID=".length);
+    };
+    try {
+      const previous = uid("previous");
+      const next = uid("next");
+      const gate = createSurgeOpenClawProcessGate(dir);
+      await createSurgeReadinessGate(dir, previous).release({ targetPodUid: previous });
+      await gate.ensure({ podUid: previous, readinessReleased: true });
+      const readiness = createSurgeReadinessGate(dir, next);
+      expect(await readiness.released()).toBe(false);
+      await gate.ensure({ podUid: next, readinessReleased: await readiness.released() });
+      await expect(gate.hydrateTarget({ podUid: next, targetPodUid: next, slug: "builder", migrationId: "new-activation" }))
+        .resolves.toMatchObject({ role: "target", mode: "held" });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("shares only desktop Documents with the VM gateway service, excluding edge, init, and browser credentials", () => {

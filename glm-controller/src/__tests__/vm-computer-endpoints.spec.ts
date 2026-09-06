@@ -42,10 +42,10 @@ describe("createSurgeEndpointLister", () => {
   it("presents a running computer as the gateway's single endpoint with the readiness the probe reports", async () => {
     const h = lister({ "b-x": { runtime: "gce-vm", vm } }, vi.fn(async () => false));
     expect(await h.listEndpoints("b-x")).toEqual({
-      pods: [{ uid: "4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", ready: false, terminating: false }],
-      observedPodUids: ["4242"],
+      pods: [{ uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", ready: false, terminating: false }],
+      observedPodUids: ["octogee-gateway-b-x-vm-4242"],
     });
-    expect(h.ready).toHaveBeenCalledWith({ uid: "4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false }, "b-x");
+    expect(h.ready).toHaveBeenCalledWith({ uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false }, "b-x");
     expect(h.listPods).not.toHaveBeenCalled();
   });
 
@@ -56,8 +56,8 @@ describe("createSurgeEndpointLister", () => {
       none: { runtime: "gce-vm" },
       cleared: { runtime: "gce-vm", vm: null },
     });
-    expect(await h.listEndpoints("stopped")).toEqual({ pods: [], observedPodUids: ["4242"] });
-    expect(await h.listEndpoints("stopping")).toEqual({ pods: [], observedPodUids: ["4242"] });
+    expect(await h.listEndpoints("stopped")).toEqual({ pods: [], observedPodUids: ["octogee-gateway-stopped-vm-4242"] });
+    expect(await h.listEndpoints("stopping")).toEqual({ pods: [], observedPodUids: ["octogee-gateway-stopping-vm-4242"] });
     expect(await h.listEndpoints("none")).toEqual({ pods: [], observedPodUids: [] });
     expect(await h.listEndpoints("cleared")).toEqual({ pods: [], observedPodUids: [] });
     expect(h.ready).not.toHaveBeenCalled();
@@ -66,7 +66,7 @@ describe("createSurgeEndpointLister", () => {
 });
 
 describe("createComputerReadinessProbe", () => {
-  const endpoint = { uid: "4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false };
+  const endpoint = { uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false };
 
   it("performs the readiness probe the kubelet would against the computer's fleet port", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
@@ -151,7 +151,7 @@ describe("first-boot VM gateway handoff", () => {
       gatewayId: "b-x", desiredImageTag: imageTag, requiresCustomerMigration: false, disposableBuilderGateway: true,
       ownerlessOperatorPrewarm: false, stateMigration: decideRollStateMigration({ sourceOpenclawVersion: undefined, targetOpenclawVersion: "2026.7.1" }),
     })).resolves.toEqual({ ready: true });
-    expect(deps.readPodHealth).toHaveBeenCalledWith(expect.objectContaining({ uid: "4242", podIP: "172.20.0.9" }), "b-x");
+    expect(deps.readPodHealth).toHaveBeenCalledWith(expect.objectContaining({ uid: "octogee-gateway-b-x-vm-4242", podIP: "172.20.0.9" }), "b-x");
     expect(listPods).not.toHaveBeenCalled();
 
     await expect(refineGatewayConvergenceAction({

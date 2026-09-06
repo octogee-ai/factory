@@ -1,11 +1,11 @@
-import { resolveGatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
+import { gatewayVmPodName, resolveGatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
 import type { SurgePod, SurgePodSnapshot } from "./surge-customer-handoff.js";
 
 export type ComputerEndpoint = Omit<SurgePod, "ready">;
 
 export type ComputerReadinessProbe = (endpoint: ComputerEndpoint, gatewayId: string) => Promise<boolean>;
 
-export function computerEndpointFromVm(vm: Partial<GatewayVmState> | null | undefined): ComputerEndpoint | null {
+export function computerEndpointFromVm(gatewayId: string, vm: Partial<GatewayVmState> | null | undefined): ComputerEndpoint | null {
   if (
     !vm ||
     vm.status !== "RUNNING" ||
@@ -15,7 +15,7 @@ export function computerEndpointFromVm(vm: Partial<GatewayVmState> | null | unde
   ) {
     return null;
   }
-  return { uid: vm.instanceId, name: vm.instanceName, podIP: vm.internalIp, terminating: false };
+  return { uid: gatewayVmPodName(gatewayId, vm.instanceId), name: vm.instanceName, podIP: vm.internalIp, terminating: false };
 }
 
 export async function listComputerEndpoints(
@@ -23,8 +23,8 @@ export async function listComputerEndpoints(
   gatewayId: string,
   readComputerReady: ComputerReadinessProbe,
 ): Promise<SurgePodSnapshot> {
-  const observedPodUids = typeof vm?.instanceId === "string" && vm.instanceId.length > 0 ? [vm.instanceId] : [];
-  const endpoint = computerEndpointFromVm(vm);
+  const observedPodUids = typeof vm?.instanceId === "string" && vm.instanceId.length > 0 ? [gatewayVmPodName(gatewayId, vm.instanceId)] : [];
+  const endpoint = computerEndpointFromVm(gatewayId, vm);
   if (!endpoint) return { pods: [], observedPodUids };
   const ready = await readComputerReady(endpoint, gatewayId);
   return { pods: [{ ...endpoint, ready }], observedPodUids };
