@@ -117,7 +117,7 @@ done
 grep -q '^ready$' "$log_dir/seat-input.log" || { stamp "ERROR virtual input seat never became ready"; exit 1; }
 stamp "virtual input seat ready"
 
-wayvnc --output="$output" "$bind" "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
+wayvnc --render-cursor --output="$output" "$bind" "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
 children+=($!)
 stamp "wayvnc listening on ${vnc_port}"
 

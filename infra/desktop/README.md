@@ -73,6 +73,20 @@ OCTO_COMPOSITOR=labwc ./measure.sh
 | 6080 | noVNC over websockify: `http://localhost:6080/vnc.html?autoconnect=true` |
 | 5900 | wayvnc RFB listener (any VNC viewer) |
 
+wayvnc runs with `--render-cursor` because the headless output has no hardware
+cursor plane; without it the stream carries no pointer and the owner drives
+blind. The PWA additionally shows noVNC's dot cursor whenever a server sends no
+cursor shape.
+
+Owner takeover input goes through the viewer's RFB session. A host compositor
+still sees chords before the browser does: on Omarchy, Super+W closes the PWA
+window rather than the window inside the agent computer. The takeover bar's
+**Send keys** control injects Super, Super+W, Super+Return, Super+Space, Alt+Tab,
+Ctrl+Alt+T, and Escape straight into the desktop, and **Capture all keys** enters
+browser fullscreen with the Keyboard Lock API so Chromium-family browsers hand
+over the keys their platform allows. Host-level binds that the compositor
+reserves for itself still win; use Send keys for those.
+
 wayvnc 0.10.1's own `--websocket` listener segfaults as soon as noVNC connects
 (labwc + pixman, under Rosetta; not retested on x86_64), so websockify fronts
 the RFB port instead.
