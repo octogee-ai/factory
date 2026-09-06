@@ -116,7 +116,7 @@ RUN chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/*
 
 ENV OCTO_COMPOSITOR=hyprland \
     OCTO_OUTPUT_NAME=OCTOGEE \
-    OCTO_RESOLUTION=1920x1080 \
+    OCTO_RESOLUTION=1440x900 \
     OCTO_REFRESH=30 \
     OCTO_VNC_PORT=5900 \
     OCTO_NOVNC_PORT=6080 \

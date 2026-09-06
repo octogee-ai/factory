@@ -6,6 +6,7 @@ ZONE="us-west1-b"
 IMAGE=""
 FAMILY="octogee-computer"
 MACHINE="n2-standard-4"
+RESOLUTION="1440x900"
 NAME="octogee-computer-test-$(date -u +%H%M%S)"
 KEEP=0
 STOP_START=0
@@ -95,6 +96,9 @@ t_desktop=$(date +%s)
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
 chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
+read -r -a ihdr < <(od -An -tu1 -j16 -N8 "$work/screenshot.png")
+screenshot_size="$(( (ihdr[0] << 24) | (ihdr[1] << 16) | (ihdr[2] << 8) | ihdr[3] ))x$(( (ihdr[4] << 24) | (ihdr[5] << 16) | (ihdr[6] << 8) | ihdr[7] ))"
+[[ "$screenshot_size" == "$RESOLUTION" ]] || { echo "screenshot is ${screenshot_size}, expected ${RESOLUTION}" >&2; exit 1; }
 
 persist=skipped
 if [[ "$STOP_START" == 1 ]]; then
@@ -124,6 +128,7 @@ cat <<RESULT
 | Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
 | Desktop service restarts needed | 0 |
 | Chromium window | "${chromium_title}" |
+| Screenshot size | ${screenshot_size} (expected ${RESOLUTION}) |
 | Home survives stop/start | ${persist} |
 | Screenshot | ${work}/screenshot.png (deleted with the workdir unless --keep) |
 RESULT

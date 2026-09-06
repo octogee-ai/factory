@@ -1,5 +1,5 @@
 local output = os.getenv("OCTO_OUTPUT_NAME") or "OCTOGEE"
-local resolution = os.getenv("OCTO_RESOLUTION") or "1920x1080"
+local resolution = os.getenv("OCTO_RESOLUTION") or "1440x900"
 local refresh = os.getenv("OCTO_REFRESH") or "30"
 
 hl.monitor({ output = "", disabled = true })

@@ -72,7 +72,7 @@ and take over the desktop.
 | --- | --- |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
 | `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |
-| `octo-desktop.service` | as `octo`: Hyprland on the `vkms` output at 1920x1080, wayvnc, noVNC over websockify, the control API, Chromium; everything bound to 127.0.0.1 |
+| `octo-desktop.service` | as `octo`: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium; everything bound to 127.0.0.1 |
 | `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
 | `octo-metadata-ssh-keys.service` | installs `octo:` keys from GCE metadata before sshd |
 | `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set (a warm-pool member boots without them and is assigned later through `setMetadata`), then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket |

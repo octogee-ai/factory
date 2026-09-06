@@ -255,7 +255,7 @@ the first key is required or the first keystroke after a focus change is lost
 - [x] Image builds; `omarchy` + `omarchy-settings` install with the stub package
 - [x] GPU-less result recorded: Hyprland cannot start (finding above)
 - [x] GPU-less fallback (`labwc`): `docker compose up` reaches control-API healthy and a mapped Chromium window
-- [x] `GET /screenshot` returns the rendered 1920x1080 desktop
+- [x] `GET /screenshot` returns the rendered 1440x900 desktop
 - [x] `POST /click`, `/type`, `/key` change the next screenshot and the window title
 - [x] noVNC renders the same output in a browser, and a click through noVNC navigates Chromium (human takeover path)
 - [x] Omarchy VM with virtio-vga: Hyprland, screenshot shows the Omarchy desktop, input verified
