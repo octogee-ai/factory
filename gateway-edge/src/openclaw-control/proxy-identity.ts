@@ -30,6 +30,8 @@ const DEFAULT_ROLE_SYNC_TIMEOUT_MS = 10_000;
 export interface OpenClawControlProxyIdentitySession {
   uid: string;
   gatewayId: string;
+  revisionId: string;
+  sessionId: string;
   brokerProfile: OpenClawBrokerProfile;
 }
 
@@ -62,7 +64,7 @@ export interface CreateOpenClawControlProxyIdentityOptions {
   timeoutMs?: number;
   podAddress?: () => string | undefined;
   openSocket?: typeof openProxyIdentitySocket;
-  loadAppearance?: (uid: string) => Promise<OpenClawProfileAppearance>;
+  loadAppearance?: (session: OpenClawControlProxyIdentitySession) => Promise<OpenClawProfileAppearance>;
 }
 
 function loopback(address: string | undefined): boolean {
@@ -144,9 +146,9 @@ export function createOpenClawControlProxyIdentity(
   const timeoutMs = options.timeoutMs ?? DEFAULT_ROLE_SYNC_TIMEOUT_MS;
   const fallbackAddress = options.podAddress ?? podClientAddress;
   const openSocket = options.openSocket ?? openProxyIdentitySocket;
-  const loadAppearance = options.loadAppearance ?? (async (uid: string) => {
+  const loadAppearance = options.loadAppearance ?? (async (session: OpenClawControlProxyIdentitySession) => {
     const { loadOpenClawProfileAppearance } = await import("./profile-appearance.js");
-    return loadOpenClawProfileAppearance(uid);
+    return loadOpenClawProfileAppearance(session, env);
   });
   const avatarSyncs = new Map<string, { revision: string; updatedAt: number | undefined }>();
   const pendingSyncs = new Map<string, Promise<void>>();
@@ -197,7 +199,7 @@ export function createOpenClawControlProxyIdentity(
         profile = profileFor(await listProfiles(), session.uid);
       }
       if (!profile) throw new Error(`OpenClaw did not create a profile for ${session.uid}`);
-      const appearance = await loadAppearance(session.uid);
+      const appearance = await loadAppearance(session);
       const avatarUnchanged = avatarAlreadySynced(profile, appearance);
       const update = async (method: string, params: Record<string, unknown>): Promise<void> => {
         const result = await rpc.call<{ profile: OpenClawProfileListItem }>(method, { profileId: profile!.id, ...params });

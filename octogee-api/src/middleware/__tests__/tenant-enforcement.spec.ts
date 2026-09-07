@@ -113,6 +113,7 @@ function app(opts: {
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
+  a.post("/internal/openclaw-control/profile", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/channels", enforcement, handler);
   a.post("/internal/openclaw/activity/session-context", enforcement, handler);
@@ -580,7 +581,7 @@ describe("tenant enforcement middleware", () => {
   });
 
   it("delegates exact OpenClaw Control routes only for the bound gateway tenant", async () => {
-    for (const route of ["redeem", "authorize", "mattermost/authorize", "mattermost/channels"]) {
+    for (const route of ["redeem", "authorize", "profile", "mattermost/authorize", "mattermost/channels"]) {
       const ownedGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/openclaw-control/${route}`)
         .send({ gatewayId: "bender", uid: "victim" });

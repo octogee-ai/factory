@@ -107,7 +107,7 @@ function identityFor(gateway: MockGateway, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-const helper = { uid: "uid-Helper", gatewayId: "bender", brokerProfile: "delegated-config" as const };
+const helper = { uid: "uid-Helper", gatewayId: "bender", revisionId: "bender", sessionId: "session-id", brokerProfile: "delegated-config" as const };
 
 describe("OpenClaw control proxy identity", () => {
   it("is disabled unless the pod runs per-user control identity", () => {
@@ -154,7 +154,7 @@ describe("OpenClaw control proxy identity", () => {
       upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4", loadAppearance,
     });
     await identity.syncProfile(helper);
-    expect(loadAppearance).toHaveBeenCalledWith(helper.uid);
+    expect(loadAppearance).toHaveBeenCalledWith(helper);
     expect(gateway.calls.filter((call) => call.method !== "users.list")).toEqual([
       { method: "users.setDisplayName", params: { profileId: "person", displayName: "Chris" }, user: "svc:gateway-edge" },
       { method: "users.setAvatar", params: { profileId: "person", mime: "image/jpeg", avatarBase64: Buffer.from("avatar").toString("base64") }, user: "svc:gateway-edge" },
@@ -185,7 +185,7 @@ describe("OpenClaw control proxy identity", () => {
 
   it("shares concurrent profile syncs for the same user and keeps other users separate", async () => {
     const gateway = await mockGateway();
-    const loadAppearance = vi.fn(async (uid: string) => ({ displayName: uid, avatar: null }));
+    const loadAppearance = vi.fn(async (session: { uid: string }) => ({ displayName: session.uid, avatar: null }));
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
       upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4", loadAppearance,

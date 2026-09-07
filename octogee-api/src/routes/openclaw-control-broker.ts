@@ -752,6 +752,52 @@ async function authorizeControlSession(
     next(err);
   }
 }
+async function loadControlProfile(
+  context: BrokerContext & { profile: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance },
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  res.setHeader("cache-control", "no-store");
+  if (!requestFits(req)) {
+    res.status(413).json({ error: "request-too-large" });
+    return;
+  }
+  const bound = boundGateway(req, res);
+  if (!bound) return;
+  const body = record(req.body);
+  if (
+    !body ||
+    !exactKeys(body, ["gatewayId", "revisionId", "sessionId"]) ||
+    !validSessionId(body.sessionId)
+  ) {
+    res.status(400).json({ error: INVALID_REQUEST });
+    return;
+  }
+  const revisionId = body.revisionId as string;
+  const sessionHash = openClawControlSessionHash(body.sessionId);
+  try {
+    const result = await context.db.runTransaction((tx) => sessionAccessInTransaction({
+      db: context.db,
+      tx,
+      gatewayId: bound.gatewayId,
+      revisionId,
+      sessionHash,
+      now: context.now(),
+    }));
+    if (result.kind !== "allowed") {
+      sendSessionAccessFailure(result, res);
+      return;
+    }
+    const appearance = await context.profile(result.session.uid);
+    res.json({ displayName: appearance.displayName, avatar: appearance.avatar ? {
+      revision: appearance.avatar.revision,
+      avatarBase64: (await appearance.avatar.read()).toString("base64"),
+    } : null });
+  } catch (err) {
+    next(err);
+  }
+}
 
 interface MattermostBrokerDependencies {
   authorize: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").authorizeChannelCredentials;
@@ -828,6 +874,7 @@ export function createOpenClawControlBrokerRoutes(args: {
   db: Firestore;
   now?: () => number;
   mattermost?: MattermostBrokerDependencies;
+  profile?: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance;
 }): Router {
   const router = Router();
   const context: BrokerContext = {
@@ -836,6 +883,10 @@ export function createOpenClawControlBrokerRoutes(args: {
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));
   router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
+  router.post("/profile", (req, res, next) => loadControlProfile({
+    ...context, profile: args.profile ?? (async (uid) =>
+      (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(uid)),
+  }, req, res, next));
   for (const operation of ["authorize", "channels"] as const) {
     router.post(`/mattermost/${operation}`, (req, res, next) =>
       controlMattermostRequest({ ...context, mattermost: args.mattermost ?? mattermostDefaults, operation }, req, res, next));
