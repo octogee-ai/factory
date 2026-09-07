@@ -41,6 +41,7 @@ export interface OpenClawControlProxyIdentity {
   serviceHeaders(): Record<string, string>;
   deviceIdentity(session: OpenClawControlProxyIdentitySession): DeviceIdentity;
   connectScopes(session: OpenClawControlProxyIdentitySession): string[];
+  resolveChatProfile(session: OpenClawControlProxyIdentitySession, source: { channelId: string; postId: string }): Promise<OpenClawChatSenderProfile | null>;
   syncProfile(session: OpenClawControlProxyIdentitySession, options?: { assignRole: boolean }): Promise<void>;
 }
 
@@ -51,6 +52,13 @@ interface OpenClawProfileListItem {
   displayName?: string | null;
   hasAvatar?: boolean;
   updatedAt?: number;
+}
+
+export interface OpenClawChatSenderProfile {
+  mattermostUserId: string;
+  profileId: string;
+  username: string;
+  avatarUrl?: string;
 }
 
 export interface OpenClawProfileAppearance {
@@ -64,6 +72,7 @@ export interface CreateOpenClawControlProxyIdentityOptions {
   timeoutMs?: number;
   podAddress?: () => string | undefined;
   openSocket?: typeof openProxyIdentitySocket;
+  loadChatAppearance?: typeof import("./profile-appearance.js").loadOpenClawChatProfileAppearance;
   loadAppearance?: (session: OpenClawControlProxyIdentitySession) => Promise<OpenClawProfileAppearance>;
 }
 
@@ -183,7 +192,9 @@ export function createOpenClawControlProxyIdentity(
     ws.close();
   };
 
-  const synchronizeProfile = async (session: OpenClawControlProxyIdentitySession, assignRole: boolean): Promise<void> => {
+  const synchronizeProfile = async (
+    session: OpenClawControlProxyIdentitySession, assignRole: boolean, suppliedAppearance?: OpenClawProfileAppearance,
+  ): Promise<OpenClawProfileListItem> => {
     const desired = roleFor(session);
     const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
     const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
@@ -199,7 +210,7 @@ export function createOpenClawControlProxyIdentity(
         profile = profileFor(await listProfiles(), session.uid);
       }
       if (!profile) throw new Error(`OpenClaw did not create a profile for ${session.uid}`);
-      const appearance = await loadAppearance(session);
+      const appearance = suppliedAppearance ?? await loadAppearance(session);
       const avatarUnchanged = avatarAlreadySynced(profile, appearance);
       const update = async (method: string, params: Record<string, unknown>): Promise<void> => {
         const result = await rpc.call<{ profile: OpenClawProfileListItem }>(method, { profileId: profile!.id, ...params });
@@ -219,6 +230,7 @@ export function createOpenClawControlProxyIdentity(
         avatarSyncs.set(profile.id, { revision: appearance.avatar.revision, updatedAt: profile.updatedAt });
         if (avatarSyncs.size > 256) avatarSyncs.delete(avatarSyncs.keys().next().value!);
       }
+      return profile;
     } finally {
       rpc.dispose();
       ws.close();
@@ -229,7 +241,7 @@ export function createOpenClawControlProxyIdentity(
     const key = JSON.stringify([session.gatewayId, session.uid, roleFor(session), assignRole]);
     const pending = pendingSyncs.get(key);
     if (pending) return pending;
-    const sync = synchronizeProfile(session, assignRole).finally(() => { pendingSyncs.delete(key); });
+    const sync = synchronizeProfile(session, assignRole).then(() => {}).finally(() => { pendingSyncs.delete(key); });
     pendingSyncs.set(key, sync);
     return sync;
   };
@@ -245,6 +257,17 @@ export function createOpenClawControlProxyIdentity(
         subject: openClawDeviceSubject(session.gatewayId, session.uid, roleFor(session)),
       }),
     connectScopes: (session) => openClawDeviceRequestScopes(roleFor(session)),
+    async resolveChatProfile(session, source) {
+      if (!enabled) return null;
+      const load = options.loadChatAppearance ?? (await import("./profile-appearance.js")).loadOpenClawChatProfileAppearance;
+      const author = await load(session, source, env);
+      if (!author) return null;
+      const profile = await synchronizeProfile({ ...session, uid: author.uid }, false, author.appearance);
+      return {
+        mattermostUserId: author.mattermostUserId, profileId: profile.id, username: author.username,
+        ...(profile.hasAvatar ? { avatarUrl: `/api/users/${encodeURIComponent(profile.id)}/avatar?v=${profile.updatedAt ?? 0}` } : {}),
+      };
+    },
     syncProfile,
   };
 }

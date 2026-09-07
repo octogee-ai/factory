@@ -845,6 +845,50 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     }).map((message) => message.__openclaw.id)).toEqual([rootId, answerId, commitId]);
   });
 
+  it("attributes chat to the existing profile and builder slug while retaining the agent's native identity", async () => {
+    const authorize = vi.fn(async () => authorized({ listChannelPosts: async () => ({ posts: committedPosts(), reachedEnd: true }) }));
+    const resolveChatProfile = vi.fn(async () => ({ mattermostUserId: humanId, profileId: "existing-profile", username: "alice", avatarUrl: "/api/users/existing-profile/avatar?v=7" }));
+    const prepared = await createMattermostControlChat({ authorize, resolveChatProfile }).prepare({
+      type: "req", id: "history-profile", method: "chat.history", params: { sessionKey },
+    }, session());
+    expect(resolveChatProfile).toHaveBeenCalledWith(session(), { channelId, postId: rootId });
+    if (prepared?.kind !== "upstream") throw new Error("expected upstream projection");
+    const response = prepared.project({ type: "res", ok: true, payload: {} });
+    expect(response).toMatchObject({ payload: { messages: [
+      { role: "user", __openclaw: { senderId: "existing-profile", senderIdentity: { type: "profile", id: "existing-profile" }, senderName: "alice", senderUsername: "alice", senderProfileAvatarUrl: "/api/users/existing-profile/avatar?v=7" } },
+      { role: "assistant" },
+    ] } });
+    expect(JSON.stringify(response)).not.toContain(humanId);
+    expect(JSON.stringify(response)).not.toContain(agentMmUserId);
+  });
+
+  it("resolves all visible authors concurrently without waiting for earlier authors", async () => {
+    const posts = Array.from({ length: 8 }, (_, index) => post({
+      id: String(index).repeat(26), user_id: String(index + 1).repeat(26),
+      message: `Message ${index}`, create_at: index + 1,
+    }));
+    const authorize = vi.fn(async () => authorized({ listChannelPosts: async () => ({ posts, reachedEnd: true }) }));
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const resolveChatProfile = vi.fn(async () => { await pending; return null; });
+    const preparation = createMattermostControlChat({ authorize, resolveChatProfile }).prepare({
+      type: "req", id: "many-authors", method: "chat.history", params: { sessionKey },
+    }, session());
+    try {
+      await vi.waitFor(() => expect(resolveChatProfile).toHaveBeenCalledTimes(8));
+    } finally {
+      release();
+      await preparation;
+    }
+  });
+
+  it("rejects a profile whose verified author does not match the projected message", async () => {
+    const authorize = vi.fn(async () => authorized({ listChannelPosts: async () => ({ posts: committedPosts(), reachedEnd: true }) }));
+    const resolveChatProfile = vi.fn(async () => ({ mattermostUserId: "other", profileId: "wrong-profile", username: "other" }));
+    const result = await createMattermostControlChat({ authorize, resolveChatProfile }).prepare({ type: "req", id: "history", method: "chat.history", params: { sessionKey } }, session());
+    expect(result).toMatchObject({ kind: "response", frame: { ok: false } });
+  });
+
   it("replaces SQLite history with the clean Mattermost projection while preserving native metadata", async () => {
     const listChannelPosts = vi.fn(async () => ({
       posts: committedPosts(),

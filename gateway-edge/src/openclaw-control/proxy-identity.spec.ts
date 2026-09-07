@@ -144,6 +144,22 @@ describe("OpenClaw control proxy identity", () => {
     expect(gateway.profiles[0]).toEqual({ id: "profile-1", emails: ["uid-helper"], role: "trusted-helper" });
   });
 
+  it("reuses the profile/avatar sync for chat authors without assigning the viewer's role", async () => {
+    const gateway = await mockGateway([{ id: "author-profile", emails: ["uid-author"], role: "member", displayName: "Author" }]);
+    const read = vi.fn(async () => Buffer.from("avatar"));
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
+      loadChatAppearance: async () => ({ uid: "uid-author", username: "builder-slug", mattermostUserId: "m".repeat(26), appearance: { displayName: "Author", avatar: { revision: "one", read } } }),
+    });
+    const source = { channelId: "channel", postId: "post" };
+    expect(await identity.resolveChatProfile(helper, source)).toMatchObject({ profileId: "author-profile", username: "builder-slug", avatarUrl: expect.stringContaining("/api/users/author-profile/avatar") });
+    await identity.resolveChatProfile(helper, source);
+    expect(gateway.profiles[0]!.role).toBe("member");
+    expect(gateway.calls.some(call => call.method === "users.setRole")).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("syncs Octogee appearance through the service even when the role is unchanged", async () => {
     const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "trusted-helper" }]);
     const read = vi.fn(async () => Buffer.from("avatar"));

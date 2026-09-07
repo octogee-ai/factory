@@ -1845,6 +1845,12 @@ export interface AttachOpenClawControlWsRouteOptions {
   ) => void;
 }
 
+function identityMattermostChat(proxyIdentity: OpenClawControlProxyIdentity): MattermostControlChat {
+  return createMattermostControlChat({
+    ...(proxyIdentity.enabled ? { resolveChatProfile: (session, source) => proxyIdentity.resolveChatProfile(session, source) } : {}),
+  });
+}
+
 export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRouteOptions): void {
   const env = options.env ?? process.env;
   const sessions = options.sessions ?? defaultSessions;
@@ -1855,7 +1861,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
   const loadGatewayToken = options.loadGatewayToken ?? fetchGatewayToken;
   const proxyIdentity = options.proxyIdentity ?? defaultProxyIdentity(env);
   const limiter = options.resourceLimiter ?? defaultLimiter;
-  const mattermostChat = options.mattermostChat ?? createMattermostControlChat();
+  const mattermostChat = options.mattermostChat ?? identityMattermostChat(proxyIdentity);
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const authorizationIntervalMs = options.authorizationIntervalMs ?? DEFAULT_AUTHORIZATION_INTERVAL_MS;
   if (!Number.isSafeInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 ||

@@ -1,3 +1,4 @@
+import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { postOpenClawControlBroker } from "./broker.js";
 import type { OpenClawControlProxyIdentitySession, OpenClawProfileAppearance } from "./proxy-identity.js";
 
@@ -18,7 +19,11 @@ export async function loadOpenClawProfileAppearance(
     await response.body?.cancel();
     throw new Error(`Profile broker request failed: ${response.status}`);
   }
-  const body = record(await response.json());
+  return parseAppearance(await response.json());
+}
+
+function parseAppearance(value: unknown): OpenClawProfileAppearance {
+  const body = record(value);
   if (!body || (body.displayName !== null && (typeof body.displayName !== "string" || body.displayName.length > 256))) {
     throw new Error("Invalid profile broker response");
   }
@@ -35,4 +40,29 @@ function parseAvatar(value: unknown): NonNullable<OpenClawProfileAppearance["ava
   }
   const bytes = Buffer.from(avatar.avatarBase64, "base64");
   return { revision: avatar.revision, read: async () => bytes };
+}
+
+export async function loadOpenClawChatProfileAppearance(
+  session: OpenClawControlProxyIdentitySession,
+  source: { channelId: string; postId: string },
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl?: typeof fetch,
+): Promise<{ uid: string; username: string; mattermostUserId: string; appearance: OpenClawProfileAppearance } | null> {
+  const { gatewayId, revisionId, sessionId } = session;
+  const response = await postOpenClawControlBroker("/internal/openclaw-control/profile", {
+    gatewayId, revisionId, sessionId, ...source,
+  }, env, fetchImpl);
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Profile broker request failed: ${response.status}`);
+  }
+  const body = record(await response.json());
+  const author = record(body?.author);
+  if (!author || typeof author.uid !== "string" || !author.uid || author.uid.length > 128 ||
+    typeof author.username !== "string" || !USERNAME_RE.test(author.username) ||
+    typeof author.mattermostUserId !== "string" || !/^[a-z0-9]{26}$/u.test(author.mattermostUserId)) {
+    throw new Error("Invalid chat profile broker response");
+  }
+  return { uid: author.uid, username: author.username, mattermostUserId: author.mattermostUserId, appearance: parseAppearance(body) };
 }

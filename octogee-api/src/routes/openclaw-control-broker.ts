@@ -733,7 +733,7 @@ async function authorizeControlSession(
     return;
   }
   const revisionId = body.revisionId as string;
-  const sessionHash = openClawControlSessionHash(body.sessionId);
+  const sessionHash = openClawControlSessionHash(body.sessionId as string);
   try {
     const result = await context.db.runTransaction((tx) => sessionAccessInTransaction({
       db: context.db,
@@ -752,8 +752,19 @@ async function authorizeControlSession(
     next(err);
   }
 }
+
+function validProfileRequest(body: Record<string, unknown> | null): body is Record<string, unknown> {
+  if (!body || !exactKeys(body, ["gatewayId", "revisionId", "sessionId", "channelId", "postId"]) || !validSessionId(body.sessionId)) return false;
+  if (body.channelId === undefined && body.postId === undefined) return true;
+  return typeof body.channelId === "string" && /^[a-z0-9]{26}$/u.test(body.channelId) &&
+    typeof body.postId === "string" && /^[a-z0-9]{26}$/u.test(body.postId);
+}
+
 async function loadControlProfile(
-  context: BrokerContext & { profile: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance },
+  context: BrokerContext & {
+    profile: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance;
+    chatAuthor: typeof import("../lib/openclaw-chat-author.js").resolveOpenClawChatAuthor;
+  },
   req: Request,
   res: Response,
   next: NextFunction,
@@ -766,16 +777,12 @@ async function loadControlProfile(
   const bound = boundGateway(req, res);
   if (!bound) return;
   const body = record(req.body);
-  if (
-    !body ||
-    !exactKeys(body, ["gatewayId", "revisionId", "sessionId"]) ||
-    !validSessionId(body.sessionId)
-  ) {
+  if (!validProfileRequest(body)) {
     res.status(400).json({ error: INVALID_REQUEST });
     return;
   }
   const revisionId = body.revisionId as string;
-  const sessionHash = openClawControlSessionHash(body.sessionId);
+  const sessionHash = openClawControlSessionHash(body.sessionId as string);
   try {
     const result = await context.db.runTransaction((tx) => sessionAccessInTransaction({
       db: context.db,
@@ -789,8 +796,20 @@ async function loadControlProfile(
       sendSessionAccessFailure(result, res);
       return;
     }
-    const appearance = await context.profile(result.session.uid);
-    res.json({ displayName: appearance.displayName, avatar: appearance.avatar ? {
+    let author: Awaited<ReturnType<typeof context.chatAuthor>> = null;
+    if (typeof body.postId === "string") {
+      if (!["native-owner", "native-co-owner", "native-member", "native-member-helper"].includes(result.session.brokerProfile)) {
+        res.status(403).json({ error: "forbidden" });
+        return;
+      }
+      author = await context.chatAuthor(result.session.uid, result.session.workspaceSlug, body.channelId as string, body.postId);
+      if (!author) {
+        res.status(204).end();
+        return;
+      }
+    }
+    const appearance = await context.profile(author?.uid ?? result.session.uid);
+    res.json({ ...(author ? { author } : {}), displayName: appearance.displayName, avatar: appearance.avatar ? {
       revision: appearance.avatar.revision,
       avatarBase64: (await appearance.avatar.read()).toString("base64"),
     } : null });
@@ -897,6 +916,7 @@ export function createOpenClawControlBrokerRoutes(args: {
   now?: () => number;
   mattermost?: MattermostBrokerDependencies;
   profile?: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance;
+  chatAuthor?: typeof import("../lib/openclaw-chat-author.js").resolveOpenClawChatAuthor;
 }): Router {
   const router = Router();
   const context: BrokerContext = {
@@ -907,7 +927,9 @@ export function createOpenClawControlBrokerRoutes(args: {
   router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
   const profile = cacheProfileAvatars(args.profile ?? (async (uid) =>
     (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(uid)));
-  router.post("/profile", (req, res, next) => loadControlProfile({ ...context, profile }, req, res, next));
+  const chatAuthor = args.chatAuthor ?? (async (...params) =>
+    (await import("../lib/openclaw-chat-author.js")).resolveOpenClawChatAuthor(...params));
+  router.post("/profile", (req, res, next) => loadControlProfile({ ...context, profile, chatAuthor }, req, res, next));
   for (const operation of ["authorize", "channels"] as const) {
     router.post(`/mattermost/${operation}`, (req, res, next) =>
       controlMattermostRequest({ ...context, mattermost: args.mattermost ?? mattermostDefaults, operation }, req, res, next));

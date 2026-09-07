@@ -1952,7 +1952,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       proxyIdentity: {
         enabled: true, userHeaders: () => ({ "x-octogee-user": "uid-helper" }),
         serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge" }), deviceIdentity: () => device,
-        connectScopes: () => ["operator.read", "operator.write"], syncProfile: async () => {},
+        connectScopes: () => ["operator.read", "operator.write"], resolveChatProfile: async () => null, syncProfile: async () => {},
       }, rpcTimeoutMs: 300,
       retainMutationLeaseUntilProcessReplacement: (lease) => { retained.push(lease); },
     });
@@ -2047,6 +2047,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge", "x-octogee-proxy": "1" }),
       deviceIdentity: () => personDevice,
       connectScopes: () => ["operator.read", "operator.write", "operator.approvals"],
+      resolveChatProfile: async () => null,
       syncProfile: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
         syncOrder.push(`sync:${session.uid}:${session.brokerProfile}`);
       }),

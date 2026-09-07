@@ -15,6 +15,7 @@ import {
   ChannelSessionMattermostError,
   type MattermostModelPost,
 } from "../lib/channel-session-model-control.js";
+import type { OpenClawControlProxyIdentity } from "./proxy-identity.js";
 import type { OpenClawControlSession } from "./session.js";
 import { createBrokeredMattermostAccess } from "./mattermost-broker.js";
 
@@ -123,6 +124,9 @@ interface ProjectedMessage {
     idempotencyKey?: string;
     senderId?: string;
     senderName?: string;
+    senderUsername?: string;
+    senderIdentity?: { type: "profile"; id: string };
+    senderProfileAvatarUrl?: string;
     turnBoundary?: true;
   };
 }
@@ -1470,10 +1474,52 @@ async function prepareSessionsList(
   };
 }
 
+async function attributeChatProfiles(
+  page: ProjectedHistory,
+  session: OpenClawControlSession,
+  channelId: string,
+  resolve: OpenClawControlProxyIdentity["resolveChatProfile"] | undefined,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!resolve) return;
+  const authors = new Map<string, ProjectedMessage>();
+  for (const message of page.messages) {
+    if (message.role === "user" && message.__openclaw.senderId) authors.set(message.__openclaw.senderId, message);
+  }
+  const entries = [...authors.entries()];
+  const profiles = new Map<string, Awaited<ReturnType<typeof resolve>>>();
+  signal?.throwIfAborted();
+  await Promise.all(entries.map(async ([mmId, message]) => {
+    const profile = await resolve(session, { channelId, postId: message.__openclaw.id });
+    if (profile && profile.mattermostUserId !== mmId) throw new Error("Chat profile author mismatch");
+    profiles.set(mmId, profile);
+  }));
+  signal?.throwIfAborted();
+  for (const message of page.messages) {
+    const meta = message.__openclaw;
+    if (message.role === "assistant") {
+      delete meta.senderId;
+      delete meta.senderName;
+      continue;
+    }
+    const profile = profiles.get(meta.senderId ?? "");
+    if (!profile) {
+      meta.senderName = "Mattermost user";
+      continue;
+    }
+    meta.senderId = profile.profileId;
+    meta.senderIdentity = { type: "profile", id: profile.profileId };
+    meta.senderName = profile.username;
+    meta.senderUsername = profile.username;
+    if (profile.avatarUrl) meta.senderProfileAvatarUrl = profile.avatarUrl;
+  }
+}
+
 async function prepareHistory(
   frame: OpenClawControlRequestFrame,
   session: OpenClawControlSession,
   authorize: Authorize,
+  resolveChatProfile: OpenClawControlProxyIdentity["resolveChatProfile"] | undefined,
   signal?: AbortSignal,
 ): Promise<MattermostChatPreparation | null> {
   const params = historyParams(frame.params);
@@ -1510,6 +1556,7 @@ async function prepareHistory(
     return rpcError(frame, "UNAVAILABLE", "Mattermost channel history exceeds the recovery window");
   }
   const page = pageHistory(history.messages, params.offset, params.limit, history.reachedEnd);
+  await attributeChatProfiles(page, session, access.route.primaryChannelId, resolveChatProfile, signal);
   if (session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper") {
     return rpcSuccess(frame, { sessionKey: params.sessionKey, ...page });
   }
@@ -1616,6 +1663,7 @@ function unavailableResponse(
 }
 
 export function createMattermostControlChat(options: {
+  resolveChatProfile?: OpenClawControlProxyIdentity["resolveChatProfile"];
   authorize?: Authorize;
   listWorkspaceChannels?: ListWorkspaceChannels;
 } = {}): MattermostControlChat {
@@ -1637,7 +1685,7 @@ export function createMattermostControlChat(options: {
           );
         }
         if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, signal);
-        const history = await prepareHistory(frame, session, authorize, signal);
+        const history = await prepareHistory(frame, session, authorize, options.resolveChatProfile, signal);
         const route = parseChannelScopedMattermostSessionRoute(frame.params.sessionKey);
         if (history && route && (history.kind === "upstream" || history.frame.ok === true)) {
           history.watch = {
