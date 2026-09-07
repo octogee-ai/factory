@@ -6,17 +6,25 @@ import unittest
 
 
 MOCK = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, struct, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 case = os.environ['ACCEPTANCE_CASE']
 if name == 'gcloud':
+    if args[:3] == ['compute', 'instances', 'create']:
+        ci = os.environ['OCTOGEE_IMAGE_RUN_ID'] != 'manual'
+        assert ('--max-run-duration=2h' in args) == ci
+        assert ('--instance-termination-action=DELETE' in args) == ci
     if 'describe' in args: print('192.0.2.1')
 elif name == 'scp':
-    pathlib.Path(args[-1]).write_bytes(b'fixture screenshot')
+    pathlib.Path(args[-1]).write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * 8 + struct.pack('>II', 1440, 900))
 elif name == 'ssh':
     command = args[-1]
-    if 'cat /etc/octogee-computer-image' in command: print('fixture-image')
+    if command == 'python3 -':
+        if case == 'missing-resize': sys.exit(22)
+        if case == 'resize-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists(): sys.exit(22)
+        print('display resize verified: 1440x900')
+    elif 'cat /etc/octogee-computer-image' in command: print('fixture-image')
     elif 'systemd-analyze verify' in command:
         if case == 'nonexecutable-agent':
             print('octo-gateway-agent.service: Command is not executable', file=sys.stderr)
@@ -41,7 +49,7 @@ elif name == 'ssh':
 
 
 class ImageAcceptanceTests(unittest.TestCase):
-    def run_acceptance(self, case):
+    def run_acceptance(self, case, ci=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ('gcloud', 'scp', 'ssh'):
@@ -51,7 +59,7 @@ class ImageAcceptanceTests(unittest.TestCase):
             return subprocess.run(
                 ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', '--stop-start'],
                 env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
-                     'ACCEPTANCE_CASE': case, 'ACCEPTANCE_MARKER': str(root / 'marker')},
+                     'ACCEPTANCE_CASE': case, 'OCTOGEE_IMAGE_RUN_ID': '123-1' if ci else 'manual', 'ACCEPTANCE_MARKER': str(root / 'marker')},
                 capture_output=True, text=True, timeout=15,
             )
 
@@ -59,6 +67,18 @@ class ImageAcceptanceTests(unittest.TestCase):
         result = self.run_acceptance('success')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Home survives stop/start | yes', result.stdout)
+
+    def test_ci_vm_has_independent_cloud_deletion_deadline(self):
+        result = self.run_acceptance('success', ci=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_resize_api_fails_acceptance(self):
+        result = self.run_acceptance('missing-resize')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_resize_must_survive_restart(self):
+        result = self.run_acceptance('resize-lost-after-reboot')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_missing_profile_fails_acceptance(self):
         result = self.run_acceptance('missing-profile')

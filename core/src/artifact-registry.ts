@@ -272,6 +272,7 @@ const RELEASE_GATEWAY_IMAGES_REQUIRED = [
 ] as const;
 
 export interface ReleaseDigestManifest {
+  desktopImage?: unknown;
   sourceSha: string;
   manifestDigest: string;
   openclawVersion: string;
@@ -425,6 +426,7 @@ function validateReleaseDigestManifest(input: unknown, manifestDigest: string, e
       : {}),
     repository: expectedRepository,
     surfaces: { gateway, platform: parseSurface("platform") },
+    ...(manifest.desktopImage === undefined ? {} : { desktopImage: manifest.desktopImage }),
   };
 }
 

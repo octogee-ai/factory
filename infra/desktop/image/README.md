@@ -130,3 +130,78 @@ clean exit; the seal removes the build key so the poweroff rides the same SSH
 session; the builder needs `/dev/kvm` opened; `gcloud compute ssh` with the
 default RSA key was refused by fresh VMs on 2026-09-05 while an ed25519 key
 delivered the same way worked, so the orchestrator uses its own ed25519 key.
+
+## Candidate acceptance and publication
+
+Build with `--candidate` to register an image without advancing the family:
+
+```bash
+infra/desktop/image/build.sh --project octogee-test --candidate
+infra/desktop/image/test.sh --project octogee-test --image <candidate-name> --stop-start
+```
+
+Acceptance checks the native resize API, screenshot dimensions, and XWayland
+geometry at 800×600 and 1024×768, restores 1440×900, and repeats after stop/start.
+Missing resize support fails acceptance. The Python acceptance fixtures and
+candidate-family behavior run in the scripts CI suite.
+
+After acceptance, publication assigns that exact image to the environment's
+`octogee-computer` family. Record publication and any pool refresh in the
+operations journal. Existing boot disks do not change when a family advances.
+Retire only unassigned old warm-pool members through Cowboy's retirement path;
+replace assigned computers individually with `fleet --env=test gw replace-computer <gateway-id> --apply` when requested. This checkpoints and restores home.
+Check `fleet --help` before running an operator command.
+
+## CI/CD
+
+The `desktop-image` job in `build-main.yml` calls these same build and acceptance
+scripts. A fingerprint covers the rootfs, ISO and tool pins, installer,
+acceptance scripts, and build driver. Unchanged inputs reuse the accepted GCE
+image; a cache miss builds a candidate without changing the image family,
+then runs acceptance on a disposable VM, including resize and stop/start.
+Only successful acceptance creates an immutable descriptor in
+`gs://octogee-test-octogee-computer-images/accepted/`.
+
+The existing release manifest records `desktopImage`: project, image name,
+numeric GCE image ID, source SHA, input fingerprint, and acceptance version.
+Both cache reuse and publication verify the live image identity. Recreating an
+image under the same name fails that check. A retry can accept an existing
+candidate with matching inputs without rebuilding it.
+
+Publish a built main SHA using the existing Fleet CLI:
+
+```bash
+npm run --prefix scripts fleet -- --env=test desktop-image publish --sha=<full-main-sha>
+npm run --prefix scripts fleet -- --env=test desktop-image publish --sha=<full-main-sha> --apply
+```
+
+The first command previews the artifact. The second journals publication,
+advances the TEST family, and marks stale unassigned warm-pool members for
+Cowboy to replace using their observed label fingerprints. Assignment labels
+and metadata are checked again before mutation. Assigned computers retain
+their current disks. Use the existing per-gateway `gw replace-computer` command
+for an explicitly selected assigned computer.
+
+For PROD, select `--env=prod`: Fleet copies the tested image from TEST into the
+PROD image project, verifies the copy's source image ID, then publishes it.
+It does not rebuild. An older manifest can be selected to roll back the family.
+Manifests predating desktop artifacts cannot publish a desktop image.
+Platform deployment remains independent of desktop and gateway publication.
+
+CI uses the existing GitHub WIF authentication. The TEST Terraform environment
+owns its temporary-compute permissions, dedicated builder service account, and
+image-bucket access. CI has no new Compute authority over the CENTRAL project
+that hosts assigned computers, and no image-family update permission.
+The builder has a 60-minute deadline and acceptance a 15-minute deadline.
+CI VMs also have a two-hour GCE automatic deletion limit, independent of the
+runner. An always-running cleanup step deletes this run's temporary VMs; the next
+image job also removes abandoned CI VMs older than two hours. Operator builds
+are excluded from that cleanup.
+
+Image acceptance verifies the host desktop, browser input, resize, XWayland
+geometry, and reboot persistence. It does not start a paired OpenClaw coach;
+gateway container and node wiring remain covered by their existing tests.
+
+The accepted image `octogee-computer-4-0-2-20260907-1302` was published to TEST
+on 2026-09-07. Fresh-VM acceptance passed before and after stop/start, and
+Cowboy's replacement warm spare was verified to use that image.

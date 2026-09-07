@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT=""
 ZONE="us-west1-b"
 IMAGE=""
@@ -10,11 +11,12 @@ RESOLUTION="1440x900"
 NAME="octogee-computer-test-$(date -u +%H%M%S)"
 KEEP=0
 STOP_START=0
+SERVICE_ACCOUNT=""
 
 usage() {
   cat <<EOF
 usage: $0 --project <gcp-project> [--zone $ZONE] [--image <name> | --family $FAMILY]
-          [--machine-type $MACHINE] [--stop-start] [--keep]
+          [--machine-type $MACHINE] [--stop-start] [--keep] [--service-account <email>]
 
 Boots a VM from the image, waits for SSH (key delivered through instance
 metadata), checks the desktop session, drives Chromium through the control API,
@@ -32,12 +34,21 @@ while [[ $# -gt 0 ]]; do
     --machine-type) MACHINE="$2"; shift 2 ;;
     --stop-start) STOP_START=1; shift ;;
     --keep) KEEP=1; shift ;;
+    --service-account) SERVICE_ACCOUNT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 [[ -n "$PROJECT" ]] || { usage >&2; exit 2; }
 
+service_account_args=()
+[[ -z "$SERVICE_ACCOUNT" ]] || service_account_args=(--service-account "$SERVICE_ACCOUNT")
+run_label="${OCTOGEE_IMAGE_RUN_ID:-manual}"
+[[ "$run_label" =~ ^[a-z0-9-]{1,63}$ ]] || { echo "invalid image run ID" >&2; exit 2; }
+ci_lifetime_args=()
+if [[ "$run_label" =~ ^[0-9]+-[0-9]+$ ]]; then
+  ci_lifetime_args=(--max-run-duration=2h --instance-termination-action=DELETE)
+fi
 work="$(mktemp -d)"
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) [test]" "$*"; }
 cleanup() {
@@ -77,7 +88,7 @@ t_create=$(date +%s)
 gcloud compute instances create "$NAME" --project "$PROJECT" --zone "$ZONE" --machine-type "$MACHINE" \
   "${image_args[@]}" --boot-disk-type pd-ssd \
   --metadata-from-file ssh-keys="$work/ssh-keys" \
-  --labels purpose=octogee-computer-test --format='value(name)' >/dev/null
+  --labels "purpose=octogee-computer-test,octogee-image-run=${run_label}" "${service_account_args[@]}" "${ci_lifetime_args[@]}" --format='value(name)' >/dev/null
 IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 wait_ssh 300
 t_ssh=$(date +%s)
@@ -93,6 +104,7 @@ read -r -a unit_states <<< "$units"
 [[ "${unit_states[*]}" == 'active active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
 wait_desktop
 t_desktop=$(date +%s)
+vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
 chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
@@ -111,6 +123,7 @@ if [[ "$STOP_START" == 1 ]]; then
   wait_ssh 300
   t_back=$(date +%s)
   wait_desktop
+  vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
   after="$(vssh 'cat ~/persist-marker 2>/dev/null; if test -f ~/.config/octogee-chromium/Default/Cookies; then echo profile-present; fi')"
   if [[ "$after" == *"$marker"* && "$after" == *profile-present* ]]; then persist="yes ($((t_back - t_start)) s start to ssh)"; else persist="NO: $after"; fi
 fi
@@ -128,6 +141,7 @@ cat <<RESULT
 | Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
 | Desktop service restarts needed | 0 |
 | Chromium window | "${chromium_title}" |
+| Resize + screenshot + XWayland geometry | 800x600, 1024x768, restored 1440x900 |
 | Screenshot size | ${screenshot_size} (expected ${RESOLUTION}) |
 | Home survives stop/start | ${persist} |
 | Screenshot | ${work}/screenshot.png (deleted with the workdir unless --keep) |

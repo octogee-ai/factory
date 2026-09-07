@@ -260,6 +260,7 @@ function validateReleaseDigestManifest(input, manifestDigest, expectedRepository
             : {}),
         repository: expectedRepository,
         surfaces: { gateway, platform: parseSurface("platform") },
+        ...(manifest.desktopImage === undefined ? {} : { desktopImage: manifest.desktopImage }),
     };
 }
 function validateResolvedReleaseDigestManifest(manifest, expectedRepository) {

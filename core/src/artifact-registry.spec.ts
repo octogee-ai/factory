@@ -316,6 +316,15 @@ describe("CENTRAL release authority — Artifact Registry adapter", () => {
     },
   };
 
+  it("preserves the accepted desktop artifact when resolving the immutable manifest", async () => {
+    const desktopImage = { project: "octogee-test", name: "octogee-computer-fixture", id: "123", sourceSha, inputFingerprint: "f".repeat(64), acceptance: "resize-reboot-v1" };
+    const archive = tarFile("release-digest-manifest.json", JSON.stringify({ ...manifest, desktopImage }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ version: `projects/octogee/locations/us-central1/repositories/octogee/packages/release-digest-manifest/versions/${manifestDigest}` }))
+      .mockResolvedValueOnce(jsonResponse({ schemaVersion: 2, layers: [{ digest: `sha256:${"f".repeat(64)}` }] }))
+      .mockResolvedValueOnce(new Response(archive));
+    await expect(createCentralReleaseAuthority({ project: "octogee", location: "us-central1", repository: "octogee" }).resolveManifest(sourceSha)).resolves.toMatchObject({ desktopImage });
+  });
+
   it("resolves the immutable manifest, builds the exact alias plan, and accepts a raced alias only after exact re-read", async () => {
     const authority = createCentralReleaseAuthority({
       project: "octogee",

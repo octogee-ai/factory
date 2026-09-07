@@ -53,6 +53,8 @@ import {
   type AdminFleetRequest,
 } from "../lib/admin-fleet-client.js";
 
+import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
+
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
   (process.env.NO_COLOR === undefined || process.env.NO_COLOR === "");
@@ -180,6 +182,14 @@ const VERBS: readonly VerbHelp[] = [
       "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234",
       "fleet --env=test gw add --gateway-id=canary --image-tag=abc1234 --apply",
     ],
+    writes: true,
+  },
+  {
+    verb: "desktop-image publish",
+    summary: "Publish the tested desktop image from an immutable build manifest.",
+    args: "--sha=<full-main-sha> [--apply]",
+    description: "Dry-run by default. Copies the tested image when needed, journals publication, and asks Cowboy to retire stale unassigned warm-pool computers. Assigned computers are preserved.",
+    examples: ["fleet --env=test desktop-image publish --sha=0123456789abcdef0123456789abcdef01234567 --apply"],
     writes: true,
   },
   {
@@ -1954,6 +1964,10 @@ async function main(): Promise<void> {
         return missingArg("gw inspect");
       }
       return inspectGateway(args.positional[2]);
+    case "desktop-image publish": {
+      if (args.positional.length !== 2 || Object.keys(args.flags).some(flag => !["sha", "apply"].includes(flag)) || (args.flags.apply !== undefined && args.flags.apply !== true)) throw new Error("desktop-image publish accepts only --sha and --apply");
+      return runDesktopImagePublication({ environment: args.env as "test" | "prod", sourceSha: requiredFlag(args, "sha", "desktop-image publish", "full-main-sha"), apply, actor: await fleetOperatorUid(), db });
+    }
     case "release status":
       return releaseStatus();
     case "gw restart":

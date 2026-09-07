@@ -28,6 +28,7 @@ export declare function ensureKeepTag(opts: Omit<PinOpts, "tag"> & {
  *  cleanup once no env still pins it). Idempotent — 404 is already-gone. */
 export declare function removeKeepTag(opts: PinOpts): Promise<void>;
 export interface ReleaseDigestManifest {
+    desktopImage?: unknown;
     sourceSha: string;
     manifestDigest: string;
     openclawVersion: string;
