@@ -1084,7 +1084,7 @@ function customerSecurityProjectionPatch(current: unknown): Record<string, unkno
   });
 }
 
-function customerSecurityProjectionReplacePaths(current: unknown): string[] {
+export function customerSecurityProjectionReplacePaths(current: unknown): string[] {
   const config = isRecord(current) ? current : {};
   const paths = new Set([
     "plugins.allow",
@@ -1314,6 +1314,43 @@ export function customerOauthRuntimeConfigPatch(
     safeModelRef,
     opts?.forceSafeAll === true,
   ).patch;
+}
+
+export function customerMountConfigPatch(
+  current: unknown,
+  mountPatch: Record<string, unknown>,
+  slug: string,
+  safeModelRef: string,
+): Record<string, unknown> {
+  const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
+  const security = customerOauthRuntimeConfigPatch(candidate, slug, safeModelRef);
+  const candidateAgents = recordChild(candidate, "agents");
+  const securityAgents = recordChild(security, "agents");
+  const projectAgent = (id: string, entry: unknown, patch: unknown) => {
+    const projected = mergeConfigPatches(isRecord(entry) ? entry : {}, isRecord(patch) ? patch : {});
+    if (agentIdBelongsToSlug(id, slug) && isRecord(entry)) {
+      const model = normalizedCatalogSelection(entry.model);
+      if (model) projected.model = model;
+    }
+    return projected;
+  };
+  if (Array.isArray(candidateAgents.list)) {
+    const patches = new Map(listedAgentEntries(securityAgents));
+    securityAgents.list = candidateAgents.list.map((entry) =>
+      isRecord(entry) && typeof entry.id === "string"
+        ? projectAgent(entry.id, entry, patches.get(entry.id))
+        : entry,
+    );
+  }
+  if (isRecord(candidateAgents.entries)) {
+    const entries = candidateAgents.entries;
+    const patches = recordChild(securityAgents, "entries");
+    const mounted = recordChild(recordChild(mountPatch, "agents"), "entries");
+    securityAgents.entries = Object.fromEntries([...new Set([
+      ...Object.keys(mounted), ...Object.keys(patches),
+    ])].map((id) => [id, projectAgent(id, entries[id], patches[id])]));
+  }
+  return mergeConfigPatches(mountPatch, security);
 }
 
 type PurgeCustomerOauthRuntimeDeps = {

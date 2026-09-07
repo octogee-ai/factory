@@ -69,6 +69,22 @@ describe("fleet informer — owned listeners (users + assignments)", () => {
     vi.useRealTimers();
   });
 
+  it("wakes placement only when eligible unassigned users change", () => {
+    const { db, users } = fakeOwnedListenerDb();
+    const informer = createFleetInformer({ db, log: vi.fn() });
+    const wake = vi.fn();
+    const stop = informer.subscribeUnassignedUsers!(wake);
+    const candidate = { username: "alice", onboardingStep: "complete", provisioning: { status: "in_progress" } };
+    lastListener(users).onNext({ docs: [doc("alice", candidate)] });
+    expect(wake).toHaveBeenCalledOnce();
+    lastListener(users).onNext({ docs: [doc("alice", { ...candidate, displayName: "Alice" })] });
+    expect(wake).toHaveBeenCalledOnce();
+    lastListener(users).onNext({ docs: [doc("alice", { ...candidate, provisioning: { openclaw: { gatewayId: "shared-a" } } })] });
+    expect(wake).toHaveBeenCalledTimes(2);
+    stop();
+    informer.stop();
+  });
+
   it("attaches a users listener without a Firestore projection", () => {
     const { db, selects, users } = fakeOwnedListenerDb();
     const informer = createFleetInformer({ db, log: vi.fn() });

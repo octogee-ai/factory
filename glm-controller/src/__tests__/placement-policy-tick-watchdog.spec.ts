@@ -23,6 +23,23 @@ describe("placement policy tick watchdog", () => {
     vi.useRealTimers();
   });
 
+  it("drains a Firestore wake received while placement is in progress", async () => {
+    let wake!: () => void;
+    let release!: () => void;
+    const unsubscribe = vi.fn();
+    const runPass = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; })).mockResolvedValue(undefined);
+    const stop = startPlacementPolicyReconciler(loopDeps(vi.fn()), 60_000, {
+      runPass, subscribe: (notify) => { wake = notify; return unsubscribe; },
+    });
+    wake();
+    expect(runPass).toHaveBeenCalledOnce();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runPass).toHaveBeenCalledTimes(2);
+    stop();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("keeps single-flight for a slow pass under the deadline", async () => {
     const log = vi.fn();
     let release: () => void = () => undefined;

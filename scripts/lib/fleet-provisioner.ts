@@ -364,6 +364,7 @@ export interface StartFleetOptions {
   /** Credential-less local mount reconcile: trusted octogee-api returns the
    * assigned roster for this gateway identity. */
   readDesiredSlugs?: () => Promise<string[]>;
+  subscribeDesiredChanges?: (wake: () => void) => () => void;
   /** Content-convergence source: slug → fingerprint of the config-affecting snapshot
    *  slice (see snapshot-fingerprint.ts). When provided, it BOTH drives the desired
    *  roster (its keys) and lets the reconcile re-ensure an already-mounted customer whose
@@ -1535,7 +1536,8 @@ function startMaybeReconcileLoop(params: {
   );
   const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
-    intervalMs: RECONCILE_LOOP_INTERVAL_MS,
+    intervalMs: opts.subscribeDesiredChanges ? 60_000 : RECONCILE_LOOP_INTERVAL_MS,
+    subscribe: opts.subscribeDesiredChanges,
     // SERIAL (not the default cap): the production lifecycle adapter shares one mutable
     // `cachedUserData.current` across addCustomerToGateway calls (loadUserSnapshot →
     // toProvisioningContext → applyConfigPatch), so two concurrent mounts could provision
@@ -2650,7 +2652,10 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     whenReady,
     opts.log,
   );
-  const reconcileLoopStatus = caps.provision ? `${RECONCILE_LOOP_INTERVAL_MS}ms` : "disabled";
+  let reconcileLoopStatus = "disabled";
+  if (caps.provision) {
+    reconcileLoopStatus = opts.subscribeDesiredChanges ? "push; repair=60000ms" : `${RECONCILE_LOOP_INTERVAL_MS}ms`;
+  }
   opts.log(
     `[fleet] listening on 0.0.0.0:${boundPort}; gatewayId=${opts.gatewayId}; platformState=${platformState}; reportState=${reportState}; reconcile-loop=${reconcileLoopStatus}`,
   );

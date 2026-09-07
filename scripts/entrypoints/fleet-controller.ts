@@ -311,6 +311,7 @@ async function main(): Promise<void> {
     openclawDir: OPENCLAW_DIR,
     platformState: !builder,
     localReconcile: true,
+    subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
     readDesiredFingerprints: createAssignedFingerprintReader(
       brokerClient,
       adapter.seedUserSnapshotForMigration,

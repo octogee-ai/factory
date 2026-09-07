@@ -172,6 +172,7 @@ export const GATEWAY_CREDENTIAL_ROUTES = new Set([
   "/internal/fleet/computer-home/download-url",
   "/internal/fleet/computer-home/prune",
   "/internal/fleet/assigned-users",
+  "/internal/fleet/assignment-watch",
   "/internal/fleet/configured-builder-bootstrap",
   "/internal/fleet/npm-registry-credentials",
   "/internal/fleet/user-snapshot",

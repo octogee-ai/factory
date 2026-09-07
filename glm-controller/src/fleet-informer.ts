@@ -1,3 +1,4 @@
+import { resolveOnboardingPlacementEligibility } from "@octogee/shared/types/orchestrator-placement";
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 
@@ -12,6 +13,7 @@ export interface FleetInformer {
   gateways(): QueryDocumentSnapshot[] | null;
   glmGateways(): QueryDocumentSnapshot[] | null;
   users(): QueryDocumentSnapshot[] | null;
+  subscribeUnassignedUsers?(wake: () => void): () => void;
   assignments(): QueryDocumentSnapshot[] | null;
   ingestGateways(changes: readonly MirrorDocChange[], options?: { reset?: boolean }): void;
   ingestGlmGateways(changes: readonly MirrorDocChange[], options?: { reset?: boolean }): void;
@@ -105,6 +107,19 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
   const users = new CollectionMirror("users", log);
   const assignments = new CollectionMirror("assignments", log);
 
+  const placementListeners = new Set<() => void>();
+  let pendingUsers = "";
+  const notifyUnassignedChanges = (docs: QueryDocumentSnapshot[]) => {
+    const pending = docs.filter((doc) => {
+      const data = doc.data();
+      return resolveOnboardingPlacementEligibility(data).eligible &&
+        !data.provisioning?.openclaw?.gatewayId;
+    }).map((doc) => doc.id).sort().join("\n");
+    if (pending === pendingUsers) return;
+    pendingUsers = pending;
+    for (const wake of placementListeners) wake();
+  };
+
   let stopped = false;
   const unsubscribes = new Map<string, () => void>();
   const reattachTimers = new Map<string, NodeJS.Timeout>();
@@ -122,6 +137,7 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
       (snapshot) => {
         if (stopped) return;
         mirror.replace(snapshot.docs);
+        if (name === "users") notifyUnassignedChanges(snapshot.docs);
       },
       (error) => {
         if (stopped) return;
@@ -150,6 +166,10 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
     gateways: () => gateways.read(),
     glmGateways: () => glmGateways.read(),
     users: () => users.read(),
+    subscribeUnassignedUsers: (wake) => {
+      placementListeners.add(wake);
+      return () => { placementListeners.delete(wake); };
+    },
     assignments: () => assignments.read(),
     ingestGateways: (changes, options) => gateways.apply(changes, options?.reset ?? false),
     ingestGlmGateways: (changes, options) => glmGateways.apply(changes, options?.reset ?? false),
@@ -157,6 +177,7 @@ export function createFleetInformer(deps: FleetInformerDeps): FleetInformer {
     markGlmGatewaysStale: (reason) => glmGateways.markStale(reason),
     stop: () => {
       stopped = true;
+      placementListeners.clear();
       for (const timer of reattachTimers.values()) clearTimeout(timer);
       reattachTimers.clear();
       for (const unsubscribe of unsubscribes.values()) unsubscribe();

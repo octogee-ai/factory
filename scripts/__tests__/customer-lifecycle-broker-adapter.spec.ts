@@ -1897,9 +1897,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       },
       model: "text-embedding-3-small",
     });
-    expect(args.buildReplacePaths?.(current)).toEqual(
-      customerConfigFullAgentListReplacePaths(current, "alice"),
-    );
+    expect(args.buildReplacePaths?.(current)).toEqual(expect.arrayContaining([
+      ...customerConfigFullAgentListReplacePaths(current, "alice"),
+      "plugins.allow", "secrets.providers.gcp-secret-manager.passEnv",
+      "agents.defaults.model.fallbacks",
+    ]));
   });
 
   it("puts a catalog Builder's final coach model and fallbacks in the initial mount patch", async () => {
@@ -1953,7 +1955,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(coach?.model).toEqual(snapshot.builderAgentDefault);
     expect(patch.agents.defaults?.models).toEqual({
       "platform-openrouter/openai/gpt-5.6-luna": {},
-      "platform-openrouter/z-ai/glm-5.2": {},
+      "platform-openrouter/z-ai/glm-5.2": { alias: "glm", params: { thinking: "xhigh" } },
     });
   });
 
@@ -2329,8 +2331,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     const patch = args.buildPatch(current);
     expect(patch.agents.entries["octogee-alice-coach"]).toMatchObject({
-      // The mounted entry's model is byot-sync's to converge — the attach keeps it.
-      model: "stale",
+      model: { primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] },
       memory: {
         search: platformOpenAiEmbeddingMemorySearch("octogee-alice-coach"),
       },
@@ -2338,9 +2339,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("id");
     expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("memorySearch");
     expect(patch.agents.entries).not.toHaveProperty("octogee-ops-eggman");
-    expect(args.buildReplacePaths?.(current)).toEqual(
-      customerConfigReplacePaths(current, "alice"),
-    );
+    expect(args.buildReplacePaths?.(current)).toEqual(expect.arrayContaining([
+      ...customerConfigReplacePaths(current, "alice"),
+      "plugins.allow", "agents.entries.octogee-alice-coach.model.fallbacks",
+    ]));
   });
 
   it("declares roster ownership on a Barn, which is multi-agent once a customer lands", async () => {

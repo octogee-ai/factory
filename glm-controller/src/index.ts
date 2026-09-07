@@ -2357,6 +2357,7 @@ function startControllerBackgroundTasks({
       readGatewayPodDiagnosticsBatch: deps.kubeOps.readGatewayPodDiagnosticsBatch,
     }),
     PLACEMENT_POLICY_RECONCILE_MS,
+    { subscribe: informer.subscribeUnassignedUsers?.bind(informer) },
   );
   const stopDisruptionObserver = deps.startDisruptionObserver?.() ?? (() => undefined);
   const httpKubeOps = deps.kubeOps;

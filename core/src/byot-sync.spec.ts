@@ -70,6 +70,7 @@ import {
   applyAgentModelOverrides,
   agentIdsForSlug,
   customerOauthRuntimeConfigPatch,
+  customerMountConfigPatch,
   purgeCustomerOauthRuntime,
   refreshCoachRuntimeSessions,
 } from "./byot-sync-runtime";
@@ -110,6 +111,38 @@ const codexBlob = () =>
     },
   });
 const noCustomerOauthRuntimePurge = vi.fn(async () => ({ changed: false, resetCount: 0 }));
+
+describe("customer mount configuration projection", () => {
+  it("does not restore an unsafe model or direct runtime from the mount candidate", () => {
+    const id = "octogee-alice-coach";
+    const patch = customerMountConfigPatch({}, { agents: { entries: {
+      [id]: { model: "openai-codex/unsafe-model", agentRuntime: { id: "codex" } },
+    } } }, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+    expect(patch.agents.entries[id].model).toEqual({ primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] });
+    expect(patch.agents.entries[id].agentRuntime).toBeNull();
+  });
+
+  it.each(["entries", "list"])("combines security cleanup and the final model without losing siblings (%s)", (shape) => {
+    const id = "octogee-alice-coach";
+    const model = { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: ["platform-openrouter/openai/gpt-5.6-luna"] };
+    const coach = { id, model, tools: { fs: { workspaceOnly: true } } };
+    const sibling = { id: "octogee-bob-coach", name: "Bob", model: "platform-openrouter/z-ai/glm-5.2" };
+    const agents = shape === "list" ? { list: [coach, sibling] } : { entries: {
+      [id]: { model, tools: coach.tools }, [sibling.id]: { name: sibling.name, model: sibling.model },
+    } };
+    const current = { agents, plugins: { allow: ["codex"], entries: { codex: { enabled: true } } }, models: { providers: { "openai-codex": { api: "openai-responses" } } } };
+    const patch = customerMountConfigPatch(current, { agents, bindings: [{ agentId: id }] }, "alice", model.primary) as any;
+    const projectedCoach = shape === "list" ? patch.agents.list.find((entry: any) => entry.id === id) : patch.agents.entries[id];
+    const projectedSibling = shape === "list" ? patch.agents.list.find((entry: any) => entry.id === sibling.id) : patch.agents.entries[sibling.id];
+    expect(projectedCoach.model).toEqual(model);
+    expect(projectedCoach.tools.fs.workspaceOnly).toBe(true);
+    expect(projectedSibling).toMatchObject({ name: "Bob", model: sibling.model });
+    expect(patch.plugins.allow).not.toContain("codex");
+    expect(patch.plugins.entries.codex).toBeNull();
+    expect(patch.models.providers["openai-codex"]).toBeNull();
+    expect(patch.bindings).toEqual([{ agentId: id }]);
+  });
+});
 
 describe("deriveDesiredByotState — gating (characterization)", () => {
   it("disabled unless byotActive + username + status=complete", () => {

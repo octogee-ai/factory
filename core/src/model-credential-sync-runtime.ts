@@ -1,5 +1,7 @@
 import {
   applyCoachModelPatch,
+  customerMountConfigPatch,
+  customerSecurityProjectionReplacePaths,
   brokerFetchByosubCreds,
   restoreOauthStoreForSlug,
   refreshCoachRuntimeSessions,
@@ -39,6 +41,8 @@ export async function syncModelCredentialsForCustomer(
 }
 
 export {
+  customerMountConfigPatch,
+  customerSecurityProjectionReplacePaths,
   applyCoachModelPatch as applyModelCredentialCoachPatch,
   brokerFetchByosubCreds as brokerFetchModelCredentialOauthCreds,
   refreshCoachRuntimeSessions as refreshModelCredentialRuntimeSessions,

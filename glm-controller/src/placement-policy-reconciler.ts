@@ -3857,6 +3857,7 @@ export function startPlacementPolicyReconciler(
   options?: {
     passDeadlineMs?: number;
     maxAbandonedPasses?: number;
+    subscribe?: (wake: () => void) => () => void;
     runPass?: (deps: PlacementPolicyReconcilerDeps) => Promise<unknown>;
   },
 ): () => void {
@@ -3865,6 +3866,7 @@ export function startPlacementPolicyReconciler(
   const maxAbandonedPasses = options?.maxAbandonedPasses ?? PLACEMENT_POLICY_MAX_ABANDONED_PASSES;
   const runPass = options?.runPass ?? reconcilePlacementPolicyOnce;
   let stopped = false;
+  let pending = false;
   let current: PlacementPolicyAttempt | null = null;
   let abandonedOutstanding = 0;
   let haltLogged = false;
@@ -3891,6 +3893,7 @@ export function startPlacementPolicyReconciler(
       }
       return;
     }
+    pending = false;
     const attempt: PlacementPolicyAttempt = { startedAt: deps.now(), abandoned: false };
     current = attempt;
     try {
@@ -3907,12 +3910,15 @@ export function startPlacementPolicyReconciler(
         );
       }
       if (current === attempt) current = null;
+      if (pending && !current && !stopped) void tick();
     }
   };
   const timer = setInterval(() => void tick(), intervalMs);
   void tick();
+  const unsubscribe = options?.subscribe?.(() => { pending = true; void tick(); });
   return () => {
     stopped = true;
     clearInterval(timer);
+    unsubscribe?.();
   };
 }

@@ -830,7 +830,7 @@ function customerSecurityProjectionPatch(current) {
         tools: customerToolsProjectionPatch(config),
     });
 }
-function customerSecurityProjectionReplacePaths(current) {
+export function customerSecurityProjectionReplacePaths(current) {
     const config = isRecord(current) ? current : {};
     const paths = new Set([
         "plugins.allow",
@@ -989,6 +989,36 @@ function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAl
 }
 export function customerOauthRuntimeConfigPatch(current, slug, safeModelRef, opts) {
     return customerOauthRuntimeConfigPlan(current, slug, safeModelRef, opts?.forceSafeAll === true).patch;
+}
+export function customerMountConfigPatch(current, mountPatch, slug, safeModelRef) {
+    const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
+    const security = customerOauthRuntimeConfigPatch(candidate, slug, safeModelRef);
+    const candidateAgents = recordChild(candidate, "agents");
+    const securityAgents = recordChild(security, "agents");
+    const projectAgent = (id, entry, patch) => {
+        const projected = mergeConfigPatches(isRecord(entry) ? entry : {}, isRecord(patch) ? patch : {});
+        if (agentIdBelongsToSlug(id, slug) && isRecord(entry)) {
+            const model = normalizedCatalogSelection(entry.model);
+            if (model)
+                projected.model = model;
+        }
+        return projected;
+    };
+    if (Array.isArray(candidateAgents.list)) {
+        const patches = new Map(listedAgentEntries(securityAgents));
+        securityAgents.list = candidateAgents.list.map((entry) => isRecord(entry) && typeof entry.id === "string"
+            ? projectAgent(entry.id, entry, patches.get(entry.id))
+            : entry);
+    }
+    if (isRecord(candidateAgents.entries)) {
+        const entries = candidateAgents.entries;
+        const patches = recordChild(securityAgents, "entries");
+        const mounted = recordChild(recordChild(mountPatch, "agents"), "entries");
+        securityAgents.entries = Object.fromEntries([...new Set([
+                ...Object.keys(mounted), ...Object.keys(patches),
+            ])].map((id) => [id, projectAgent(id, entries[id], patches[id])]));
+    }
+    return mergeConfigPatches(mountPatch, security);
 }
 function customerAgentIds(slug, config) {
     const agentIds = agentIdsForSlug(slug, config);

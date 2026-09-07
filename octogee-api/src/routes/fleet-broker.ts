@@ -1,3 +1,4 @@
+import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
 import { readComputerRuntimeObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
 import {
@@ -1848,6 +1849,20 @@ function resolveFleetBrokerRouteDeps(
   };
 }
 
+function installAssignmentWatchRoute(router: Router, db: Firestore): void {
+  router.post("/assignment-watch", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const revisionId = typeof req.body?.revisionId === "string" ? req.body.revisionId : "";
+    const gate = await resolveAssignedUsersRevisionGate(db, bound.gatewayId, revisionId);
+    if (!gate.allowed) {
+      respondInvalidRevision(res, bound.gatewayId, revisionId);
+      return;
+    }
+    streamAssignmentChanges(req, res, db, bound.gatewayId, (message) => logger.error(message));
+  });
+}
+
 function installSnapshotRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -1888,6 +1903,8 @@ function installSnapshotRoutes(
     }
     res.json({ assignments });
   });
+
+  installAssignmentWatchRoute(router, db);
 
   router.post("/assigned-users", async (req, res) => {
     const bound = boundGateway(req, res);

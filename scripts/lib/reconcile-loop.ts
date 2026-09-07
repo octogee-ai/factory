@@ -237,17 +237,21 @@ async function runBounded(actions: Array<() => Promise<void>>, max: number): Pro
 
 export interface StartReconcileLoopOptions extends ReconcileLoopDeps {
   intervalMs: number;
+  subscribe?: (wake: () => void) => () => void;
 }
 
 export function startReconcileLoop(opts: StartReconcileLoopOptions): () => void {
   let running = false;
+  let stopped = false;
+  let pending = false;
   const tick = () => {
     // Non-reentrant: reconcileFleet can outlive intervalMs (a mount may wait on
     // the gateway's config.patch rate limit). Overlapping ticks create independent
     // runBounded schedulers, so maxConcurrent stops being a process-wide cap; for
     // callers that set maxConcurrent=1, that also breaks the serial-mount invariant.
     // Skip; level-triggered, so the next interval after this tick drains catches up.
-    if (running) return;
+    if (stopped || running) return;
+    pending = false;
     running = true;
     reconcileFleet(opts)
       .catch((err) => {
@@ -255,8 +259,14 @@ export function startReconcileLoop(opts: StartReconcileLoopOptions): () => void 
       })
       .finally(() => {
         running = false;
+        if (pending) tick();
       });
   };
   const timer = setInterval(tick, opts.intervalMs);
-  return () => clearInterval(timer);
+  const unsubscribe = opts.subscribe?.(() => { pending = true; tick(); });
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    unsubscribe?.();
+  };
 }

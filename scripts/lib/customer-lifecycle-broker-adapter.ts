@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/fleet-broker.js";
 import {
   DEFAULT_BUILDER_AGENT_MODEL_REF,
+  DEFAULT_FREE_TIER_MODEL_REF,
   parseBuilderAgentModelDefault,
   type BuilderAgentModelDefault,
 } from "../../shared/types/platform-config.js";
@@ -117,6 +118,8 @@ import {
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
 import {
+  customerMountConfigPatch,
+  customerSecurityProjectionReplacePaths,
   refreshModelCredentialRuntimeSessions,
   syncModelCredentialsForCustomer,
 } from "./model-credential-sync-runtime.js";
@@ -713,6 +716,19 @@ async function requiredCoachMattermostAccount(
   throw new Error(`[add:${slug}] fleet broker account fragment was empty`);
 }
 
+function projectMountPolicy(
+  current: unknown,
+  patch: Record<string, unknown>,
+  snapshot: UserSnapshot,
+  builderGateway: boolean,
+): Record<string, unknown> {
+  if (builderGateway || snapshot.byotActive === true) return patch;
+  return customerMountConfigPatch(
+    current, patch, snapshot.slug,
+    initialCoachModelSelection(snapshot)?.primary ?? DEFAULT_FREE_TIER_MODEL_REF,
+  );
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -843,7 +859,7 @@ async function applyAddCustomerConfigPatch(
           customerAgentEntries,
           builderGateway,
         );
-        return {
+        const mountPatch = {
           agents: {
             ownership: "explicit",
             ...(agentDefaults ? { defaults: agentDefaults } : {}),
@@ -876,12 +892,15 @@ async function applyAddCustomerConfigPatch(
             },
           },
         };
+        return projectMountPolicy(current, mountPatch, snapshot, builderGateway);
       },
-      buildReplacePaths: (current) => [...new Set(
-        [snapshot.slug, ...evictionSlugs].flatMap((slug) =>
+      buildReplacePaths: (current) => [...new Set([
+        ...[snapshot.slug, ...evictionSlugs].flatMap((slug) =>
           customerConfigAgentRosterReplacePaths(current, slug)
         ),
-      )],
+        ...(!builderGateway && snapshot.byotActive !== true
+          ? customerSecurityProjectionReplacePaths(current) : []),
+      ])],
       logPrefix: `[add:${snapshot.slug}]`,
     },
     {

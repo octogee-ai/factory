@@ -1,3 +1,4 @@
+import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
   FleetBrokerBlobSignedUrl,
   FleetBrokerBuilderRuntimeStatePruneResult,
@@ -62,6 +63,7 @@ async function postNoContent(
 }
 
 export interface FleetBrokerClient {
+  watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
   npmRegistryCredentials(slug: string): Promise<FleetBrokerNpmRegistryCredentials>;
@@ -221,6 +223,10 @@ export function createFleetBrokerClient(
     ?? defaultGatewayCredentialHeaders;
   return {
     ...npmRegistryCredentialClient(gatewayId, gatewayCredentialHeaders),
+    watchAssignments: (wake, log) => watchFleetAssignments({
+      url: `${baseUrl()}/internal/fleet/assignment-watch`,
+      gatewayId, revisionId, headers: gatewayCredentialHeaders, wake, log,
+    }),
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",

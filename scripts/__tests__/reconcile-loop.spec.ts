@@ -550,6 +550,35 @@ describe("reconcileFleet — content convergence (mounted-but-stale re-ensured)"
 });
 
 describe("startReconcileLoop", () => {
+  it("wakes immediately from push and drains an event received during a mount", async () => {
+    let wake!: () => void;
+    const unsubscribe = vi.fn();
+    const gate = deferred();
+    let desired = ["a"];
+    const mounted: string[] = [];
+    const d = mkDeps({
+      getMountObserved: () => mounted,
+      readDesired: async () => desired,
+      ensureSlug: async (slug) => {
+        if (slug === "a") await gate.promise;
+        mounted.push(slug);
+        return "mounted";
+      },
+    });
+    const stop = startReconcileLoop({ ...d, intervalMs: 60_000,
+      subscribe: (notify) => { wake = notify; return unsubscribe; },
+    });
+    try {
+      wake();
+      await flushMicrotasks();
+      desired = ["a", "b"];
+      wake();
+      gate.resolve();
+      await vi.waitFor(() => expect(mounted).toEqual(["a", "b"]));
+    } finally { gate.resolve(); stop(); }
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("reconciles on each interval tick and stops cleanly", async () => {
     vi.useFakeTimers();
     try {
