@@ -12,6 +12,7 @@ import {
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
 const workflowTools = [
+  "message",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
@@ -312,6 +313,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       fs: { workspaceOnly: true },
       keep: true,
     });
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toContain("message");
+    expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.deny).not.toContain("message");
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toContain("read");
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).toContain("ls");
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools.alsoAllow).not.toContain("grep");

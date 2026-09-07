@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CUSTOMER_WORKFLOW_TOOLS,
+  PROJECT_AGENT_ALLOWED_TOOLS,
   PlatformInvariantPolicyError,
   assertPlatformInvariants,
   platformInvariantTable,
@@ -945,4 +947,9 @@ describe("system config platform invariants", () => {
     expect(plugins.entries).not.toHaveProperty("octogee-router");
     expect(platformInvariantViolations(config, builder)).toEqual([]);
   });
+});
+
+it("makes native Mattermost reactions available to coach and project coding policies", () => {
+  expect(CUSTOMER_WORKFLOW_TOOLS).toContain("message");
+  expect(PROJECT_AGENT_ALLOWED_TOOLS).toContain("message");
 });

@@ -51,6 +51,7 @@ export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "octogee_board_card_comment",
 ];
 export const OCTOGEE_WORKFLOW_TOOLS = [
+  "message",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
@@ -110,6 +111,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
 const PRODUCTIVITY_TOOL_NAMES = OCTOGEE_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 const PROJECT_AGENT_ALLOWED_TOOLS = [
+  "message",
   "read",
   "ls",
   "write",

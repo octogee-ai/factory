@@ -67,7 +67,7 @@
           }
         }
       },
-      "verboseDefault": "off",
+      "verboseDefault": "on",
       "toolProgressDetail": "raw",
       "workspace": "/home/node/.openclaw/workspace",
       "contextPruning": {
@@ -99,6 +99,7 @@
   "tools": {
     "profile": "coding",
     "alsoAllow": [
+      "message",
       "octogee_project_create",
       "octogee_project_commit",
       "octogee_project_list",
@@ -187,10 +188,14 @@
         "direct": "all"
       },
       "threadSessionScope": "channel",
+      "actions": { "reactions": true },
       "streaming": {
-        "mode": "off",
+        "mode": "block",
+        "chunkMode": "newline",
+        "block": { "enabled": true },
         "preview": {
-          "toolProgress": false
+          "toolProgress": true,
+          "commandText": "raw"
         }
       },
       "network": {

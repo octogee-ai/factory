@@ -435,7 +435,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it("sets final-only native threaded behavior without the retired activity flag", () => {
+  it("enables reactions and block previews with tool activity summaries", () => {
     const config: any = {
       agents: { defaults: { maxConcurrent: 4 } },
       channels: {
@@ -458,21 +458,25 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
       streaming: {
-        mode: "off",
+        mode: "block",
+        block: { enabled: true },
         chunkMode: "newline",
         preview: {
-          toolProgress: false,
+          toolProgress: true,
+          commandText: "raw",
         },
         progress: {
           maxLines: 6,
-          toolProgress: false,
+          toolProgress: true,
+          commandText: "raw",
         },
       },
     });
-    expect(config.channels.mattermost.streaming.preview).not.toHaveProperty("commandText");
-    expect(config.channels.mattermost.streaming.progress).not.toHaveProperty("commandText");
+    expect(config.channels.mattermost.streaming.preview.commandText).toBe("raw");
+    expect(config.channels.mattermost.actions.reactions).toBe(true);
+    expect(config.channels.mattermost.streaming.progress.commandText).toBe("raw");
     expect(config.agents.defaults).toMatchObject({
-      verboseDefault: "off",
+      verboseDefault: "on",
       toolProgressDetail: "raw",
       maxConcurrent: 4,
     });
@@ -491,14 +495,17 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       replyToModeByChatType: { direct: "all" },
       threadSessionScope: "channel",
       streaming: {
-        mode: "off",
+        mode: "block",
+        chunkMode: "newline",
+        block: { enabled: true },
         preview: {
-          toolProgress: false,
+          toolProgress: true,
+          commandText: "raw",
         },
       },
     });
     expect(config.agents.defaults).toEqual({
-      verboseDefault: "off",
+      verboseDefault: "on",
       toolProgressDetail: "raw",
     });
     expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
@@ -1170,7 +1177,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
             "anthropic/claude-sonnet-4-6": {},
             "anthropic/claude-haiku-4-5": {},
           },
-          verboseDefault: "off",
+          verboseDefault: "on",
           toolProgressDetail: "raw",
         },
       },
@@ -1182,10 +1189,14 @@ describe("applyPreBootPatches — no-change reporting", () => {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           threadSessionScope: "channel",
+          actions: { reactions: true },
           streaming: {
-            mode: "off",
+            mode: "block",
+            chunkMode: "newline",
+            block: { enabled: true },
             preview: {
-              toolProgress: false,
+              toolProgress: true,
+              commandText: "raw",
             },
           },
           baseUrl: "${MM_URL}",

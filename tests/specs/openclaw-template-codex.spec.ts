@@ -4,6 +4,7 @@ import path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const workflowTools = [
+  "message",
   "octogee_project_create",
   "octogee_project_commit",
   "octogee_project_list",
