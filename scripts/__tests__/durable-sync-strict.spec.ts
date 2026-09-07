@@ -581,6 +581,60 @@ describe("workspace divergence", () => {
       .toBe(testGitExec(remote, ["rev-parse", "main"]));
   });
 
+  it("aligns a dirty imported snapshot with canonical history without losing its files", async () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "AGENTS.md", "original instructions\n");
+    testGitExec(workspace, ["push", "origin", "main"]);
+    const sibling = path.join(paths.root, "import-source");
+    execFileSync("git", ["clone", "-q", remote, sibling]);
+    execFileSync("git", ["config", "user.email", "test@octogee.test"], { cwd: sibling });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: sibling });
+    commitLocally(sibling, "AGENTS.md", "source checkpoint instructions\n");
+    testGitExec(sibling, ["push", "origin", "main"]);
+    fs.writeFileSync(path.join(workspace, "AGENTS.md"), "imported Builder instructions\n");
+    fs.writeFileSync(path.join(workspace, "TOOLS.md"), "imported tools\n");
+
+    expect(reconcileImportedWorkspace("alice", {
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    })).toBe("behind");
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
+      .toBe(testGitExec(remote, ["rev-parse", "main"]));
+    expect(fs.readFileSync(path.join(workspace, "AGENTS.md"), "utf8"))
+      .toBe("imported Builder instructions\n");
+    expect(fs.readFileSync(path.join(workspace, "TOOLS.md"), "utf8"))
+      .toBe("imported tools\n");
+
+    await syncCustomerRepositoriesForSlug("alice", {
+      strict: true,
+      gitExec: testGitExec,
+      prepareRepository: prepareTestRepository,
+    });
+    expect(testGitExec(workspace, ["rev-parse", "HEAD"]))
+      .toBe(testGitExec(remote, ["rev-parse", "main"]));
+    expect(testGitExec(workspace, ["status", "--porcelain"])).toBe("");
+  });
+
+  it.each(["merge", "reset", "status"])("fails import reconciliation when %s fails", (command) => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    advanceRemoteFromASibling("alice", remote);
+    if (command === "reset") fs.writeFileSync(path.join(workspace, "TOOLS.md"), "imported tools\n");
+    expect(() => reconcileImportedWorkspace("alice", {
+      gitExec: (cwd, args) => args[0] === command ? null : testGitExec(cwd, args),
+      prepareRepository: prepareTestRepository,
+    })).toThrow(/import reconcile/);
+  });
+
+  it("fails import reconciliation when resetting a divergent checkpoint fails", () => {
+    const { workspace, remote } = initWorkspaceWithRemote("alice");
+    commitLocally(workspace, "LOCAL.md", "local checkpoint\n");
+    advanceRemoteFromASibling("alice", remote);
+    expect(() => reconcileImportedWorkspace("alice", {
+      gitExec: (cwd, args) => args[0] === "reset" ? null : testGitExec(cwd, args),
+      prepareRepository: prepareTestRepository,
+    })).toThrow(/import reconcile/);
+  });
+
   it("leaves an imported workspace holding unpushed commits alone", () => {
     const { workspace, remote } = initWorkspaceWithRemote("alice");
     commitLocally(workspace, "LOCAL.md", "not yet pushed\n");

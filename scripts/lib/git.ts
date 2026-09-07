@@ -1945,22 +1945,25 @@ export function reconcileImportedWorkspace(
   return observed;
 }
 
-// Fast-forward only: nothing local is discarded, and git refuses rather than
-// overwrite a tree the import left dirty.
 function advanceImportedWorkspace(target: RepositorySyncTarget, runGit: GitRunner): void {
-  if (runGit(target.dir, ["merge", "--ff-only", "FETCH_HEAD"]) === null) {
-    log(`⚠ [git-sync] ${target.label}: import reconcile could not fast-forward to origin/main`);
-    return;
+  const changes = runGit(target.dir, ["status", "--porcelain"]);
+  if (changes === null) {
+    throw new Error(`${target.label}: import reconcile could not inspect imported files`);
   }
-  log(`[git-sync] ${target.label}: import reconcile fast-forwarded to origin/main`);
+  const command = changes.length > 0
+    ? ["reset", "--mixed", "FETCH_HEAD"]
+    : ["merge", "--ff-only", "FETCH_HEAD"];
+  if (runGit(target.dir, command) === null) {
+    throw new Error(`${target.label}: import reconcile could not advance to origin/main`);
+  }
+  log(`[git-sync] ${target.label}: import reconcile advanced to origin/main${changes.length > 0 ? " retaining imported files" : ""}`);
 }
 
 function resetImportedWorkspace(target: RepositorySyncTarget, runGit: GitRunner): void {
   const discarded = (runGit(target.dir, ["log", "--oneline", "FETCH_HEAD..HEAD"]) ?? "")
     .split("\n").filter(Boolean);
   if (runGit(target.dir, ["reset", "--hard", "FETCH_HEAD"]) === null) {
-    log(`⚠ [git-sync] ${target.label}: import reconcile could not reset onto origin/main`);
-    return;
+    throw new Error(`${target.label}: import reconcile could not reset onto origin/main`);
   }
   log(
     `[git-sync] ${target.label}: import reconcile reset onto origin/main, discarding ` +
