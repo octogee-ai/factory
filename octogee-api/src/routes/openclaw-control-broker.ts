@@ -870,6 +870,28 @@ async function controlMattermostRequest(
   }
 }
 
+function cacheProfileAvatars(
+  load: typeof import("../lib/openclaw-profile-appearance.js").loadOpenClawProfileAppearance,
+): typeof load {
+  const avatars = new Map<string, { revision: string; bytes: Buffer }>();
+  return async (uid) => {
+    const appearance = await load(uid);
+    const avatar = appearance.avatar;
+    if (!avatar) {
+      avatars.delete(uid);
+      return appearance;
+    }
+    return { ...appearance, avatar: { revision: avatar.revision, read: async () => {
+      const cached = avatars.get(uid);
+      const bytes = cached?.revision === avatar.revision ? cached.bytes : await avatar.read();
+      avatars.delete(uid);
+      avatars.set(uid, { revision: avatar.revision, bytes });
+      if (avatars.size > 128) avatars.delete(avatars.keys().next().value!);
+      return bytes;
+    } } };
+  };
+}
+
 export function createOpenClawControlBrokerRoutes(args: {
   db: Firestore;
   now?: () => number;
@@ -883,10 +905,9 @@ export function createOpenClawControlBrokerRoutes(args: {
   };
   router.post("/redeem", (req, res, next) => redeemControlTicket(context, req, res, next));
   router.post("/authorize", (req, res, next) => authorizeControlSession(context, req, res, next));
-  router.post("/profile", (req, res, next) => loadControlProfile({
-    ...context, profile: args.profile ?? (async (uid) =>
-      (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(uid)),
-  }, req, res, next));
+  const profile = cacheProfileAvatars(args.profile ?? (async (uid) =>
+    (await import("../lib/openclaw-profile-appearance.js")).loadOpenClawProfileAppearance(uid)));
+  router.post("/profile", (req, res, next) => loadControlProfile({ ...context, profile }, req, res, next));
   for (const operation of ["authorize", "channels"] as const) {
     router.post(`/mattermost/${operation}`, (req, res, next) =>
       controlMattermostRequest({ ...context, mattermost: args.mattermost ?? mattermostDefaults, operation }, req, res, next));
