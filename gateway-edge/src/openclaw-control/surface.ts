@@ -405,6 +405,38 @@ function isDashboardProviderIcon(pathname: string): boolean {
   return /^\/provider-icons\/ProviderIcon-[A-Za-z0-9_-]+\.svg$/u.test(pathname);
 }
 
+function isDashboardArtwork(pathname: string): boolean {
+  return /^\/(?:plugin-art|community-art)\/[A-Za-z0-9_-]+\.webp$/u.test(pathname);
+}
+
+function isDashboardTheme(pathname: string): boolean {
+  return /^\/themes\/[A-Za-z0-9_-]+\.css$/u.test(pathname);
+}
+
+function isDashboardBundledAsset(pathname: string): boolean {
+  return DASHBOARD_ROOT_ASSETS.has(pathname) ||
+    isDashboardStaticAsset(pathname) ||
+    isDashboardFontAsset(pathname) ||
+    isDashboardProviderIcon(pathname) ||
+    isDashboardArtwork(pathname) ||
+    isDashboardTheme(pathname);
+}
+
+function isDashboardSessionRoute(pathname: string): boolean {
+  const match = /^\/(?:chat|dashboard)\/([A-Za-z0-9][A-Za-z0-9._~-]{0,511})\/(.+)$/u.exec(pathname);
+  if (!match) return false;
+  const segments = match[2]!.split("/");
+  if (segments[0] === "~key") segments.shift();
+  return segments.length > 0 && segments.every((segment) => {
+    if (!/^[A-Za-z0-9._~:%-]{1,512}$/u.test(segment)) return false;
+    try {
+      return !/[\p{Cc}\\/]/u.test(decodeURIComponent(segment));
+    } catch {
+      return false;
+    }
+  });
+}
+
 function isDashboardDynamicRoute(pathname: string): boolean {
   const segment = "[A-Za-z0-9][A-Za-z0-9._~:%-]{0,511}";
   return new RegExp(`^/(?:chat|dashboard)/${segment}$`, "iu").test(pathname) ||
@@ -424,12 +456,10 @@ export function isOpenClawControlHttpResource(originalUrl: string, gatewayId: st
     route === "/control-ui-config.json" ||
     DASHBOARD_ROUTES.has(route.toLowerCase()) ||
     isDashboardDynamicRoute(route) ||
-    DASHBOARD_ROOT_ASSETS.has(route) ||
-    isDashboardStaticAsset(route) ||
-    isDashboardFontAsset(route) ||
+    isDashboardSessionRoute(route) ||
+    isDashboardBundledAsset(route) ||
     isDashboardControlResourcePath(route) ||
     isDashboardAssistantMediaResource(parsed) ||
-    isDashboardProviderIcon(route) ||
     isDashboardApprovalDeepLink(route);
 }
 

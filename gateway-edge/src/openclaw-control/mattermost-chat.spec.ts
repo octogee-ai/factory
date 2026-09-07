@@ -1115,6 +1115,52 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     expect(JSON.stringify(response)).not.toContain("Malformed Mattermost row");
   });
 
+  it.each([true, false])("preserves the hasBoard=%s inventory filter and channel authorization", async (hasBoard) => {
+    const adapter = createMattermostControlChat({
+      authorize: vi.fn(async (_uid: string, id: string) => id === deniedChannelId
+        ? { forbidden: true as const }
+        : authorized({ getJson: vi.fn(async () => ({
+          id, team_id: "t".repeat(26), type: "P", name: "alice-general",
+          display_name: "General", create_at: 10, update_at: 20,
+          delete_at: 0, last_post_at: 40,
+        })) })),
+      listWorkspaceChannels: vi.fn(async () => [
+        { channelId }, { channelId: secondChannelId }, { channelId: deniedChannelId },
+      ]),
+    });
+    const prepared = await adapter.prepare({
+      type: "req", id: "dashboards", method: "sessions.list",
+      params: { hasBoard, archived: "all", limit: 60, includeGlobal: true, includeUnknown: true },
+    }, session());
+    expect(prepared?.kind).toBe("upstream");
+    if (prepared?.kind !== "upstream") throw new Error("expected upstream projection");
+    expect(prepared.upstreamParams).toMatchObject({ hasBoard, archived: "all" });
+    const nativeKey = `agent:${agentId}:main`;
+    expect(prepared.project({
+      type: "res", id: "dashboards", ok: true,
+      payload: {
+        count: 3, totalCount: 3, hasMore: false, nextOffset: null,
+        sessions: [{ key: sessionKey }, { key: deniedSessionKey }, { key: nativeKey }],
+      },
+    })).toMatchObject({
+      ok: true, payload: {
+        count: 2, totalCount: 2,
+        sessions: [expect.objectContaining({ key: sessionKey }), expect.objectContaining({ key: nativeKey })],
+      },
+    });
+  });
+
+  it("rejects a non-boolean board inventory filter", async () => {
+    const listWorkspaceChannels = vi.fn();
+    const adapter = createMattermostControlChat({ listWorkspaceChannels });
+    await expect(adapter.prepare({
+      type: "req", id: "invalid-board-filter", method: "sessions.list", params: { hasBoard: "true" },
+    }, session())).resolves.toMatchObject({
+      kind: "response", frame: { ok: false, error: { code: "INVALID_REQUEST" } },
+    });
+    expect(listWorkspaceChannels).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported sessions.list input before native rows can bypass projection", async () => {
     const listWorkspaceChannels = vi.fn();
     const adapter = createMattermostControlChat({

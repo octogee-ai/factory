@@ -53,6 +53,7 @@ const SESSION_LIST_PARAM_KEYS = new Set([
   "boardFace",
   "configuredAgentsOnly",
   "creatorId",
+  "hasBoard",
   "includeDerivedTitles",
   "includeGlobal",
   "includeLastMessage",
@@ -278,6 +279,7 @@ function validSessionsListParams(
       params.includePeople,
       params.ownerFirst,
       params.involvingMe,
+      params.hasBoard,
     ].map(optionalBoolean),
     optionalBoundedNonBlank(params.label, 512),
     ...[
@@ -313,7 +315,7 @@ function sessionsListParams(
   const offset = params.offset === undefined ? 0 : params.offset;
   const activeMinutes = params.activeMinutes === undefined ? undefined : params.activeMinutes;
   if (!validSessionsListParams(params, limit, offset, activeMinutes)) return null;
-  const synthesize = [...SESSION_LIST_SYNTHESIS_FILTERS].every((key) => {
+  const synthesize = params.hasBoard === undefined && [...SESSION_LIST_SYNTHESIS_FILTERS].every((key) => {
     const value = params[key];
     return value === undefined || value === false;
   });

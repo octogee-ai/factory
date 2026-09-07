@@ -12,6 +12,7 @@ import {
 import { TICKETS_COLLECTION } from './helpers/collections.js';
 
 process.env.NODE_ENV = 'test';
+process.env.GATEWAY_ID = 'gw-1';
 process.env.FIREBASE_PROJECT ??= 'octogee-test';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
 

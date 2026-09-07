@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 process.env.MM_INTERNAL_URL = 'http://mattermost.octogee-test.svc.cluster.local:8065';
@@ -62,7 +62,10 @@ function fakeUpstream(label: string) {
 }
 
 describe('establishUpstreamWithRotation', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
+    vi.stubEnv('GATEWAY_ID', 'gw-1');
     h.ctl.fetchAuth.mockReset();
     h.ctl.openUpstream.mockReset();
     h.ctl.requestBootstrap.mockReset().mockResolvedValue('one-time-bootstrap-token');
@@ -70,10 +73,31 @@ describe('establishUpstreamWithRotation', () => {
     h.ctl.clearedDeviceToken = 0;
   });
 
+  it.each(['gw-2', ''])('rejects a ticket when the local gateway is %j before reading credentials', async (localGatewayId) => {
+    vi.stubEnv('GATEWAY_ID', localGatewayId);
+    const result = await establishUpstreamWithRotation('gw-1');
+    expect(result).toEqual({ ok: false, httpStatus: '403 Forbidden' });
+    expect(h.ctl.fetchAuth).not.toHaveBeenCalled();
+    expect(h.ctl.openUpstream).not.toHaveBeenCalled();
+  });
+
+  it('connects the event socket to the local OpenClaw runtime', async () => {
+    vi.stubEnv('OPENCLAW_GATEWAY_URL', 'http://127.0.0.1:18789');
+    const upstream = fakeUpstream('local-runtime');
+    h.ctl.fetchAuth.mockResolvedValueOnce({ source: 'device-token-file', deviceToken: 'device' });
+    h.ctl.openUpstream.mockResolvedValueOnce(upstream);
+    try {
+      expect(await establishUpstreamWithRotation('gw-1')).toEqual({ ok: true, upstream });
+      expect(h.ctl.openUpstream.mock.calls[0]?.[0]?.url).toBe('http://127.0.0.1:18789');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('maps gateway-token source failures to 503 without opening upstream', async () => {
     h.ctl.fetchAuth.mockRejectedValueOnce(new h.GatewayTokenError('token-source-down'));
 
-    const result = await establishUpstreamWithRotation('gw-1', 'ws://gateway');
+    const result = await establishUpstreamWithRotation('gw-1');
 
     expect(result).toEqual({ ok: false, httpStatus: '503 Service Unavailable' });
     expect(h.ctl.openUpstream).not.toHaveBeenCalled();
@@ -83,7 +107,7 @@ describe('establishUpstreamWithRotation', () => {
     h.ctl.fetchAuth.mockResolvedValueOnce({ source: 'legacy-token', token: 'cached-token' });
     h.ctl.openUpstream.mockRejectedValueOnce(new h.OpenclawWireError('handshake-timeout'));
 
-    const result = await establishUpstreamWithRotation('gw-1', 'ws://gateway');
+    const result = await establishUpstreamWithRotation('gw-1');
 
     expect(result).toEqual({ ok: false, httpStatus: '502 Bad Gateway' });
     expect(h.ctl.invalidatedGateways).toEqual([]);
@@ -104,7 +128,7 @@ describe('establishUpstreamWithRotation', () => {
         return recovered;
       });
 
-    const result = await establishUpstreamWithRotation('gw-1', 'ws://gateway');
+    const result = await establishUpstreamWithRotation('gw-1');
 
     expect(result).toEqual({ ok: true, upstream: recovered });
     expect(h.ctl.invalidatedGateways).toEqual(['gw-1']);
@@ -124,7 +148,7 @@ describe('establishUpstreamWithRotation', () => {
       .mockRejectedValueOnce(new h.OpenclawWireError('auth-failed'))
       .mockResolvedValueOnce(recovered);
 
-    const result = await establishUpstreamWithRotation('gw-1', 'ws://gateway');
+    const result = await establishUpstreamWithRotation('gw-1');
 
     expect(result).toEqual({ ok: true, upstream: recovered });
     expect(h.ctl.invalidatedGateways).toEqual([]);
@@ -137,7 +161,7 @@ describe('establishUpstreamWithRotation', () => {
       .mockRejectedValueOnce(new h.GatewayTokenError('token-source-down'));
     h.ctl.openUpstream.mockRejectedValueOnce(new h.OpenclawWireError('auth-failed'));
 
-    const result = await establishUpstreamWithRotation('gw-1', 'ws://gateway');
+    const result = await establishUpstreamWithRotation('gw-1');
 
     expect(result).toEqual({ ok: false, httpStatus: '503 Service Unavailable' });
     expect(h.ctl.invalidatedGateways).toEqual(['gw-1']);

@@ -526,8 +526,12 @@ type OpenAttempt =
 
 export async function establishUpstreamWithRotation(
   gatewayId: string,
-  gatewayUrl: string,
 ): Promise<UpstreamOutcome> {
+  if (!process.env.GATEWAY_ID || process.env.GATEWAY_ID !== gatewayId) {
+    console.error("[proxy] OC WS: redeemed gateway does not match the local gateway");
+    return { ok: false, httpStatus: "403 Forbidden" };
+  }
+  const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL;
   const auth = await fetchInitialGatewayAuth(gatewayId);
   if (!auth.ok) return auth;
 
@@ -676,7 +680,6 @@ function handleOpenClawWsUpgrade(
       }
       const redeemed = redeemOutcome.redeemed;
       const uid = redeemed.uid;
-      const gatewayUrl = redeemed.gatewayUrl;
       const gatewayId = redeemed.gatewayId;
       const expectedAgentId = redeemed.expectedAgentId;
 
@@ -692,7 +695,7 @@ function handleOpenClawWsUpgrade(
         }
       }
 
-      const outcome = await establishUpstreamWithRotation(gatewayId, gatewayUrl);
+      const outcome = await establishUpstreamWithRotation(gatewayId);
       if (!outcome.ok) {
         socket.write(`HTTP/1.1 ${outcome.httpStatus}\r\n\r\n`);
         socket.destroy();
