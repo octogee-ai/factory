@@ -1056,6 +1056,8 @@ class OpenClawControlSocketBridge {
   private readonly timedOut = new Map<string, SystemConfigMutationLease | undefined>();
   private quarantineTimer?: NodeJS.Timeout;
   private authorizationTimer?: NodeJS.Timeout;
+  private nextProfileSyncAt = 0;
+  private profileSyncPending = false;
   private closing = false;
   private socketReleased = false;
 
@@ -1141,6 +1143,7 @@ class OpenClawControlSocketBridge {
     }, { forceRefresh: true }).then((allowed) => {
       if (allowed) {
         this.args.metrics?.session(this.metricsIdentity, "authorize", "ok");
+        this.refreshProfile();
         return;
       }
       this.args.metrics?.session(this.metricsIdentity, "authorize", "policy_denied");
@@ -1161,6 +1164,19 @@ class OpenClawControlSocketBridge {
       this.args.metrics?.session(this.metricsIdentity, "authorize", outcome);
       this.closeBoth(outcome === "broker_timeout" ? "broker-timeout" : "broker-unavailable");
     });
+  }
+
+  private refreshProfile(): void {
+    if (this.closing || !this.installedMethods || !this.args.proxyIdentity.enabled
+      || this.profileSyncPending || Date.now() < this.nextProfileSyncAt) return;
+    this.profileSyncPending = true;
+    this.nextProfileSyncAt = Date.now() + 60_000;
+    void this.args.proxyIdentity.syncProfile(this.activeSession, { assignRole: false }).catch((error: unknown) => {
+      logger.error("OpenClaw Dashboard identity profile refresh failed", {
+        gatewayId: this.activeSession.gatewayId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => { this.profileSyncPending = false; });
   }
 
   private touch(): boolean {
@@ -1499,13 +1515,14 @@ class OpenClawControlSocketBridge {
       this.upstreamSocket().send(rewritten);
       return;
     }
-    void this.args.proxyIdentity.syncRole(this.activeSession).then(
+    void this.args.proxyIdentity.syncProfile(this.activeSession).then(
       () => {
         if (this.closing || this.upstreamSocket().readyState !== WebSocket.OPEN) return;
+        this.nextProfileSyncAt = Date.now() + 60_000;
         this.upstreamSocket().send(rewritten);
       },
       (error: unknown) => {
-        logger.error("OpenClaw Dashboard identity role sync failed", {
+        logger.error("OpenClaw Dashboard identity profile sync failed", {
           gatewayId: this.activeSession.gatewayId,
           revisionId: this.activeSession.revisionId,
           brokerProfile: this.activeSession.brokerProfile,

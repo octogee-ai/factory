@@ -40,13 +40,21 @@ export interface OpenClawControlProxyIdentity {
   serviceHeaders(): Record<string, string>;
   deviceIdentity(session: OpenClawControlProxyIdentitySession): DeviceIdentity;
   connectScopes(session: OpenClawControlProxyIdentitySession): string[];
-  syncRole(session: OpenClawControlProxyIdentitySession): Promise<void>;
+  syncProfile(session: OpenClawControlProxyIdentitySession, options?: { assignRole: boolean }): Promise<void>;
 }
 
 interface OpenClawProfileListItem {
   id: string;
   emails: string[];
   role?: string | null;
+  displayName?: string | null;
+  hasAvatar?: boolean;
+  updatedAt?: number;
+}
+
+export interface OpenClawProfileAppearance {
+  displayName: string | null;
+  avatar: { revision: string; read(): Promise<Buffer> } | null;
 }
 
 export interface CreateOpenClawControlProxyIdentityOptions {
@@ -55,6 +63,7 @@ export interface CreateOpenClawControlProxyIdentityOptions {
   timeoutMs?: number;
   podAddress?: () => string | undefined;
   openSocket?: typeof openProxyIdentitySocket;
+  loadAppearance?: (uid: string) => Promise<OpenClawProfileAppearance>;
 }
 
 function loopback(address: string | undefined): boolean {
@@ -136,6 +145,17 @@ export function createOpenClawControlProxyIdentity(
   const timeoutMs = options.timeoutMs ?? DEFAULT_ROLE_SYNC_TIMEOUT_MS;
   const fallbackAddress = options.podAddress ?? podClientAddress;
   const openSocket = options.openSocket ?? openProxyIdentitySocket;
+  const loadAppearance = options.loadAppearance ?? (async (uid: string) => {
+    const { loadOpenClawProfileAppearance } = await import("./profile-appearance.js");
+    return loadOpenClawProfileAppearance(uid);
+  });
+  const avatarSyncs = new Map<string, { revision: string; updatedAt: number | undefined }>();
+  const pendingSyncs = new Map<string, Promise<void>>();
+  const avatarAlreadySynced = (profile: OpenClawProfileListItem, appearance: OpenClawProfileAppearance): boolean => {
+    const previous = avatarSyncs.get(profile.id);
+    return Boolean(profile.hasAvatar && previous?.revision === appearance.avatar?.revision
+      && previous?.updatedAt === profile.updatedAt);
+  };
 
   const roleFor = (session: OpenClawControlProxyIdentitySession): OpenClawOperatorRole =>
     openClawRoleForBrokerProfile(session.brokerProfile);
@@ -162,7 +182,7 @@ export function createOpenClawControlProxyIdentity(
     ws.close();
   };
 
-  const syncRole = async (session: OpenClawControlProxyIdentitySession): Promise<void> => {
+  const synchronizeProfile = async (session: OpenClawControlProxyIdentitySession, assignRole: boolean): Promise<void> => {
     const desired = roleFor(session);
     const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
     const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
@@ -178,13 +198,39 @@ export function createOpenClawControlProxyIdentity(
         profile = profileFor(await listProfiles(), session.uid);
       }
       if (!profile) throw new Error(`OpenClaw did not create a profile for ${session.uid}`);
-      if ((profile.role ?? null) === desired) return;
-      const assigned = await rpc.call("users.setRole", { profileId: profile.id, role: desired });
-      if (!assigned.ok) throw new Error(`users.setRole failed: ${assigned.reason}`);
+      const appearance = await loadAppearance(session.uid);
+      const avatarUnchanged = avatarAlreadySynced(profile, appearance);
+      const update = async (method: string, params: Record<string, unknown>): Promise<void> => {
+        const result = await rpc.call<{ profile: OpenClawProfileListItem }>(method, { profileId: profile!.id, ...params });
+        if (!result.ok) throw new Error(`${method} failed: ${result.reason}`);
+        profile = result.result.profile;
+      };
+      if (assignRole && (profile.role ?? null) !== desired) await update("users.setRole", { role: desired });
+      if ((profile.displayName ?? null) !== appearance.displayName) {
+        await update("users.setDisplayName", { displayName: appearance.displayName });
+      }
+      if (appearance.avatar) {
+        if (!avatarUnchanged) {
+          const bytes = await appearance.avatar.read();
+          await update("users.setAvatar", { mime: "image/jpeg", avatarBase64: bytes.toString("base64") });
+        }
+        avatarSyncs.delete(profile.id);
+        avatarSyncs.set(profile.id, { revision: appearance.avatar.revision, updatedAt: profile.updatedAt });
+        if (avatarSyncs.size > 256) avatarSyncs.delete(avatarSyncs.keys().next().value!);
+      }
     } finally {
       rpc.dispose();
       ws.close();
     }
+  };
+
+  const syncProfile = (session: OpenClawControlProxyIdentitySession, { assignRole = true } = {}): Promise<void> => {
+    const key = JSON.stringify([session.gatewayId, session.uid, roleFor(session), assignRole]);
+    const pending = pendingSyncs.get(key);
+    if (pending) return pending;
+    const sync = synchronizeProfile(session, assignRole).finally(() => { pendingSyncs.delete(key); });
+    pendingSyncs.set(key, sync);
+    return sync;
   };
 
   return {
@@ -198,6 +244,6 @@ export function createOpenClawControlProxyIdentity(
         subject: openClawDeviceSubject(session.gatewayId, session.uid, roleFor(session)),
       }),
     connectScopes: (session) => openClawDeviceRequestScopes(roleFor(session)),
-    syncRole,
+    syncProfile,
   };
 }

@@ -1928,7 +1928,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       proxyIdentity: {
         enabled: true, userHeaders: () => ({ "x-octogee-user": "uid-helper" }),
         serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge" }), deviceIdentity: () => device,
-        connectScopes: () => ["operator.read", "operator.write"], syncRole: async () => {},
+        connectScopes: () => ["operator.read", "operator.write"], syncProfile: async () => {},
       }, rpcTimeoutMs: 300,
       retainMutationLeaseUntilProcessReplacement: (lease) => { retained.push(lease); },
     });
@@ -1969,7 +1969,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     }
   });
 
-  it("carries each person's identity to OpenClaw and settles their role before forwarding connect", async () => {
+  it("carries each person's identity to OpenClaw and syncs their profile before connect and refreshes authorized connections", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upgradeHeaders: Array<Record<string, unknown>> = [];
     const assetHeaders: Array<Record<string, unknown>> = [];
@@ -2010,6 +2010,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const perUserEnv = { ...env(upstreamPort), OPENCLAW_CONTROL_IDENTITY: "per-user" };
     const manager = sessions();
     const syncOrder: string[] = [];
+    let authorized = true;
     const personDevice = generateIdentity();
     const proxyIdentity = {
       enabled: true,
@@ -2022,7 +2023,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge", "x-octogee-proxy": "1" }),
       deviceIdentity: () => personDevice,
       connectScopes: () => ["operator.read", "operator.write", "operator.approvals"],
-      syncRole: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
+      syncProfile: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
         syncOrder.push(`sync:${session.uid}:${session.brokerProfile}`);
       }),
     };
@@ -2039,7 +2040,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       router,
       env: perUserEnv,
       sessions: manager,
-      authorize: async () => true,
+      authorize: async () => authorized,
+      authorizationIntervalMs: 10,
       loadGatewayToken: async () => {
         throw new Error("per-user must not load the pod token");
       },
@@ -2086,15 +2088,35 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         }
       });
     });
-    browser.close();
-    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner:delegated-config"]);
+    const clock = vi.spyOn(Date, "now");
+    const now = Date.now();
+    try {
+      clock.mockReturnValue(now + 61_000);
+      await vi.waitFor(() => expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(2);
+      proxyIdentity.syncProfile.mockRejectedValueOnce(new Error("temporary profile outage"));
+      clock.mockReturnValue(now + 122_000);
+      await vi.waitFor(() => expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(3));
+      expect(browser.readyState).toBe(WebSocket.OPEN);
+      clock.mockReturnValue(now + 183_000);
+      await vi.waitFor(() => expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(4));
+      authorized = false;
+      clock.mockReturnValue(now + 244_000);
+      await vi.waitFor(() => expect(browser.readyState).toBe(WebSocket.CLOSED));
+      expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(4);
+    } finally {
+      clock.mockRestore();
+      browser.terminate();
+      await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    }
 
     expect(upgradeHeaders[0]).toMatchObject({
       "x-octogee-user": "uid-owner",
       "x-octogee-proxy": "1",
       "x-forwarded-for": "10.9.8.7",
     });
-    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner:delegated-config"]);
     const connect = upstreamFrames.find((frame) => frame.method === "connect");
     expect(connect?.params).toMatchObject({
       client: expect.objectContaining({ id: "openclaw-control-ui", mode: "ui" }),

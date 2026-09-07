@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 
 import {
@@ -17,7 +17,8 @@ interface MockGateway {
   base: URL;
   connects: ConnectRecord[];
   calls: Array<{ method: string; params: Record<string, unknown>; user: string | undefined }>;
-  profiles: Array<{ id: string; emails: string[]; role: string | null }>;
+  profiles: Array<{ id: string; emails: string[]; role: string | null; displayName?: string | null; hasAvatar?: boolean; updatedAt?: number }>;
+  rejectMethod?: string;
   close(): Promise<void>;
 }
 
@@ -62,6 +63,18 @@ async function mockGateway(
         return;
       }
       state.calls.push({ method: frame.method, params: frame.params, user: typeof user === "string" ? user : undefined });
+      if (frame.method === state.rejectMethod) {
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { message: "refused" } }));
+        return;
+      }
+      if (frame.method === "users.setDisplayName" || frame.method === "users.setAvatar") {
+        const profile = state.profiles.find((entry) => entry.id === frame.params.profileId)!;
+        if (frame.method === "users.setDisplayName") profile.displayName = frame.params.displayName as string;
+        else profile.hasAvatar = true;
+        profile.updatedAt = (profile.updatedAt ?? 0) + 1;
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profile } }));
+        return;
+      }
       if (frame.method === "users.list") {
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profiles: state.profiles } }));
         return;
@@ -90,6 +103,7 @@ function identityFor(gateway: MockGateway, env: NodeJS.ProcessEnv = {}) {
     upstreamBase: () => gateway.base,
     timeoutMs: 2_000,
     podAddress: () => "10.8.0.4",
+    loadAppearance: async () => ({ displayName: null, avatar: null }),
   });
 }
 
@@ -107,7 +121,7 @@ describe("OpenClaw control proxy identity", () => {
   it("creates the person's profile through their own identity, then assigns their role from the service socket", async () => {
     const gateway = await mockGateway();
 
-    await identityFor(gateway).syncRole(helper);
+    await identityFor(gateway).syncProfile(helper);
 
     expect(gateway.connects.map((connect) => connect.headers["x-octogee-user"])).toEqual([
       "svc:gateway-edge",
@@ -130,6 +144,74 @@ describe("OpenClaw control proxy identity", () => {
     expect(gateway.profiles[0]).toEqual({ id: "profile-1", emails: ["uid-helper"], role: "trusted-helper" });
   });
 
+  it("syncs Octogee appearance through the service even when the role is unchanged", async () => {
+    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "trusted-helper" }]);
+    const read = vi.fn(async () => Buffer.from("avatar"));
+    const appearance = { displayName: "Chris", avatar: { revision: "upload-1", read } };
+    const loadAppearance = vi.fn(async () => appearance);
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4", loadAppearance,
+    });
+    await identity.syncProfile(helper);
+    expect(loadAppearance).toHaveBeenCalledWith(helper.uid);
+    expect(gateway.calls.filter((call) => call.method !== "users.list")).toEqual([
+      { method: "users.setDisplayName", params: { profileId: "person", displayName: "Chris" }, user: "svc:gateway-edge" },
+      { method: "users.setAvatar", params: { profileId: "person", mime: "image/jpeg", avatarBase64: Buffer.from("avatar").toString("base64") }, user: "svc:gateway-edge" },
+    ]);
+    await identity.syncProfile(helper);
+    expect(read).toHaveBeenCalledTimes(1);
+    appearance.displayName = "Christopher";
+    appearance.avatar.revision = "upload-2";
+    await identity.syncProfile(helper);
+    expect(gateway.profiles[0]!.displayName).toBe("Christopher");
+    expect(read).toHaveBeenCalledTimes(2);
+    gateway.profiles[0]!.updatedAt! += 1;
+    await identity.syncProfile(helper);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes appearance without reassigning roles on an established connection", async () => {
+    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "viewer" }]);
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
+      loadAppearance: async () => ({ displayName: "Chris", avatar: null }),
+    });
+    await identity.syncProfile(helper, { assignRole: false });
+    expect(gateway.profiles[0]).toMatchObject({ displayName: "Chris", role: "viewer" });
+    expect(gateway.calls.map((call) => call.method)).toEqual(["users.list", "users.setDisplayName"]);
+  });
+
+  it("shares concurrent profile syncs for the same user and keeps other users separate", async () => {
+    const gateway = await mockGateway();
+    const loadAppearance = vi.fn(async (uid: string) => ({ displayName: uid, avatar: null }));
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4", loadAppearance,
+    });
+    await Promise.all([identity.syncProfile(helper), identity.syncProfile(helper),
+      identity.syncProfile({ ...helper, uid: "another-user" })]);
+    expect(loadAppearance).toHaveBeenCalledTimes(2);
+    expect(gateway.profiles.map((profile) => profile.displayName).sort()).toEqual(["another-user", "uid-Helper"]);
+  });
+
+  it("retries refused avatar writes instead of caching them as synchronized", async () => {
+    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "trusted-helper" }]);
+    const read = vi.fn(async () => Buffer.from("avatar"));
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
+      loadAppearance: async () => ({ displayName: null, avatar: { revision: "one", read } }),
+    });
+    gateway.rejectMethod = "users.setAvatar";
+    await expect(identity.syncProfile(helper)).rejects.toThrow("users.setAvatar failed");
+    gateway.rejectMethod = undefined;
+    await identity.syncProfile(helper);
+    expect(gateway.profiles[0]!.hasAvatar).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the configured API origin for user and service connections", async () => {
     const identity = identityFor(await mockGateway());
     expect(identity.serviceHeaders().origin).toBe("https://api-test.octogee.com");
@@ -143,10 +225,10 @@ describe("OpenClaw control proxy identity", () => {
     ]);
     const identity = identityFor(gateway);
 
-    await identity.syncRole(helper);
+    await identity.syncProfile(helper);
     expect(gateway.calls.map((call) => call.method)).toEqual(["users.list"]);
 
-    await identity.syncRole({ ...helper, brokerProfile: "delegated-read" });
+    await identity.syncProfile({ ...helper, brokerProfile: "delegated-read" });
     expect(gateway.calls.map((call) => call.method)).toEqual(["users.list", "users.list", "users.setRole"]);
     expect(gateway.calls[2]!.params).toEqual({ profileId: "profile-9", role: "viewer" });
     expect(gateway.connects).toHaveLength(2);
@@ -155,7 +237,7 @@ describe("OpenClaw control proxy identity", () => {
   it("fails loudly when the gateway refuses the role assignment", async () => {
     const gateway = await mockGateway([{ id: "ghost", emails: ["uid-helper"], role: null }]);
 
-    await expect(identityFor(gateway).syncRole(helper)).rejects.toThrow(/users.setRole failed/);
+    await expect(identityFor(gateway).syncProfile(helper)).rejects.toThrow(/users.setRole failed/);
     expect(gateway.profiles[0]!.role).toBeNull();
   });
 
