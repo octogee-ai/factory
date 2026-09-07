@@ -102,7 +102,7 @@ import {
   type RecoveredCustomerRuntimeResetResult,
 } from "./recovered-customer-runtime-reset.js";
 
-const RECONCILE_LOOP_INTERVAL_MS = 15 * 1000;
+const RECONCILE_LOOP_INTERVAL_MS = 2 * 1000;
 const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
 const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 600_000;
 

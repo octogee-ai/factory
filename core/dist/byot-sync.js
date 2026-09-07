@@ -180,7 +180,7 @@ function isPlatformFreeTierToolsBlock(existing) {
 // own free-tier block (fingerprint-gated) so an upgraded customer returns to
 // the inherited gateway-wide surface without losing fs.workspaceOnly or any
 // customer-authored tools keys.
-function convergedCoachToolsValue(existing, tools) {
+export function convergedCoachToolsValue(existing, tools) {
     const base = isAgentRecord(existing)
         ? { ...existing }
         : {};

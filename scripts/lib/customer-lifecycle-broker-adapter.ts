@@ -6,7 +6,6 @@ import type {
   FleetBrokerProjectCheckoutScope,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
-import { resolveBillingProfile } from "../../shared/types/billing.js";
 import {
   DEFAULT_BUILDER_AGENT_MODEL_REF,
   parseBuilderAgentModelDefault,
@@ -121,7 +120,12 @@ import {
   refreshModelCredentialRuntimeSessions,
   syncModelCredentialsForCustomer,
 } from "./model-credential-sync-runtime.js";
-import { isPlatformProviderRef } from "./byot-sync.js";
+import {
+  byosCoachConfigPatch,
+  convergedCoachToolsValue,
+  isPlatformProviderRef,
+  platformCoachModelInputForUser,
+} from "./byot-sync.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
@@ -549,12 +553,26 @@ function agentIdsFromEntries(entries: ReadonlyArray<Record<string, unknown>>): s
   return entries.flatMap((entry) => (typeof entry.id === "string" ? [entry.id] : []));
 }
 
+function initialHouseCoachPatch(snapshot: UserSnapshot) {
+  return byosCoachConfigPatch(platformCoachModelInputForUser(snapshot.slug, {
+    ...snapshot,
+    selectedTier: typeof snapshot.selectedTier === "string" ? snapshot.selectedTier : undefined,
+  }));
+}
+
 function initialCoachModelSelection(snapshot: UserSnapshot): BuilderAgentModelDefault | null {
   if (snapshot.byotActive === true) return null;
-  if (resolveBillingProfile(snapshot).modelAccess === "house_only") return null;
+  const housePatch = initialHouseCoachPatch(snapshot);
+  if (housePatch) return housePatch.agents.list[0].model as BuilderAgentModelDefault;
   const agentId = `octogee-${snapshot.slug}-coach`;
   return snapshot.systemConfig?.agentModels?.[agentId]
     ?? parseBuilderAgentModelDefault(snapshot.builderAgentDefault);
+}
+
+function initialCoachTools(snapshot: UserSnapshot, current: unknown) {
+  if (snapshot.byotActive === true) return current;
+  const tools = initialHouseCoachPatch(snapshot)?.agents.list[0].tools;
+  return tools ? convergedCoachToolsValue(current, tools) : current;
 }
 
 function platformModelDefaults(
@@ -743,6 +761,7 @@ async function applyAddCustomerConfigPatch(
       : {}),
   });
   if (coachModelSelection) agentEntry.model = coachModelSelection;
+  agentEntry.tools = initialCoachTools(snapshot, agentEntry.tools);
   const projectAgentEntries = buildProjectAgents({
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),

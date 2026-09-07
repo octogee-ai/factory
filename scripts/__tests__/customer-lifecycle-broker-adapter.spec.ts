@@ -1884,7 +1884,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const rebuiltCoach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach") as
       | { model?: string; memorySearch?: unknown }
       | undefined;
-    expect(rebuiltCoach?.model).toBe("platform-openrouter/openai/gpt-5.6-luna");
+    expect(rebuiltCoach?.model).toEqual({ primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] });
     expect(rebuiltCoach?.memorySearch).toEqual({
       provider: "openai-compatible",
       remote: {
@@ -1954,6 +1954,62 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(patch.agents.defaults?.models).toEqual({
       "platform-openrouter/openai/gpt-5.6-luna": {},
       "platform-openrouter/z-ai/glm-5.2": {},
+    });
+  });
+
+  it("puts a house-only coach's final model and tools in the initial mount patch", async () => {
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "free",
+      selectedTier: "free",
+      gatewayId: "default",
+      status: "provisioning",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      email: "alice@example.com",
+      displayName: "Alice",
+      lastName: "",
+      photoURL: "",
+      onboardingVibe: null,
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+      byotActive: false,
+      freeTierModelRef: "platform-openrouter/openai/gpt-5.6-luna",
+      builderAgentDefault: {
+        primary: "platform-openrouter/openai/gpt-5.6-luna",
+        fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+      },
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+      buildPatch: (current: unknown) => {
+        agents: {
+          defaults?: { models?: Record<string, unknown> };
+          list: Array<{ id?: string; model?: unknown; tools?: unknown }>;
+        };
+      };
+    };
+    const patch = args.buildPatch({ agents: { list: [] }, bindings: [] });
+    const coach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach");
+
+    expect(coach?.model).toEqual({ primary: "platform-openrouter/openai/gpt-5.6-luna", fallbacks: [] });
+    expect(coach?.tools).toMatchObject({ profile: "minimal" });
+    expect(patch.agents.defaults?.models).toEqual({
+      "platform-openrouter/openai/gpt-5.6-luna": {},
     });
   });
 

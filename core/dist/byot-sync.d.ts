@@ -43,6 +43,7 @@ export interface CoachModelPatch {
 export declare const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch;
 export declare function isPlatformProviderRef(ref: string): boolean;
 export declare function byosCoachConfigPatch(input: CoachModelInput | null): CoachModelPatch | null;
+export declare function convergedCoachToolsValue(existing: unknown, tools: FreeTierCoachToolsBlock | null): Record<string, unknown> | undefined;
 export declare function coachFullAgentList(current: unknown, agentId: string, model: CoachModelPatch["agents"]["list"][number]["model"] | null, tools?: FreeTierCoachToolsBlock | null): unknown[];
 export type CoachAgentPatch = {
     list: unknown[];
