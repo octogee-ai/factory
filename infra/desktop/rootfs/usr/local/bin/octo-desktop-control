@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 
@@ -44,6 +45,23 @@ def monitors():
     return [m.get("name") for m in json.loads(out.stdout or b"[]")]
 
 
+def resize(width, height):
+    if type(width) is not int or type(height) is not int or not (320 <= width <= 3840 and 240 <= height <= 2160):
+        raise ValueError("display size must be integers within 320x240 and 3840x2160")
+    if COMPOSITOR != "hyprland":
+        raise RuntimeError("display resizing requires Hyprland")
+    expression = 'hl.monitor({ output = %s, mode = "%dx%d@30", position = "0x0", scale = 1 })' % (json.dumps(OUTPUT), width, height)
+    out = run(["hyprctl", "eval", expression])
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.decode(errors="replace"))
+    for _ in range(20):
+        actual = next((m for m in hyprctl_json("monitors", "all") if m.get("name") == OUTPUT), None)
+        if actual and actual.get("width") == width and actual.get("height") == height:
+            return {"width": width, "height": height}
+        time.sleep(0.1)
+    raise RuntimeError("compositor did not apply requested display size")
+
+
 def screenshot_png():
     out = run(["grim", "-o", OUTPUT, "-t", "png", "-"], timeout=30)
     if out.returncode != 0:
@@ -64,6 +82,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.command, fmt % args))
+
+    def do_POST(self):
+        if self.path != "/resize":
+            self._send(404, {"error": "not found"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 1024:
+                raise ValueError("invalid request size")
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict):
+                raise ValueError("expected display dimensions")
+            with ACTION_LOCK:
+                result = resize(body.get("width"), body.get("height"))
+            self._send(200, result)
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+        except Exception as exc:
+            self._send(500, {"error": str(exc)})
 
     def do_GET(self):
         try:

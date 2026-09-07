@@ -91,7 +91,8 @@ export function planContainer(
           ...bindsFor(bundle, container, ctx),
           ...(role === "service" && container.name === "gateway" ? ["/home/octo/Documents:/home/octo/Documents"] : []),
           ...(role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER
-            ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`]
+            // eslint-disable-next-line sonarjs/publicly-writable-directories -- XWayland requires its standard socket directory; the mount is read-only.
+            ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
             : []),
         ],
         ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),

@@ -29,15 +29,12 @@ it("sends only lifecycle actions through the private socket and surfaces systemd
   }
 });
 
-it("quiesces desktop and user applications and recovers lifecycle failures", async () => {
-  const script = resolve(__dirname, "../../../infra/desktop/image/test_lifecycle.py");
-  await expect(promisify(execFile)("python3", [script])).resolves.toMatchObject({
-    stderr: expect.stringMatching(/Ran [1-9]\d* tests? in [^\n]+\n\nOK\s*$/),
-  });
-});
-
-it("keeps fresh and restored managed desktops awake before the compositor starts", async () => {
-  const script = resolve(__dirname, "../../../infra/desktop/image/test_idle.py");
+it.each([
+  ["quiesces applications and recovers lifecycle failures", "test_lifecycle.py"],
+  ["keeps managed desktops awake before starting the compositor", "test_idle.py"],
+  ["validates resize requests and waits for output dimensions", "test_resize.py"],
+])("%s", async (_behavior, filename) => {
+  const script = resolve(__dirname, "../../../infra/desktop/image", filename);
   await expect(promisify(execFile)("python3", [script])).resolves.toMatchObject({
     stderr: expect.stringMatching(/Ran [1-9]\d* tests? in [^\n]+\n\nOK\s*$/),
   });

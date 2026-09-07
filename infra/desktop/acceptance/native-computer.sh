@@ -3,7 +3,6 @@ set -euo pipefail
 
 : "${OPENCLAW_GATEWAY_TOKEN:?run inside the Builder VM gateway container}"
 node_name="${OCTOGEE_DESKTOP_NODE_NAME:-octogee-desktop}"
-gateway_url="${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}"
 control_url="${GATEWAY_COMPUTER_CONTROL_URL:-http://127.0.0.1:7777}"
 target_url="${OCTOGEE_ACCEPT_TARGET_URL:-https://example.com/}"
 expected_title="${OCTOGEE_ACCEPT_EXPECTED_TITLE:-Example Domain}"
@@ -14,7 +13,7 @@ export OPENCLAW_STATE_DIR
 trap 'rm -rf "$OPENCLAW_STATE_DIR"' EXIT
 printf '{"gateway":{"auth":{"mode":"password"}}}\n' > "$OPENCLAW_STATE_DIR/openclaw.json"
 
-oc() { openclaw "$@" --url "$gateway_url" --json; }
+oc() { openclaw "$@" --json; }
 
 chromium_title() {
   curl -fsS "$control_url/windows" | jq -r '.[] | select(.class | test("chromium"; "i")) | .title' | head -n1
@@ -41,11 +40,24 @@ act() {
   oc nodes invoke --node "$node_id" --command computer.act --invoke-timeout 30000 --params "$params"
 }
 
+cleanup() {
+  local status=$?
+  if ! act '{"action":"__close_execution","reason":"acceptance-complete"}' >/dev/null; then
+    echo "native computer acceptance: execution cleanup failed" >&2
+    status=1
+  fi
+  rm -rf "$OPENCLAW_STATE_DIR"
+  exit "$status"
+}
+trap cleanup EXIT
+
+echo "native computer acceptance: screenshot"
 oc nodes invoke --node "$node_id" --command screen.snapshot --invoke-timeout 30000 \
   --params "$(jq -cn --arg id "$execution_id" '{executionId: $id}')" \
   | jq -e '(.payload // (.payloadJSON | fromjson)).displayFrameId' >/dev/null
 
 title_before="$(chromium_title)"
+echo "native computer acceptance: keyboard navigation"
 act '{"action":"key","keys":"ctrl+l"}' >/dev/null
 act "$(jq -cn --arg url "$target_url" '{action: "type", text: $url}')" >/dev/null
 act '{"action":"key","keys":"Return"}' >/dev/null
@@ -57,11 +69,15 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 
-act '{"action":"__close_execution","reason":"acceptance-complete"}' >/dev/null || true
-
 printf 'node=%s before=%q after=%q\n' "$node_id" "$title_before" "$title_after"
 if [[ "$title_after" != *"$expected_title"* ]]; then
   echo "native computer acceptance failed: Chromium did not navigate through computer.act"
   exit 1
 fi
+echo "native computer acceptance: pointer input"
+pointer="$(oc nodes invoke --node "$node_id" --command screen.snapshot --invoke-timeout 30000 \
+  --params "$(jq -cn --arg id "$execution_id" '{executionId: $id}')" \
+  | jq -c '(.payload // (.payloadJSON | fromjson)) | {displayFrameId, refWidth: .width, x: (.width * 0.9 | floor), y: (.height * 0.9 | floor)}')"
+act "$(jq -c '. + {action: "mouse_move"}' <<< "$pointer")" >/dev/null
+act "$(jq -c '. + {action: "left_click"}' <<< "$pointer")" >/dev/null
 echo "native computer acceptance ok"

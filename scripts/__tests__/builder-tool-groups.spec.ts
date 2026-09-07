@@ -18,6 +18,7 @@ describe("Builder tool groups", () => {
       "core",
       "agent-clis",
       "browser",
+      "computer",
       "web-development",
       "languages",
       "build",
@@ -56,7 +57,7 @@ describe("Builder tool groups", () => {
       "make", "nano", "net-tools", "netcat-openbsd", "pandoc", "pipx", "pkg-config",
       "postgresql-client", "procps", "psmisc", "python3", "python3-pip", "python3-venv",
       "redis-tools", "ripgrep", "sqlite3", "socat", "strace", "traceroute", "tree",
-      "unzip", "vim", "wget", "xxd", "zip", "zsh",
+      "unzip", "vim", "wget", "wtype", "xxd", "zip", "zsh",
     ]));
 
     expect(manifest.pythonPackages).toEqual([

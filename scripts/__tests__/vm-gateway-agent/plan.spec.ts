@@ -85,7 +85,7 @@ describe("planBundle", () => {
     expect(desktopBinds(planContainer(bundle, bundle.containers[0], ctx, "init").config)).toEqual([]);
   });
 
-  it("gives only the desktop node the desktop's Wayland runtime directory", () => {
+  it("gives only the desktop node the desktop's Wayland and XWayland sockets", () => {
     const bundle = bundleFixture();
     bundle.containers.push({
       name: "desktop-node",
@@ -107,9 +107,12 @@ describe("planBundle", () => {
     expect(binds(2)).toEqual([
       "/srv/octogee/volumes/desktop-node-state:/home/node/.openclaw",
       "/run/user/1000:/run/user/1000",
+      "/tmp/.X11-unix:/tmp/.X11-unix:ro",
     ]);
     expect(binds(0)).not.toContain("/run/user/1000:/run/user/1000");
     expect(binds(1)).not.toContain("/run/user/1000:/run/user/1000");
+    expect(binds(0)).not.toContain("/tmp/.X11-unix:/tmp/.X11-unix:ro");
+    expect(binds(1)).not.toContain("/tmp/.X11-unix:/tmp/.X11-unix:ro");
   });
 
   it("refuses a mount onto an unknown volume and lists each image once", () => {

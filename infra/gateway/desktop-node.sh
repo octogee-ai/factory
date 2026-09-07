@@ -5,6 +5,11 @@ set -euo pipefail
 : "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}"
 : "${OPENCLAW_GATEWAY_PASSWORD:?OPENCLAW_GATEWAY_PASSWORD is required}"
 
+if ! command -v wtype >/dev/null 2>&1; then
+  echo "desktop-node: wtype is required for CUA Wayland keyboard input" >&2
+  exit 1
+fi
+
 export HOME="${HOME:-/home/node}"
 state="$HOME/.openclaw"
 mkdir -p "$state"
@@ -20,6 +25,7 @@ until socket="$(wayland_socket)" && [ -n "$socket" ]; do
   sleep 2
 done
 export WAYLAND_DISPLAY="$socket"
+export DISPLAY="${DISPLAY:-:0}"
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=Hyprland
 export CUA_DRIVER_RS_ENABLE_WAYLAND=1

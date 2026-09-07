@@ -35,6 +35,13 @@
       "commands": ["chromium"]
     },
     {
+      "id": "computer",
+      "enabled": true,
+      "delivery": "base",
+      "debianPackages": ["wtype"],
+      "commands": ["wtype"]
+    },
+    {
       "id": "web-development",
       "enabled": true,
       "delivery": "npm",
