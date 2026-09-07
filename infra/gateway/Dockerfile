@@ -40,6 +40,7 @@ COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
+COPY --chown=node:node .github/actions/release-digest-manifest/desktop-image.mjs .github/actions/release-digest-manifest/desktop-image.d.mts /octogee/.github/actions/release-digest-manifest/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
 RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
       --bundle --platform=node --format=esm \
@@ -128,6 +129,7 @@ USER root
 
 COPY --from=gateway-build --chown=node:node /octogee/core /octogee/core
 COPY --from=gateway-build --chown=node:node /octogee/scripts /octogee/scripts
+COPY --from=gateway-build --chown=node:node /octogee/.github/actions/release-digest-manifest /octogee/.github/actions/release-digest-manifest
 COPY --from=gateway-build --chown=node:node /octogee/shared /octogee/shared
 COPY --from=gateway-build --chown=node:node /octogee/extensions /octogee/extensions
 RUN chown root:root /octogee/scripts \
