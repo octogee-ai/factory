@@ -14,7 +14,6 @@ import {
 } from "@octogee/shared/types/device-identity";
 import {
   OPENCLAW_CONTROL_UI_CLIENT_ID,
-  OPENCLAW_CONTROL_UI_CLIENT_MODE,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 
 export {
@@ -237,7 +236,7 @@ function proxyIdentityConnectParams(): Record<string, unknown> {
       displayName: "octogee-chat-proxy",
       version: "1.0.0",
       platform: process.platform,
-      mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+      mode: "backend",
     },
     role: "operator",
   };

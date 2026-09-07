@@ -13,7 +13,6 @@ import {
 } from "@octogee/shared/types/openclaw-wire-core";
 import {
   OPENCLAW_CONTROL_UI_CLIENT_ID,
-  OPENCLAW_CONTROL_UI_CLIENT_MODE,
   OPENCLAW_PROVISIONER_SERVICE_IDENTITY,
   isPerUserControlIdentity,
   openClawProxyIdentityHeaders,
@@ -1040,7 +1039,7 @@ function proxyIdentityConnectParams(): Record<string, unknown> {
       displayName: "octogee-provisioner",
       version: "1.0.0",
       platform: process.platform,
-      mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+      mode: "backend",
     },
     role: "operator",
   };

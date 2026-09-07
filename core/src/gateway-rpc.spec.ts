@@ -1559,7 +1559,7 @@ describe("token resolution", () => {
 expect(captured?.auth).toBeUndefined();
   });
 
-  it("connects with an attributable in-pod service identity and allowed origin without a token", async () => {
+  it("excludes service probes from Online with backend mode while preserving trusted-proxy authentication", async () => {
     vi.stubEnv("API_PUBLIC_URL", "https://api-test.octogee.com/");
     const network = vi.mocked(os.networkInterfaces).mockReturnValue({
       lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
@@ -1614,7 +1614,7 @@ expect(captured?.auth).toBeUndefined();
       "x-forwarded-for": "10.8.0.4",
       origin: "https://api-test.octogee.com",
     });
-    expect(captured?.client).toMatchObject({ id: "openclaw-control-ui", mode: "ui" });
+    expect(captured?.client).toMatchObject({ id: "openclaw-control-ui", mode: "backend" });
     expect(captured?.auth).toBeUndefined();
     expect(captured?.device).toBeUndefined();
     expect(captured?.scopes).toBeUndefined();

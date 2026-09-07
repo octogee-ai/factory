@@ -231,7 +231,7 @@ describe("openUpstream OpenClaw auth", () => {
     ]);
   });
 
-  it("carries a proxy identity on the upgrade and connects as a Control UI client with no self-declared authority", async () => {
+  it("carries a proxy identity on the upgrade and uses backend mode to exclude service RPC from Online without self-declared authority", async () => {
     const identity = generateIdentity();
     await withMockGateway(async (url, captured) => {
       const ws = await openUpstream({
@@ -246,7 +246,7 @@ describe("openUpstream OpenClaw auth", () => {
 
       expect(captured.upgradeHeaders["x-octogee-user"]).toBe("svc:gateway-edge");
       expect(captured.upgradeHeaders["x-octogee-proxy"]).toBe("1");
-      expect(captured.params?.client).toMatchObject({ id: "openclaw-control-ui", mode: "ui" });
+      expect(captured.params?.client).toMatchObject({ id: "openclaw-control-ui", mode: "backend" });
       expect(captured.params?.role).toBe("operator");
       expect(captured.params).not.toHaveProperty("auth");
       expect(captured.params).not.toHaveProperty("device");

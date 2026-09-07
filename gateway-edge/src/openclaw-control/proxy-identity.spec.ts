@@ -131,7 +131,7 @@ describe("OpenClaw control proxy identity", () => {
     expect(gateway.connects.every((connect) => connect.headers["x-forwarded-for"] === "10.8.0.4")).toBe(true);
     expect(gateway.connects.every((connect) => connect.headers.origin === "https://api-test.octogee.com")).toBe(true);
     expect(gateway.connects[0]!.params).toMatchObject({
-      client: { id: "openclaw-control-ui", mode: "ui" },
+      client: { id: "openclaw-control-ui", mode: "backend" },
       role: "operator",
     });
     expect(gateway.connects[0]!.params).not.toHaveProperty("auth");

@@ -12,7 +12,6 @@ import {
 } from "@octogee/shared/types/openclaw-wire-core";
 import {
   OPENCLAW_CONTROL_UI_CLIENT_ID,
-  OPENCLAW_CONTROL_UI_CLIENT_MODE,
   OPENCLAW_EDGE_SERVICE_IDENTITY,
   isPerUserControlIdentity,
   openClawDeviceRequestScopes,
@@ -112,7 +111,7 @@ export async function openProxyIdentitySocket(args: {
           displayName: "octogee-identity-sync",
           version: "1.0.0",
           platform: process.platform,
-          mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+          mode: "backend",
         },
         role: "operator",
       },
