@@ -31,7 +31,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@aws-sdk/client-sts": "^3.1123.0",
+    "@aws-sdk/client-sts": "^3.1124.0",
     "@google-cloud/kms": "^6.0.0",
     "@google-cloud/secret-manager": "^7.0.0",
     "@octogee/core": "file:../core",
