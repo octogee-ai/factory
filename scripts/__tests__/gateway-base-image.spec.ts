@@ -70,7 +70,7 @@ describe("gateway base image", () => {
     const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
     const builderConfig = readRepoFile("infra/gateway/openclaw.builder.template.json");
 
-    expect(base).toContain("FROM node:24-bookworm-slim AS gateway-core-system");
+    expect(base).toContain("FROM node:26-bookworm-slim AS gateway-core-system");
     expect(base).toContain("FROM gateway-core-system AS gateway-core-runtime");
     expect(builderBase).toContain("ARG GATEWAY_BASE_IMAGE");
     expect(builderBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");

@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS gateway-core-system
+FROM node:26-bookworm-slim AS gateway-core-system
 
 ARG NPM_VERSION=12.0.2
 
