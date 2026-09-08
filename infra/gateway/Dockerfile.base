@@ -58,7 +58,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
-FROM rust:1.97.1-slim-bookworm AS cua-driver-builder
+FROM rust:1.98.0-slim-bookworm AS cua-driver-builder
 
 ARG CUA_SOURCE_SHA=6309cc93dea771c7980a23d586608b465293a4de
 RUN apt-get update && apt-get install -y --no-install-recommends \
