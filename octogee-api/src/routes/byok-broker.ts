@@ -189,7 +189,6 @@ export type AgentCredentialPath =
   "platform_broker" | "byok_api_key" | "byosub" | "byosub_suppressed_customer";
 
 function credentialPathFor(
-  userData: Record<string, unknown>,
   configData: Record<string, unknown>,
   gatewayClass: string,
 ): { path: AgentCredentialPath; provider: string | null } {
@@ -197,18 +196,9 @@ function credentialPathFor(
     configData.modelCredential && typeof configData.modelCredential === "object"
       ? (configData.modelCredential as Record<string, unknown>)
       : null;
-  const legacyByot =
-    userData.byotActive === true &&
-    configData.byot &&
-    typeof configData.byot === "object"
-      ? (configData.byot as Record<string, unknown>)
-      : null;
-  const active = credential?.active === true ? credential : legacyByot;
-  if (!active) return { path: "platform_broker", provider: null };
-  const provider = stringOrNull(active.provider);
-  // legacy byot records predate the mode field and were always API keys
-  const isOauth = active !== legacyByot && active.mode === "oauth";
-  if (!isOauth) return { path: "byok_api_key", provider };
+  if (credential?.active !== true) return { path: "platform_broker", provider: null };
+  const provider = stringOrNull(credential.provider);
+  if (credential.mode !== "oauth") return { path: "byok_api_key", provider };
   return gatewayClass === "builder"
     ? { path: "byosub", provider }
     : { path: "byosub_suppressed_customer", provider };
@@ -292,7 +282,6 @@ async function agentUsageStatusPayload(
     );
   }
   const credential = credentialPathFor(
-    userData,
     (configSnap.data() ?? {}) as Record<string, unknown>,
     authorization.config.gatewayClass,
   );

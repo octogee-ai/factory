@@ -35,14 +35,10 @@ export interface ModelBrokerProviderKeyResolverDeps {
   readSecret?: (name: string) => Promise<string>;
 }
 
-type AnthropicConfiguredCredentialResolution =
+export type AnthropicModelCredentialResolution =
   | { kind: "platform" }
   | { kind: "deny" }
   | { kind: "owner_model_credential"; secretName: string };
-
-export type AnthropicModelCredentialResolution =
-  | { kind: "fallback" }
-  | AnthropicConfiguredCredentialResolution;
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -59,30 +55,13 @@ function ownerSlug(userData: Record<string, unknown> | undefined): string | null
   return typeof slug === "string" && SLUG_PATTERN.test(slug) ? slug : null;
 }
 
-function byotRecord(
-  configData: Record<string, unknown> | undefined,
-): Record<string, unknown> | null {
-  return objectRecord(configData?.byot);
-}
-
-function modelCredentialRecord(
-  configData: Record<string, unknown> | undefined,
-): Record<string, unknown> | null {
-  return objectRecord(configData?.modelCredential);
-}
-
-function expectedAnthropicSecretName(slug: string): string {
-  return `byok-${slug}-anthropic`;
-}
-
 export function configuredAnthropicModelCredentialResolution(
   userData: Record<string, unknown> | undefined,
   configData: Record<string, unknown> | undefined,
 ): AnthropicModelCredentialResolution {
-  const credential = modelCredentialRecord(configData);
-  if (!credential) return { kind: "fallback" };
+  const credential = objectRecord(configData?.modelCredential);
   if (
-    credential.active !== true ||
+    credential?.active !== true ||
     credential.provider !== "anthropic" ||
     credential.mode !== "api_key"
   ) {
@@ -90,23 +69,8 @@ export function configuredAnthropicModelCredentialResolution(
   }
   const slug = ownerSlug(userData);
   if (!slug) return { kind: "deny" };
-  const expected = expectedAnthropicSecretName(slug);
+  const expected = `byok-${slug}-anthropic`;
   return credential.secretName === expected
-    ? { kind: "owner_model_credential", secretName: expected }
-    : { kind: "deny" };
-}
-
-function configuredAnthropicByotResolution(
-  userData: Record<string, unknown> | undefined,
-  configData: Record<string, unknown> | undefined,
-): AnthropicConfiguredCredentialResolution {
-  if (userData?.byotActive !== true) return { kind: "platform" };
-  const byot = byotRecord(configData);
-  if (byot?.provider !== "anthropic") return { kind: "platform" };
-  const slug = ownerSlug(userData);
-  if (!slug) return { kind: "deny" };
-  const expected = expectedAnthropicSecretName(slug);
-  return byot.secretName === expected
     ? { kind: "owner_model_credential", secretName: expected }
     : { kind: "deny" };
 }
@@ -130,13 +94,10 @@ export function createAnthropicProviderKeyResolver(
     ]);
     const userData = userSnap.data() as Record<string, unknown> | undefined;
     const configData = configSnap.data() as Record<string, unknown> | undefined;
-    const modelCredentialResolution = configuredAnthropicModelCredentialResolution(
+    const resolution = configuredAnthropicModelCredentialResolution(
       userData,
       configData,
     );
-    const resolution = modelCredentialResolution.kind === "fallback"
-      ? configuredAnthropicByotResolution(userData, configData)
-      : modelCredentialResolution;
     if (resolution.kind === "deny") return null;
     if (resolution.kind === "platform") return platformKeyResolution(deps.platformKey);
 

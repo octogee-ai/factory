@@ -15,14 +15,9 @@ import {
   workspaceGeneralChannelName,
   type ParsedAgentId,
 } from "@octogee/shared/types/identity";
-import {
-  projectGatewayDesiredRootForGateway,
-  type GatewayDoc,
-} from "@octogee/shared/types/gateway-releases";
-import type { GatewayMutableConfig } from "@octogee/core/gateway-live-release";
+import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
-import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 import {
   ActivityReceiptConflictError,
@@ -63,15 +58,6 @@ const RECEIPT_MAX_LEASE_MS = 60_000;
 const PREVIEW_PROJECT_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PREVIEW_PROJECT_SLUG_MAX_LENGTH = 63;
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
-
-function isDurableGatewayRoot(
-  data: unknown,
-  gatewayId: string,
-): data is GatewayDoc & GatewayMutableConfig {
-  return (
-    projectGatewayDesiredRootForGateway(data, gatewayId) !== null
-  );
-}
 
 function boundGateway(req: Request, res: Response): GatewayBinding | null {
   const bound = req.boundTenant;
@@ -892,103 +878,30 @@ async function resolveUidByMmUser(
   return uid;
 }
 
-// Resolve the customer's serving revision for WS redemption. A BACKFILLED
-// gateway (Step 2) carries its durable identity in gateways/{id} with NO
-// internalUrl; the serving URL lives on the revision realization doc. Resolution
-// is scoped entirely to the bound gateway: the assignment doc is read from
-// gateways/{boundGatewayId}/assignments/{uid} and liveRevisionId from the bound
-// gateway doc — never from request content — so this cannot widen tenant access.
-export function resolveServingRevisionId(input: {
-  gatewayData: Record<string, unknown>;
-  assignmentData: Record<string, unknown> | undefined;
-  uid: string;
-  gatewayId: string;
-}): string | null {
-  const assignment = parseAssignmentDoc(input.uid, input.assignmentData);
-  if (assignment) return assignment.gatewayId;
-  const live = input.gatewayData.liveRelease;
-  return typeof live === "number" ? input.gatewayId : null;
-}
-
-// Read the revision's serving internalUrl, failing LOUD rather than dialing a
-// wrong revision: the revision doc must belong to the bound gateway and must
-// carry a non-empty heartbeat.internalUrl.
-export function readRevisionInternalUrl(input: {
-  revisionData: Record<string, unknown> | undefined;
-  expectedGatewayId: string;
-  revisionId: string;
-}): { url: string } | { error: string } {
-  const data = input.revisionData;
-  if (!data) return { error: `revision ${input.revisionId} not found` };
-  if (data.gatewayId !== input.expectedGatewayId) {
-    return {
-      error: `revision ${input.revisionId} belongs to gateway ${String(data.gatewayId)}, not ${input.expectedGatewayId}`,
-    };
-  }
-  // Never dial a corpse: a retired/failed revision may still carry a stale
-  // heartbeat.internalUrl, but the pod is gone (or unhealthy). Reject BEFORE the
-  // caller consumes the one-time ticket so the client can retry once the roll
-  // settles onto a live revision.
-  if (data.lifecycle === "retired" || data.lifecycle === "failed") {
-    return { error: `revision ${input.revisionId} is ${String(data.lifecycle)} — not serving` };
-  }
-  if (data.retiredAt != null) {
-    return { error: `revision ${input.revisionId} is retired (retiredAt set) — not serving` };
-  }
-  const url = readPath(data, "heartbeat.internalUrl");
-  if (typeof url !== "string" || url.length === 0) {
-    return { error: `revision ${input.revisionId} has no serving internalUrl` };
-  }
-  return { url };
-}
-
-// Resolve the serving gateway URL for a WS redemption inside the redeem
-// transaction: legacy internalUrl passthrough, else revision-scoped resolution.
 export async function resolveRedeemGatewayUrl(input: {
   tx: Transaction;
   db: Firestore;
   gatewayId: string;
-  uid: string;
-  gatewayExists: boolean;
-  gatewayData: Record<string, unknown>;
+  gatewayData: Record<string, unknown> | undefined;
 }): Promise<{ url: string } | { error: string }> {
-  // Un-backfilled path, byte-identical to legacy: a genuine pre-backfill
-  // gateways/{id} heartbeat doc carries its own flat internalUrl → use it. A
-  // BACKFILLED GatewayDoc must NEVER honor a flat internalUrl even if one is
-  // still contaminating the doc (a stale heartbeat dual-write) — that flat URL
-  // pins whichever revision heartbeat'd last, silently bypassing assignment /
-  // live-revision resolution and attaching the customer to the WRONG revision.
-  // A GatewayDoc always goes through revision resolution below.
-  const legacyUrl = input.gatewayData.internalUrl;
-  if (
-    !input.gatewayExists &&
-    typeof legacyUrl === "string" &&
-    legacyUrl.length > 0
-  ) {
-    return { url: legacyUrl };
-  }
-  if (input.gatewayExists && !isDurableGatewayRoot(input.gatewayData, input.gatewayId)) {
-    return { error: "gateway-root-invalid" };
-  }
+  const gateway = projectGatewayDesiredRootForGateway(input.gatewayData, input.gatewayId);
+  if (!gateway) return { error: "gateway-root-invalid" };
+  if (gateway.liveRelease === null) return { error: "gateway-url-unresolved" };
 
-  // Backfilled desired doc: resolve the customer's serving revision and read its
-  // heartbeat.internalUrl. Fail loud rather than dial the wrong revision.
-  const assignmentSnap = await input.tx.get(
-    input.db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`),
-  );
-  const revisionId = resolveServingRevisionId({
-    gatewayData: input.gatewayData,
-    assignmentData: assignmentSnap.data(),
-    uid: input.uid,
-    gatewayId: input.gatewayId,
-  });
-  if (!revisionId) return { error: "gateway-url-unresolved" };
-  const revSnap = await input.tx.get(input.db.doc(`glmGateways/${revisionId}`));
-  return readRevisionInternalUrl({
-    revisionData: revSnap.data(),
-    expectedGatewayId: input.gatewayId,
-    revisionId,
-  });
+  const runtimeSnap = await input.tx.get(input.db.doc(`glmGateways/${input.gatewayId}`));
+  const runtime = runtimeSnap.data();
+  if (!runtime) return { error: `runtime ${input.gatewayId} not found` };
+  if (runtime.gatewayId !== input.gatewayId) {
+    return { error: `runtime ${input.gatewayId} belongs to gateway ${String(runtime.gatewayId)}` };
+  }
+  if (runtime.lifecycle === "retired" || runtime.lifecycle === "failed" || runtime.retiredAt != null) {
+    return { error: `runtime ${input.gatewayId} is not serving` };
+  }
+  const url = readPath(runtime, "heartbeat.internalUrl");
+  if (typeof url !== "string" || url.length === 0) {
+    return { error: `runtime ${input.gatewayId} has no serving internalUrl` };
+  }
+  return { url };
 }
 
 function mountUserAndWsRoutes(router: Router, db: Firestore): void {
@@ -1074,9 +987,7 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
         tx,
         db,
         gatewayId: bound.gatewayId,
-        uid,
-        gatewayExists: gwSnap.exists,
-        gatewayData: gwSnap.data() ?? {},
+        gatewayData: gwSnap.data(),
       });
       if ("error" in urlResult) {
         return {

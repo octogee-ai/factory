@@ -1,123 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { Firestore, Transaction } from "firebase-admin/firestore";
-import {
-  readRevisionInternalUrl,
-  resolveRedeemGatewayUrl,
-  resolveServingRevisionId,
-} from "./openclaw-runtime-broker.js";
+import { resolveRedeemGatewayUrl } from "./openclaw-runtime-broker.js";
 
-const LEGACY_URL = "ws://octogee-gateway-default.octogee-test.svc.cluster.local:18789";
+const LEGACY_URL = "ws://retired-gateway.octogee-test.svc.cluster.local:18789";
 const RUNTIME_URL = "ws://octogee-gateway-default.octogee-test.svc.cluster.local:18789";
 
 function assignmentDoc(gatewayId = "default"): Record<string, unknown> {
-  return {
-    uid: "u1",
-    slug: "acme",
-    gatewayId,
-    source: "onboarding",
-  };
+  return { uid: "u1", slug: "acme", gatewayId, source: "onboarding" };
 }
 
-describe("resolveServingRevisionId", () => {
-  it("resolves an assigned customer to the bare gateway", () => {
-    const revisionId = resolveServingRevisionId({
-      gatewayData: { liveRelease: 9 },
-      assignmentData: assignmentDoc(),
-      uid: "u1",
-      gatewayId: "default",
-    });
-    expect(revisionId).toBe("default");
-  });
-
-  it("resolves a gap user (no assignment) via the gateway's live release", () => {
-    const revisionId = resolveServingRevisionId({
-      gatewayData: { liveRelease: 9 },
-      assignmentData: undefined,
-      uid: "u1",
-      gatewayId: "default",
-    });
-    expect(revisionId).toBe("default");
-  });
-
-  it("ignores a junk/partial assignment doc and falls back to the live release", () => {
-    const revisionId = resolveServingRevisionId({
-      gatewayData: { liveRelease: 9 },
-      assignmentData: { gatewayId: "default" }, // missing slug/source → not a valid assignment
-      uid: "u1",
-      gatewayId: "default",
-    });
-    expect(revisionId).toBe("default");
-  });
-
-  it("returns null when neither an assignment nor a live release resolves", () => {
-    const revisionId = resolveServingRevisionId({
-      gatewayData: {},
-      assignmentData: undefined,
-      uid: "u1",
-      gatewayId: "default",
-    });
-    expect(revisionId).toBeNull();
-  });
-});
-
-describe("readRevisionInternalUrl", () => {
-  it("returns the runtime heartbeat internalUrl when it belongs to the bound gateway", () => {
-    const result = readRevisionInternalUrl({
-      revisionData: { gatewayId: "default", heartbeat: { internalUrl: RUNTIME_URL } },
-      expectedGatewayId: "default",
-      revisionId: "default",
-    });
-    expect(result).toEqual({ url: RUNTIME_URL });
-  });
-
-  it("fails loud when the runtime doc belongs to another gateway (never dial a wrong pod)", () => {
-    const result = readRevisionInternalUrl({
-      revisionData: { gatewayId: "bender", heartbeat: { internalUrl: RUNTIME_URL } },
-      expectedGatewayId: "default",
-      revisionId: "default",
-    });
-    expect("error" in result).toBe(true);
-  });
-
-  it("fails loud when the runtime has no serving internalUrl", () => {
-    const result = readRevisionInternalUrl({
-      revisionData: { gatewayId: "default", heartbeat: { internalUrl: "" } },
-      expectedGatewayId: "default",
-      revisionId: "default",
-    });
-    expect("error" in result).toBe(true);
-  });
-
-  it("fails loud when the runtime doc is missing", () => {
-    const result = readRevisionInternalUrl({
-      revisionData: undefined,
-      expectedGatewayId: "default",
-      revisionId: "default",
-    });
-    expect("error" in result).toBe(true);
-  });
-
-  it("rejects a FAILED runtime even when it still carries a stale internalUrl", () => {
-    const result = readRevisionInternalUrl({
-      revisionData: { gatewayId: "default", lifecycle: "failed", heartbeat: { internalUrl: RUNTIME_URL } },
-      expectedGatewayId: "default",
-      revisionId: "default",
-    });
-    expect("error" in result).toBe(true);
-  });
-
-  it("resolves a serving runtime", () => {
-    const result = readRevisionInternalUrl({
-      revisionData: { gatewayId: "default", lifecycle: "serving", heartbeat: { internalUrl: RUNTIME_URL } },
-      expectedGatewayId: "default",
-      revisionId: "default",
-    });
-    expect(result).toEqual({ url: RUNTIME_URL });
-  });
-});
-
-// A GatewayDoc shape isGatewayDesiredDoc accepts.
 function desiredDoc(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     gatewayId: "default",
@@ -144,8 +36,6 @@ function desiredDoc(extra: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
-// Fake redeem transaction: db.doc(path) returns the path as a token; tx.get maps
-// the token back to a seeded snapshot.
 function fakeRedeemDeps(snaps: Record<string, Record<string, unknown> | undefined>): {
   tx: Transaction;
   db: Firestore;
@@ -160,21 +50,19 @@ function fakeRedeemDeps(snaps: Record<string, Record<string, unknown> | undefine
   return { tx, db };
 }
 
-describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", () => {
-  it("a TRUE legacy heartbeat doc uses its flat internalUrl byte-identically (no runtime resolution)", async () => {
+describe("resolveRedeemGatewayUrl", () => {
+  it("rejects a legacy heartbeat without a durable gateway root", async () => {
     const { tx, db } = fakeRedeemDeps({});
     const result = await resolveRedeemGatewayUrl({
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: false,
       gatewayData: { internalUrl: LEGACY_URL },
     });
-    expect(result).toEqual({ url: LEGACY_URL });
+    expect(result).toEqual({ error: "gateway-root-invalid" });
   });
 
-  it("a GatewayDoc carrying a STALE flat internalUrl resolves via the bare runtime doc, NOT the flat field", async () => {
+  it("requires a live release even when a customer assignment exists", async () => {
     const { tx, db } = fakeRedeemDeps({
       "gateways/default/assignments/u1": assignmentDoc(),
       "glmGateways/default": {
@@ -187,15 +75,30 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: true,
-      // Contaminated: a desired doc that ALSO carries a stale flat internalUrl.
+      gatewayData: desiredDoc({ liveRelease: null }),
+    });
+    expect(result).toEqual({ error: "gateway-url-unresolved" });
+  });
+
+  it("uses the bound gateway runtime and ignores a flat root URL", async () => {
+    const { tx, db } = fakeRedeemDeps({
+      "gateways/default/assignments/u1": assignmentDoc(),
+      "glmGateways/default": {
+        gatewayId: "default",
+        lifecycle: "serving",
+        heartbeat: { internalUrl: RUNTIME_URL },
+      },
+    });
+    const result = await resolveRedeemGatewayUrl({
+      tx,
+      db,
+      gatewayId: "default",
       gatewayData: desiredDoc({ internalUrl: LEGACY_URL }),
     });
     expect(result).toEqual({ url: RUNTIME_URL });
   });
 
-  it("a GatewayDoc with a gap user (no assignment) resolves via the live release", async () => {
+  it("resolves the live runtime without a customer assignment", async () => {
     const { tx, db } = fakeRedeemDeps({
       "glmGateways/default": {
         gatewayId: "default",
@@ -207,8 +110,6 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: true,
       gatewayData: desiredDoc({ internalUrl: LEGACY_URL }),
     });
     expect(result).toEqual({ url: RUNTIME_URL });
@@ -226,29 +127,22 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: true,
       gatewayData: desiredDoc({ coOwnerUids: [] }),
     })).resolves.toEqual({ url: RUNTIME_URL });
     await expect(resolveRedeemGatewayUrl({
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: true,
       gatewayData: desiredDoc({ coOwnerUids: ["uid-former-helper"] }),
     })).resolves.toEqual({ error: "gateway-root-invalid" });
   });
 
-  it("fails loud (no url) rather than dial the stale flat field when a desired doc cannot resolve", async () => {
+  it("rejects an unrealized gateway instead of dialing a flat root URL", async () => {
     const { tx, db } = fakeRedeemDeps({});
     const result = await resolveRedeemGatewayUrl({
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: true,
-      // Desired doc, never realized, no assignment → unresolved, never the flat URL.
       gatewayData: desiredDoc({ internalUrl: LEGACY_URL, liveRelease: null }),
     });
     expect("error" in result).toBe(true);
@@ -260,8 +154,6 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
       tx,
       db,
       gatewayId: "default",
-      uid: "u1",
-      gatewayExists: true,
       gatewayData: {
         gatewayId: "default",
         desiredRelease: 7,
@@ -273,4 +165,30 @@ describe("resolveRedeemGatewayUrl — broker discriminates a real legacy doc", (
 
     expect(result).toEqual({ error: "gateway-root-invalid" });
   });
+
+  it.each([
+    ["missing root", undefined],
+    ["foreign root", desiredDoc({ gatewayId: "other" })],
+  ])("rejects a %s", async (_name, gatewayData) => {
+    const { tx, db } = fakeRedeemDeps({});
+    await expect(resolveRedeemGatewayUrl({ tx, db, gatewayId: "default", gatewayData }))
+      .resolves.toEqual({ error: "gateway-root-invalid" });
+  });
+
+  it.each([
+    ["missing runtime", undefined],
+    ["foreign runtime", { gatewayId: "other", heartbeat: { internalUrl: RUNTIME_URL } }],
+    ["failed runtime", { gatewayId: "default", lifecycle: "failed", heartbeat: { internalUrl: RUNTIME_URL } }],
+    ["retired runtime", { gatewayId: "default", lifecycle: "retired", heartbeat: { internalUrl: RUNTIME_URL } }],
+    ["retired timestamp", { gatewayId: "default", retiredAt: 1, heartbeat: { internalUrl: RUNTIME_URL } }],
+    ["missing URL", { gatewayId: "default", heartbeat: {} }],
+    ["empty URL", { gatewayId: "default", heartbeat: { internalUrl: "" } }],
+  ])("rejects a %s", async (_name, runtime) => {
+    const { tx, db } = fakeRedeemDeps({ "glmGateways/default": runtime });
+    const result = await resolveRedeemGatewayUrl({
+      tx, db, gatewayId: "default", gatewayData: desiredDoc(),
+    });
+    expect(result).toHaveProperty("error");
+  });
+
 });
