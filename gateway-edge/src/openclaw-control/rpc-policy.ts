@@ -92,7 +92,7 @@ const TEAM_MEMBER_METHODS = new Set([
   "sessions.delete", "sessions.reset", "sessions.resolve", "sessions.compact", "sessions.preview",
   "sessions.messages.subscribe", "sessions.messages.unsubscribe",
 ]);
-const TEAM_MEMBER_EVENTS = new Set(["connect.challenge", "chat", "sessions.changed", "tick", "shutdown"]);
+const TEAM_MEMBER_EVENTS = new Set(["connect.challenge", "chat", "sessions.changed", "presence", "tick", "shutdown"]);
 const TEAM_SESSION_METHODS = new Set([
   "agent.identity.get", "chat.metadata", "chat.startup", "chat.history", "chat.send", "chat.abort",
   "sessions.create", "sessions.patch", "sessions.delete", "sessions.reset", "sessions.resolve",
@@ -121,6 +121,25 @@ function memberSessionsPayload(value: unknown, workspaceSlug: string | undefined
     ? payload.sessions.filter((row) => prefix && typeof record(row)?.key === "string" &&
       String(record(row)!.key).startsWith(prefix) && !parseChannelScopedMattermostSessionRoute(record(row)!.key)) : [];
   return { ...payload, sessions, count: sessions.length, totalCount: sessions.length };
+}
+
+function memberPresencePayload(value: unknown): Record<string, unknown> {
+  const presence = record(value)?.presence;
+  if (!Array.isArray(presence)) return { presence: [] };
+  return {
+    presence: presence.flatMap((entry) => {
+      const row = record(entry);
+      const user = record(row?.user);
+      const identity = record(user?.identity);
+      if (!row || !user || identity?.type !== "profile" || !safeShortString(identity.id) ||
+        user.id !== identity.id || typeof row.ts !== "number" || !Number.isFinite(row.ts)) return [];
+      return [{
+        ...displayFields(row, ["ts", "onlineSince", "lastActivityAt", "lastInputSeconds", "reason", "instanceId"]),
+        user: { ...displayFields(user, ["id", "name", "avatarUrl"]),
+          identity: { type: "profile", id: identity.id } },
+      }];
+    }),
+  };
 }
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
@@ -780,7 +799,7 @@ export function projectOpenClawHelloForProfile(
   }
   const auth = record(payload.auth);
   if (isMemberProfile(profile)) {
-    payload.snapshot = {};
+    payload.snapshot = memberPresencePayload(payload.snapshot);
     if (Array.isArray(features?.events)) features.events = features.events.filter((event) => TEAM_MEMBER_EVENTS.has(String(event)));
   }
   if (auth) {
@@ -1096,6 +1115,9 @@ function projectDelegatedConnectChallenge(
 
 function projectMemberEvent(frame: Record<string, unknown>, workspaceSlug?: string): Record<string, unknown> | null {
   if (frame.type !== "event" || typeof frame.event !== "string" || !TEAM_MEMBER_EVENTS.has(frame.event)) return null;
+  if (frame.event === "presence") {
+    return { ...frame, payload: memberPresencePayload(frame.payload) };
+  }
   if (frame.event === "chat" || frame.event === "sessions.changed") {
     const sessionKey = record(frame.payload)?.sessionKey;
     if (!workspaceSlug || typeof sessionKey !== "string" ||

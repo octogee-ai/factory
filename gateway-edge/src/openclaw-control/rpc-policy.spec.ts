@@ -39,6 +39,37 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("OpenClaw Dashboard RPC policy", () => {
+  it.each(["native-member", "native-member-helper"] as const)(
+    "shows the human online roster and own presence identity to %s without exposing host or session details", (profile) => {
+      const people = ["owner", "member"].map((id) => ({
+        ts: 1_000, onlineSince: 500, lastActivityAt: 900, lastInputSeconds: 1,
+        reason: "connect", instanceId: `browser-${id}`,
+        user: { id: `profile-${id}`, identity: { type: "profile", id: `profile-${id}` },
+          name: id, avatarUrl: `/api/users/profile-${id}/avatar`, email: `${id}@private.example` },
+        host: "private-host", ip: "10.0.0.1", deviceId: "private-device", scopes: ["operator.admin"],
+        watchedSessions: ["agent:private-project:private-session"], text: "private-status",
+      }));
+      const expected = people.map(({ ts, onlineSince, lastActivityAt, lastInputSeconds, reason, instanceId, user }) => ({
+        ts, onlineSince, lastActivityAt, lastInputSeconds, reason, instanceId,
+        user: { id: user.id, identity: user.identity, name: user.name, avatarUrl: user.avatarUrl },
+      }));
+      const presence = [...people, { ts: 1_000, host: "private-node" },
+        { ts: 1_000, user: { id: "svc:private-service" } }];
+      const hello = projectOpenClawHelloForProfile({ type: "res", id: "connect", ok: true, payload: {
+        type: "hello-ok", features: { methods: [], events: ["presence", "health", "chat"] },
+        snapshot: { presence, health: { preview: "private-preview" } },
+      } }, profile);
+      expect(hello).toMatchObject({ payload: {
+        snapshot: { presence: expected }, features: { events: ["presence", "chat"] },
+      } });
+      const event = projectOpenClawServerFrameForProfile({ type: "event", event: "presence",
+        payload: { presence, privateStatus: "private-status" },
+      }, undefined, profile, "alice");
+      expect(event).toEqual({ type: "event", event: "presence", payload: { presence: expected } });
+      expect(JSON.stringify([hello, event])).not.toContain("private");
+    },
+  );
+
   it("admits team chat and personal session methods without support or administrative authority", () => {
     const methods = ["chat.metadata", "chat.send", "chat.history", "chat.startup", "sessions.list", "sessions.create", "users.self"];
     const forbidden = ["config.patch", "users.setRole", "browser.request", "tools.invoke", "exec.approval.resolve", "device.pair.approve"];
@@ -57,7 +88,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
   });
   it("suppresses global owner heartbeat previews and cron payloads for Team members", () => {
     for (const profile of ["native-member", "native-member-helper"] as const) {
-      for (const event of ["heartbeat", "cron", "presence", "health"]) {
+      for (const event of ["heartbeat", "cron", "health"]) {
         expect(projectOpenClawServerFrameForProfile({ type: "event", event,
           payload: { preview: "owner secret", to: "private destination" },
         }, undefined, profile)).toBeNull();
@@ -79,7 +110,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
     const hello = projectOpenClawHelloForProfile({ type: "res", payload: { type: "hello-ok",
       features: { methods: [], events: ["chat", "heartbeat"] }, snapshot: { health: { preview: "secret" }, presence: ["owner"] },
     } }, "native-member");
-    expect(hello).toMatchObject({ payload: { snapshot: {}, features: { events: ["chat"] } } });
+    expect(hello).toMatchObject({ payload: { snapshot: { presence: [] }, features: { events: ["chat"] } } });
     expect(projectOpenClawServerFrameForProfile({ type: "event", event: "chat", payload: { message: "unscoped" } }, undefined, "native-member")).toBeNull();
     expect(projectOpenClawServerFrameForProfile({ type: "event", event: "chat", payload: {
       sessionKey: "agent:octogee-alice-proj-private:formerly-owned", message: "private project",

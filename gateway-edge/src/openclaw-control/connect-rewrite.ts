@@ -37,6 +37,7 @@ function connectAuthority(
   identity: OpenClawConnectIdentity,
   nonce: string,
   platform: string,
+  instanceId: unknown,
 ): Record<string, unknown> {
   const shared = { displayName: "octogee-control-ui", version: "1.0.0", platform };
   if (identity.mode === "shared-operator") {
@@ -46,7 +47,14 @@ function connectAuthority(
       auth: { token: identity.gatewayToken },
     };
   }
-  const client = { id: OPENCLAW_CONTROL_UI_CLIENT_ID, mode: OPENCLAW_CONTROL_UI_CLIENT_MODE, ...shared };
+  const client = {
+    id: OPENCLAW_CONTROL_UI_CLIENT_ID,
+    mode: OPENCLAW_CONTROL_UI_CLIENT_MODE,
+    ...shared,
+    ...(typeof instanceId === "string" && /^[a-zA-Z0-9_-]{1,256}$/u.test(instanceId)
+      ? { instanceId }
+      : {}),
+  };
   return {
     client,
     scopes: [...identity.scopes],
@@ -80,7 +88,8 @@ export function rewriteTrustedOpenClawConnect(args: {
       minProtocol: OPENCLAW_PROTOCOL_VERSION,
       maxProtocol: OPENCLAW_PROTOCOL_VERSION,
       role: "operator",
-      ...connectAuthority(args.identity, args.nonce, args.platform ?? process.platform),
+      ...connectAuthority(args.identity, args.nonce, args.platform ?? process.platform,
+        record(record(request.params)?.client)?.instanceId),
     },
   });
 }

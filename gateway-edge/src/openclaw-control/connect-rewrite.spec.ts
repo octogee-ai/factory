@@ -16,7 +16,7 @@ const browserConnect = {
   id: "browser-connect",
   method: "connect",
   params: {
-    client: { id: "untrusted-browser", mode: "cli" },
+    client: { id: "untrusted-browser", mode: "cli", instanceId: "5adcb01f-bef1-4b3a-9dd9-b11951926f30" },
     role: "node",
     scopes: ["stolen.scope"],
     auth: { token: "browser-token" },
@@ -76,7 +76,8 @@ describe("trusted OpenClaw Dashboard connect rewrite", () => {
       id: "browser-connect",
       method: "connect",
       params: {
-        client: { id: "openclaw-control-ui", mode: "ui", platform: "linux" },
+        client: { id: "openclaw-control-ui", mode: "ui", platform: "linux",
+          instanceId: browserConnect.params.client.instanceId },
         role: "operator",
         scopes,
         device: { id: device.deviceId, nonce: "nonce-1" },
@@ -106,6 +107,17 @@ describe("trusted OpenClaw Dashboard connect rewrite", () => {
       decodeBase64Url(rewritten.params.device.signature),
     )).toBe(true);
   });
+
+  it.each([null, {}, "", "x".repeat(257), "browser\ninstance"])(
+    "does not forward malformed browser presence identifiers %j", (instanceId) => {
+      const rewritten = JSON.parse(rewriteTrustedOpenClawConnect({
+        frame: { ...browserConnect, params: { ...browserConnect.params,
+          client: { ...browserConnect.params.client, instanceId } } },
+        nonce: "nonce-1", identity: { mode: "per-user", device: generateIdentity(), scopes: [] },
+      })!);
+      expect(rewritten.params.client).not.toHaveProperty("instanceId");
+    },
+  );
 
   it("extracts only a challenge and removes server-held credentials from every server frame", () => {
     expect(challengeNonce({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }))
