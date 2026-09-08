@@ -1449,10 +1449,11 @@ async function prepareSessionsList(
   session: OpenClawControlSession,
   authorize: Authorize,
   listWorkspaceChannels: ListWorkspaceChannels,
-  signal?: AbortSignal,
+  { signal, perUserIdentity = false }: { signal?: AbortSignal; perUserIdentity?: boolean },
 ): Promise<MattermostChatPreparation | null> {
   const params = sessionsListParams(frame.params);
   if (!params) {
+    if (perUserIdentity) return null;
     return rpcError(frame, "INVALID_REQUEST", "Unsupported Mattermost session list request");
   }
   const authorizedRows = await authorizedMattermostSessions(
@@ -1469,7 +1470,7 @@ async function prepareSessionsList(
       limit: SESSION_LIST_SOURCE_LIMIT,
     },
     project: (upstream) => projectSessionsList(frame, upstream, authorizedRows, params,
-      session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper"
+      !perUserIdentity && (session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper")
         ? `octogee-${session.workspaceSlug}-coach` : undefined),
   };
 }
@@ -1663,6 +1664,7 @@ function unavailableResponse(
 }
 
 export function createMattermostControlChat(options: {
+  perUserIdentity?: boolean;
   resolveChatProfile?: OpenClawControlProxyIdentity["resolveChatProfile"];
   authorize?: Authorize;
   listWorkspaceChannels?: ListWorkspaceChannels;
@@ -1674,14 +1676,14 @@ export function createMattermostControlChat(options: {
       const listWorkspaceChannels = options.listWorkspaceChannels ?? broker.listWorkspaceChannels;
       if (!["sessions.subscribe", "sessions.list", "chat.history", "chat.startup", "chat.send"].includes(frame.method)) return null;
       try {
-        if (frame.method === "sessions.subscribe") return prepareSessionSubscription(frame);
+        if (frame.method === "sessions.subscribe") return options.perUserIdentity ? null : prepareSessionSubscription(frame);
         if (frame.method === "sessions.list") {
           return await prepareSessionsList(
             frame,
             session,
             authorize,
             listWorkspaceChannels,
-            signal,
+            { signal, perUserIdentity: options.perUserIdentity },
           );
         }
         if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, signal);

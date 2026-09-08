@@ -1993,6 +1993,81 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     }
   });
 
+  it.each(["native-member", "native-member-helper", "native-co-owner", "delegated-read", "delegated-config", "native-owner"] as const)(
+    "leaves per-user RPC authority and server capabilities with OpenClaw for %s", async (profile) => {
+      const received: unknown[] = [];
+      const hello = { type: "hello-ok", auth: { role: "operator", scopes: ["operator.read", "operator.questions"] },
+        snapshot: { presence: [{ id: "permitted-user" }] },
+        features: { methods: ["config.get", "session.members.list"], events: ["session.members.changed"] } };
+      const config = { raw: '{"agents":{"list":[{"id":"upstream-authorized-project"}]}}',
+        config: { agents: { list: [{ id: "upstream-authorized-project" }] } }, hash: "hash" };
+      const event = { type: "event", event: "session.members.changed", payload: { sessionKey: "upstream-authorized-session" } };
+      const denial = { code: "FORBIDDEN", message: "OpenClaw denied this user" };
+      const upstream = http.createServer((_req, res) => { res.statusCode = 403; res.end("upstream-media-denial"); });
+      const wss = new WebSocketServer({ server: upstream });
+      wss.on("connection", (ws) => {
+        ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "nonce" } }));
+        ws.on("message", (data) => {
+          const frame = JSON.parse(data.toString());
+          received.push(frame);
+          const payload = frame.method === "connect" ? hello : frame.method === "config.get" ? config : { accepted: true };
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: frame.method !== "users.setRole",
+            ...(frame.method === "users.setRole" ? { error: denial } : { payload }) }));
+          if (frame.method === "connect") ws.send(JSON.stringify(event));
+        });
+      });
+      const upstreamPort = await listen(upstream);
+      const manager = sessions();
+      const device = generateIdentity();
+      const proxyIdentity = { enabled: true,
+        userHeaders: () => ({ "x-octogee-user": "uid-owner", "x-octogee-proxy": "1" }),
+        serviceHeaders: vi.fn(() => { throw new Error("ordinary RPC must use the person's connection"); }),
+        deviceIdentity: () => device, connectScopes: () => ["operator.read", "operator.write"],
+        resolveChatProfile: async () => null, syncProfile: async () => {} };
+      const edgeEnv = { ...env(upstreamPort), OPENCLAW_CONTROL_IDENTITY: "per-user" };
+      const edge = http.createServer(appWith({ env: edgeEnv, sessions: manager, ...({ proxyIdentity } as object) }));
+      const router = new WsUpgradeRouter();
+      attachOpenClawControlWsRoute({ router, env: edgeEnv, sessions: manager, proxyIdentity,
+        authorize: async () => true, mattermostChat: { prepare: async () => null } });
+      router.attach(edge);
+      const port = await listen(edge);
+      const browser = new WebSocket(`ws://127.0.0.1:${port}/openclaw`, {
+        headers: { cookie: issue(manager, profile), origin: "https://api.octogee.com" } });
+      const frames: Array<Record<string, unknown>> = [];
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString()); frames.push(frame);
+        if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+      });
+      try {
+        await vi.waitFor(() => expect(frames.some((frame) => frame.id === "connect")).toBe(true));
+        expect(frames.find((frame) => frame.id === "connect")?.payload).toEqual(hello);
+        await vi.waitFor(() => expect(frames).toContainEqual(event));
+        for (const [method, params] of [
+          ["config.get", {}], ["session.members.list", { sessionKey: "upstream-authorized-session" }],
+          ["future.plugin.rpc", { extension: true }], ["users.setRole", { role: "owner" }],
+          ["tools.invoke", { tool: "gateway-owned-tool", extension: true }],
+          ["exec.approval.resolve", { id: "upstream-approval", decision: "upstream-owned-contract" }],
+        ] as const) {
+          const frame = { type: "req", id: method, method, params };
+          browser.send(JSON.stringify(frame));
+          await vi.waitFor(() => expect(frames.some((item) => item.id === method)).toBe(true));
+          expect(received).toContainEqual(frame);
+        }
+        expect(frames.find((frame) => frame.id === "config.get")?.payload).toEqual(config);
+        expect(frames.find((frame) => frame.id === "users.setRole")).toMatchObject({ ok: false, error: denial });
+        expect(proxyIdentity.serviceHeaders).not.toHaveBeenCalled();
+        const media = await request(edge).get("/api/g/bender/openclaw/__openclaw__/assistant-media?source=image.png")
+          .set("cookie", issue(manager, profile));
+        expect(media.status).toBe(403);
+        expect(media.text).toBe("upstream-media-denial");
+      } finally {
+        browser.terminate();
+        for (const client of wss.clients) client.terminate();
+        await new Promise<void>((resolve) => wss.close(() => resolve()));
+      }
+    },
+  );
+
   it("carries each person's identity to OpenClaw and syncs their profile before connect and refreshes authorized connections", async () => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upgradeHeaders: Array<Record<string, unknown>> = [];

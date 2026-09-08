@@ -640,7 +640,7 @@ function unavailableMethodDecision(): OpenClawControlRpcDecision {
   return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
 }
 
-function nativeOwnerCategory(method: string): OpenClawControlRpcCategory {
+export function openClawControlRpcCategory(method: string): OpenClawControlRpcCategory {
   if (READ_METHODS.has(method)) return "read";
   if (CONFIG_MUTATION_METHODS.has(method)) return "config_mutation";
   if (APPROVAL_READ_METHODS.has(method)) return "approval_read";
@@ -683,7 +683,7 @@ export function evaluateNativeOwnerOpenClawControlRpc(
   if (APPROVAL_READ_METHODS.has(parsed.method) || APPROVAL_MUTATION_METHODS.has(parsed.method)) {
     return nativeApprovalDecision(parsed.request);
   }
-  const category = nativeOwnerCategory(parsed.method);
+  const category = openClawControlRpcCategory(parsed.method);
   if (category === "config_mutation") {
     return nativeOwnerConfigMutationDecision(parsed.request, context);
   }

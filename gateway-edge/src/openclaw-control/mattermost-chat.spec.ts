@@ -1268,6 +1268,21 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     } })).toMatchObject({ payload: { count: 1, sessions: [{ key: sessionKey, displayName: "General" }] } });
   });
 
+  it("preserves OpenClaw-authorized native sessions and subscription requests for per-user gateways", async () => {
+    const adapter = createMattermostControlChat({ perUserIdentity: true,
+      authorize: vi.fn(), listWorkspaceChannels: async () => [] });
+    const member = { ...session(), brokerProfile: "native-member" as const, permissionSetIds: [], grantRevision: null };
+    const subscribe = { type: "req", id: "subscription", method: "sessions.subscribe", params: { futureOption: true } };
+    await expect(adapter.prepare(subscribe, member)).resolves.toBeNull();
+    await expect(adapter.prepare({ ...subscribe, method: "sessions.list" }, member)).resolves.toBeNull();
+    const prepared = await adapter.prepare({ type: "req", id: "list", method: "sessions.list", params: {} }, member);
+    if (prepared?.kind !== "upstream") throw new Error("expected Mattermost roster merge");
+    const native = { key: "agent:octogee-alice-proj-shared:authorized-by-openclaw", updatedAt: 1 };
+    expect(prepared.project({ type: "res", ok: true, payload: {
+      sessions: [native], count: 1, totalCount: 1, hasMore: false, nextOffset: null,
+    } })).toMatchObject({ payload: { sessions: [native], count: 1 } });
+  });
+
   it("removes formerly owned private-project sessions before paginating Team discovery", async () => {
     const adapter = createMattermostControlChat({ authorize: vi.fn(), listWorkspaceChannels: async () => [] });
     const prepared = await adapter.prepare({ type: "req", id: "list-member", method: "sessions.list", params: {} },

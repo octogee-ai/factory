@@ -45,6 +45,7 @@ import {
 } from "./proxy-identity.js";
 import {
   evaluateOpenClawControlRpcForProfile,
+  openClawControlRpcCategory,
   installedMethodsFromHello,
   isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
@@ -607,7 +608,7 @@ function rejectDashboardHttpRequest(
   res: Response,
   frameAncestor: string,
   gatewayId: string,
-  brokerProfile: OpenClawBrokerProfile,
+  { brokerProfile, perUserIdentity }: { brokerProfile: OpenClawBrokerProfile; perUserIdentity: boolean },
 ): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
     securityHeaders(res, frameAncestor);
@@ -620,7 +621,7 @@ function rejectDashboardHttpRequest(
     res.status(404).json({ error: "dashboard-resource-not-found" });
     return true;
   }
-  if (brokerProfile !== "native-owner" &&
+  if (!perUserIdentity && brokerProfile !== "native-owner" &&
     isDashboardAssistantMediaResource(openClawControlHttpSuffix(req.originalUrl, gatewayId))) {
     securityHeaders(res, frameAncestor);
     res.status(404).json({ error: "dashboard-resource-not-found" });
@@ -842,7 +843,9 @@ export function createOpenClawControlHttpRouter(
         return;
       }
       metrics?.session(identity, "authorize", "ok");
-      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId, session.brokerProfile)) return;
+      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId, {
+        brokerProfile: session.brokerProfile, perUserIdentity: proxyIdentity.enabled,
+      })) return;
       const touched = sessions.touchSession(session);
       if (!touched) {
         outcome = "policy_denied";
@@ -1420,7 +1423,7 @@ class OpenClawControlSocketBridge {
     request: PendingRpc | undefined,
   ): void {
     if (request?.internal || this.args.browser.readyState !== WebSocket.OPEN) return;
-    const projected = projectOpenClawServerFrameForProfile(
+    const projected = this.args.proxyIdentity.enabled ? frame : projectOpenClawServerFrameForProfile(
       frame,
       request?.method,
       this.activeSession.brokerProfile,
@@ -1568,12 +1571,16 @@ class OpenClawControlSocketBridge {
   }
 
   private evaluateAndForward(frame: BrowserRpcFrame): void {
-    const decision = evaluateOpenClawControlRpcForProfile(frame, {
-      installedMethods: this.installedMethods!,
-      invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
-      currentConfig: this.currentConfig,
-      configFrozen: configFrozen(this.args.env),
-    }, this.activeSession.brokerProfile);
+    const category = openClawControlRpcCategory(frame.method);
+    const managedConfigWrite = category === "config_mutation";
+    const decision: OpenClawControlRpcDecision = this.args.proxyIdentity.enabled && !managedConfigWrite
+      ? { allowed: true, category, outbound: frame }
+      : evaluateOpenClawControlRpcForProfile(frame, {
+        installedMethods: this.installedMethods!,
+        invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
+        currentConfig: this.currentConfig,
+        configFrozen: configFrozen(this.args.env),
+      }, this.activeSession.brokerProfile);
     if (!decision.allowed) {
       this.deny(frame, decision, decision.reason ?? "method-denied");
       return;
@@ -1847,6 +1854,7 @@ export interface AttachOpenClawControlWsRouteOptions {
 
 function identityMattermostChat(proxyIdentity: OpenClawControlProxyIdentity): MattermostControlChat {
   return createMattermostControlChat({
+    perUserIdentity: proxyIdentity.enabled,
     ...(proxyIdentity.enabled ? { resolveChatProfile: (session, source) => proxyIdentity.resolveChatProfile(session, source) } : {}),
   });
 }
