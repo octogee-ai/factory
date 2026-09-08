@@ -167,16 +167,14 @@ async function projectAccessAuthorized(
   return memberSnap.exists;
 }
 
-// The public project page has no caller identity, so this kind stands in for one. It
-// authorizes a single file — the canvas the owner published — on a listed project, and
-// the path is re-derived from the project doc rather than trusted from the request. A
-// private repo behind such a project stays private everywhere except that one file.
 async function publicCanvasAccessAuthorized(
   db: Firestore,
   uid: string,
+  runtimeOwnerUid: string,
   connectorId: string,
   access: PublicCanvasAccessContext,
 ): Promise<boolean> {
+  if (uid !== runtimeOwnerUid) return false;
   const projectSnap = await db
     .doc(`workspaces/${access.workspaceSlug}/projects/${access.projectSlug}`)
     .get();
@@ -235,7 +233,7 @@ async function accessAuthorized(
     gatewayClass: authorization.gatewayClass,
   });
   if (access?.kind === PUBLIC_CANVAS_ACCESS_KIND) {
-    return publicCanvasAccessAuthorized(db, uid, connectorId, access);
+    return publicCanvasAccessAuthorized(db, uid, bound.ownerUid, connectorId, access);
   }
   if (access?.kind === "project") {
     if (uid !== bound.ownerUid || access.requestingUid !== bound.ownerUid) return false;
