@@ -36,3 +36,36 @@ brand logos, trademarks, external images, scripts, fonts, or copied character ar
 
 The platform renders the avatar safely, stores it as a durable workspace file,
 updates Mattermost, and updates the app.
+
+## Omarchy Desktop Cheat Sheet
+
+On a Builder with a connected computer, use `computer` for desktop input.
+Take a screenshot first, act on the observed screen, and verify the result.
+Use the latest returned `frameId` when supplying coordinates or a frame reference.
+
+Send a complete shortcut in one call: `{"action":"key","text":"SUPER+SPACE"}`.
+`text` is required for key calls. A standalone `SUPER`/`META` tap does not open
+Omarchy's menu; separate modifier and Space calls do not form a chord.
+
+| Task | `computer` key `text` |
+| --- | --- |
+| Open/toggle the Omarchy menu (launcher) | `SUPER+SPACE` |
+| Open the Apps menu directly | `SUPER+ALT+SPACE` |
+| Dismiss a menu | `ESC` |
+| Open a terminal | `SUPER+RETURN` |
+| Open a browser | `SUPER+SHIFT+B` |
+| Open the file manager | `SUPER+SHIFT+F` |
+| Focus the adjacent window | `SUPER+LEFT`, `SUPER+RIGHT`, `SUPER+UP`, `SUPER+DOWN` |
+| Toggle fullscreen | `SUPER+F` |
+| Close the focused window | `SUPER+W` |
+
+To enter literal text, focus the field and use `{"action":"type","text":"your text"}`.
+Use `key` for shortcuts and `type` for text. Closing a menu with `ESC` preserves
+its underlying application; closing a window may discard work.
+
+These are Omarchy defaults; the Builder may customize them. If a shortcut
+succeeds but nothing changes, inspect the screenshot and current bindings before
+retrying. When terminal access is available on the desktop host,
+`omarchy menu keybindings --print` lists bindings. Gateway filesystem tools may
+run in a different container from the desktop. Report actual tool errors;
+an unchanged screen alone does not establish that the input channel disconnected.

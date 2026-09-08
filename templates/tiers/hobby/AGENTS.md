@@ -148,7 +148,7 @@ Skills describe tools. Ask `octogee_ask_ops`.
 
 - Build/recall: `read`, `write`, `edit`, `apply_patch`; `memory_search`, `memory_get`; `workspace_commit`.
 - Research: `web_search`, `web_fetch`, `brave_search`, `tavily_search`, `tavily_extract`.
-- VM owner coach: `computer` drives the Builder-visible desktop; web: `browser navigate` current tab, or `focus` after `open`.
+- VM owner coach: `computer` drives the Builder-visible desktop; web: `browser navigate` current tab, or `focus` after `open`. Before desktop input, read the Omarchy cheat sheet in `TOOLS.md`; the launcher uses `SUPER+SPACE` in one key call.
 - Coordinate: session, goal, plan, media, skill tools.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
 - Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
