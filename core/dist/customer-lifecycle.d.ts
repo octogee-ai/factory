@@ -196,6 +196,13 @@ export interface CustomerLifecycleAdapter {
         elapsedMs: number;
         appliedFingerprint?: string;
     }>;
+    reconcileConfiguredBuilderProjectAgents?: (snapshot: UserSnapshot, opts?: {
+        signal?: AbortSignal;
+        withoutProjectIds?: readonly string[];
+    }) => Promise<{
+        elapsedMs: number;
+        appliedFingerprint?: string;
+    }>;
     applyRemoveCustomerConfigPatch: (slug: string, agentId: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>) => Promise<readonly string[] | void>;
     cancelPendingEviction?: (slug: string) => boolean | void;
     clearMountMarker?: (slug: string) => void;

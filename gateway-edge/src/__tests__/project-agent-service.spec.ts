@@ -102,6 +102,7 @@ function projectAgentStateWrite(
         enabled,
         mode: enabled ? "scoped" : "agentless",
         status,
+        activationId: null,
         lastError,
         updatedAt: "SERVER_TS",
       },
@@ -254,13 +255,14 @@ describe("setProjectAgentEnabled — enable", () => {
     });
   });
 
-  it("writes the flag, mints the bot, joins every project primary channel, and reports active", async () => {
+  it("mints the bot and keeps the agent provisioning until the runtime reports readiness", async () => {
     seedProject();
 
     const result = await setProjectAgentEnabled(actor(), "orbit", true);
 
     expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "ready"));
+    expect(h.sets.some((write) => (write.data.agent as { status: string }).status === "ready")).toBe(false);
+    expect((h.sets.at(-1)?.data.agent as { activationId: string }).activationId).toMatch(/^[a-f0-9-]{36}$/);
     expect(h.createProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
       uid: "owner-1",
       username: "mira",
@@ -275,8 +277,23 @@ describe("setProjectAgentEnabled — enable", () => {
     );
     expect(result).toEqual({
       status: 200,
-      body: { success: true, enabled: true, mode: "scoped", status: "ready", provisioned: true },
+      body: { success: true, enabled: true, mode: "scoped", status: "provisioning", provisioned: true },
     });
+  });
+
+  it("invalidates prior readiness before minting and assigns a new activation to each successful enable", async () => {
+    seedProject({ agent: { enabled: true, status: "ready", activationId: "previous" } });
+    let finishMint!: (value: { mmUserId: string; token: string }) => void;
+    h.createProjectAgentBot.mockImplementationOnce(() => new Promise((resolve) => { finishMint = resolve; }));
+    const enabling = setProjectAgentEnabled(actor(), "orbit", true);
+    await vi.waitFor(() => expect(h.createProjectAgentBot).toHaveBeenCalled());
+    expect(h.sets).toEqual([projectAgentStateWrite(true, "provisioning")]);
+    finishMint({ mmUserId: "bot-1", token: "new-pat" });
+    await enabling;
+    const first = (h.sets.at(-1)?.data.agent as { activationId: string }).activationId;
+    await setProjectAgentEnabled(actor(), "orbit", true);
+    const second = (h.sets.at(-1)?.data.agent as { activationId: string }).activationId;
+    expect(second).not.toBe(first);
   });
 
   it("registers the agent id in the owner's provisioning roster so the byok broker will issue its tokens", async () => {

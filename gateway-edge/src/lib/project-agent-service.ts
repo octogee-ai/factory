@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { FieldValue, db } from "./db.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
@@ -52,6 +53,7 @@ async function writeProjectAgentState(
   enabled: boolean,
   status: ProjectAgentStatus,
   lastError: string | null = null,
+  activationId: string | null = null,
 ): Promise<void> {
   await projectRef.set(
     {
@@ -59,6 +61,7 @@ async function writeProjectAgentState(
         enabled,
         mode: modeFor(enabled),
         status,
+        activationId,
         lastError,
         updatedAt: FieldValue.serverTimestamp(),
       },
@@ -218,7 +221,7 @@ async function enableProjectAgent(
     for (const binding of channelBindings) {
       await addChannelMember(binding.docPath, minted.mmUserId);
     }
-    await writeProjectAgentState(projectRef, true, "ready");
+    await writeProjectAgentState(projectRef, true, "provisioning", null, randomUUID());
   } catch (err) {
     logger.error(`[project-agent] mint failed for ${workspaceId}/${project}:`, { err });
     return settleProjectAgentError(
@@ -230,7 +233,7 @@ async function enableProjectAgent(
   logger.info(`[project-agent] enabled + minted ${workspaceId}/${project}`, { uid: actor.uid });
   return {
     status: 200,
-    body: { success: true, enabled: true, mode: "scoped", status: "ready", provisioned: true },
+    body: { success: true, enabled: true, mode: "scoped", status: "provisioning", provisioned: true },
   };
 }
 

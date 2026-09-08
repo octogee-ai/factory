@@ -97,7 +97,7 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
       .map((c) => ({ scope: c.scope, kind: c.kind, channelId: c.channelId, projectId: c.projectId }))
       .sort((a, b) => compareStrings(a.channelId, b.channelId)),
     projectAgents: [...(snapshot.projectAgents ?? [])]
-      .map((p) => ({ projectId: p.projectId, enabled: p.enabled, mmUserId: p.mmUserId, token: p.token }))
+      .map((p) => ({ projectId: p.projectId, enabled: p.enabled, mmUserId: p.mmUserId, token: p.token, activationId: p.activationId }))
       .sort((a, b) => compareStrings(a.projectId, b.projectId)),
     projectCloneSet: snapshot.projectCheckoutScope === "workspace-only" ? [] : [...(snapshot.projects ?? [])]
       .filter(

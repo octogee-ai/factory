@@ -1,3 +1,5 @@
+import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
+import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -729,6 +731,35 @@ function projectMountPolicy(
   );
 }
 
+function buildCustomerProjectAgents(
+  snapshot: UserSnapshot,
+  projectAgents: NonNullable<UserSnapshot["projectAgents"]>,
+  identity: ReturnType<typeof resolveCoachIdentity>,
+  ownerMmUserId: string | null | undefined,
+  builderGateway: boolean,
+): Array<Record<string, unknown>> {
+  return buildProjectAgents({
+    slug: snapshot.slug,
+    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
+    agentsDir: AGENTS_DIR,
+    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
+    projectAgents,
+    ownerMmUserId,
+    hostCode: builderGateway ? "builder-full" : "customer-restricted",
+  });
+}
+
+function pendingProjectActivationAccountIds(slug: string, projectAgents: NonNullable<UserSnapshot["projectAgents"]>): string[] {
+  return projectAgents.filter((agent) => agent.enabled && agent.status === "provisioning" && agent.activationId && agent.token)
+    .map((agent) => `${slug}-proj-${agent.projectId}`);
+}
+
+function markPendingProjectActivations(reason: string, accountIds: string[], baseline: Record<string, number>): boolean {
+  if (accountIds.length === 0) return false;
+  markMattermostRoutingActivationPending(OPENCLAW_DIR, reason, accountIds, baseline);
+  return true;
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -778,15 +809,8 @@ async function applyAddCustomerConfigPatch(
   });
   if (coachModelSelection) agentEntry.model = coachModelSelection;
   agentEntry.tools = initialCoachTools(snapshot, agentEntry.tools);
-  const projectAgentEntries = buildProjectAgents({
-    slug: snapshot.slug,
-    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
-    agentsDir: AGENTS_DIR,
-    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
-    projectAgents,
-    ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
-    hostCode: builderGateway ? "builder-full" : "customer-restricted",
-  });
+  const projectAgentEntries = buildCustomerProjectAgents(snapshot, projectAgents, identity,
+    brokerCustomerMattermostUserId(brokerSnapshot, snapshot), builderGateway);
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
@@ -833,6 +857,9 @@ async function applyAddCustomerConfigPatch(
   );
   const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
     captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
+  const pendingProjectAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
+  routingActivationRequired = markPendingProjectActivations(routingActivationReason, pendingProjectAccountIds, routingActivationBaseline)
+    || routingActivationRequired;
   const startedAt = Date.now();
   const configPatch = await applyConfigPatch(
     {
@@ -910,16 +937,19 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
-  await activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
-    accountIds: affectedAccountIds,
-    baseline: routingActivationBaseline,
-    configNoop: configPatch.noop === true,
-    required: routingActivationRequired,
-    reason: routingActivationReason,
-    currentSlug: snapshot.slug,
-    evictionSlugs,
+  await settleProjectAgentActivations(ctx, {
+    snapshot, projectAgents, channels: snapshot.channels, baseline: routingActivationBaseline,
+    activate: () => activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
+      accountIds: affectedAccountIds,
+      baseline: routingActivationBaseline,
+      configNoop: configPatch.noop === true,
+      required: routingActivationRequired,
+      reason: routingActivationReason,
+      currentSlug: snapshot.slug,
+      evictionSlugs,
+      restartAccountIds: pendingProjectAccountIds,
+    }),
   });
-  await reloadRuntimeSecrets(ctx, `[add:${snapshot.slug}]`);
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
   return {
     elapsedMs: Date.now() - startedAt,
@@ -927,6 +957,93 @@ async function applyAddCustomerConfigPatch(
       ? { appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) }
       : {}),
   };
+}
+
+async function settleProjectAgentActivations(
+  ctx: BrokerCtx,
+  input: {
+    snapshot: UserSnapshot;
+    projectAgents: NonNullable<UserSnapshot["projectAgents"]>;
+    channels: UserSnapshot["channels"];
+    baseline: Readonly<Record<string, number>>;
+    activate(): Promise<void>;
+  },
+): Promise<void> {
+  const errors: unknown[] = [];
+  await reloadRuntimeSecrets(ctx, `[add:${input.snapshot.slug}]`);
+  try {
+    await input.activate();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await reportProjectAgentReadiness({
+      rpc: ctx.rpc, report: (uid, projects) => ctx.client.reportProjectAgentReadiness(uid, projects),
+      uid: input.snapshot.uid, slug: input.snapshot.slug, projectAgents: input.projectAgents,
+      channels: input.channels, baseline: input.baseline,
+    });
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length > 0) {
+    const details = errors.map((error) => error instanceof Error ? error.message : String(error)).join("; ");
+    throw new AggregateError(errors, `Project Agent runtime activation did not complete: ${details}`);
+  }
+}
+
+async function reconcileConfiguredBuilderProjectAgents(
+  ctx: BrokerCtx,
+  snapshot: UserSnapshot,
+  options: { withoutProjectIds?: readonly string[]; signal?: AbortSignal } = {},
+): Promise<{ elapsedMs: number; appliedFingerprint?: string }> {
+  const startedAt = Date.now();
+  const brokerSnapshot = await snapshotForUidWithProjectMembershipIsolation(ctx, snapshot.uid);
+  if (!brokerSnapshot) throw new Error(`Project Agent snapshot unavailable for ${snapshot.slug}`);
+  const current = await freshRosterConfig(ctx);
+  const managedProjectIds = configuredBuilderManagedProjectIds(current, snapshot.slug,
+    (brokerSnapshot.projectAgents ?? []).map((agent) => agent.projectId));
+  if (managedProjectIds.length === 0) {
+    return { elapsedMs: 0, appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) };
+  }
+  const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot, options.withoutProjectIds);
+  const identity = resolveCoachIdentity(brokerSnapshot.coachIdentity, DEFAULT_COACH);
+  const projectAgentEntries = buildCustomerProjectAgents(snapshot, projectAgents, identity, brokerSnapshot.customerMmUserId, true);
+  const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents, brokerSnapshot.customerMmUserId);
+  const patchInput = {
+    slug: snapshot.slug, managedProjectIds, projectAgentEntries, projectAccounts, channels: brokerSnapshot.channels,
+    activationProjectIds: projectAgents.filter((agent) => agent.status === "provisioning" && agent.activationId).map((agent) => agent.projectId),
+  };
+  const logPrefix = `[project-agents:${snapshot.slug}]`;
+  const initial = configuredBuilderProjectAgentPatch(current, patchInput);
+  await deleteAgentsAndInvalidateCache(ctx, initial.retiredAgentIds, logPrefix);
+  await createMissingCustomerAgents(ctx, projectAgentEntries, logPrefix);
+  const agentIds = agentIdsFromEntries(projectAgentEntries);
+  await Promise.all(agentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })));
+  await materializeCustomerBrokerProfiles(agentIds, snapshot.slug, ctx.log);
+  const projectSecrets = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
+  await updateMattermostAccountSecrets(OPENCLAW_DIR, { set: projectSecrets.set });
+  const pendingAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
+  const baseline = pendingAccountIds.length > 0
+    ? await captureMattermostRoutingActivationBaseline(ctx.rpc, pendingAccountIds)
+    : {};
+  await applyConfigPatch({
+    buildPatch: (current) => configuredBuilderProjectAgentPatch(current, patchInput).patch,
+    buildReplacePaths: (current) => configuredBuilderProjectAgentPatch(current, patchInput).replacePaths,
+    logPrefix,
+  }, { rpc: convergedConfigRpc(ctx), cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS, signal: options.signal });
+  const retiredAccountIds = managedProjectIds.map((projectId) => `${snapshot.slug}-proj-${projectId}`)
+    .filter((accountId) => !projectAccounts[accountId]);
+  for (const accountId of retiredAccountIds) await ctx.rpc.channelsStop({ channel: "mattermost", accountId });
+  await updateMattermostAccountSecrets(OPENCLAW_DIR, { remove: [...new Set([...projectSecrets.remove, ...retiredAccountIds])] });
+  await settleProjectAgentActivations(ctx, {
+    snapshot, projectAgents, channels: brokerSnapshot.channels, baseline,
+    activate: async () => {
+      if (pendingAccountIds.length === 0) return;
+      markMattermostRoutingActivationPending(OPENCLAW_DIR, logPrefix, pendingAccountIds, baseline);
+      await activatePendingMattermostRouting(ctx.rpc, OPENCLAW_DIR, ctx.log, { restartAccountIds: pendingAccountIds });
+    },
+  });
+  return { elapsedMs: Date.now() - startedAt, appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) };
 }
 
 async function applyRemoveCustomerConfigPatch(
@@ -1574,6 +1691,8 @@ export function buildBrokeredLifecycleAdapter(
     scheduleBootGreetingCron: (params) => scheduleBootGreetingCron(ctx, params),
     applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
       applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts),
+    reconcileConfiguredBuilderProjectAgents: (snapshot, options) =>
+      reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options),
     applyRemoveCustomerConfigPatch: (slug, agentId, evictionBatch, currentEvictionBatch) =>
       applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch),
     cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),

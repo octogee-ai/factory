@@ -1,4 +1,5 @@
 import type { UserSnapshot } from "./customer-lifecycle.js";
+import { type ProjectAgentStatus } from "@octogee/shared/types/project";
 type ChannelBinding = UserSnapshot["channels"][number];
 export declare function mapWorkspaceChannelDoc(data: Record<string, unknown>): ChannelBinding | null;
 export declare function mapProjectChannelDoc(projectId: string, data: Record<string, unknown>): ChannelBinding | null;
@@ -7,6 +8,8 @@ export declare function mapProjectAgentState(projectId: string, projectData: Rec
     enabled: boolean;
     mmUserId: string | null;
     token: string | null;
+    activationId: string | null;
+    status: ProjectAgentStatus | null;
 } | null;
 interface SnapshotDocSnap {
     id: string;

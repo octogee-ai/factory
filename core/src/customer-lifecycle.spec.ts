@@ -862,6 +862,96 @@ const cloneIdx = state.calls.indexOf("cloneWorkspaceRepo");
 });
 
 describe("addCustomerToGateway — configured Builder overlay", () => {
+  function configuredProjectState(): MockState {
+    const state = makeState(snap({
+      status: "complete",
+      agentIds: ["octogee-test-coach"],
+      repoUrl: "http://gitea/octogee/test-workspace",
+      mattermostUserId: "mm-user-existing",
+      greetingPosted: true,
+      projectAgents: [{ projectId: "launchroom", enabled: true, mmUserId: "project-bot", token: "project-pat" }],
+    }), {
+      customerDir: true,
+      workspaceGitDir: true,
+      gitRemote: true,
+      sshKey: true,
+      templatesWritten: true,
+      repoHasCommits: true,
+    });
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    state.pendingProjects = [{ projectSlug: "launchroom", giteaRepoName: "launchroom" }];
+    return state;
+  }
+
+  it.each([true, false])("reconciles configured project agents after checkout convergence (checkout lands: %s)", async (checkoutLands) => {
+    const state = configuredProjectState();
+    state.cloneProjectLands = checkoutLands;
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.reconcileConfiguredBuilderProjectAgents = async (snapshot, opts) => {
+      expect(snapshot).toBe(state.user);
+      expect(state.calls).toContain("cloneProjectRepo");
+      expect(opts?.withoutProjectIds).toEqual(checkoutLands ? [] : ["launchroom"]);
+      state.calls.push("reconcileConfiguredBuilderProjectAgents");
+      return { elapsedMs: 10, appliedFingerprint: "project-activation" };
+    };
+
+    const result = await addCustomerToGateway(adapter, "uid-test", { convergeContent: true });
+
+    expect(state.calls).toContain("reconcileConfiguredBuilderProjectAgents");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+    expect(state.calls).not.toContain("writeCustomerTemplates");
+    expect(result.appliedFingerprint).toBe("project-activation");
+    expect(result.steps).toContain("config-patch");
+  });
+
+  it("does not mark a configured Builder mounted when project activation fails", async () => {
+    const state = configuredProjectState();
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.reconcileConfiguredBuilderProjectAgents = async () => {
+      throw new Error("project routing activation failed");
+    };
+
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("project routing activation failed");
+    expect(state.calls).not.toContain("onMounted");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+  });
+
+  it.each([true, false])("defers project runtime reconciliation until OpenClaw starts (hook available: %s)", async (hasHook) => {
+    const state = configuredProjectState();
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+    if (hasHook) {
+      adapter.reconcileConfiguredBuilderProjectAgents = async () => {
+        state.calls.push("reconcileConfiguredBuilderProjectAgents");
+        return { elapsedMs: 0, appliedFingerprint: "must-not-be-applied-before-startup" };
+      };
+    }
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      convergeContent: true,
+      deferRuntimeVerification: true,
+    });
+
+    expect(state.calls).toContain("cloneProjectRepo");
+    expect(state.calls).not.toContain("reconcileConfiguredBuilderProjectAgents");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(result.appliedFingerprint).toBeUndefined();
+    expect(result.steps).not.toContain("config-patch");
+    expect(state.logs.some((line) => line.includes("project runtime reconciliation deferred until OpenClaw starts"))).toBe(true);
+  });
+
+  it("rejects a configured project snapshot when the adapter cannot reconcile its agents", async () => {
+    const state = configuredProjectState();
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("configured Builder project reconciliation is unavailable");
+    expect(state.calls).not.toContain("onMounted");
+  });
+
   it("converges project checkouts without replacing a mounted Builder overlay when its snapshot changed", async () => {
     const state = makeState(
       snap({

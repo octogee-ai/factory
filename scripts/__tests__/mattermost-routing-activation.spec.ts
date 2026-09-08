@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   activatePendingMattermostRouting,
+  activateMattermostRoutingAfterConfigPatch,
   captureMattermostRoutingActivationBaseline,
   discardMattermostRoutingActivationForCustomers,
   markMattermostRoutingActivationPending,
@@ -251,6 +252,22 @@ describe("Mattermost routing activation", () => {
     expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(rpc.gatewayRestartRequest).not.toHaveBeenCalled();
     expect(rpc.channelsStatusConnectionGeneration).not.toHaveBeenCalled();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
+  it("restarts a newly minted project account even when the config patch changed unrelated fields", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const accountId = "ceckert-proj-orbit";
+    markMattermostRoutingActivationPending(openclawDir, "project enabled", [accountId], { [accountId]: 100 });
+    const rpc = channelOperationRpc([accountId], vi.fn(async () => ({
+      channelAccounts: { mattermost: [{ accountId, running: true, connected: true, lastStartAt: 101 }] },
+    })));
+    await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
+      accountIds: [accountId], baseline: { [accountId]: 100 }, configNoop: false,
+      required: true, reason: "project enabled", currentSlug: "ceckert", evictionSlugs: [], restartAccountIds: [accountId],
+    });
+    expect(rpc.channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId });
+    expect(rpc.channelsStart).toHaveBeenCalledWith({ channel: "mattermost", accountId });
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 

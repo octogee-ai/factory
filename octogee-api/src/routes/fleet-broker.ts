@@ -1,3 +1,4 @@
+import { completeProjectAgentActivations, parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
 import { readComputerRuntimeObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
@@ -73,6 +74,7 @@ import { isDeveloperToolchainStatus } from "@octogee/shared/types/developer-tool
 import {
   byotSnapshotProjectionFromSystemConfig,
   collectProjectAgentStates,
+  deriveSlug,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
 } from "@octogee/core/customer-snapshot-mapping";
@@ -2351,6 +2353,32 @@ function installRuntimeResetAckRoute(router: Router, db: Firestore): void {
   });
 }
 
+function installProjectAgentReadinessRoute(router: Router, db: Firestore): void {
+  router.post("/project-agent-readiness", async (req, res) => {
+    const assigned = await requireAssignedUser(db, req, res);
+    if (!assigned) return;
+    const projects = parseProjectAgentReadinessReports(objectBody(req).projects);
+    if (!projects) {
+      res.status(400).json({ error: "invalid_project_agent_readiness" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const accepted = await completeProjectAgentActivations(db, {
+        uid: assigned.uid,
+        gatewayId: assigned.bound.gatewayId,
+        slug: deriveSlug(assigned.uid, assigned.data),
+        projects,
+      });
+      if (!accepted) {
+        res.status(409).json({ error: "stale_project_agent_readiness" });
+        return;
+      }
+      res.status(204).end();
+    });
+  });
+
+}
+
 function installProvisioningRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
@@ -2473,6 +2501,8 @@ function installProvisioningRoutes(
       res.status(204).end();
     });
   });
+
+  installProjectAgentReadinessRoute(router, db);
 
   router.post("/mounted", async (req, res) => {
     const assigned = await requireAssignedUser(db, req, res);

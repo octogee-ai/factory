@@ -187,6 +187,7 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     setGreetingResult: vi.fn(async () => undefined),
     setAgentIds: vi.fn(async () => undefined),
     setMounted: vi.fn(async () => undefined),
+    reportProjectAgentReadiness: vi.fn(async () => undefined),
     recordReconcileError: vi.fn(async () => undefined),
     clearReconcileError: vi.fn(async () => undefined),
     notifySignup: vi.fn(async () => undefined),
@@ -1486,7 +1487,128 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
-  it("activates changed routing bindings before refreshing the secret surface", async () => {
+  it("reports project readiness after reloading credentials and activating routing", async () => {
+    const events: string[] = [];
+    const snapshot = aliceSnapshot({
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+    });
+    const agentId = "octogee-alice-proj-orbit-coach";
+    const match = { channel: "mattermost", accountId: "alice-proj-orbit" };
+    const config = {
+      agents: { entries: { [agentId]: { id: agentId } } },
+      channels: { mattermost: { accounts: { "alice-proj-orbit": {} } } },
+      bindings: [{ agentId, match }, { agentId, match: { ...match, peer: { kind: "group", id: "orbit-general" } } }],
+    };
+    routingActivationMocks.activateAfterPatch.mockImplementationOnce(async () => { events.push("routing"); });
+    const rpc = mkGatewayRpc({
+      ...rosterRpc(config),
+      secretsReload: vi.fn(async () => { events.push("secrets"); return { ok: true, warningCount: 0 }; }),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 2 }] } })),
+    });
+    const client = mkClient({
+      userSnapshot: vi.fn(async () => snapshot),
+      reportProjectAgentReadiness: vi.fn(async () => { events.push("report"); }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+    expect(events).toEqual(["secrets", "routing", "report"]);
+    expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [{
+      projectId: "orbit", activationId: "activation-1", tokenHash: expect.any(String), channelIds: ["orbit-general"],
+    }]);
+  });
+
+  it("reports a connected project even when another routing activation failed", async () => {
+    const agentId = "octogee-alice-proj-orbit-coach";
+    const match = { channel: "mattermost", accountId: "alice-proj-orbit" };
+    const snapshot = aliceSnapshot({
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+    });
+    const rpc = mkGatewayRpc({
+      ...rosterRpc({ agents: { entries: { [agentId]: {} } }, channels: { mattermost: { accounts: { "alice-proj-orbit": {} } } },
+        bindings: [{ agentId, match }, { agentId, match: { ...match, peer: { kind: "group", id: "orbit-general" } } }] }),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 2 }] } })),
+    });
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    routingActivationMocks.activateAfterPatch.mockRejectedValueOnce(new Error("unrelated account could not connect"));
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await expect(adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" }))
+      .rejects.toThrow("unrelated account could not connect");
+    expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit" })]);
+  });
+
+  it("installs and reports a pending configured Builder project without changing the owner's coach", async () => {
+    const snapshot = aliceSnapshot({
+      status: "complete",
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+    });
+    const coach = { model: "owner-model", tools: { allow: ["owner-tool"] }, workspace: "/owner/workspace" };
+    let config: Record<string, any> = {
+      agents: { entries: { "octogee-alice-coach": coach }, defaults: { model: "owner-default" } },
+      channels: { mattermost: { accounts: { "alice-coach": { botToken: "owner-coach-token" } } } },
+      bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
+    };
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot(config)),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 2 }] } })),
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      const patch = args.buildPatch(config) as Record<string, any>;
+      config = {
+        ...config,
+        agents: { ...config.agents, entries: { ...config.agents.entries, ...patch.agents.entries } },
+        channels: { mattermost: { accounts: { ...config.channels.mattermost.accounts, ...patch.channels.mattermost.accounts } } },
+        bindings: patch.bindings,
+      };
+      return { mode: "rpc", attempts: 1 };
+    });
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+    expect(config.agents.entries["octogee-alice-coach"]).toEqual(coach);
+    expect(config.agents.defaults).toEqual({ model: "owner-default" });
+    expect(config.channels.mattermost.accounts["alice-coach"]).toEqual({ botToken: "owner-coach-token" });
+    expect(config.agents.entries["octogee-alice-proj-orbit-coach"]).toMatchObject({ workspace: expect.stringContaining("/projects/orbit") });
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(routingActivationMocks.activate).toHaveBeenCalledWith(rpc, expect.any(String), expect.any(Function), { restartAccountIds: ["alice-proj-orbit"] });
+    expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit", activationId: "activation-1" })]);
+  });
+
+  it("retires deleted platform project runtime before removing its local credential", async () => {
+    const events: string[] = [];
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [] });
+    const orphanId = "octogee-alice-proj-deleted-coach";
+    const importedId = "octogee-alice-proj-imported-coach";
+    const config = {
+      agents: { entries: { [orphanId]: { id: orphanId }, [importedId]: { id: importedId } } },
+      channels: { mattermost: { accounts: {
+        "alice-proj-deleted": { botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-proj-deleted" } },
+        "alice-proj-imported": { botToken: "owner-token" },
+      } } },
+      bindings: [],
+    };
+    const rpc = mkGatewayRpc(rosterRpc(config));
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      const patch = args.buildPatch(config) as Record<string, any>;
+      expect(patch.channels.mattermost.accounts).toEqual({ "alice-proj-deleted": null });
+      events.push("patch");
+      return { mode: "rpc", attempts: 1 };
+    });
+    secretMocks.updateMattermostAccountSecrets.mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(async (_dir, change) => {
+        expect(change.remove).toEqual(["alice-proj-deleted"]);
+        events.push("remove-secret");
+      });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+    await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+    expect(rpc.agentsDelete).toHaveBeenCalledExactlyOnceWith({ agentId: orphanId, deleteFiles: false });
+    expect(rpc.channelsStop).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId: "alice-proj-deleted" });
+    expect(events).toEqual(["patch", "remove-secret"]);
+  });
+
+  it("refreshes runtime credentials before activating changed routing bindings", async () => {
     const events: string[] = [];
     routingActivationMocks.activate.mockImplementationOnce(async () => {
       events.push("routing-activation");
@@ -1552,7 +1674,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(rpc.channelsStop).not.toHaveBeenCalled();
     expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(routingActivationMocks.activate).toHaveBeenCalledOnce();
-    expect(events).toEqual(["config-patch", "routing-activation", "secrets-reload"]);
+    expect(events).toEqual(["config-patch", "secrets-reload", "routing-activation"]);
   });
 
   it("preserves isolated coach policy while refreshing no-op routing monitors", async () => {
@@ -1633,6 +1755,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         reason: "[add:alice] account-level Mattermost binding changed",
         currentSlug: "alice",
         evictionSlugs: [],
+        restartAccountIds: [],
       },
     );
   });

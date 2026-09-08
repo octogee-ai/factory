@@ -218,22 +218,39 @@ async function attachConfiguredBuilderOverlay(adapter, snapshot, opts) {
         : { steps: [], pending: [] };
     steps.push(...projectClones.steps);
     throwIfAborted(opts.signal, uid);
+    let appliedFingerprint;
+    if (opts.deferRuntimeVerification) {
+        adapter.log(`[add:${slug}] project runtime reconciliation deferred until OpenClaw starts`);
+    }
+    else if (adapter.reconcileConfiguredBuilderProjectAgents) {
+        opts.markStep(CONFIG_PATCH);
+        const result = await adapter.reconcileConfiguredBuilderProjectAgents(snapshot, {
+            signal: opts.signal,
+            withoutProjectIds: projectClones.pending,
+        });
+        appliedFingerprint = result.appliedFingerprint;
+        steps.push(CONFIG_PATCH);
+        throwIfAborted(opts.signal, uid);
+    }
+    else if (snapshot.projectAgents?.length) {
+        throw new Error(`[add:${slug}] configured Builder project reconciliation is unavailable`);
+    }
     const platformCoachWired = adapter.customerCoachWiredInOpenclawConfig?.(slug) ?? false;
     if (platformCoachWired && !opts.deferRuntimeVerification) {
-        adapter.log(`[add:${slug}] configured Builder overlay retained — verifying MM coach without a config patch`);
+        adapter.log(`[add:${slug}] configured Builder overlay retained — verifying MM coach`);
         opts.markStep(VERIFY_CHANNEL_READY);
         await verifyChannelReady(adapter, slug, opts.verifyTimeoutMs);
         steps.push(VERIFY_CHANNEL_READY);
     }
     else if (!platformCoachWired) {
-        adapter.log(`[add:${slug}] configured Builder overlay has no platform MM coach wiring; retaining it without a config patch`);
+        adapter.log(`[add:${slug}] configured Builder overlay has no platform MM coach wiring; retaining workspace config`);
     }
     else {
         adapter.log(`[add:${slug}] configured Builder overlay runtime verification deferred without a config patch`);
     }
     if (adapter.onMounted)
         adapter.onMounted(slug);
-    return { newCustomer: false, steps, pendingProjectClones: projectClones.pending };
+    return { newCustomer: false, steps, pendingProjectClones: projectClones.pending, appliedFingerprint };
 }
 async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;

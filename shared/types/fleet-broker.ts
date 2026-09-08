@@ -1,3 +1,4 @@
+import type { ProjectAgentStatus } from "./project.js";
 import type { AssignmentState } from "./gateway-releases.js";
 import type { ProjectRepoSource } from "./project.js";
 
@@ -53,8 +54,17 @@ export interface FleetBrokerConfiguredBuilderBootstrap {
   projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }
 
+export interface FleetBrokerProjectAgentReadiness {
+  projectId: string;
+  activationId: string;
+  tokenHash: string;
+  channelIds: string[];
+}
+
 export interface FleetBrokerProjectAgent {
   projectId: string;
+  activationId?: string | null;
+  status?: ProjectAgentStatus | null;
   enabled: boolean;
   mmUserId: string | null;
   token: string | null;

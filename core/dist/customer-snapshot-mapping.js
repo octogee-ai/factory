@@ -23,6 +23,13 @@ export function mapProjectChannelDoc(projectId, data) {
         channelId,
     };
 }
+function projectAgentRuntimeState(value) {
+    const agent = value && typeof value === "object" ? value : {};
+    return {
+        activationId: typeof agent.activationId === "string" ? agent.activationId : null,
+        status: typeof agent.status === "string" ? agent.status : null,
+    };
+}
 // Vegas: project-agent state for the snapshot. Null when the project has no
 // agent state at all (never enabled, nothing minted) so snapshots stay lean;
 // a disabled-with-secret entry survives so the reconcile can retire it.
@@ -40,7 +47,7 @@ export function mapProjectAgentState(projectId, projectData, secretData) {
         : null;
     if (!enabled && mmUserId === null && token === null)
         return null;
-    return { projectId, enabled, mmUserId, token };
+    return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
 }
 // Vegas: collect per-project agent states for a snapshot. The secret is read
 // only for projects whose doc carries an agent field — untouched projects

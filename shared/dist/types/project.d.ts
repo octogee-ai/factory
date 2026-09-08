@@ -18,6 +18,7 @@ export interface ProjectAgentConfig {
     enabled: boolean;
     mode?: ProjectAgentMode;
     status?: ProjectAgentStatus;
+    activationId?: string | null;
     lastError?: string | null;
     updatedAt?: unknown;
 }

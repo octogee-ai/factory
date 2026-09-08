@@ -2,7 +2,7 @@ import type { UserSnapshot } from "./customer-lifecycle.js";
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectAgentEnabled } from "@octogee/shared/types/project";
+import { projectAgentEnabled, type ProjectAgentStatus } from "@octogee/shared/types/project";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -32,6 +32,14 @@ export function mapProjectChannelDoc(
   };
 }
 
+function projectAgentRuntimeState(value: unknown): { activationId: string | null; status: ProjectAgentStatus | null } {
+  const agent = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    activationId: typeof agent.activationId === "string" ? agent.activationId : null,
+    status: typeof agent.status === "string" ? agent.status as ProjectAgentStatus : null,
+  };
+}
+
 // Vegas: project-agent state for the snapshot. Null when the project has no
 // agent state at all (never enabled, nothing minted) so snapshots stay lean;
 // a disabled-with-secret entry survives so the reconcile can retire it.
@@ -39,7 +47,7 @@ export function mapProjectAgentState(
   projectId: string,
   projectData: Record<string, unknown>,
   secretData: Record<string, unknown> | undefined,
-): { projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } | null {
+): { projectId: string; enabled: boolean; mmUserId: string | null; token: string | null; activationId: string | null; status: ProjectAgentStatus | null } | null {
   const agent = projectData.agent;
   const requestedEnabled = projectAgentEnabled(agent);
   const commercialLifecycle = projectData.commercialLifecycle;
@@ -55,7 +63,7 @@ export function mapProjectAgentState(
       ? secretData.personalToken
       : null;
   if (!enabled && mmUserId === null && token === null) return null;
-  return { projectId, enabled, mmUserId, token };
+  return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
 }
 
 interface SnapshotDocSnap {

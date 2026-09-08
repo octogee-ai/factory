@@ -450,6 +450,7 @@ export async function activateMattermostRoutingAfterConfigPatch(
     reason: string;
     currentSlug: string;
     evictionSlugs: readonly string[];
+    restartAccountIds?: readonly string[];
   },
 ): Promise<void> {
   let required = params.required;
@@ -469,7 +470,7 @@ export async function activateMattermostRoutingAfterConfigPatch(
   }
   if (!required) return;
   await activatePendingMattermostRouting(rpc, openclawDir, log, {
-    restartAccountIds: params.configNoop ? params.accountIds : [],
+    restartAccountIds: params.configNoop ? params.accountIds : params.restartAccountIds ?? [],
   });
 }
 

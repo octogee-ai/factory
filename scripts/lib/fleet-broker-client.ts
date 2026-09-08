@@ -10,6 +10,7 @@ import type {
   FleetBrokerNpmRegistryCredentials,
   FleetBrokerOpenClawBootClaim,
   FleetBrokerPreStopFlushEvent,
+  FleetBrokerProjectAgentReadiness,
   FleetBrokerProvisioningStatus,
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
@@ -83,6 +84,7 @@ export interface FleetBrokerClient {
   setGreetingResult(uid: string, result: FleetBrokerGreetingResult): Promise<void>;
   setAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
+  reportProjectAgentReadiness(uid: string, projects: FleetBrokerProjectAgentReadiness[]): Promise<void>;
   acknowledgeRuntimeReset(uid: string, operationId: string, generation: number): Promise<void>;
   recordReconcileError(slug: string, message: string): Promise<void>;
   clearReconcileError(slug: string): Promise<void>;
@@ -342,6 +344,9 @@ export function createFleetBrokerClient(
     },
     setAgentIds(uid, agentIds) {
       return postNoContent("/internal/fleet/set-agent-ids", { gatewayId, uid, agentIds });
+    },
+    reportProjectAgentReadiness(uid, projects) {
+      return postNoContent("/internal/fleet/project-agent-readiness", { gatewayId, uid, projects });
     },
     setMounted(uid, mounted) {
       return postNoContent("/internal/fleet/mounted", { gatewayId, uid, mounted });

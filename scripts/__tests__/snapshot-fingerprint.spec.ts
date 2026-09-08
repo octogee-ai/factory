@@ -84,6 +84,12 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(before)).not.toBe(snapshotConfigFingerprint(after));
   });
 
+  it("reconciles a newly minted project activation even if other configuration is unchanged", () => {
+    const project = { projectId: "camp", enabled: true, mmUserId: "mm-proj", token: "pat-1" };
+    expect(snapshotConfigFingerprint(snap({ projectAgents: [{ ...project, activationId: "activation-1" }] })))
+      .not.toBe(snapshotConfigFingerprint(snap({ projectAgents: [{ ...project, activationId: "activation-2" }] })));
+  });
+
   it("changes when the shared-gateway Ops Mattermost identity changes", () => {
     const before = snap({ platformAdminMmUserId: "pppppppppppppppppppppppppp" });
     const after = snap({ platformAdminMmUserId: "qqqqqqqqqqqqqqqqqqqqqqqqqq" });

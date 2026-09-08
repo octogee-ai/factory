@@ -242,10 +242,10 @@ describe("mapProjectAgentState", () => {
     expect(
       mapProjectAgentState(
         "orbit",
-        { agent: { enabled: true } },
+        { agent: { enabled: true, activationId: "activation-1", status: "provisioning" } },
         { mmUserId: "bot-1", personalToken: "pat-1" },
       ),
-    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1" });
+    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: "activation-1", status: "provisioning" });
   });
 
   it("maps an enabled-but-unminted agent with null credentials", () => {
@@ -253,7 +253,7 @@ describe("mapProjectAgentState", () => {
       projectId: "orbit",
       enabled: true,
       mmUserId: null,
-      token: null,
+      token: null, activationId: null, status: null,
     });
   });
 
@@ -264,14 +264,14 @@ describe("mapProjectAgentState", () => {
         { agent: { mode: "scoped", enabled: false } },
         undefined,
       ),
-    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null });
+    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null, activationId: null, status: null });
     expect(
       mapProjectAgentState(
         "orbit",
         { agent: { mode: "agentless", enabled: true } },
         { mmUserId: "bot-1", personalToken: "pat-1" },
       ),
-    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1" });
+    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null });
   });
 
   it("projects an archived project's agent as retire-pending instead of runnable", () => {
@@ -288,14 +288,14 @@ describe("mapProjectAgentState", () => {
       projectId: "orbit",
       enabled: false,
       mmUserId: "bot-1",
-      token: "pat-1",
+      token: "pat-1", activationId: null, status: null,
     });
   });
 
   it("keeps a disabled entry while a secret lingers (retire pending)", () => {
     expect(
       mapProjectAgentState("orbit", { agent: { enabled: false } }, { mmUserId: "bot-1", personalToken: "pat-1" }),
-    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1" });
+    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null });
   });
 
   it("returns null when the project has no agent state at all (snapshot stays lean)", () => {
@@ -307,7 +307,7 @@ describe("mapProjectAgentState", () => {
     expect(mapProjectAgentState("orbit", { agent: "yes" }, undefined)).toBeNull();
     expect(
       mapProjectAgentState("orbit", { agent: { enabled: true } }, { mmUserId: 7, personalToken: null }),
-    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null });
+    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null, activationId: null, status: null });
   });
 });
 
@@ -359,8 +359,8 @@ describe("collectProjectAgentStates", () => {
     const states = await collectProjectAgentStates(db, "uid-1", "alice");
 
     expect(states).toEqual([
-      { projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1" },
-      { projectId: "old", enabled: false, mmUserId: "bot-2", token: "pat-2" },
+      { projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null },
+      { projectId: "old", enabled: false, mmUserId: "bot-2", token: "pat-2", activationId: null, status: null },
     ]);
     expect(secretReads).toEqual(["projectAgentMattermost-orbit", "projectAgentMattermost-old"]);
   });
@@ -406,7 +406,7 @@ describe("collectProjectAgentStates — orphaned secrets (deleted projects)", ()
     const states = await collectProjectAgentStates(db, "uid-1", "alice");
 
     expect(states).toEqual([
-      { projectId: "ghost", enabled: false, mmUserId: "bot-ghost", token: "pat-ghost" },
+      { projectId: "ghost", enabled: false, mmUserId: "bot-ghost", token: "pat-ghost", activationId: null, status: null },
     ]);
   });
 });
