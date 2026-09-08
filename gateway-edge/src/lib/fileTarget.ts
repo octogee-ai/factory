@@ -6,6 +6,7 @@ import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
 import { logger } from "../middleware/logging.js";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 
 export interface FileTarget {
   slug: string;
@@ -218,7 +219,7 @@ async function resolveWorkspaceMemberTarget(
     return { ok: false, status: 403, error: "Forbidden" };
   }
   const memberDoc = await db.doc(`workspaces/${slug}/members/${callerUid}`).get();
-  if (!memberDoc.exists) {
+  if (!memberDoc.exists || !isCanonicalWorkspaceMembership(memberDoc.data())) {
     return { ok: false, status: 403, error: "Forbidden" };
   }
   logger.info(`[fileTarget] brokered gitea sudo workspace=${slug} caller=${callerUid} as=ws-${slug}`);

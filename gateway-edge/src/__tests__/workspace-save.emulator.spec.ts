@@ -81,11 +81,23 @@ async function seedAll(): Promise<void> {
 
   // Workspace docs — bob is a member of alice's workspace; carl is not.
   await db.doc("workspaces/alice").set({ slug: "alice", ownerUid: ALICE_UID });
-  await db.doc(`workspaces/alice/members/${BOB_UID}`).set({ role: "member" });
+  await db.doc(`workspaces/alice/members/${BOB_UID}`).set({
+    role: "member",
+    canonicalSource: "mattermost-general",
+    canonicalState: "active",
+    mattermostChannelId: "alice-general",
+    mattermostUserId: "mm-bob",
+  });
   await db.doc("workspaces/carl").set({ slug: "carl", ownerUid: CARL_UID });
   // dora's workspace: bob is a member, but dora has no gitea token to broker.
   await db.doc("workspaces/dora").set({ slug: "dora", ownerUid: DORA_UID });
-  await db.doc(`workspaces/dora/members/${BOB_UID}`).set({ role: "member" });
+  await db.doc(`workspaces/dora/members/${BOB_UID}`).set({
+    role: "member",
+    canonicalSource: "mattermost-general",
+    canonicalState: "active",
+    mattermostChannelId: "dora-general",
+    mattermostUserId: "mm-bob",
+  });
 
   // Gitea-backed project owned by alice; bob is a member.
   await db.doc("workspaces/alice/projects/zine").set({
@@ -131,6 +143,18 @@ beforeEach(async () => {
 const app = createApp();
 
 describe("POST /api/workspace/save — gitea targets", () => {
+  it("rejects a revoked member before impersonating the workspace owner", async () => {
+    await db.doc(`workspaces/alice/members/${BOB_UID}`).update({ canonicalState: "revoking" });
+
+    const res = await request(app)
+      .post("/api/workspace/save")
+      .set(await authHeader(BOB_UID))
+      .send({ slug: "alice", path: "notes/idea.md", content: "# Unauthorized edit\n" });
+
+    expect(res.status).toBe(403);
+    expect(mockGiteaApiAs).not.toHaveBeenCalled();
+  });
+
   it("saves a new workspace note as a contents PUT with the caller as author", async () => {
     mockGiteaApiAs.mockImplementation(async (_tok, _org, _path, method) => {
       if (method === undefined || method === "GET") throw new Error("Gitea API 404");
