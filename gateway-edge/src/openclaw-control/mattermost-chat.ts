@@ -1040,7 +1040,10 @@ function humanProjectionMessages(
     post.user_id !== agentMmUserId &&
     (post.root_id === "" || rootIds.has(post.root_id)));
   return inputs.map((inputPost) => {
-    const controlRunId = durableControlRunId(inputPost.pending_post_id);
+    const submission = record(inputPost.props?.octogeeControlSubmission);
+    const controlRunId = (submission?.userId === inputPost.user_id
+      ? durableControlRunId(submission.id)
+      : null) ?? durableControlRunId(inputPost.pending_post_id);
     return {
       id: inputPost.id,
       runId: controlRunId ?? inputPost.id,
@@ -1641,6 +1644,7 @@ async function prepareSend(
     channel_id: access.route.primaryChannelId,
     message,
     pending_post_id: runId,
+    props: { octogeeControlSubmission: { id: runId, userId: access.authorization.callerMmUserId } },
   });
   const created = record(createdValue);
   if (!validCreatedPost(

@@ -205,6 +205,11 @@
   },
   "bindings": [],
   "messages": {
+    "queue": {
+      "byChannel": {
+        "mattermost": "followup"
+      }
+    },
     "ackReactionScope": "group-mentions",
     "groupChat": {
       "visibleReplies": "automatic"
@@ -225,6 +230,7 @@
   },
   "channels": {
     "mattermost": {
+      "threadSessionScope": "channel",
       "enabled": true,
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",

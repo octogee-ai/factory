@@ -1816,6 +1816,37 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     });
   });
 
+  it("preserves submission identity after Mattermost strips the transient pending post ID", async () => {
+    let persistedBody: Record<string, unknown> = {};
+    const postJson = vi.fn(async (_path: string[], body: unknown) => {
+      persistedBody = body as Record<string, unknown>;
+      return post({ id: rootId, message: "Hello" });
+    });
+    const adapter = createMattermostControlChat({ authorize: vi.fn(async () => authorized({ postJson })) });
+    await adapter.prepare({
+      type: "req", id: "durable-send", method: "chat.send",
+      params: { sessionKey, message: "Hello", idempotencyKey: "control-run-1" },
+    }, session());
+    const messages = projectMattermostControlMessages({
+      posts: [post({ id: rootId, message: "Hello", pending_post_id: "", props: (persistedBody.props ?? {}) as Record<string, unknown> })],
+      channelId, agentId, agentMmUserId,
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.__openclaw.idempotencyKey).toBe("control-run-1");
+    expect(messages[0]?.__openclaw.id).toBe(rootId);
+  });
+
+  it.each([
+    { userId: agentMmUserId, id: "control-run-1" },
+    { userId: humanId, id: " invalid " },
+  ])("ignores invalid or differently authored submission identity %j", (submission) => {
+    const messages = projectMattermostControlMessages({
+      posts: [post({ id: rootId, props: { octogeeControlSubmission: submission } })],
+      channelId, agentId, agentMmUserId,
+    });
+    expect(messages[0]?.__openclaw.idempotencyKey).toBe(`${rootId}:user`);
+  });
+
   it("posts Control UI sends as caller-authored top-level Mattermost turns", async () => {
     const postJson = vi.fn(async () => ({
       id: rootId,
@@ -1844,6 +1875,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
       channel_id: channelId,
       message: "Hello",
       pending_post_id: "control-run-1",
+      props: { octogeeControlSubmission: { id: "control-run-1", userId: humanId } },
     });
     expect(prepared).toEqual({
       kind: "response",

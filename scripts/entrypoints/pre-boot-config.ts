@@ -103,19 +103,37 @@ function isCoachAgentEntry(value: unknown): value is Record<string, unknown> & {
   return isPlainObject(value) && typeof value.id === "string" && COACH_AGENT_ID_RE.test(value.id);
 }
 
-function removeMattermostForkSettings(
+function applyMattermostAccountSessionPolicy(
   account: Record<string, unknown>,
   configPath: string,
   logFn: (msg: string) => void,
 ): boolean {
   let changed = false;
-  for (const key of ["threadSessionScope", "agentActivity", "threadDirectMessages"]) {
+  for (const key of ["agentActivity", "threadDirectMessages"]) {
     if (!Object.hasOwn(account, key)) continue;
     delete account[key];
     changed = true;
     logFn(`removed unsupported ${configPath}.${key}`);
   }
+  if (account.threadSessionScope !== "channel") {
+    account.threadSessionScope = "channel";
+    changed = true;
+    logFn(`set ${configPath}.threadSessionScope=channel`);
+  }
   return changed;
+}
+
+function applyMattermostQueuePolicy(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void,
+): boolean {
+  const messages = ensureNullishObjectProperty(config, "messages");
+  const queue = messages ? ensureNullishObjectProperty(messages, "queue") : null;
+  const byChannel = queue ? ensureNullishObjectProperty(queue, "byChannel") : null;
+  if (!byChannel || byChannel.mattermost === "followup") return false;
+  byChannel.mattermost = "followup";
+  logFn("set messages.queue.byChannel.mattermost=followup");
+  return true;
 }
 
 export function applyMattermostPreBootPatches(
@@ -125,7 +143,8 @@ export function applyMattermostPreBootPatches(
 ): boolean {
   const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");
   if (!mattermost) return false;
-  let changed = removeMattermostForkSettings(mattermost, "channels.mattermost", logFn);
+  let changed = applyMattermostAccountSessionPolicy(mattermost, "channels.mattermost", logFn);
+  changed = applyMattermostQueuePolicy(config, logFn) || changed;
 
   if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
     mattermost.baseUrl = MM_URL_PLACEHOLDER;
@@ -144,7 +163,7 @@ export function applyMattermostPreBootPatches(
   if (!configuredAccounts) return changed;
   for (const [accountId, account] of Object.entries(configuredAccounts)) {
     if (!isPlainObject(account)) continue;
-    changed = removeMattermostForkSettings(account, `channels.mattermost.accounts.${accountId}`, logFn) || changed;
+    changed = applyMattermostAccountSessionPolicy(account, `channels.mattermost.accounts.${accountId}`, logFn) || changed;
     const accountCommands = ensureNullishObjectProperty(account, "commands");
     if (accountCommands && accountCommands.native !== false) {
       accountCommands.native = false;

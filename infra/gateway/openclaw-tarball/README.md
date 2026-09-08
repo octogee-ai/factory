@@ -79,56 +79,51 @@ select TEST or PROD later.
 
 The selected release is `v2026.9.3`, peeled to
 [upstream commit `1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7`](https://github.com/openclaw/openclaw/commit/1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7).
-[Runtime source `9f57512340deaa67fbccea01a5b4a0e8e254e21f`](https://github.com/ceckert/openclaw/commit/9f57512340deaa67fbccea01a5b4a0e8e254e21f)
-on `ceckert/openclaw:codex/octogee-team-followups` carries these fixes:
+[Runtime source `630287c1c845a32bb98b50690a9a00b10f65dff8`](https://github.com/ceckert/openclaw/commit/630287c1c845a32bb98b50690a9a00b10f65dff8)
+on `ceckert/openclaw:codex/restore-mattermost-channel-scope` carries these fixes:
 
 | Fix | Behavior pinned by its regressions | Upstream contribution |
 | --- | --- | --- |
 | Config revision freshness | Agent create/update/delete expose the persisted config hash before deferred reload acceptance. The ordinary write limiter remains unchanged. | [PR #142169](https://github.com/openclaw/openclaw/pull/142169) |
 | Account-scoped reload inspection | Source SecretRefs use account inspection when planning reloads; failed inspection and global policy changes retain whole-channel fallback. Runtime account resolution stays strict. | [PR #142193](https://github.com/openclaw/openclaw/pull/142193) |
-
 | Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit owner grants in either grant order. | [Fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
 | Preferences and workspace icons | Resolve preferences without a session target, authorize icons with native visibility, and bound repeated credential failures while allowing recovery. | [Fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
+| Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Downstream restoration; upstream consideration pending |
 
-The root artifact is `openclaw-fork-9f575123.tgz` at generation `1788893543972817`
-(SHA-256 `602b7a265dd3001417df68350c0ea5ebbf760d369a544ac8345a5096aa1a70a9`).
-Mattermost is `openclaw-mattermost-47be64ed.tgz`
-(SHA-256 `47be64edb595f797d8a0edb594a7b04296efcf7e14ea71dbe8d2dc43c2e97a04`).
-The root package passed a full build on the exact runtime commit, focused native
-membership/sharing and preferences/icon tests, and a clean joint npm installation
-with the unchanged Mattermost artifact. Installed CLI, SQLite, plugin SDK,
-Mattermost, FFI, PTY, parser and image runtime imports passed; the CUA driver
-remains 0.22.2. Eleven live checks against the installed artifact proved native
-channel discovery, board/task access, writes/events, immediate revocation,
-rejoin and explicit owner-grant preservation using the actual Octogee helper.
-Chrome verified the member dashboard, authorized workspace icon and responsive
-composer. The prior minimal overlay passed 534 targeted gateway/Mattermost tests.
+The root artifact is `openclaw-fork-630287c1.tgz`
+(SHA-256 `1cf429a4065a9b27d84fb9c0d99f5d699bd652ca043fd98988535a446bd5677f`).
+Mattermost is `openclaw-mattermost-a0bcaffe.tgz`
+(SHA-256 `a0bcaffea4f8142f23918a7733ec52fbf878f5c86f3bb516947b9fe5db31f2fd`).
+The exact runtime commit passed a full build and 66 focused Mattermost routing
+regressions. The packed root installed successfully; its CLI and the matching
+Mattermost runtime imported successfully using the Dockerfile's bundled layout.
 
-### Native Mattermost behavior
+### Mattermost session and delivery policy
 
-The custom channel-session, answer-commit, queued-delivery observation, and
-Mattermost transcript-recovery patches are removed. Sessions and tool history
-live in native OpenClaw SQLite state. New room messages receive native top-level
-answers; replies within existing threads retain their thread root and native
-thread session. We no longer force channel-wide context across threads or
-reconstruct lost OpenClaw databases from Mattermost messages.
+Templates and pre-boot set `threadSessionScope: "channel"` for Mattermost accounts.
+Existing reply and streaming preferences remain intact. This restores shared
+context across a room's threads without restoring answer-commit observation,
+Activity publication, or transcript reconstruction. Sessions and tool history
+remain in native OpenClaw SQLite state. Existing thread sessions are not deleted
+or merged by this change.
 
-The templates omit custom thread scope and forced reply/streaming preferences.
-Pre-boot removes unsupported fork keys from stored configs and preserves supported
-native settings. Activity publication is disabled; the activity-tools plugin stays
-enabled for its voice relay. Octogee's authorized transcript projection now includes
-native top-level bot answers and conversations rooted in those answers.
+Octogee sets the native `messages.queue.byChannel.mattermost` policy to `followup`.
+This keeps an overlapping second message queued with its own reply destination;
+the native default `steer` can instead redirect the running answer into its first
+thread. Other channel queue settings are preserved.
 
-Completely unmodified `v2026.9.3` passed 856 native Mattermost tests and a disposable
-runtime experiment in `octogee-test` using its real Mattermost HTTP/WebSocket service,
-private human/bot accounts, two file SecretRefs, and a deterministic model fixture.
-The live checks covered DMs, coach/project rooms, human-rooted and bot-rooted threads,
-single-answer placement, native history, Control UI-style `deliver:false`, explicit
-backend delivery, cancellation and the next turn, tool results, model failure and
-recovery, bot separation, and process restart with history preservation and resumed
-delivery. Octogee's projection displayed the captured native human/bot posts.
-These were API/runtime checks, not a browser UI or fleet rollout. The fixture pod,
-tokens, users, and private rooms were cleaned up afterward.
+Human posts retain Octogee's submission ID in namespaced Mattermost properties,
+bound to the posting user. Mattermost clears `pending_post_id` in later REST reads;
+the durable ID lets native history reconcile the optimistic user bubble.
+
+A disposable runtime connected to the real TEST Mattermost service proved that
+two humans, separate roots, and an existing thread share one channel session;
+another channel remains isolated. An overlapping two-human test used distinct
+answers and verified each appeared under its own root with `followup`. The test
+also verified durable submission properties survive REST retrieval and native
+history contains the turns. These were API/runtime checks, not a browser rollout.
+All four fixture tokens were revoked, users deactivated, and private rooms and the
+team archived afterward. Adapter and pre-boot behavior have separate regressions.
 
 Startup-default preservation is also dropped downstream: Octogee already provisions
 explicit account policies and plugin enablement. A separate generic auto-enable
