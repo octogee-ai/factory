@@ -254,7 +254,7 @@ function assertPortableWorkspace(
   const allowed = new Set([
     `workspace-${agentId}`,
     `workspaces/${agentId}`,
-    ...(isDefault ? ["workspace"] : []),
+    ...(isDefault || agentId === "main" ? ["workspace"] : []),
     ...(platformWorkspace ? [platformWorkspace] : []),
   ]);
   if (!allowed.has(relativePath)) {
@@ -358,7 +358,8 @@ export function configuredBuilderPortableStatePlanFromConfig(
     throw new Error("configured Builder roster has more than one default agent");
   }
   const defaultAgentId = declaredDefaultAgentIds[0] ?? (agentIds.length === 1 ? agentIds[0] : null);
-  if (defaultWorkspacePath !== undefined && defaultAgentId === null) {
+  if (defaultWorkspacePath !== undefined && defaultAgentId === null && agentIds.some((agentId) =>
+    configuredPathField(configuredAgentRecords(config, agentId), "workspace", `configured Builder agent ${agentId}`) === undefined)) {
     throw new Error("agents.defaults.workspace requires a unique default Builder agent");
   }
   const paths: ConfiguredBuilderPortableStatePath[] = [];

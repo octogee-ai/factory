@@ -907,9 +907,6 @@ describe("configured Builder surge release", () => {
           events.push("release");
         }),
       } as unknown as SurgeReadinessGate;
-      const reconcileImportedWorkspace = vi.fn((slug: string) => {
-        events.push(`reconcile:${slug}`);
-      });
       const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
         mounted = true;
@@ -925,7 +922,6 @@ describe("configured Builder surge release", () => {
         },
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-        reconcileImportedWorkspace,
         configuredBuilderAssigned,
         attachConfiguredBuilderBeforeOpenClaw,
       });
@@ -939,7 +935,6 @@ describe("configured Builder surge release", () => {
         "status",
         "claim",
         "claim",
-        "reconcile:ceckert-test",
         "claim",
         "attach",
         "permit",
@@ -1163,9 +1158,6 @@ describe("configured Builder surge release", () => {
         input.adapter.writeMountMarker?.("ceckert-test");
         return "ceckert-test";
       });
-      const reconcileImportedWorkspace = vi.fn(() => {
-        events.push("reconcile");
-      });
       const surgeReadiness = {
         release: vi.fn(async () => {
           events.push("release");
@@ -1182,7 +1174,6 @@ describe("configured Builder surge release", () => {
           releaseWaitStarted();
           return counter.waitForDrain();
         },
-        reconcileImportedWorkspace,
         attachConfiguredBuilderBeforeOpenClaw,
       });
       const released = wiring.releaseSurgeReadiness({
@@ -1191,7 +1182,6 @@ describe("configured Builder surge release", () => {
       });
       await releaseWaitStartedPromise;
 
-      expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
       expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
 
@@ -1207,7 +1197,6 @@ describe("configured Builder surge release", () => {
       expect(events).toEqual([
         "claim",
         "claim",
-        "reconcile",
         "claim",
         "attach",
         "permit",
@@ -1324,9 +1313,6 @@ describe("configured Builder surge release", () => {
           };
         }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const reconcileImportedWorkspace = vi.fn(() => {
-        events.push("reconcile");
-      });
       const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
         return "ceckert-test";
@@ -1353,7 +1339,6 @@ describe("configured Builder surge release", () => {
           if (drainCalls === 2) bothInitialDrainsStarted();
           return counter.waitForDrain();
         },
-        reconcileImportedWorkspace,
         attachConfiguredBuilderBeforeOpenClaw,
       });
       let reserved = false;
@@ -1371,7 +1356,6 @@ describe("configured Builder surge release", () => {
 
       expect(counter.active()).toBe(1);
       expect(calls).not.toContain("mount-marker");
-      expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
       expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
       expect(reserved).toBe(false);
@@ -1384,7 +1368,6 @@ describe("configured Builder surge release", () => {
         "mount-marker",
         "claim",
         "claim",
-        "reconcile",
         "claim",
         "attach",
         "permit",
@@ -1452,7 +1435,6 @@ describe("configured Builder surge release", () => {
         permit: vi.fn(),
         hold: vi.fn(),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const reconcileImportedWorkspace = vi.fn();
       const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => "ceckert-test");
       const wiring = createBuilderSurgeGateWiring({
         adapter: {
@@ -1470,7 +1452,6 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
         provisioning: counter.provisioning,
         waitForActiveProvisioningDrain: counter.waitForDrain,
-        reconcileImportedWorkspace,
         attachConfiguredBuilderBeforeOpenClaw,
       });
 
@@ -1487,7 +1468,6 @@ describe("configured Builder surge release", () => {
       await vi.waitFor(() => expect(state).toMatchObject({ role: "normal", mode: "held", phase: "held" }));
 
       expect(vi.mocked(processGate.claimTargetCompletion)).toHaveBeenCalledTimes(2);
-      expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
       expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permit)).not.toHaveBeenCalled();
 
@@ -1575,7 +1555,6 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
         provisioning: counter.provisioning,
         waitForActiveProvisioningDrain: counter.waitForDrain,
-        reconcileImportedWorkspace: () => undefined,
         attachConfiguredBuilderBeforeOpenClaw: async () => {
           mounted = true;
           return request.slug;
@@ -1649,7 +1628,6 @@ describe("configured Builder surge release", () => {
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: createProvisioningCounter().provisioning,
-        reconcileImportedWorkspace: () => undefined,
         attachConfiguredBuilderBeforeOpenClaw: async () => { throw new Error("write EPIPE"); },
       });
 
@@ -1859,9 +1837,6 @@ describe("configured Builder surge release", () => {
         mounted = true;
         return "ceckert-test";
       });
-      const reconcileImportedWorkspace = vi.fn(() => {
-        events.push("reconcile");
-      });
       const surgeReadiness = {
         release: vi.fn(async () => {
           events.push("release");
@@ -1874,7 +1849,6 @@ describe("configured Builder surge release", () => {
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-        reconcileImportedWorkspace,
         attachConfiguredBuilderBeforeOpenClaw,
       });
 
@@ -1901,7 +1875,6 @@ describe("configured Builder surge release", () => {
         "status",
         "claim",
         "claim",
-        "reconcile",
         "claim",
         "attach",
         "permit",
@@ -1909,7 +1882,6 @@ describe("configured Builder surge release", () => {
       ]);
       expect(vi.mocked(processGate.status)).toHaveBeenCalledOnce();
       expect(vi.mocked(processGate.claimTargetCompletion)).toHaveBeenCalledTimes(3);
-      expect(reconcileImportedWorkspace).toHaveBeenCalledOnce();
       expect(attachConfiguredBuilderBeforeOpenClaw).toHaveBeenCalledOnce();
       expect(vi.mocked(processGate.permit)).toHaveBeenCalledOnce();
       expect(vi.mocked(processGate.releaseTarget)).toHaveBeenCalledOnce();

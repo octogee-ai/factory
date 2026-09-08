@@ -76,7 +76,6 @@ import {
   readSystemConfigWatchFenceGeneration,
 } from "./system-config-watch-state.js";
 import { dlog, OPENCLAW_DIR } from "./config.js";
-import { reconcileImportedWorkspace } from "./git.js";
 import { openClawConfigPath } from "./openclaw-config-path.js";
 import {
   assertConfiguredBuilderPortableStatePlanOnDisk,
@@ -133,7 +132,6 @@ resumeSystemConfigWatch?: (
   slug: string,
   expectedGeneration?: string | null,
 ) => Promise<boolean | void>;
-reconcileImportedWorkspace?: (slug: string) => void;
 }
 
 async function pauseSystemConfigWatchForBuilder(
@@ -398,16 +396,11 @@ function verifyHeaderSignature(
 }
 
 function tarArgsForSources(
-  sources: Array<{ cwd: string; path: string }>,
-  input: { slug?: string; projectCheckoutScope?: PushStateRequestBody["projectCheckoutScope"] } = {},
+  sources: Array<{ cwd: string; path: string }>
 ): string[] {
-  const excludes = input.projectCheckoutScope === "workspace-only" && input.slug
-    ? [`--exclude=customers/${input.slug}/projects`]
-    : [];
   return [
     "-cf", "-",
     ...SQLITE_SIDECAR_EXCLUDE_ARGS,
-    ...excludes,
     ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
   ];
 }
@@ -428,9 +421,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function spawnTarStream(
   sources: Array<{ cwd: string; path: string }>,
-  input?: { slug?: string; projectCheckoutScope?: PushStateRequestBody["projectCheckoutScope"] },
 ): TarStream {
-  const child = spawn("tar", tarArgsForSources(sources, input), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
+  const child = spawn("tar", tarArgsForSources(sources), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
   const stdout = child.stdout;
   const stderr = child.stderr;
   if (!stdout || !stderr) {
@@ -1494,12 +1486,19 @@ async function listRelativeEntries(root: string): Promise<string[]> {
   return entries;
 }
 
-async function copyStageToOpenClaw(stageDir: string, importDir: string): Promise<void> {
+async function copyStageToOpenClaw(stageDir: string, importDir: string, slug: string): Promise<void> {
   await runSpawnChecked(
     RSYNC_BIN,
     ["-a", `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
     { label: "rsync import copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS },
   );
+  for (const directory of ["customers", "git-metadata"]) {
+    const relative = path.join(directory, slug);
+    if (!await hasRealStageAncestors(stageDir, path.join(relative, ".entry"))) continue;
+    await runSpawnChecked(RSYNC_BIN, [
+      "-a", "--delete", `${path.join(stageDir, relative)}/`, `${path.join(importDir, relative)}/`,
+    ], { label: "rsync customer state copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS });
+  }
 }
 
 async function hasRealStageAncestors(stageDir: string, relativePath: string): Promise<boolean> {
@@ -1751,6 +1750,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
         [
           "-a",
           "--relative",
+          ...(mode === "final" ? ["--delete-delay"] : []),
           "--ignore-missing-args",
           ...SQLITE_SIDECAR_EXCLUDE_ARGS,
           "--password-file",
@@ -1888,7 +1888,6 @@ async function activateFinishedRsyncImport(input: {
     if (activation) {
       await activateConfiguredBuilderImport(deps, activation, signal);
     } else {
-      (deps.reconcileImportedWorkspace ?? reconcileImportedWorkspace)(body.slug);
       verificationPending = await activateImportedCustomerForMigration({
         deps,
         slug: body.slug,
@@ -1944,7 +1943,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
-      await copyStageToOpenClaw(session.stageDir, session.importDir);
+      await copyStageToOpenClaw(session.stageDir, session.importDir, body.slug);
       const verificationPending = mode === "final"
         ? await activateFinishedRsyncImport({
           deps,
@@ -2156,10 +2155,7 @@ export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandl
         `[migration-http] push-state mode=${body.mode ?? "default"} migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) to ${target.targetGatewayId}`,
       );
 
-      const tar = spawnTarStream(sources, {
-        slug: body.slug,
-        projectCheckoutScope: body.projectCheckoutScope,
-      });
+      const tar = spawnTarStream(sources);
       const tarDone = tar.done.catch((err: unknown) => {
         sourceTarError = err;
         abort.controller.abort(err);
@@ -2296,18 +2292,17 @@ async function extractValidatedImport(input: {
   const traversal = findPathTraversalViolation(entries, input.slug, input.mode);
   if (traversal !== null) return traversal;
 
+  const stageDir = path.join(path.dirname(input.tarPath), "stage");
+  await fs.mkdir(stageDir, { recursive: true });
+  await extractTarToDir(input.tarPath, stageDir);
   const delivered = entries
     .filter((entry) => isSqliteStorePath(entry))
-    .map((entry) => path.join(input.importDir, entry));
-  await clearSqliteSidecars(delivered);
-  await extractTarToDir(input.tarPath, input.importDir);
-
-  const unreadable = await findUnreadableStore({
-    storePaths: delivered,
-    relativeTo: input.importDir,
-  });
-  if (!unreadable) return null;
-  return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
+    .map((entry) => path.join(stageDir, entry));
+  const unreadable = await findUnreadableStore({ storePaths: delivered, relativeTo: stageDir });
+  if (unreadable) return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
+  await clearSqliteSidecars(delivered.map((store) => path.join(input.importDir, path.relative(stageDir, store))));
+  await copyStageToOpenClaw(stageDir, input.importDir, input.slug);
+  return null;
 }
 
 export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -2443,6 +2438,7 @@ async function extractTarToDir(tarPath: string, dest: string): Promise<void> {
 function allowedMigrationPrefixes(slug: string, mode: MigrationImportMode): string[] {
   const durablePrefixes = [
     `customers/${slug}/`,
+    `git-metadata/${slug}/`,
     `${MIGRATION_ACTIVATION_DIR}/${slug}/`,
   ];
   if (mode === "keys") return [`customer-keys/${slug}/`];

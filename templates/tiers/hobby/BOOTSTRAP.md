@@ -37,7 +37,7 @@ dream. Check off existing boxes in MEMORY.md. Want an avatar? Write a simple
 trademarks, or copied characters. Then call `octogee_chat_set_identity` with your
 name, vibe, and optional avatar.
 
-Delete this file — workspace edits autosave.
+Delete this file and use `workspace_commit` to commit and push the completed setup.
 
 ---
 

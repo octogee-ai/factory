@@ -93,10 +93,6 @@ imageProfile: ""
 # docs and clients; new callers should set gatewayClass + imageProfile.
 profile: ""
 
-# Workspace auto-commit toggle. Unset (default) lets the gateway code
-# decide based on profile. Set to "true" or "false" to override.
-workspaceAutosaveEnabled: ""
-
 # Gateway container security defaults stay locked down. Personal build
 # gateways may override this per instance via glmGateways desired state.
 gatewayContainerSecurityContext:

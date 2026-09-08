@@ -7,7 +7,6 @@ import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
   buildBrokeredLifecycleAdapter,
   projectCheckoutScopeForRuntime,
-  pruneWorkspaceOnlyProjectCheckouts,
   waitForAppliedConfigRevision,
 } from "../lib/customer-lifecycle-broker-adapter.js";
 import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
@@ -989,25 +988,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
   });
 
-  it("removes transferred project checkouts before activating a workspace-only import", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-only-import-"));
-    const projectsDir = path.join(root, "alice", "projects");
-    await fs.mkdir(path.join(projectsDir, "camp", ".git"), { recursive: true });
-    const log = vi.fn();
-
-    try {
-      await pruneWorkspaceOnlyProjectCheckouts(root, "alice", "workspace-only", log);
-
-      expect(fsSync.existsSync(path.join(projectsDir, "camp"))).toBe(false);
-      expect(fsSync.existsSync(projectsDir)).toBe(true);
-      expect(log).toHaveBeenCalledWith(
-        "[import:alice] removed project checkouts from workspace-only target",
-      );
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("moves and quiesces every project agent state path owned by the builder", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-project-state-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -1049,9 +1029,11 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       log: vi.fn(),
     });
 
+    await fs.mkdir(path.join(testRuntime.dir, "git-metadata", "tester10", "projects", "orbit.git"), { recursive: true });
     const paths = await adapter.listExportPaths("tester10");
 
     expect(paths).toEqual(expect.arrayContaining([
+      { cwd: testRuntime.dir, path: path.join("git-metadata", "tester10") },
       { cwd: tempStateDir, path: path.join("agents", "octogee-tester10-coach") },
       { cwd: tempStateDir, path: path.join("agents", "octogee-tester10-proj-orbit-coach") },
     ]));

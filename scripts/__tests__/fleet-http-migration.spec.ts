@@ -232,6 +232,12 @@ const sink = new Writable({
   };
 }
 
+it("transfers only the selected customer's Git metadata", () => {
+  expect(findPathTraversalViolation(["git-metadata/alice/projects/app.git/refs/heads/work", "git-metadata/alice/projects/app.git/index"], "alice", "final")).toBeNull();
+  expect(findPathTraversalViolation(["git-metadata/bob/projects/app.git/index"], "alice", "final")).not.toBeNull();
+  expect(findPathTraversalViolation(["git-metadata/alice/../../bob/index"], "alice", "final")).not.toBeNull();
+});
+
 describe("sendPushStateImportResponse", () => {
   it("relays successful target responses without duplicating destination progress on the source", async () => {
     const { res, getStatus, getBody } = mkResponse();
@@ -598,7 +604,7 @@ describe("createFlushHandler", () => {
     const flushLocalState = vi.fn(async () => ({
       ok: true,
       durationMs: 12,
-      steps: [{ name: "workspace-git", status: "done" as const, durationMs: 10 }],
+      steps: [{ name: "customer-files", status: "done" as const, durationMs: 10 }],
     }));
     const handler = createFlushHandler(mkDeps({ flushLocalState }));
     const body = { migrationId: "mig-1", slug: "chris", reason: "idle" };
@@ -616,7 +622,7 @@ describe("createFlushHandler", () => {
       slug: "chris",
       ok: true,
       durationMs: 12,
-      steps: [{ name: "workspace-git", status: "done", durationMs: 10 }],
+      steps: [{ name: "customer-files", status: "done", durationMs: 10 }],
     });
   });
 
@@ -2254,6 +2260,52 @@ describe("queued-rsync migration control handlers", () => {
     expect(copyArgs.at(-1)).toBe("/openclaw/");
   });
 
+  it("replaces only the imported customer's files and Git refs with the final source state", async () => {
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "final-customer-state-"));
+    migrationTempRoots.push(importDir);
+    const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => importDir) });
+    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(real.spawn);
+    const deps = mkDeps({ adapter, waitForRsyncReady: vi.fn(async () => undefined) });
+    const prepareBody: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-exact-state", slug: "chris", rpcPhase: "prepare-rsync-import",
+      mode: "final", transferUser: "migration", transferKey: "c".repeat(64),
+    };
+    const response = mkResponse();
+    await createPrepareRsyncImportHandler(deps)(mkRequest(prepareBody, {
+      signature: signForPod(prepareBody.migrationId, JSON.stringify(prepareBody)),
+      localAddress: `::ffff:${TARGET_POD_IP}`,
+    }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    const daemonArgs = spawnMock.mock.calls[0][1] as string[];
+    const configPath = daemonArgs.find((arg) => arg.startsWith("--config="))!.slice(9);
+    const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
+    for (const [relative, content] of [
+      ["customers/chris/draft.txt", "latest draft"],
+      ["git-metadata/chris/workspace.git/HEAD", "ref: refs/heads/work"],
+    ]) {
+      await fs.mkdir(path.dirname(path.join(stageDir, relative)), { recursive: true });
+      await fs.writeFile(path.join(stageDir, relative), content);
+    }
+    for (const relative of ["customers/chris/deleted.txt", "git-metadata/chris/workspace.git/refs/heads/deleted", "customers/alice/keep.txt"]) {
+      await fs.mkdir(path.dirname(path.join(importDir, relative)), { recursive: true });
+      await fs.writeFile(path.join(importDir, relative), "presync");
+    }
+    const finishBody: FinishRsyncImportRequestBody = {
+      migrationId: prepareBody.migrationId, slug: "chris", rpcPhase: "finish-rsync-import", mode: "final",
+    };
+    const finished = mkResponse();
+    await createFinishRsyncImportHandler(deps)(mkRequest(finishBody, {
+      signature: signForPod(finishBody.migrationId, JSON.stringify(finishBody)),
+    }), finished.res, vi.fn());
+    expect(finished.getStatus()).toBe(200);
+    expect(await fs.readFile(path.join(importDir, "customers/chris/draft.txt"), "utf8")).toBe("latest draft");
+    expect(await fs.readFile(path.join(importDir, "git-metadata/chris/workspace.git/HEAD"), "utf8")).toBe("ref: refs/heads/work");
+    expect(fsSync.existsSync(path.join(importDir, "customers/chris/deleted.txt"))).toBe(false);
+    expect(fsSync.existsSync(path.join(importDir, "git-metadata/chris/workspace.git/refs/heads/deleted"))).toBe(false);
+    expect(await fs.readFile(path.join(importDir, "customers/alice/keep.txt"), "utf8")).toBe("presync");
+  });
+
   it("keeps a committed import whose activation could not finish verifying", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),
@@ -2332,7 +2384,6 @@ describe("queued-rsync migration control handlers", () => {
     const onMounted = vi.fn((slug: string) => {
       if (!mounted.includes(slug)) mounted.push(slug);
     });
-    const reconcileImportedWorkspace = vi.fn();
     const markCustomerMigratingIn = vi.fn();
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
@@ -2368,7 +2419,6 @@ describe("queued-rsync migration control handlers", () => {
       migrationRsyncPort: 30873,
       waitForRsyncReady: vi.fn(async () => undefined),
       getMountedCustomers: () => mounted,
-      reconcileImportedWorkspace,
     });
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-builder-finish",
@@ -2421,7 +2471,6 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.loadUserSnapshot).not.toHaveBeenCalled();
     expect(adapter.writeMountMarker).not.toHaveBeenCalled();
     expect(onMounted).not.toHaveBeenCalled();
-    expect(reconcileImportedWorkspace).not.toHaveBeenCalled();
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(mounted).toEqual([]);
     expect(deps.log).toHaveBeenCalledWith(
@@ -2920,7 +2969,7 @@ describe("createPushStateHandler", () => {
   });
 
   it.each(["pre", "final"] as const)(
-    "excludes project checkouts from a workspace-only %s transfer",
+    "preserves project work in a workspace-only %s transfer",
     async (mode) => {
       const adapter = mkAdapter({
         listExportPaths: vi.fn(async () => [
@@ -2951,7 +3000,6 @@ describe("createPushStateHandler", () => {
       expect(spawnMock.mock.calls[0][1]).toEqual([
         "-cf", "-",
         "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
-        "--exclude=customers/chris/projects",
         "-C", "/state", "agents/octogee-chris-coach",
         "-C", "/openclaw", "customers/chris",
       ]);
@@ -3410,7 +3458,7 @@ describe("createImportHandler", () => {
       exitCode: 0,
     });
     const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
     const handler = createImportHandler(mkDeps({ adapter }));
     const sig = signForPod("mig-1", "chris");
@@ -3434,7 +3482,7 @@ describe("createImportHandler", () => {
     );
     expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
 
-    expect(spawnMock.mock.calls.length).toBe(2);
+    expect(spawnMock.mock.calls.length).toBe(3);
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
     expect(spawnMock.mock.calls[0][1][0]).toBe("-tf");
     expect(spawnMock.mock.calls[1][1][0]).toBe("-xf");
@@ -3447,7 +3495,7 @@ describe("createImportHandler", () => {
       exitCode: 0,
     });
     const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
     const handler = createImportHandler(mkDeps({ adapter }));
     const sig = signForPod("mig-1", "chris");
@@ -3479,7 +3527,7 @@ describe("createImportHandler", () => {
       exitCode: 0,
     });
     const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
     const handler = createImportHandler(mkDeps({ adapter }));
     const sig = signForPod("mig-1", "chris");
@@ -3527,7 +3575,7 @@ describe("createImportHandler", () => {
       exitCode: 0,
     });
     const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
     const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
     const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
     const handler = createImportHandler(
@@ -3563,7 +3611,7 @@ describe("createImportHandler", () => {
     expect(pauseSystemConfigWatch.mock.invocationCallOrder[0]).toBeLessThan(
       adapter.activateImportedCustomer.mock.invocationCallOrder[0],
     );
-    expect(spawnMock.mock.calls.length).toBe(2);
+    expect(spawnMock.mock.calls.length).toBe(3);
   });
 
   it("aborts activate + responds 499 when the client disconnects mid-import", async () => {
@@ -3590,7 +3638,7 @@ describe("createImportHandler", () => {
       exitCode: 0,
     });
     const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild);
+    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
     const handler = createImportHandler(mkDeps({ adapter }));
     const sig = signForPod("mig-1", "chris");

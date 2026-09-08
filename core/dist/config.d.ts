@@ -14,7 +14,7 @@ export declare const TEMPLATES_DIR: string;
 export declare const GIT_API_URL: string;
 export declare const GIT_ORG: string;
 export declare const GIT_SSH_HOST = "gitea";
-export declare const GIT_SYNC_INTERVAL_MS: number;
+export declare const BLOB_SYNC_INTERVAL_MS: number;
 export declare const GITHUB_TOKEN: string;
 export declare const GITHUB_ORG: string;
 export declare const BLOB_SYNC_MAX_CONCURRENT = 10;

@@ -133,7 +133,7 @@ Files you write there belong to that project's repo, not the workspace's.
   and the project's starting playbook. Never hand-create `projects/{slug}/`: a folder you
   make yourself has no repo, no channel and no record.
 - **List:** `octogee_project_list`. There is no `PROJECTS.md`.
-- **Save:** workspace edits autosave. Use `octogee_project_commit` for a project checkpoint.
+- **Save:** files stay local until you intentionally commit and push. Use `workspace_commit` for workspace changes and `octogee_project_commit` for project changes.
 
 Every project starts with `runbook/`, `DECISIONS.md`, and `notes/welcome.md`. When
 someone says "record a decision", append it to that project's `DECISIONS.md`, newest

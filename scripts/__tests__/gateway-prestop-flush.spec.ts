@@ -12,7 +12,7 @@ describe("runGatewayPreStopFlush", () => {
       gatewayId: "eggman-devdays",
       gatewayClass: "builder",
       quiesceSessions: vi.fn(async () => { calls.push("quiesce"); }),
-      syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
+      flushFiles: vi.fn(async () => { calls.push("workspaces"); }),
       syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
       syncSystemConfig: vi.fn(async () => { calls.push("system_config-push"); }),
       releaseGiteaKey: vi.fn(async () => { calls.push("release-key"); }),
@@ -29,7 +29,7 @@ describe("runGatewayPreStopFlush", () => {
     const result = await runGatewayPreStopFlush({
       gatewayId: "eggman-devdays",
       gatewayClass: "builder",
-      syncWorkspaces: vi.fn(async () => {}),
+      flushFiles: vi.fn(async () => {}),
       syncSystemConfig: vi.fn(async () => { throw new Error("push failed"); }),
       releaseGiteaKey,
       log: () => {},
@@ -48,7 +48,7 @@ describe("runGatewayPreStopFlush", () => {
     const result = await runGatewayPreStopFlush({
       gatewayId: "builder-a",
       gatewayClass: "builder",
-      syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
+      flushFiles: vi.fn(async () => { calls.push("workspaces"); }),
       syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
       syncSystemConfig: vi.fn(async () => {
         calls.push("system_config");
@@ -83,7 +83,7 @@ describe("runGatewayPreStopFlush", () => {
     const result = await runGatewayPreStopFlush({
       gatewayId: "default",
       gatewayClass: "shared",
-      syncWorkspaces: vi.fn(async () => {
+      flushFiles: vi.fn(async () => {
         calls.push("workspaces");
         throw new Error("git unavailable");
       }),
@@ -96,13 +96,13 @@ describe("runGatewayPreStopFlush", () => {
     expect(result.ok).toBe(false);
     expect(result.steps).toMatchObject([
       { name: "session-quiesce", status: "skipped" },
-      { name: "workspace-git", status: "failed", error: "git unavailable" },
+      { name: "customer-files", status: "failed", error: "git unavailable" },
       { name: "blob-sync", status: "done" },
       { name: "system-config", status: "skipped" },
       { name: "runtime-state", status: "skipped" },
       { name: "gitea-key-release", status: "skipped" },
     ]);
-    expect(logs.join("\n")).toMatch(/workspace-git failed/);
+    expect(logs.join("\n")).toMatch(/customer-files failed/);
     expect(logs.join("\n")).toMatch(/complete ok=false/);
   });
 
@@ -116,7 +116,7 @@ describe("runGatewayPreStopFlush", () => {
         calls.push("quiesce");
         throw new Error("2 sessions still running");
       }),
-      syncWorkspaces: vi.fn(async () => { calls.push("workspaces"); }),
+      flushFiles: vi.fn(async () => { calls.push("workspaces"); }),
       syncBlobs: vi.fn(async () => { calls.push("blobs"); }),
       syncSystemConfig: vi.fn(async () => { calls.push("system-config"); }),
       releaseGiteaKey,
@@ -149,7 +149,7 @@ describe("runGatewayPreStopFlush", () => {
       systemConfigCommit: "a".repeat(40),
       steps: [
         { name: "session-quiesce", status: "skipped" },
-        { name: "workspace-git", status: "skipped" },
+        { name: "customer-files", status: "skipped" },
         { name: "blob-sync", status: "skipped" },
         { name: "system-config", status: "done" },
         { name: "runtime-state", status: "skipped" },
@@ -168,7 +168,7 @@ describe("runGatewayPreStopFlush", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "workspace-git", status: "skipped" }),
+      expect.objectContaining({ name: "customer-files", status: "skipped" }),
       expect.objectContaining({
         name: "system-config",
         status: "failed",
@@ -210,7 +210,7 @@ describe("runGatewayPreStopFlush", () => {
         calls.push("runtime");
         await runtimeDone;
       },
-      syncWorkspaces: async () => { calls.push("workspace"); },
+      flushFiles: async () => { calls.push("workspace"); },
       log: () => {},
     });
 

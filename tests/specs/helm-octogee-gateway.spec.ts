@@ -2039,42 +2039,4 @@ describe("helm/octogee-gateway/ — env entries pass K8s schema (no value+valueF
     expect(nameless).toEqual([]);
   });
 
-  describe("workspace auto-commit env wiring (Builder vs cattle defaults)", () => {
-    it("omits WORKSPACE_AUTOSAVE_ENABLED when the helm value is unset — gateway code defaults from profile", () => {
-      const out = helmTemplate("octogee-gw-default");
-      const gateway = containerBlock(
-        findDoc(out, "Deployment", "octogee-gateway-default") ?? "",
-        "gateway",
-      );
-      expect(gateway).not.toMatch(/WORKSPACE_AUTOSAVE_ENABLED/);
-    });
-
-    it("renders the override when workspaceAutosaveEnabled=true (Builder opts back in)", () => {
-      const out = helmTemplate("octogee-gw-bender", {
-        gatewayId: "bender",
-        profile: "builder",
-        workspaceAutosaveEnabled: "true",
-      });
-      const gateway = containerBlock(
-        findDoc(out, "Deployment", "octogee-gateway-bender") ?? "",
-        "gateway",
-      );
-      expect(gateway).toMatch(
-        /- name:\s*WORKSPACE_AUTOSAVE_ENABLED[\s\S]*?value:\s*"true"/,
-      );
-    });
-
-    it("renders the override when workspaceAutosaveEnabled=false (cattle opts out)", () => {
-      const out = helmTemplate("octogee-gw-default", {
-        workspaceAutosaveEnabled: "false",
-      });
-      const gateway = containerBlock(
-        findDoc(out, "Deployment", "octogee-gateway-default") ?? "",
-        "gateway",
-      );
-      expect(gateway).toMatch(
-        /- name:\s*WORKSPACE_AUTOSAVE_ENABLED[\s\S]*?value:\s*"false"/,
-      );
-    });
-  });
 });

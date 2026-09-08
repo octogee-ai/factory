@@ -292,13 +292,6 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
 });
 
 describe("scripts/entrypoints/fleet-controller.ts — db-less local persistence loops", () => {
-  it("keeps autosave and non-committing push recovery wired into the live gateway controller", () => {
-    expect(fleetController).toMatch(/startWorkspaceAutosaveLoop/);
-    expect(fleetController).toMatch(/startWorkspacePushRecoveryLoop/);
-    expect(fleetController).toMatch(/syncAllCustomerRepositories/);
-    expect(fleetController).toMatch(/retryAllCustomerRepositoryPushes/);
-    expect(fleetController).toMatch(/GIT_SYNC_INTERVAL_MS/);
-  });
 
   it("keeps brokered GCS blob sync wired into the live gateway controller", () => {
     expect(fleetController).toMatch(/blobSyncAllWithOptions/);

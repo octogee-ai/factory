@@ -2,7 +2,7 @@ export interface GatewayPreStopFlushDeps {
   gatewayId: string;
   gatewayClass: string;
   quiesceSessions?: () => Promise<void>;
-  syncWorkspaces: () => Promise<unknown>;
+  flushFiles: () => Promise<unknown>;
   syncBlobs?: () => Promise<void>;
   syncSystemConfig?: () => Promise<void | { acceptedCommit: string }>;
   syncRuntimeState?: () => Promise<void>;
@@ -22,7 +22,7 @@ export interface GatewaySystemConfigConvergenceCheckpointDeps {
 export interface GatewayPreStopFlushStep {
   name:
     | "session-quiesce"
-    | "workspace-git"
+    | "customer-files"
     | "blob-sync"
     | "system-config"
     | "runtime-state"
@@ -85,7 +85,7 @@ export async function runGatewayPreStopFlush(
 
   const quiesce = await runStep(deps, "session-quiesce", deps.quiesceSessions);
   const runtimeStatePromise = runStep(deps, "runtime-state", deps.syncRuntimeState);
-  const workspace = await runStep(deps, "workspace-git", deps.syncWorkspaces);
+  const workspace = await runStep(deps, "customer-files", deps.flushFiles);
   const blobs = await runStep(deps, "blob-sync", deps.syncBlobs);
   const systemConfig = await runStep(deps, "system-config", deps.syncSystemConfig);
   const runtimeState = await runtimeStatePromise;
@@ -127,7 +127,7 @@ export async function runGatewaySystemConfigConvergenceCheckpoint(
   });
   const steps: GatewayPreStopFlushStep[] = [
     { name: "session-quiesce", status: "skipped", durationMs: 0 },
-    { name: "workspace-git", status: "skipped", durationMs: 0 },
+    { name: "customer-files", status: "skipped", durationMs: 0 },
     { name: "blob-sync", status: "skipped", durationMs: 0 },
     systemConfig.step,
     { name: "runtime-state", status: "skipped", durationMs: 0 },

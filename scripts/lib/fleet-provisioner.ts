@@ -70,7 +70,6 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
-import { reconcileImportedWorkspace } from "./git.js";
 import {
   addCustomerToGateway,
   cloneMissingProjects,
@@ -2170,7 +2169,6 @@ interface BuilderSurgeGateWiringOptions {
   log: (message: string) => void;
   provisioning: ProvisioningCounter;
   waitForActiveProvisioningDrain?: () => Promise<void>;
-  reconcileImportedWorkspace?: (slug: string) => void;
   attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
   configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
 }
@@ -2184,7 +2182,6 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     log,
     provisioning,
     waitForActiveProvisioningDrain = async () => undefined,
-    reconcileImportedWorkspace: reconcileImported = reconcileImportedWorkspace,
     attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
     configuredBuilderAssigned = async () => false,
   } = input;
@@ -2228,7 +2225,6 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       await processGate!.claimTargetCompletion(request);
       throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
-      reconcileImported(request.slug);
       throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
       const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });

@@ -1,3 +1,4 @@
+import { flushCustomerFiles, flushAllCustomerFiles } from "../lib/customer-file-state.js";
 import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import {
   GATEWAY_CLASS,
@@ -7,15 +8,12 @@ import {
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import {
   createFleetBrokerClient,
-  resolveGithubTokenForSlug,
 } from "../lib/fleet-broker-client.js";
 import { runGatewayPreStopFlush } from "../lib/gateway-prestop-flush.js";
 import {
   listLocalCustomerPubKeys,
   listOnDiskCustomerSlugs,
   readLocalCustomerPubKey,
-  syncAllCustomerRepositories,
-  syncCustomerRepositoriesForSlug,
   type LocalCustomerPubKey,
 } from "../lib/git.js";
 import { quiesceCustomerSessions } from "../lib/customer-session-quiesce.js";
@@ -172,15 +170,9 @@ async function main(): Promise<void> {
     gatewayId,
     gatewayClass,
     quiesceSessions: createPreStopSessionQuiesce(builderSlug),
-    syncWorkspaces: builderSlug
-      ? () => syncCustomerRepositoriesForSlug(builderSlug, {
-          strict: true,
-          resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
-        })
-      : () => syncAllCustomerRepositories({
-          strict: true,
-          resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
-        }),
+    flushFiles: builderSlug
+      ? () => flushCustomerFiles(builderSlug)
+      : () => flushAllCustomerFiles(),
     syncBlobs: builderSlug
       ? () => blobSyncForSlug(builderSlug, {
           strict: true,

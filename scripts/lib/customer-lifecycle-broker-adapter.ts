@@ -1,3 +1,4 @@
+import { customerFileStatePaths } from "./customer-file-state.js";
 import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
 import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
 import * as fs from "node:fs";
@@ -1239,8 +1240,7 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
         })),
         ...agentIdsForMigration(slug).flatMap((agentId) => memoryPathsForAgent(agentId)),
       ]),
-    { cwd: OPENCLAW_DIR, path: path.join("customers", slug) },
-    { cwd: OPENCLAW_DIR, path: path.join("customer-keys", slug) },
+    ...await customerFileStatePaths(OPENCLAW_DIR, slug),
   ];
   const sources: Array<{ cwd: string; path: string }> = [];
   for (const c of candidates) {
@@ -1315,16 +1315,6 @@ async function activateImportedCustomer(
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
-  const runtimeProjectCheckoutScope = ctx.projectCheckoutScope?.(slug)
-    ?? WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
-  const projectCheckoutScope = ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
-    ?? runtimeProjectCheckoutScope;
-  await pruneWorkspaceOnlyProjectCheckouts(
-    CUSTOMERS_DIR,
-    slug,
-    projectCheckoutScope,
-    ctx.log,
-  );
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
   // The rsync brings whatever store the source pod had. One openclaw cannot
@@ -1472,19 +1462,6 @@ function reportPendingVerification(ctx: BrokerCtx, slug: string, reason: string)
     `converges the rest: ${reason}`,
   );
   return reason;
-}
-
-export async function pruneWorkspaceOnlyProjectCheckouts(
-  customersDir: string,
-  slug: string,
-  scope: FleetBrokerProjectCheckoutScope,
-  log: (message: string) => void,
-): Promise<void> {
-  if (scope !== WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE) return;
-  const projectsDir = path.join(customersDir, slug, "projects");
-  await fsp.rm(projectsDir, { recursive: true, force: true });
-  await fsp.mkdir(projectsDir, { recursive: true });
-  log(`[import:${slug}] removed project checkouts from workspace-only target`);
 }
 
 export function projectCheckoutScopeForRuntime(

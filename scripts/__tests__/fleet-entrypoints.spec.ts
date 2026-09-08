@@ -228,7 +228,7 @@ describe("fleet-controller entrypoint config", () => {
   });
 
   it("uses only the expected config checkpoint for target migration convergence", async () => {
-    const syncWorkspaces = vi.fn(async () => undefined);
+    const flushFiles = vi.fn(async () => undefined);
     const syncBlobs = vi.fn(async () => undefined);
     const expectedSystemConfigCommit = "a".repeat(40);
     const syncSystemConfig = vi.fn(() => ({
@@ -241,7 +241,7 @@ describe("fleet-controller entrypoint config", () => {
       gatewayClass: "builder",
       builderSlug: "alice",
       builder: true,
-      syncWorkspaces,
+      flushFiles,
       syncBlobs,
       syncSystemConfig,
       log: () => {},
@@ -256,12 +256,12 @@ describe("fleet-controller entrypoint config", () => {
     expect(result.ok).toBe(true);
     expect(result.systemConfigCommit).toBe(expectedSystemConfigCommit);
     expect(result.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "workspace-git", status: "skipped" }),
+      expect.objectContaining({ name: "customer-files", status: "skipped" }),
       expect.objectContaining({ name: "blob-sync", status: "skipped" }),
       expect.objectContaining({ name: "system-config", status: "done" }),
     ]));
 
-    expect(syncWorkspaces).not.toHaveBeenCalled();
+    expect(flushFiles).not.toHaveBeenCalled();
     expect(syncBlobs).not.toHaveBeenCalled();
     expect(syncSystemConfig).toHaveBeenCalledWith("alice", expect.objectContaining({
       expectedRemoteCommit: expectedSystemConfigCommit,
@@ -270,13 +270,13 @@ describe("fleet-controller entrypoint config", () => {
   });
 
   it("retains strict workspace durability for a final migration flush", async () => {
-    const syncWorkspaces = vi.fn(async () => { throw new Error("workspace push failed"); });
+    const flushFiles = vi.fn(async () => { throw new Error("workspace push failed"); });
     const flush = createFleetControllerRequestedFlush({
       gatewayId: "builder-alice",
       gatewayClass: "builder",
       builderSlug: "alice",
       builder: true,
-      syncWorkspaces,
+      flushFiles,
       syncSystemConfig: vi.fn(() => ({
         committed: true,
         pushed: true,
@@ -289,16 +289,16 @@ describe("fleet-controller entrypoint config", () => {
     expect(result.ok).toBe(false);
     expect(result.steps).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        name: "workspace-git",
+        name: "customer-files",
         status: "failed",
         error: "workspace push failed",
       }),
     ]));
-    expect(syncWorkspaces).toHaveBeenCalledOnce();
+    expect(flushFiles).toHaveBeenCalledOnce();
   });
 
   it("rejects an unpinned migration convergence request before it can sync", async () => {
-    const syncWorkspaces = vi.fn(async () => undefined);
+    const flushFiles = vi.fn(async () => undefined);
     const syncSystemConfig = vi.fn(() => ({
       committed: true,
       pushed: true,
@@ -309,14 +309,14 @@ describe("fleet-controller entrypoint config", () => {
       gatewayClass: "builder",
       builderSlug: "alice",
       builder: true,
-      syncWorkspaces,
+      flushFiles,
       syncSystemConfig,
       log: () => {},
     });
 
     await expect(flush({ slug: "alice", reason: "migration-converge" }))
       .rejects.toThrow("migration converge is missing expected system config commit");
-    expect(syncWorkspaces).not.toHaveBeenCalled();
+    expect(flushFiles).not.toHaveBeenCalled();
     expect(syncSystemConfig).not.toHaveBeenCalled();
   });
 

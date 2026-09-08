@@ -175,6 +175,21 @@ describe("configuredBuilderPortableStatePlanFromConfig", () => {
     expect(emptyEntries.agentIds).toEqual(["main"]);
   });
 
+  it("carries explicit workspaces when a main agent and project agent have no default marker", () => {
+    const plan = configuredBuilderPortableStatePlanFromConfig({
+      agents: {
+        defaults: { workspace: `${stateDir}/workspace` },
+        entries: {
+          main: { workspace: `${stateDir}/workspace` },
+          "octogee-aug292-proj-oglist-coach": { workspace: `${stateDir}/customers/aug292/projects/oglist` },
+        },
+      },
+    }, stateDir);
+    expect(plan.agentIds).toEqual(["main", "octogee-aug292-proj-oglist-coach"]);
+    expect(plan.paths).toContainEqual({ relativePath: "workspace", kind: "directory" });
+    expect(plan.paths).toContainEqual({ relativePath: "customers/aug292/projects/oglist", kind: "directory" });
+  });
+
   it("accepts the shipped Builder seed (empty roster + agents.defaults.workspace)", () => {
     const seed = JSON.parse(fs.readFileSync(
       path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),

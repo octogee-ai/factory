@@ -34,7 +34,6 @@ const {
   cloneProjectRepo,
   externalizeCustomerGitDir,
   githubCloneCredentialEnv,
-  syncCustomerRepositoriesForSlug,
 } = await import("../lib/git.js");
 
 const SLUG = "alice";
@@ -76,7 +75,6 @@ function localConfigContents(repo: string): string {
   return fs.readFileSync(config, "utf8");
 }
 
-const acquireWorkspaceMutationLease = () => ({ release: () => {} });
 const prepareRepository = () => {};
 
 function prepareTrustedGithubRepository(
@@ -190,136 +188,6 @@ afterEach(() => {
   for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-
-describe("workspace autosync remote migration", () => {
-  it("leaves a GitHub HTTPS origin untouched instead of hijacking it onto the Gitea SSH host", async () => {
-    const project = path.join(paths.customers, SLUG, "projects", "site");
-    const origin = `https://github.com/${SLUG}/site.git`;
-    initRepoWithOrigin(project, origin);
-
-    await syncCustomerRepositoriesForSlug(SLUG, {
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-    });
-
-    expect(localConfig(project, "remote.origin.url")).toBe(origin);
-  });
-
-  it("reports a GitHub-backed checkout's strict flush as a push failure, never as a failed SSH migration", async () => {
-    const project = path.join(paths.customers, SLUG, "projects", "gh");
-    const origin = `https://github.com/${SLUG}/gh.git`;
-    initRepoWithOrigin(project, origin);
-
-    await expect(syncCustomerRepositoriesForSlug(SLUG, {
-      strict: true,
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-    }))
-      .rejects.toThrow(/push failed/);
-
-    expect(localConfig(project, "remote.origin.url")).toBe(origin);
-  });
-
-  it("mints one on-demand token and passes it only to a trusted GitHub checkout's network commands", async () => {
-    const project = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(project, GITHUB_REMOTE);
-    rebuildTransferredGithubMetadata(project, SLUG, {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-    });
-    fs.writeFileSync(path.join(project, "local.md"), "checkpoint\n");
-    const resolveGithubToken = vi.fn(async () => MATERIALIZED_TOKEN);
-    const runGit = vi.fn((
-      cwd: string,
-      args: string[],
-      _sshKey?: string,
-      _githubToken?: string | null,
-    ) => localGitExec(cwd, args));
-
-    await syncCustomerRepositoriesForSlug(SLUG, {
-      gitExec: runGit,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-      resolveGithubToken,
-    });
-
-    expect(resolveGithubToken).toHaveBeenCalledOnce();
-    expect(resolveGithubToken).toHaveBeenCalledWith(SLUG);
-    const networkCommands = ["ls-remote", "fetch", "push"];
-    const calls = runGit.mock.calls;
-    expect(calls.filter(([, args]) => networkCommands.includes(args[0]!)))
-      .toEqual(expect.arrayContaining([
-        expect.arrayContaining([project, expect.arrayContaining(["ls-remote"]), undefined, MATERIALIZED_TOKEN]),
-        expect.arrayContaining([project, expect.arrayContaining(["fetch"]), undefined, MATERIALIZED_TOKEN]),
-        expect.arrayContaining([project, expect.arrayContaining(["push"]), undefined, MATERIALIZED_TOKEN]),
-      ]));
-    expect(calls.filter(([, args]) => !networkCommands.includes(args[0]!)))
-      .toEqual(expect.not.arrayContaining([
-        expect.arrayContaining([expect.anything(), expect.anything(), expect.anything(), MATERIALIZED_TOKEN]),
-      ]));
-  });
-
-  it("refuses to autosave a project binary into a GitHub repository", async () => {
-    const project = path.join(paths.customers, SLUG, "projects", "demo");
-    initRepoWithOrigin(project, GITHUB_REMOTE);
-    rebuildTransferredGithubMetadata(project, SLUG, {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-    });
-    fs.writeFileSync(path.join(project, "cover.png"), Buffer.from([0x89, 0x50, 0x00]));
-
-    await expect(syncCustomerRepositoriesForSlug(SLUG, {
-      strict: true,
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-      resolveGithubToken: async () => MATERIALIZED_TOKEN,
-    })).rejects.toThrow(/alice\/projects\/demo: binary files require workspace_commit/u);
-
-    expect(fs.existsSync(path.join(project, "cover.png"))).toBe(true);
-    expect(localGitExec(canonicalOrigin, ["show", "main:cover.png"])).toBeNull();
-  });
-
-  it("still flushes Gitea repositories when the GitHub token broker is unavailable", async () => {
-    const workspace = path.join(paths.customers, SLUG);
-    execFileSync("git", ["clone", "-q", canonicalOrigin, workspace]);
-    git(workspace, ["config", "user.email", "test@octogee.test"]);
-    git(workspace, ["config", "user.name", "Test"]);
-    fs.writeFileSync(path.join(workspace, ".gitignore"), "projects/\n");
-    fs.writeFileSync(path.join(workspace, "workspace.md"), "durable\n");
-    const project = path.join(workspace, "projects", "demo");
-    initRepoWithOrigin(project, GITHUB_REMOTE);
-    rebuildTransferredGithubMetadata(project, SLUG, {
-      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
-    });
-
-    await expect(syncCustomerRepositoriesForSlug(SLUG, {
-      strict: true,
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-      resolveGithubToken: async () => { throw new Error("broker down"); },
-    })).rejects.toThrow(/GitHub credential unavailable: broker down/u);
-
-    expect(git(canonicalOrigin, ["show", "main:workspace.md"])).toBe("durable");
-  });
-
-  it("still migrates a legacy Gitea HTTP origin onto the SSH host", async () => {
-    const project = path.join(paths.customers, SLUG, "projects", "legacy");
-    initRepoWithOrigin(
-      project,
-      `http://gitea-http.octogee.svc.cluster.local:3000/${SLUG}/legacy`,
-    );
-
-    await syncCustomerRepositoriesForSlug(SLUG, {
-      gitExec: localGitExec,
-      prepareRepository,
-      acquireWorkspaceMutationLease,
-    });
-
-    expect(localConfig(project, "remote.origin.url")).toBe(`git@gitea:${SLUG}/legacy`);
-  });
 });
 
 describe("cloneProjectRepo for a GitHub-backed project", () => {

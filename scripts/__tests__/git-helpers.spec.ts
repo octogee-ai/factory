@@ -24,7 +24,6 @@ const {
   listOnDiskCustomerSlugs,
   customerSshKeyPath,
   adoptProjectClone,
-  runWorkspaceSyncMutation,
 } = await import("../lib/git.js");
 
 describe("adoptProjectClone", () => {
@@ -136,42 +135,5 @@ describe("listOnDiskCustomerSlugs", () => {
     // the function must short-circuit cleanly so syncAllWorkspaces
     // is a no-op on fresh gateway boots before any provisioning.
     expect(listOnDiskCustomerSlugs()).toEqual([]);
-  });
-});
-
-describe("runWorkspaceSyncMutation", () => {
-  it("skips autosave while another writer holds the workspace lease", () => {
-    const work = vi.fn();
-    const log = vi.fn();
-
-    expect(runWorkspaceSyncMutation("/customers/acme", "acme", work, {
-      acquire: () => null,
-      log,
-    })).toBe(false);
-    expect(work).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("workspace busy"));
-  });
-
-  it("fails a strict durability flush while another writer holds the workspace lease", () => {
-    expect(() => runWorkspaceSyncMutation(
-      "/customers/acme",
-      "acme",
-      vi.fn(),
-      { acquire: () => null, log: vi.fn(), strict: true },
-    )).toThrow(/acme.*lease unavailable/i);
-  });
-
-  it("holds the lease through autosave work and releases it afterward", () => {
-    const release = vi.fn();
-    const work = vi.fn();
-
-    expect(runWorkspaceSyncMutation(
-      "/customers/acme",
-      "acme",
-      work,
-      { acquire: () => ({ ownerToken: "lease", release }), log: vi.fn() },
-    )).toBe(true);
-    expect(work).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
   });
 });

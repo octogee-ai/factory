@@ -257,16 +257,3 @@ describe("pushInitialSkeleton", () => {
     expect(originLog()).not.toContain("initial workspace skeleton");
   });
 });
-
-describe("syncAllWorkspaces no longer gates on BOOTSTRAP.md", () => {
-  it("the BOOTSTRAP.md skip block is gone from git.ts", () => {
-    const gitTs = fs.readFileSync(
-      path.resolve(__dirname, "..", "lib", "git.ts"),
-      "utf-8",
-    );
-    expect(gitTs).not.toContain("BOOTSTRAP.md present — skipping");
-    expect(gitTs).not.toMatch(
-      /existsSync\(path\.join\(coachDir,\s*["']BOOTSTRAP\.md["']\)\)/,
-    );
-  });
-});

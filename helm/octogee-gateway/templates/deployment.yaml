@@ -242,11 +242,6 @@ spec:
               value: {{ $imageProfile | quote }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
-            {{- $autosave := .Values.workspaceAutosaveEnabled | toString }}
-            {{- if ne $autosave "" }}
-            - name: WORKSPACE_AUTOSAVE_ENABLED
-              value: {{ $autosave | quote }}
-            {{- end }}
             {{- $llmBrokerUrl := .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) }}
             # Every class routes anthropic through the LLM broker — no provider key
             # is served from a pod to api.anthropic.com directly. The base URL is

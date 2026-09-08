@@ -6,18 +6,14 @@ import {
   GATEWAY_CLASS,
   GATEWAY_ID,
   GATEWAY_PROFILE,
-  GIT_SYNC_INTERVAL_MS,
+  BLOB_SYNC_INTERVAL_MS,
   isBuilderGateway,
   log,
   OPENCLAW_DIR,
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
-import {
-  retryAllCustomerRepositoryPushes,
-  syncAllCustomerRepositories,
-  syncCustomerRepositoriesForSlug,
-} from "../lib/git.js";
+import { flushCustomerFiles } from "../lib/customer-file-state.js";
 import {
   buildBrokeredLifecycleAdapter,
   projectCheckoutScopeForRuntime,
@@ -26,17 +22,13 @@ import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import { createBrokeredBlobStore } from "../lib/blob-sync-broker.js";
 import {
   createFleetBrokerClient,
-  resolveGithubTokenForSlug,
 } from "../lib/fleet-broker-client.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
 import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
-import {
-  startWorkspaceAutosaveLoop,
-  startWorkspacePushRecoveryLoop,
-} from "../lib/workspace-autosave-runner.js";
+import { startBlobSyncLoop } from "../lib/blob-sync-runner.js";
 import {
   runGatewayPreStopFlush,
   runGatewaySystemConfigConvergenceCheckpoint,
@@ -158,7 +150,7 @@ export interface FleetControllerRequestedFlushDeps {
   gatewayClass: string;
   builderSlug: string;
   builder: boolean;
-  syncWorkspaces: (slug: string) => Promise<unknown>;
+  flushFiles: (slug: string) => Promise<unknown>;
   syncBlobs?: (slug: string) => Promise<void>;
   log: (message: string) => void;
   syncSystemConfig?: typeof syncSystemConfigForSlug;
@@ -202,7 +194,7 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
     return runGatewayPreStopFlush({
       gatewayId: input.gatewayId,
       gatewayClass: input.gatewayClass,
-      syncWorkspaces: () => input.syncWorkspaces(slug),
+      flushFiles: () => input.flushFiles(slug),
       syncBlobs: input.syncBlobs ? () => input.syncBlobs!(slug) : undefined,
       syncSystemConfig,
       log: input.log,
@@ -327,13 +319,7 @@ async function main(): Promise<void> {
       gatewayClass: GATEWAY_CLASS,
       builderSlug: entrypointConfig.builderSlug,
       builder,
-      syncWorkspaces: (slug) => syncCustomerRepositoriesForSlug(slug, {
-        strict: true,
-        resolveGithubToken: (customerSlug) => resolveGithubTokenForSlug(
-          brokerClient,
-          customerSlug,
-        ),
-      }),
+      flushFiles: (slug) => flushCustomerFiles(slug),
       syncBlobs: builder
         ? undefined
         : (slug) => blobSyncForSlug(slug, {
@@ -366,33 +352,12 @@ async function main(): Promise<void> {
     : null;
   void runtimeHealthPublisher?.publishNow();
 
-  const autosaveTimer = startWorkspaceAutosaveLoop(
-    {
-      envValue: process.env.WORKSPACE_AUTOSAVE_ENABLED,
-      isBuilderGateway,
-      syncWorkspaces: () => syncAllCustomerRepositories({
-        resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
-      }),
-      syncBlobs: builder
-        ? undefined
-        : () => blobSyncAllWithOptions({
-            storeForSlug: () => createBrokeredBlobStore(brokerClient!),
-          }),
-      log,
-    },
-    GIT_SYNC_INTERVAL_MS,
-  );
-  const pushRecoveryTimer = builder
-    ? startWorkspacePushRecoveryLoop(
-        {
-          syncWorkspaces: () => retryAllCustomerRepositoryPushes({
-            resolveGithubToken: (slug) => resolveGithubTokenForSlug(brokerClient, slug),
-          }),
-          log,
-        },
-        GIT_SYNC_INTERVAL_MS,
-      )
-    : null;
+  const blobSyncTimer = startBlobSyncLoop({
+    syncBlobs: () => blobSyncAllWithOptions({
+      storeForSlug: () => createBrokeredBlobStore(brokerClient),
+    }),
+    log,
+  }, BLOB_SYNC_INTERVAL_MS);
   const usageTimer = builder
     ? null
     : startUsageEventTailer({
@@ -410,8 +375,7 @@ async function main(): Promise<void> {
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
     runtimeHealthPublisher?.close();
-    if (autosaveTimer) clearInterval(autosaveTimer);
-    if (pushRecoveryTimer) clearInterval(pushRecoveryTimer);
+    clearInterval(blobSyncTimer);
     if (usageTimer) clearInterval(usageTimer);
     try { await fleetHandle.stop(); } catch {}
     try { await rpc.close(); } catch {}
