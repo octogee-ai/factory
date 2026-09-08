@@ -55,6 +55,17 @@ export function resolveBuilderRuntimePolicy(env: Record<string, string | undefin
   return raw;
 }
 
+function assertFallbackZones(spec: Partial<GatewayVmSpec>): void {
+  const zones = spec.fallbackZones;
+  if (zones === undefined) return;
+  if (!Array.isArray(zones) || zones.some((zone) => typeof zone !== "string" || zone.length === 0)) {
+    throw new Error("GATEWAY_VM_SPEC_JSON.fallbackZones must be an array of non-empty zone names when set");
+  }
+  if (zones.includes(spec.zone as string)) {
+    throw new Error("GATEWAY_VM_SPEC_JSON.fallbackZones must not repeat the primary zone");
+  }
+}
+
 export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
   if (!raw?.trim()) throw new Error("GATEWAY_VM_SPEC_JSON is required when GATEWAY_BUILDER_RUNTIME=gce-vm");
   const spec = JSON.parse(raw) as Partial<GatewayVmSpec>;
@@ -69,6 +80,7 @@ export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
   if (spec.provisioningModel !== "SPOT" && spec.provisioningModel !== "STANDARD") {
     throw new Error("GATEWAY_VM_SPEC_JSON.provisioningModel must be SPOT or STANDARD");
   }
+  assertFallbackZones(spec);
   return spec as GatewayVmSpec;
 }
 

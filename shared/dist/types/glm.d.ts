@@ -59,6 +59,7 @@ export declare const GATEWAY_VM_PROVISIONING_MODELS: readonly ["SPOT", "STANDARD
 export type GatewayVmProvisioningModel = (typeof GATEWAY_VM_PROVISIONING_MODELS)[number];
 export interface GatewayVmSpec {
     zone: string;
+    fallbackZones?: readonly string[];
     machineType: string;
     imageFamily: string;
     imageProject?: string;

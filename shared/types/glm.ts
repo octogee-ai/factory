@@ -95,6 +95,7 @@ export type GatewayVmProvisioningModel = (typeof GATEWAY_VM_PROVISIONING_MODELS)
 
 export interface GatewayVmSpec {
   zone: string;
+  fallbackZones?: readonly string[];
   machineType: string;
   imageFamily: string;
   imageProject?: string;

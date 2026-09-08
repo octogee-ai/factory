@@ -350,7 +350,7 @@ describe("createGatewayVmClient lifecycle", () => {
     await expect(client.describe("x", "us-west1-b")).rejects.toThrow(/http 403/);
     await expect(client.delete("x", "us-west1-b")).rejects.toThrow(/http 403/);
     await expect(client.stop("x", "us-west1-b")).rejects.toThrow(/http 403/);
-    await expect(client.list({ zone: "us-west1-b", labels: { "octogee-pool": "warm" } })).rejects.toThrow(/http 403/);
+    await expect(client.list({ zones: ["us-west1-b"], labels: { "octogee-pool": "warm" } })).rejects.toThrow(/http 403/);
     await expect(client.findByLabels({ "octogee-owner-uid": "uida" })).rejects.toThrow(/http 403/);
     await expect(client.setMetadata("x", "us-west1-b", { fingerprint: "f", items: {} })).rejects.toThrow(/http 403/);
     await expect(client.setLabels("x", "us-west1-b", { fingerprint: "f", labels: {} })).rejects.toThrow(/http 403/);
@@ -399,7 +399,7 @@ describe("createGatewayVmClient pool primitives", () => {
     });
     const { client } = clientWith(request);
 
-    const members = await client.list({ zone: "us-west1-b", labels: { "octogee-pool": "warm", "octogee-environment": "test" } });
+    const members = await client.list({ zones: ["us-west1-b"], labels: { "octogee-pool": "warm", "octogee-environment": "test" } });
 
     expect(members.map((m) => m.name)).toEqual(["octogee-pool-ab12cd34", "octogee-pool-second"]);
     expect(new URL(calls[0].url).searchParams.get("filter")).toBe("(labels.octogee-pool = \"warm\") AND (labels.octogee-environment = \"test\")");
@@ -430,7 +430,7 @@ describe("createGatewayVmClient pool primitives", () => {
   it("list returns nothing when the zone has no matching instances", async () => {
     const { request } = fakeCompute(() => ({ status: 200, data: {} }));
     const { client } = clientWith(request);
-    expect(await client.list({ zone: "us-west1-b", labels: { "octogee-pool": "warm" } })).toEqual([]);
+    expect(await client.list({ zones: ["us-west1-b"], labels: { "octogee-pool": "warm" } })).toEqual([]);
   });
 
   it("setMetadata posts the fingerprint-guarded items and waits for the operation", async () => {
@@ -478,5 +478,91 @@ describe("createGatewayVmClient pool primitives", () => {
       url: `${BASE}/zones/us-west1-b/instances/${pooled.name}/setLabels`,
       body: { labelFingerprint: "lf-1", labels: { "octogee-gateway-id": "b-x" } },
     });
+  });
+});
+
+describe("createGatewayVmClient — multi-zone spot fallback", () => {
+  const input = {
+    instanceName: "octogee-pool-abc",
+    zone: "us-central1-a",
+    fallbackZones: ["us-central1-b", "us-central1-c"],
+    machineType: "n2-standard-4",
+    imageFamily: "octogee-computer",
+    diskSizeGb: 40,
+    provisioningModel: "SPOT" as const,
+    serviceAccountEmail: "computer@octogee.iam.gserviceaccount.com",
+    subnetwork: "regions/us-central1/subnetworks/default",
+    labels: {},
+    metadata: {},
+  };
+
+  const exhaustedIn = (zones: readonly string[]) => {
+    const posts: Array<{ zone: string; model: string }> = [];
+    let op = 0;
+    const { request } = fakeCompute((call) => {
+      if (call.method === "POST" && call.url.endsWith("/instances")) {
+        const zone = /\/zones\/([^/]+)\/instances$/u.exec(call.url)?.[1] ?? "?";
+        posts.push({ zone, model: (call.body as any).scheduling.provisioningModel });
+        op += 1;
+        return { status: 200, data: { name: `op-${op}`, status: "RUNNING" } };
+      }
+      const opMatch = /\/operations\/op-(\d+)$/u.exec(call.url);
+      if (opMatch) {
+        const attempt = posts[Number(opMatch[1]) - 1];
+        return zones.includes(attempt.zone) && attempt.model === "SPOT"
+          ? { status: 200, data: { name: call.url, status: "DONE", error: { errors: [{ code: "ZONE_RESOURCE_POOL_EXHAUSTED", message: "no spot" }] } } }
+          : { status: 200, data: { name: call.url, status: "DONE" } };
+      }
+      if (call.method === "GET" && call.url.includes(`/instances/${input.instanceName}`)) {
+        const landed = posts[posts.length - 1];
+        return instance({ scheduling: { provisioningModel: landed.model } });
+      }
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    });
+    return { request, posts };
+  };
+
+  it("tries spot in a fallback zone before paying on-demand", async () => {
+    const { request, posts } = exhaustedIn(["us-central1-a"]);
+    const { client, log } = clientWith(request);
+
+    const result = await client.create(input);
+
+    expect(posts).toEqual([
+      { zone: "us-central1-a", model: "SPOT" },
+      { zone: "us-central1-b", model: "SPOT" },
+    ]);
+    expect(result.fellBackToStandard).toBe(false);
+    expect(result.provisioningModel).toBe("SPOT");
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/spot capacity exhausted in us-central1-a.*us-central1-b/));
+  });
+
+  it("walks every fallback zone before it gives up on spot", async () => {
+    const { request, posts } = exhaustedIn(["us-central1-a", "us-central1-b", "us-central1-c"]);
+    const { client } = clientWith(request);
+
+    const result = await client.create(input);
+
+    expect(posts).toEqual([
+      { zone: "us-central1-a", model: "SPOT" },
+      { zone: "us-central1-b", model: "SPOT" },
+      { zone: "us-central1-c", model: "SPOT" },
+      { zone: "us-central1-a", model: "STANDARD" },
+    ]);
+    expect(result.fellBackToStandard).toBe(true);
+    expect(result.provisioningModel).toBe("STANDARD");
+  });
+
+  it("falls straight to on-demand when no fallback zones are configured", async () => {
+    const { request, posts } = exhaustedIn(["us-central1-a"]);
+    const { client } = clientWith(request);
+
+    const result = await client.create({ ...input, fallbackZones: [] });
+
+    expect(posts).toEqual([
+      { zone: "us-central1-a", model: "SPOT" },
+      { zone: "us-central1-a", model: "STANDARD" },
+    ]);
+    expect(result.fellBackToStandard).toBe(true);
   });
 });

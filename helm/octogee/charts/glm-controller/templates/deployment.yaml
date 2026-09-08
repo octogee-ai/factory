@@ -73,6 +73,10 @@ spec:
               value: "octogee-vm-routes"
             - name: GATEWAY_VM_WARM_POOL_SIZE
               value: {{ $computer.warmPoolSize | default 0 | quote }}
+            {{- with $computer.warmPoolStandardMaxAgeMs }}
+            - name: GATEWAY_VM_WARM_POOL_STANDARD_MAX_AGE_MS
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             - name: FLEET_CONTROLLER_PRIVATE_KEY
               valueFrom:

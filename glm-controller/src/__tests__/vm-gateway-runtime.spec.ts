@@ -243,7 +243,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(JSON.stringify(glm.vmInstance)).not.toContain("undefined");
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
     expect(h.vm.find).not.toHaveBeenCalled();
-    expect(h.vm.list).toHaveBeenCalledWith({ zone: "us-west1-b", labels: POOL_LABELS });
+    expect(h.vm.list).toHaveBeenCalledWith({ zones: ["us-west1-b"], labels: POOL_LABELS });
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({
       instanceName: COMPUTER, zone: "us-west1-b", provisioningModel: "SPOT",
       labels: expect.objectContaining({ "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" }),

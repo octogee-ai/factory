@@ -22,6 +22,7 @@ export interface CreateGatewayVmInput {
   imageProject?: string;
   diskSizeGb: number;
   provisioningModel: GatewayVmProvisioningModel;
+  fallbackZones?: readonly string[];
   serviceAccountEmail: string;
   subnetwork: string;
   labels: Record<string, string>;
@@ -44,7 +45,7 @@ export interface GatewayVmDescription {
 }
 
 export interface ListGatewayVmsInput {
-  zone: string;
+  zones: readonly string[];
   labels: Record<string, string>;
 }
 
@@ -210,6 +211,43 @@ function describeInstance(instance: ComputeInstance, instanceName: string, zone:
   };
 }
 
+interface VmPlacement {
+  outcome: "created" | "exists";
+  zone: string;
+  provisioningModel: GatewayVmProvisioningModel;
+  fellBackToStandard: boolean;
+}
+
+// A spot request walks the region before it pays on-demand: one zone's
+// capacity is not the region's, and the on-demand rate is roughly 4x.
+async function placeAcrossZones(
+  input: CreateGatewayVmInput,
+  insert: (candidate: CreateGatewayVmInput, model: GatewayVmProvisioningModel) => Promise<"created" | "exists">,
+  log: (msg: string) => void,
+): Promise<VmPlacement> {
+  const spot = input.provisioningModel === "SPOT";
+  const zones = spot ? [input.zone, ...(input.fallbackZones ?? [])] : [input.zone];
+  for (const [index, zone] of zones.entries()) {
+    try {
+      const outcome = await insert({ ...input, zone }, input.provisioningModel);
+      return { outcome, zone, provisioningModel: input.provisioningModel, fellBackToStandard: false };
+    } catch (err) {
+      if (!(isSpotExhausted(err) && spot)) throw err;
+      const next = zones[index + 1];
+      log(
+        `[gateway-vm] ${input.instanceName}: spot capacity exhausted in ${zone}; ` +
+          (next ? `retrying spot in ${next}` : "retrying on-demand"),
+      );
+    }
+  }
+  return {
+    outcome: await insert({ ...input, zone: input.zone }, "STANDARD"),
+    zone: input.zone,
+    provisioningModel: "STANDARD",
+    fellBackToStandard: true,
+  };
+}
+
 export function instanceInsertBody(projectId: string, input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
   return {
     name: input.instanceName,
@@ -301,15 +339,17 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
 
   async function list(input: ListGatewayVmsInput): Promise<GatewayVmDescription[]> {
     const members: GatewayVmDescription[] = [];
-    let pageToken: string | undefined;
-    do {
-      const params = new URLSearchParams({ filter: labelFilter(input.labels) });
-      if (pageToken) params.set("pageToken", pageToken);
-      const res = await deps.request({ url: `${base}/zones/${input.zone}/instances?${params.toString()}`, method: "GET" });
-      const page = (res.data ?? {}) as ComputeInstanceList;
-      for (const item of page.items ?? []) members.push(describeInstance(item, item.name ?? "unknown", input.zone));
-      pageToken = nonEmpty(page.nextPageToken) ?? undefined;
-    } while (pageToken);
+    for (const zone of input.zones) {
+      let pageToken: string | undefined;
+      do {
+        const params = new URLSearchParams({ filter: labelFilter(input.labels) });
+        if (pageToken) params.set("pageToken", pageToken);
+        const res = await deps.request({ url: `${base}/zones/${zone}/instances?${params.toString()}`, method: "GET" });
+        const page = (res.data ?? {}) as ComputeInstanceList;
+        for (const item of page.items ?? []) members.push(describeInstance(item, item.name ?? "unknown", zone));
+        pageToken = nonEmpty(page.nextPageToken) ?? undefined;
+      } while (pageToken);
+    }
     return members;
   }
 
@@ -374,19 +414,9 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
   }
 
   async function create(input: CreateGatewayVmInput): Promise<CreateGatewayVmResult> {
-    let provisioningModel = input.provisioningModel;
-    let fellBackToStandard = false;
-    let outcome: "created" | "exists";
-    try {
-      outcome = await insert(input, provisioningModel);
-    } catch (err) {
-      if (!(isSpotExhausted(err) && provisioningModel === "SPOT")) throw err;
-      deps.log(`[gateway-vm] ${input.instanceName}: spot capacity exhausted in ${input.zone}; retrying on-demand`);
-      provisioningModel = "STANDARD";
-      fellBackToStandard = true;
-      outcome = await insert(input, provisioningModel);
-    }
-    const description = await describe(input.instanceName, input.zone);
+    const placement = await placeAcrossZones(input, insert, deps.log);
+    const { outcome, zone, provisioningModel, fellBackToStandard } = placement;
+    const description = await describe(input.instanceName, zone);
     if (!description) throw new Error(`insert ${input.instanceName}: instance vanished after ${outcome}`);
     if (outcome === "exists") {
       deps.log(`[gateway-vm] ${input.instanceName}: already exists (${description.status}); reusing`);
