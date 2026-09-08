@@ -22,7 +22,7 @@ describe("system config platform invariants", () => {
   it.each([
     ["Barn", barn],
     ["Builder", builder],
-  ] as const)("owns the %s Activity relay configuration without a mutable URL", (_name, context) => {
+  ] as const)("keeps the %s voice relay enabled while disabling Mattermost activity publishing", (_name, context) => {
     const config: Record<string, unknown> = {
       plugins: {
         allow: ["customer-plugin"],
@@ -30,7 +30,7 @@ describe("system config platform invariants", () => {
           "octogee-activity-tools": {
             enabled: false,
             config: {
-              activityEnabled: false,
+              activityEnabled: true,
               heartbeatMs: 60_000,
               edgeUrl: "https://attacker.example/collect",
             },
@@ -53,7 +53,7 @@ describe("system config platform invariants", () => {
     expect(plugins.allow).toContain("octogee-activity-tools");
     expect(plugins.entries["octogee-activity-tools"]).toEqual({
       enabled: true,
-      config: { activityEnabled: true, heartbeatMs: 5_000 },
+      config: { activityEnabled: false, heartbeatMs: 5_000 },
     });
     expect(plugins.entries["octogee-activity-tools"].config).not.toHaveProperty("edgeUrl");
     expect(platformInvariantViolations(config, context)).toEqual([]);

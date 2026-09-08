@@ -105,7 +105,7 @@ const OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
 
 const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
   "octogee-activity-tools": {
-    activityEnabled: true,
+    activityEnabled: false,
     heartbeatMs: 5_000,
   },
   "octogee-chat-tools": {

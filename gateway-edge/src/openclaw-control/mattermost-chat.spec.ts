@@ -150,6 +150,33 @@ function authorized(client: Record<string, unknown>): AuthorizedChannel {
 }
 
 describe("Mattermost-backed OpenClaw Control chat", () => {
+  it("shows native top-level and threaded bot replies without Activity metadata", () => {
+    const messages = projectMattermostControlMessages({
+      posts: [
+        post({ id: rootId, message: "Native question" }),
+        post({ id: answerId, user_id: agentMmUserId, message: "Native flat reply", create_at: 2 }),
+        post({ id: secondAnswerId, root_id: rootId, user_id: agentMmUserId, message: "Native threaded reply", create_at: 3 }),
+        post({ id: commitId, channel_id: secondChannelId, user_id: agentMmUserId, message: "Another channel", create_at: 4 }),
+      ], channelId, agentId, agentMmUserId,
+    });
+    expect(messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", [{ type: "text", text: "Native question" }]],
+      ["assistant", [{ type: "text", text: "Native flat reply" }]],
+      ["assistant", [{ type: "text", text: "Native threaded reply" }]],
+    ]);
+  });
+
+  it("keeps a native discussion rooted in a top-level bot reply visible", () => {
+    const messages = projectMattermostControlMessages({
+      posts: [
+        post({ id: answerId, user_id: agentMmUserId, message: "Native answer" }),
+        post({ id: followupId, root_id: answerId, message: "Follow-up question", create_at: 2 }),
+        post({ id: secondAnswerId, root_id: answerId, user_id: agentMmUserId, message: "Follow-up answer", create_at: 3 }),
+      ], channelId, agentId, agentMmUserId,
+    });
+    expect(messages.map((message) => message.__openclaw.id)).toEqual([answerId, followupId, secondAnswerId]);
+  });
+
   it("projects only human roots and exactly committed answer parts", () => {
     const messages = projectMattermostControlMessages({
       posts: committedPosts(),

@@ -183,21 +183,7 @@
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
-      "replyToMode": "all",
-      "replyToModeByChatType": {
-        "direct": "all"
-      },
-      "threadSessionScope": "channel",
       "actions": { "reactions": true },
-      "streaming": {
-        "mode": "block",
-        "chunkMode": "newline",
-        "block": { "enabled": true },
-        "preview": {
-          "toolProgress": true,
-          "commandText": "raw"
-        }
-      },
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },
@@ -341,7 +327,7 @@
       "octogee-activity-tools": {
         "enabled": true,
         "config": {
-          "activityEnabled": true,
+          "activityEnabled": false,
           "heartbeatMs": 5000
         }
       },

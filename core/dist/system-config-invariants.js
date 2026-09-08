@@ -30,7 +30,7 @@ const FLEET_BROKER_URL_PLACEHOLDER = "${FLEET_BROKER_URL}";
 const OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
 const PLATFORM_PLUGIN_CONFIGS = {
     "octogee-activity-tools": {
-        activityEnabled: true,
+        activityEnabled: false,
         heartbeatMs: 5_000,
     },
     "octogee-chat-tools": {

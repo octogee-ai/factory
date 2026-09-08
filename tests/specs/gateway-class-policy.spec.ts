@@ -411,7 +411,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(out.plugins.entries["octogee-activity-tools"]).toEqual({
       enabled: true,
-      config: { activityEnabled: true, heartbeatMs: 5000 },
+      config: { activityEnabled: false, heartbeatMs: 5000 },
     });
   });
 
@@ -1453,7 +1453,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-workspace-tools"].config).toEqual({});
     expect(out.plugins.entries["octogee-activity-tools"]).toEqual({
       enabled: true,
-      config: { activityEnabled: true, heartbeatMs: 5000 },
+      config: { activityEnabled: false, heartbeatMs: 5000 },
     });
     expect(out.plugins.entries).not.toHaveProperty("octogee-preview-tools");
     expect(out.plugins.entries).not.toHaveProperty("octogee-publish-tools");

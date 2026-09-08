@@ -1025,7 +1025,8 @@ function projectionRootIds(
   agentMmUserId: string,
 ): Set<string> {
   const roots = posts.filter((post) =>
-    normalizedHistoryPost(post) && post.root_id === "" && post.user_id !== agentMmUserId);
+    normalizedHistoryPost(post) && post.root_id === "" &&
+    (post.user_id !== agentMmUserId || rawAssistantText(post) !== null));
   return new Set(roots.map((root) => root.id));
 }
 
@@ -1185,7 +1186,7 @@ function rawAssistantMessages(input: {
   for (const post of input.posts) {
     if (post.user_id !== input.agentMmUserId) continue;
     if (
-      !input.rootIds.has(post.root_id) ||
+      (post.root_id !== "" && !input.rootIds.has(post.root_id)) ||
       input.consumedPostIds.has(post.id) ||
       input.hiddenCommitPostIds.has(post.id)
     ) continue;

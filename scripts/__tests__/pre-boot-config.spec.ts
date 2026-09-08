@@ -435,159 +435,41 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it("enables reactions and block previews with tool activity summaries", () => {
+  it("leaves native reply and streaming preferences untouched", () => {
     const config: any = {
-      agents: { defaults: { maxConcurrent: 4 } },
-      channels: {
-        mattermost: {
-          streaming: {
-            chunkMode: "newline",
-            preview: { toolProgress: true, commandText: "raw" },
-            progress: { maxLines: 6, toolProgress: true, commandText: "raw" },
-          },
-        },
-      },
+      agents: { defaults: { verboseDefault: "off" } },
+      channels: { mattermost: { replyToMode: "off", streaming: { mode: "partial" } } },
     };
-
     applyPreBootPatches(config, {});
-
-    expect(config.channels.mattermost).toMatchObject({
-      chatmode: "onmessage",
-      requireMention: false,
-      replyToMode: "all",
-      replyToModeByChatType: { direct: "all" },
-      threadSessionScope: "channel",
-      streaming: {
-        mode: "block",
-        block: { enabled: true },
-        chunkMode: "newline",
-        preview: {
-          toolProgress: true,
-          commandText: "raw",
-        },
-        progress: {
-          maxLines: 6,
-          toolProgress: true,
-          commandText: "raw",
-        },
-      },
-    });
-    expect(config.channels.mattermost.streaming.preview.commandText).toBe("raw");
-    expect(config.channels.mattermost.actions.reactions).toBe(true);
-    expect(config.channels.mattermost.streaming.progress.commandText).toBe("raw");
-    expect(config.agents.defaults).toMatchObject({
-      verboseDefault: "on",
-      toolProgressDetail: "raw",
-      maxConcurrent: 4,
-    });
-    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
+    expect(config.channels.mattermost).toMatchObject({ replyToMode: "off", streaming: { mode: "partial" } });
+    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
+    expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
+    expect(config.agents.defaults.verboseDefault).toBe("off");
   });
 
-  it("creates the Mattermost root settings before the fleet mounts a coach account", () => {
+  it("does not introduce reply or streaming overrides into a new account configuration", () => {
     const config: any = { channels: { mattermost: {} } };
-
     applyPreBootPatches(config, {});
-
-    expect(config.channels.mattermost).toMatchObject({
-      chatmode: "onmessage",
-      requireMention: false,
-      replyToMode: "all",
-      replyToModeByChatType: { direct: "all" },
-      threadSessionScope: "channel",
-      streaming: {
-        mode: "block",
-        chunkMode: "newline",
-        block: { enabled: true },
-        preview: {
-          toolProgress: true,
-          commandText: "raw",
-        },
-      },
-    });
-    expect(config.agents.defaults).toEqual({
-      verboseDefault: "on",
-      toolProgressDetail: "raw",
-    });
-    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
+    expect(config.channels.mattermost).not.toHaveProperty("replyToMode");
+    expect(config.channels.mattermost).not.toHaveProperty("streaming");
+    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
   });
 
-  it("migrates direct threading without replacing other chat-type reply modes", () => {
-    const config: any = {
-      channels: {
-        mattermost: {
-          threadDirectMessages: true,
-          replyToModeByChatType: { direct: "off", group: "first" },
-        },
-      },
-    };
-
-    applyPreBootPatches(config, {});
-
-    expect(config.channels.mattermost.replyToModeByChatType).toEqual({
-      direct: "all",
-      group: "first",
-    });
-    expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
-  });
-
-  it("removes obsolete root activity configuration and legacy account overrides", () => {
-    const config: any = {
-      channels: {
-        mattermost: {
-          agentActivity: true,
-          accounts: {
-            default: {
-              agentActivity: true,
-              replyToMode: "all",
-              replyToModeByChatType: { direct: "all" },
-              threadDirectMessages: true,
-              threadSessionScope: "channel",
-              streaming: { mode: "block" },
-            },
-            "chris-coach": {
-              agentActivity: true,
-              replyToMode: "first",
-              threadSessionScope: "thread",
-              streaming: { mode: "progress" },
-              botToken: { source: "file", provider: "octogee-mattermost", id: "/chris" },
-            },
-            malformed: "preserve",
-          },
-        },
-      },
-    };
-
-    applyPreBootPatches(config, {});
-
-    expect(config.channels.mattermost).toMatchObject({
-      replyToMode: "all",
-      replyToModeByChatType: { direct: "all" },
-    });
-    expect(config.channels.mattermost).not.toHaveProperty("agentActivity");
-    expect(config.channels.mattermost).not.toHaveProperty("threadDirectMessages");
-    expect(config.channels.mattermost).toHaveProperty("threadSessionScope", "channel");
-    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("agentActivity");
-    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("replyToMode");
-    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadDirectMessages");
-    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("threadSessionScope");
-    expect(config.channels.mattermost.accounts.default).not.toHaveProperty("streaming");
-    expect(config.channels.mattermost.accounts["chris-coach"]).toMatchObject({
-      replyToMode: "first",
-    });
-    expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty(
-      "agentActivity",
-    );
-    expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty(
-      "threadSessionScope",
-    );
-    expect(config.channels.mattermost.accounts["chris-coach"]).not.toHaveProperty("streaming");
-    expect(config.channels.mattermost.accounts["chris-coach"].botToken).toEqual({
-      source: "file",
-      provider: "octogee-mattermost",
-      id: "/chris",
-    });
-    expect(config.channels.mattermost.accounts.malformed).toBe("preserve");
-    expect(applyPreBootPatches(config, {})).toBe(false);
+  it("removes unsupported fork settings while retaining native account policy and SecretRefs", () => {
+    const token = { source: "file", provider: "octogee-mattermost", id: "/coach" };
+    const config: any = { channels: { mattermost: {
+      threadSessionScope: "channel", agentActivity: true, threadDirectMessages: true,
+      accounts: { coach: { threadSessionScope: "thread", agentActivity: true, threadDirectMessages: true, replyToMode: "first", botToken: token } },
+    } } };
+    const log = vi.fn();
+    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
+    for (const field of ["threadSessionScope", "agentActivity", "threadDirectMessages"]) {
+      expect(config.channels.mattermost).not.toHaveProperty(field);
+      expect(config.channels.mattermost.accounts.coach).not.toHaveProperty(field);
+    }
+    expect(config.channels.mattermost.accounts.coach).toMatchObject({ replyToMode: "first", botToken: token });
+    expect(log).toHaveBeenCalled();
+    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(false);
   });
 });
 
@@ -1188,7 +1070,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
           requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          threadSessionScope: "channel",
           actions: { reactions: true },
           streaming: {
             mode: "block",

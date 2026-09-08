@@ -14,7 +14,6 @@ import {
   platformOpenAiEmbeddingMemorySearch,
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
-import { applyOpenClawMattermostRuntimeConfig } from "../lib/openclaw-mattermost-runtime.js";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
 import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 import {
@@ -104,6 +103,21 @@ function isCoachAgentEntry(value: unknown): value is Record<string, unknown> & {
   return isPlainObject(value) && typeof value.id === "string" && COACH_AGENT_ID_RE.test(value.id);
 }
 
+function removeMattermostForkSettings(
+  account: Record<string, unknown>,
+  configPath: string,
+  logFn: (msg: string) => void,
+): boolean {
+  let changed = false;
+  for (const key of ["threadSessionScope", "agentActivity", "threadDirectMessages"]) {
+    if (!Object.hasOwn(account, key)) continue;
+    delete account[key];
+    changed = true;
+    logFn(`removed unsupported ${configPath}.${key}`);
+  }
+  return changed;
+}
+
 export function applyMattermostPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -111,7 +125,7 @@ export function applyMattermostPreBootPatches(
 ): boolean {
   const mattermost = objectProperty(objectProperty(config, "channels"), "mattermost");
   if (!mattermost) return false;
-  let changed = false;
+  let changed = removeMattermostForkSettings(mattermost, "channels.mattermost", logFn);
 
   if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
     mattermost.baseUrl = MM_URL_PLACEHOLDER;
@@ -130,6 +144,7 @@ export function applyMattermostPreBootPatches(
   if (!configuredAccounts) return changed;
   for (const [accountId, account] of Object.entries(configuredAccounts)) {
     if (!isPlainObject(account)) continue;
+    changed = removeMattermostForkSettings(account, `channels.mattermost.accounts.${accountId}`, logFn) || changed;
     const accountCommands = ensureNullishObjectProperty(account, "commands");
     if (accountCommands && accountCommands.native !== false) {
       accountCommands.native = false;
@@ -531,7 +546,6 @@ export function applyPreBootPatches(
     builderGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
     applySharedMattermostRoutingSafetyPatch(config, env, logFn),
-    applyOpenClawMattermostRuntimeConfig(config),
     applyOpenClawComputerBrowserConfig(config, env),
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyPlatformModelAllowlist(config, env),

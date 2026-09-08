@@ -77,68 +77,57 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The selected build is the operator-requested upstream `main` snapshot,
-locked to [upstream commit `5702b8011812e26cf5ec3301116a9465683707b5`](https://github.com/openclaw/openclaw/commit/5702b8011812e26cf5ec3301116a9465683707b5),
-with [overlay head `f6da275e0bd7d56db39257a03751a07c4fe5148c`](https://github.com/ceckert/openclaw/commit/f6da275e0bd7d56db39257a03751a07c4fe5148c)
-on `ceckert/openclaw:codex/signup-config-cache`.
-The package version is `2026.9.1`; this is a locked branch snapshot, not a
-claim to have built a GA tag.
+The selected release is `v2026.9.3`, peeled to
+[upstream commit `1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7`](https://github.com/openclaw/openclaw/commit/1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7).
+[Overlay head `93e558bc3f1cc674bd1858a63924022050278c54`](https://github.com/ceckert/openclaw/commit/93e558bc3f1cc674bd1858a63924022050278c54)
+on `ceckert/openclaw:codex/octogee-v2026.9.3-minimal` carries two fixes:
 
-Its write-once artifacts are `openclaw-fork-f6da275e.tgz` at generation
-`1788743513182279` (SHA-256 `b8a3dc0dbdb27f7ac2c67f44be961c85802efb9412f70c20d61658d4bbd38e41`)
-and `openclaw-mattermost-b119b594.tgz` at generation `1788726117510009`
-(SHA-256 `b119b594f0490733e5dc0c4981f6f9710d692c555a66bf31eb5e2bd6a3051d20`).
-Both artifacts passed isolated npm installation and runtime entry checks;
-the installed root reports the exact overlay commit above.
-
-The overlay adds config.get cache invalidation when the shared reload watcher
-observes a configuration candidate. Agent create, update, and delete now expose
-the persisted hash before runtime reload acceptance. The exact selected source
-passed a full build, 64 focused RPC/cache tests, and isolated npm installation
-with source identity and native runtime import checks.
-
-The prior overlay retains the Mattermost integration and repairs account-scoped reload
-planning and startup config normalization. That refresh passed 527 focused tests,
-the full build and `pnpm check`, channel/config checks, and clean joint npm
-installation with runtime imports and source-identity verification in
-[Cloud Build](https://console.cloud.google.com/cloud-build/builds/922f782b-6943-4504-a22e-8250254617d2?project=octogee).
-
-An isolated TEST runtime using the actual packages, the existing gateway assembly
-transform, and unchanged installed dependencies started 15 synthetic Mattermost
-accounts, then added two accounts sequentially. Both arrivals connected once,
-all accounts stayed healthy, and unrelated reconnects were zero, versus 31 in the
-prior-runtime baseline. The loopback mock establishes avoided reconnects, not a
-stable production latency percentage. A separate source-equivalent auto-enable
-case proved startup normalization prevents a first-update global restart; the
-observed rollout used explicit channel enablement.
-
-This snapshot includes upstream's native sandbox directory listing from
-[PR #136110](https://github.com/openclaw/openclaw/pull/136110). An isolated real
-Docker invocation of the production tool factory exposed only `apply_patch`,
-`edit`, `ls`, `read`, and `write` under a minimal filesystem-only policy. Native
-`ls` passed nested listing, pagination, quoted filenames, and discovery after a
-write; outside paths and symlink escapes were rejected. Neither `exec` nor
-`process` was exposed. That satisfies Octogee's directory-discovery requirement;
-recursive `find`/`grep` are not required. The entire discovery patch is dropped,
-and [PR #122899 is closed with this proof](https://github.com/openclaw/openclaw/pull/122899#issuecomment-5554030414).
-Octogee's project-agent policies no longer advertise the removed tools.
-
-| Patch area | Locked main assessment | Why Octogee carries it / removal gate |
+| Fix | Behavior pinned by its regressions | Upstream contribution |
 | --- | --- | --- |
-| Sandbox-backed file discovery | Dropped in full. Use upstream's native `ls` and `readDirectory`, with no custom recursive search, directory producer, SDK subpath, or path/stat changes. | The verified native listing path meets Octogee's need without granting shell access. Do not retain optional `find`/`grep` as a new removal gate. |
-| Account-scoped reload | Retained: use source-safe account inspection for SecretRefs and expose it through both Mattermost facades. | Remove when upstream passes authored-SecretRef and sequential-arrival regressions while retaining whole-channel fallback for failed inspection and global policy changes. |
-| Startup config normalization | Retained: canonically validate config after source-based plugin auto-enable so schema defaults do not disappear. | Remove when upstream preserves runtime defaults after auto-enable and the first account addition stays scoped without hiding real global policy changes. |
-| Config write hashes and patch limiter | Invalidate config.get cache at candidate observation for every writer, including agent lifecycle writes. Keep the native 30 writes/minute limiter. | Remove the cache fix when upstream passes the agent create/update/delete regression with reload held pending. Signup logs exposed stale hashes despite successful ordinary config writes; no limiter exemption is needed. |
-| Resolved-secret reuse | Dropped. Cross-write caching was an optional performance optimization, not an Octogee correctness requirement. | Accept upstream's normal resolution cost and keep the resolver available. There is no custom stale-value lifecycle to maintain. |
-| Custom `secrets.apply` RPC | Dropped. Upstream's existing batched `secrets apply` CLI uses the same apply engine; the old bootstrap-latency rationale did not hold in fresh measurements. | Octogee uses the asynchronous standard CLI and the existing reload path. No upstream RPC addition is required. |
-| No-archive session deletion | Dropped. Standard upstream deletion archives transcripts using bounded worker-backed cleanup. [OpenClaw PR #137428](https://github.com/openclaw/openclaw/pull/137428) stays closed. | Ops Agent keeps per-request isolation and accepts archive retention. Durable scoped Ops conversations would be a separate product change, not a reason to retain this flag. |
-| Recreated agent databases | Dropped. Upstream adopted lifecycle invalidation and schema revalidation through [OpenClaw PR #137424](https://github.com/openclaw/openclaw/pull/137424). | Upstream's recreation and gateway product tests cover the requirement without our filesystem-identity polling. |
-| Fresh-chat terminal ownership | Dropped by operator choice. Keep upstream's native terminal and session lifecycle; no custom terminal materialization hook remains. | Mattermost-backed sessions may already supply an existing owner row. We do not claim all never-materialized native chats can open a terminal before their first message. This convenience is not a reason to carry another gateway patch. |
-| Durable Mattermost channel sessions | Retained: channel-scoped sessions, queued delivery observation, sealed answer commits, and bounded recovery. Recovery uses delivered-answer timestamps, rejects noncausal references, distinguishes metadata-only rows from live SQLite state, and orders interleaved threads chronologically before retaining the newest entries. Each multipart answer remains one entry. | Octogee's channel-backed conversations consume this behavior. Channel scope requires threaded room replies; unthreaded configurations fail when the enabled account resolves. Keep Octogee's transcript metadata downstream; contribute generic delivery/adapter seams only when independently justified. Remove corresponding pieces as upstream adopts equivalent contracts. |
+| Config revision freshness | Agent create/update/delete expose the persisted config hash before deferred reload acceptance. The ordinary write limiter remains unchanged. | [PR #142169](https://github.com/openclaw/openclaw/pull/142169) |
+| Account-scoped reload inspection | Source SecretRefs use account inspection when planning reloads; failed inspection and global policy changes retain whole-channel fallback. Runtime account resolution stays strict. | [PR #142193](https://github.com/openclaw/openclaw/pull/142193) |
 
-The gateway base still verifies runtime contracts such as expected config
-behavior and tool-policy shape. Those are product checks, not a parallel
-release authority.
+The root artifact is `openclaw-fork-93e558bc.tgz`
+(SHA-256 `8fcc04dc903ac9044dea53ca3855764395ecd9c857909fcc0ae3e1f161447ae1`).
+Mattermost is `openclaw-mattermost-47be64ed.tgz`
+(SHA-256 `47be64edb595f797d8a0edb594a7b04296efcf7e14ea71dbe8d2dc43c2e97a04`).
+The exact overlay passed the full build and 534 targeted gateway/Mattermost tests.
+
+### Native Mattermost behavior
+
+The custom channel-session, answer-commit, queued-delivery observation, and
+Mattermost transcript-recovery patches are removed. Sessions and tool history
+live in native OpenClaw SQLite state. New room messages receive native top-level
+answers; replies within existing threads retain their thread root and native
+thread session. We no longer force channel-wide context across threads or
+reconstruct lost OpenClaw databases from Mattermost messages.
+
+The templates omit custom thread scope and forced reply/streaming preferences.
+Pre-boot removes unsupported fork keys from stored configs and preserves supported
+native settings. Activity publication is disabled; the activity-tools plugin stays
+enabled for its voice relay. Octogee's authorized transcript projection now includes
+native top-level bot answers and conversations rooted in those answers.
+
+Completely unmodified `v2026.9.3` passed 856 native Mattermost tests and a disposable
+runtime experiment in `octogee-test` using its real Mattermost HTTP/WebSocket service,
+private human/bot accounts, two file SecretRefs, and a deterministic model fixture.
+The live checks covered DMs, coach/project rooms, human-rooted and bot-rooted threads,
+single-answer placement, native history, Control UI-style `deliver:false`, explicit
+backend delivery, cancellation and the next turn, tool results, model failure and
+recovery, bot separation, and process restart with history preservation and resumed
+delivery. Octogee's projection displayed the captured native human/bot posts.
+These were API/runtime checks, not a browser UI or fleet rollout. The fixture pod,
+tokens, users, and private rooms were cleaned up afterward.
+
+Startup-default preservation is also dropped downstream: Octogee already provisions
+explicit account policies and plugin enablement. A separate generic auto-enable
+reproduction still loses an effective schema default; that is upstream follow-up,
+not a reason to preserve Octogee's patch. No replacement control RPC is needed.
+
+Native `ls` continues to replace the former discovery patch. Resolved-secret caching,
+custom `secrets.apply`, no-archive deletion, database-recreation polling, and custom
+fresh-chat terminal ownership remain removed. The Dockerfile's WebSocket import
+rewrite is removed because the released Mattermost package resolves it natively.
 
 ## What the packers do
 
