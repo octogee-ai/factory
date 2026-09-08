@@ -37,12 +37,12 @@ describe("Builder tool groups", () => {
       manifest.groups.flatMap((group) => Object.entries(group.npmPackages ?? {})),
     );
     expect(npmPackages).toEqual({
-      "@anthropic-ai/claude-code": "2.1.251",
-      "@openai/codex": "0.151.0",
+      "@anthropic-ai/claude-code": "2.1.257",
+      "@openai/codex": "0.152.0",
       "@sparticuz/chromium": "149.0.0",
       "firebase-tools": "15.28.2",
       "npm-check-updates": "23.1.0",
-      "pnpm": "12.1.0",
+      "pnpm": "12.2.1",
       "tsx": "4.23.13",
       "typescript": "7.0.2",
     });
