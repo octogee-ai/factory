@@ -129,6 +129,27 @@ custom `secrets.apply`, no-archive deletion, database-recreation polling, and cu
 fresh-chat terminal ownership remain removed. The Dockerfile's WebSocket import
 rewrite is removed because the released Mattermost package resolves it natively.
 
+## Temporary native CUA driver patch
+
+`Dockerfile.base` builds the CUA SDK from the 0.22.2 backport commit
+[`6309cc93dea771c7980a23d586608b465293a4de`](https://github.com/ceckert/cua/commit/6309cc93dea771c7980a23d586608b465293a4de)
+and installs its Linux library into OpenClaw's native driver package. The
+backport carries [CUA PR #3659](https://github.com/trycua/cua/pull/3659):
+standalone modifier aliases need native keysym and evdev translations.
+No Omarchy keybindings or OpenClaw tool semantics change.
+
+The build runs the focused Wayland tests, requires native package version
+0.22.2, and records the source commit in `octogee-patch.json` beside the
+library. The Dockerfile is already part of the immutable base fingerprint;
+changing the source pin produces a new base identity. The original npm Node
+runtime and generated bindings remain from the same 0.22.2 release.
+
+Remove the native builder stage and installer overlay when the selected
+OpenClaw package uses a published CUA version containing the fix and passes
+the modifier/launcher checks. An upstream merge alone does not update an
+installed npm package. Until then, a driver version change deliberately fails
+the image build and requires reassessing this backport.
+
 ## What the packers do
 
 `pack-fork-tarball.sh` produces an installable root package. It vendors root

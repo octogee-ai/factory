@@ -58,12 +58,41 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
+FROM rust:1.97.1-slim-bookworm AS cua-driver-builder
+
+ARG CUA_SOURCE_SHA=6309cc93dea771c7980a23d586608b465293a4de
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git pkg-config libx11-dev libxi-dev libxtst-dev \
+      libxkbcommon-dev libssl-dev libwayland-dev libxdo-dev libgtk-3-dev \
+      libclang-dev clang cmake \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init && git remote add origin https://github.com/ceckert/cua.git \
+    && git config core.sparseCheckout true \
+    && printf 'libs/cua-driver/\n' > .git/info/sparse-checkout \
+    && git fetch --depth=1 --filter=blob:none origin "$CUA_SOURCE_SHA" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$CUA_SOURCE_SHA"
+WORKDIR /src/libs/cua-driver/rust
+RUN cargo test --locked -p platform-linux --lib wayland::tests --features portal-input \
+    && cargo build --locked --release -p cua-driver-sdk --features portal-input \
+    && mkdir /out \
+    && install -m 755 target/release/libcua_driver_sdk.so /out/ \
+    && printf '{"version":"0.22.2","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659"}\n' "$CUA_SOURCE_SHA" > /out/octogee-patch.json
+
 FROM gateway-core-system AS openclaw-installer
 
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
+COPY --from=cua-driver-builder /out/ /tmp/cua-driver-patch/
 RUN set -e; \
     npm install -g /tmp/openclaw-fork.tgz; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
+    CUA_PACKAGE="$OPENCLAW_ROOT/node_modules/@trycua/cua-driver-linux-$(node -p process.arch)-gnu"; \
+    test "$(node -p "require('$CUA_PACKAGE/package.json').version")" = "0.22.2"; \
+    test -f "$CUA_PACKAGE/libcua_driver_sdk.so"; \
+    install -m 755 /tmp/cua-driver-patch/libcua_driver_sdk.so "$CUA_PACKAGE/libcua_driver_sdk.so"; \
+    install -m 644 /tmp/cua-driver-patch/octogee-patch.json "$CUA_PACKAGE/octogee-patch.json"; \
+    rm -rf /tmp/cua-driver-patch; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     test -n "$OPENCLAW_CORE_VERSION"; \
     openclaw --version; \
