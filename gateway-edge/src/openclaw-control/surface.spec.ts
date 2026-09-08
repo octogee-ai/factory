@@ -1952,7 +1952,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       proxyIdentity: {
         enabled: true, userHeaders: () => ({ "x-octogee-user": "uid-helper" }),
         serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge" }), deviceIdentity: () => device,
-        connectScopes: () => ["operator.read", "operator.write"], resolveChatProfile: async () => null, syncProfile: async () => {},
+        connectScopes: () => ["operator.read", "operator.write"], resolveChatProfile: async () => null, syncChannelMemberships: async () => {}, syncProfile: async () => {},
       }, rpcTimeoutMs: 300,
       retainMutationLeaseUntilProcessReplacement: (lease) => { retained.push(lease); },
     });
@@ -2023,7 +2023,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         userHeaders: () => ({ "x-octogee-user": "uid-owner", "x-octogee-proxy": "1" }),
         serviceHeaders: vi.fn(() => { throw new Error("ordinary RPC must use the person's connection"); }),
         deviceIdentity: () => device, connectScopes: () => ["operator.read", "operator.write"],
-        resolveChatProfile: async () => null, syncProfile: async () => {} };
+        resolveChatProfile: async () => null, syncChannelMemberships: async () => {}, syncProfile: async () => {} };
       const edgeEnv = { ...env(upstreamPort), OPENCLAW_CONTROL_IDENTITY: "per-user" };
       const edge = http.createServer(appWith({ env: edgeEnv, sessions: manager, ...({ proxyIdentity } as object) }));
       const router = new WsUpgradeRouter();
@@ -2068,7 +2068,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     },
   );
 
-  it("carries each person's identity to OpenClaw and syncs their profile before connect and refreshes authorized connections", async () => {
+  it.each(["workspace-revoked", "channel-sync-failed"])("syncs identity and native channel access before connect and fails closed on %s", async (failure) => {
     const upstreamFrames: Array<Record<string, unknown>> = [];
     const upgradeHeaders: Array<Record<string, unknown>> = [];
     const assetHeaders: Array<Record<string, unknown>> = [];
@@ -2123,6 +2123,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       deviceIdentity: () => personDevice,
       connectScopes: () => ["operator.read", "operator.write", "operator.approvals"],
       resolveChatProfile: async () => null,
+      syncChannelMemberships: vi.fn(async () => { syncOrder.push("channel-sync"); }),
       syncProfile: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
         syncOrder.push(`sync:${session.uid}:${session.brokerProfile}`);
       }),
@@ -2160,6 +2161,18 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     expect(asset.status).toBe(200);
     expect(assetHeaders[0]).toMatchObject({ "x-octogee-user": "uid-owner", "x-octogee-proxy": "1" });
     expect(assetHeaders[0]).not.toHaveProperty("authorization");
+    expect(proxyIdentity.syncChannelMemberships).not.toHaveBeenCalled();
+    const page = await request(edge).get("/api/g/bender/openclaw/")
+      .set("cookie", issue(manager, "delegated-config"));
+    expect(page.status).toBe(200);
+    expect(proxyIdentity.syncChannelMemberships).toHaveBeenCalledTimes(1);
+    proxyIdentity.syncChannelMemberships.mockRejectedValueOnce(new Error("Membership sync unavailable"));
+    const deniedPage = await request(edge).get("/api/g/bender/openclaw/")
+      .set("cookie", issue(manager, "delegated-config"));
+    expect(deniedPage.status).toBe(502);
+    expect(assetHeaders).toHaveLength(2);
+    proxyIdentity.syncChannelMemberships.mockClear();
+    syncOrder.length = 0;
 
     const browserFrames: Array<Record<string, unknown>> = [];
     const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
@@ -2188,10 +2201,15 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         }
       });
     });
-    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner:delegated-config"]);
+    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner:delegated-config", "channel-sync"]);
+    expect(proxyIdentity.syncChannelMemberships).toHaveBeenCalledWith(expect.objectContaining({ uid: "uid-owner" }), { force: true });
     const clock = vi.spyOn(Date, "now");
     const now = Date.now();
     try {
+      const initialChannelSyncs = proxyIdentity.syncChannelMemberships.mock.calls.length;
+      clock.mockReturnValue(now + 10_000);
+      await vi.waitFor(() => expect(proxyIdentity.syncChannelMemberships.mock.calls.length).toBeGreaterThan(initialChannelSyncs));
+      expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(1);
       clock.mockReturnValue(now + 61_000);
       await vi.waitFor(() => expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(2));
       await new Promise((resolve) => setTimeout(resolve, 40));
@@ -2202,7 +2220,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       expect(browser.readyState).toBe(WebSocket.OPEN);
       clock.mockReturnValue(now + 183_000);
       await vi.waitFor(() => expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(4));
-      authorized = false;
+      if (failure === "workspace-revoked") authorized = false;
+      else proxyIdentity.syncChannelMemberships.mockRejectedValue(new Error("Mattermost directory unavailable"));
       clock.mockReturnValue(now + 244_000);
       await vi.waitFor(() => expect(browser.readyState).toBe(WebSocket.CLOSED));
       expect(proxyIdentity.syncProfile).toHaveBeenCalledTimes(4);

@@ -9,6 +9,7 @@ import {
   projectCheckoutScopeForRuntime,
   waitForAppliedConfigRevision,
 } from "../lib/customer-lifecycle-broker-adapter.js";
+import { OPENCLAW_CONFIG } from "../lib/config.js";
 import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
   applyConfigPatch,
@@ -1546,6 +1547,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       };
       return { mode: "rpc", attempts: 1 };
     });
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
     const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
     const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
     await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
@@ -1558,7 +1561,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit", activationId: "activation-1" })]);
   });
 
-  it("retires deleted platform project runtime before removing its local credential", async () => {
+  it("discovers deleted platform projects from authored config despite RPC secret redaction and retires runtime before credentials", async () => {
     const events: string[] = [];
     const snapshot = aliceSnapshot({ status: "complete", projectAgents: [] });
     const orphanId = "octogee-alice-proj-deleted-coach";
@@ -1567,14 +1570,25 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       agents: { entries: { [orphanId]: { id: orphanId }, [importedId]: { id: importedId } } },
       channels: { mattermost: { accounts: {
         "alice-proj-deleted": { botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-proj-deleted" } },
-        "alice-proj-imported": { botToken: "owner-token" },
+        "alice-proj-imported": { botToken: { source: "file", provider: "octogee-mattermost", id: "/owner-custom" } },
       } } },
-      bindings: [],
+      bindings: [
+        { agentId: orphanId, match: { channel: "mattermost", accountId: "alice-proj-deleted" } },
+        { agentId: orphanId, match: { channel: "mattermost", accountId: "alice-proj-deleted", peer: { kind: "group", id: "deleted-channel" } } },
+        { agentId: importedId, match: { channel: "mattermost", accountId: "alice-proj-imported" } },
+      ],
     };
-    const rpc = mkGatewayRpc(rosterRpc(config));
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    const redacted = structuredClone(config);
+    for (const account of Object.values(redacted.channels.mattermost.accounts)) {
+      account.botToken.id = "__OPENCLAW_REDACTED__";
+    }
+    const rpc = mkGatewayRpc(rosterRpc(redacted));
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       const patch = args.buildPatch(config) as Record<string, any>;
       expect(patch.channels.mattermost.accounts).toEqual({ "alice-proj-deleted": null });
+      expect(patch.bindings).toEqual([config.bindings[2]]);
       events.push("patch");
       return { mode: "rpc", attempts: 1 };
     });

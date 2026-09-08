@@ -85,9 +85,9 @@ cloud-sql-proxy:
 mattermost:
   enabled: true
   image:
-    repository: mattermost/mattermost-team-edition
-    tag: "11.10.1"
-    digest: "sha256:12f18e9f6ad2a9c29a95393f337aa2ab0700517a55470cd943a759f5392a017f"
+    repository: us-central1-docker.pkg.dev/octogee/octogee/mattermost
+    tag: "11.10.1-octogee-6774cf2c"
+    digest: "sha256:716be3a51218419dd0572f8e914ab3364f2f8a74339b29f26cf3ef361e1d4cc8"
   db:
     user: mattermost
     name: mattermost_prod

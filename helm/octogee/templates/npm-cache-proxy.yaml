@@ -133,6 +133,11 @@ spec:
             matchLabels:
               app: octogee-gateway
               gateway-class: builder
+        {{- if (.Values.global.computer).enabled }}
+        - podSelector:
+            matchLabels:
+              app: octogee-vm-bridge
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.npmCacheProxy.port }}

@@ -18,6 +18,11 @@ export type OpenClawBrokerProfile =
   | "delegated-config"
   | "delegated-read";
 
+export function hasNativeOpenClawChatAccess(profile: OpenClawBrokerProfile): boolean {
+  return profile === "native-owner" || profile === "native-co-owner" ||
+    profile === "native-member" || profile === "native-member-helper";
+}
+
 export interface GatewayPermissionSetDefinition {
   label: string;
   purpose: string;

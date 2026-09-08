@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import { isIP } from "node:net";
 import os from "node:os";
-import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
+import { hasNativeOpenClawChatAccess, type OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
 import { deriveDeviceIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import {
@@ -24,6 +24,9 @@ import {
 import { WebSocket } from "ws";
 
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
+import type { OpenClawControlSession } from "./session.js";
+import { synchronizeChannelMemberships, type AuthorizedNativeChannel } from "./channel-membership-sync.js";
+
 
 const DEFAULT_ROLE_SYNC_TIMEOUT_MS = 10_000;
 
@@ -42,6 +45,7 @@ export interface OpenClawControlProxyIdentity {
   deviceIdentity(session: OpenClawControlProxyIdentitySession): DeviceIdentity;
   connectScopes(session: OpenClawControlProxyIdentitySession): string[];
   resolveChatProfile(session: OpenClawControlProxyIdentitySession, source: { channelId: string; postId: string }): Promise<OpenClawChatSenderProfile | null>;
+  syncChannelMemberships(session: OpenClawControlSession, options?: { force?: boolean }): Promise<void>;
   syncProfile(session: OpenClawControlProxyIdentitySession, options?: { assignRole: boolean }): Promise<void>;
 }
 
@@ -73,6 +77,7 @@ export interface CreateOpenClawControlProxyIdentityOptions {
   podAddress?: () => string | undefined;
   openSocket?: typeof openProxyIdentitySocket;
   loadChatAppearance?: typeof import("./profile-appearance.js").loadOpenClawChatProfileAppearance;
+  loadChannelMemberships?: (session: OpenClawControlSession) => Promise<readonly AuthorizedNativeChannel[]>;
   loadAppearance?: (session: OpenClawControlProxyIdentitySession) => Promise<OpenClawProfileAppearance>;
 }
 
@@ -161,6 +166,14 @@ export function createOpenClawControlProxyIdentity(
   });
   const avatarSyncs = new Map<string, { revision: string; updatedAt: number | undefined }>();
   const pendingSyncs = new Map<string, Promise<void>>();
+  const channelSyncs = new Map<string, { pending?: Promise<void>; expiresAt: number }>();
+  const loadChannels = options.loadChannelMemberships ?? (async (session: OpenClawControlSession) => {
+    const { createBrokeredMattermostAccess } = await import("./mattermost-broker.js");
+    const { authorizedMattermostSessions } = await import("./mattermost-chat.js");
+    const broker = createBrokeredMattermostAccess(session, { env });
+    return authorizedMattermostSessions(session, broker.authorize, broker.listWorkspaceChannels);
+  });
+
   const avatarAlreadySynced = (profile: OpenClawProfileListItem, appearance: OpenClawProfileAppearance): boolean => {
     const previous = avatarSyncs.get(profile.id);
     return Boolean(profile.hasAvatar && previous?.revision === appearance.avatar?.revision
@@ -246,8 +259,51 @@ export function createOpenClawControlProxyIdentity(
     return sync;
   };
 
+  const syncChannelMemberships = async (session: OpenClawControlSession, settings: { force?: boolean } = {}): Promise<void> => {
+    if (!enabled || !hasNativeOpenClawChatAccess(session.brokerProfile)) return;
+    const key = JSON.stringify([session.gatewayId, session.uid, session.workspaceSlug]);
+    const existing = channelSyncs.get(key);
+    if (existing?.pending) {
+      await existing.pending;
+      return;
+    } else if (!settings.force && existing && existing.expiresAt > Date.now()) return;
+    const state: { pending?: Promise<void>; expiresAt: number } = { expiresAt: 0 };
+    const work = async () => {
+      const authorized = await loadChannels(session);
+      const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
+      const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
+      try {
+        const profiles = await rpc.call<{ profiles: OpenClawProfileListItem[] }>("users.list", {});
+        if (!profiles.ok) throw new Error(`users.list failed: ${profiles.reason}`);
+        let member = profileFor(profiles.result.profiles, session.uid);
+        if (!member || (member.role ?? null) !== roleFor(session)) {
+          member = await synchronizeProfile(session, true);
+        }
+        const service = profileFor(profiles.result.profiles, OPENCLAW_EDGE_SERVICE_IDENTITY);
+        if (!member || !service) throw new Error("Channel membership identity is not initialized");
+        await synchronizeChannelMemberships({ rpc, profileId: member.id, serviceProfileId: service.id, authorized });
+        state.expiresAt = Date.now() + 10_000;
+      } finally {
+        rpc.dispose();
+        ws.close();
+      }
+    };
+    state.pending = work().finally(() => {
+      state.pending = undefined;
+      if (state.expiresAt === 0) channelSyncs.delete(key);
+    });
+    channelSyncs.set(key, state);
+    if (channelSyncs.size > 256) {
+      for (const [oldKey, old] of channelSyncs) {
+        if (!old.pending && oldKey !== key) { channelSyncs.delete(oldKey); break; }
+      }
+    }
+    await state.pending;
+  };
+
   return {
     enabled,
+    syncChannelMemberships,
     userHeaders: (session, req) =>
       identityHeaders(session.uid, openClawControlClientAddress(req, fallbackAddress)),
     serviceHeaders,

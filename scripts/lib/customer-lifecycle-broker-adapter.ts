@@ -61,6 +61,7 @@ import {
   CUSTOMERS_DIR,
   OPENCLAW_CONFIG,
   OPENCLAW_DIR,
+  readOpenClawConfig,
 } from "./config.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 import {
@@ -1001,7 +1002,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   const brokerSnapshot = await snapshotForUidWithProjectMembershipIsolation(ctx, snapshot.uid);
   if (!brokerSnapshot) throw new Error(`Project Agent snapshot unavailable for ${snapshot.slug}`);
   const current = await freshRosterConfig(ctx);
-  const managedProjectIds = configuredBuilderManagedProjectIds(current, snapshot.slug,
+  const managedProjectIds = configuredBuilderManagedProjectIds(readOpenClawConfig(), snapshot.slug,
     (brokerSnapshot.projectAgents ?? []).map((agent) => agent.projectId));
   if (managedProjectIds.length === 0) {
     return { elapsedMs: 0, appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) };

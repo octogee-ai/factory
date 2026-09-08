@@ -1,11 +1,27 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
 function source(path: string): string {
   return readFileSync(resolve(repoRoot, path), "utf8");
+}
+
+function deploymentSettings(path: string): string {
+  const values = parse(source(path)) as { mattermost?: { image?: { repository?: string; digest?: string } } };
+  const image = values.mattermost?.image;
+  if (image?.repository) {
+    const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
+      targets: Record<string, { artifactRegistry: { location: string; projectId: string; repository: string } }>;
+    };
+    const registry = targets.targets["test-central"].artifactRegistry;
+    expect(image.repository).toBe(`${registry.location}-docker.pkg.dev/${registry.projectId}/${registry.repository}/mattermost`);
+    expect(image.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    delete image.repository;
+  }
+  return JSON.stringify(values);
 }
 
 describe("deployment target consumers", () => {
@@ -550,7 +566,7 @@ describe("deployment target consumers", () => {
 
     expect(customValues).toContain("__TARGET_ID__");
     expect(customValues).toContain("__AR_REPOSITORY__");
-    expect(customValues).not.toContain("us-central1");
+    expect(deploymentSettings("helm/octogee/values.custom.yaml.tpl")).not.toContain("us-central1");
     expect(inventory).toContain("@octogee/core/deployment-environment");
     expect(inventory).not.toContain("us-central1-docker.pkg.dev/octogee/octogee/");
   });
@@ -564,7 +580,7 @@ describe("deployment target consumers", () => {
       "helm/octogee/charts/octogee-api/values.yaml",
       "helm/octogee-gateway/values.yaml",
     ]) {
-      const values = source(valuesFile);
+      const values = deploymentSettings(valuesFile);
       expect(values, valuesFile).not.toContain("us-central1");
       expect(values, valuesFile).not.toContain("-docker.pkg.dev/octogee/octogee");
     }

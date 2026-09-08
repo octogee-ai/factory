@@ -75,6 +75,11 @@ async function mockGateway(
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profile } }));
         return;
       }
+      if (frame.method === "sessions.list" || frame.method === "sessions.channel.sync") {
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true,
+          payload: frame.method === "sessions.list" ? { sessions: [], hasMore: false } : { changed: true } }));
+        return;
+      }
       if (frame.method === "users.list") {
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profiles: state.profiles } }));
         return;
@@ -110,6 +115,53 @@ function identityFor(gateway: MockGateway, env: NodeJS.ProcessEnv = {}) {
 const helper = { uid: "uid-Helper", gatewayId: "bender", revisionId: "bender", sessionId: "session-id", brokerProfile: "delegated-config" as const };
 
 describe("OpenClaw control proxy identity", () => {
+  it.each((["native-owner", "native-co-owner", "native-member", "native-member-helper"] as const)
+    .flatMap((brokerProfile) => [false, true].map((firstVisit) => ({ brokerProfile, firstVisit }))))(
+    "synchronizes $brokerProfile channel access on admission (first visit: $firstVisit)", async ({ brokerProfile, firstVisit }) => {
+    const gateway = await mockGateway([
+      ...(firstVisit ? [] : [{ id: "member-profile", emails: ["uid-helper"], role: "trusted-helper" }]),
+      { id: "service-profile", emails: ["svc:gateway-edge"], role: "service" },
+    ]);
+    const key = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
+    const load = vi.fn(async () => [{ key, displayName: "General" }]);
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" }, upstreamBase: () => gateway.base,
+      podAddress: () => "10.8.0.4", loadChannelMemberships: load,
+      loadAppearance: async () => ({ displayName: null, avatar: null }),
+    });
+    const session = { ...helper, brokerProfile, workspaceSlug: "alice", permissionSetIds: [], grantRevision: null,
+      idleExpiresAt: 1, absoluteExpiresAt: 2 };
+    await identity.syncChannelMemberships(session, { force: true });
+    expect(gateway.calls).toContainEqual({ method: "sessions.channel.sync", user: "svc:gateway-edge",
+      params: { agentId: "octogee-alice-coach", channel: "mattermost", peerKind: "group",
+        peerId: "a".repeat(26), profileId: firstVisit ? "profile-2" : "member-profile", member: true, displayName: "General" } });
+    if (firstVisit) {
+      expect(gateway.connects.some((connection) => connection.headers["x-octogee-user"] === helper.uid)).toBe(true);
+      expect(gateway.calls.findIndex((call) => call.method === "users.setRole"))
+        .toBeLessThan(gateway.calls.findIndex((call) => call.method === "sessions.channel.sync"));
+    }
+    await identity.syncChannelMemberships(session);
+    expect(load).toHaveBeenCalledTimes(1);
+    await identity.syncChannelMemberships(session, { force: true });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["delegated-read", "delegated-config"] as const)("does not call the native-only Mattermost broker for %s", async (brokerProfile) => {
+    const loadChannelMemberships = vi.fn(async () => { throw new Error("forbidden"); });
+    const openSocket = vi.fn();
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user" },
+      upstreamBase: () => new URL("http://127.0.0.1:18789"),
+      loadChannelMemberships, openSocket,
+    });
+    const session = { ...helper, brokerProfile, workspaceSlug: "alice", permissionSetIds: [], grantRevision: null,
+      idleExpiresAt: 1, absoluteExpiresAt: 2 };
+    await expect(identity.syncChannelMemberships(session, { force: true })).resolves.toBeUndefined();
+    await expect(identity.syncChannelMemberships(session)).resolves.toBeUndefined();
+    expect(loadChannelMemberships).not.toHaveBeenCalled();
+    expect(openSocket).not.toHaveBeenCalled();
+  });
+
   it("is disabled unless the pod runs per-user control identity", () => {
     const identity = createOpenClawControlProxyIdentity({
       env: {},

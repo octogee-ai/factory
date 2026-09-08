@@ -1295,6 +1295,24 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     } })).toMatchObject({ payload: { count: 1, sessions: [{ key: sessionKey, displayName: "General" }] } });
   });
 
+  it("does not synthesize channel sessions withheld by native per-user authorization", async () => {
+    const adapter = createMattermostControlChat({ perUserIdentity: true,
+      authorize: vi.fn(async () => authorized({ getJson: vi.fn(async () => ({
+        id: channelId, team_id: "t".repeat(26), type: "P", name: "alice-general",
+        display_name: "General", create_at: 10, update_at: 20, delete_at: 0, last_post_at: 40,
+      })) })), listWorkspaceChannels: async () => [{ channelId }] });
+    const prepared = await adapter.prepare({ type: "req", id: "list", method: "sessions.list", params: {} },
+      { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    if (prepared?.kind !== "upstream") throw new Error("expected native channel projection");
+    expect(prepared.project({ type: "res", ok: true, payload: {
+      sessions: [], count: 0, totalCount: 0, hasMore: false, nextOffset: null,
+    } })).toMatchObject({ payload: { sessions: [], count: 0 } });
+    expect(prepared.project({ type: "res", ok: true, payload: {
+      sessions: [{ key: sessionKey, sessionId: "native-general", updatedAt: 1 }],
+      count: 1, totalCount: 1, hasMore: false, nextOffset: null,
+    } })).toMatchObject({ payload: { sessions: [{ key: sessionKey, sessionId: "native-general", displayName: "General" }] } });
+  });
+
   it("preserves OpenClaw-authorized native sessions and subscription requests for per-user gateways", async () => {
     const adapter = createMattermostControlChat({ perUserIdentity: true,
       authorize: vi.fn(), listWorkspaceChannels: async () => [] });

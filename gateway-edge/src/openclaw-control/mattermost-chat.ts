@@ -434,7 +434,7 @@ function projectedMattermostSession(
   };
 }
 
-async function authorizedMattermostSessions(
+export async function authorizedMattermostSessions(
   session: OpenClawControlSession,
   authorize: Authorize,
   listWorkspaceChannels: ListWorkspaceChannels,
@@ -1457,6 +1457,7 @@ async function prepareSessionsList(
     if (perUserIdentity) return null;
     return rpcError(frame, "INVALID_REQUEST", "Unsupported Mattermost session list request");
   }
+  if (perUserIdentity) params.synthesize = false;
   const authorizedRows = await authorizedMattermostSessions(
     session,
     authorize,

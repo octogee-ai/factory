@@ -6,6 +6,10 @@ export const GATEWAY_PERMISSION_SET_IDS = [
     "trusted-helper.v1",
     "co-owner.v1",
 ];
+export function hasNativeOpenClawChatAccess(profile) {
+    return profile === "native-owner" || profile === "native-co-owner" ||
+        profile === "native-member" || profile === "native-member-helper";
+}
 export const GATEWAY_PERMISSION_SETS = Object.freeze({
     "agent-viewer.v1": Object.freeze({
         label: "Agent viewer",

@@ -19,6 +19,7 @@ import {
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
 import {
   GATEWAY_ACCESS_GRANTS_COLLECTION,
+  hasNativeOpenClawChatAccess,
   workspaceAgentAccessGrantId,
   isCanonicalWorkspaceMembership,
   permissionSetIds,
@@ -798,7 +799,7 @@ async function loadControlProfile(
     }
     let author: Awaited<ReturnType<typeof context.chatAuthor>> = null;
     if (typeof body.postId === "string") {
-      if (!["native-owner", "native-co-owner", "native-member", "native-member-helper"].includes(result.session.brokerProfile)) {
+      if (!hasNativeOpenClawChatAccess(result.session.brokerProfile)) {
         res.status(403).json({ error: "forbidden" });
         return;
       }
@@ -866,7 +867,7 @@ async function controlMattermostRequest(
       sendSessionAccessFailure(access, res);
       return;
     }
-    if (!["native-owner", "native-co-owner", "native-member", "native-member-helper"].includes(access.session.brokerProfile)) {
+    if (!hasNativeOpenClawChatAccess(access.session.brokerProfile)) {
       res.status(403).json({ error: "forbidden" });
       return;
     }

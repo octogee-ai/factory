@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   GATEWAY_PERMISSION_SETS,
+  hasNativeOpenClawChatAccess,
   workspaceAgentAccessGrantId,
   isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
@@ -29,6 +30,12 @@ function grant(overrides: Record<string, unknown> = {}) {
 }
 
 describe("gateway principal access", () => {
+  it.each([
+    ["native-owner", true], ["native-co-owner", true], ["native-member", true], ["native-member-helper", true],
+    ["delegated-read", false], ["delegated-config", false],
+  ] as const)("classifies %s native channel access as %s", (profile, allowed) => {
+    expect(hasNativeOpenClawChatAccess(profile)).toBe(allowed);
+  });
   it("accepts only a server-maintained Mattermost general-channel membership assertion", () => {
     expect(isCanonicalWorkspaceMembership({ role: "member" })).toBe(false);
     expect(isCanonicalWorkspaceMembership({

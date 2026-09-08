@@ -92,6 +92,7 @@ const REQUIRED_PLUGINS = [
 ] as const;
 
 const RETIRED_PLUGINS = [
+  "octogee-computer-tools",
   "octogee-mattermost-tools",
   "octogee-router",
   "octogee-preview-tools",

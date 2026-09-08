@@ -357,7 +357,7 @@ const BUILDER_RUNTIME_POLICY = resolveBuilderRuntimePolicy(process.env);
 const BUILDER_VM_SPEC = BUILDER_RUNTIME_POLICY === "gce-vm" ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
 const BUILDER_VM_WARM_POOL = parseVmWarmPoolConfig(process.env);
 const VM_WARM_POOL_RECONCILE_MS = 60_000;
-const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker"] as const;
+const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker", "octogee-npm-cache-proxy"] as const;
 const vmGatewayRuntimeRef: { current?: VmGatewayRuntime } = {};
 const NAMESPACE = (function () {
   const namespace = process.env.K8S_NAMESPACE;

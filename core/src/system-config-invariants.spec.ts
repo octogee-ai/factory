@@ -59,6 +59,22 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(config, context)).toEqual([]);
   });
 
+  it("removes restored retired computer plugin config while preserving user plugins", () => {
+    const config = {
+      plugins: {
+        allow: ["octogee-computer-tools", "customer-plugin"],
+        entries: {
+          "octogee-computer-tools": { enabled: true },
+          "customer-plugin": { enabled: true },
+        },
+      },
+    };
+    reconcilePlatformInvariants(config, builder);
+    expect(config.plugins.allow).not.toContain("octogee-computer-tools");
+    expect(config.plugins.entries).not.toHaveProperty("octogee-computer-tools");
+    expect(config.plugins.entries["customer-plugin"]).toEqual({ enabled: true });
+  });
+
   it("strips config keys OpenClaw retired instead of stamping them back", () => {
     const config: Record<string, unknown> = {
       gateway: { controlUi: { allowInsecureAuth: false } },

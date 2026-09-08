@@ -102,6 +102,9 @@
     "@opentelemetry/core": "^2.8.0",
     "esbuild": "^0.28.1",
     "postcss": "8.5.25",
-    "undici@<7.0.0": "^6.28.0"
+    "undici@<7.0.0": "^6.28.0",
+    "firebase-tools": {
+      "csv-parse": "^7.0.2"
+    }
   }
 }

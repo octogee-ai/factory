@@ -82,7 +82,8 @@
     "fast-xml-builder": "^1.1.7",
     "fast-uri": "^3.1.6",
     "firebase-tools": {
-      "ws": "^7.5.11"
+      "ws": "^7.5.11",
+      "csv-parse": "^7.0.2"
     },
     "glob": "^13.0.0",
     "ip-address": "^10.2.1",

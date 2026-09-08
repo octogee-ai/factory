@@ -79,19 +79,30 @@ select TEST or PROD later.
 
 The selected release is `v2026.9.3`, peeled to
 [upstream commit `1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7`](https://github.com/openclaw/openclaw/commit/1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7).
-[Overlay head `93e558bc3f1cc674bd1858a63924022050278c54`](https://github.com/ceckert/openclaw/commit/93e558bc3f1cc674bd1858a63924022050278c54)
-on `ceckert/openclaw:codex/octogee-v2026.9.3-minimal` carries two fixes:
+[Runtime source `9f57512340deaa67fbccea01a5b4a0e8e254e21f`](https://github.com/ceckert/openclaw/commit/9f57512340deaa67fbccea01a5b4a0e8e254e21f)
+on `ceckert/openclaw:codex/octogee-team-followups` carries these fixes:
 
 | Fix | Behavior pinned by its regressions | Upstream contribution |
 | --- | --- | --- |
 | Config revision freshness | Agent create/update/delete expose the persisted config hash before deferred reload acceptance. The ordinary write limiter remains unchanged. | [PR #142169](https://github.com/openclaw/openclaw/pull/142169) |
 | Account-scoped reload inspection | Source SecretRefs use account inspection when planning reloads; failed inspection and global policy changes retain whole-channel fallback. Runtime account resolution stays strict. | [PR #142193](https://github.com/openclaw/openclaw/pull/142193) |
 
-The root artifact is `openclaw-fork-93e558bc.tgz`
-(SHA-256 `8fcc04dc903ac9044dea53ca3855764395ecd9c857909fcc0ae3e1f161447ae1`).
+| Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit owner grants in either grant order. | [Fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
+| Preferences and workspace icons | Resolve preferences without a session target, authorize icons with native visibility, and bound repeated credential failures while allowing recovery. | [Fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
+
+The root artifact is `openclaw-fork-9f575123.tgz` at generation `1788893543972817`
+(SHA-256 `602b7a265dd3001417df68350c0ea5ebbf760d369a544ac8345a5096aa1a70a9`).
 Mattermost is `openclaw-mattermost-47be64ed.tgz`
 (SHA-256 `47be64edb595f797d8a0edb594a7b04296efcf7e14ea71dbe8d2dc43c2e97a04`).
-The exact overlay passed the full build and 534 targeted gateway/Mattermost tests.
+The root package passed a full build on the exact runtime commit, focused native
+membership/sharing and preferences/icon tests, and a clean joint npm installation
+with the unchanged Mattermost artifact. Installed CLI, SQLite, plugin SDK,
+Mattermost, FFI, PTY, parser and image runtime imports passed; the CUA driver
+remains 0.22.2. Eleven live checks against the installed artifact proved native
+channel discovery, board/task access, writes/events, immediate revocation,
+rejoin and explicit owner-grant preservation using the actual Octogee helper.
+Chrome verified the member dashboard, authorized workspace icon and responsive
+composer. The prior minimal overlay passed 534 targeted gateway/Mattermost tests.
 
 ### Native Mattermost behavior
 

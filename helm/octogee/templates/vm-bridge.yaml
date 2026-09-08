@@ -3,6 +3,7 @@
 {{- $cidr := required "global.computer.cidr is required" $computer.cidr -}}
 {{- $ns := .Release.Namespace -}}
 {{- $llmPort := .Values.llmBroker.port | default 3010 -}}
+{{- $npmPort := .Values.npmCacheProxy.port | default 3005 -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,6 +28,9 @@ data:
       server { listen 8065; set $mm mattermost.{{ $ns }}.svc.cluster.local; proxy_pass $mm:8065; }
       server { listen 3000; set $git octogee-gitea-http.{{ $ns }}.svc.cluster.local; proxy_pass $git:3000; }
       server { listen 2222; set $ssh octogee-gitea-ssh.{{ $ns }}.svc.cluster.local; proxy_pass $ssh:2222; }
+      {{- if .Values.npmCacheProxy.enabled }}
+      server { listen {{ $npmPort }}; set $npm octogee-npm-cache-proxy.{{ $ns }}.svc.cluster.local; proxy_pass $npm:{{ $npmPort }}; }
+      {{- end }}
       server { listen {{ $llmPort }}; set $llm llm-broker.{{ $ns }}.svc.cluster.local; proxy_pass $llm:{{ $llmPort }}; }
     }
 ---
@@ -47,7 +51,7 @@ spec:
       labels:
         app: octogee-vm-bridge
       annotations:
-        checksum/nginx: {{ list $ns $llmPort .Values.networkPolicy.nodeLocalDnsCidr 2222 2222 "quiet-empty-probes" | toJson | sha256sum | trunc 16 }}
+        checksum/nginx: {{ list $ns $llmPort $npmPort .Values.npmCacheProxy.enabled .Values.networkPolicy.nodeLocalDnsCidr 2222 2222 "quiet-empty-probes" | toJson | sha256sum | trunc 16 }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -72,6 +76,9 @@ spec:
             - { name: mattermost, containerPort: 8065 }
             - { name: gitea-http, containerPort: 3000 }
             - { name: gitea-ssh, containerPort: 2222 }
+            {{- if .Values.npmCacheProxy.enabled }}
+            - { name: npm-cache, containerPort: {{ $npmPort }} }
+            {{- end }}
             - { name: llm-broker, containerPort: {{ $llmPort }} }
           readinessProbe:
             tcpSocket:
@@ -114,6 +121,9 @@ spec:
     - { name: mattermost, port: 8065, targetPort: 8065 }
     - { name: gitea-http, port: 3000, targetPort: 3000 }
     - { name: gitea-ssh, port: 2222, targetPort: 2222 }
+    {{- if .Values.npmCacheProxy.enabled }}
+    - { name: npm-cache, port: {{ $npmPort }}, targetPort: {{ $npmPort }} }
+    {{- end }}
     - { name: llm-broker, port: {{ $llmPort }}, targetPort: {{ $llmPort }} }
 ---
 apiVersion: networking.k8s.io/v1
@@ -137,6 +147,9 @@ spec:
         - { protocol: TCP, port: 3000 }
         - { protocol: TCP, port: 2222 }
         - { protocol: TCP, port: {{ $llmPort }} }
+        {{- if .Values.npmCacheProxy.enabled }}
+        - { protocol: TCP, port: {{ $npmPort }} }
+        {{- end }}
   egress:
     - to:
         - ipBlock:
@@ -163,6 +176,14 @@ spec:
       ports:
         - { protocol: TCP, port: 3000 }
         - { protocol: TCP, port: 2222 }
+    {{- if .Values.npmCacheProxy.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: octogee-npm-cache-proxy
+      ports:
+        - { protocol: TCP, port: {{ $npmPort }} }
+    {{- end }}
     - to:
         - podSelector:
             matchLabels:

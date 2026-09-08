@@ -852,6 +852,9 @@ export function createOpenClawControlHttpRouter(
         unauthorized(req, res, frameAncestor);
         return;
       }
+      if (proxyIdentity.enabled && !isDashboardBundledAsset(openClawControlHttpSuffix(req.originalUrl, gatewayId).pathname)) {
+        await proxyIdentity.syncChannelMemberships(session);
+      }
       const gatewayToken = proxyIdentity.enabled ? "" : await loadGatewayToken({ gatewayId });
       const authority: UpstreamAuthority = proxyIdentity.enabled
         ? { kind: "proxy-identity", headers: proxyIdentity.userHeaders(session, req) }
@@ -1173,8 +1176,12 @@ class OpenClawControlSocketBridge {
       gatewayId: this.activeSession.gatewayId,
       revisionId: this.activeSession.revisionId,
       env: this.args.env,
-    }, { forceRefresh: true }).then((allowed) => {
+    }, { forceRefresh: true }).then(async (allowed) => {
       if (allowed) {
+        if (this.args.proxyIdentity.enabled) {
+          await this.args.proxyIdentity.syncChannelMemberships(this.activeSession, { force: true });
+        }
+        if (this.closing) return;
         this.args.metrics?.session(this.metricsIdentity, "authorize", "ok");
         this.refreshProfile();
         return;
@@ -1548,7 +1555,9 @@ class OpenClawControlSocketBridge {
       this.upstreamSocket().send(rewritten);
       return;
     }
-    void this.args.proxyIdentity.syncProfile(this.activeSession).then(
+    void this.args.proxyIdentity.syncProfile(this.activeSession)
+      .then(() => this.args.proxyIdentity.syncChannelMemberships(this.activeSession, { force: true }))
+      .then(
       () => {
         if (this.closing || this.upstreamSocket().readyState !== WebSocket.OPEN) return;
         this.nextProfileSyncAt = Date.now() + 60_000;

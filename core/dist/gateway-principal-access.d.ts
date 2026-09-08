@@ -3,6 +3,7 @@ export declare const GATEWAY_ACCESS_AUDIT_COLLECTION = "gatewayAccessAudit";
 export declare const GATEWAY_PERMISSION_SET_IDS: readonly ["agent-viewer.v1", "trusted-helper.v1", "co-owner.v1"];
 export type GatewayPermissionSetId = (typeof GATEWAY_PERMISSION_SET_IDS)[number];
 export type OpenClawBrokerProfile = "native-owner" | "native-member" | "native-member-helper" | "native-co-owner" | "delegated-config" | "delegated-read";
+export declare function hasNativeOpenClawChatAccess(profile: OpenClawBrokerProfile): boolean;
 export interface GatewayPermissionSetDefinition {
     label: string;
     purpose: string;

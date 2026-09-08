@@ -20,6 +20,7 @@ const REQUIRED_PLUGINS = [
     "parallel",
 ];
 const RETIRED_PLUGINS = [
+    "octogee-computer-tools",
     "octogee-mattermost-tools",
     "octogee-router",
     "octogee-preview-tools",
