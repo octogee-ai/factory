@@ -84,15 +84,14 @@ FROM gateway-core-system AS openclaw-installer
 
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
 COPY --from=cua-driver-builder /out/ /tmp/cua-driver-patch/
+COPY infra/gateway/install-cua-driver-patch.mjs /tmp/install-cua-driver-patch.mjs
 RUN set -e; \
     npm install -g /tmp/openclaw-fork.tgz; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
-    CUA_PACKAGE="$OPENCLAW_ROOT/node_modules/@trycua/cua-driver-linux-$(node -p process.arch)-gnu"; \
-    test "$(node -p "require('$CUA_PACKAGE/package.json').version")" = "0.22.2"; \
-    test -f "$CUA_PACKAGE/libcua_driver_sdk.so"; \
-    install -m 755 /tmp/cua-driver-patch/libcua_driver_sdk.so "$CUA_PACKAGE/libcua_driver_sdk.so"; \
-    install -m 644 /tmp/cua-driver-patch/octogee-patch.json "$CUA_PACKAGE/octogee-patch.json"; \
-    rm -rf /tmp/cua-driver-patch; \
+    node /tmp/install-cua-driver-patch.mjs "$OPENCLAW_ROOT" /tmp/cua-driver-patch; \
+    printf '%s\n' '{"plugins":{"entries":{"cua-computer":{"enabled":true}}}}' > /tmp/cua-driver-check.json; \
+    OPENCLAW_CONFIG_PATH=/tmp/cua-driver-check.json openclaw doctor --lint --only cua-computer/driver-artifacts; \
+    rm -rf /tmp/cua-driver-patch /tmp/install-cua-driver-patch.mjs /tmp/cua-driver-check.json; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     test -n "$OPENCLAW_CORE_VERSION"; \
     openclaw --version; \
