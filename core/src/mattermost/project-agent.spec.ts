@@ -54,6 +54,10 @@ function createInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function mmError(status: number, detail: string): Error & { status: number } {
+  return Object.assign(new Error(`MM API ${status}: ${detail}`), { status });
+}
+
 describe("projectAgentSecretDocId", () => {
   it("keys the secret per project", () => {
     expect(projectAgentSecretDocId("orbit")).toBe("projectAgentMattermost-orbit");
@@ -128,6 +132,88 @@ describe("createProjectAgentBot", () => {
 
     expect(result).toEqual({ mmUserId: "bot-9", token: "pat-9" });
     expect(d.log).toHaveBeenCalled();
+  });
+
+  it("retries partial and completed provisioning through existing team and channel memberships", async () => {
+    const d = deps();
+    const memberships = new Set<string>();
+    let botExists = false;
+    let channelFailed = false;
+    let minted = 0;
+    const mm = mmRecorder((method, endpoint) => {
+      if (method === "POST" && endpoint === "/bots") {
+        if (botExists) throw mmError(409, "bot exists");
+        botExists = true;
+        return { user_id: "bot-1" };
+      }
+      if (method === "GET" && endpoint === "/users/username/alice-proj-orbit-coach") {
+        return { id: "bot-1", is_bot: true, delete_at: 0 };
+      }
+      if (method === "POST" && endpoint.endsWith("/members")) {
+        if (endpoint === "/channels/chan-b/members" && !channelFailed) {
+          channelFailed = true;
+          throw mmError(502, "membership unavailable");
+        }
+        if (memberships.has(endpoint)) {
+          const detail = endpoint.startsWith("/teams/")
+            ? '{"id":"store.sql_team.save_member.exists.app_error"}'
+            : endpoint === "/channels/chan-a/members"
+              ? '{"id":"store.sql_channel.save_member.exists.app_error"}'
+              : "user_already_in_channel";
+          throw mmError(409, detail);
+        }
+        memberships.add(endpoint);
+        return {};
+      }
+      if (method === "GET" && endpoint === "/users/bot-1/tokens") {
+        return minted ? [{ id: "stale-pat", description: PROJECT_AGENT_PAT_DESCRIPTION }] : [];
+      }
+      if (method === "POST" && endpoint === "/users/tokens/revoke") return {};
+      if (method === "POST" && endpoint === "/users/bot-1/tokens") return { token: `pat-${++minted}` };
+      throw new Error(`unexpected mmApiCall: ${method} ${endpoint}`);
+    });
+    d.mmApiCall = mm.fn;
+
+    await expect(createProjectAgentBot(d, createInput())).rejects.toThrow("membership unavailable");
+    expect(d.set).not.toHaveBeenCalled();
+    await expect(createProjectAgentBot(d, createInput())).resolves.toEqual({ mmUserId: "bot-1", token: "pat-1" });
+    await expect(createProjectAgentBot(d, createInput())).resolves.toEqual({ mmUserId: "bot-1", token: "pat-2" });
+
+    expect(memberships).toEqual(new Set([
+      "/teams/team-1/members", "/channels/chan-a/members", "/channels/chan-b/members",
+    ]));
+    expect(d.set).toHaveBeenCalledTimes(2);
+    expect(d.set).toHaveBeenLastCalledWith(expect.objectContaining({ personalToken: "pat-2", mmUserId: "bot-1" }));
+    expect(mm.calls).toContainEqual({ method: "POST", endpoint: "/users/tokens/revoke", body: { token_id: "stale-pat" } });
+  });
+
+  describe.each(["/teams/team-1/members", "/channels/chan-a/members"])("membership failure at %s", (failedEndpoint) => {
+    it.each([
+      [409, '{"id":"store.sql_channel.save_member.conflict.app_error"}'],
+      [409, "already a member"],
+      [409, '{"id":"store.sql_channel.save_member.exists.app_error.other"}'],
+      [409, JSON.stringify({
+        id: failedEndpoint.startsWith("/teams/")
+          ? "store.sql_channel.save_member.exists.app_error"
+          : "store.sql_team.save_member.exists.app_error",
+      })],
+      [401, '{"id":"store.sql_channel.save_member.exists.app_error"}'],
+      [403, '{"id":"store.sql_channel.save_member.exists.app_error"}'],
+    ])("preserves status %s with detail %s without minting or saving a token", async (status, detail) => {
+      const d = deps();
+      const failure = mmError(status, detail);
+      d.mmApiCall = vi.fn(async (method: string, endpoint: string) => {
+        if (method === "POST" && endpoint === "/bots") return { user_id: "bot-1" };
+        if (endpoint === failedEndpoint) throw failure;
+        if (method === "POST" && endpoint.endsWith("/members")) return {};
+        throw new Error(`unexpected mmApiCall: ${method} ${endpoint}`);
+      });
+
+      await expect(createProjectAgentBot(d, createInput())).rejects.toBe(failure);
+
+      expect(d.mmApiCall.mock.calls.some(([, endpoint]) => endpoint.includes("/tokens"))).toBe(false);
+      expect(d.set).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses to adopt a username-squatting NON-bot user", async () => {

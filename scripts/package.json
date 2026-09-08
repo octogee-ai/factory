@@ -10,7 +10,6 @@
     "fleet": "tsx ops/fleet.ts",
     "backfill-gateway-field": "tsx ops/backfill-gateway-field.ts",
     "backfill-gateway-mutable-config": "tsx ops/backfill-gateway-mutable-config.ts",
-    "backfill-project-agents": "tsx ops/backfill-project-agents.ts",
     "pretest": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "test": "npx vitest run __tests__",
     "pretest:emulator": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",

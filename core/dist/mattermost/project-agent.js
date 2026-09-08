@@ -56,15 +56,33 @@ async function revokeTokens(deps, mmUserId, matches) {
         await deps.mmApiCall("POST", "/users/tokens/revoke", { token_id: token.id });
     }
 }
+async function addProjectAgentMember(deps, kind, id, mmUserId) {
+    const endpoint = `/${kind}/${id}/members`;
+    try {
+        await deps.mmApiCall("POST", endpoint, {
+            ...(kind === "teams" ? { team_id: id } : {}),
+            user_id: mmUserId,
+        });
+    }
+    catch (error) {
+        if (!(error instanceof Error) || error.status !== 409)
+            throw error;
+        const errorId = error.message.match(/"id"\s*:\s*"([^"]+)"/u)?.[1]
+            ?? error.message.replace(/^MM API 409:\s*/u, "");
+        const alreadyMemberIds = kind === "teams"
+            ? ["store.sql_team.save_member.exists.app_error"]
+            : ["store.sql_channel.save_member.exists.app_error", "user_already_in_channel"];
+        if (!alreadyMemberIds.includes(errorId))
+            throw error;
+        deps.log(`[project-agent] ${mmUserId} already belongs to ${kind}/${id}`);
+    }
+}
 export async function createProjectAgentBot(deps, input) {
     const botUsername = projectAgentMmUsername(input.username, input.project);
     const mmUserId = await createOrAdoptBotUser(deps, botUsername, input.displayName, `Octogee project agent for ${input.username}/${input.project}`);
-    await deps.mmApiCall("POST", `/teams/${input.teamId}/members`, {
-        team_id: input.teamId,
-        user_id: mmUserId,
-    });
+    await addProjectAgentMember(deps, "teams", input.teamId, mmUserId);
     for (const channelId of input.projectChannelIds) {
-        await deps.mmApiCall("POST", `/channels/${channelId}/members`, { user_id: mmUserId });
+        await addProjectAgentMember(deps, "channels", channelId, mmUserId);
     }
     await revokeTokens(deps, mmUserId, (t) => t.description === PROJECT_AGENT_PAT_DESCRIPTION);
     const minted = (await deps.mmApiCall("POST", `/users/${mmUserId}/tokens`, {
