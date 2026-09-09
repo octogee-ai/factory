@@ -75,32 +75,24 @@ vi.mock("@octogee/core/mattermost/project-agent", () => ({
   projectAgentSecretDocId: (pid: string) => `projectAgentMattermost-${pid}`,
 }));
 
-const { setProjectAgentEnabled, retireProjectAgentForDeletion } = await import(
+const { provisionProjectAgent, retireProjectAgentForDeletion } = await import(
   "../lib/project-agent-service.js"
 );
 
 function actor(overrides: Record<string, unknown> = {}) {
-  return {
-    uid: "owner-1",
-    userData: { username: "mira", subscription: { tier: "pro" } },
-    workspaceId: "mira",
-    ...overrides,
-  };
+  return { uid: "owner-1", workspaceId: "mira", ...overrides };
 }
 
 const PROJECT_PATH = "workspaces/mira/projects/orbit";
 
 function projectAgentStateWrite(
-  enabled: boolean,
-  status: "provisioning" | "ready" | "retiring" | "agentless" | "error",
+  status: "provisioning" | "ready" | "error",
   { lastError = null }: { lastError?: string | null } = {},
 ) {
   return {
     path: PROJECT_PATH,
     data: {
       agent: {
-        enabled,
-        mode: enabled ? "scoped" : "agentless",
         status,
         activationId: null,
         lastError,
@@ -143,75 +135,20 @@ beforeEach(() => {
   h.logger.warn.mockReset();
 });
 
-describe("setProjectAgentEnabled — enable", () => {
-  it("gates enable on paid-ness from the shared tier config — trial, free (expired trial), and unknown tiers are all blocked", async () => {
-    seedProject();
-    for (const userData of [
-      { username: "mira", selectedTier: "trial" },
-      { username: "mira", tier: "free", selectedTier: "free" },
-      { username: "mira", selectedTier: "enterprise-legacy" },
-      { username: "mira" },
-    ]) {
-      const result = await setProjectAgentEnabled(actor({ userData }), "orbit", true);
-      expect(result).toEqual({
-        status: 402,
-        body: { error: "Project agents are available on paid plans" },
-      });
-    }
-    expect(h.sets).toEqual([]);
-    expect(h.updates).toEqual([]);
-  });
-
-  it("allows an active Builder Signup Offer to enable a project agent", async () => {
-    seedProject();
-    const result = await setProjectAgentEnabled(
-      actor({
-        userData: {
-          username: "mira",
-          tier: "personal_free",
-          trialGrant: {
-            schemaVersion: 3,
-            offerId: "builder-signup",
-            offerVersion: 1,
-            personalTier: "personal",
-            builderTier: "hobby",
-            configHash: "config-a",
-            claimedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
-            endsAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000),
-          },
-        },
-      }),
-      "orbit",
-      true,
-    );
-
-    expect(result.status).toBe(200);
-    expect(h.createProjectAgentBot).toHaveBeenCalled();
-  });
-
-  it("an active paid subscription wins over a stale free selection (billing precedence)", async () => {
-    seedProject();
-    const result = await setProjectAgentEnabled(
-      actor({ userData: { username: "mira", selectedTier: "free", subscription: { tier: "hobby" } } }),
-      "orbit",
-      true,
-    );
-    expect(result.status).toBe(200);
-  });
-
-  it("502s when the workspace has no MM teamId, keeping the flag for retry", async () => {
+describe("provisionProjectAgent", () => {
+  it("502s when the workspace has no MM teamId, recording the error for retry", async () => {
     seedProject();
     h.docs.set("workspaces/mira", { ownerUid: "owner-1" });
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
     expect(result).toEqual({
       status: 502,
-      body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
+      body: { error: "Project Agent provisioning failed - retry from project settings" },
     });
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
-      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    expect(h.sets).toContainEqual(projectAgentStateWrite("provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
+      lastError: "Project Agent provisioning failed - retry from project settings",
     }));
     expect(h.createProjectAgentBot).not.toHaveBeenCalled();
     expect(h.logger.error).toHaveBeenCalled();
@@ -220,7 +157,7 @@ describe("setProjectAgentEnabled — enable", () => {
   it("403s when the caller is not the project owner", async () => {
     seedProject({ ownerUid: "someone-else" });
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
     expect(result).toEqual({
       status: 403,
@@ -234,7 +171,7 @@ describe("setProjectAgentEnabled — enable", () => {
   it("does not materialize a project Agent for an archived project", async () => {
     seedProject({ commercialLifecycle: { status: "archived" } });
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
     expect(result).toEqual({
       status: 409,
@@ -245,11 +182,11 @@ describe("setProjectAgentEnabled — enable", () => {
   });
 
   it("404s for a missing project and 400s for an invalid id", async () => {
-    await expect(setProjectAgentEnabled(actor(), "orbit", true)).resolves.toEqual({
+    await expect(provisionProjectAgent(actor(), "orbit")).resolves.toEqual({
       status: 404,
       body: { error: "Project not found" },
     });
-    await expect(setProjectAgentEnabled(actor(), "Bad!", true)).resolves.toEqual({
+    await expect(provisionProjectAgent(actor(), "Bad!")).resolves.toEqual({
       status: 400,
       body: { error: "Invalid project" },
     });
@@ -258,9 +195,9 @@ describe("setProjectAgentEnabled — enable", () => {
   it("mints the bot and keeps the agent provisioning until the runtime reports readiness", async () => {
     seedProject();
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite("provisioning"));
     expect(h.sets.some((write) => (write.data.agent as { status: string }).status === "ready")).toBe(false);
     expect((h.sets.at(-1)?.data.agent as { activationId: string }).activationId).toMatch(/^[a-f0-9-]{36}$/);
     expect(h.createProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
@@ -277,21 +214,21 @@ describe("setProjectAgentEnabled — enable", () => {
     );
     expect(result).toEqual({
       status: 200,
-      body: { success: true, enabled: true, mode: "scoped", status: "provisioning", provisioned: true },
+      body: { success: true, status: "provisioning", provisioned: true },
     });
   });
 
-  it("invalidates prior readiness before minting and assigns a new activation to each successful enable", async () => {
-    seedProject({ agent: { enabled: true, status: "ready", activationId: "previous" } });
+  it("invalidates prior readiness before minting and assigns a new activation to each successful provision", async () => {
+    seedProject({ agent: { status: "ready", activationId: "previous" } });
     let finishMint!: (value: { mmUserId: string; token: string }) => void;
     h.createProjectAgentBot.mockImplementationOnce(() => new Promise((resolve) => { finishMint = resolve; }));
-    const enabling = setProjectAgentEnabled(actor(), "orbit", true);
+    const enabling = provisionProjectAgent(actor(), "orbit");
     await vi.waitFor(() => expect(h.createProjectAgentBot).toHaveBeenCalled());
-    expect(h.sets).toEqual([projectAgentStateWrite(true, "provisioning")]);
+    expect(h.sets).toEqual([projectAgentStateWrite("provisioning")]);
     finishMint({ mmUserId: "bot-1", token: "new-pat" });
     await enabling;
     const first = (h.sets.at(-1)?.data.agent as { activationId: string }).activationId;
-    await setProjectAgentEnabled(actor(), "orbit", true);
+    await provisionProjectAgent(actor(), "orbit");
     const second = (h.sets.at(-1)?.data.agent as { activationId: string }).activationId;
     expect(second).not.toBe(first);
   });
@@ -299,42 +236,42 @@ describe("setProjectAgentEnabled — enable", () => {
   it("registers the agent id in the owner's provisioning roster so the byok broker will issue its tokens", async () => {
     seedProject();
 
-    await setProjectAgentEnabled(actor(), "orbit", true);
+    await provisionProjectAgent(actor(), "orbit");
 
     expect(h.updates).toEqual([ROSTER_UNION]);
   });
 
-  it("keeps the flag but reports 502 when minting fails (retry re-mints idempotently)", async () => {
+  it("reports 502 when minting fails (retry re-mints idempotently)", async () => {
     seedProject();
     h.createProjectAgentBot.mockRejectedValue(new Error("MM down"));
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
-      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    expect(h.sets).toContainEqual(projectAgentStateWrite("provisioning"));
+    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
+      lastError: "Project Agent provisioning failed - retry from project settings",
     }));
     expect(h.updates).toEqual([ROSTER_UNION]);
     expect(result).toEqual({
       status: 502,
-      body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
+      body: { error: "Project Agent provisioning failed - retry from project settings" },
     });
     expect(h.logger.error).toHaveBeenCalled();
   });
 
-  it("keeps the flag but reports 502 when primary membership cannot converge", async () => {
+  it("reports 502 when primary membership cannot converge", async () => {
     seedProject();
     h.addChannelMember.mockRejectedValue(new Error("primary membership mismatch"));
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
     expect(h.createProjectAgentBot).toHaveBeenCalled();
     expect(result).toEqual({
       status: 502,
-      body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
+      body: { error: "Project Agent provisioning failed - retry from project settings" },
     });
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
-      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
+    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
+      lastError: "Project Agent provisioning failed - retry from project settings",
     }));
     expect(h.logger.error).toHaveBeenCalled();
   });
@@ -346,113 +283,17 @@ describe("setProjectAgentEnabled — enable", () => {
       new MattermostIdentityMissingError("Mattermost user bot-1 was not found"),
     );
 
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
+    const result = await provisionProjectAgent(actor(), "orbit");
 
     expect(h.createProjectAgentBot).toHaveBeenCalled();
     expect(result).toEqual({
       status: 422,
       body: { error: "Your chat account could not be found. Please contact support to restore access." },
     });
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
+    expect(h.sets).toContainEqual(projectAgentStateWrite("error", {
       lastError: "Your chat account could not be found. Please contact support to restore access.",
     }));
     expect(h.logger.error).toHaveBeenCalled();
-  });
-});
-
-describe("setProjectAgentEnabled — disable", () => {
-  it("writes the flag and retires the minted bot", async () => {
-    seedProject();
-    h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
-      mmUserId: "bot-1",
-      personalToken: "pat-1",
-    });
-
-    const result = await setProjectAgentEnabled(actor(), "orbit", false);
-
-    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "retiring"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "agentless"));
-    expect(h.retireProjectAgentBot).toHaveBeenCalledWith(expect.anything(), {
-      uid: "owner-1",
-      project: "orbit",
-      mmUserId: "bot-1",
-    });
-    expect(h.updates).toEqual([ROSTER_REMOVAL]);
-    expect(result).toEqual({
-      status: 200,
-      body: { success: true, enabled: false, mode: "agentless", status: "agentless", provisioned: false },
-    });
-  });
-
-  it("disable works on trial (no paid gate for turning things off) and without a minted bot", async () => {
-    seedProject();
-
-    const result = await setProjectAgentEnabled(
-      actor({ userData: { username: "mira", selectedTier: "trial" } }),
-      "orbit",
-      false,
-    );
-
-    expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
-    expect(h.updates).toEqual([ROSTER_REMOVAL]);
-    expect(result).toEqual({
-      status: 200,
-      body: { success: true, enabled: false, mode: "agentless", status: "agentless", provisioned: false },
-    });
-  });
-
-  it("deregisters the roster id even when retiring the bot fails — the disabled flag already ends config demand", async () => {
-    seedProject();
-    h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
-      mmUserId: "bot-1",
-      personalToken: "pat-1",
-    });
-    h.retireProjectAgentBot.mockRejectedValue(new Error("MM down"));
-
-    const result = await setProjectAgentEnabled(actor(), "orbit", false);
-
-    expect(h.updates).toEqual([ROSTER_REMOVAL]);
-    expect(result).toEqual({
-      status: 502,
-      body: { error: "Agent disabled, but retiring the bot failed - toggle again to retry" },
-    });
-    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "error", {
-      lastError: "Agent disabled, but retiring the bot failed - toggle again to retry",
-    }));
-  });
-
-  it("records an agentless error instead of claiming success when the bot secret is malformed", async () => {
-    seedProject();
-    h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", { personalToken: "pat-1" });
-
-    const result = await setProjectAgentEnabled(actor(), "orbit", false);
-
-    expect(h.retireProjectAgentBot).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      status: 502,
-      body: { error: "Agent disabled, but retiring the bot failed - toggle again to retry" },
-    });
-    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "retiring"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite(false, "error", {
-      lastError: "Agent disabled, but retiring the bot failed - toggle again to retry",
-    }));
-  });
-
-  it("records an error state when the gateway roster cannot converge", async () => {
-    seedProject();
-    h.updateFailures.set("users/owner-1", new Error("Firestore unavailable"));
-
-    const result = await setProjectAgentEnabled(actor(), "orbit", true);
-
-    expect(h.createProjectAgentBot).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      status: 502,
-      body: { error: "Agent enabled, but provisioning failed - toggle again to retry" },
-    });
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "provisioning"));
-    expect(h.sets).toContainEqual(projectAgentStateWrite(true, "error", {
-      lastError: "Agent enabled, but provisioning failed - toggle again to retry",
-    }));
   });
 });
 

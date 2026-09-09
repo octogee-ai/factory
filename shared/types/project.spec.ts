@@ -4,30 +4,24 @@ import {
   PROJECT_RECIPE_IDS,
   defaultProjectRecipe,
   isProjectRecipeId,
-  projectAgentEnabled,
+  projectAgentConfigured,
   projectRepoSourceFromDoc,
   type ProjectRecipeId,
   type ProjectType,
 } from './project.js';
 
-describe('projectAgentEnabled', () => {
-  it('uses mode over a stale enabled flag', () => {
-    expect(projectAgentEnabled({ mode: 'scoped', enabled: false })).toBe(true);
-    expect(projectAgentEnabled({ mode: 'agentless', enabled: true })).toBe(false);
+describe('projectAgentConfigured', () => {
+  it('treats any agent record as the project having its agent', () => {
+    expect(projectAgentConfigured({})).toBe(true);
+    expect(projectAgentConfigured({ status: 'provisioning' })).toBe(true);
+    expect(projectAgentConfigured({ status: 'error', lastError: 'mint failed' })).toBe(true);
   });
 
-  it('falls back to enabled only for legacy records with no mode', () => {
-    expect(projectAgentEnabled({ enabled: true })).toBe(true);
-    expect(projectAgentEnabled({ enabled: false })).toBe(false);
-    expect(projectAgentEnabled({ mode: null, enabled: true })).toBe(false);
-  });
-
-  it('fails closed for malformed project-agent state', () => {
-    expect(projectAgentEnabled(undefined)).toBe(false);
-    expect(projectAgentEnabled(null)).toBe(false);
-    expect(projectAgentEnabled('scoped')).toBe(false);
-    expect(projectAgentEnabled([])).toBe(false);
-    expect(projectAgentEnabled({ mode: 'unknown', enabled: true })).toBe(false);
+  it('fails closed for a missing or malformed agent record', () => {
+    expect(projectAgentConfigured(undefined)).toBe(false);
+    expect(projectAgentConfigured(null)).toBe(false);
+    expect(projectAgentConfigured('scoped')).toBe(false);
+    expect(projectAgentConfigured([])).toBe(false);
   });
 });
 

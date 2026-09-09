@@ -37,7 +37,7 @@ import {
 } from "@octogee/shared/types/identity";
 import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectAgentEnabled, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
+import { projectAgentConfigured, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedBuilderAgentDefaultResolver,
   createCachedFreeTierModelResolver,
@@ -2065,7 +2065,7 @@ function installSnapshotRoutes(
         const agent = agentByProject.get(projectId);
         return {
           projectId,
-          projectAgentEnabled: projectAgentEnabled(agent),
+          projectAgentConfigured: projectAgentConfigured(agent),
           projectAgentMmUserId: agent?.mmUserId ?? null,
           channelIds,
         };

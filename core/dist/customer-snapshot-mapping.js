@@ -1,7 +1,7 @@
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectAgentEnabled } from "@octogee/shared/types/project";
+import { projectAgentConfigured } from "@octogee/shared/types/project";
 export function mapWorkspaceChannelDoc(data) {
     const channelId = data.mattermost?.channelId;
     if (!channelId)
@@ -51,7 +51,7 @@ function projectAgentRuntimeState(value) {
 // a disabled-with-secret entry survives so the reconcile can retire it.
 export function mapProjectAgentState(projectId, projectData, secretData) {
     const agent = projectData.agent;
-    const requestedEnabled = projectAgentEnabled(agent);
+    const requestedEnabled = projectAgentConfigured(agent);
     const commercialLifecycle = projectData.commercialLifecycle;
     const archived = !!commercialLifecycle &&
         typeof commercialLifecycle === "object" &&

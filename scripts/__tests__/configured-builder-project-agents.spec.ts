@@ -137,7 +137,7 @@ describe("configuredBuilderProjectAgentPatch", () => {
     expect(entry).toEqual({ ...desired.projectAgentEntries[0], ...customized, name: desired.projectAgentEntries[0].name, identity: desired.projectAgentEntries[0].identity });
   });
 
-  it("leaves disabled projects agentless instead of restoring a coach fallback", () => {
+  it("leaves projects without an active agent unbound instead of restoring a coach fallback", () => {
     const current = currentConfig("entries");
     const { patch, retiredAgentIds } = configuredBuilderProjectAgentPatch(current, {
       ...desired,

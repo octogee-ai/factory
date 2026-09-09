@@ -12,8 +12,7 @@ export interface ProjectRepoSource {
     owner: string;
     repo: string;
 }
-export type ProjectAgentMode = 'scoped' | 'agentless';
-export type ProjectAgentStatus = 'provisioning' | 'ready' | 'retiring' | 'agentless' | 'error';
+export type ProjectAgentStatus = 'provisioning' | 'ready' | 'error';
 export interface ProjectAgentIdentity {
     name: string;
     emoji: string;
@@ -36,14 +35,12 @@ export interface ProjectAgentConfig {
         status: 'pending' | 'sent';
         postId?: string;
     };
-    enabled: boolean;
-    mode?: ProjectAgentMode;
     status?: ProjectAgentStatus;
     activationId?: string | null;
     lastError?: string | null;
     updatedAt?: unknown;
 }
-export declare function projectAgentEnabled(value: unknown): boolean;
+export declare function projectAgentConfigured(value: unknown): boolean;
 export declare function projectCheckoutEnabled(value: unknown): boolean;
 export declare function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | null;
 export interface Project {

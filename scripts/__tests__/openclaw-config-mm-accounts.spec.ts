@@ -782,7 +782,7 @@ describe("buildCustomerBindings — Vegas partition", () => {
     { channelId: "proj-nova-gen", scope: "project" as const, projectId: "nova" },
   ];
 
-  it("routes only workspace channels to the coach and leaves agentless projects unbound", () => {
+  it("routes only workspace channels to the coach and leaves projects without an active agent unbound", () => {
     const bindings = buildCustomerBindings([
       { slug: "chris", channels, agentProjects: new Set(["orbit"]) },
     ]);

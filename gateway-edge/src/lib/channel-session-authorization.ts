@@ -3,7 +3,7 @@ import {
   USERNAME_RE,
   workspaceCoachAgentId,
 } from "@octogee/shared/types/identity";
-import { projectAgentEnabled } from "@octogee/shared/types/project";
+import { projectAgentConfigured } from "@octogee/shared/types/project";
 
 import {
   ChannelSessionMattermostError,
@@ -175,7 +175,7 @@ function activeProjectAgentMmUserId(
   projectData: FirebaseFirestore.DocumentData | undefined,
   credential: FirebaseFirestore.DocumentData | undefined,
 ): string | null {
-  if (!projectAgentEnabled(projectData?.agent)) return null;
+  if (!projectAgentConfigured(projectData?.agent)) return null;
   if (
     typeof credential?.mmUserId !== "string" ||
     !MATTERMOST_ID.test(credential.mmUserId)

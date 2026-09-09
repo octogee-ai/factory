@@ -1,4 +1,4 @@
-export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId, projectAgentEnabled, } from './project.js';
+export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId, projectAgentConfigured, } from './project.js';
 export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
 export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export { AGENT_IMPORT_FORMAT_VERSION, AGENT_IMPORT_AUTHORIZATION_INTENTS, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, isAgentImportAuthorizationIntent, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';

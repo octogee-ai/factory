@@ -15,7 +15,7 @@ describe("reconcileCoachProjectMembership", () => {
       coachMmUserId: "coach-mm",
       projects: [{
         projectId: "orbit",
-        projectAgentEnabled: true,
+        projectAgentConfigured: true,
         projectAgentMmUserId: "project-agent-mm",
         channelIds: ["project-2", "project-1", "project-1"],
       }],
@@ -39,13 +39,13 @@ describe("reconcileCoachProjectMembership", () => {
       projects: [
         {
           projectId: "app",
-          projectAgentEnabled: false,
+          projectAgentConfigured: false,
           projectAgentMmUserId: null,
           channelIds: ["disabled-project"],
         },
         {
           projectId: "orbit",
-          projectAgentEnabled: true,
+          projectAgentConfigured: true,
           projectAgentMmUserId: "project-agent-mm",
           channelIds: ["enabled-project"],
         },
@@ -66,7 +66,7 @@ describe("reconcileCoachProjectMembership", () => {
       coachMmUserId: "coach-mm",
       projects: [{
         projectId: "orbit",
-        projectAgentEnabled: true,
+        projectAgentConfigured: true,
         projectAgentMmUserId: null,
         channelIds: ["project-1"],
       }],
@@ -79,7 +79,7 @@ describe("reconcileCoachProjectMembership", () => {
   });
 
   it("adds missing coach membership and propagates upstream errors", async () => {
-    const input = { coachMmUserId: "coach-mm", projects: [{ projectId: "orbit", projectAgentEnabled: false,
+    const input = { coachMmUserId: "coach-mm", projects: [{ projectId: "orbit", projectAgentConfigured: false,
       projectAgentMmUserId: null, channelIds: ["project-1"] }] };
     const call = vi.fn(async (method: string) => {
       if (method === "GET") throw Object.assign(new Error("not found"), { status: 404 });

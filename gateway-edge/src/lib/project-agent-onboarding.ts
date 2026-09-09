@@ -5,7 +5,7 @@ import { mmApi } from "./mattermost.js";
 import { giteaWriteFiles } from "./gitea.js";
 import { workspaceGiteaOrg, projectRepoName } from "./gitea-naming.js";
 import { projectAgentMmUsername } from "@octogee/shared/types/identity";
-import { projectAgentEnabled, type ProjectAgentIdentity } from "@octogee/shared/types/project";
+import { projectAgentConfigured, type ProjectAgentIdentity } from "@octogee/shared/types/project";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 export interface ProjectHandoff {
@@ -47,7 +47,7 @@ export async function queueProjectHandoff(uid: string, workspaceId: string, proj
   const handoffRef = db.doc(`${ref.path}/agentState/handoff`);
   await db.runTransaction(async (tx) => {
     const project = (await tx.get(ref)).data();
-    if (project?.ownerUid !== uid || project.provisioningState !== "active" || !projectAgentEnabled(project.agent)) {
+    if (project?.ownerUid !== uid || project.provisioningState !== "active" || !projectAgentConfigured(project.agent)) {
       throw new Error("An active project with its own agent is required");
     }
     const existing = (await tx.get(handoffRef)).data();

@@ -46,14 +46,7 @@ export interface ProjectRepoSource {
   repo: string;
 }
 
-export type ProjectAgentMode = 'scoped' | 'agentless';
-
-export type ProjectAgentStatus =
-  | 'provisioning'
-  | 'ready'
-  | 'retiring'
-  | 'agentless'
-  | 'error';
+export type ProjectAgentStatus = 'provisioning' | 'ready' | 'error';
 
 export interface ProjectAgentIdentity {
   name: string;
@@ -68,22 +61,14 @@ export interface ProjectAgentConfig {
   requestedName?: string;
   kickoff?: { status: 'pending' | 'sent'; postId?: string };
   handoff?: { status: 'pending' | 'sent'; postId?: string };
-
-  enabled: boolean;
-  mode?: ProjectAgentMode;
   status?: ProjectAgentStatus;
   activationId?: string | null;
   lastError?: string | null;
   updatedAt?: unknown;
 }
 
-export function projectAgentEnabled(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const agent = value as { mode?: unknown; enabled?: unknown };
-  if (agent.mode === 'scoped') return true;
-  if (agent.mode === 'agentless') return false;
-  if (agent.mode !== undefined) return false;
-  return agent.enabled === true;
+export function projectAgentConfigured(value: unknown): boolean {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function projectCheckoutEnabled(value: unknown): boolean {

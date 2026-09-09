@@ -9,14 +9,13 @@ import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";
 import { provisionProjectRepo } from "./provisioning.js";
 import { projectRepoName } from "../../lib/gitea-naming.js";
-import { setProjectAgentEnabled } from "../../lib/project-agent-service.js";
+import { provisionProjectAgent } from "../../lib/project-agent-service.js";
 
 const router = Router();
 
 type WorkspaceMmContext = NonNullable<Awaited<ReturnType<typeof getWorkspaceMmContext>>>;
 type RetryMattermostContext = WorkspaceMmContext & {
   teamId: string;
-  userData: FirebaseFirestore.DocumentData | undefined;
 };
 
 interface RetryMember {
@@ -43,7 +42,7 @@ async function markRetryFailed(projectRef: FirebaseFirestore.DocumentReference, 
 async function retryMattermostContext(ctx: ProjectCtx, res: Response): Promise<RetryMattermostContext | null> {
   const userDoc = await db.doc(`users/${ctx.uid}`).get();
   const callerCtx = await getWorkspaceMmContext(ctx.uid, ctx.wid, userDoc.data());
-  if (callerCtx?.teamId) return { ...callerCtx, teamId: callerCtx.teamId, userData: userDoc.data() };
+  if (callerCtx?.teamId) return { ...callerCtx, teamId: callerCtx.teamId };
   await markRetryFailed(ctx.projectRef, "Workspace has no Mattermost team context");
   res.status(502).json({ error: "Retry failed — workspace chat is not ready" });
   return null;
@@ -240,16 +239,9 @@ async function activateRetriedProject(ctx: ProjectCtx, visibility: string): Prom
   });
 }
 
-async function enableRetriedProjectAgent(
-  ctx: ProjectCtx,
-  callerCtx: RetryMattermostContext,
-): Promise<void> {
+async function provisionRetriedProjectAgent(ctx: ProjectCtx): Promise<void> {
   try {
-    const result = await setProjectAgentEnabled(
-      { uid: ctx.uid, userData: callerCtx.userData, workspaceId: ctx.wid },
-      ctx.pid,
-      true,
-    );
+    const result = await provisionProjectAgent({ uid: ctx.uid, workspaceId: ctx.wid }, ctx.pid);
     if (result.status !== 200) {
       logger.warn(`[projects] Retry project agent not provisioned for ${ctx.wid}/${ctx.pid}`, {
         status: result.status,
@@ -276,7 +268,7 @@ async function retryProjectProvisioning(ctx: ProjectCtx, res: Response): Promise
   const visibility = restoredVisibility(ctx);
   if (!(await reconcileRetryRepoOrFail(ctx, res, visibility))) return;
   await activateRetriedProject(ctx, visibility);
-  await enableRetriedProjectAgent(ctx, callerCtx);
+  await provisionRetriedProjectAgent(ctx);
 
   logger.info(`[projects] Retry provisioning succeeded for ${ctx.wid}/${ctx.pid}`);
   res.json({ success: true, channelId: channel.id });

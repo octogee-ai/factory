@@ -22,17 +22,8 @@ export function defaultProjectRecipe(projectType) {
             return DEFAULT_PROJECT_RECIPE;
     }
 }
-export function projectAgentEnabled(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        return false;
-    const agent = value;
-    if (agent.mode === 'scoped')
-        return true;
-    if (agent.mode === 'agentless')
-        return false;
-    if (agent.mode !== undefined)
-        return false;
-    return agent.enabled === true;
+export function projectAgentConfigured(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 export function projectCheckoutEnabled(value) {
     return value !== false;

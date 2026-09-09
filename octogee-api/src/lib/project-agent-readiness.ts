@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { FieldValue, type DocumentData, type Firestore, type QuerySnapshot } from "firebase-admin/firestore";
 import type { FleetBrokerProjectAgentReadiness } from "@octogee/shared/types/fleet-broker";
 import { isValidProjectId } from "@octogee/shared/types/identity";
-import { projectAgentEnabled } from "@octogee/shared/types/project";
+import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 function validChannelIds(value: unknown): value is string[] {
@@ -47,7 +47,7 @@ function activationMatches(input: {
   channels: QuerySnapshot;
 }): boolean {
   const { uid, report, data, secret, channels } = input;
-  if (data?.ownerUid !== uid || !projectAgentEnabled(data.agent) ||
+  if (data?.ownerUid !== uid || !projectAgentConfigured(data.agent) ||
     data.commercialLifecycle?.status === "archived" || data.agent.activationId !== report.activationId ||
     !["provisioning", "ready"].includes(data.agent.status)) return false;
   if (typeof secret?.personalToken !== "string") return false;

@@ -769,12 +769,11 @@ describe("createProjectSessionChannel", () => {
     ]);
   });
 
-  it("keeps human project chat working when the project is explicitly agentless", async () => {
+  it("keeps human project chat working when the project has no agent record", async () => {
     h.docs.set(PROJECT_DOC_PATH, {
       id: "orbit",
       slug: "orbit",
       provisioningState: "active",
-      agent: { mode: "agentless", enabled: true },
     });
     h.docs.set("users/owner-1/secrets/projectAgentMattermost-orbit", {
       mmUserId: "stale-project-agent-mm",

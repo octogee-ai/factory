@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
-import { projectAgentEnabled } from "@octogee/shared/types/project";
+import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
 export const WORKSPACE_COMMIT_PROOF_PATH = "/internal/workspace/commit";
@@ -90,7 +90,7 @@ async function proofSecret(
   const identity = parseAgentId(target.agentId);
   if (identity.kind === "project") {
     const project = await db.doc(`workspaces/${target.slug}/projects/${identity.project}`).get();
-    if (!project.exists || !projectAgentEnabled(project.data()?.agent)) return null;
+    if (!project.exists || !projectAgentConfigured(project.data()?.agent)) return null;
   }
   const secret = await db.doc(secretPath).get();
   const personalToken = secret.exists ? secret.data()?.personalToken : undefined;

@@ -128,9 +128,9 @@ describe("channel session model routes", () => {
     expect(project.body.agentId).toBe("octogee-alice-proj-orbit-coach");
   });
 
-  it("uses the workspace coach for an agentless project channel", async () => {
+  it("uses the workspace coach for a project channel without an agent record", async () => {
     h.channelPath = "workspaces/alice/projects/orbit/channels/general";
-    h.docs.set("workspaces/alice/projects/orbit", { agent: { mode: "agentless", enabled: true } });
+    h.docs.set("workspaces/alice/projects/orbit", {});
     h.docs.set("users/owner-uid/secrets/projectAgentMattermost-orbit", {
       mmUserId: "q".repeat(26),
       personalToken: "u".repeat(32),

@@ -27,7 +27,7 @@ const h = vi.hoisted(() => ({
   } as ProjectUpdate | null,
   mmApi: vi.fn(),
   provisionProjectRepo: vi.fn(),
-  setProjectAgentEnabled: vi.fn(),
+  provisionProjectAgent: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -111,7 +111,7 @@ vi.mock("../routes/projects/provisioning.js", () => ({
 }));
 
 vi.mock("../lib/project-agent-service.js", () => ({
-  setProjectAgentEnabled: (...args: unknown[]) => h.setProjectAgentEnabled(...args),
+  provisionProjectAgent: (...args: unknown[]) => h.provisionProjectAgent(...args),
 }));
 
 vi.mock("../middleware/logging.js", () => ({
@@ -160,7 +160,7 @@ beforeEach(() => {
     throw new Error(`unexpected Mattermost call: ${method ?? "GET"} ${path}`);
   });
   h.provisionProjectRepo.mockReset().mockResolvedValue(null);
-  h.setProjectAgentEnabled.mockReset().mockResolvedValue({ status: 200, body: { success: true } });
+  h.provisionProjectAgent.mockReset().mockResolvedValue({ status: 200, body: { success: true } });
   h.logger.error.mockReset();
   h.logger.info.mockReset();
 });
@@ -181,11 +181,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     });
     expect(h.mmApi).toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "owner-mm" });
     expect(h.mmApi).not.toHaveBeenCalledWith("/channels/channel-1/members", "POST", { user_id: "agent-mm" });
-    expect(h.setProjectAgentEnabled).toHaveBeenCalledWith(
-      expect.objectContaining({ uid: "owner-1", workspaceId: "mira" }),
-      "orbit",
-      true,
-    );
+    expect(h.provisionProjectAgent).toHaveBeenCalledWith({ uid: "owner-1", workspaceId: "mira" }, "orbit");
     expect(h.provisionProjectRepo).toHaveBeenCalledWith({
       workspaceId: "mira",
       slug: "orbit",

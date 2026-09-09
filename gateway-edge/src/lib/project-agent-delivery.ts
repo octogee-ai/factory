@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentReference } from "firebase-admin/firestore";
-import { projectAgentEnabled, type ProjectAgentConfig } from "@octogee/shared/types/project";
+import { projectAgentConfigured, type ProjectAgentConfig } from "@octogee/shared/types/project";
 import { db, FieldValue } from "./db.js";
 import { mmApi } from "./mattermost.js";
 
@@ -23,7 +23,7 @@ function pendingDelivery(agent: ProjectAgentConfig): DeliveryKind | null {
 export async function claimProjectDelivery(ref: DocumentReference, uid: string): Promise<DeliveryClaim | null> {
   return db.runTransaction(async (tx) => {
     const project = (await tx.get(ref)).data();
-    if (project?.ownerUid !== uid || project.agent?.status !== "ready" || !projectAgentEnabled(project.agent)) return null;
+    if (project?.ownerUid !== uid || project.agent?.status !== "ready" || !projectAgentConfigured(project.agent)) return null;
     const kind = pendingDelivery(project.agent);
     if (!kind) return null;
     if (project.agent.deliveryLeaseUntil > Date.now()) throw new Error("Project agent delivery is in progress");

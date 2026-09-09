@@ -17,7 +17,7 @@ import { requestedProjectRecipe } from "./project-recipe.js";
 import { resolveEntitlements } from "@octogee/shared/types/billing";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
-import { setProjectAgentEnabled } from "./project-agent-service.js";
+import { provisionProjectAgent } from "./project-agent-service.js";
 
 // "workspace" would collide with the workspace repo in Gitea (projectRepoName
 // is the slug itself) — a project by that name adopts and shares the repo.
@@ -169,7 +169,7 @@ export async function createProjectForActor(
     const channel = await provisionProjectMattermost(projectRef, plan, callerCtx, artifacts);
     await provisionProjectCodeRepo(plan, artifacts);
     await markProjectActive(projectRef, plan.targetVisibility);
-    await enableProjectAgentByDefault(plan);
+    await provisionProjectAgentByDefault(plan);
     logger.info(`[projects] Created project ${plan.workspaceId}/${plan.slug}`, {
       source: plan.source,
       uid: plan.uid,
@@ -627,18 +627,13 @@ async function markProjectActive(
   });
 }
 
-// Every new project gets its scoped agent, so a project is useful the moment it
+// Every new project gets its agent, so a project is useful the moment it
 // exists and nothing has to reach in from the workspace coach. A mint failure is
-// not a create failure — the project is already active and the owner's toggle
-// retries; the same entitlement that gates project creation gates the agent, so
-// a 402 here means the two have drifted and the log is the signal.
-async function enableProjectAgentByDefault(plan: ProjectCreatePlan): Promise<void> {
+// not a create failure — the project is already active and the owner retries
+// from project settings.
+async function provisionProjectAgentByDefault(plan: ProjectCreatePlan): Promise<void> {
   try {
-    const result = await setProjectAgentEnabled(
-      { uid: plan.uid, userData: plan.userData, workspaceId: plan.workspaceId },
-      plan.slug,
-      true,
-    );
+    const result = await provisionProjectAgent({ uid: plan.uid, workspaceId: plan.workspaceId }, plan.slug);
     if (result.status !== 200) {
       logger.warn(
         `[projects] Default project agent not provisioned for ${plan.workspaceId}/${plan.slug}`,

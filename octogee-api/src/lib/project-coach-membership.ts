@@ -2,7 +2,7 @@ export interface ProjectCoachMembershipInput {
   coachMmUserId: string | null;
   projects: ReadonlyArray<{
     projectId: string;
-    projectAgentEnabled: boolean;
+    projectAgentConfigured: boolean;
     projectAgentMmUserId: string | null;
     channelIds: readonly string[];
   }>;
@@ -51,7 +51,7 @@ async function projectAgentMembershipError(
   channelId: string,
   call: MattermostCall,
 ): Promise<unknown> {
-  if (!project.projectAgentEnabled || !project.projectAgentMmUserId) return undefined;
+  if (!project.projectAgentConfigured || !project.projectAgentMmUserId) return undefined;
   try {
     await ensureChannelMember(call, channelId, project.projectAgentMmUserId);
     return undefined;
@@ -80,7 +80,7 @@ async function reconcileProjectMembership(
   for (const channelId of channelIds) {
     await reconcileProjectChannel(project, channelId, coachMmUserId, call);
   }
-  return channelIds.length > 0 && project.projectAgentEnabled && !project.projectAgentMmUserId;
+  return channelIds.length > 0 && project.projectAgentConfigured && !project.projectAgentMmUserId;
 }
 
 export async function reconcileCoachProjectMembership(

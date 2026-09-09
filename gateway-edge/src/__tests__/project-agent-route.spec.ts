@@ -3,7 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
-  setProjectAgentEnabled: vi.fn(),
+  provisionProjectAgent: vi.fn(),
   logger: { error: vi.fn(), info: vi.fn() },
 }));
 
@@ -14,7 +14,7 @@ vi.mock("../middleware/security.js", () => ({
 vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
 
 vi.mock("../lib/project-agent-service.js", () => ({
-  setProjectAgentEnabled: (...args: unknown[]) => h.setProjectAgentEnabled(...args),
+  provisionProjectAgent: (...args: unknown[]) => h.provisionProjectAgent(...args),
 }));
 
 const { default: agentRouter } = await import("../routes/projects/agent.js");
@@ -33,72 +33,35 @@ function app() {
 }
 
 beforeEach(() => {
-  h.setProjectAgentEnabled.mockReset();
+  h.provisionProjectAgent.mockReset();
   h.logger.error.mockReset();
 });
 
 describe("POST /api/projects/:wid/:pid/agent", () => {
-  it("relays the toggle to the service for the caller's own workspace", async () => {
-    h.setProjectAgentEnabled.mockResolvedValue({
+  it("provisions the project agent for the caller's own workspace", async () => {
+    h.provisionProjectAgent.mockResolvedValue({
       status: 200,
-      body: {
-        success: true,
-        enabled: true,
-        mode: "scoped",
-        status: "ready",
-        provisioned: true,
-      },
+      body: { success: true, status: "provisioning", provisioned: true },
     });
 
-    const resp = await request(app())
-      .post("/api/projects/mira/orbit/agent")
-      .send({ enabled: true });
+    const resp = await request(app()).post("/api/projects/mira/orbit/agent").send({});
 
     expect(resp.status).toBe(200);
-    expect(resp.body).toEqual({
-      success: true,
-      enabled: true,
-      mode: "scoped",
-      status: "ready",
-      provisioned: true,
-    });
-    expect(h.setProjectAgentEnabled).toHaveBeenCalledWith(
-      { uid: "owner-1", userData: { username: "mira" }, workspaceId: "mira" },
-      "orbit",
-      true,
-    );
+    expect(resp.body).toEqual({ success: true, status: "provisioning", provisioned: true });
+    expect(h.provisionProjectAgent).toHaveBeenCalledWith({ uid: "owner-1", workspaceId: "mira" }, "orbit");
   });
 
-  it("refuses toggles against another workspace", async () => {
-    const resp = await request(app())
-      .post("/api/projects/victim/orbit/agent")
-      .send({ enabled: true });
+  it("refuses provisioning against another workspace", async () => {
+    const resp = await request(app()).post("/api/projects/victim/orbit/agent").send({});
 
     expect(resp.status).toBe(403);
-    expect(h.setProjectAgentEnabled).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-boolean enabled instead of treating it as a destructive disable", async () => {
-    const resp = await request(app())
-      .post("/api/projects/mira/orbit/agent")
-      .send({ enabled: "yes" });
-
-    expect(resp.status).toBe(400);
-    expect(h.setProjectAgentEnabled).not.toHaveBeenCalled();
-  });
-
-  it("relays explicit disable", async () => {
-    h.setProjectAgentEnabled.mockResolvedValue({ status: 200, body: { success: true } });
-
-    await request(app()).post("/api/projects/mira/orbit/agent").send({ enabled: false });
-
-    expect(h.setProjectAgentEnabled).toHaveBeenCalledWith(expect.anything(), "orbit", false);
+    expect(h.provisionProjectAgent).not.toHaveBeenCalled();
   });
 
   it("returns 500 and logs when the service throws", async () => {
-    h.setProjectAgentEnabled.mockRejectedValue(new Error("boom"));
+    h.provisionProjectAgent.mockRejectedValue(new Error("boom"));
 
-    const resp = await request(app()).post("/api/projects/mira/orbit/agent").send({ enabled: true });
+    const resp = await request(app()).post("/api/projects/mira/orbit/agent").send({});
 
     expect(resp.status).toBe(500);
     expect(h.logger.error).toHaveBeenCalled();

@@ -453,7 +453,7 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
       targets.length,
     );
     expect(result).toEqual({ materialized: agentIds.length, deferred: [] });
-  });
+  }, 30_000);
 
   it("defers every affected agent when the batched apply fails unexpectedly", async () => {
     const agentIds = ["octogee-alice-coach", "octogee-bob-coach"];

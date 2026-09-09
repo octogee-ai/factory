@@ -71,11 +71,11 @@ describe("workspace commit agent proof", () => {
     )).toBe(false);
   });
 
-  it("rejects an agentless project agent even if its old credential and enabled flag still exist", async () => {
+  it("rejects a project agent whose project has no agent record even if its old credential still exists", async () => {
     const own = { agentId: "octogee-acme-proj-orbit-coach", slug: "acme", project: "orbit" };
     const disabled = {
       ...records,
-      "workspaces/acme/projects/orbit": { agent: { mode: "agentless", enabled: true } },
+      "workspaces/acme/projects/orbit": {},
     };
     expect(await verifyWorkspaceCommitProof(
       proof(own, "acme-orbit-pat"), own, fakeDb(disabled), () => NOW,

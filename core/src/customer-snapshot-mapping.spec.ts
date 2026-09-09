@@ -238,18 +238,18 @@ describe("byotSystemConfigFromDoc — users/{uid}/system/config → snapshot.sys
 });
 
 describe("mapProjectAgentState", () => {
-  it("maps an enabled project agent with its minted secret", () => {
+  it("maps a project agent with its minted secret", () => {
     expect(
       mapProjectAgentState(
         "orbit",
-        { agent: { enabled: true, activationId: "activation-1", status: "provisioning" } },
+        { agent: { activationId: "activation-1", status: "provisioning" } },
         { mmUserId: "bot-1", personalToken: "pat-1" },
       ),
     ).toEqual({ projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: "activation-1", status: "provisioning" });
   });
 
-  it("maps an enabled-but-unminted agent with null credentials", () => {
-    expect(mapProjectAgentState("orbit", { agent: { enabled: true } }, undefined)).toEqual({
+  it("maps an unminted agent with null credentials", () => {
+    expect(mapProjectAgentState("orbit", { agent: {} }, undefined)).toEqual({
       projectId: "orbit",
       enabled: true,
       mmUserId: null,
@@ -257,29 +257,12 @@ describe("mapProjectAgentState", () => {
     });
   });
 
-  it("uses project agent mode before a stale legacy enabled flag", () => {
-    expect(
-      mapProjectAgentState(
-        "orbit",
-        { agent: { mode: "scoped", enabled: false } },
-        undefined,
-      ),
-    ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null, activationId: null, status: null });
-    expect(
-      mapProjectAgentState(
-        "orbit",
-        { agent: { mode: "agentless", enabled: true } },
-        { mmUserId: "bot-1", personalToken: "pat-1" },
-      ),
-    ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null });
-  });
-
   it("projects an archived project's agent as retire-pending instead of runnable", () => {
     expect(
       mapProjectAgentState(
         "orbit",
         {
-          agent: { enabled: true },
+          agent: {},
           commercialLifecycle: { status: "archived" },
         },
         { mmUserId: "bot-1", personalToken: "pat-1" },
@@ -292,21 +275,21 @@ describe("mapProjectAgentState", () => {
     });
   });
 
-  it("keeps a disabled entry while a secret lingers (retire pending)", () => {
+  it("keeps an archived entry while a secret lingers (retire pending)", () => {
     expect(
-      mapProjectAgentState("orbit", { agent: { enabled: false } }, { mmUserId: "bot-1", personalToken: "pat-1" }),
+      mapProjectAgentState("orbit", { agent: {}, commercialLifecycle: { status: "archived" } }, { mmUserId: "bot-1", personalToken: "pat-1" }),
     ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null });
   });
 
   it("returns null when the project has no agent state at all (snapshot stays lean)", () => {
     expect(mapProjectAgentState("orbit", {}, undefined)).toBeNull();
-    expect(mapProjectAgentState("orbit", { agent: { enabled: false } }, undefined)).toBeNull();
+    expect(mapProjectAgentState("orbit", { agent: {}, commercialLifecycle: { status: "archived" } }, undefined)).toBeNull();
   });
 
   it("treats malformed agent/secret shapes as absent", () => {
     expect(mapProjectAgentState("orbit", { agent: "yes" }, undefined)).toBeNull();
     expect(
-      mapProjectAgentState("orbit", { agent: { enabled: true } }, { mmUserId: 7, personalToken: null }),
+      mapProjectAgentState("orbit", { agent: {} }, { mmUserId: 7, personalToken: null }),
     ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null, activationId: null, status: null });
   });
 });
@@ -343,12 +326,12 @@ describe("collectProjectAgentStates", () => {
     return { db, secretReads };
   }
 
-  it("collects enabled and retire-pending agents, skipping untouched projects without secret reads", async () => {
+  it("collects live and retire-pending agents, skipping untouched projects without secret reads", async () => {
     const { db, secretReads } = fakeDb(
       [
-        { id: "orbit", data: { agent: { enabled: true } } },
+        { id: "orbit", data: { agent: {} } },
         { id: "plain", data: {} },
-        { id: "old", data: { agent: { enabled: false } } },
+        { id: "old", data: { agent: {}, commercialLifecycle: { status: "archived" } } },
       ],
       {
         "projectAgentMattermost-orbit": { mmUserId: "bot-1", personalToken: "pat-1" },
@@ -368,8 +351,8 @@ describe("collectProjectAgentStates", () => {
   it("quarantines a malformed identity without blocking healthy projects or retiring its bot", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const { db } = fakeDb([
-      { id: "broken", data: { agent: { enabled: true, identity: { name: "Broken" }, kickoff: { status: "pending" } } } },
-      { id: "healthy", data: { agent: { enabled: true, identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } } } },
+      { id: "broken", data: { agent: { identity: { name: "Broken" }, kickoff: { status: "pending" } } } },
+      { id: "healthy", data: { agent: { identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } } } },
     ], {
       "projectAgentMattermost-broken": { mmUserId: "bot-broken", personalToken: "pat-broken" },
       "projectAgentMattermost-healthy": { mmUserId: "bot-healthy", personalToken: "pat-healthy" },
@@ -383,8 +366,8 @@ describe("collectProjectAgentStates", () => {
     } finally { error.mockRestore(); }
   });
 
-  it("drops fully-settled disabled agents (no secret left)", async () => {
-    const { db } = fakeDb([{ id: "old", data: { agent: { enabled: false } } }], {});
+  it("drops fully-settled archived agents (no secret left)", async () => {
+    const { db } = fakeDb([{ id: "old", data: { agent: {}, commercialLifecycle: { status: "archived" } } }], {});
 
     expect(await collectProjectAgentStates(db, "uid-1", "alice")).toEqual([]);
   });
