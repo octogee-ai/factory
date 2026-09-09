@@ -7,9 +7,13 @@ import {
   acquireSystemConfigSyncLeaseSync,
 } from "@octogee/core/system-config-mutation-lease";
 
-import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
+import { isValidUsername, parseAgentId, workspaceCoachAgentId } from "../../shared/types/identity.js";
+import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
+import { SAFE_DEFAULT_AGENT_ID, buildSafeDefaultAgent } from "./openclaw-config-builders.js";
 import {
   log as defaultLog,
+  AGENTS_DIR,
+  CUSTOMERS_DIR,
   OPENCLAW_DIR,
   TEMPLATES_DIR,
   GIT_SSH_HOST,
@@ -746,6 +750,96 @@ function cloneOrReuseSystemConfigRepo(
   return true;
 }
 
+const LEGACY_IMPLICIT_AGENT_ID = "main";
+
+type RosterEntry = { id: string; entry: UnknownRecord };
+
+function readRosterEntries(agents: UnknownRecord): { form: "entries" | "list"; roster: RosterEntry[] } {
+  const entries = asRecord(agents.entries);
+  if (entries) {
+    return {
+      form: "entries",
+      roster: Object.entries(entries).map(([id, entry]) => ({ id, entry: { ...(asRecord(entry) ?? {}) } })),
+    };
+  }
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  const roster = list.flatMap((entry) => {
+    const record = asRecord(entry);
+    if (!record) return [];
+    const { id, ...rest } = record;
+    return typeof id === "string" && id ? [{ id, entry: rest }] : [];
+  });
+  return { form: Array.isArray(agents.list) ? "list" : "entries", roster };
+}
+
+function writeRosterEntries(agents: UnknownRecord, form: "entries" | "list", roster: RosterEntry[]): void {
+  if (form === "list") {
+    delete agents.entries;
+    agents.list = roster.map(({ id, entry }) => ({ id, ...entry }));
+    return;
+  }
+  delete agents.list;
+  agents.entries = Object.fromEntries(roster.map(({ id, entry }) => [id, entry]));
+}
+
+function repointAgentDefault(holder: UnknownRecord, key: string, from: string, to: string): boolean {
+  const target = asRecord(holder[key]);
+  if (!target || target.agentId !== from) return false;
+  target.agentId = to;
+  return true;
+}
+
+// OpenClaw materializes its implicit `main` agent the first time a roster-less
+// config gains an explicit roster, and the hello's default agent is the first
+// roster entry. A Builder therefore boots with its coach already first and the
+// model-less anchor last, so Model Setup never sees `main`.
+export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: string): boolean {
+  const agents = asRecord(config.agents) ?? {};
+  config.agents = agents;
+  const coachId = workspaceCoachAgentId(slug);
+  const { form, roster } = readRosterEntries(agents);
+  const before = JSON.stringify({ ownership: agents.ownership, ids: roster.map((item) => item.id) });
+
+  const kept = roster.filter((item) => item.id !== LEGACY_IMPLICIT_AGENT_ID);
+  const coach = kept.find((item) => item.id === coachId) ?? {
+    id: coachId,
+    entry: {
+      workspace: path.join(CUSTOMERS_DIR, slug),
+      agentDir: path.join(AGENTS_DIR, coachId, "agent"),
+      model: DEFAULT_BUILDER_AGENT_MODEL_REF,
+    },
+  };
+  if (coach.entry.model === undefined) coach.entry.model = DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const { id: _anchorId, ...anchorSeed } = buildSafeDefaultAgent();
+  const anchor = kept.find((item) => item.id === SAFE_DEFAULT_AGENT_ID) ?? { id: SAFE_DEFAULT_AGENT_ID, entry: anchorSeed };
+  const others = kept.filter((item) => item.id !== coachId && item.id !== SAFE_DEFAULT_AGENT_ID);
+  const ordered = [coach, ...others, anchor];
+  writeRosterEntries(agents, form, ordered);
+  agents.ownership = "explicit";
+
+  const defaults = asRecord(agents.defaults) ?? {};
+  agents.defaults = defaults;
+  let defaultsChanged = false;
+  if (asRecord(defaults.authInheritance)?.agentId !== SAFE_DEFAULT_AGENT_ID) {
+    defaults.authInheritance = { agentId: SAFE_DEFAULT_AGENT_ID };
+    defaultsChanged = true;
+  }
+  defaultsChanged = repointAgentDefault(defaults, "systemAgent", LEGACY_IMPLICIT_AGENT_ID, coachId) || defaultsChanged;
+  defaultsChanged = repointAgentDefault(config, "talk", LEGACY_IMPLICIT_AGENT_ID, coachId) || defaultsChanged;
+
+  const after = JSON.stringify({ ownership: agents.ownership, ids: ordered.map((item) => item.id) });
+  return before !== after || defaultsChanged;
+}
+
+function ensureBuilderRosterAtPath(configPath: string, slug: string, log: (msg: string) => void): void {
+  const contents = fs.readFileSync(configPath, "utf8");
+  const value = readTrackedConfigObject(contents);
+  if (!value) return;
+  if (!ensureBuilderRosterLeadsWithCoach(value, slug)) return;
+  atomicWrite(configPath, `${JSON.stringify(value, null, 2)}\n`);
+  log(`[system_config] Builder roster now leads with ${workspaceCoachAgentId(slug)} and keeps ${SAFE_DEFAULT_AGENT_ID} last`);
+}
+
 function reconcilePlatformInvariantsAtPath(configPath: string, env: NodeJS.ProcessEnv): void {
   const contents = fs.readFileSync(configPath, "utf8");
   let value: unknown;
@@ -967,6 +1061,7 @@ export async function restoreSystemConfigForSlug(
     }
     await reconcileSystemConfigSchema(openclawDir, env);
   }
+  if (env.GATEWAY_CLASS === "builder") ensureBuilderRosterAtPath(configPath, slug, log);
   reconcilePlatformInvariantsAtPath(configPath, env);
   log(`[system_config] active openclaw.json is ${slug}/${systemConfigRepoName()}/openclaw.json`);
   return { seeded, restored: true, configPath };

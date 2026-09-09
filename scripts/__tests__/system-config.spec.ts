@@ -35,7 +35,7 @@ import {
   assertPlatformInvariants,
   reconcilePlatformInvariants,
 } from "../lib/system-config-invariants.js";
-import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
+import { CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
 
 vi.mock("../lib/git.js", () => ({
   createGiteaUser: vi.fn(async () => {}),
@@ -307,6 +307,79 @@ describe("system_config restore", () => {
     });
     expect(seeded.channels.mattermost.baseUrl).toBe("${MM_URL}");
     expect(seeded.gateway.controlUi.basePath).toBe("/g/robert-xs-bd6a8f5a/openclaw");
+  });
+
+  it("seeds a Builder roster that leads with the configured coach and keeps the anchor last", async () => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
+    );
+    const env = {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_ID: "robert-xs-bd6a8f5a",
+      GATEWAY_BUILDER_SLUG: "robert",
+      API_PUBLIC_URL: "https://api.octogee.com",
+    };
+
+    await restoreSystemConfigForSlug("robert", {
+      openclawDir,
+      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+      env,
+      log: () => {},
+    });
+
+    const seeded = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(seeded.agents.ownership).toBe("explicit");
+    expect(Object.keys(seeded.agents.entries)).toEqual(["octogee-robert-coach", "octogee-unmatched-route"]);
+    expect(seeded.agents.entries["octogee-robert-coach"]).toMatchObject({
+      workspace: expect.stringMatching(/\/robert$/),
+      agentDir: expect.stringMatching(/octogee-robert-coach\/agent$/),
+      model: "platform-openrouter/openai/gpt-5.6-luna",
+    });
+    expect(seeded.agents.entries["octogee-unmatched-route"]).toMatchObject({ heartbeat: { every: "0m" } });
+    expect(seeded.agents.defaults.authInheritance).toEqual({ agentId: "octogee-unmatched-route" });
+    expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
+  });
+
+  it("removes a materialized main agent and restores coach-first order on a Builder restore", async () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          authInheritance: { agentId: "main" },
+          systemAgent: { agentId: "main" },
+        },
+        entries: {
+          main: {},
+          "octogee-robert-proj-golf-coach": { workspace: "/customers/robert/projects/golf", model: "house" },
+          "octogee-unmatched-route": { name: "Unmatched Mattermost route", heartbeat: { every: "0m" } },
+          "octogee-robert-coach": { workspace: "/customers/robert", model: { primary: "house", fallbacks: [] } },
+        },
+      },
+      talk: { agentId: "main" },
+    }));
+    fs.writeFileSync(path.join(repoDir, ".octogee.json"), `${JSON.stringify({ schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, lastMigration: "initial" })}\n`);
+    const env = {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_ID: "robert-xs-bd6a8f5a",
+      GATEWAY_BUILDER_SLUG: "robert",
+      API_PUBLIC_URL: "https://api.octogee.com",
+    };
+
+    await restoreSystemConfigForSlug("robert", { openclawDir, env, log: () => {} });
+
+    const restored = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(Object.keys(restored.agents.entries)).toEqual([
+      "octogee-robert-coach",
+      "octogee-robert-proj-golf-coach",
+      "octogee-unmatched-route",
+    ]);
+    expect(restored.agents.entries["octogee-robert-coach"].model).toEqual({ primary: "house", fallbacks: [] });
+    expect(restored.agents.defaults).toMatchObject({
+      authInheritance: { agentId: "octogee-unmatched-route" },
+      systemAgent: { agentId: "octogee-robert-coach" },
+    });
+    expect(restored.talk).toEqual({ agentId: "octogee-robert-coach" });
   });
 
   it("refuses to seed an isolated gateway that cannot resolve its own api origin", async () => {
