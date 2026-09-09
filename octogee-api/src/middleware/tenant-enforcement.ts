@@ -78,6 +78,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-projects/create",
   "/internal/agent-projects/list",
   "/internal/agent-projects/set-recipe",
+  "/internal/project-runs/capability",
   "/internal/project-runs/start",
   "/internal/project-runs/status",
   "/internal/openclaw/project-publish",
