@@ -4,7 +4,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT=""
 ZONE="us-west1-b"
-OMARCHY_VERSION="4.0.2"
+OMARCHY_VERSION="4.0.3"
 BUCKET=""
 BUILDER="octogee-computer-image-builder"
 KEEP_BUILDER=0
@@ -15,7 +15,7 @@ FAMILY="octogee-computer"
 
 iso_sha256_for() {
   case "$1" in
-    4.0.2) echo "2ef8e624aa1bec7e277e28056b8535a6c9373ba48d7ede3f1a01cb6d2373cfb8" ;;
+    4.0.3) echo "03d60bc74306dca51f96e1a84b690871d8d606826b260edd0208962da8507d14" ;;
     *) echo "" ;;
   esac
 }
