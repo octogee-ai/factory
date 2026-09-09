@@ -74,6 +74,7 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   productivityApprovals: { uidFields: ["ownerUid"] },
   agentProjectRuns: { uidFields: ["ownerUid"] },
   agentProjectRunOwnerLeases: { uidFields: ["ownerUid"] },
+  projectPreviewAliases: { uidFields: ["ownerUid"] },
   projectPreviewStates: { uidFields: ["ownerUid"] },
   projectPreviews: { uidFields: ["ownerUid"] },
   agentImports: { uidFields: ["uid"] },

@@ -87,13 +87,16 @@ function projectScope(input: ConfiguredBuilderProjectAgentInput) {
 function projectBindings(current: unknown, input: ConfiguredBuilderProjectAgentInput, replaced: ReadonlySet<string>, active: ReadonlySet<string>): unknown[] {
   const agentIds = new Set([...replaced].map((id) => projectAgentId(input.slug, id)));
   const accountIds = new Set([...replaced].map((id) => `${input.slug}-proj-${id}`));
+  const projectChannelIds = new Set(input.channels.filter(channel => channel.scope === "project").map(channel => channel.channelId));
   const channelIds = new Set(input.channels.filter((channel) => channel.scope === "project" && replaced.has(channel.projectId ?? "")).map((channel) => channel.channelId));
   const before = record(current).bindings;
   const bindings: unknown[] = Array.isArray(before) ? before : [];
   const kept = bindings.filter((binding) => {
     const entry = record(binding);
     const match = record(entry.match);
-    return match.channel !== "mattermost" || !(agentIds.has(String(entry.agentId)) || accountIds.has(String(match.accountId)) || channelIds.has(String(record(match.peer).id)));
+    const coachProjectRoute = projectChannelIds.has(String(record(match.peer).id)) &&
+      (entry.agentId === `octogee-${input.slug}-coach` || match.accountId === `${input.slug}-coach`);
+    return match.channel !== "mattermost" || !(coachProjectRoute || agentIds.has(String(entry.agentId)) || accountIds.has(String(match.accountId)) || channelIds.has(String(record(match.peer).id)));
   });
   const desired = buildCustomerBindings([{ slug: input.slug, channels: input.channels, agentProjects: active }]).filter((binding) => agentIds.has(binding.agentId));
   const next = [...kept, ...desired];
@@ -109,7 +112,8 @@ export function configuredBuilderProjectAgentPatch(current: unknown, input: Conf
   const activating = new Set(input.activationProjectIds.map((id) => projectAgentId(input.slug, id)));
   const entries = input.projectAgentEntries.map((entry) => {
     const existing = existingAgents.get(String(entry.id));
-    return existing && !activating.has(String(entry.id)) ? existing : { ...entry, ...existing };
+    const retained = existing && !activating.has(String(entry.id)) ? existing : { ...entry, ...existing };
+    return { ...retained, id: entry.id, name: entry.name, identity: entry.identity };
   });
   const desiredAgents = new Map(entries.map((entry) => [String(entry.id), entry]));
   const fullRoster = [...roster.map((entry) => desiredAgents.get(String(entry.id)) ?? entry), ...entries.filter((entry) => !existingAgents.has(String(entry.id)))];

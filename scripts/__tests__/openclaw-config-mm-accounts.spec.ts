@@ -445,6 +445,7 @@ describe("buildMattermostAccounts", () => {
       dmPolicy: "allowlist",
       allowFrom: [CHRIS_MM_ID],
       groupPolicy: "open",
+      groups: null,
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
@@ -452,6 +453,7 @@ describe("buildMattermostAccounts", () => {
       dmPolicy: "allowlist",
       allowFrom: [SAM_MM_ID],
       groupPolicy: "open",
+      groups: null,
       commands: { native: false },
     });
   });
@@ -502,14 +504,7 @@ describe("buildMattermostAccounts", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("owner Mattermost id is unavailable"));
   });
 
-  // OpenClaw 2026.7.2's mattermost plugin builds its group entry as
-  // buildGroupEntrySchema().omit({ skills, enabled, allowFrom, systemPrompt }),
-  // so a per-channel mute cannot be expressed at all. Emitting one is not
-  // merely ignored — config.patch rejects the whole document with
-  // 'must not have additional properties: "enabled"', which fails the mount
-  // permanently and, because reconcile defers the rest of the batch, strands
-  // every other customer queued for that gateway.
-  it("never emits a per-channel group entry — the plugin schema has no such property", () => {
+  it("clears mention overrides because project replies are blocked at dispatch", () => {
     const accounts = buildMattermostAccounts(
       [
         {
@@ -527,12 +522,11 @@ describe("buildMattermostAccounts", () => {
       new Map([["uid-a", "tok-chris"]]),
     );
 
-    // null, not omitted: it must actively clear entries a prior release wrote.
     expect(accounts["chris-coach"].groups).toBeNull();
     expect(JSON.stringify(accounts["chris-coach"])).not.toContain("enabled");
   });
 
-  it("clears stale workspace coach inbound exclusions when no project agent remains active", () => {
+  it("clears stale mention overrides even when no project agent remains active", () => {
     const accounts = buildMattermostAccounts(
       [
         {
@@ -662,6 +656,15 @@ describe("activeAgentProjectIds", () => {
 });
 
 describe("buildProjectAgents", () => {
+  it("uses the project's identity independently of the workspace coach", () => {
+    const [agent] = buildProjectAgents({ slug: "chris", customerDir: "/customers/chris", agentsDir: "/agents",
+      coach: { name: "Piper", emoji: "🧭", model: "house" },
+      projectAgents: [{ projectId: "fairway", enabled: true, token: "pat", mmUserId: "bot",
+        identity: { name: "Chip", emoji: "⛳", persona: "Friendly caddie" } }],
+    });
+    expect(agent).toMatchObject({ name: "Chip (chris/fairway)", identity: { name: "Chip", emoji: "⛳" } });
+  });
+
   const projectAgents = [
     { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
     { projectId: "unminted", enabled: true, token: null, mmUserId: null },
@@ -681,11 +684,11 @@ describe("buildProjectAgents", () => {
     expect(agents).toEqual([
       {
         id: "octogee-chris-proj-orbit-coach",
-        name: "BenderEcho (chris/orbit)",
+        name: "Orbit (chris/orbit)",
         workspace: "/customers/chris/projects/orbit",
         agentDir: "/agents/octogee-chris-proj-orbit-coach/agent",
         model: "anthropic/claude-sonnet-4-6",
-        identity: { name: "BenderEcho", emoji: "🤖" },
+        identity: { name: "Orbit", emoji: "🤖" },
         tools: {
           profile: "minimal",
           alsoAllow: PROJECT_AGENT_ALLOWED_TOOLS,
@@ -779,7 +782,7 @@ describe("buildCustomerBindings — Vegas partition", () => {
     { channelId: "proj-nova-gen", scope: "project" as const, projectId: "nova" },
   ];
 
-  it("routes agent-enabled project channels to the project agent, everything else to the coach", () => {
+  it("routes only workspace channels to the coach and leaves agentless projects unbound", () => {
     const bindings = buildCustomerBindings([
       { slug: "chris", channels, agentProjects: new Set(["orbit"]) },
     ]);
@@ -809,14 +812,6 @@ describe("buildCustomerBindings — Vegas partition", () => {
           peer: { kind: "group", id: "proj-orbit-gen" },
         },
       },
-      {
-        agentId: "octogee-chris-coach",
-        match: {
-          channel: "mattermost",
-          accountId: "chris-coach",
-          peer: { kind: "group", id: "proj-nova-gen" },
-        },
-      },
     ]);
   });
 
@@ -838,8 +833,9 @@ describe("buildCustomerBindings — Vegas partition", () => {
     expect(byChannel.get("ws-general")).toEqual(["octogee-chris-coach"]);
   });
 
-  it("without agentProjects everything binds to the coach (pre-Vegas behavior)", () => {
+  it("never falls back to the workspace coach for projects without an active agent", () => {
     const bindings = buildCustomerBindings([{ slug: "chris", channels }]);
+    expect(bindings.flatMap(b => b.match.peer ? [b.match.peer.id] : [])).toEqual(["ws-general"]);
     for (const b of bindings) {
       expect(b.agentId).toBe("octogee-chris-coach");
       expect(b.match.accountId).toBe("chris-coach");
@@ -870,4 +866,12 @@ describe("buildCustomerBindings — Vegas partition", () => {
       },
     ]);
   });
+});
+
+it('excludes an agent in error from all runtime accounts and bindings without using a fallback identity', () => {
+  const projectAgents = [{ projectId: 'broken', enabled: true, status: 'error' as const, mmUserId: 'bot', token: 'pat' }];
+  expect([...activeAgentProjectIds(projectAgents)]).toEqual([]);
+  expect(buildProjectAgentAccounts('chris', projectAgents, CHRIS_MM_ID)).toEqual({});
+  expect(buildProjectAgents({ slug: 'chris', customerDir: '/customers/chris', agentsDir: '/agents',
+    coach: { name: 'Piper', emoji: '🤖', model: 'house' }, projectAgents })).toEqual([]);
 });

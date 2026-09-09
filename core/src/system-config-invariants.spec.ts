@@ -36,6 +36,9 @@ describe("system config platform invariants", () => {
     expect(coach.deny).not.toContain("automations");
     expect(coach.alsoAllow).toContain("automations");
     expect(project.deny).toContain("automations");
+    expect(project.alsoAllow).toContain("octogee_chat_set_identity");
+    expect(project.deny).not.toContain("octogee_chat_set_identity");
+    expect(coach.alsoAllow).toContain("octogee_project_delegate");
     expect(project.alsoAllow).not.toContain("automations");
     expect(coach.deny).toEqual(expect.arrayContaining(["exec", "process", "terminal"]));
     expect(config).toHaveProperty("cron.triggers.enabled", false);

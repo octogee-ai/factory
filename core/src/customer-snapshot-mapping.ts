@@ -2,7 +2,7 @@ import type { UserSnapshot } from "./customer-lifecycle.js";
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectAgentEnabled, type ProjectAgentStatus } from "@octogee/shared/types/project";
+import { projectAgentEnabled, type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -32,9 +32,24 @@ export function mapProjectChannelDoc(
   };
 }
 
-function projectAgentRuntimeState(value: unknown): { activationId: string | null; status: ProjectAgentStatus | null } {
+class ProjectAgentIdentityError extends Error {}
+
+function projectIdentity(value: unknown): ProjectAgentIdentity | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object") throw new ProjectAgentIdentityError("Invalid project agent identity");
+  const { name, emoji, persona } = value as Record<string, unknown>;
+  if (typeof name !== "string" || !name.trim() || typeof emoji !== "string" || typeof persona !== "string") {
+    throw new ProjectAgentIdentityError("Invalid project agent identity");
+  }
+  return { name, emoji, persona };
+}
+
+function projectAgentRuntimeState(value: unknown) {
   const agent = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
+    ...(agent.identity === undefined ? {} : { identity: projectIdentity(agent.identity) }),
+    ...((agent.kickoff as { status?: string } | undefined)?.status === "pending" ||
+      (agent.handoff as { status?: string } | undefined)?.status === "pending" ? { deliveryPending: true } : {}),
     activationId: typeof agent.activationId === "string" ? agent.activationId : null,
     status: typeof agent.status === "string" ? agent.status as ProjectAgentStatus : null,
   };
@@ -47,7 +62,7 @@ export function mapProjectAgentState(
   projectId: string,
   projectData: Record<string, unknown>,
   secretData: Record<string, unknown> | undefined,
-): { projectId: string; enabled: boolean; mmUserId: string | null; token: string | null; activationId: string | null; status: ProjectAgentStatus | null } | null {
+): ({ projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } & ReturnType<typeof projectAgentRuntimeState>) | null {
   const agent = projectData.agent;
   const requestedEnabled = projectAgentEnabled(agent);
   const commercialLifecycle = projectData.commercialLifecycle;
@@ -63,7 +78,13 @@ export function mapProjectAgentState(
       ? secretData.personalToken
       : null;
   if (!enabled && mmUserId === null && token === null) return null;
-  return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
+  try {
+    return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
+  } catch (error) {
+    if (!(error instanceof ProjectAgentIdentityError)) throw error;
+    console.error("Project agent identity rejected", { projectId, error: error.message });
+    return { projectId, enabled, mmUserId, token, status: "error", activationId: null };
+  }
 }
 
 interface SnapshotDocSnap {

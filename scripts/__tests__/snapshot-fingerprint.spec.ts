@@ -373,3 +373,10 @@ describe("desiredFingerprints", () => {
     expect(map.size).toBe(1);
   });
 });
+
+it('refreshes runtime identity and retries delivery when project onboarding changes', () => {
+  const p = { projectId: 'camp', enabled: true, mmUserId: 'mm', token: 'pat' };
+  const original = snapshotConfigFingerprint(snap({ projectAgents: [p] }));
+  expect(snapshotConfigFingerprint(snap({ projectAgents: [{ ...p, identity: { name: 'Chip', emoji: '⛳', persona: 'Caddie' } }] }))).not.toBe(original);
+  expect(snapshotConfigFingerprint(snap({ projectAgents: [{ ...p, deliveryPending: true }] }))).not.toBe(original);
+});

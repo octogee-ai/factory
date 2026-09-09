@@ -32,7 +32,7 @@ export async function reportProjectAgentReadiness(input: {
   rpc: { configGet(): Promise<{ config: unknown; configRevisionHash?: string; appliedConfigHash?: string | null }>; channelsStatus(): Promise<unknown> };
   report(uid: string, projects: FleetBrokerProjectAgentReadiness[]): Promise<void>;
 }): Promise<void> {
-  const active = input.projectAgents.filter((agent) => agent.enabled && agent.status === "provisioning" && agent.token && agent.activationId);
+  const active = input.projectAgents.filter((agent) => agent.enabled && (agent.status === "provisioning" || agent.deliveryPending) && agent.token && agent.activationId);
   if (active.length === 0) return;
   const snapshot = await input.rpc.configGet();
   if (!snapshot.configRevisionHash || snapshot.appliedConfigHash !== snapshot.configRevisionHash) {
@@ -50,7 +50,7 @@ export async function reportProjectAgentReadiness(input: {
     const channelIds = [...new Set(input.channels.filter((channel) =>
       channel.scope === "project" && channel.projectId === agent.projectId && channel.kind !== "admin"
     ).map((channel) => channel.channelId))].sort();
-    if (!runtimeProjectBound(config, agentId, accountId, channelIds) || !accountActivated(account, input.baseline[accountId])) {
+    if (!runtimeProjectBound(config, agentId, accountId, channelIds) || !(agent.status === "ready" ? account?.running && account.connected : accountActivated(account, input.baseline[accountId]))) {
       errors.push(new Error(`Project Agent ${agent.projectId} is not connected to its configured channels`));
       continue;
     }

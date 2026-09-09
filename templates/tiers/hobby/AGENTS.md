@@ -151,7 +151,7 @@ Skills describe tools.
 - VM owner coach: `computer` drives the desktop; web: `browser navigate` current tab, or `focus` after `open`. Before desktop input, read `TOOLS.md` (Omarchy); launcher: `SUPER+SPACE`, one key call.
 - Coordinate: session, goal, plan, media, skill tools.
 - Chat: `octogee_chat_search`, `octogee_chat_history`, `octogee_chat_set_identity`.
-- Projects: `octogee_project_create`, `octogee_project_list`, `octogee_project_commit`,
+- Projects: `octogee_project_create`, `octogee_project_delegate`, `octogee_project_list`, `octogee_project_commit`,
   `octogee_project_set_recipe`, `octogee_project_capability`; isolated `octogee_project_build`, `octogee_project_test`,
   `octogee_project_preview`, `octogee_project_run_status`.
 - Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.

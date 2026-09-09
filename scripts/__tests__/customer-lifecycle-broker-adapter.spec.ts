@@ -3108,7 +3108,6 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     ).toEqual({
       "ws-1": "octogee-alice-coach|alice-coach",
       "po-1": "octogee-alice-proj-orbit-coach|alice-proj-orbit",
-      "pn-1": "octogee-alice-coach|alice-coach",
     });
     expect(patch.channels.mattermost.accounts["alice-proj-orbit"]?.botToken).toEqual({
       source: "file",
@@ -3119,9 +3118,6 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       dmPolicy: "disabled",
       allowFrom: [ALICE_OWNER_MM_ID],
     });
-    // The plugin schema has no per-channel mute, so the coach account clears
-    // `groups` rather than listing the project channel; the project channel
-    // still reaches its own agent through the partitioned bindings above.
     expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
       dmPolicy: "allowlist",
       allowFrom: [ALICE_OWNER_MM_ID],

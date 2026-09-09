@@ -1,3 +1,4 @@
+import type { ProjectAgentIdentity } from "../../shared/types/project.js";
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
 import { applyComputerBrowserAgentPolicy } from "./openclaw-computer-browser.js";
@@ -275,10 +276,7 @@ export interface MattermostAccountEntry {
   allowFrom?: string[];
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
-  /** Only ever `null` — see buildMattermostAccounts. The plugin's group entry
-   *  schema omits `enabled`, so there is no per-channel mute to express; the
-   *  key exists solely to clear entries written before 2026.7.2. */
-  groups?: null;
+  groups?: Record<string, { requireMention?: boolean }> | null;
 
   commands?: {
     native: false;
@@ -302,25 +300,13 @@ export function buildMattermostAccounts(
       warn(`Skipping ${c.slug}-coach Mattermost account: owner Mattermost id is unavailable`);
       continue;
     }
-    // Per-channel mutes are not expressible: the mattermost plugin builds its
-    // group entry as buildGroupEntrySchema().omit({ skills, enabled, allowFrom,
-    // systemPrompt }), so `enabled` is rejected outright and config.patch fails
-    // the whole document — taking the mount, and every customer queued behind
-    // it in the same reconcile batch, down with it. Clearing the key is also
-    // the repair path for configs a prior release already wrote.
-    // Project channels reach the project agent through its own account and MM
-    // membership; the workspace coach is deliberately not a channel member.
-    const managesGroups = c.channels !== undefined && c.agentProjects !== undefined;
-    const groupsPatch: Pick<MattermostAccountEntry, "groups"> = managesGroups
-      ? { groups: null }
-      : {};
     const accountId = `${c.slug}-coach`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
       dmPolicy: "allowlist",
       allowFrom: [ownerMmUserId],
       groupPolicy: "open",
-      ...groupsPatch,
+      groups: null,
       commands: { native: false },
     };
   }
@@ -491,6 +477,8 @@ export function gatewayAgentRosterBuilderSlug(
 }
 
 export interface ProjectAgentState {
+  status?: string | null;
+  identity?: ProjectAgentIdentity;
   projectId: string;
   enabled: boolean;
   mmUserId: string | null;
@@ -505,7 +493,7 @@ export function activeAgentProjectIds(
 ): Set<string> {
   return new Set(
     projectAgents
-      .filter((p) => p.enabled && typeof p.token === "string" && p.token.length > 0)
+      .filter((p) => p.enabled && p.status !== "error" && typeof p.token === "string" && p.token.length > 0)
       .map((p) => p.projectId),
   );
 }
@@ -526,14 +514,15 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
     .filter((p) => active.has(p.projectId))
     .map((p) => {
       const agentId = projectAgentId(input.slug, p.projectId);
+      const identity = { name: p.identity?.name ?? p.projectId[0].toUpperCase() + p.projectId.slice(1), emoji: p.identity?.emoji ?? "🤖" };
       const ownerToolPolicy = workspaceCoachTools();
       return {
         id: agentId,
-        name: `${input.coach.name} (${input.slug}/${p.projectId})`,
+        name: `${identity.name} (${input.slug}/${p.projectId})`,
         workspace: `${input.customerDir}/projects/${p.projectId}`,
         agentDir: `${input.agentsDir}/${agentId}/agent`,
         model: input.coach.model,
-        identity: { name: input.coach.name, emoji: input.coach.emoji },
+        identity,
         ...(input.hostCode === "builder-full" ? {} : {
           tools: {
             ...ownerToolPolicy,
@@ -605,7 +594,8 @@ export function buildCustomerBindings(
         },
       })),
     ];
-    const peerBindings = c.channels.filter((binding) => binding.kind !== "admin").map((binding) => {
+    const peerBindings = c.channels.filter((binding) => binding.kind !== "admin" &&
+      (binding.scope !== "project" || (binding.projectId !== undefined && c.agentProjects?.has(binding.projectId)))).map((binding) => {
       const projectAgent =
         binding.scope === "project" &&
         binding.projectId !== undefined &&

@@ -119,11 +119,6 @@ async function projectChannelBindings(
   return bindings;
 }
 
-async function coachDisplayName(uid: string): Promise<string> {
-  const snap = await db.doc(`agents/${uid}`).get();
-  const name = snap.data()?.name;
-  return typeof name === "string" && name ? name : "Octo";
-}
 
 async function resolveProjectAgentToggleContext(
   actor: ProjectAgentActor,
@@ -215,7 +210,7 @@ async function enableProjectAgent(
       username: workspaceId,
       project,
       teamId,
-      displayName: await coachDisplayName(actor.uid),
+      displayName: (await projectRef.get()).data()?.agent?.identity?.name ?? project,
       projectChannelIds: channelBindings.map((binding) => binding.channelId),
     });
     for (const binding of channelBindings) {

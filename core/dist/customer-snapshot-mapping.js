@@ -23,9 +23,25 @@ export function mapProjectChannelDoc(projectId, data) {
         channelId,
     };
 }
+class ProjectAgentIdentityError extends Error {
+}
+function projectIdentity(value) {
+    if (value === undefined)
+        return undefined;
+    if (!value || typeof value !== "object")
+        throw new ProjectAgentIdentityError("Invalid project agent identity");
+    const { name, emoji, persona } = value;
+    if (typeof name !== "string" || !name.trim() || typeof emoji !== "string" || typeof persona !== "string") {
+        throw new ProjectAgentIdentityError("Invalid project agent identity");
+    }
+    return { name, emoji, persona };
+}
 function projectAgentRuntimeState(value) {
     const agent = value && typeof value === "object" ? value : {};
     return {
+        ...(agent.identity === undefined ? {} : { identity: projectIdentity(agent.identity) }),
+        ...(agent.kickoff?.status === "pending" ||
+            agent.handoff?.status === "pending" ? { deliveryPending: true } : {}),
         activationId: typeof agent.activationId === "string" ? agent.activationId : null,
         status: typeof agent.status === "string" ? agent.status : null,
     };
@@ -47,7 +63,15 @@ export function mapProjectAgentState(projectId, projectData, secretData) {
         : null;
     if (!enabled && mmUserId === null && token === null)
         return null;
-    return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
+    try {
+        return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
+    }
+    catch (error) {
+        if (!(error instanceof ProjectAgentIdentityError))
+            throw error;
+        console.error("Project agent identity rejected", { projectId, error: error.message });
+        return { projectId, enabled, mmUserId, token, status: "error", activationId: null };
+    }
 }
 // Vegas: collect per-project agent states for a snapshot. The secret is read
 // only for projects whose doc carries an agent field — untouched projects

@@ -16,6 +16,7 @@ interface FakeChannel {
 
 function fakeDb(input: {
   workspaceOwner?: string;
+  coachId?: string;
   channels?: FakeChannel[];
 } = {}) {
   const channels = input.channels ?? [];
@@ -34,7 +35,7 @@ function fakeDb(input: {
         exists: path === "workspaces/eggman" && input.workspaceOwner !== undefined,
         data: () => path === "workspaces/eggman"
           ? { ownerUid: input.workspaceOwner, ownerActive: true }
-          : undefined,
+          : path === "agents/uid-eggman" ? { mattermost: { userId: input.coachId } } : undefined,
       }),
     }),
     collectionGroup,
@@ -287,4 +288,12 @@ describe("createProjectWorkspaceTurnVerifier", () => {
 
     await expect(verify(projectInput())).resolves.toBe(false);
   });
+});
+
+it('accepts only the assigned workspace Coach when it delegates in the canonical project channel', async () => {
+  const h = fakeDb({ workspaceOwner: 'uid-eggman', coachId: 'b'.repeat(26), channels: [{ path: 'workspaces/eggman/projects/orbit/channels/general' }] });
+  const verify = createProjectWorkspaceTurnVerifier(h.db);
+  const check = (sender: string) => verify(input(context(`channel:${CHANNEL_ID}`, { accountId: 'eggman-proj-orbit', requesterSenderId: sender }), { agentId: 'octogee-eggman-proj-orbit-coach' }));
+  await expect(check('b'.repeat(26))).resolves.toBe(true);
+  await expect(check('x'.repeat(26))).resolves.toBe(false);
 });

@@ -31,18 +31,6 @@ async function ensureChannelMember(
   }
 }
 
-async function removeChannelMember(
-  call: MattermostCall,
-  channelId: string,
-  mmUserId: string,
-): Promise<void> {
-  try {
-    await call("DELETE", `/channels/${channelId}/members/${mmUserId}`);
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
-  }
-}
-
 type ProjectMembership = ProjectCoachMembershipInput["projects"][number];
 
 function assertExclusiveChannelOwnership(projects: readonly ProjectMembership[]): void {
@@ -79,7 +67,7 @@ async function reconcileProjectChannel(
   call: MattermostCall,
 ): Promise<void> {
   const agentError = await projectAgentMembershipError(project, channelId, call);
-  if (coachMmUserId) await removeChannelMember(call, channelId, coachMmUserId);
+  if (coachMmUserId) await ensureChannelMember(call, channelId, coachMmUserId);
   if (agentError) throw agentError;
 }
 

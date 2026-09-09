@@ -130,7 +130,8 @@ describe("gateway-edge gitea client — per-workspace org", () => {
     expect("GITEA_ORG" in mod).toBe(false);
   });
 
-  it("giteaWriteFiles probes each path, then batch-creates only the absent ones in one commit", async () => {
+  it("giteaWriteFiles probes each path, logs preserved files, and batch-creates only absent ones", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     fetchMock
       .mockResolvedValueOnce(res(200, { path: "README.md" }))
       .mockResolvedValueOnce(res(404))
@@ -149,6 +150,8 @@ describe("gateway-edge gitea client — per-workspace org", () => {
       "auto: seed project playbook",
     );
 
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"path":"README.md"'));
+    log.mockRestore();
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://gitea.test:3000/api/v1/repos/alice/my-game/contents/README.md",

@@ -7,6 +7,7 @@ const workflowTools = [
   "automations",
   "message",
   "octogee_project_create",
+  "octogee_project_delegate",
   "octogee_project_commit",
   "octogee_project_list",
   "octogee_project_set_recipe",

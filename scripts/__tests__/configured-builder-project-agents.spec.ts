@@ -55,6 +55,16 @@ function currentConfig(representation: "list" | "entries", extraAgents: Record<s
 }
 
 describe("configuredBuilderProjectAgentPatch", () => {
+  it("removes coach project bindings even when no project activation is pending", () => {
+    const current = currentConfig("entries", desired.projectAgentEntries);
+    current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, ...desired.projectAccounts };
+    const stale = { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "launch-channel" } } };
+    current.bindings = [...current.bindings, stale];
+    const result = configuredBuilderProjectAgentPatch(current, { ...desired, activationProjectIds: [] });
+    expect(result.patch.bindings).not.toContainEqual(stale);
+    expect(result.patch.bindings).toContainEqual(existingBindings.find(binding => binding.match.peer?.id === "workspace-channel"));
+  });
+
   it("retires a deleted platform project while preserving imported and customized accounts", () => {
     const config = currentConfig("entries");
     const accounts = {
@@ -124,7 +134,7 @@ describe("configuredBuilderProjectAgentPatch", () => {
     const customized = { id: agentId, workspace: "/owner/project", model: { primary: "custom-project", fallbacks: ["backup"] }, identity: { name: "Custom" }, tools: { allow: ["owner-tool"] } };
     const { patch } = configuredBuilderProjectAgentPatch(currentConfig(representation, [customized]), desired);
     const entry = representation === "entries" ? { ...patch.agents.entries[agentId], id: agentId } : patch.agents.list.find((agent: { id: string }) => agent.id === agentId);
-    expect(entry).toEqual({ ...desired.projectAgentEntries[0], ...customized });
+    expect(entry).toEqual({ ...desired.projectAgentEntries[0], ...customized, name: desired.projectAgentEntries[0].name, identity: desired.projectAgentEntries[0].identity });
   });
 
   it("leaves disabled projects agentless instead of restoring a coach fallback", () => {
@@ -157,7 +167,7 @@ describe("configuredBuilderProjectAgentPatch", () => {
       channels: { mattermost: { accounts: { ...current.channels.mattermost.accounts, "alice-proj-launch": customAccount } } },
     };
     const ready = configuredBuilderProjectAgentPatch(config, { ...desired, activationProjectIds: [] }).patch;
-    expect(ready.agents.entries[agentId]).toEqual({ workspace: "/owner/project", model: "owner-model" });
+    expect(ready.agents.entries[agentId]).toEqual({ workspace: "/owner/project", model: "owner-model", name: desired.projectAgentEntries[0].name, identity: desired.projectAgentEntries[0].identity });
     expect(ready.channels.mattermost.accounts["alice-proj-launch"]).toEqual(customAccount);
     expect(ready.bindings).toEqual([customBinding]);
 

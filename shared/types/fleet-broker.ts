@@ -1,4 +1,4 @@
-import type { ProjectAgentStatus } from "./project.js";
+import type { ProjectAgentIdentity, ProjectAgentStatus } from "./project.js";
 import type { AssignmentState } from "./gateway-releases.js";
 import type { ProjectRepoSource } from "./project.js";
 
@@ -62,6 +62,8 @@ export interface FleetBrokerProjectAgentReadiness {
 }
 
 export interface FleetBrokerProjectAgent {
+  identity?: ProjectAgentIdentity;
+  deliveryPending?: boolean;
   projectId: string;
   activationId?: string | null;
   status?: ProjectAgentStatus | null;
@@ -76,6 +78,7 @@ export interface FleetBrokerCoachIdentity {
 }
 
 export interface FleetBrokerProjectCreateInput {
+  agentName?: string;
   name?: string;
   slug?: string;
   tagline?: string;

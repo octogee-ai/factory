@@ -263,6 +263,7 @@ export async function giteaWriteFiles(
   for (const file of files) {
     const existing = await giteaAdminFetch("GET", `${contentsUrl}/${file.path}`, undefined, true);
     if (existing === null) absent.push(file);
+    else logger.info("Repository seed preserved an existing file", { org, repoName, path: file.path });
   }
   if (absent.length === 0) return;
   await giteaCreateFiles(contentsUrl, absent, commitMessage);

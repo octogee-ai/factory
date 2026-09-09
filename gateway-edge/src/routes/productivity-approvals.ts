@@ -437,21 +437,23 @@ function projectObsidianPreview(preview: Record<string, unknown>): Record<string
 }
 
 function projectCreatePreview(preview: Record<string, unknown>): Record<string, unknown> {
-  exactKeys(preview, ["name", "slug", "tagline", "projectType", "recipe"]);
+  exactKeys(preview, ["name", "agentName", "slug", "tagline", "projectType", "recipe"]);
   const name = requiredText(preview.name, 80);
+  const agentName = preview.agentName === null ? null : requiredText(preview.agentName, 80);
   const slug = requiredText(preview.slug, 16);
   const tagline = preview.tagline;
   const projectType = preview.projectType;
   const recipe = preview.recipe;
   if (
     name.trim().length === 0
+    || (agentName !== null && agentName.trim().length === 0)
     || !/^[a-z0-9]{1,16}$/u.test(slug)
     || typeof tagline !== "string"
     || tagline.length > 300
     || (projectType !== null && !["game", "social", "planner", "trip", "other"].includes(String(projectType)))
     || !isProjectRecipeId(recipe)
   ) throw new Error("canonical productivity approval preview is malformed");
-  return { name, slug, tagline, projectType, recipe };
+  return { name, agentName, slug, tagline, projectType, recipe };
 }
 
 function validProjectPublishUrl(value: string): boolean {

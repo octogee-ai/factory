@@ -558,7 +558,7 @@ async function resolveSessionContext(
   const channel = await resolveSessionChannel(db, channelId);
   if (channel === "forbidden") return channel;
   if (!channel) return null;
-  if (!agentCanReadSession(agentId, identity.workspaceSlug, channel.binding)) return "forbidden";
+  if (!agentCanRunInConversation(agentId, identity.workspaceSlug, channel.binding)) return "forbidden";
   if (!(await sessionOwnerIsActive(db, channel.binding))) return null;
   return authorizedChannelContext(channel.data, channel.binding);
 }

@@ -199,6 +199,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
   "automations",
   "message",
   "octogee_project_create",
+  "octogee_project_delegate",
   "octogee_project_commit",
   "octogee_project_list",
   "octogee_project_set_recipe",
@@ -259,6 +260,7 @@ export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
+  "octogee_chat_set_identity",
   "message",
   "read",
   "ls",
@@ -298,12 +300,12 @@ export const PROJECT_AGENT_DENIED_TOOLS = [
   "octogee_publish",
   "workspace_commit",
   "octogee_project_create",
+  "octogee_project_delegate",
   "octogee_project_publish",
   "delegated_access",
   "octogee_status",
   "octogee_chat_search",
   "octogee_chat_history",
-  "octogee_chat_set_identity",
   "bundle-mcp",
   "automations",
   "skill_workshop",

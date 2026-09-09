@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   byotSnapshotProjectionFromSystemConfig,
   byotSystemConfigFromDoc,
@@ -363,6 +363,24 @@ describe("collectProjectAgentStates", () => {
       { projectId: "old", enabled: false, mmUserId: "bot-2", token: "pat-2", activationId: null, status: null },
     ]);
     expect(secretReads).toEqual(["projectAgentMattermost-orbit", "projectAgentMattermost-old"]);
+  });
+
+  it("quarantines a malformed identity without blocking healthy projects or retiring its bot", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = fakeDb([
+      { id: "broken", data: { agent: { enabled: true, identity: { name: "Broken" }, kickoff: { status: "pending" } } } },
+      { id: "healthy", data: { agent: { enabled: true, identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } } } },
+    ], {
+      "projectAgentMattermost-broken": { mmUserId: "bot-broken", personalToken: "pat-broken" },
+      "projectAgentMattermost-healthy": { mmUserId: "bot-healthy", personalToken: "pat-healthy" },
+    });
+    try {
+      const states = await collectProjectAgentStates(db, "uid-1", "alice");
+      expect(states).toHaveLength(2);
+      expect(states[0]).toEqual({ projectId: "broken", enabled: true, mmUserId: "bot-broken", token: "pat-broken", status: "error", activationId: null });
+      expect(states[1]).toMatchObject({ projectId: "healthy", identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } });
+      expect(error).toHaveBeenCalledWith("Project agent identity rejected", { projectId: "broken", error: "Invalid project agent identity" });
+    } finally { error.mockRestore(); }
   });
 
   it("drops fully-settled disabled agents (no secret left)", async () => {

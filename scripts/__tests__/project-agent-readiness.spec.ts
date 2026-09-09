@@ -14,7 +14,7 @@ function fixture() {
     channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 2 }] } })),
   };
   const report = vi.fn(async () => undefined);
-  const run = (projectAgents: Array<Omit<typeof agent, "status"> & { status: "provisioning" | "ready" }> = [agent]) => reportProjectAgentReadiness({
+  const run = (projectAgents: Array<Omit<typeof agent, "status"> & { status: "provisioning" | "ready"; deliveryPending?: boolean }> = [agent]) => reportProjectAgentReadiness({
     rpc, report, uid: "uid-alice", slug: "alice", projectAgents, baseline: { "alice-proj-orbit": 1 },
     channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "channel-orbit" }],
   });
@@ -69,4 +69,11 @@ describe("project agent runtime readiness", () => {
     expect(f.report).not.toHaveBeenCalled();
     expect(f.rpc.channelsStatus).not.toHaveBeenCalled();
   });
+});
+
+it('retries pending handoff delivery without requiring another account restart', async () => {
+  const f = fixture();
+  f.rpc.channelsStatus.mockResolvedValue({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 1 }] } });
+  await f.run([{ ...agent, status: 'ready', deliveryPending: true }]);
+  expect(f.report).toHaveBeenCalledTimes(1);
 });

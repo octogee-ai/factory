@@ -268,7 +268,7 @@ describe("setProjectAgentEnabled — enable", () => {
       username: "mira",
       project: "orbit",
       teamId: "team-1",
-      displayName: "BenderEcho",
+      displayName: "orbit",
       projectChannelIds: ["po-1"],
     });
     expect(h.addChannelMember).toHaveBeenCalledWith(

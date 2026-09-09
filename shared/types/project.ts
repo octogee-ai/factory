@@ -55,7 +55,20 @@ export type ProjectAgentStatus =
   | 'agentless'
   | 'error';
 
+export interface ProjectAgentIdentity {
+  name: string;
+  emoji: string;
+  persona: string;
+  avatar?: { path: string; gcsPath: string; updatedAt?: unknown };
+  avatarVersion?: number;
+}
+
 export interface ProjectAgentConfig {
+  identity?: ProjectAgentIdentity;
+  requestedName?: string;
+  kickoff?: { status: 'pending' | 'sent'; postId?: string };
+  handoff?: { status: 'pending' | 'sent'; postId?: string };
+
   enabled: boolean;
   mode?: ProjectAgentMode;
   status?: ProjectAgentStatus;
@@ -91,6 +104,7 @@ export function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | nu
 }
 
 export interface Project {
+  reusePreviewUrl?: boolean;
   
   id: string;
   ownerUid: string;

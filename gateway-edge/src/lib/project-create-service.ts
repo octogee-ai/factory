@@ -51,6 +51,7 @@ interface ProjectCreatePlan {
   slug: string;
   trimmedName: string;
   trimmedTagline: string;
+  agentName: string;
   category: string;
   projectType: string | null;
   status: string;
@@ -63,6 +64,7 @@ interface ProjectCreatePlan {
 
 interface NormalizedProjectCreateRequest {
   name: string;
+  agentName: unknown;
   slug: string;
   tagline: string;
   category: string;
@@ -262,6 +264,7 @@ function buildProjectCreatePlan(
       workspaceId,
       slug: request.slug,
       trimmedName: validation.trimmedName,
+      agentName: typeof request.agentName === "string" ? request.agentName.trim() : "",
       trimmedTagline: request.tagline.trim(),
       category: request.category,
       projectType: request.projectType,
@@ -281,6 +284,7 @@ function normalizeProjectCreateRequest(
   const request = input && typeof input === "object" ? input : {};
   return {
     name: stringValue(request.name),
+    agentName: request.agentName,
     slug: stringValue(request.slug),
     tagline: stringValue(request.tagline),
     category: nonEmptyStringOr(request.category, "other"),
@@ -295,6 +299,9 @@ function normalizeProjectCreateRequest(
 function validateProjectCreateRequest(
   request: NormalizedProjectCreateRequest,
 ): { ok: true; trimmedName: string } | { ok: false; result: ProjectCreateResult } {
+  if (request.agentName !== undefined && (typeof request.agentName !== "string" || request.agentName.trim().length > 80)) {
+    return { ok: false, result: bad(400, "Agent name must be text with 80 characters or fewer") };
+  }
   const trimmedName = request.name.trim();
   if (trimmedName.length === 0) {
     return { ok: false, result: bad(400, "Project name is required") };
@@ -321,6 +328,11 @@ async function writeProvisioningProject(
   plan: ProjectCreatePlan,
 ): Promise<void> {
   await projectRef.set({
+    agent: {
+      requestedName: plan.agentName,
+      identity: { name: plan.agentName || plan.slug, emoji: "🤖", persona: "" },
+      ...(plan.source === "ui" ? { kickoff: { status: "pending" } } : {}),
+    },
     id: plan.slug,
     ownerUid: plan.uid,
     ownerActive: true,

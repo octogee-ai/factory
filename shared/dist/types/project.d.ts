@@ -14,7 +14,28 @@ export interface ProjectRepoSource {
 }
 export type ProjectAgentMode = 'scoped' | 'agentless';
 export type ProjectAgentStatus = 'provisioning' | 'ready' | 'retiring' | 'agentless' | 'error';
+export interface ProjectAgentIdentity {
+    name: string;
+    emoji: string;
+    persona: string;
+    avatar?: {
+        path: string;
+        gcsPath: string;
+        updatedAt?: unknown;
+    };
+    avatarVersion?: number;
+}
 export interface ProjectAgentConfig {
+    identity?: ProjectAgentIdentity;
+    requestedName?: string;
+    kickoff?: {
+        status: 'pending' | 'sent';
+        postId?: string;
+    };
+    handoff?: {
+        status: 'pending' | 'sent';
+        postId?: string;
+    };
     enabled: boolean;
     mode?: ProjectAgentMode;
     status?: ProjectAgentStatus;
@@ -26,6 +47,7 @@ export declare function projectAgentEnabled(value: unknown): boolean;
 export declare function projectCheckoutEnabled(value: unknown): boolean;
 export declare function projectRepoSourceFromDoc(value: unknown): ProjectRepoSource | null;
 export interface Project {
+    reusePreviewUrl?: boolean;
     id: string;
     ownerUid: string;
     workspaceId: string;

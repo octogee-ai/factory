@@ -1,4 +1,5 @@
-import { completeProjectAgentActivations, parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
+import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
+import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
 import { readComputerRuntimeObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
@@ -161,11 +162,16 @@ type PruneBuilderRuntimeState = (input: {
 
 type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
 
+function validIdentityEmoji(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 32;
+}
+
 type ApplyCoachIdentity = (input: {
   uid: string;
   slug: string;
   name?: string;
   persona?: string;
+  emoji?: string;
   avatarPng?: Buffer;
 }) => Promise<string[]>;
 
@@ -315,7 +321,7 @@ const defaultApplyCoachIdentity: ApplyCoachIdentity = async (input) => {
   );
   return syncCoachIdentity(
     input.uid,
-    { name: input.name, persona: input.persona, avatarPng: input.avatarPng },
+    { name: input.name, persona: input.persona, emoji: input.emoji, avatarPng: input.avatarPng },
     { slug: input.slug },
   );
 };
@@ -2363,7 +2369,7 @@ function installProjectAgentReadinessRoute(router: Router, db: Firestore): void 
       return;
     }
     await runBrokered(res, async () => {
-      const accepted = await completeProjectAgentActivations(db, {
+      const accepted = await completeProjectAgentReadiness(db, {
         uid: assigned.uid,
         gatewayId: assigned.bound.gatewayId,
         slug: deriveSlug(assigned.uid, assigned.data),
@@ -3418,7 +3424,7 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
     }
     const body = objectBody(req);
 
-    const patch: { name?: string; persona?: string; avatarPng?: Buffer } = {};
+    const patch: { name?: string; persona?: string; emoji?: string; avatarPng?: Buffer } = {};
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (name) {
       if (name.length > 80) {
@@ -3426,6 +3432,12 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
         return;
       }
       patch.name = name;
+    }
+    if (body.emoji !== undefined) {
+      if (!validIdentityEmoji(body.emoji)) {
+        res.status(400).json({ error: "invalid_emoji" }); return;
+      }
+      patch.emoji = body.emoji.trim();
     }
     const vibe = typeof body.vibe === "string" ? body.vibe : body.persona;
     if (typeof vibe === "string") {
@@ -3444,11 +3456,7 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
         return;
       }
     }
-    if (
-      patch.name === undefined &&
-      patch.persona === undefined &&
-      patch.avatarPng === undefined
-    ) {
+    if (Object.keys(patch).length === 0) {
       res.status(400).json({ error: "empty_identity" });
       return;
     }
@@ -3459,6 +3467,7 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
         slug: assigned.slug,
         name: patch.name,
         persona: patch.persona,
+        ...(patch.emoji !== undefined ? { emoji: patch.emoji } : {}),
         avatarPng: patch.avatarPng,
       });
       res.json({ updated });
