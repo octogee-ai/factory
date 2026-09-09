@@ -2490,7 +2490,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     }
   });
 
-  it("retains the Builder auth anchor during regular list-roster reconciliation", async () => {
+  it("leads a Builder roster with the configured coach and keeps the auth anchor last during list-roster reconciliation", async () => {
     const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
     process.env.GATEWAY_BUILDER_SLUG = "alice";
     try {
@@ -2526,7 +2526,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
       expect(patch.agents.ownership).toBe("explicit");
       expect(patch.agents.defaults.authInheritance).toEqual({ agentId: SAFE_DEFAULT_AGENT_ID });
-      expect(patch.agents.list.filter((agent) => agent.id === SAFE_DEFAULT_AGENT_ID)).toHaveLength(1);
+      expect(patch.agents.list.map((agent) => agent.id)).toEqual([
+        "octogee-alice-coach",
+        "octogee-bob-coach",
+        SAFE_DEFAULT_AGENT_ID,
+      ]);
       expect(patch.agents.list.find((agent) => agent.id === "octogee-alice-coach")).not.toHaveProperty(
         "default",
       );

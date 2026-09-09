@@ -28,6 +28,7 @@ import {
   customerConfigAgentRosterReplacePaths,
   customerConfigReplacePaths,
   mergeCustomerBindings,
+  orderBuilderGatewayRoster,
   preserveMountedAgentModels,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
@@ -613,7 +614,13 @@ function customerGatewayAgentRoster(
     preserveMountedAgentModels(current, customerAgentEntries),
   );
   const roster = gatewayAgentRoster(nextAgents, builderGateway ? slug : "");
-  return builderGateway ? [buildSafeDefaultAgent(), ...roster] : roster;
+  return builderGateway
+    ? orderBuilderGatewayRoster(
+      [...roster, buildSafeDefaultAgent()],
+      `octogee-${slug}-coach`,
+      SAFE_DEFAULT_AGENT_ID,
+    )
+    : roster;
 }
 
 function convergedConfigRpc(ctx: BrokerCtx): BrokerCtx["rpc"] {

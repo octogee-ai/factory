@@ -452,6 +452,7 @@ describe("migration activation manifest", () => {
       name: anchor.name,
       heartbeat: anchor.heartbeat,
     });
+    expect(Object.keys(patch.agents.entries)).toEqual(["octogee-alice-coach", anchor.id]);
     expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("tools");
     expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
   });
@@ -501,6 +502,11 @@ describe("migration activation manifest", () => {
       model: "house",
     });
     expect(withoutTools(patch.agents.list).filter((agent) => agent.id === anchor.id)).toEqual([anchor]);
+    expect(patch.agents.list.map((agent) => agent.id)).toEqual([
+      "octogee-alice-coach",
+      "octogee-bob-coach",
+      anchor.id,
+    ]);
     expect(patch.agents.list.find((agent) => agent.id === anchor.id)).not.toHaveProperty("tools");
     expect(patch.agents.list.find((agent) => agent.id === "octogee-alice-coach"))
       .not.toHaveProperty("tools");

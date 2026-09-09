@@ -7,6 +7,7 @@ import {
   customerAgentRosterPatch,
   customerConfigAgentRosterReplacePaths,
   filterOutCustomerBindings,
+  orderBuilderGatewayRoster,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
   upsertAgentInFullAgentList,
@@ -523,10 +524,17 @@ export async function applyOpenClawActivationManifest(
             ),
             replaceCustomerAgentsInFullAgentList(current, manifest.slug, []),
           );
+        const orderedAgents = normalizedAuthInheritanceAnchor
+          ? orderBuilderGatewayRoster(
+            nextAgents,
+            manifest.agentId,
+            normalizedAuthInheritanceAnchor.agentId,
+          )
+          : nextAgents;
         const rosterPatch = customerAgentRosterPatch(
           current,
           manifest.slug,
-          rebindPlatformEmbeddingRefs(nextAgents),
+          rebindPlatformEmbeddingRefs(orderedAgents),
         );
         return {
           // openclaw rejects a multi-agent roster that declares no ownership.

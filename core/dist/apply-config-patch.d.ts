@@ -40,6 +40,7 @@ export interface ApplyConfigPatchResult {
 export declare function applyConfigPatch(args: ApplyConfigPatchArgs, opts?: ApplyConfigPatchOptions): Promise<ApplyConfigPatchResult>;
 export declare function upsertAgentInFullAgentList(current: unknown, agentId: string, agentEntry: unknown): unknown[];
 export declare function replaceCustomerAgentsInFullAgentList(current: unknown, slug: string, agentEntries: readonly unknown[]): unknown[];
+export declare function orderBuilderGatewayRoster<T>(agents: readonly T[], coachAgentId: string, anchorAgentId: string): T[];
 /**
  * After the first mount, model authority belongs to the byot-sync pipeline
  * (BYOK overrides, house pins, picker selections) — the attach path re-ships

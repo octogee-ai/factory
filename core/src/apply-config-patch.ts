@@ -541,6 +541,23 @@ export function replaceCustomerAgentsInFullAgentList(
   return next;
 }
 
+// Under explicit ownership OpenClaw's gateway default is the first roster entry;
+// its model decides the Control UI hello's `modelConfigured`.
+export function orderBuilderGatewayRoster<T>(
+  agents: readonly T[],
+  coachAgentId: string,
+  anchorAgentId: string,
+): T[] {
+  const idOf = (agent: T): unknown => (isPlainObject(agent) ? agent.id : undefined);
+  const coach = agents.filter((agent) => idOf(agent) === coachAgentId);
+  const anchor = agents.filter((agent) => idOf(agent) === anchorAgentId);
+  const rest = agents.filter((agent) => {
+    const id = idOf(agent);
+    return id !== coachAgentId && id !== anchorAgentId;
+  });
+  return [...coach, ...rest, ...anchor];
+}
+
 /**
  * After the first mount, model authority belongs to the byot-sync pipeline
  * (BYOK overrides, house pins, picker selections) — the attach path re-ships

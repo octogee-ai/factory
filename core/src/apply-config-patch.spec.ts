@@ -24,6 +24,7 @@ import {
   filterOutCustomerBindings,
   fullAgentListReplacePaths,
   mergeCustomerBindings,
+  orderBuilderGatewayRoster,
   replaceCustomerAgentsInFullAgentList,
   staleProjectAgentAccountNulls,
 } from "./apply-config-patch.js";
@@ -1131,6 +1132,32 @@ describe("replaceCustomerAgentsInFullAgentList", () => {
       "octogee-alice-coach",
       "octogee-bob-coach",
     ]);
+  });
+});
+
+describe("orderBuilderGatewayRoster", () => {
+  it("leads with the configured coach and keeps the model-less anchor last", () => {
+    expect(orderBuilderGatewayRoster(
+      [
+        { id: "octogee-unmatched-route" },
+        { id: "octogee-alice-proj-orbit-coach", model: "house" },
+        { id: "octogee-alice-coach", model: "house" },
+        { id: "octogee-bob-coach", model: "foreign" },
+      ],
+      "octogee-alice-coach",
+      "octogee-unmatched-route",
+    )).toEqual([
+      { id: "octogee-alice-coach", model: "house" },
+      { id: "octogee-alice-proj-orbit-coach", model: "house" },
+      { id: "octogee-bob-coach", model: "foreign" },
+      { id: "octogee-unmatched-route" },
+    ]);
+  });
+
+  it("returns the roster unchanged when neither the coach nor the anchor is present", () => {
+    const roster = [{ id: "octogee-bob-coach" }, { id: "octogee-carol-coach" }];
+    expect(orderBuilderGatewayRoster(roster, "octogee-alice-coach", "octogee-unmatched-route"))
+      .toEqual(roster);
   });
 });
 

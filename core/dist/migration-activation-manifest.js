@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { parseAgentId } from "@octogee/shared/types/identity";
-import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, filterOutCustomerBindings, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
+import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, filterOutCustomerBindings, orderBuilderGatewayRoster, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 import { reconcileBuilderAgentEntry, reconcileCustomerAgentEntry, } from "./system-config-invariants.js";
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
@@ -356,7 +356,10 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
             const nextAgents = targetUsesKeyedEntries
                 ? rosterAgents
                 : rosterAgents.reduce((agentList, agent) => upsertAgentInFullAgentList({ agents: { list: agentList } }, rosterAgentId(agent), agent), replaceCustomerAgentsInFullAgentList(current, manifest.slug, []));
-            const rosterPatch = customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(nextAgents));
+            const orderedAgents = normalizedAuthInheritanceAnchor
+                ? orderBuilderGatewayRoster(nextAgents, manifest.agentId, normalizedAuthInheritanceAnchor.agentId)
+                : nextAgents;
+            const rosterPatch = customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(orderedAgents));
             return {
                 // openclaw rejects a multi-agent roster that declares no ownership.
                 agents: {
