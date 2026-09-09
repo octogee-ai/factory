@@ -1,36 +1,48 @@
 import { type GatewayDesiredStatus } from "./glm.js";
-export declare const PRIMARY_SHARED_GATEWAY_ID = "shared-a";
-export declare const STANDARD_SHARED_GATEWAY_IDS: readonly ["shared-a", "shared-b", "shared-c", "shared-d"];
-export declare const DEFAULT_SHARED_GATEWAY_MIN_HOT_MEMBERS = 2;
-export declare const MIN_SHARED_GATEWAY_MIN_HOT_MEMBERS = 1;
-/** Two hot members where the pool allows it, never more than the pool has. */
-export declare function defaultMinHotMembers(memberCount: number): number;
+export declare const SHARED_POOL_SLOT_ID_PATTERN: RegExp;
+export declare const LEGACY_SHARED_GATEWAY_IDS: readonly ["shared-a", "shared-b", "shared-c", "shared-d"];
 export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export declare const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 export interface SharedGatewayAutoscalingConfig {
     enabled: boolean;
-    minHotMembers: number;
     buildersPerGateway: number;
 }
-export interface SharedGatewayAutoscalingMember {
+export interface SharedPoolReplicaBounds {
+    minReplicas: number;
+    maxReplicas: number;
+}
+export interface SharedPoolScalingMember {
     gatewayId: string;
     desiredStatus: GatewayDesiredStatus;
     assignmentCount: number;
     mountedCount: number;
     incomingMigrationCount: number;
     converged: boolean;
+    platformCurrent: boolean;
 }
-export interface SharedGatewayAutoscalingInput {
+export interface SharedPoolScalingInput {
     config: SharedGatewayAutoscalingConfig;
-    members: readonly SharedGatewayAutoscalingMember[];
+    bounds: SharedPoolReplicaBounds;
+    members: readonly SharedPoolScalingMember[];
+    unplacedBuilderCount: number;
 }
-export type SharedGatewayAutoscalingDecision = {
+export type SharedPoolScalingDecision = {
     kind: "hold";
-    reason: "disabled" | "steady" | "converging" | "draining" | "minimum-hot-members" | "malformed-config" | "malformed-state";
+    reason: "disabled" | "steady" | "converging" | "draining" | "malformed-config" | "malformed-state";
 } | {
     kind: "resume-member";
     gatewayId: string;
-    reason: "minimum-hot-members" | "scale-out" | "cancel-drain";
+    reason: "minimum-replicas" | "scale-out" | "cancel-drain";
+} | {
+    kind: "mint-slot";
+    gatewayId: string;
+    reason: "minimum-replicas" | "scale-out";
+} | {
+    kind: "follow-platform-release";
+    gatewayId: string;
+} | {
+    kind: "drain-legacy-member";
+    gatewayId: string;
 } | {
     kind: "begin-drain";
     gatewayId: string;
@@ -73,8 +85,26 @@ export interface SharedGatewayRebalance {
     fromGatewayId: string;
     toGatewayId: string;
 }
+export interface SharedPoolMemberRoot {
+    gatewayId: string;
+    gatewayClass: unknown;
+    desiredStatus: unknown;
+    managedBy?: unknown;
+}
+export declare function isSharedPoolSlotId(id: unknown): id is string;
+export declare function sharedPoolSlotOrdinal(id: string): number | null;
+export declare function isLegacySharedGatewayId(id: unknown): boolean;
+export declare function compareSharedGatewayIds(left: string, right: string): number;
+export declare function nextSharedPoolSlotId(existingGatewayIds: readonly string[]): string;
+export declare function isSharedPoolMemberRoot(root: SharedPoolMemberRoot): boolean;
+export declare function sharedPoolMemberIds(roots: readonly SharedPoolMemberRoot[]): string[];
+export declare function deriveSharedGatewayPoolConfig(roots: readonly SharedPoolMemberRoot[], sharedGatewayAutoscaling?: SharedGatewayAutoscalingConfig): SharedGatewayPoolConfig | null;
 export declare function parseSharedGatewayPoolConfig(value: unknown): SharedGatewayPoolConfig | null;
-export declare function parseSharedGatewayAutoscalingConfig(value: unknown, memberCount: number): SharedGatewayAutoscalingConfig | null;
+export declare function parseSharedGatewayAutoscalingConfig(value: unknown): SharedGatewayAutoscalingConfig | null;
+export declare function parseSharedPoolReplicaBounds(value: {
+    minReplicas: unknown;
+    maxReplicas: unknown;
+}): SharedPoolReplicaBounds | null;
 export declare function authoritativeSharedGatewayLoad(candidate: SharedGatewayPoolCandidate): number;
 export declare function isAcceptingSharedGateway(config: SharedGatewayPoolConfig, candidate: SharedGatewayPoolCandidate): boolean;
 export declare function stableGatewayUidHash(uid: string): number;

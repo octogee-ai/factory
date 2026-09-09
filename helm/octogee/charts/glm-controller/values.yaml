@@ -29,11 +29,21 @@ kmsKeyName: ""
 # chart. Override only for tests / non-standard image layouts.
 gatewayChart: /charts/octogee-gateway
 
-sharedGatewayIds:
-  - shared-a
-  - shared-b
-  - shared-c
-  - shared-d
+# Shared pool bounds. Cowboy mints `shared-N` slots on demand between these,
+# from the platform release image below. Per-environment values set the floor:
+# TEST 1 (0 allowed), PROD 2.
+sharedPool:
+  minReplicas: 1
+  maxReplicas: 8
+
+# The gateway and gateway-edge images every shared slot converges to. The
+# platform release (Deploy platform) sets the digest-qualified tags from the
+# deployed build's immutable manifest; Cowboy rolls each slot with surge.
+platformRelease:
+  gatewayImageRepository: ""
+  gatewayImageTag: ""
+  gatewayEdgeImageRepository: ""
+  gatewayEdgeImageTag: ""
 
 # Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
 # resolve to in-cluster ClusterIP Services for the same Helm release;

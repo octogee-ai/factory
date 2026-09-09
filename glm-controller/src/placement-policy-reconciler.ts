@@ -44,11 +44,13 @@ import {
   type PodReplacementTransition,
 } from "./pod-replacement-tracking.js";
 import {
+  deriveSharedGatewayPoolConfig,
   parseSharedGatewayPoolConfig,
   planSharedGatewayRebalance,
   selectSharedGateway,
   type SharedGatewayPoolCandidate,
 } from "@octogee/shared/types/shared-gateway-pool";
+import { readSharedGatewayPoolConfig } from "@octogee/core/shared-gateway-pool-read";
 import {
   commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
@@ -96,7 +98,6 @@ const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
 const BUILDER_ACTIVATION_LEASE_SOURCE = "builder-activation-lease";
 const DISPOSABLE_BUILDER_ALLOCATION_KIND = "disposable-builder";
 const ROLLED_BACK_STATUS = "rolled-back";
-const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 const NO_ACCEPTING_SHARED_GATEWAY = "no-accepting-shared-gateway";
 const CONTINUOUS_PLACEMENT_POLICY_SOURCE = "continuous-placement-policy";
 const LIVE_LEASE_STATUSES = new Set([
@@ -2247,7 +2248,7 @@ export async function reconcilePlacementPolicyOnce(
     sharedGatewayIds: state.sharedGatewayIds,
   });
   if (!pool) {
-    deps.log("[placement-policy] disabled: config/orchestrator shared gateway pool is invalid");
+    deps.log("[placement-policy] idle: the shared pool has no Cowboy-managed members yet");
     return result;
   }
   const gateways = new Map(state.gateways.map((item) => [item.gatewayId, item]));
@@ -2848,25 +2849,6 @@ function placementGatewayFromDocument(input: {
   };
 }
 
-export function assertConfiguredSharedGateways(
-  sharedGatewayIds: readonly string[],
-  gateways: readonly PlacementPolicyGateway[],
-): void {
-  const automaticSharedStatuses = new Set(["running", "draining", "paused"]);
-  for (const gatewayId of sharedGatewayIds) {
-    const gateway = gateways.find((item) => item.gatewayId === gatewayId);
-    const invalid = [
-      !gateway,
-      gateway?.gatewayClass !== "shared",
-      !automaticSharedStatuses.has(gateway?.desiredStatus ?? ""),
-      isOperatorManaged(gateway?.managedBy),
-    ].some(Boolean);
-    if (invalid) {
-      throw new Error(`configured shared gateway ${gatewayId} is not a Cowboy-managed shared root`);
-    }
-  }
-}
-
 async function readPlacementPolicySnapshot(
   input: FirestorePlacementPolicyInput,
 ): Promise<PlacementPolicySnapshot> {
@@ -2883,9 +2865,17 @@ async function readPlacementPolicySnapshot(
         .get(),
       mirroredOrScan(informer.assignments(), () => db.collectionGroup("assignments").get()),
     ]);
-  const pool = parseSharedGatewayPoolConfig(configSnap.data());
-  if (!pool) throw new Error("config/orchestrator shared gateway pool is invalid");
-  const { defaultGatewayId, sharedGatewayIds } = pool;
+  const pool = deriveSharedGatewayPoolConfig(gatewayDocs.map((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    return {
+      gatewayId: doc.id,
+      gatewayClass: data.gatewayClass,
+      desiredStatus: data.desiredStatus,
+      managedBy: data.managedBy,
+    };
+  }));
+  const defaultGatewayId = pool?.defaultGatewayId ?? "";
+  const sharedGatewayIds = pool?.sharedGatewayIds ?? [];
   const [completedReturnSnapshots, terminalLeaseSnapshots] = await Promise.all([
     readCompletedReturnSnapshots(db, userDocs, sharedGatewayIds),
     readTerminalLeaseOperationSnapshots(db, userDocs),
@@ -2928,7 +2918,6 @@ async function readPlacementPolicySnapshot(
       now,
     }))
     .filter((gateway): gateway is PlacementPolicyGateway => gateway !== null);
-  assertConfiguredSharedGateways(sharedGatewayIds, gateways);
   return {
     defaultGatewayId,
     sharedGatewayIds,
@@ -2952,10 +2941,7 @@ function unavailableRecoveryTargetFence(
 ): (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void> {
   return async (context) => {
     const transaction = context.txn as unknown as Transaction;
-    const configSnapshot = await transaction.get(input.db.doc(ORCHESTRATOR_CONFIG_DOC_PATH));
-    const pool = parseSharedGatewayPoolConfig(
-      configSnapshot.exists ? configSnapshot.data() : undefined,
-    );
+    const pool = await readSharedGatewayPoolConfig(input.db, transaction);
     if (
       pool === null ||
       pool.sharedGatewayIds.length !== request.sharedGatewayIds.length ||

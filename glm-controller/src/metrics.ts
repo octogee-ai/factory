@@ -15,6 +15,7 @@ let sharedGatewayCapacitySnapshot = {
   assignmentCount: 0,
   hotMemberCount: 0,
 };
+let sharedPoolReplicaBounds = { minReplicas: 0, maxReplicas: 0 };
 let disruptionSnapshot = {
   spotNodes: 0,
   onDemandNodes: 0,
@@ -120,6 +121,13 @@ export function recordDisruptionSnapshot(sample: DisruptionSnapshotSample): void
   disruptionLastObservedMs = sample.now ?? Date.now();
 }
 
+export function recordSharedPoolReplicaBounds(bounds: { minReplicas: number; maxReplicas: number }): void {
+  sharedPoolReplicaBounds = {
+    minReplicas: Math.max(0, Math.trunc(bounds.minReplicas)),
+    maxReplicas: Math.max(0, Math.trunc(bounds.maxReplicas)),
+  };
+}
+
 export function recordSharedGatewayMaxCapacity(
   sample: SharedGatewayMaxCapacitySample,
 ): void {
@@ -180,7 +188,13 @@ export function renderMetrics(): string {
     "# HELP glm_disruption_pending_gateway_pods Current Pending gateway pods observed by the disruption observer.",
     "# TYPE glm_disruption_pending_gateway_pods gauge",
     `glm_disruption_pending_gateway_pods ${disruptionSnapshot.pendingGatewayPods}`,
-    "# HELP glm_shared_gateway_max_capacity_total Shared Barn autoscaler observations with every reserved member running.",
+    "# HELP octogee_shared_pool_min_replicas The shared pool floor Cowboy converges to for this environment.",
+    "# TYPE octogee_shared_pool_min_replicas gauge",
+    `octogee_shared_pool_min_replicas ${sharedPoolReplicaBounds.minReplicas}`,
+    "# HELP octogee_shared_pool_max_replicas The shared pool ceiling Cowboy will mint slots up to for this environment.",
+    "# TYPE octogee_shared_pool_max_replicas gauge",
+    `octogee_shared_pool_max_replicas ${sharedPoolReplicaBounds.maxReplicas}`,
+    "# HELP glm_shared_gateway_max_capacity_total Shared pool scaler observations at the replica ceiling.",
     "# TYPE glm_shared_gateway_max_capacity_total counter",
     `glm_shared_gateway_max_capacity_total ${sharedGatewayMaxCapacity}`,
     "# HELP glm_shared_gateway_assignment_count Assigned builders observed when the Shared Barn most recently reached maximum capacity.",

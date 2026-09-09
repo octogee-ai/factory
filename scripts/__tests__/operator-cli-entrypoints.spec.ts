@@ -38,11 +38,9 @@ import {
 } from "@octogee/shared/types/billing-tiers";
 
 describe("seed-orchestrator-config args", () => {
-  it("validates env and default gateway before Firebase init", () => {
+  it("validates env and the deployment target before Firebase init", () => {
     expect(parseSeedOrchestratorConfigArgs([
       "--env=test",
-      "--default-gateway=canary",
-      "--shared-gateways=canary,default,default-b",
       "--force",
       "--dry-run",
     ])).toEqual({
@@ -51,8 +49,6 @@ describe("seed-orchestrator-config args", () => {
         env: "test",
         deploymentTargetId: "test-central",
         firebaseProjectId: "octogee-test",
-        defaultGateway: "canary",
-        sharedGateways: ["canary", "default", "default-b"],
         force: true,
         dryRun: true,
         check: false,

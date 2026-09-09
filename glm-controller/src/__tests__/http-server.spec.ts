@@ -636,7 +636,11 @@ describe("createHttpServer — admin gateway routes", () => {
       repository: "us-central1-docker.pkg.dev/octogee/octogee",
       surfaces: { gateway: {}, platform: {} },
     }));
-    store.gateways["shared-a"] = durableSharedGateway("shared-a");
+    store.gateways["gw-alice"] = {
+      ...durableBuilderGateway("gw-alice", "running"),
+      profile: "builder",
+      imageProfile: "builder",
+    };
     const app = createHttpServer(buildDeps(store, {
       releaseEnvironment: "test",
       releaseAuthority: {
@@ -648,7 +652,7 @@ describe("createHttpServer — admin gateway routes", () => {
     }));
 
     const res = await request(app)
-      .post("/api/admin/gateways/shared-a/deploy")
+      .post("/api/admin/gateways/gw-alice/deploy")
       .set("Authorization", "Bearer admin-token")
       .send({ sourceSha: requestedSourceSha });
 

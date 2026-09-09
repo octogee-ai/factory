@@ -26,12 +26,10 @@ import {
   type GatewayVmState,
 } from "@octogee/shared/types/glm";
 import {
-  GATEWAY_CONFIG_SCHEMA_VERSION,
   type GatewayMutableConfig,
 } from "@octogee/shared/types/gateway-mutable-config";
 import {
   gatewayHeartbeatMatchesImageTag,
-  isGatewayImageTag,
 } from "@octogee/shared/types/image-tag";
 import {
   startGatewayHeartbeatPoller,
@@ -72,10 +70,8 @@ import {
 import { createGatewayRuntimeConfigPreparer } from "./gateway-runtime-config.js";
 import {
   isGatewayDesiredDoc,
-  isGatewayEdgeImage,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
-  GATEWAY_RELEASES_SUBCOLLECTION,
   type GatewayDoc,
   type GatewayRuntimeDoc,
   type ReleasePayload,
@@ -228,11 +224,8 @@ import {
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
 import {
-  InitialGatewayReleaseConflictError,
   gatewayAuthorizationFromRootDocument,
   readGatewayArtifact,
-  writeInitialGatewayRelease,
-  type GatewayArtifact,
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
@@ -298,7 +291,11 @@ import {
   CUSTOMER_DELETION_JOBS_COLLECTION,
 } from "@octogee/shared/types/account-lifecycle";
 import { MODEL_BROKER_USAGE_ROLLUPS_COLLECTION } from "@octogee/shared/types/model-broker-usage";
-import { recordReconcile, recordSharedGatewayMaxCapacity } from "./metrics.js";
+import {
+  recordReconcile,
+  recordSharedGatewayMaxCapacity,
+  recordSharedPoolReplicaBounds,
+} from "./metrics.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
@@ -311,15 +308,13 @@ import {
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
-import { completeHealthyBootstrapAddGatewayOperations } from "./bootstrap-add-gateway-recovery.js";
+import { completeHealthySharedPoolAddGatewayOperations } from "./shared-pool-add-gateway-recovery.js";
 import { computeChartFingerprint } from "./chart-fingerprint.js";
+import { startSharedPoolScaler } from "./shared-pool-scaler.js";
 import {
-  parseDeclaredSharedGatewayIds,
-  runSharedGatewayPoolReconcile,
-  startSharedGatewayPoolReconciler,
-} from "./shared-gateway-pool-bootstrap.js";
-import { PRIMARY_SHARED_GATEWAY_ID } from "@octogee/shared/types/shared-gateway-pool";
-import { startSharedGatewayAutoscaler } from "./shared-gateway-autoscaler.js";
+  platformGatewayArtifactFromEnvironment,
+  sharedPoolReplicaBoundsFromEnvironment,
+} from "./platform-release.js";
 import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
@@ -341,9 +336,8 @@ const logger = createLogger({
 const log = (msg: string) => logger.legacy(msg);
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
-const SHARED_GATEWAY_POOL_RECONCILE_MS = 30_000;
-const SHARED_GATEWAY_AUTOSCALER_MS = parseNonNegativeInt(
-  process.env.SHARED_GATEWAY_AUTOSCALER_MS,
+const SHARED_POOL_SCALER_MS = parseNonNegativeInt(
+  process.env.SHARED_POOL_SCALER_MS,
   30_000,
 );
 const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
@@ -2687,26 +2681,21 @@ async function main(): Promise<void> {
   );
 
   await bootstrapGlmGateways(deps);
-  await bootstrapDefaultGateway(deps);
-  const sharedGatewayPoolDeps = {
-    db,
-    namespace: NAMESPACE,
-    declaredSharedGatewayIds: parseDeclaredSharedGatewayIds(process.env.SHARED_GATEWAY_IDS),
-    ensureGatewayAuthSecret: deps.ensureGatewayAuthSecret,
-    convergeGateways: deps.convergeGateways,
-    log: deps.log,
-    now: () => Date.now(),
-  };
-  await runSharedGatewayPoolReconcile(sharedGatewayPoolDeps, "startup");
+  const sharedPoolBounds = sharedPoolReplicaBoundsFromEnvironment();
+  const platformArtifact = platformGatewayArtifactFromEnvironment();
+  recordSharedPoolReplicaBounds(sharedPoolBounds);
+  log(
+    `[glm-controller] shared pool minReplicas=${sharedPoolBounds.minReplicas} maxReplicas=${sharedPoolBounds.maxReplicas} platformImage=${platformArtifact.imageTag}`,
+  );
   try {
-    await completeHealthyBootstrapAddGatewayOperations({
+    await completeHealthySharedPoolAddGatewayOperations({
       db,
       log,
       now: () => Date.now(),
     });
   } catch (err) {
     log(
-      `[glm-controller] ⚠ bootstrap add-gateway recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+      `[glm-controller] ⚠ shared pool add-gateway recovery failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -2734,15 +2723,16 @@ async function main(): Promise<void> {
     fleetControllerPrivateKey,
   });
   stoppers.push(
-    startSharedGatewayPoolReconciler(sharedGatewayPoolDeps, SHARED_GATEWAY_POOL_RECONCILE_MS),
-  );
-  stoppers.push(
-    startSharedGatewayAutoscaler({
+    startSharedPoolScaler({
       db,
+      bounds: sharedPoolBounds,
+      platformArtifact,
+      ensureGatewayAuthSecret: ({ gatewayId }) =>
+        deps.ensureGatewayAuthSecret({ namespace: NAMESPACE, gatewayId }),
       log,
       now: () => Date.now(),
       recordMaxCapacity: recordSharedGatewayMaxCapacity,
-    }, SHARED_GATEWAY_AUTOSCALER_MS),
+    }, SHARED_POOL_SCALER_MS),
   );
   if (BUILDER_VM_SPEC) {
     stoppers.push(
@@ -2763,140 +2753,6 @@ async function main(): Promise<void> {
 
 export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> {
   deps.log("[glm-controller] legacy Helm bootstrap disabled; durable roots and revisions own recovery");
-}
-
-function bootstrapGatewayArtifactFromEnvironment(): GatewayArtifact {
-  const imageRepository = process.env.BOOTSTRAP_IMAGE_REPOSITORY?.trim();
-  if (!imageRepository) {
-    throw new Error("BOOTSTRAP_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled");
-  }
-  const imageTag = process.env.BOOTSTRAP_IMAGE_TAG?.trim();
-  if (!imageTag || !isGatewayImageTag(imageTag)) {
-    throw new Error("BOOTSTRAP_IMAGE_TAG must be an immutable gateway image tag");
-  }
-  const gatewayEdgeImageRepository = process.env.BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY?.trim();
-  if (!gatewayEdgeImageRepository) {
-    throw new Error(
-      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY is required when default gateway bootstrap is enabled",
-    );
-  }
-  const gatewayEdgeImageTag = process.env.BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG?.trim();
-  if (!gatewayEdgeImageTag || !isGatewayImageTag(gatewayEdgeImageTag)) {
-    throw new Error("BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG must be an immutable gateway-edge image tag");
-  }
-  const gatewayEdgeImage = {
-    imageRepository: gatewayEdgeImageRepository,
-    imageTag: gatewayEdgeImageTag,
-  };
-  if (!isGatewayEdgeImage(gatewayEdgeImage, imageRepository)) {
-    throw new Error(
-      "BOOTSTRAP_GATEWAY_EDGE_IMAGE_REPOSITORY and BOOTSTRAP_GATEWAY_EDGE_IMAGE_TAG must identify the paired immutable gateway-edge image",
-    );
-  }
-  return { imageRepository, imageTag, gatewayEdgeImage };
-}
-
-export async function bootstrapDefaultGateway(deps: ControllerDeps): Promise<void> {
-  if (process.env.BOOTSTRAP_DEFAULT_GATEWAY !== "true") {
-    deps.log("[glm-controller] durable default gateway bootstrap disabled");
-    return;
-  }
-
-  const gatewayId = PRIMARY_SHARED_GATEWAY_ID;
-  const gatewayRef = deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-  const durableDefaultExists = async (): Promise<boolean> => {
-    const gateway = await gatewayRef.get();
-    if (!gateway.exists) return false;
-    const gatewayData = gateway.data() as { desiredRelease?: unknown } | undefined;
-    const desiredRelease = gatewayData?.desiredRelease;
-    if (typeof desiredRelease !== "number") {
-      throw new Error(
-        `default gateway bootstrap found durable root gateways/${gatewayId} with a non-numeric desiredRelease`,
-      );
-    }
-    const release = await gatewayRef
-      .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-      .doc(String(desiredRelease))
-      .get();
-    if (!release.exists) {
-      throw new Error(
-        `default gateway bootstrap found durable root gateways/${gatewayId} referencing missing release ${desiredRelease}`,
-      );
-    }
-    return true;
-  };
-
-  if (await durableDefaultExists()) {
-    deps.log("[glm-controller] durable default gateway already exists");
-    return;
-  }
-
-  const artifact = bootstrapGatewayArtifactFromEnvironment();
-  const imageTag = artifact.imageTag;
-
-  await deps.ensureGatewayAuthSecret({
-    namespace: NAMESPACE,
-    gatewayId,
-  });
-  const now = Date.now();
-  const createdBy = "glm-controller-bootstrap";
-  const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc();
-  try {
-    await writeInitialGatewayRelease(deps.db, {
-      gatewayId,
-      createdBy,
-      now,
-      desiredStatus: "running",
-      config: {
-        configSchemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION,
-        profile: null,
-        gatewayClass: "shared",
-        imageProfile: "standard",
-        sizingTier: null,
-        gcpProject: null,
-        gatewayContainerSecurityContext: null,
-        serviceAccountName: null,
-        serviceAccount: null,
-        builderAccess: null,
-        ownerUid: null,
-        builderSlug: null,
-        openclawOverrides: null,
-        modelBrokerLimits: null,
-      },
-      artifact,
-      writeAdditional: (transaction) => {
-        transaction.set(operationRef, {
-          kind: "add-gateway",
-          status: "pending",
-          origin: "automatic",
-          createdBy,
-          createdAt: now,
-          startedAt: null,
-          completedAt: null,
-          gatewayId,
-          input: {
-            gatewayId,
-            imageTag,
-            gatewayClass: "shared",
-            source: "default-gateway-bootstrap",
-          },
-          steps: [],
-        });
-      },
-    });
-  } catch (error) {
-    if (
-      error instanceof InitialGatewayReleaseConflictError &&
-      await durableDefaultExists()
-    ) {
-      deps.log("[glm-controller] durable default gateway already exists");
-      return;
-    }
-    throw error;
-  }
-  deps.log(
-    `[glm-controller] queued durable default gateway release 1 (${imageTag})`,
-  );
 }
 
 function createMigrationClientBuilder(

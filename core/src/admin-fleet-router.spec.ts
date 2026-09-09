@@ -789,6 +789,15 @@ function mkAdminFleetRouteApp(opts: {
     users: { ...opts.users },
     operations: { ...(opts.operations ?? {}) },
   };
+  // The pool derives from the shared-class root query. A test that names pool
+  // members in `config` without seeding their roots gets them synthesized into
+  // that query only, so the rest of the fleet projection sees the seeded roots.
+  const poolRoots: Record<string, Record<string, unknown>> = { ...(opts.gateways ?? {}) };
+  for (const gatewayId of (sharedGatewayIds as string[] | undefined) ?? []) {
+    poolRoots[gatewayId] ??= durableGatewayRoot(gatewayId, { liveRelease: 1 });
+  }
+  const gatewaysCollection = mkCollection(opts.gateways ?? {});
+  const poolQueryCollection = mkCollection(poolRoots);
   let operationId = 0;
   const assignmentDocs = Object.values(opts.assignments ?? {}).flatMap((byUid) =>
     Object.entries(byUid).map(([uid, data]) => ({ id: uid, data: () => data })),
@@ -820,7 +829,9 @@ function mkAdminFleetRouteApp(opts: {
     collection: vi.fn((name: string) => {
       if (name === "users") return mkCollection(state.users);
       if (name === GLM_GATEWAYS_COLLECTION) return mkCollection(opts.glmGateways ?? {});
-      if (name === "gateways") return mkCollection(opts.gateways ?? {});
+      if (name === "gateways") {
+        return { ...gatewaysCollection, where: poolQueryCollection.where };
+      }
       if (name === GLM_OPERATIONS_COLLECTION) {
         return mkCollection(state.operations, () => `operation-${++operationId}`);
       }
@@ -2343,12 +2354,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-missing",
       sharedGatewayIds: ["gw-missing"],
-      sharedGatewayAutoscaling: {
-        enabled: true,
-        // A one-member pool cannot hold two hot members; the default clamps.
-        minHotMembers: 1,
-        buildersPerGateway: 4,
-      },
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
@@ -2471,204 +2477,62 @@ describe("onboarding placement (post-cohorts)", () => {
     });
   });
 
-  it("PATCH promotes a configured shared member without migrating existing Builders", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-old", sharedGatewayIds: ["gw-old", "gw-new"] },
-      users: {
-        "uid-shared": {
-          username: "shared-builder",
-          provisioning: { openclaw: { slug: "shared-builder", gatewayId: "gw-old" } },
-        },
-        "uid-active": {
-          username: "active-builder",
-          provisioning: { openclaw: { slug: "active-builder", gatewayId: "run-active" } },
-        },
-        "uid-adopted": {
-          username: "adopted-builder",
-          provisioning: { openclaw: { slug: "adopted-builder", gatewayId: "gw-old" } },
-        },
-        "uid-deleting": {
-          username: "deleting-builder",
-          accountLifecycle: { status: "deletion_scheduled" },
-          provisioning: { openclaw: { slug: "deleting-builder", gatewayId: "gw-old" } },
-        },
-      },
-      glmGateways: {
-        "gw-bare": { gatewayClass: "shared", desiredStatus: "running" },
-        "gw-new": {
-          docKind: "runtime",
-          gatewayId: "gw-new",
-          release: 1,
-          lifecycle: "serving",
-          helm: { imageRepository: "gateway", imageTag: "1234567" },
-          heartbeat: { status: "ready", mountedCustomers: [] },
-          lastError: { message: null, at: null },
-        },
-      },
-      gateways: {
-        "gw-old": durableGatewayRoot("gw-old", { desiredStatus: "paused" }),
-        "gw-new": durableGatewayRoot("gw-new"),
-        "gw-builder": durableGatewayRoot("gw-builder", {
-          gatewayClass: "builder",
-          ownerUid: "uid-builder",
-          builderSlug: "builder",
-          allocation: {
-            kind: "disposable-builder",
-            schemaVersion: 1,
-            leaseId: "lease-builder",
-            generation: 1,
-            claimedByUid: "uid-builder",
-          },
-        }),
-        "run-active": durableGatewayRoot("run-active", {
-          gatewayClass: "builder",
-          ownerUid: "uid-active",
-          builderSlug: "active-builder",
-          allocation: {
-            kind: "disposable-builder",
-            schemaVersion: 1,
-            leaseId: "lease-active",
-            generation: 1,
-            claimedByUid: "uid-active",
-          },
-        }),
-      },
-      operations: {
-        "existing-migration": {
-          kind: "migrate-customer",
-          status: "running",
-          inputUid: "uid-adopted",
-          input: {
-            uid: "uid-adopted",
-            fromGatewayId: "gw-old",
-            toGatewayId: "gw-new",
-          },
-        },
-      },
-    });
-
-    const rejected = await request(app)
-      .patch("/onboarding-placement")
-      .send({ defaultGatewayId: "gw-builder" })
-      .expect(400);
-    expect(rejected.body.error).toContain("configured shared pool member");
-
-    const bare = await request(app)
-      .patch("/onboarding-placement")
-      .send({ defaultGatewayId: "gw-bare" })
-      .expect(400);
-    expect(bare.body.error).toContain("configured shared pool member");
-
-    const response = await request(app)
-      .patch("/onboarding-placement")
-      .send({ defaultGatewayId: "gw-new" })
-      .expect(200);
-    expect(state.config.defaultGatewayId).toBe("gw-new");
-    expect(state.config.sharedGatewayIds).toEqual(["gw-new", "gw-old"]);
-    expect(response.body.defaultChange).toMatchObject({
-      previousGatewayId: "gw-old",
-      targetGatewayId: "gw-new",
-      enqueued: [],
-      adopted: [],
-      blocked: [],
-      ownedRuntimeUntouched: 0,
-    });
-    const migrationAudits = Object.values(state.operations).filter((operation) =>
-      (operation as { recordType?: unknown }).recordType === "audit" &&
-      (operation as { mutation?: { kind?: unknown } }).mutation?.kind === "migrate-customer",
-    );
-    expect(migrationAudits).toEqual([]);
-  });
-
-  it("does not move a legacy non-disposable owner root when the primary changes", async () => {
-    const { app, state } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-old", sharedGatewayIds: ["gw-old", "gw-new"] },
-      users: {
-        "uid-legacy": {
-          username: "legacy-builder",
-          provisioning: { openclaw: { slug: "legacy-builder", gatewayId: "legacy-owner" } },
-        },
-      },
-      glmGateways: {
-        "gw-new": {
-          docKind: "runtime",
-          gatewayId: "gw-new",
-          release: 1,
-          lifecycle: "serving",
-          helm: { imageRepository: "gateway", imageTag: "1234567" },
-          heartbeat: { status: "ready", mountedCustomers: [] },
-          lastError: { message: null, at: null },
-        },
-      },
-      gateways: {
-        "gw-old": durableGatewayRoot("gw-old"),
-        "gw-new": durableGatewayRoot("gw-new"),
-        "legacy-owner": durableGatewayRoot("legacy-owner", {
-          gatewayClass: "builder",
-          ownerUid: "uid-legacy",
-          builderSlug: "legacy-builder",
-        }),
-      },
-    });
-
-    const response = await request(app)
-      .patch("/onboarding-placement")
-      .send({ defaultGatewayId: "gw-new" })
-      .expect(200);
-
-    expect(response.body.defaultChange).toMatchObject({
-      enqueued: [],
-      ownedRuntimeUntouched: 0,
-    });
-    expect(Object.values(state.operations).filter((operation) =>
-      (operation as { kind?: unknown }).kind === "migrate-customer",
-    )).toEqual([]);
-  });
-
-  it("updates Shared Barn autoscaling through the platform config route", async () => {
+  it("updates shared pool autoscaling through the platform config route", async () => {
     const { app, state } = mkAdminFleetRouteApp({
       config: {
-        defaultGatewayId: "shared-a",
-        sharedGatewayIds: ["shared-a", "shared-b", "shared-c", "shared-d"],
-        sharedGatewayAutoscaling: {
-          enabled: true,
-          minHotMembers: 2,
-          buildersPerGateway: 4,
-        },
+        defaultGatewayId: "shared-0",
+        sharedGatewayIds: ["shared-0", "shared-1"],
+        sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
       },
     });
 
     const response = await request(app)
       .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: false, minHotMembers: 2, buildersPerGateway: 6 })
+      .send({ enabled: false, buildersPerGateway: 6 })
       .expect(200);
 
-    expect(state.config.sharedGatewayAutoscaling).toEqual({
-      enabled: false,
-      minHotMembers: 2,
-      buildersPerGateway: 6,
-    });
+    expect(state.config.sharedGatewayAutoscaling).toEqual({ enabled: false, buildersPerGateway: 6 });
     expect(response.body.config.sharedGatewayAutoscaling).toEqual({
       enabled: false,
-      minHotMembers: 2,
       buildersPerGateway: 6,
     });
 
-    // A single hot Barn is a valid, deliberately cheaper shape.
     await request(app)
       .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: true, minHotMembers: 1, buildersPerGateway: 4 })
-      .expect(200);
-
-    await request(app)
-      .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: true, minHotMembers: 0, buildersPerGateway: 4 })
+      .send({ enabled: true, buildersPerGateway: 1 })
       .expect(400);
-
     await request(app)
       .patch("/onboarding-placement/autoscaling")
-      .send({ enabled: true, minHotMembers: 5, buildersPerGateway: 4 })
+      .send({ enabled: "yes", buildersPerGateway: 4 })
       .expect(400);
+  });
+
+  it("derives the shared pool from shared-class roots, not config/orchestrator", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: {},
+      users: {},
+      gateways: {
+        "shared-1": durableGatewayRoot("shared-1"),
+        "shared-0": durableGatewayRoot("shared-0", { desiredStatus: "paused" }),
+        "shared-a": durableGatewayRoot("shared-a", { desiredStatus: "draining" }),
+        bender: durableGatewayRoot("bender", {
+          gatewayClass: "builder",
+          ownerUid: "uid-bender",
+          builderSlug: "bender",
+        }),
+      },
+      glmGateways: {
+        "shared-1": { gatewayClass: "shared", desiredStatus: "running" },
+      },
+    });
+
+    const res = await request(app).get("/onboarding-placement").expect(200);
+
+    expect(res.body.config).toEqual({
+      defaultGatewayId: "shared-1",
+      sharedGatewayIds: ["shared-1", "shared-0", "shared-a"],
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
+    });
   });
 
   it("ignores retired override data and exposes no override API", async () => {
@@ -2690,13 +2554,9 @@ describe("onboarding placement (post-cohorts)", () => {
     const res = await request(app).get("/onboarding-placement").expect(200);
 
     expect(res.body.config).toEqual({
-      defaultGatewayId: "gw-default",
-      sharedGatewayIds: ["gw-default"],
-      sharedGatewayAutoscaling: {
-        enabled: true,
-        minHotMembers: 1,
-        buildersPerGateway: 4,
-      },
+      defaultGatewayId: "gw-canary",
+      sharedGatewayIds: ["gw-canary", "gw-default"],
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
     });
     expect(res.body).not.toHaveProperty("overrides");
     expect(res.body.customers[0]).not.toHaveProperty("overrideGatewayId");

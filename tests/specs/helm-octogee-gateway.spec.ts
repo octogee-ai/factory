@@ -224,7 +224,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(builder).toMatch(/cloud\.google\.com\/compute-class:\s*"octogee-gateway-test"/);
   });
 
-  it("keeps Shared Barn identities on different nodes and different Central zones", () => {
+  it("keeps shared slots on different nodes and spread across Central zones", () => {
     const shared = findDoc(helmTemplate("octogee-gw-shared-a", {
       gatewayId: "shared-a",
       gatewayClass: "shared",
@@ -238,7 +238,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     )?.[0] ?? "";
 
     expect(shared).toMatch(/requiredDuringSchedulingIgnoredDuringExecution:[\s\S]*topologyKey: kubernetes\.io\/hostname/);
-    expect(shared).toMatch(/gateway-class: shared[\s\S]*operator: NotIn[\s\S]*- shared-a[\s\S]*topologyKey: topology\.kubernetes\.io\/zone/);
+    expect(shared).toMatch(/topologySpreadConstraints:[\s\S]*topologyKey: topology\.kubernetes\.io\/zone[\s\S]*whenUnsatisfiable: DoNotSchedule[\s\S]*gateway-class: shared/);
+    expect(shared).not.toContain("matchLabelKeys");
+    expect(shared).not.toMatch(/operator: NotIn/);
+    expect(ownerBound).not.toContain("topologySpreadConstraints:");
     expect(ownerRequired).not.toContain("topologyKey: topology.kubernetes.io/zone");
   });
 
@@ -728,9 +731,12 @@ const out = helmTemplate();
     expect(pdb).toMatch(/gateway-instance:\s*bender/);
   });
 
-  it("leaves shared disruption ownership to umbrella identity PDBs", () => {
+  it("renders a shared slot's own PodDisruptionBudget keyed by gateway-instance", () => {
     const out = helmTemplate();
-    expect(findDoc(out, "PodDisruptionBudget", "octogee-gateway-default")).toBeNull();
+    const pdb = findDoc(out, "PodDisruptionBudget", "octogee-gateway-default");
+    expect(pdb).not.toBeNull();
+    expect(pdb).toMatch(/gateway-instance:\s*default/);
+    expect(pdb).toMatch(/^\s*minAvailable:\s*1\s*$/m);
   });
 
   it("protects a healthy Builder gateway from voluntary eviction", () => {

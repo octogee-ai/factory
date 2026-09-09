@@ -109,8 +109,8 @@ glm-controller:
   gatewayServiceAccount: octogee-gateway@__FIREBASE_PROJECT__.iam.gserviceaccount.com
   workloadIdentityProject: "__CLUSTER_PROJECT__"
   kmsKeyName: "__KMS_KEY_NAME__"
-  bootstrapDefaultGateway:
-    imageRepository: __AR_REPOSITORY__/octogee-gateway
+  platformRelease:
+    gatewayImageRepository: __AR_REPOSITORY__/octogee-gateway
     gatewayEdgeImageRepository: __AR_REPOSITORY__/gateway-edge
 
 llmBroker:

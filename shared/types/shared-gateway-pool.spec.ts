@@ -2,15 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   authoritativeSharedGatewayLoad,
+  compareSharedGatewayIds,
+  deriveSharedGatewayPoolConfig,
   isAcceptingSharedGateway,
+  isLegacySharedGatewayId,
+  isSharedPoolSlotId,
+  nextSharedPoolSlotId,
+  parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
+  parseSharedPoolReplicaBounds,
   planSharedGatewayRebalance,
   selectSharedGateway,
+  sharedPoolSlotOrdinal,
 } from "./shared-gateway-pool.js";
 
 const config = {
-  defaultGatewayId: "shared-a",
-  sharedGatewayIds: ["shared-a", "shared-b"],
+  defaultGatewayId: "shared-0",
+  sharedGatewayIds: ["shared-0", "shared-1"],
 } as const;
 
 function candidate(
@@ -33,40 +41,156 @@ function candidate(
   };
 }
 
+function root(
+  gatewayId: string,
+  overrides: Partial<{ gatewayClass: unknown; desiredStatus: unknown; managedBy: unknown }> = {},
+) {
+  return { gatewayId, gatewayClass: "shared", desiredStatus: "running", ...overrides };
+}
+
+describe("shared pool slot ids", () => {
+  it("recognises unnamed ordinal slots and their ordinals", () => {
+    expect(isSharedPoolSlotId("shared-0")).toBe(true);
+    expect(isSharedPoolSlotId("shared-12")).toBe(true);
+    expect(sharedPoolSlotOrdinal("shared-12")).toBe(12);
+    for (const id of ["shared-a", "shared-01", "shared-", "shared", "builder-0", 7, null]) {
+      expect(isSharedPoolSlotId(id)).toBe(false);
+    }
+    expect(sharedPoolSlotOrdinal("shared-a")).toBeNull();
+  });
+
+  it("keeps the named cutover members recognisable until they are uninstalled", () => {
+    expect(isLegacySharedGatewayId("shared-a")).toBe(true);
+    expect(isLegacySharedGatewayId("shared-d")).toBe(true);
+    expect(isLegacySharedGatewayId("shared-0")).toBe(false);
+    expect(isLegacySharedGatewayId("shared-e")).toBe(false);
+  });
+
+  it("orders slots numerically before legacy members", () => {
+    expect(["shared-b", "shared-10", "shared-2", "shared-a", "shared-0"].sort(compareSharedGatewayIds))
+      .toEqual(["shared-0", "shared-2", "shared-10", "shared-a", "shared-b"]);
+  });
+
+  it("mints the lowest unused ordinal", () => {
+    expect(nextSharedPoolSlotId([])).toBe("shared-0");
+    expect(nextSharedPoolSlotId(["shared-0", "shared-1"])).toBe("shared-2");
+    expect(nextSharedPoolSlotId(["shared-0", "shared-2", "shared-a"])).toBe("shared-1");
+  });
+});
+
+describe("deriveSharedGatewayPoolConfig", () => {
+  it("derives the pool from Cowboy-managed shared roots only", () => {
+    expect(deriveSharedGatewayPoolConfig([
+      root("shared-1"),
+      root("shared-0", { desiredStatus: "paused" }),
+      root("shared-a", { desiredStatus: "draining" }),
+      root("bender", { gatewayClass: "builder" }),
+      root("shared-2", { managedBy: "operator" }),
+      root("shared-3", { desiredStatus: "retired" }),
+      root("NOT VALID"),
+    ])).toEqual({
+      defaultGatewayId: "shared-1",
+      sharedGatewayIds: ["shared-1", "shared-0", "shared-a"],
+    });
+  });
+
+  it("anchors on the first running slot, then the first running member, then the first member", () => {
+    expect(deriveSharedGatewayPoolConfig([
+      root("shared-a"),
+      root("shared-0", { desiredStatus: "paused" }),
+    ])?.defaultGatewayId).toBe("shared-a");
+    expect(deriveSharedGatewayPoolConfig([
+      root("shared-a", { desiredStatus: "paused" }),
+      root("shared-0", { desiredStatus: "paused" }),
+    ])?.defaultGatewayId).toBe("shared-0");
+  });
+
+  it("is null for an empty pool and carries the autoscaling knobs when given", () => {
+    expect(deriveSharedGatewayPoolConfig([root("bender", { gatewayClass: "builder" })])).toBeNull();
+    expect(deriveSharedGatewayPoolConfig(
+      [root("shared-0")],
+      { enabled: false, buildersPerGateway: 3 },
+    )).toEqual({
+      defaultGatewayId: "shared-0",
+      sharedGatewayIds: ["shared-0"],
+      sharedGatewayAutoscaling: { enabled: false, buildersPerGateway: 3 },
+    });
+  });
+});
+
 describe("parseSharedGatewayPoolConfig", () => {
-  it("requires a valid unique pool with the primary first", () => {
+  it("requires a valid unique pool with the anchor first", () => {
     expect(parseSharedGatewayPoolConfig(config)).toEqual(config);
-    expect(parseSharedGatewayPoolConfig({ defaultGatewayId: "shared-a" })).toBeNull();
+    expect(parseSharedGatewayPoolConfig({ defaultGatewayId: "shared-0" })).toBeNull();
     expect(parseSharedGatewayPoolConfig({
-      defaultGatewayId: "shared-a",
-      sharedGatewayIds: ["shared-b", "shared-a"],
+      defaultGatewayId: "shared-0",
+      sharedGatewayIds: ["shared-1", "shared-0"],
     })).toBeNull();
     expect(parseSharedGatewayPoolConfig({
-      defaultGatewayId: "shared-a",
-      sharedGatewayIds: ["shared-a", "shared-a"],
+      defaultGatewayId: "shared-0",
+      sharedGatewayIds: ["shared-0", "shared-0"],
     })).toBeNull();
     expect(parseSharedGatewayPoolConfig({
-      defaultGatewayId: "shared-a",
-      sharedGatewayIds: ["shared-a", "NOT VALID"],
+      defaultGatewayId: "shared-0",
+      sharedGatewayIds: ["shared-0", "NOT VALID"],
     })).toBeNull();
+  });
+});
+
+describe("scaling configuration", () => {
+  it("parses the operator autoscaling knobs with defaults", () => {
+    expect(parseSharedGatewayAutoscalingConfig(undefined)).toEqual({
+      enabled: true,
+      buildersPerGateway: 4,
+    });
+    expect(parseSharedGatewayAutoscalingConfig({ enabled: false, buildersPerGateway: 2 })).toEqual({
+      enabled: false,
+      buildersPerGateway: 2,
+    });
+    expect(parseSharedGatewayAutoscalingConfig({ buildersPerGateway: 1 })).toBeNull();
+    expect(parseSharedGatewayAutoscalingConfig({ enabled: "yes" })).toBeNull();
+    expect(parseSharedGatewayAutoscalingConfig({ minHotMembers: 2 })).toEqual({
+      enabled: true,
+      buildersPerGateway: 4,
+    });
+  });
+
+  it("parses the environment replica bounds", () => {
+    expect(parseSharedPoolReplicaBounds({ minReplicas: "0", maxReplicas: "8" })).toEqual({
+      minReplicas: 0,
+      maxReplicas: 8,
+    });
+    expect(parseSharedPoolReplicaBounds({ minReplicas: 2, maxReplicas: 2 })).toEqual({
+      minReplicas: 2,
+      maxReplicas: 2,
+    });
+    for (const bounds of [
+      { minReplicas: "3", maxReplicas: "2" },
+      { minReplicas: "-1", maxReplicas: "2" },
+      { minReplicas: "0", maxReplicas: "0" },
+      { minReplicas: "1.5", maxReplicas: "2" },
+      { minReplicas: undefined, maxReplicas: "2" },
+    ]) {
+      expect(parseSharedPoolReplicaBounds(bounds)).toBeNull();
+    }
   });
 });
 
 describe("shared gateway selection", () => {
   it("chooses the least authoritative load", () => {
-    expect(authoritativeSharedGatewayLoad(candidate("shared-a", {
+    expect(authoritativeSharedGatewayLoad(candidate("shared-0", {
       assignmentCount: 2,
       incomingMigrationCount: 1,
     }))).toBe(3);
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      candidates: [candidate("shared-a", { assignmentCount: 4 }), candidate("shared-b", { assignmentCount: 2 })],
-    })).toMatchObject({ kind: "selected", gatewayId: "shared-b", load: 2 });
+      candidates: [candidate("shared-0", { assignmentCount: 4 }), candidate("shared-1", { assignmentCount: 2 })],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-1", load: 2 });
   });
 
   it("uses a stable uid hash to distribute equal loads", () => {
-    const candidates = [candidate("shared-a"), candidate("shared-b")];
+    const candidates = [candidate("shared-0"), candidate("shared-1")];
     const picks = new Set(
       Array.from({ length: 32 }, (_, index) => selectSharedGateway({
         uid: `uid-${index}`,
@@ -74,7 +198,7 @@ describe("shared gateway selection", () => {
         candidates,
       })).map((selection) => selection.kind === "selected" ? selection.gatewayId : null),
     );
-    expect(picks).toEqual(new Set(["shared-a", "shared-b"]));
+    expect(picks).toEqual(new Set(["shared-0", "shared-1"]));
     expect(selectSharedGateway({ uid: "uid-7", config, candidates })).toEqual(
       selectSharedGateway({ uid: "uid-7", config, candidates }),
     );
@@ -84,15 +208,15 @@ describe("shared gateway selection", () => {
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      currentGatewayId: "shared-a",
-      candidates: [candidate("shared-a", { assignmentCount: 3 }), candidate("shared-b", { assignmentCount: 2 })],
-    })).toMatchObject({ gatewayId: "shared-a", retainedCurrent: true });
+      currentGatewayId: "shared-0",
+      candidates: [candidate("shared-0", { assignmentCount: 3 }), candidate("shared-1", { assignmentCount: 2 })],
+    })).toMatchObject({ gatewayId: "shared-0", retainedCurrent: true });
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      currentGatewayId: "shared-a",
-      candidates: [candidate("shared-a", { assignmentCount: 4 }), candidate("shared-b", { assignmentCount: 2 })],
-    })).toMatchObject({ gatewayId: "shared-b", retainedCurrent: false });
+      currentGatewayId: "shared-0",
+      candidates: [candidate("shared-0", { assignmentCount: 4 }), candidate("shared-1", { assignmentCount: 2 })],
+    })).toMatchObject({ gatewayId: "shared-1", retainedCurrent: false });
   });
 
   it("excludes invalid destinations and blocks visibly when none accept", () => {
@@ -103,12 +227,12 @@ describe("shared gateway selection", () => {
       { gatewayClass: "builder" },
       { gatewayId: "isolated" },
     ]) {
-      expect(isAcceptingSharedGateway(config, candidate("shared-a", overrides))).toBe(false);
+      expect(isAcceptingSharedGateway(config, candidate("shared-0", overrides))).toBe(false);
     }
     expect(selectSharedGateway({
       uid: "uid-alice",
       config,
-      candidates: [candidate("shared-a", { ready: false })],
+      candidates: [candidate("shared-0", { ready: false })],
     })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
   });
 
@@ -117,20 +241,20 @@ describe("shared gateway selection", () => {
       uid: "uid-alice",
       config,
       candidates: [
-        candidate("shared-a", { assignmentCount: 1, incomingMigrationCount: 2 }),
-        candidate("shared-b", { assignmentCount: 2 }),
+        candidate("shared-0", { assignmentCount: 1, incomingMigrationCount: 2 }),
+        candidate("shared-1", { assignmentCount: 2 }),
       ],
-    })).toMatchObject({ kind: "selected", gatewayId: "shared-b", load: 2 });
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-1", load: 2 });
   });
 
   it("plans one recovery rebalance only when the healthy pool differs by two", () => {
     expect(planSharedGatewayRebalance({
       config,
-      candidates: [candidate("shared-a", { assignmentCount: 4 }), candidate("shared-b", { assignmentCount: 2 })],
-    })).toEqual({ fromGatewayId: "shared-a", toGatewayId: "shared-b" });
+      candidates: [candidate("shared-0", { assignmentCount: 4 }), candidate("shared-1", { assignmentCount: 2 })],
+    })).toEqual({ fromGatewayId: "shared-0", toGatewayId: "shared-1" });
     expect(planSharedGatewayRebalance({
       config,
-      candidates: [candidate("shared-a", { assignmentCount: 3 }), candidate("shared-b", { assignmentCount: 2 })],
+      candidates: [candidate("shared-0", { assignmentCount: 3 }), candidate("shared-1", { assignmentCount: 2 })],
     })).toBeNull();
   });
 });

@@ -77,6 +77,16 @@ spec:
       nodeSelector:
         cloud.google.com/compute-class: {{ required "computeClass is required for owner-bound gateways" .Values.computeClass | quote }}
       {{- end }}
+      {{- if eq $gatewayClass "shared" }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: octogee-gateway
+              gateway-class: shared
+      {{- end }}
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -85,20 +95,6 @@ spec:
                   app: octogee-gateway
               namespaceSelector: {}
               topologyKey: kubernetes.io/hostname
-            {{- if eq $gatewayClass "shared" }}
-            - labelSelector:
-                matchLabels:
-                  app: octogee-gateway
-                  gateway-class: shared
-                matchExpressions:
-                  - key: gateway-id
-                    operator: Exists
-                  - key: gateway-id
-                    operator: NotIn
-                    values:
-                      - {{ .Values.gatewayId }}
-              topologyKey: topology.kubernetes.io/zone
-            {{- end }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:

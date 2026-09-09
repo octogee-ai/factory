@@ -32,8 +32,8 @@ source "$SCRIPT_DIR/lib/deployment-target.sh"
 source "$SCRIPT_DIR/lib/ready-assigned-gateway-probe.sh"
 # shellcheck source=scripts/lib/gitea-token-convergence.sh
 source "$SCRIPT_DIR/lib/gitea-token-convergence.sh"
-# shellcheck source=scripts/lib/default-gateway-deployment.sh
-source "$SCRIPT_DIR/lib/default-gateway-deployment.sh"
+# shellcheck source=scripts/lib/shared-pool-deployments.sh
+source "$SCRIPT_DIR/lib/shared-pool-deployments.sh"
 # shellcheck source=scripts/lib/iap-endpoint-health.sh
 source "$SCRIPT_DIR/lib/iap-endpoint-health.sh"
 # shellcheck source=scripts/lib/gateway-image-bundle.sh
@@ -159,32 +159,33 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" \
 kubectl config use-context "$K8S_CONTEXT" >/dev/null 2>&1 || true
 
 ORCH_OUTPUT=""
-DEFAULT_GATEWAY_ID=""
-SHARED_GATEWAY_IDS=""
-if [[ "$ENV" == "custom" ]]; then
-  DEFAULT_GATEWAY_ID="shared-a"
-  SHARED_GATEWAY_IDS="shared-a,shared-b,shared-c,shared-d"
-else
+if [[ "$ENV" != "custom" ]]; then
   ORCH_OUTPUT=$(node "$REPO_DIR/scripts/node_modules/tsx/dist/cli.mjs" "$REPO_DIR/scripts/ops/seed-orchestrator-config.ts" --env="$ENV" --deployment-target="$TARGET_ID" --check 2>&1 || true)
-  DEFAULT_GATEWAY_ID=$(echo "$ORCH_OUTPUT" | sed -nE \
-    -e 's/.*shared gateway pool = [a-z0-9,-]+ \(primary=([a-z0-9-]+).*/\1/p' \
-    -e 's/.*defaultGatewayId = ([a-z0-9-]+).*/\1/p' \
-    -e 's/.*already seeded with ([a-z0-9-]+).*/\1/p' \
-    -e "s/.*defaultGatewayId is '([a-z0-9-]+)'.*/\1/p" | head -1)
-  SHARED_GATEWAY_IDS=$(echo "$ORCH_OUTPUT" | sed -nE \
-    -e 's/.*shared gateway pool = ([a-z0-9,-]+) \(primary=.*/\1/p' | head -1)
 fi
 
+# The shared pool is unnamed: Cowboy mints `shared-N` slots on demand and the
+# floor lives on its Deployment as SHARED_POOL_MIN_REPLICAS. Every Ready slot is
+# an equivalent probe target; the first one drives the single-gateway checks.
 GW_DEPLOYMENTS=$(kubectl get deploy -n "$NAMESPACE" --context "$K8S_CONTEXT" \
   -l "app.kubernetes.io/name=octogee-gateway" -o json 2>/dev/null || echo '{"items":[]}')
-GW_RESOLUTION=$(octogee_resolve_default_gateway_deployment "$DEFAULT_GATEWAY_ID" \
-  <<< "$GW_DEPLOYMENTS" 2>/dev/null || echo "")
+SHARED_GW_LIST=$(octogee_list_shared_gateway_deployments <<< "$GW_DEPLOYMENTS" 2>/dev/null || echo "")
+SHARED_POOL_MIN_REPLICAS=$(kubectl get deployment glm-controller -n "$NAMESPACE" --context "$K8S_CONTEXT" \
+  -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="SHARED_POOL_MIN_REPLICAS")].value}' 2>/dev/null || echo "")
 GW_DEPLOYMENT=""
 GW_INSTANCE_ID=""
-GW_SELECTION_SOURCE=""
-if [[ -n "$GW_RESOLUTION" ]]; then
-  IFS=$'\t' read -r GW_DEPLOYMENT GW_INSTANCE_ID GW_SELECTION_SOURCE <<< "$GW_RESOLUTION"
-fi
+SHARED_GW_READY_COUNT=0
+SHARED_GW_TOTAL=0
+while IFS=$'\t' read -r SHARED_GW_NAME SHARED_GW_INSTANCE SHARED_GW_READY _; do
+  [[ -z "$SHARED_GW_NAME" ]] && continue
+  SHARED_GW_TOTAL=$((SHARED_GW_TOTAL + 1))
+  if [[ "${SHARED_GW_READY:-0}" -gt 0 ]]; then
+    SHARED_GW_READY_COUNT=$((SHARED_GW_READY_COUNT + 1))
+    if [[ -z "$GW_DEPLOYMENT" ]]; then
+      GW_DEPLOYMENT="$SHARED_GW_NAME"
+      GW_INSTANCE_ID="$SHARED_GW_INSTANCE"
+    fi
+  fi
+done <<< "$SHARED_GW_LIST"
 
 # ── Header ────────────────────────────────────────────────────────────────────
 echo ""
@@ -404,36 +405,39 @@ fi
 set_section infra
 header "5. Gateway"
 
-if [[ -n "$SHARED_GATEWAY_IDS" ]]; then
-  IFS=',' read -r -a SHARED_GATEWAY_IDS_ARRAY <<< "$SHARED_GATEWAY_IDS"
-  for SHARED_GATEWAY_ID in "${SHARED_GATEWAY_IDS_ARRAY[@]}"; do
-    SHARED_GW_RESOLUTION=$(octogee_resolve_default_gateway_deployment "$SHARED_GATEWAY_ID" \
-      <<< "$GW_DEPLOYMENTS" 2>/dev/null || echo "")
-    if [[ -z "$SHARED_GW_RESOLUTION" ]]; then
-      fail "No current Cowboy gateway deployment found for configured shared gateway $SHARED_GATEWAY_ID."
-      continue
-    fi
-    IFS=$'\t' read -r SHARED_GW_DEPLOYMENT _ _ <<< "$SHARED_GW_RESOLUTION"
-    pass "configured shared gateway $SHARED_GATEWAY_ID resolves to $SHARED_GW_DEPLOYMENT"
-  done
+while IFS=$'\t' read -r SHARED_GW_NAME SHARED_GW_INSTANCE SHARED_GW_READY SHARED_GW_DESIRED; do
+  [[ -z "$SHARED_GW_NAME" ]] && continue
+  if [[ "${SHARED_GW_READY:-0}" -gt 0 ]]; then
+    pass "shared slot $SHARED_GW_INSTANCE → $SHARED_GW_NAME ready=$SHARED_GW_READY/$SHARED_GW_DESIRED"
+  elif [[ "${SHARED_GW_DESIRED:-0}" -eq 0 ]]; then
+    info "shared slot $SHARED_GW_INSTANCE → $SHARED_GW_NAME empty (replicas=0)"
+  else
+    warn "shared slot $SHARED_GW_INSTANCE → $SHARED_GW_NAME not Ready (ready=$SHARED_GW_READY/$SHARED_GW_DESIRED)"
+  fi
+done <<< "$SHARED_GW_LIST"
+
+if [[ -z "$SHARED_POOL_MIN_REPLICAS" ]]; then
+  warn "SHARED_POOL_MIN_REPLICAS not found on the glm-controller Deployment; skipping the shared pool floor check"
+elif [[ "$SHARED_GW_READY_COUNT" -ge "$SHARED_POOL_MIN_REPLICAS" ]]; then
+  pass "shared pool has $SHARED_GW_READY_COUNT Ready slot(s) of $SHARED_GW_TOTAL (minReplicas=$SHARED_POOL_MIN_REPLICAS)"
+else
+  fail "shared pool has $SHARED_GW_READY_COUNT Ready slot(s), below minReplicas=$SHARED_POOL_MIN_REPLICAS"
+  if $FIX; then
+    echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check the shared pool scaler"
+  fi
 fi
 
 if [[ -z "$GW_DEPLOYMENT" ]]; then
-  if [[ -z "$DEFAULT_GATEWAY_ID" ]]; then
-    warn "Gateway deployment check inconclusive: orchestrator config probe failed and no sole Ready shared deployment could be selected"
+  if [[ "${SHARED_POOL_MIN_REPLICAS:-1}" -eq 0 ]]; then
+    info "No Ready shared slot (minReplicas=0); single-gateway checks skipped"
   else
-    fail "No current Cowboy gateway deployment found for default gateway $DEFAULT_GATEWAY_ID."
+    fail "No Ready shared gateway deployment found."
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} kubectl logs deployment/glm-controller -n $NAMESPACE --tail=50    # check Cowboy reconciler"
-      echo -e "  ${YELLOW}FIX:${NC} kubectl get glmgateways or read config/orchestrator.defaultGatewayId in Firestore"
     fi
   fi
 else
-  if [[ "$GW_SELECTION_SOURCE" == "sole-ready-shared" ]]; then
-    info "Gateway deployment: $GW_DEPLOYMENT (sole Ready shared fallback; orchestrator config probe unavailable)"
-  else
-    info "Gateway deployment: $GW_DEPLOYMENT"
-  fi
+  info "Gateway deployment: $GW_DEPLOYMENT (shared slot $GW_INSTANCE_ID)"
   GW_DESIRED=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
     -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
   GW_READY=$(kubectl get deployment "$GW_DEPLOYMENT" -n "$NAMESPACE" \
@@ -909,10 +913,9 @@ else
 fi
 
 # ── 8b. Orchestrator Config (Firestore) ──────────────────────────────────────
-# `config/orchestrator` is the strict shared-pool placement authority. There
-# is no hardcoded fallback: an absent, malformed, or primary-mismatched pool
-# leaves new signup placement not-ready rather than silently collapsing back to
-# one default gateway.
+# `config/orchestrator` holds the operator dials (shared pool autoscaling) and
+# `platformConfig/trial` the Signup Offer. Shared pool membership is not
+# configured anywhere: it derives from the shared-class durable roots.
 #
 set_section bootstrap
 header "8b. Orchestrator Config"
@@ -920,13 +923,12 @@ header "8b. Orchestrator Config"
 if [[ "$ENV" == "custom" ]]; then
   info "Custom namespaces don't use config/orchestrator — skipping"
 else
-  if [[ -n "$DEFAULT_GATEWAY_ID" && -n "$SHARED_GATEWAY_IDS" ]]; then
-    pass "config/orchestrator shared gateway pool = $SHARED_GATEWAY_IDS (primary=$DEFAULT_GATEWAY_ID)"
-  elif echo "$ORCH_OUTPUT" | grep -Eq "shared gateway pool (is missing or invalid|drifts from the declared pool)"; then
-    fail "config/orchestrator shared gateway pool is missing, invalid, or drifts from the declared Helm pool — every new signup will stall with reason 'config-missing'"
+  if echo "$ORCH_OUTPUT" | grep -q "release preflight passed"; then
+    pass "$(echo "$ORCH_OUTPUT" | grep "release preflight passed" | head -1 | sed -E 's/^[^a-z]*//')"
+  elif echo "$ORCH_OUTPUT" | grep -Eq "is missing or invalid"; then
+    fail "operator dials are missing or invalid: $(echo "$ORCH_OUTPUT" | grep -E "is missing or invalid" | head -1)"
     if $FIX; then
       echo -e "  ${YELLOW}FIX:${NC} node scripts/node_modules/tsx/dist/cli.mjs scripts/ops/seed-orchestrator-config.ts --env=$ENV$TARGET_ARG"
-      echo -e "  ${YELLOW}     ${NC} then re-fire pending placements with the same tsx CLI and scripts/ops/assign-customer-gateway.ts --env=$ENV --all"
     fi
   else
     warn "Orchestrator config probe failed; verify operator ADC: $(echo "$ORCH_OUTPUT" | head -1)"

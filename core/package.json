@@ -1,7 +1,7 @@
 {
   "name": "@octogee/core",
   "version": "1.0.0",
-  "description": "Octogee shared runtime — consumers depend on its built interface, never its source.",
+  "description": "Octogee shared runtime \u2014 consumers depend on its built interface, never its source.",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -352,6 +352,14 @@
     "./workspace-binary": {
       "types": "./dist/workspace-binary.d.ts",
       "default": "./dist/workspace-binary.js"
+    },
+    "./gateway-release-append": {
+      "types": "./dist/gateway-release-append.d.ts",
+      "default": "./dist/gateway-release-append.js"
+    },
+    "./shared-gateway-pool-read": {
+      "types": "./dist/shared-gateway-pool-read.d.ts",
+      "default": "./dist/shared-gateway-pool-read.js"
     }
   },
   "typesVersions": {
@@ -604,6 +612,12 @@
       ],
       "workspace-binary": [
         "dist/workspace-binary.d.ts"
+      ],
+      "gateway-release-append": [
+        "dist/gateway-release-append.d.ts"
+      ],
+      "shared-gateway-pool-read": [
+        "dist/shared-gateway-pool-read.d.ts"
       ]
     }
   },

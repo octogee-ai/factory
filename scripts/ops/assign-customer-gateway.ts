@@ -20,21 +20,24 @@ import {
   type PlacementFirestore,
 } from "../../shared/types/gateway-releases.js";
 import {
-  parseSharedGatewayPoolConfig,
+  deriveSharedGatewayPoolConfig,
   selectSharedGateway,
   type SharedGatewayPoolCandidate,
   type SharedGatewayPoolConfig,
 } from "../../shared/types/shared-gateway-pool.js";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "../../shared/types/fleet-controller.js";
 
-const ORCHESTRATOR_CONFIG_DOC = "config/orchestrator";
-
-
-
 async function readOrchestratorConfig(db: Firestore): Promise<SharedGatewayPoolConfig | null> {
-  const snap = await db.doc(ORCHESTRATOR_CONFIG_DOC).get();
-  if (!snap.exists) return null;
-  return parseSharedGatewayPoolConfig(snap.data());
+  const snapshot = await db.collection("gateways").where("gatewayClass", "==", "shared").get();
+  return deriveSharedGatewayPoolConfig(snapshot.docs.map((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    return {
+      gatewayId: doc.id,
+      gatewayClass: data.gatewayClass,
+      desiredStatus: data.desiredStatus,
+      managedBy: data.managedBy,
+    };
+  }));
 }
 
 type AssignResult =
@@ -221,7 +224,7 @@ export async function assignOne(
 
   const config = await readOrchestratorConfig(db);
   if (config === null) {
-    return { kind: "not-ready", uid, slug, reason: "config-missing" };
+    return { kind: "not-ready", uid, slug, reason: "shared-pool-empty" };
   }
   const current: string | null = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;
   let pinnedGatewayId: string | null = null;

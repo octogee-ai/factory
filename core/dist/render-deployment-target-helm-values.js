@@ -79,8 +79,9 @@ glm-controller:
   kmsKeyName: ${quoted(settings.kmsKeyName)}
   gatewayServiceAccount: ${quoted(`octogee-gateway@${dataProject}.iam.gserviceaccount.com`)}
   workloadIdentityProject: ${quoted(settings.clusterProjectId)}
-  bootstrapDefaultGateway:
-    imageRepository: ${quoted(`${registry}/octogee-gateway`)}
+  platformRelease:
+    gatewayImageRepository: ${quoted(`${registry}/octogee-gateway`)}
+    gatewayEdgeImageRepository: ${quoted(`${registry}/gateway-edge`)}
 `;
 }
 if (isDeploymentTargetResolverEntrypoint(import.meta.url, process.argv[1])) {

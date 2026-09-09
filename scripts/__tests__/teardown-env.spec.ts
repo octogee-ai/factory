@@ -827,7 +827,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
 
   it("prints the explicit orchestrator seed before Helm so a fresh reset cannot reach release unconfigured", () => {
     const source = readFileSync(teardown, "utf8");
-    const seed = source.indexOf("# 1b. Seed Firestore bootstrap config");
+    const seed = source.indexOf("# 1b. Seed the Firestore operator dials");
     const helm = source.indexOf("# 2. Helm install");
     expect(seed).toBeGreaterThan(-1);
     expect(seed).toBeLessThan(helm);
@@ -850,16 +850,16 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/mattermost-data"));
     expect(result.stdout).toContain("Durable PVCs confirmed absent");
     expect(result.stdout).toContain(
-      "BOOTSTRAP_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
+      "PLATFORM_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
     );
     expect(result.stdout).toContain(
-      "BOOTSTRAP_GATEWAY_EDGE_IMAGE=<tested release SHA>@sha256:<gateway-edge digest from release receipt>",
+      "PLATFORM_GATEWAY_EDGE_IMAGE=<tested release SHA>@sha256:<gateway-edge digest from release receipt>",
     );
     expect(result.stdout).toContain(
-      "glm-controller.bootstrapDefaultGateway.imageTag=$BOOTSTRAP_GATEWAY_IMAGE",
+      "glm-controller.platformRelease.gatewayImageTag=$PLATFORM_GATEWAY_IMAGE",
     );
     expect(result.stdout).toContain(
-      "glm-controller.bootstrapDefaultGateway.gatewayEdgeImageTag=$BOOTSTRAP_GATEWAY_EDGE_IMAGE",
+      "glm-controller.platformRelease.gatewayEdgeImageTag=$PLATFORM_GATEWAY_EDGE_IMAGE",
     );
   });
 

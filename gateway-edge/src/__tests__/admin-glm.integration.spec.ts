@@ -69,6 +69,12 @@ vi.mock("../lib/db", () => {
             size: docs.length,
           };
         }
+        if (collectionName === "gateways" && filter) {
+          const matches = Object.entries(gatewaysDocs)
+            .filter(([, data]) => data[filter.field] === filter.value)
+            .map(([id, data]) => ({ id, data: () => data }));
+          return { docs: matches, size: matches.length };
+        }
         if (collectionName === "glmGateways" && filter) {
           const matches = Object.entries(glmGatewaysDocs)
             .filter(([, data]) => data[filter.field] === filter.value)
@@ -533,12 +539,9 @@ beforeEach(() => {
 
 describe("Admin onboarding placement", () => {
   it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
-    configDocs.orchestrator = {
-      defaultGatewayId: "gw-target",
-      sharedGatewayIds: ["gw-target"],
-    };
     seedDurableGateway("gw-source", {
       imageTag: "oldsha1",
+      root: { managedBy: "operator" },
       heartbeat: { status: "ready", mountedCustomers: ["alice"] },
     });
     seedDurableGateway("gw-target", {
@@ -563,11 +566,7 @@ describe("Admin onboarding placement", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-target",
       sharedGatewayIds: ["gw-target"],
-      sharedGatewayAutoscaling: {
-        enabled: true,
-        minHotMembers: 1,
-        buildersPerGateway: 4,
-      },
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
     });
     expect(res.body.driftSummary["pointer-drift"]).toBe(1);
     expect(res.body.customers).toEqual([
@@ -600,11 +599,7 @@ describe("Admin onboarding placement", () => {
     );
   });
 
-  it("persists a validated ready default gateway and rejects retired override endpoints", async () => {
-    configDocs.orchestrator = {
-      defaultGatewayId: "gw-old",
-      sharedGatewayIds: ["gw-old", "gw-new"],
-    };
+  it("rejects the retired default-gateway setter and override endpoints", async () => {
     seedRetirableGateway("gw-old");
     seedRetirableGateway("gw-new");
     usersDocs = {
@@ -617,11 +612,8 @@ describe("Admin onboarding placement", () => {
     const patched = await request(buildApp())
       .patch("/api/admin/onboarding-placement")
       .send({ defaultGatewayId: "gw-new" });
-    expect(patched.status).toBe(200);
-    expect(configDocs.orchestrator).toMatchObject({
-      defaultGatewayId: "gw-new",
-      sharedGatewayIds: ["gw-new", "gw-old"],
-    });
+    expect(patched.status).toBe(404);
+    expect(configDocs.orchestrator).toBeUndefined();
 
     const retiredPut = await request(buildApp())
       .put("/api/admin/onboarding-placement/overrides/uid-alice")
@@ -632,29 +624,6 @@ describe("Admin onboarding placement", () => {
       "/api/admin/onboarding-placement/overrides/uid-alice",
     );
     expect(retiredDelete.status).toBe(404);
-  });
-
-  it("rejects a default gateway pointed at a dedicated (non-shared) gateway", async () => {
-    configDocs.orchestrator = {
-      defaultGatewayId: "gw-old",
-      sharedGatewayIds: ["gw-old", "gw-builder"],
-    };
-    seedDurableGateway("gw-builder", {
-      root: {
-        profile: "builder",
-        gatewayClass: "builder",
-        imageProfile: "builder",
-        ownerUid: "uid-builder",
-        builderSlug: "builder",
-      },
-    });
-
-    const res = await request(buildApp())
-      .patch("/api/admin/onboarding-placement")
-      .send({ defaultGatewayId: "gw-builder" });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("shared gateway");
   });
 });
 

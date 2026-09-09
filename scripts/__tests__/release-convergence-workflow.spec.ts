@@ -29,12 +29,11 @@ describe("gateway image build workflow", () => {
   });
 });
 
-describe("verify-env configured default selection", () => {
-  it("selects the configured default gateway instead of the first Deployment", () => {
-    expect(verifyEnv).toContain("config/orchestrator");
-    expect(verifyEnv).toContain(
-      'octogee_resolve_default_gateway_deployment "$DEFAULT_GATEWAY_ID"',
-    );
+describe("verify-env shared pool selection", () => {
+  it("probes the shared slots Cowboy minted instead of the first Deployment", () => {
+    expect(verifyEnv).toContain("octogee_list_shared_gateway_deployments <<<");
+    expect(verifyEnv).toContain("SHARED_POOL_MIN_REPLICAS");
+    expect(verifyEnv).not.toContain("octogee_resolve_default_gateway_deployment");
     expect(verifyEnv).not.toContain("-l app=octogee-gateway -o jsonpath='{.items[0].metadata.name}'");
   });
 });

@@ -73,13 +73,15 @@ spec:
               )
               or on(namespace)
               (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test"})
-            ) < 2
+            )
+            < on(namespace) group_left()
+            octogee_shared_pool_min_replicas{namespace=~"octogee|octogee-test"}
           for: 2m
           labels:
             severity: critical
           annotations:
             summary: "Shared gateway pool is degraded in {{ $labels.namespace }}"
-            description: "Fewer than two Ready shared gateway pods are available from the on-demand reliability floor. Each per-identity minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod. Inspect gateway pods, node capacity, and recovery operations."
+            description: "Fewer Ready shared gateway pods than the environment's minReplicas floor (Cowboy's octogee_shared_pool_min_replicas gauge) are available from the on-demand reliability floor. Each slot's minAvailable: 1 PDB protects its Ready gateway during voluntary disruption while AlwaysAllow permits eviction of an unhealthy stale pod. Inspect gateway pods, node capacity, and the shared pool scaler."
         - alert: SharedGatewayZoneDiversityLost
           expr: |
             (
@@ -99,6 +101,8 @@ spec:
               or on(namespace)
               (0 * kube_namespace_created{job="gmp-kube-state-metrics",namespace=~"octogee|octogee-test"})
             ) < 2
+            and on(namespace)
+            octogee_shared_pool_min_replicas{namespace=~"octogee|octogee-test"} >= 2
           for: 5m
           labels:
             severity: warning

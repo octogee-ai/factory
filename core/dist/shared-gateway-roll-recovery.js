@@ -1,11 +1,10 @@
 import { GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperatorManaged, } from "@octogee/shared/types/glm";
 import { GATEWAY_RELEASES_SUBCOLLECTION, hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash, } from "@octogee/shared/types/gateway-releases";
-import { parseSharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { gatewayArtifactFromReleasePayload } from "./gateway-live-release.js";
+import { readSharedGatewayPoolConfig } from "./shared-gateway-pool-read.js";
 import { FleetMutationIdempotencyError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
 const ACTOR = "glm-controller-placement-policy";
-const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 function recoveryOperationId(input) {
     return `recover-shared-roll-${input.sourceGatewayId}-to-${input.targetGatewayId}-r${input.expectedDesiredRelease}-to-r${input.expectedLiveRelease}`;
 }
@@ -145,12 +144,12 @@ async function appendRecoveryRollback(deps, input) {
     const operationId = recoveryOperationId(input);
     const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
     return db.runTransaction(async (txn) => {
-        const [targetSnapshot, sourceSnapshot, runtimeSnapshot, sourceRuntimeSnapshot, configSnapshot, operationSnapshot, assignmentsSnapshot, operationsSnapshot,] = await Promise.all([
+        const [targetSnapshot, sourceSnapshot, runtimeSnapshot, sourceRuntimeSnapshot, pool, operationSnapshot, assignmentsSnapshot, operationsSnapshot,] = await Promise.all([
             txn.get(targetRef),
             txn.get(sourceRef),
             txn.get(runtimeRef),
             txn.get(sourceRuntimeRef),
-            txn.get(db.doc(ORCHESTRATOR_CONFIG_DOC_PATH)),
+            readSharedGatewayPoolConfig(db, txn),
             txn.get(operationRef),
             txn.get(targetAssignments),
             txn.get(activeOperations),
@@ -158,7 +157,7 @@ async function appendRecoveryRollback(deps, input) {
         const state = {
             target: gatewayRootFromSnapshot(targetSnapshot, input.targetGatewayId),
             source: gatewayRootFromSnapshot(sourceSnapshot, input.sourceGatewayId),
-            pool: parseSharedGatewayPoolConfig(snapshotData(configSnapshot)),
+            pool,
             runtime: gatewayRuntimeFromSnapshot(runtimeSnapshot),
             sourceRuntime: gatewayRuntimeFromSnapshot(sourceRuntimeSnapshot),
             assignments: assignmentsSnapshot.docs,

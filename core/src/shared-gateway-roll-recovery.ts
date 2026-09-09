@@ -20,8 +20,9 @@ import {
   type ReleaseDoc,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
-import { parseSharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
+import type { SharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { gatewayArtifactFromReleasePayload } from "./gateway-live-release.js";
+import { readSharedGatewayPoolConfig } from "./shared-gateway-pool-read.js";
 import {
   FleetMutationIdempotencyError,
   runNormalFleetMutation,
@@ -29,7 +30,6 @@ import {
 } from "./normal-fleet-mutation.js";
 
 const ACTOR = "glm-controller-placement-policy";
-const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 
 export interface SupersedeRollingSharedGatewayRollInput {
   sourceGatewayId: string;
@@ -185,7 +185,7 @@ function matchingRecoveryOperation(
 interface RecoveryRollState {
   target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
   source: ReturnType<typeof projectGatewayDesiredRootForGateway>;
-  pool: ReturnType<typeof parseSharedGatewayPoolConfig>;
+  pool: SharedGatewayPoolConfig | null;
   runtime: GatewayRuntimeDoc | null;
   sourceRuntime: GatewayRuntimeDoc | null;
   assignments: ReadonlyArray<{ data(): Record<string, unknown> }>;
@@ -248,7 +248,7 @@ async function appendRecoveryRollback(
       sourceSnapshot,
       runtimeSnapshot,
       sourceRuntimeSnapshot,
-      configSnapshot,
+      pool,
       operationSnapshot,
       assignmentsSnapshot,
       operationsSnapshot,
@@ -257,7 +257,7 @@ async function appendRecoveryRollback(
       txn.get(sourceRef),
       txn.get(runtimeRef),
       txn.get(sourceRuntimeRef),
-      txn.get(db.doc(ORCHESTRATOR_CONFIG_DOC_PATH)),
+      readSharedGatewayPoolConfig(db, txn),
       txn.get(operationRef),
       txn.get(targetAssignments),
       txn.get(activeOperations),
@@ -265,7 +265,7 @@ async function appendRecoveryRollback(
     const state: RecoveryRollState = {
       target: gatewayRootFromSnapshot(targetSnapshot, input.targetGatewayId),
       source: gatewayRootFromSnapshot(sourceSnapshot, input.sourceGatewayId),
-      pool: parseSharedGatewayPoolConfig(snapshotData(configSnapshot)),
+      pool,
       runtime: gatewayRuntimeFromSnapshot(runtimeSnapshot),
       sourceRuntime: gatewayRuntimeFromSnapshot(sourceRuntimeSnapshot),
       assignments: assignmentsSnapshot.docs,

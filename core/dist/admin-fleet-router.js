@@ -4,13 +4,14 @@ import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, releasePayloadHash, isGatewayDesiredDoc, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
 import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
-import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
+import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousBuilderPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
-import { DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED, DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY, defaultMinHotMembers, parseSharedGatewayAutoscalingConfig, parseSharedGatewayPoolConfig, } from "@octogee/shared/types/shared-gateway-pool";
+import { parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shared-gateway-pool";
+import { readSharedGatewayAutoscalingConfig, readSharedGatewayPoolConfig, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
@@ -18,6 +19,7 @@ import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { requestBuilderActivationLease } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
 import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
+import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError, } from "./gateway-release-append.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
@@ -121,70 +123,17 @@ export function resolveFleetDeploymentSettings(namespace = resolveFleetNamespace
     }
 }
 const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
-function normalizeOnboardingRuntimeConfig(data) {
-    return parseSharedGatewayPoolConfig(data) ?? {
-        defaultGatewayId: asStringOrNull(data?.defaultGatewayId) ?? "",
-        sharedGatewayIds: [],
-    };
-}
+export const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
 async function readOnboardingRuntimeConfig(deps) {
-    const snap = await deps.db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
-    const data = snap.exists ? snap.data() : undefined;
-    return normalizeOnboardingRuntimeConfig(data);
-}
-function validatePlacementGateway(gatewayId, gatewaysById) {
-    const gateway = gatewaysById.get(gatewayId);
-    if (!gateway) {
-        return {
-            status: 400,
-            body: { error: "placement gateway desired state not found", gatewayId },
-        };
-    }
-    if (gateway.desiredStatus !== "running") {
-        return {
-            status: 400,
-            body: { error: "placement gateway must be running", gatewayId },
-        };
-    }
-    if (gateway.gatewayClass !== "shared") {
-        return {
-            status: 400,
-            body: { error: "placement gateway must be a shared gateway", gatewayId },
-        };
-    }
-    if (isOperatorManaged(gateway.managedBy)) {
-        return {
-            status: 400,
-            body: { error: "placement gateway must be Cowboy-managed", gatewayId },
-        };
-    }
-    return null;
-}
-function parsePlacementPatch(body, gatewaysById, config) {
-    const defaultGatewayId = asStringOrNull(body.defaultGatewayId);
-    if (!defaultGatewayId) {
-        return { error: { status: 400, body: { error: "defaultGatewayId is required" } } };
-    }
-    if (config === null) {
-        return {
-            error: {
-                status: 409,
-                body: { error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool" },
-            },
-        };
-    }
-    if (!config.sharedGatewayIds.includes(defaultGatewayId)) {
-        return {
-            error: {
-                status: 400,
-                body: { error: "default gateway must already be a configured shared pool member", gatewayId: defaultGatewayId },
-            },
-        };
-    }
-    const gatewayError = validatePlacementGateway(defaultGatewayId, gatewaysById);
-    if (gatewayError)
-        return { error: gatewayError };
-    return { ok: { defaultGatewayId } };
+    const [pool, sharedGatewayAutoscaling] = await Promise.all([
+        readSharedGatewayPoolConfig(deps.db),
+        readSharedGatewayAutoscalingConfig(deps.db),
+    ]);
+    return {
+        defaultGatewayId: pool?.defaultGatewayId ?? "",
+        sharedGatewayIds: pool?.sharedGatewayIds ?? [],
+        sharedGatewayAutoscaling,
+    };
 }
 function readUserOpenclaw(data) {
     const provisioning = data.provisioning ?? {};
@@ -319,9 +268,10 @@ function accountLifecycleWarnings(userDocs, operations) {
 function driftStateForCustomer(input) {
     if (isInFlightOperation(input.latestOperation))
         return "in-flight";
-    if (input.policyTargetGatewayId &&
-        (!input.glmByGatewayId.has(input.policyTargetGatewayId) ||
-            projectDesiredStatus(input.glmByGatewayId.get(input.policyTargetGatewayId)) === "retired")) {
+    const missing = (gatewayId) => Boolean(gatewayId) &&
+        (!input.glmByGatewayId.has(gatewayId) ||
+            projectDesiredStatus(input.glmByGatewayId.get(gatewayId)) === "retired");
+    if (missing(input.policyTargetGatewayId) || missing(input.assignedGatewayId)) {
         return "missing-gateway";
     }
     if (input.assignedGatewayId &&
@@ -573,11 +523,7 @@ function buildOnboardingPlacementResponse(opts) {
         config: {
             defaultGatewayId,
             sharedGatewayIds: [...opts.config.sharedGatewayIds],
-            sharedGatewayAutoscaling: opts.config.sharedGatewayAutoscaling ?? {
-                enabled: DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
-                minHotMembers: defaultMinHotMembers(opts.config.sharedGatewayIds.length),
-                buildersPerGateway: DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
-            },
+            sharedGatewayAutoscaling: opts.config.sharedGatewayAutoscaling,
         },
         gateways,
         customers,
@@ -786,11 +732,6 @@ function shouldProjectDesiredOnlyGateway(glmDoc) {
 }
 function isPlainRecord(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
-}
-function asDurableGatewayRoot(data, gatewayId) {
-    if (!isGatewayDesiredDoc(data) || data.gatewayId !== gatewayId)
-        return null;
-    return projectGatewayMutableConfigForGateway(data, gatewayId);
 }
 function hasDurableGatewayRootMarkers(data) {
     if (!isPlainRecord(data))
@@ -1914,9 +1855,6 @@ async function readRelease(db, gatewayId, release) {
         return null;
     return snap.data();
 }
-function asReleaseArtifactPayload(artifact) {
-    return { ...artifact };
-}
 function releaseSourceShaFromBody(value) {
     return typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
 }
@@ -1953,85 +1891,6 @@ function artifactFromRelease(release) {
 function sameArtifact(left, right) {
     return (left.imageRepository === right.imageRepository &&
         left.imageTag === right.imageTag);
-}
-async function appendGatewayReleaseCurrentRoot(transaction, gatewayRef, args) {
-    const snapshot = await transaction.get(gatewayRef);
-    const current = asDurableGatewayRoot(snapshot.data(), args.gateway.gatewayId);
-    if (!current)
-        throw new InvalidGatewayRootError(args.gateway.gatewayId);
-    if (current.desiredStatus === "retired" || current.retirementClaim != null) {
-        throw new GatewayRetirementConflictError(`gateway ${args.gateway.gatewayId} has a current retirement claim`);
-    }
-    if (current.latestRelease !== args.gateway.latestRelease) {
-        throw new StaleGatewayReleaseError(args.gateway.gatewayId, args.gateway.latestRelease, current.latestRelease);
-    }
-    return current;
-}
-async function assertGatewayReleaseIsNew(transaction, gatewayRef, gatewayId, release) {
-    const releaseRef = gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
-    if (await transaction.get(releaseRef).then((snapshot) => snapshot.exists)) {
-        throw new Error(`appendGatewayRelease: gateways/${gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`);
-    }
-}
-function appendGatewayReleasePayload(args) {
-    const payload = args.payload ?? asReleaseArtifactPayload(args.artifact);
-    if (!isReleasePayload(payload)) {
-        throw new Error("appendGatewayRelease requires a valid immutable release payload");
-    }
-    return payload;
-}
-async function appendGatewayRelease(db, args) {
-    const gwRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
-    const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-    return db.runTransaction(async (txn) => {
-        const current = await appendGatewayReleaseCurrentRoot(txn, gwRef, args);
-        const release = current.latestRelease + 1;
-        const relRef = gwRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
-        await assertGatewayReleaseIsNew(txn, gwRef, args.gateway.gatewayId, release);
-        const payload = appendGatewayReleasePayload(args);
-        const artifact = gatewayArtifactFromReleasePayload(payload);
-        const releaseDoc = {
-            gatewayId: args.gateway.gatewayId,
-            release,
-            createdAt: args.now,
-            createdBy: args.createdBy,
-            sourceRelease: args.sourceRelease,
-            note: args.note,
-            payloadHash: releasePayloadHash(payload),
-            payload,
-        };
-        txn.set(relRef, releaseDoc);
-        txn.update(gwRef, {
-            latestRelease: release,
-            updatedAt: args.now,
-            updatedBy: args.createdBy,
-        });
-        txn.set(operationRef, operationDoc({
-            kind: "rollout",
-            createdBy: args.createdBy,
-            input: rolloutOpInputFromArtifact(args.gateway.gatewayId, release, artifact),
-        }, args.now));
-        return { release, operationId: operationRef.id };
-    });
-}
-class StaleGatewayReleaseError extends Error {
-    gatewayId;
-    expectedRelease;
-    actualRelease;
-    constructor(gatewayId, expectedRelease, actualRelease) {
-        super(`gateway ${gatewayId} changed while this release was being cut ` +
-            `(expected ${expectedRelease}, found ${actualRelease})`);
-        this.gatewayId = gatewayId;
-        this.expectedRelease = expectedRelease;
-        this.actualRelease = actualRelease;
-    }
-}
-class InvalidGatewayRootError extends Error {
-    gatewayId;
-    constructor(gatewayId) {
-        super(`gateway ${gatewayId} durable root is invalid`);
-        this.gatewayId = gatewayId;
-    }
 }
 function respondReleaseWriteConflict(res, error) {
     if (error instanceof GatewayRetirementConflictError) {
@@ -2089,14 +1948,6 @@ function respondCentralReleaseError(res, error) {
         return true;
     }
     return respondReleaseWriteConflict(res, error);
-}
-function rolloutOpInputFromArtifact(gatewayId, targetRelease, artifact) {
-    return {
-        gatewayId,
-        targetRelease,
-        imageTag: artifact.imageTag,
-        imageRepository: artifact.imageRepository,
-    };
 }
 const GATEWAY_MUTABLE_CONFIG_FIELDS = [
     "profile",
@@ -3174,11 +3025,10 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/gateways", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap, configSnap, settings] = await Promise.all([
+            const [gwSnap, glmSnap, usersSnap, settings] = await Promise.all([
                 db.collection("gateways").get(),
                 db.collection(GLM_GATEWAYS_COLLECTION).get(),
                 db.collection("users").get(),
-                db.doc("config/orchestrator").get(),
                 readFleetRuntimeSettings(),
             ]);
             const glmByGatewayId = indexAdminGatewayRuntimeDocs({
@@ -3242,7 +3092,7 @@ export function addAdminFleetRoutes(router, deps) {
                     targetPodCount: target?.podDiagnostics?.totalPods ?? null,
                 };
             });
-            const sharedPoolConfig = parseSharedGatewayPoolConfig(configSnap.exists ? configSnap.data() : undefined);
+            const sharedPoolConfig = await readSharedGatewayPoolConfig(db);
             const sharedGatewayIds = new Set(sharedPoolConfig?.sharedGatewayIds ?? []);
             const parkedBuilders = usersSnap.docs.filter((doc) => {
                 const resolved = activationLeaseFromUser(doc.data());
@@ -3271,100 +3121,27 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    router.patch("/onboarding-placement", async (req, res, next) => {
-        try {
-            const [gatewaySnap, configSnap] = await Promise.all([
-                db.collection(GATEWAYS_COLLECTION).get(),
-                db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get(),
-            ]);
-            const gatewaysById = indexDurableGatewayRoots(gatewaySnap.docs);
-            const config = parseSharedGatewayPoolConfig(configSnap.exists ? configSnap.data() : undefined);
-            if (config === null) {
-                res.status(409).json({
-                    error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool",
-                });
-                return;
-            }
-            const parsed = parsePlacementPatch(req.body, gatewaysById, config);
-            if ("error" in parsed) {
-                res.status(parsed.error.status).json(parsed.error.body);
-                return;
-            }
-            const target = await readGatewayRegistrationReadiness(db, parsed.ok.defaultGatewayId);
-            if (target.status !== "ready") {
-                res.status(409).json({
-                    error: "default gateway must be ready",
-                    gatewayId: parsed.ok.defaultGatewayId,
-                    status: target.status ?? "unknown",
-                });
-                return;
-            }
-            const actor = req;
-            const createdBy = actor.uid ?? "unknown";
-            await runAdminFleetMutation({
-                req,
-                what: "set default gateway placement",
-                why: ADMIN_FLEET_REQUEST_REASON,
-                target: { gatewayId: parsed.ok.defaultGatewayId },
-                preActionStatus: { defaultGatewayId: config.defaultGatewayId },
-                mutation: {
-                    kind: "set-default-gateway-placement",
-                    gatewayId: parsed.ok.defaultGatewayId,
-                },
-                action: async () => {
-                    await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
-                        defaultGatewayId: parsed.ok.defaultGatewayId,
-                        sharedGatewayIds: [
-                            parsed.ok.defaultGatewayId,
-                            ...config.sharedGatewayIds.filter((gatewayId) => gatewayId !== parsed.ok.defaultGatewayId),
-                        ],
-                        placementUpdatedAt: Date.now(),
-                        placementUpdatedBy: createdBy,
-                    }, { merge: true });
-                },
-            });
-            const defaultChange = {
-                previousGatewayId: config.defaultGatewayId,
-                targetGatewayId: parsed.ok.defaultGatewayId,
-                enqueued: [],
-                adopted: [],
-                blocked: [],
-                ownedRuntimeUntouched: 0,
-            };
-            const response = await readAdminOnboardingPlacementResponse(deps);
-            res.json({ ...response, defaultChange });
-        }
-        catch (e) {
-            next(e);
-        }
-    });
     router.patch("/onboarding-placement/autoscaling", async (req, res, next) => {
         try {
-            const configSnap = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
-            const config = parseSharedGatewayPoolConfig(configSnap.exists ? configSnap.data() : undefined);
-            if (config === null) {
-                res.status(409).json({
-                    error: "config/orchestrator must contain a valid primary-first sharedGatewayIds pool",
-                });
-                return;
-            }
-            const autoscaling = parseSharedGatewayAutoscalingConfig(req.body, config.sharedGatewayIds.length);
+            const autoscaling = parseSharedGatewayAutoscalingConfig(req.body);
             if (autoscaling === null) {
                 res.status(400).json({
-                    error: "enabled, minHotMembers, and buildersPerGateway must form a valid Barn autoscaling config",
+                    error: "enabled and buildersPerGateway must form a valid shared pool autoscaling config",
                 });
                 return;
             }
+            const [pool, current] = await Promise.all([
+                readSharedGatewayPoolConfig(db),
+                readSharedGatewayAutoscalingConfig(db).catch(() => null),
+            ]);
             const actor = req;
             const updatedBy = actor.uid ?? "unknown";
             await runAdminFleetMutation({
                 req,
-                what: "set Shared Barn autoscaling",
+                what: "set shared pool autoscaling",
                 why: ADMIN_FLEET_REQUEST_REASON,
-                target: { sharedGatewayIds: config.sharedGatewayIds },
-                preActionStatus: {
-                    sharedGatewayAutoscaling: config.sharedGatewayAutoscaling ?? null,
-                },
+                target: { sharedGatewayIds: pool?.sharedGatewayIds ?? [] },
+                preActionStatus: { sharedGatewayAutoscaling: current },
                 mutation: { kind: "set-shared-gateway-autoscaling", autoscaling },
                 action: async () => {
                     await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
@@ -3822,10 +3599,9 @@ export function addAdminFleetRoutes(router, deps) {
             const leaseId = body.leaseId;
             const generation = body.generation;
             const now = Date.now();
-            const config = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
-            const sharedPoolConfig = parseSharedGatewayPoolConfig(config.exists ? config.data() : undefined);
+            const sharedPoolConfig = await readSharedGatewayPoolConfig(db);
             if (sharedPoolConfig === null) {
-                res.status(409).json({ error: "default gateway is unavailable" });
+                res.status(409).json({ error: "shared pool has no members" });
                 return;
             }
             const outcome = await runAdminFleetMutation({
@@ -4396,6 +4172,10 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (gateway.desiredStatus === "retired") {
                 res.status(409).json({ error: "cannot deploy to a retired gateway", gatewayId: id });
+                return;
+            }
+            if (gateway.gatewayClass === "shared") {
+                res.status(409).json({ error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: id });
                 return;
             }
             if (!deps.releaseEnvironment || !deps.releaseAuthority) {

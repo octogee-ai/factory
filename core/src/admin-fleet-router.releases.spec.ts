@@ -467,28 +467,53 @@ function buildAuthority(manifest: ReleaseDigestManifest): CentralReleaseAuthorit
 }
 
 describe("POST /gateways/:id/deploy", () => {
+  it("rejects deploying to a shared pool member because the pool rides the platform release", async () => {
+    const manifest = immutableBuild();
+    const authority = buildAuthority(manifest);
+    const { app, store } = mkApp(seedNewSchemaGateway("shared-0", sharedPayload()), {
+      releaseAuthority: authority,
+    });
+
+    const res = await request(app)
+      .post("/gateways/shared-0/deploy")
+      .send({ sourceSha: manifest.sourceSha })
+      .expect(409);
+
+    expect(res.body.error).toContain("rides the platform release");
+    expect(store.get("gateways/shared-0")).toMatchObject({ latestRelease: 1 });
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+    expect(authority.resolveManifest).not.toHaveBeenCalled();
+  });
+
   it("deploys an existing paired build to exactly the operator-selected gateway", async () => {
     const manifest = immutableBuild();
     const authority = buildAuthority(manifest);
+    const builder = (slug: string) => ({
+      gatewayClass: "builder",
+      imageProfile: "builder",
+      profile: "builder",
+      ownerUid: `uid-${slug}`,
+      builderSlug: slug,
+    });
     const seed = {
-      ...seedNewSchemaGateway("shared-a", sharedPayload()),
-      ...seedNewSchemaGateway("shared-b", sharedPayload()),
+      ...seedNewSchemaGateway("gw-alice", sharedPayload(), builder("alice")),
+      ...seedNewSchemaGateway("gw-bob", sharedPayload(), builder("bob")),
       [`${GLM_OPERATIONS_COLLECTION}/existing`]: {
         kind: "restart-gateway",
         status: "running",
-        input: { gatewayId: "shared-a" },
+        input: { gatewayId: "gw-alice" },
       },
     };
     const { app, store } = mkApp(seed, { releaseAuthority: authority });
 
     await request(app)
-      .post("/gateways/shared-a/deploy")
+      .post("/gateways/gw-alice/deploy")
       .send({ sourceSha: manifest.sourceSha })
       .expect(202);
 
-    expect(store.get("gateways/shared-a")).toMatchObject({ latestRelease: 2 });
-    expect(store.get("gateways/shared-b")).toMatchObject({ latestRelease: 1 });
-    expect(store.get(`gateways/shared-a/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toMatchObject({
+    expect(store.get("gateways/gw-alice")).toMatchObject({ latestRelease: 2 });
+    expect(store.get("gateways/gw-bob")).toMatchObject({ latestRelease: 1 });
+    expect(store.get(`gateways/gw-alice/${GATEWAY_RELEASES_SUBCOLLECTION}/2`)).toMatchObject({
       payload: {
         imageTag: `aaaaaaa-oc2026.8.1@sha256:${"c".repeat(64)}`,
         openclawSourceSha: "f".repeat(40),

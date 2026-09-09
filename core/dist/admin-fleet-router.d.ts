@@ -1,11 +1,10 @@
 import { Router } from "express";
 import { type Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
-import { type GatewayDoc } from "@octogee/shared/types/gateway-releases";
 import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
-import { type GatewayMutableConfig } from "./gateway-live-release.js";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
+import { type DurableGatewayRoot } from "./gateway-release-append.js";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
 export interface FleetLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -93,7 +92,7 @@ interface FirestoreDocLike {
     id: string;
     data(): GlmDoc;
 }
-type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
+export declare const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
 export interface FleetRuntimeSettings {
     gatewayImageRepository: string;
 }
