@@ -40,7 +40,7 @@ export async function selectDesktopFamily(name: string, deps: {
 }): Promise<void> {
   await deps.setFamily(name, 'octogee-computer');
   for (const member of await deps.listMembers()) {
-    if (member !== name) await deps.setFamily(member, '');
+    if (member !== name) await deps.setFamily(member, 'octogee-computer-archive');
   }
   if ((await deps.resolveFamily()).name !== name) throw new Error('desktop family does not resolve to the selected image');
 }

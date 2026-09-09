@@ -59,10 +59,18 @@ it('preserves a member claimed concurrently and surfaces other failures', async 
 });
 
 import { selectDesktopFamily } from '../lib/desktop-image-publication';
-it('selects an older image for rollback by removing newer images from the family', async () => {
-  const setFamily = vi.fn();
-  await selectDesktopFamily('older', { listMembers: async () => ['older', 'newer'], setFamily, resolveFamily: async () => ({ name: 'older' }) });
-  expect(setFamily.mock.calls).toEqual([['older', 'octogee-computer'], ['newer', '']]);
+it('selects an older image for rollback while retaining newer images in a valid archive family', async () => {
+  const families = new Map([['older', 'octogee-computer-archive'], ['newer', 'octogee-computer']]);
+  const members = () => [...families].filter(([, family]) => family === 'octogee-computer').map(([name]) => name);
+  await selectDesktopFamily('older', {
+    listMembers: async () => members(),
+    setFamily: async (name, family) => {
+      if (!/^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(family)) throw new Error('Invalid GCE image family');
+      families.set(name, family);
+    },
+    resolveFamily: async () => ({ name: members().at(-1)! }),
+  });
+  expect([...families]).toEqual([['older', 'octogee-computer'], ['newer', 'octogee-computer-archive']]);
 });
 it('fails publication if the family resolves to a different image', async () => {
   await expect(selectDesktopFamily('selected', { listMembers: async () => [], setFamily: vi.fn(), resolveFamily: async () => ({ name: 'concurrent' }) })).rejects.toThrow('does not resolve');
