@@ -4,6 +4,7 @@ import path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const workflowTools = [
+  "automations",
   "message",
   "octogee_project_create",
   "octogee_project_commit",
@@ -101,7 +102,6 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
       "preview_list",
       "octogee_publish",
       "bundle-mcp",
-      "automations",
       "skill_workshop",
       "conversations_list",
       "conversations_send",

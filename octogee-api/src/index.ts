@@ -353,7 +353,11 @@ function recordProductEvent(
   }
 }
 
-function clusterRouteOverrides(featurePolicy: FeaturePolicy, voiceCatalog: VoiceCatalog) {
+function clusterRouteOverrides(
+  featurePolicy: FeaturePolicy,
+  voiceCatalog: VoiceCatalog,
+  prewarmProjectRunCapacity: () => Promise<void>,
+) {
   return {
     mmRestProxyHandler,
     mattermostMintRoutes,
@@ -362,7 +366,7 @@ function clusterRouteOverrides(featurePolicy: FeaturePolicy, voiceCatalog: Voice
     }),
     builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
     sharingRoutes: createSharingRoutes({ featurePolicy }),
-    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
+    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
     voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog }),
     productivityApprovalRoutes: express.Router()
@@ -649,7 +653,11 @@ export function createApp(opts: CreateAppOptions = {}) {
   });
   const voiceRelayConfig = opts.voiceRelayConfig === undefined ? parseVoiceRelayConfig() : opts.voiceRelayConfig;
   const voiceRelayLog = (message: string, fields?: Record<string, unknown>) => logger.warn(message, fields ?? {});
-  mountClusterRoutes(app, clusterRouteOverrides(featurePolicy, createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog })));
+  mountClusterRoutes(app, clusterRouteOverrides(
+    featurePolicy,
+    createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog }),
+    () => projectRunControlPlane.prewarm(),
+  ));
   const chatArtifacts = defaultChatArtifactRoutes();
   app.use("/api/chat/artifacts", chatArtifacts.public);
   // App-facing, Firebase-authed: Codex-style link unfurl (SSRF-guarded). Lives
@@ -714,6 +722,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // entitlements are enforced by the same service the UI create uses.
   app.use("/internal/agent-projects", createAgentProjectRoutes({
     db,
+    prewarmProjectRunCapacity: () => projectRunControlPlane.prewarm(),
     actionBaseUrl: appOrigin,
     onProjectCreated: (uid) => recordProductEvent(product, uid, {
       name: "project_created",

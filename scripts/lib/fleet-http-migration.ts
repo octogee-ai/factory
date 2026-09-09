@@ -2,6 +2,7 @@
 
 import type { Request, Response, RequestHandler } from "express";
 import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { createWriteStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -1840,6 +1841,7 @@ async function activateConfiguredBuilderImport(
   deps: MigrationHandlerDeps,
   request: NonNullable<ReturnType<typeof configuredBuilderActivationRequest>>,
   signal: AbortSignal,
+  loadStrategy: MigrationLoadStrategy,
 ): Promise<void> {
   let cancellation: Promise<void> | null = null;
   let cancellationFailure: Error | null = null;
@@ -1857,6 +1859,17 @@ async function activateConfiguredBuilderImport(
       targetPodUid: request.targetPodUid,
     });
     signal.throwIfAborted();
+    const verificationPending = await activateImportedCustomerForMigration({
+      deps,
+      slug: request.slug,
+      mode: "final",
+      loadStrategy,
+      signal,
+    });
+    signal.throwIfAborted();
+    if (verificationPending) {
+      throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
+    }
   } catch (error) {
     (deps.log ?? console.log)(
       `[migration-rsync] Builder activation failed migrationId=${request.migrationId} slug=${request.slug}: ` +
@@ -1886,7 +1899,7 @@ async function activateFinishedRsyncImport(input: {
     const activation = configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
     let verificationPending: string | undefined;
     if (activation) {
-      await activateConfiguredBuilderImport(deps, activation, signal);
+      await activateConfiguredBuilderImport(deps, activation, signal, loadStrategy);
     } else {
       verificationPending = await activateImportedCustomerForMigration({
         deps,
@@ -2615,10 +2628,6 @@ export interface AgentSessionEntry {
   status?: "running" | "done" | "failed" | "killed" | "timeout";
 }
 
-function isAgentSessionEntry(value: unknown): value is AgentSessionEntry {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export async function readAgentSessions(
   stateDir: string,
   agentId: string,
@@ -2631,16 +2640,20 @@ export async function readAgentSessions(
 export async function readAgentSessionsAtPath(
   sessionsPath: string,
 ): Promise<SessionsJson["sessions"]> {
+  const storePath = sessionsPath.endsWith(".sqlite")
+    ? sessionsPath
+    : path.join(path.dirname(path.dirname(sessionsPath)), "agent", "openclaw-agent.sqlite");
   try {
-    const raw = await fs.readFile(sessionsPath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
-    const sessions = (parsed as Partial<SessionsJson>).sessions;
-    if (Array.isArray(sessions)) return sessions.filter(isAgentSessionEntry);
-    return Object.values(parsed).filter(isAgentSessionEntry);
+    await fs.stat(storePath);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return [];
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
+  }
+  const db = new DatabaseSync(storePath, { readOnly: true });
+  try {
+    return db.prepare("SELECT current_session_id AS sessionId, status FROM session_nodes")
+      .all() as AgentSessionEntry[];
+  } finally {
+    db.close();
   }
 }

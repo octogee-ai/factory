@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { OCTOGEE_WORKFLOW_TOOLS } from "./apply-gateway-class-policy.mjs";
 
 const HOST_EXEC_SCHEDULES = new Set(["stream", "on-exit"]);
 const HOST_EXEC_PAYLOADS = new Set(["script", "command"]);
@@ -16,6 +17,8 @@ const SAFE_MODELS = new Set([
   "platform-openai/gpt-5.4-mini",
 ]);
 const SAFE_SCHEDULED_TOOLS = new Set([
+  ...OCTOGEE_WORKFLOW_TOOLS,
+  "ls",
   "read",
   "write",
   "edit",
@@ -25,6 +28,35 @@ const SAFE_SCHEDULED_TOOLS = new Set([
   "brave_search",
   "tavily_search",
   "tavily_extract",
+  "code_execution",
+  "secrets",
+  "x_search",
+  "memory_search",
+  "memory_get",
+  "sessions",
+  "sessions_list",
+  "sessions_history",
+  "sessions_search",
+  "sessions_send",
+  "agents_wait",
+  "sessions_yield",
+  "session_status",
+  "suggest_task",
+  "dismiss_task",
+  "screen",
+  "dashboard",
+  "portal",
+  "github_identity_status",
+  "github_publish",
+  "get_goal",
+  "create_goal",
+  "update_goal",
+  "progress_card",
+  "ask_user",
+  "view_image",
+  "image_generate",
+  "music_generate",
+  "video_generate",
 ]);
 const SAFE_SESSION_TARGETS = new Set(["main", "isolated", "current"]);
 const CUSTOMER_AGENT_ID = /^octogee-[a-z0-9-]+(?:-proj-[a-z0-9-]+)?-coach$/;

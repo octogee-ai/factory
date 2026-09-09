@@ -2009,7 +2009,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it.each(["ready", "startup-failed", "disconnected", "cancellation-failed"])(
+  it.each(["ready", "activation-failed", "verification-pending", "startup-failed", "disconnected", "cancellation-failed"])(
     "activates a held Barn-to-Builder target through its process gate: %s",
     async (outcome) => {
       vi.stubEnv("POD_UID", "builder-pod");
@@ -2020,7 +2020,10 @@ describe("queued-rsync migration control handlers", () => {
         isConfiguredBuilderCustomer: (slug) => slug === "chris",
         prepareImportDir: vi.fn(async () => "/openclaw"),
         activateImportedCustomer: vi.fn(async () => {
-          throw new Error("ECONNREFUSED: OpenClaw is held");
+          expect(events).toContain("attach-permit-verify");
+          events.push("activate-manifest");
+          if (outcome === "activation-failed") throw new Error("Coach activation failed");
+          return { appliedFingerprint: "imported-coach", ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}) };
         }),
       });
       const reserveSurgeTarget = vi.fn(async () => { events.push("reserve"); });
@@ -2058,7 +2061,11 @@ describe("queued-rsync migration control handlers", () => {
         signature: signForPod(finish.migrationId, JSON.stringify(finish)),
       }), response.res, vi.fn());
       expect(events.slice(0, 3)).toEqual(["reserve", "copy", "attach-permit-verify"]);
-      expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+      if (["ready", "activation-failed", "verification-pending"].includes(outcome)) {
+        expect(adapter.activateImportedCustomer).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
+      } else {
+        expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+      }
       expect(releaseSurgeReadiness).toHaveBeenCalledWith({
         migrationId: prepare.migrationId, targetPodUid: "builder-pod",
       });

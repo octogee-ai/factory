@@ -99,6 +99,7 @@
   "tools": {
     "profile": "coding",
     "alsoAllow": [
+      "automations",
       "message",
       "octogee_project_create",
       "octogee_project_commit",

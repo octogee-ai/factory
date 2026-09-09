@@ -127,6 +127,7 @@ function bad(status: number, error: string, extra: Record<string, unknown> = {})
 export async function createProjectForActor(
   actor: ProjectCreateActor,
   input: ProjectCreateInput | null | undefined,
+  prewarmProjectRunCapacity?: () => Promise<void>,
 ): Promise<ProjectCreateResult> {
   const planResult = buildProjectCreatePlan(actor, input);
   if (!planResult.ok) return planResult.result;
@@ -152,6 +153,9 @@ export async function createProjectForActor(
   }
 
   await writeProvisioningProject(projectRef, plan);
+  if (plan.recipe !== "static-site" && prewarmProjectRunCapacity) {
+    void prewarmProjectCapacity(plan, prewarmProjectRunCapacity);
+  }
   const artifacts: ProjectProvisioningArtifacts = {
     generalChannelStored: false,
     repoCreated: false,
@@ -180,6 +184,18 @@ export async function createProjectForActor(
     };
   } catch (error) {
     return failProjectProvisioning(projectRef, plan, artifacts, error);
+  }
+}
+
+async function prewarmProjectCapacity(plan: ProjectCreatePlan, prewarm: () => Promise<void>): Promise<void> {
+  try {
+    await prewarm();
+  } catch (error) {
+    logger.error("[projects] capacity prewarm failed", {
+      workspaceId: plan.workspaceId,
+      projectSlug: plan.slug,
+      error,
+    });
   }
 }
 

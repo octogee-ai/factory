@@ -1,12 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import openclawCodingTools from "../fixtures/openclaw-coding-tools.json";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/quarantine-customer-cron-jobs.mjs");
+const template = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.template.json"), "utf8"));
+const coachTools = [...new Set([...openclawCodingTools, ...template.tools.alsoAllow])]
+  .filter((tool) => !template.tools.deny.includes(tool));
 const storeKey = "/home/node/.openclaw/cron/jobs.json";
 const ceckertAgent = "octogee-ceckert-coach";
 const mikeAgent = "octogee-mike-coach";
@@ -229,7 +233,7 @@ function fixture() {
     row("malformed-tools", { payload_kind: "agentTurn", payload_tools_allow_json: "[" }),
     row("safe-tools", {
       payload_kind: "agentTurn",
-      payload_tools_allow_json: JSON.stringify(["read", "web_search"]),
+      payload_tools_allow_json: JSON.stringify(coachTools),
       scheduled_tool_policy_json: JSON.stringify({
         version: 1,
         mode: "account",
@@ -299,16 +303,31 @@ function fixture() {
   return { root, jobCount: rows.length };
 }
 
-function run(root: string, gatewayClass: "shared" | "builder") {
-  return spawnSync("node", [script], {
+function run(root: string, gatewayClass: "shared" | "builder", scriptPath = script) {
+  return spawnSync("node", [scriptPath], {
     encoding: "utf8",
     env: { ...process.env, OPENCLAW_DIR: root, GATEWAY_CLASS: gatewayClass },
   });
 }
 
 describe("customer cron routing quarantine", () => {
+  it("runs from the gateway scripts and shared types without a core package installation", () => {
+    const standalone = mkdtempSync(path.join(tmpdir(), "octogee-cron-standalone-"));
+    const gateway = path.join(standalone, "infra", "gateway");
+    mkdirSync(gateway, { recursive: true });
+    writeFileSync(path.join(standalone, "package.json"), JSON.stringify({ type: "module" }));
+    for (const name of ["quarantine-customer-cron-jobs.mjs", "apply-gateway-class-policy.mjs"]) {
+      copyFileSync(path.join(repoRoot, "infra", "gateway", name), path.join(gateway, name));
+    }
+    cpSync(path.join(repoRoot, "shared", "dist"), path.join(standalone, "shared", "dist"), { recursive: true });
+    const { root } = fixture();
+    const result = run(root, "shared", path.join(gateway, "quarantine-customer-cron-jobs.mjs"));
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("quarantined 26 unsafe customer cron job(s)");
+  });
+
   it.each(["shared", "builder"] as const)(
-    "removes cross-tenant and unsafe persisted jobs before %s startup while preserving a fully attributed reminder",
+    "removes cross-tenant and unsafe persisted jobs before %s startup while preserving reminders and the full captured coach tool surface",
     (gatewayClass) => {
       const { root } = fixture();
       const result = run(root, gatewayClass);

@@ -152,6 +152,15 @@ describe("GET /api/projects/slug-available", () => {
 });
 
 describe("POST /api/projects", () => {
+  it("passes capacity warming to the validated creation service", async () => {
+    const prewarmProjectRunCapacity = vi.fn().mockResolvedValue(undefined);
+    await request(app(createProjectCreateRoutes({ prewarmProjectRunCapacity })))
+      .post("/api/projects")
+      .send({ name: "Orbit", slug: "orbit" })
+      .expect(200);
+    expect(h.createProjectForActor.mock.calls[0][2]).toBe(prewarmProjectRunCapacity);
+  });
+
   it("passes the authenticated actor and request body to the project creation service", async () => {
     const body = { name: "Orbit", slug: "orbit" };
 
@@ -169,6 +178,7 @@ describe("POST /api/projects", () => {
         source: "ui",
       }),
       body,
+      undefined,
     );
     expect(h.evaluate).not.toHaveBeenCalled();
   });
@@ -190,6 +200,7 @@ describe("POST /api/projects", () => {
     expect(h.createProjectForActor).toHaveBeenCalledWith(
       expect.objectContaining({ repoSourceAccess: "enabled", proveRepoSource: expect.any(Function) }),
       body,
+      undefined,
     );
 
     const actor = h.createProjectForActor.mock.calls[0]?.[0] as {
@@ -217,6 +228,7 @@ describe("POST /api/projects", () => {
     expect(h.createProjectForActor).toHaveBeenCalledWith(
       expect.objectContaining({ repoSourceAccess: "disabled" }),
       body,
+      undefined,
     );
   });
 
@@ -235,6 +247,7 @@ describe("POST /api/projects", () => {
     expect(h.createProjectForActor).toHaveBeenCalledWith(
       expect.objectContaining({ repoSourceAccess: "disabled" }),
       expect.anything(),
+      undefined,
     );
   });
 
@@ -255,6 +268,7 @@ describe("POST /api/projects", () => {
     expect(h.createProjectForActor).toHaveBeenCalledWith(
       expect.objectContaining({ repoSourceAccess: "enabled" }),
       expect.anything(),
+      undefined,
     );
   });
 
@@ -271,6 +285,7 @@ describe("POST /api/projects", () => {
     expect(h.createProjectForActor).toHaveBeenCalledWith(
       expect.objectContaining({ repoSourceAccess: "disabled" }),
       expect.anything(),
+      undefined,
     );
   });
 

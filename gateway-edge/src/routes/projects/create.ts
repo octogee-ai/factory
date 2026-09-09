@@ -15,7 +15,10 @@ import {
 } from "./repo-source.js";
 
 export function createProjectCreateRoutes(
-  { featurePolicy }: { featurePolicy?: FeaturePolicy } = {},
+  { featurePolicy, prewarmProjectRunCapacity }: {
+    featurePolicy?: FeaturePolicy;
+    prewarmProjectRunCapacity?: () => Promise<void>;
+  } = {},
 ): Router {
   const router = Router();
 
@@ -63,6 +66,7 @@ export function createProjectCreateRoutes(
           source: "ui",
         },
         input,
+        prewarmProjectRunCapacity,
       );
       res.status(result.status).json(result.body);
     } catch (err) {

@@ -19,6 +19,30 @@ const builder = {
 const barn = { gatewayClass: "shared" as const };
 
 describe("system config platform invariants", () => {
+  it("restores coach automations through reconciliation while project agents and host execution remain restricted", () => {
+    const config = {
+      tools: { deny: ["automations"] },
+      agents: {
+        entries: {
+          "octogee-sep091-coach": { tools: { deny: ["automations"] } },
+          "octogee-sep091-proj-garden-coach": { tools: { deny: [] } },
+        },
+      },
+    };
+    reconcilePlatformInvariants(config, barn);
+    const coach = config.agents.entries["octogee-sep091-coach"].tools as Record<string, unknown>;
+    const project = config.agents.entries["octogee-sep091-proj-garden-coach"].tools as Record<string, unknown>;
+    expect(config.tools.deny).not.toContain("automations");
+    expect(coach.deny).not.toContain("automations");
+    expect(coach.alsoAllow).toContain("automations");
+    expect(project.deny).toContain("automations");
+    expect(project.alsoAllow).not.toContain("automations");
+    expect(coach.deny).toEqual(expect.arrayContaining(["exec", "process", "terminal"]));
+    expect(config).toHaveProperty("cron.triggers.enabled", false);
+    expect(platformInvariantViolations(config, barn)).toEqual([]);
+    expect(reconcilePlatformInvariants(config, barn).changedPaths).toEqual([]);
+  });
+
   it.each([
     ["Barn", barn],
     ["Builder", builder],
@@ -340,7 +364,6 @@ describe("system config platform invariants", () => {
           "preview_list",
           "octogee_publish",
           "bundle-mcp",
-          "automations",
           "skill_workshop",
           "conversations_list",
           "conversations_send",
@@ -431,7 +454,7 @@ describe("system config platform invariants", () => {
     expect((config.channels as any).mattermost.accounts["alice-proj-garden"].dmPolicy).toBe("disabled");
     expect((config.channels as any).mattermost.accounts["alice-proj-garden"])
       .not.toHaveProperty("allowFrom");
-    expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "automations"]));
+    expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "exec"]));
     expect(agents.list[0].tools.deny).toEqual(expect.arrayContaining([
       "preview_start",
       "preview_stop",

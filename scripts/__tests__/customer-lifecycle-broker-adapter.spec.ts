@@ -2,6 +2,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
@@ -1002,20 +1003,17 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       recursive: true,
     });
     await fs.mkdir(path.join(tempStateDir, "memory"), { recursive: true });
-    await fs.writeFile(
-      path.join(tempStateDir, "agents", "octogee-tester10-coach", "sessions", "sessions.json"),
-      JSON.stringify({ sessions: [{ status: "running" }] }),
-    );
-    await fs.writeFile(
-      path.join(
-        tempStateDir,
-        "agents",
-        "octogee-tester10-proj-orbit-coach",
-        "sessions",
-        "sessions.json",
-      ),
-      JSON.stringify({ sessions: [{ status: "running" }] }),
-    );
+    for (const agentId of ["octogee-tester10-coach", "octogee-tester10-proj-orbit-coach"]) {
+      const agentDir = path.join(tempStateDir, "agents", agentId, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+      try {
+        db.exec("CREATE TABLE session_nodes (current_session_id TEXT, status TEXT)");
+        db.prepare("INSERT INTO session_nodes VALUES (?, ?)").run(agentId, "running");
+      } finally {
+        db.close();
+      }
+    }
     await fs.writeFile(
       path.join(tempStateDir, "memory", "octogee-tester10-proj-orbit-coach.sqlite-wal"),
       "",

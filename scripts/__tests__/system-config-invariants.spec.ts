@@ -103,7 +103,6 @@ describe("system config platform invariants", () => {
           "preview_list",
           "octogee_publish",
           "bundle-mcp",
-          "automations",
           "skill_workshop",
           "conversations_list",
           "conversations_send",

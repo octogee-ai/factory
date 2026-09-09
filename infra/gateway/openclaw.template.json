@@ -107,7 +107,6 @@
       "preview_list",
       "octogee_publish",
       "bundle-mcp",
-      "automations",
       "skill_workshop",
       "conversations_list",
       "conversations_send",
@@ -116,6 +115,7 @@
       "computer"
     ],
     "alsoAllow": [
+      "automations",
       "message",
       "octogee_project_create",
       "octogee_project_commit",

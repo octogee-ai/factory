@@ -168,7 +168,6 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "preview_list",
   "octogee_publish",
   "bundle-mcp",
-  "automations",
   "skill_workshop",
   "conversations_list",
   "conversations_send",
@@ -178,6 +177,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
 ] as const;
 
 const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+  "automations",
   "workspace_commit",
   "octogee_project_commit",
   "octogee_project_capability",
@@ -196,6 +196,7 @@ const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
 ] as const;
 
 export const CUSTOMER_WORKFLOW_TOOLS = [
+  "automations",
   "message",
   "octogee_project_create",
   "octogee_project_commit",

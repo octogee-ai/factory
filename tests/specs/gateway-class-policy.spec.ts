@@ -12,6 +12,7 @@ import {
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
 const workflowTools = [
+  "automations",
   "message",
   "octogee_project_create",
   "octogee_project_commit",
@@ -70,6 +71,7 @@ const workflowTools = [
   "octogee_obsidian_write",
 ];
 const customerStructuredTools = [
+  "automations",
   "workspace_commit",
   "octogee_project_commit",
   "octogee_project_capability",
@@ -275,7 +277,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "preview_list",
       "octogee_publish",
       "bundle-mcp",
-      "automations",
       "skill_workshop",
       "conversations_list",
       "conversations_send",
@@ -306,7 +307,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee_project_publish",
     ]));
     expect(out.agents.list[0].tools.allow).toBeUndefined();
-    expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "computer", "automations", "conversations_send"]));
+    expect(out.agents.list[0].tools.deny).toEqual(expect.arrayContaining(["browser", "computer", "conversations_send"]));
     expect(out.agents.list[1].tools).toMatchObject({ profile: "minimal", alsoAllow: [], fs: { workspaceOnly: true } });
     expect(out.agents.entries["octogee-alice-proj-garden-coach"].tools).toMatchObject({
       profile: "minimal",

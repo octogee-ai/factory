@@ -71,13 +71,12 @@ if [ ! -f "$MATTERMOST_ACCOUNT_SECRETS" ]; then
 fi
 chmod 600 "$MATTERMOST_ACCOUNT_SECRETS"
 
-# ── SSH config (host alias for Gitea — used by per-customer GIT_SSH_COMMAND) ──
-# No global SSH identity file — per-customer keys are gateway-local and passed
-# via GIT_SSH_COMMAND="-i {customer_key}". This prevents agents from falling
-# back to a global admin key.
-# Boot-sync uses brokered HTTP restore paths; no global SSH/admin identity lives
-# in the gateway filesystem.
 GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  case "${GATEWAY_BUILDER_SLUG:-}" in
+    ""|*[!a-z0-9-]*) log "FATAL: a valid GATEWAY_BUILDER_SLUG is required for Builder SSH"; exit 1 ;;
+  esac
+fi
 mkdir -p "$HOME/.ssh"
 cat > "$HOME/.ssh/config" <<SSHEOF
 Host gitea
@@ -88,8 +87,14 @@ Host gitea
   UserKnownHostsFile /dev/null
   LogLevel ERROR
 SSHEOF
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  cat >> "$HOME/.ssh/config" <<SSHEOF
+  IdentityFile ${OPENCLAW_DIR}/customer-keys/${GATEWAY_BUILDER_SLUG}/id_ed25519
+  IdentitiesOnly yes
+SSHEOF
+fi
 chmod 600 "$HOME/.ssh/config"
-log "SSH config written for Gitea (host: ${GIT_SSH_HOST}, no global identity file)"
+log "SSH config written for Gitea (host: ${GIT_SSH_HOST}, class: ${GATEWAY_CLASS_EFFECTIVE})"
 
 # ── OpenClaw environment inputs ─────────────────────────────────────────────
 export MM_URL="${MM_URL:-}"

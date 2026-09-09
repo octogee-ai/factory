@@ -25,7 +25,6 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "preview_list",
   "octogee_publish",
   "bundle-mcp",
-  "automations",
   "skill_workshop",
   "conversations_list",
   "conversations_send",
@@ -34,6 +33,7 @@ export const CUSTOMER_CODE_DENIED_TOOLS = [
   "computer",
 ];
 export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
+  "automations",
   "workspace_commit",
   "octogee_project_commit",
   "octogee_project_capability",
@@ -51,6 +51,7 @@ export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "octogee_board_card_comment",
 ];
 export const OCTOGEE_WORKFLOW_TOOLS = [
+  "automations",
   "message",
   "octogee_project_create",
   "octogee_project_commit",
