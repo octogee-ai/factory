@@ -74,18 +74,8 @@ OCTO_COMPOSITOR=labwc ./measure.sh
 | 5900 | wayvnc RFB listener (any VNC viewer) |
 
 wayvnc runs with `--render-cursor` because the headless output has no hardware
-cursor plane; without it the stream carries no pointer and the owner drives
-blind. The PWA additionally shows noVNC's dot cursor whenever a server sends no
-cursor shape.
-
-Owner takeover input goes through the viewer's RFB session. A host compositor
-still sees chords before the browser does: on Omarchy, Super+W closes the PWA
-window rather than the window inside the agent computer. The takeover bar's
-**Send keys** control injects Super, Super+W, Super+Return, Super+Space, Alt+Tab,
-Ctrl+Alt+T, and Escape straight into the desktop, and **Capture all keys** enters
-browser fullscreen with the Keyboard Lock API so Chromium-family browsers hand
-over the keys their platform allows. Host-level binds that the compositor
-reserves for itself still win; use Send keys for those.
+cursor plane. The websockify/noVNC endpoint remains an operator diagnostic;
+Octogee's PWA uses the OpenClaw Control UI Browser and Desktop panels.
 
 wayvnc 0.10.1's own `--websocket` listener segfaults as soon as noVNC connects
 (labwc + pixman, under Rosetta; not retested on x86_64), so websockify fronts
@@ -95,6 +85,37 @@ the RFB port instead.
 window, samples CPU and memory idle and under a screenshot loop, drives one
 navigation through the control API, and prints a results block for the table
 below.
+
+## OpenClaw Control UI panels
+
+The Browser panel uses the gateway's attach-only `computer` CDP profile.
+`gateway.nodes.browser.mode=off` prevents automatic delegation to the native
+computer node, whose `nodeHost.browserProxy.enabled` is false.
+
+The Desktop panel uses the paired desktop node's `desktop.stream` command.
+The gateway explicitly allows it, and the node sets `desktop.host.enabled=true`,
+`managed=false`, and port `5901`. The existing local pairing loop approves the
+node's expanded manifest on reconnection.
+
+`octo-desktop-openclaw-vnc` waits for WayVNC, then runs an
+[x11vnc reflector](https://github.com/LibVNC/x11vnc/blob/master/doc/OPTIONS.md)
+on `127.0.0.1:5901`. It serves the same desktop with VNC password authentication,
+which OpenClaw requires; WayVNC's offered authentication order does not match
+OpenClaw's adapter. Its per-start password lives in the private
+`$XDG_RUNTIME_DIR/octogee-openclaw-vnc/password` file, readable by the desktop
+node through its existing runtime-directory mount. The outer stream uses the
+authenticated gateway WebSocket path, not a published VNC port.
+
+Gateway-edge rewrites `desktop.observe` results into gateway-affine, one-use
+observer tickets bound to the dashboard session and revision. The binary stream
+uses the dashboard's origin, authorization, socket limits, and periodic access
+checks. OpenClaw continues to enforce observation versus control at its RFB
+boundary.
+
+Rollout requires both the gateway build and a computer image containing the
+reflector package/helper. A gateway-only rollout against an older computer image
+cannot serve port 5901. Build the computer image and replace the parked computer
+through the normal fleet lifecycle so its home checkpoint is restored.
 
 ## OpenClaw browser acceptance
 

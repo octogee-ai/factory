@@ -706,6 +706,93 @@ describe("OpenClaw Dashboard HTTP surface", () => {
 });
 
 describe("OpenClaw Dashboard WebSocket surface", () => {
+  it("requires a dashboard session before accepting a desktop observer socket", async () => {
+    const edge = http.createServer();
+    const router = new WsUpgradeRouter();
+    const authorize = vi.fn(async () => true);
+    attachOpenClawControlWsRoute({ router, env: env(), sessions: sessions(), authorize });
+    router.attach(edge);
+    const port = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${port}/openclaw/desktop/observe?token=stolen`, {
+      headers: { origin: "https://api.octogee.com" },
+    });
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      browser.on("unexpected-response", (_req, response) => { response.resume(); resolve(response.statusCode); });
+      browser.on("error", reject);
+    });
+    expect(status).toBe(401);
+    expect(authorize).not.toHaveBeenCalled();
+    browser.terminate();
+  });
+
+  it("routes a session-bound desktop observer as binary RFB and closes it on revocation", async () => {
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ server: upstream });
+    const observerPaths: string[] = [];
+    upstreamWs.on("connection", (ws, req) => {
+      if (req.url?.startsWith("/desktop/observe")) {
+        observerPaths.push(req.url);
+        ws.send(Buffer.from("RFB 003.008\n"));
+        ws.on("message", (data, binary) => ws.send(data, { binary }));
+        return;
+      }
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: frame.method === "connect"
+          ? { type: "hello-ok", features: { methods: ["desktop.observe"] } }
+          : { transport: "rfb", wsPath: frame.id === "bad-observer" ? "https://other.test/desktop/observe?token=bad" : "/desktop/observe?token=native-ticket", expiresAtMs: Date.now() + 30_000, control: true } }));
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    let sessionNow = 1_000;
+    const manager = sessions(() => sessionNow);
+    const cookie = issue(manager);
+    const edge = http.createServer();
+    const router = new WsUpgradeRouter();
+    let allowed = true;
+    attachOpenClawControlWsRoute({ router, env: env(upstreamPort), sessions: manager,
+      authorize: async () => allowed, authorizationIntervalMs: 20, loadGatewayToken: async () => "gateway-secret" });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const headers = { cookie, origin: "https://api.octogee.com" };
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, { headers });
+    const messages: any[] = [];
+    browser.on("message", (data) => {
+      const frame = JSON.parse(data.toString());
+      messages.push(frame);
+      if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+      if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "observe", method: "desktop.observe", params: { source: { kind: "node", nodeId: "desktop" } } }));
+    });
+    let desktop: WebSocket | undefined;
+    try {
+      await vi.waitFor(() => expect(messages.some((frame) => frame.id === "observe")).toBe(true));
+      const result = messages.find((frame) => frame.id === "observe");
+      expect(result.ok).toBe(true);
+      expect(result.payload.wsPath).toMatch(/^\/g\/bender\/openclaw\/desktop\/observe\?token=/);
+      const url = `ws://127.0.0.1:${edgePort}${result.payload.wsPath.replace('/g/bender', '')}`;
+      desktop = new WebSocket(url, { headers });
+      const bytes: Buffer[] = [];
+      desktop.on("message", (data, binary) => { expect(binary).toBe(true); bytes.push(Buffer.from(data as Buffer)); });
+      await vi.waitFor(() => expect(bytes[0]?.toString()).toBe("RFB 003.008\n"));
+      sessionNow += 14 * 60_000;
+      desktop.send(Buffer.from([0, 1, 255]));
+      await vi.waitFor(() => expect(bytes[1]).toEqual(Buffer.from([0, 1, 255])));
+      sessionNow += 2 * 60_000;
+      expect(manager.verify({ cookieHeader: cookie, gatewayId: "bender", revisionId: "bender-r7" })).not.toBeNull();
+      expect(observerPaths).toEqual(["/desktop/observe?token=native-ticket"]);
+      browser.send(JSON.stringify({ type: "req", id: "bad-observer", method: "desktop.observe", params: {} }));
+      await vi.waitFor(() => expect(messages.find((frame) => frame.id === "bad-observer")).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } }));
+      expect(browser.readyState).toBe(WebSocket.OPEN);
+      allowed = false;
+      await vi.waitFor(() => expect(desktop?.readyState).toBe(WebSocket.CLOSED));
+    } finally {
+      desktop?.terminate();
+      browser.terminate();
+      for (const client of upstreamWs.clients) client.terminate();
+    }
+  });
+
   it("shares a positive authorization cache between Dashboard assets and the WebSocket attachment", async () => {
     const upstream = http.createServer((_req, res) => res.end("asset"));
     const upstreamWs = new WebSocketServer({ noServer: true });

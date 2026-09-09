@@ -88,7 +88,10 @@ export function applyOpenClawComputerBrowserConfig(
   objectAt(objectAt(plugins, "entries"), "browser").enabled = true;
   const tools = objectAt(config, "tools");
   tools.alsoAllow = [...new Set([...stringList(tools, "alsoAllow"), ...DESKTOP_TOOLS])];
-  const commands = objectAt(objectAt(objectAt(config, "gateway"), "nodes"), "commands");
+  const nodes = objectAt(objectAt(config, "gateway"), "nodes");
+  nodes.browser = { mode: "off" };
+  const commands = objectAt(nodes, "commands");
+  commands.allow = [...new Set([...stringList(commands, "allow"), "desktop.stream"])];
   commands.deny = [...new Set([...stringList(commands, "deny"), ...DESKTOP_NODE_DENIED_COMMANDS])];
   const agents = objectAt(config, "agents");
   if (agents.list !== undefined) {

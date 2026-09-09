@@ -87,7 +87,7 @@ RUN set -eux; \
     sed -i 's/^SigLevel = Optional TrustAll$/SigLevel = Required DatabaseOptional/' /etc/pacman.conf; \
     pacman -Syy --noconfirm; \
     pacman -S --noconfirm --needed \
-      wayvnc grim wtype wl-clipboard slurp \
+      wayvnc x11vnc grim wtype wl-clipboard slurp \
       labwc wlr-randr \
       chromium xorg-xwayland \
       foot noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono; \

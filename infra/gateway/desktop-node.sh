@@ -13,9 +13,21 @@ fi
 export HOME="${HOME:-/home/node}"
 state="$HOME/.openclaw"
 mkdir -p "$state"
-if [ ! -f "$state/openclaw.json" ]; then
-  printf '{"plugins":{"entries":{"cua-computer":{"enabled":true}}}}\n' > "$state/openclaw.json"
-fi
+node --input-type=module - "$state/openclaw.json" <<'JS'
+import fs from "node:fs";
+const file = process.argv[2];
+const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+config.plugins ??= {};
+config.plugins.entries ??= {};
+config.plugins.entries["cua-computer"] = { enabled: true };
+config.nodeHost ??= {};
+config.nodeHost.browserProxy = { enabled: false };
+config.desktop = { host: {
+  enabled: true, managed: false, port: 5901,
+  passwordFile: `${process.env.XDG_RUNTIME_DIR}/octogee-openclaw-vnc/password`,
+} };
+fs.writeFileSync(file, JSON.stringify(config) + "\n", { mode: 0o600 });
+JS
 
 wayland_socket() {
   ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -E '^wayland-[0-9]+$' | head -n1

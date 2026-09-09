@@ -62,6 +62,7 @@ import {
   type OpenClawControlResourceIdentity,
 } from "./limits.js";
 import { OpenClawControlSessionManager, type OpenClawControlSession } from "./session.js";
+import { bridgeDesktopObserver, DesktopObserverTickets } from "./desktop-stream.js";
 import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./metrics.js";
 import {
   createMattermostControlChat,
@@ -1021,6 +1022,7 @@ export function openClawControlRpcDeadlineMs(args: {
 }
 
 interface BridgeControlSocketArgs {
+  desktopTickets: DesktopObserverTickets;
   browser: WebSocket;
   requestPath: string;
   cookieHeader?: string;
@@ -1430,12 +1432,23 @@ class OpenClawControlSocketBridge {
     request: PendingRpc | undefined,
   ): void {
     if (request?.internal || this.args.browser.readyState !== WebSocket.OPEN) return;
-    const projected = this.args.proxyIdentity.enabled ? frame : projectOpenClawServerFrameForProfile(
+    let projected = this.args.proxyIdentity.enabled ? frame : projectOpenClawServerFrameForProfile(
       frame,
       request?.method,
       this.activeSession.brokerProfile,
       this.activeSession.workspaceSlug,
     );
+    if (projected && request?.method === "desktop.observe") {
+      try {
+        projected = this.args.desktopTickets.project(projected, this.activeSession);
+      } catch (error) {
+        logger.error("OpenClaw desktop observer response rejected", {
+          gatewayId: this.activeSession.gatewayId, error: error instanceof Error ? error.message : String(error),
+        });
+        projected = { type: "res", id: frame.id, ok: false,
+          error: { code: "UNAVAILABLE", message: "Desktop observer could not be attached" } };
+      }
+    }
     if (projected) {
       this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));
     }
@@ -1887,9 +1900,11 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
   }
   const gatewayId = envValue(env, "GATEWAY_ID");
   const revisionId = envValue(env, "GATEWAY_REVISION_ID");
+  const desktopTickets = new DesktopObserverTickets();
   options.router.add({
-    match: isOpenClawControlWsPath,
+    match: (pathname) => isOpenClawControlWsPath(pathname) || pathname === "/openclaw/desktop/observe",
     extractTicket: (pathname) => {
+      if (pathname === "/openclaw/desktop/observe") return pathname;
       try {
         return openClawControlUpstreamPath(pathname, gatewayId);
       } catch {
@@ -1941,7 +1956,27 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         ws.close(1013, "dashboard-socket-limit");
         return;
       }
+      if (ticket === "/openclaw/desktop/observe") {
+        const observerUrl = new URL(req.url ?? "/", "http://localhost");
+        const upstreamPath = desktopTickets.redeem(observerUrl.searchParams.get("token") ?? "", session);
+        if (!upstreamPath || [...observerUrl.searchParams.keys()].some((key) => key !== "token")) {
+          socketLease.release();
+          ws.close(1008, "desktop-ticket-invalid");
+          return;
+        }
+        const upstreamUrl = new URL(upstreamPath, openClawControlUpstreamBase(env));
+        upstreamUrl.protocol = "ws:";
+        bridgeDesktopObserver({
+          browser: ws, upstreamUrl, release: () => socketLease.release(), authorizationIntervalMs,
+          touch: () => Boolean(sessions.touchSession(session)),
+          log: (message) => logger.error(message, { gatewayId, revisionId }),
+          authorize: async () => Boolean(sessions.verify({ cookieHeader: req.headers.cookie, gatewayId, revisionId })) &&
+            await authorizationCache.authorize({ sessionId: session.sessionId, gatewayId, revisionId, env }, { forceRefresh: true }),
+        });
+        return;
+      }
       void bridgeControlSocket({
+        desktopTickets,
         browser: ws,
         requestPath: ticket,
         cookieHeader: req.headers.cookie,

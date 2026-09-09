@@ -118,8 +118,13 @@ grep -q '^ready$' "$log_dir/seat-input.log" || { stamp "ERROR virtual input seat
 stamp "virtual input seat ready"
 
 wayvnc --render-cursor --output="$output" "$bind" "$vnc_port" >"$log_dir/wayvnc.log" 2>&1 &
-children+=($!)
+wayvnc_pid=$!
+children+=("$wayvnc_pid")
 stamp "wayvnc listening on ${vnc_port}"
+
+OCTO_WAYVNC_PID="$wayvnc_pid" OCTO_VNC_PORT="$vnc_port" /usr/local/bin/octo-desktop-openclaw-vnc >"$log_dir/openclaw-vnc.log" 2>&1 &
+children+=($!)
+stamp "OpenClaw authenticated VNC listener starting on loopback:5901"
 
 websockify --web /opt/novnc "${bind}:${novnc_port}" "127.0.0.1:${vnc_port}" >"$log_dir/websockify.log" 2>&1 &
 children+=($!)
