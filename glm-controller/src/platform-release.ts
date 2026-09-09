@@ -1,6 +1,6 @@
 import { GATEWAY_CONFIG_SCHEMA_VERSION } from "@octogee/shared/types/gateway-mutable-config";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import { isGatewayEdgeImage } from "@octogee/shared/types/gateway-releases";
+import { isGatewayEdgeImage, isReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { isGatewayImageTag } from "@octogee/shared/types/image-tag";
 import {
   parseSharedPoolReplicaBounds,
@@ -35,13 +35,26 @@ export function platformGatewayArtifactFromEnvironment(
       "PLATFORM_GATEWAY_EDGE_IMAGE_REPOSITORY and PLATFORM_GATEWAY_EDGE_IMAGE_TAG must identify the paired immutable gateway-edge image",
     );
   }
+  const builderImageTag = requiredEnv(env, "PLATFORM_GATEWAY_BUILDER_IMAGE_TAG");
   const openclawSourceSha = env.OPENCLAW_FORK_SHA?.trim();
-  return {
+  const artifact: GatewayArtifact = {
     imageRepository,
     imageTag,
+    profileImages: {
+      builder: {
+        imageRepository: `${imageRepository.replace(/\/octogee-gateway$/, "")}/octogee-gateway-builder`,
+        imageTag: builderImageTag,
+      },
+    },
     gatewayEdgeImage,
     ...(openclawSourceSha && /^[a-f0-9]{40}$/.test(openclawSourceSha) ? { openclawSourceSha } : {}),
   };
+  if (!isReleasePayload(artifact)) {
+    throw new Error(
+      "PLATFORM_GATEWAY_* must describe one build's paired immutable gateway, gateway-builder, and gateway-edge images",
+    );
+  }
+  return artifact;
 }
 
 export function sharedPoolReplicaBoundsFromEnvironment(

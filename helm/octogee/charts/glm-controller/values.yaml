@@ -42,6 +42,9 @@ sharedPool:
 platformRelease:
   gatewayImageRepository: ""
   gatewayImageTag: ""
+  # Same build's octogee-gateway-builder digest; disposable Builders allocated
+  # from a shared slot inherit the slot's release payload and need it.
+  builderImageTag: ""
   gatewayEdgeImageRepository: ""
   gatewayEdgeImageTag: ""
 

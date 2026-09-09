@@ -859,6 +859,9 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
       "glm-controller.platformRelease.gatewayImageTag=$PLATFORM_GATEWAY_IMAGE",
     );
     expect(result.stdout).toContain(
+      "glm-controller.platformRelease.builderImageTag=$PLATFORM_GATEWAY_BUILDER_IMAGE",
+    );
+    expect(result.stdout).toContain(
       "glm-controller.platformRelease.gatewayEdgeImageTag=$PLATFORM_GATEWAY_EDGE_IMAGE",
     );
   });

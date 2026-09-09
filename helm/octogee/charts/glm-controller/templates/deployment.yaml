@@ -184,6 +184,8 @@ spec:
               value: {{ required "glm-controller.platformRelease.gatewayImageRepository is required" (.Values.platformRelease).gatewayImageRepository | quote }}
             - name: PLATFORM_GATEWAY_IMAGE_TAG
               value: {{ (.Values.platformRelease).gatewayImageTag | default "" | quote }}
+            - name: PLATFORM_GATEWAY_BUILDER_IMAGE_TAG
+              value: {{ (.Values.platformRelease).builderImageTag | default "" | quote }}
             - name: PLATFORM_GATEWAY_EDGE_IMAGE_REPOSITORY
               value: {{ required "glm-controller.platformRelease.gatewayEdgeImageRepository is required" (.Values.platformRelease).gatewayEdgeImageRepository | quote }}
             - name: PLATFORM_GATEWAY_EDGE_IMAGE_TAG

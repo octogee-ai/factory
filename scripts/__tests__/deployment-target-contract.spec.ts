@@ -537,6 +537,10 @@ describe("deployment target consumers", () => {
     expect(workflow).toContain(
       "--set-string glm-controller.platformRelease.gatewayEdgeImageTag=${GLM_TAG}@${ROUTER_DIGEST}",
     );
+    expect(workflow).toContain(
+      "--set-string glm-controller.platformRelease.builderImageTag=${GLM_TAG}@${BUILDER_DIGEST}",
+    );
+    expect(workflow).toContain('BUILDER_DIGEST="$(manifest_digest gateway octogee-gateway-builder)"');
     expect(workflow).not.toContain("bootstrapDefaultGateway");
   });
 
@@ -554,6 +558,9 @@ describe("deployment target consumers", () => {
     );
     expect(teardown).toContain(
       "glm-controller.platformRelease.gatewayEdgeImageTag=\\$PLATFORM_GATEWAY_EDGE_IMAGE",
+    );
+    expect(teardown).toContain(
+      "glm-controller.platformRelease.builderImageTag=\\$PLATFORM_GATEWAY_BUILDER_IMAGE",
     );
     expect(teardown).not.toContain("BOOTSTRAP_GATEWAY_TAG=");
     expect(teardown).not.toContain(
