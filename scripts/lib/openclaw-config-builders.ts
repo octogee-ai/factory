@@ -432,6 +432,7 @@ export function buildSafeDefaultAgent(): Record<string, unknown> {
   return {
     id: SAFE_DEFAULT_AGENT_ID,
     name: "Unmatched Mattermost route",
+    workspace: `${process.env.OPENCLAW_DIR || "/home/node/.openclaw"}/workspace-${SAFE_DEFAULT_AGENT_ID}`,
     heartbeat: { every: "0m" },
     tools: {
       profile: "minimal",
