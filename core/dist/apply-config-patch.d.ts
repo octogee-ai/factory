@@ -97,4 +97,4 @@ export declare function fullAgentListReplacePaths(): string[];
  * `agents.list` is a complete replacement candidate, not a single-agent upsert.
  */
 export declare function customerConfigFullAgentListReplacePaths(current: unknown, slug: string): string[];
-export declare function customerConfigAgentRosterReplacePaths(current: unknown, slug: string): string[];
+export declare function customerConfigAgentRosterReplacePaths(current: unknown, slug: string, additionalAgentIds?: readonly string[]): string[];

@@ -569,10 +569,11 @@ export async function applyOpenClawActivationManifest(
           },
         };
       },
-      // Rebuilding the agent's bindings can shrink the array (stale entries dropped), and
-      // importing over residue merges an account fragment whose arrays can shrink too — the
-      // gateway's destructive-array guard requires both confirmed.
-      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(current, manifest.slug),
+      buildReplacePaths: (current) => customerConfigAgentRosterReplacePaths(
+        current,
+        manifest.slug,
+        normalizedAuthInheritanceAnchor ? [normalizedAuthInheritanceAnchor.agentId] : [],
+      ),
       logPrefix: `[import:${manifest.slug}]`,
     },
     {

@@ -457,6 +457,49 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries).not.toHaveProperty("octogee-bob-coach");
   });
 
+  it.each(["entries", "list"] as const)("confirms stale auth anchor array replacement in a %s roster", async (roster) => {
+    const anchor = {
+      id: "octogee-unmatched-route",
+      tools: { profile: "minimal", deny: ["exec", "process"] },
+    };
+    const denyPath = roster === "entries"
+      ? `agents.entries.${anchor.id}.tools.deny`
+      : "agents.list[].tools.deny";
+    const staleAnchor = { tools: { profile: "minimal", deny: ["exec", "process", "browser"] } };
+    const configPatch = vi.fn(async (patch: unknown, _hash: string, options?: { replacePaths: string[] }) => {
+      expect(options?.replacePaths).toContain(denyPath);
+      expect(options?.replacePaths).not.toContain("agents.entries.octogee-bob-coach.tools.deny");
+      return { hash: "h2", config: patch };
+    });
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: roster === "entries" ? { entries: {
+            [anchor.id]: staleAnchor,
+            "octogee-bob-coach": { tools: { deny: ["exec"] } },
+          } } : { list: [{ id: anchor.id, ...staleAnchor }] },
+          bindings: [],
+        },
+      })),
+      configPatch,
+    };
+
+    await applyOpenClawActivationManifest(manifest(), {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+      authInheritanceAnchor: { agentId: anchor.id, agent: anchor },
+    });
+
+    expect(configPatch).toHaveBeenCalledOnce();
+    expect(configPatch.mock.calls[0]?.[0]).toMatchObject({
+      agents: roster === "entries"
+        ? { entries: { [anchor.id]: { tools: anchor.tools } } }
+        : { list: expect.arrayContaining([expect.objectContaining(anchor)]) },
+    });
+  });
+
   it("adds the Builder auth anchor to a default-less list roster", async () => {
     const anchor = { id: "octogee-unmatched-route", heartbeat: { every: "0m" } };
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));

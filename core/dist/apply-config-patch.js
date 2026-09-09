@@ -542,11 +542,22 @@ function customerKeyedAgentEntryArrayPaths(current, slug) {
         ? collectArrayPathsUnder(entry, `agents.entries.${agentId}`)
         : []);
 }
-export function customerConfigAgentRosterReplacePaths(current, slug) {
-    return keyedAgentEntries(current)
+export function customerConfigAgentRosterReplacePaths(current, slug, additionalAgentIds = []) {
+    const entries = keyedAgentEntries(current);
+    const additionalPaths = additionalAgentIds.flatMap((agentId) => {
+        if (entries)
+            return collectArrayPathsUnder(entries[agentId], `agents.entries.${agentId}`);
+        const list = current?.agents?.list;
+        const agent = Array.isArray(list)
+            ? list.find((entry) => isPlainObject(entry) && entry.id === agentId)
+            : undefined;
+        return collectArrayPathsUnder(agent, "agents.list[]");
+    });
+    const paths = entries
         ? [
             ...customerKeyedAgentEntryArrayPaths(current, slug),
             ...customerConfigReplacePaths(current, slug),
         ]
         : customerConfigFullAgentListReplacePaths(current, slug);
+    return [...new Set([...paths, ...additionalPaths])];
 }
