@@ -5,7 +5,6 @@ import {
   compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
   isAcceptingSharedGateway,
-  isLegacySharedGatewayId,
   isSharedPoolSlotId,
   nextSharedPoolSlotId,
   parseSharedGatewayAutoscalingConfig,
@@ -59,14 +58,7 @@ describe("shared pool slot ids", () => {
     expect(sharedPoolSlotOrdinal("shared-a")).toBeNull();
   });
 
-  it("keeps the named cutover members recognisable until they are uninstalled", () => {
-    expect(isLegacySharedGatewayId("shared-a")).toBe(true);
-    expect(isLegacySharedGatewayId("shared-d")).toBe(true);
-    expect(isLegacySharedGatewayId("shared-0")).toBe(false);
-    expect(isLegacySharedGatewayId("shared-e")).toBe(false);
-  });
-
-  it("orders slots numerically before legacy members", () => {
+  it("orders slots numerically, with any other id after them", () => {
     expect(["shared-b", "shared-10", "shared-2", "shared-a", "shared-0"].sort(compareSharedGatewayIds))
       .toEqual(["shared-0", "shared-2", "shared-10", "shared-a", "shared-b"]);
   });
@@ -94,13 +86,13 @@ describe("deriveSharedGatewayPoolConfig", () => {
     });
   });
 
-  it("anchors on the first running slot, then the first running member, then the first member", () => {
+  it("anchors on the first running member in slot order, else the first member", () => {
     expect(deriveSharedGatewayPoolConfig([
-      root("shared-a"),
+      root("shared-2"),
       root("shared-0", { desiredStatus: "paused" }),
-    ])?.defaultGatewayId).toBe("shared-a");
+    ])?.defaultGatewayId).toBe("shared-2");
     expect(deriveSharedGatewayPoolConfig([
-      root("shared-a", { desiredStatus: "paused" }),
+      root("shared-1", { desiredStatus: "paused" }),
       root("shared-0", { desiredStatus: "paused" }),
     ])?.defaultGatewayId).toBe("shared-0");
   });

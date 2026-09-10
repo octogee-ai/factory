@@ -1,6 +1,5 @@
 import { isOperatorManaged, isValidGatewayId, } from "./glm.js";
 export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-(0|[1-9]\d*)$/;
-export const LEGACY_SHARED_GATEWAY_IDS = ["shared-a", "shared-b", "shared-c", "shared-d"];
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 const SHARED_POOL_MEMBER_STATUSES = new Set(["running", "draining", "paused"]);
@@ -16,9 +15,6 @@ export function isSharedPoolSlotId(id) {
 export function sharedPoolSlotOrdinal(id) {
     const match = SHARED_POOL_SLOT_ID_PATTERN.exec(id);
     return match ? Number(match[1]) : null;
-}
-export function isLegacySharedGatewayId(id) {
-    return typeof id === "string" && LEGACY_SHARED_GATEWAY_IDS.includes(id);
 }
 export function compareSharedGatewayIds(left, right) {
     const leftOrdinal = sharedPoolSlotOrdinal(left);
@@ -55,9 +51,7 @@ export function deriveSharedGatewayPoolConfig(roots, sharedGatewayAutoscaling) {
     const running = new Set(roots
         .filter((root) => isSharedPoolMemberRoot(root) && root.desiredStatus === "running")
         .map((root) => root.gatewayId));
-    const defaultGatewayId = sharedGatewayIds.find((gatewayId) => running.has(gatewayId) && isSharedPoolSlotId(gatewayId)) ??
-        sharedGatewayIds.find((gatewayId) => running.has(gatewayId)) ??
-        sharedGatewayIds[0];
+    const defaultGatewayId = sharedGatewayIds.find((gatewayId) => running.has(gatewayId)) ?? sharedGatewayIds[0];
     return {
         defaultGatewayId,
         sharedGatewayIds: [

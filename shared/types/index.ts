@@ -282,13 +282,11 @@ export type {
 export {
   DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
   DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
-  LEGACY_SHARED_GATEWAY_IDS,
   SHARED_POOL_SLOT_ID_PATTERN,
   authoritativeSharedGatewayLoad,
   compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
   isAcceptingSharedGateway,
-  isLegacySharedGatewayId,
   isSharedPoolMemberRoot,
   isSharedPoolSlotId,
   nextSharedPoolSlotId,

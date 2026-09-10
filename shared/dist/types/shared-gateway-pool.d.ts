@@ -1,6 +1,5 @@
 import { type GatewayDesiredStatus } from "./glm.js";
 export declare const SHARED_POOL_SLOT_ID_PATTERN: RegExp;
-export declare const LEGACY_SHARED_GATEWAY_IDS: readonly ["shared-a", "shared-b", "shared-c", "shared-d"];
 export declare const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export declare const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 export interface SharedGatewayAutoscalingConfig {
@@ -39,9 +38,6 @@ export type SharedPoolScalingDecision = {
     reason: "minimum-replicas" | "scale-out";
 } | {
     kind: "follow-platform-release";
-    gatewayId: string;
-} | {
-    kind: "drain-legacy-member";
     gatewayId: string;
 } | {
     kind: "begin-drain";
@@ -93,7 +89,6 @@ export interface SharedPoolMemberRoot {
 }
 export declare function isSharedPoolSlotId(id: unknown): id is string;
 export declare function sharedPoolSlotOrdinal(id: string): number | null;
-export declare function isLegacySharedGatewayId(id: unknown): boolean;
 export declare function compareSharedGatewayIds(left: string, right: string): number;
 export declare function nextSharedPoolSlotId(existingGatewayIds: readonly string[]): string;
 export declare function isSharedPoolMemberRoot(root: SharedPoolMemberRoot): boolean;
