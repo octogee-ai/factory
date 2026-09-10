@@ -83,25 +83,25 @@ async function reconcileProjectMembership(
   return channelIds.length > 0 && project.projectAgentConfigured && !project.projectAgentMmUserId;
 }
 
+export interface ProjectCoachMembershipResult {
+  pendingProjectIds: string[];
+}
+
 export async function reconcileCoachProjectMembership(
   input: ProjectCoachMembershipInput,
   call: MattermostCall = mattermostAdminCall,
-): Promise<void> {
+): Promise<ProjectCoachMembershipResult> {
   const projects = [...input.projects].sort((left, right) =>
     left.projectId.localeCompare(right.projectId));
   assertExclusiveChannelOwnership(projects);
 
-  const missingAgents = new Set<string>();
+  const pendingProjectIds: string[] = [];
   for (const project of projects) {
     if (await reconcileProjectMembership(project, input.coachMmUserId, call)) {
-      missingAgents.add(project.projectId);
+      pendingProjectIds.push(project.projectId);
     }
   }
-  if (missingAgents.size > 0) {
-    throw new Error(
-      `enabled project agents are not ready: ${[...missingAgents].sort().join(", ")}`,
-    );
-  }
+  return { pendingProjectIds };
 }
 
 async function mattermostAdminCall(

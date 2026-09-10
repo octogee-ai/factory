@@ -123,6 +123,7 @@ import {
 import {
   reconcileCoachProjectMembership,
   type ProjectCoachMembershipInput,
+  type ProjectCoachMembershipResult,
 } from "../lib/project-coach-membership.js";
 import {
   InMemoryNpmCacheCapabilityStore,
@@ -226,7 +227,7 @@ type ResolveChatIdentity = (
 
 interface FleetBrokerRouteDeps {
   platformAdminMmUserId?: string;
-  reconcileCoachProjectMembership?: (input: ProjectCoachMembershipInput) => Promise<void>;
+  reconcileCoachProjectMembership?: (input: ProjectCoachMembershipInput) => Promise<ProjectCoachMembershipResult>;
   provisionMattermost?: (input: {
     uid: string;
     userData: Record<string, unknown>;
@@ -1767,7 +1768,7 @@ type ResolvedFleetBrokerRouteDeps = {
   verifyOwnerWorkspaceTurn: OwnerWorkspaceTurnVerifier;
   webResearch: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
   now: () => number;
-  reconcileCoachProjectMembership: (input: ProjectCoachMembershipInput) => Promise<void>;
+  reconcileCoachProjectMembership: (input: ProjectCoachMembershipInput) => Promise<ProjectCoachMembershipResult>;
   npmCacheCapabilities: NpmCacheCapabilityStore;
   npmCacheRegistryUrl: string;
   reportNpmCacheCapabilityFailure: NonNullable<
@@ -1783,7 +1784,7 @@ function ownerWorkspaceTurnVerifier(
 
 function projectCoachMembershipReconciler(
   opts: FleetBrokerRouteDeps,
-): (input: ProjectCoachMembershipInput) => Promise<void> {
+): (input: ProjectCoachMembershipInput) => Promise<ProjectCoachMembershipResult> {
   return opts.reconcileCoachProjectMembership ?? reconcileCoachProjectMembership;
 }
 
@@ -2059,7 +2060,7 @@ function installSnapshotRoutes(
       coachSecret.data() as Record<string, unknown> | undefined,
     );
     const agentByProject = new Map(projectAgents.map((agent) => [agent.projectId, agent]));
-    await deps.reconcileCoachProjectMembership({
+    const { pendingProjectIds } = await deps.reconcileCoachProjectMembership({
       coachMmUserId: coach.coachMmUserId,
       projects: collectedChannels.projectMemberships.map(({ projectId, channelIds }) => {
         const agent = agentByProject.get(projectId);
@@ -2071,7 +2072,14 @@ function installSnapshotRoutes(
         };
       }),
     });
-    res.status(204).end();
+    if (pendingProjectIds.length > 0) {
+      logger.warn("[fleet-broker] project agents pending mint; coach mounted without them", {
+        gatewayId: bound.gatewayId,
+        slug,
+        pendingProjectIds,
+      });
+    }
+    res.json({ pendingProjectAgents: pendingProjectIds });
   });
 }
 
