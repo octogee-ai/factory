@@ -31,7 +31,10 @@ function heldReturnOperationId(data: FirebaseFirestore.DocumentData | undefined)
 function returnOperationStatus(snap: FirebaseFirestore.DocumentSnapshot): ReturnOperationStatus {
   if (!snap.exists) return "missing";
   const status = snap.data()?.status;
-  return typeof status === "string" ? status as OperationStatus : "missing";
+  if (typeof status !== "string") {
+    throw new Error(`return operation ${snap.id} has a malformed status (${String(status)}); hold retained`);
+  }
+  return status as OperationStatus;
 }
 
 function releaseJournalId(gatewayId: string, returnOperationId: string): string {
@@ -89,13 +92,18 @@ export async function runNativeReturnHoldReaperTick(
   for (const doc of docs) {
     const returnOperationId = heldReturnOperationId(doc.data());
     if (returnOperationId === null) continue;
-    const status = await releaseTerminalHold(deps, doc.id, returnOperationId);
-    if (status === null) continue;
-    released += 1;
-    deps.log(
-      `[native-return-hold-reaper] ⚠ released the native return hold on ${doc.id}: ` +
-      `return operation ${returnOperationId} is ${status} and never released it`,
-    );
+    try {
+      const status = await releaseTerminalHold(deps, doc.id, returnOperationId);
+      if (status === null) continue;
+      released += 1;
+      deps.log(
+        `[native-return-hold-reaper] ⚠ released the native return hold on ${doc.id}: ` +
+        `return operation ${returnOperationId} is ${status} and never released it`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.log(`[native-return-hold-reaper] ⚠ ${doc.id}: hold for ${returnOperationId} not released — ${message}`);
+    }
   }
   return { scanned: docs.length, released };
 }

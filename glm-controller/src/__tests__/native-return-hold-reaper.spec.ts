@@ -104,6 +104,23 @@ describe("native return hold reaper", () => {
     expect(h.docs["glmGateways/native"].vmHome.returnOperationId).toBe("builder-return-native");
   });
 
+  it.each([{ kind: "migrate-customer" }, { kind: "migrate-customer", status: 7 }])(
+    "keeps the hold and logs when the return operation record is malformed (%o), still sweeping other gateways",
+    async (operation) => {
+      const h = harness({
+        gateways: { broken: heldGateway("builder-return-broken"), native: heldGateway("builder-return-native") },
+        operations: {
+          "builder-return-broken": operation,
+          "builder-return-native": { kind: "migrate-customer", status: "failed" },
+        },
+      });
+      expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 2, released: 1 });
+      expect(h.docs["glmGateways/broken"].vmHome.returnOperationId).toBe("builder-return-broken");
+      expect(h.docs["glmGateways/native"].vmHome.returnOperationId).toBeUndefined();
+      expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/native-return-hold-reaper.*broken.*builder-return-broken.*malformed status/));
+    },
+  );
+
   it("ignores gateways without a return hold, including plain park checkpoints", async () => {
     const h = harness({
       gateways: {
