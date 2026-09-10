@@ -9,15 +9,16 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
+import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+import { createTenantDenialReporter, type TenantDenial, type TenantDenialReporter, type TenantDenialTenant } from "./tenant-denial.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type PlatformBinding = Extract<Express.Request["boundTenant"], { kind: "platform" }>;
 
 export interface TenantEnforcementOptions {
   db?: Pick<Firestore, "collection">;
+  onDenied?: TenantDenialReporter;
 }
-
-const FORBIDDEN = { error: "forbidden" } as const;
 
 // The only internal routes a platform tenant (the octogee-cron KSA) may reach.
 // Must stay in lockstep with the routes guarded by requireInternalPlatformAuth.
@@ -78,6 +79,8 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/agent-projects/create",
   "/internal/agent-projects/list",
   "/internal/agent-projects/set-recipe",
+  "/internal/agent-projects/delegate",
+  "/internal/agent-projects/identity",
   "/internal/project-runs/capability",
   "/internal/project-runs/start",
   "/internal/project-runs/status",
@@ -273,77 +276,115 @@ async function uidsAllowedForRequest(
   return uids.length === 0 || allUidsBelongToGateway(db, uids, gatewayId);
 }
 
-async function gatewayBindingAuthorized(
+async function gatewayDenialReason(
   db: Pick<Firestore, "collection">,
   bound: GatewayBinding,
   req: Request,
-): Promise<boolean> {
+): Promise<string | null> {
   const gatewayIds = requestedGatewayIds(req);
   const requestTargetsDifferentGateway = gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId);
   if (gatewayIds.length > 0 && requestTargetsDifferentGateway) {
-    return false;
+    return "request names a gatewayId other than the bound gateway";
   }
   if (routeIsPlatformWideNotificationProducer(req)) {
-    return false;
+    return "route is platform-only";
   }
   if (bound.finalHomeCheckpoint) {
-    return FINAL_HOME_CHECKPOINT_ROUTES.has(req.path);
+    return FINAL_HOME_CHECKPOINT_ROUTES.has(req.path)
+      ? null
+      : "retired computer bindings may only reach final-checkpoint routes";
   }
 
   // These brokers perform route-specific authorization from their own body
   // shape. Keeping this as an explicit route allowlist avoids turning
   // gatewayId into a generic skeleton key for future internal routes.
   if (isSelfScopedInternalBrokerRoute(req.path)) {
-    return true;
+    return null;
   }
+  return targetedDenialReason(db, bound, req, gatewayIds.length > 0);
+}
 
+async function targetedDenialReason(
+  db: Pick<Firestore, "collection">,
+  bound: GatewayBinding,
+  req: Request,
+  namesBoundGateway: boolean,
+): Promise<string | null> {
   const uids = requestedUids(req);
   if (!(await uidsAllowedForRequest(db, uids, bound.gatewayId, req))) {
-    return false;
+    return "request names a user not assigned to the bound gateway";
   }
 
   const slugs = requestedSlugs(req);
   if (slugs.length > 0 && !(await allSlugsAllowedForRequest(db, slugs, bound, req))) {
-    return false;
+    return "request names a workspace slug not assigned to the bound gateway";
   }
 
   const flowId = requestedFlowId(req);
   if (flowId && !(await flowBelongsToGateway(db, flowId, bound.gatewayId))) {
-    return false;
+    return "request names a flow owned by another gateway";
   }
 
-  return uids.length > 0 || slugs.length > 0 || gatewayIds.length > 0 || flowId !== null;
+  return uids.length > 0 || slugs.length > 0 || namesBoundGateway || flowId !== null
+    ? null
+    : "route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow";
+}
+
+function denialTenant(bound: Express.Request["boundTenant"]): TenantDenialTenant {
+  if (bound?.kind === "gateway") {
+    return { kind: "gateway", gatewayId: bound.gatewayId, ...(bound.ownerUid ? { ownerUid: bound.ownerUid } : {}) };
+  }
+  if (bound?.kind === "platform") return { kind: "platform", actor: bound.actor };
+  return { kind: "unbound" };
+}
+
+function requestedAgentId(req: Request): string | null {
+  return stringValue(body(req).agentId);
 }
 
 export function createTenantEnforcementMiddleware(
   opts: TenantEnforcementOptions = {},
 ): (req: Request, res: Response, next: NextFunction) => void {
   const db = opts.db ?? defaultDb;
+  const onDenied = opts.onDenied ?? createTenantDenialReporter({ db });
+  const deny = (req: Request, res: Response, reason: string): void => {
+    const denial: TenantDenial = {
+      method: req.method,
+      path: req.path,
+      reason,
+      tenant: denialTenant(req.boundTenant),
+      agentId: requestedAgentId(req),
+    };
+    onDenied(denial).catch((error: unknown) => {
+      logger.error("[tenant-enforcement] denial reporter threw", { ...denial, error });
+    });
+    res.status(403).json({ error: `forbidden: ${reason}`, code: "tenant-enforcement" });
+  };
   return (req, res, next) => {
     const bound = req.boundTenant;
     if (bound?.kind === "platform") {
       if (platformBindingAuthorized(bound, req.path)) {
         next();
       } else {
-        res.status(403).json(FORBIDDEN);
+        deny(req, res, `platform actor ${bound.actor} is not admitted on this route`);
       }
       return;
     }
     if (!bound || bound.kind !== "gateway") {
-      res.status(403).json(FORBIDDEN);
+      deny(req, res, "request carries no gateway tenant binding");
       return;
     }
 
-    gatewayBindingAuthorized(db, bound, req)
-      .then((allowed) => {
-        if (!allowed) {
-          res.status(403).json(FORBIDDEN);
+    gatewayDenialReason(db, bound, req)
+      .then((reason) => {
+        if (reason !== null) {
+          deny(req, res, reason);
           return;
         }
         next();
       })
-      .catch(() => {
-        res.status(403).json(FORBIDDEN);
+      .catch((error: unknown) => {
+        deny(req, res, `authorization check failed: ${error instanceof Error ? error.message : String(error)}`);
       });
   };
 }

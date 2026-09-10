@@ -1,8 +1,9 @@
 import express from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTenantEnforcementMiddleware } from "../tenant-enforcement.js";
+import type { TenantDenial, TenantDenialReporter } from "../tenant-denial.js";
 
 type UserDoc = Record<string, unknown>;
 type FlowDoc = Record<string, unknown>;
@@ -80,6 +81,7 @@ function app(opts: {
   flows?: Record<string, FlowDoc>;
   operations?: Record<string, OperationDoc>;
   gateways?: Record<string, Record<string, unknown>>;
+  onDenied?: TenantDenialReporter;
 }) {
   const a = express();
   a.use(express.json());
@@ -88,6 +90,7 @@ function app(opts: {
     next();
   });
   const enforcement = createTenantEnforcementMiddleware({
+    onDenied: opts.onDenied ?? (async () => {}),
     db: fakeDb({
       users:
         opts.users ?? {
@@ -123,6 +126,8 @@ function app(opts: {
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
   a.post("/internal/agent-projects/set-recipe", enforcement, handler);
+  a.post("/internal/agent-projects/delegate", enforcement, handler);
+  a.post("/internal/agent-projects/identity", enforcement, handler);
   a.post("/internal/agent-board/list", enforcement, handler);
   a.post("/internal/agent-board/card-read", enforcement, handler);
   a.post("/internal/agent-board/card-create", enforcement, handler);
@@ -310,7 +315,87 @@ describe("tenant enforcement middleware", () => {
       .send({});
 
     expect(res.status).toBe(403);
-    expect(res.body).toEqual({ error: "forbidden" });
+    expect(res.body).toEqual({
+      error: "forbidden: request carries no gateway tenant binding",
+      code: "tenant-enforcement",
+    });
+  });
+
+  describe("denial reporting", () => {
+    function denialCapture() {
+      const denials: TenantDenial[] = [];
+      const onDenied = vi.fn(async (denial: TenantDenial) => { denials.push(denial); });
+      return { denials, onDenied };
+    }
+
+    it("reports a fall-through deny with the reason, the bound tenant, and the calling agent", async () => {
+      const { denials, onDenied } = denialCapture();
+      const res = await request(app({ boundTenant: BENDER, onDenied }))
+        .post("/internal/probe")
+        .send({ agentId: "octogee-alice-coach" });
+
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({
+        error: "forbidden: route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow",
+        code: "tenant-enforcement",
+      });
+      expect(denials).toEqual([{
+        method: "POST",
+        path: "/internal/probe",
+        reason: "route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow",
+        tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+        agentId: "octogee-alice-coach",
+      }]);
+    });
+
+    it("reports a foreign-gateway deny and a platform-actor deny with their own reasons", async () => {
+      const { denials, onDenied } = denialCapture();
+      await request(app({ boundTenant: BENDER, onDenied }))
+        .post("/internal/agent-projects/list")
+        .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
+        .expect(403);
+      await request(app({ boundTenant: { kind: "platform", actor: "cron" }, onDenied }))
+        .post("/internal/probe")
+        .send({})
+        .expect(403);
+
+      expect(denials.map((d) => [d.tenant, d.reason, d.agentId])).toEqual([
+        [
+          { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+          "request names a gatewayId other than the bound gateway",
+          "octogee-alice-coach",
+        ],
+        [{ kind: "platform", actor: "cron" }, "platform actor cron is not admitted on this route", null],
+      ]);
+    });
+
+    it("reports an unbound deny without an agent", async () => {
+      const { denials, onDenied } = denialCapture();
+      await request(app({ onDenied })).post("/internal/probe").send({ agentId: 42 }).expect(403);
+      expect(denials).toEqual([{
+        method: "POST",
+        path: "/internal/probe",
+        reason: "request carries no gateway tenant binding",
+        tenant: { kind: "unbound" },
+        agentId: null,
+      }]);
+    });
+
+    it("does not report an admitted call", async () => {
+      const { denials, onDenied } = denialCapture();
+      await request(app({ boundTenant: BENDER, onDenied }))
+        .post("/internal/agent-projects/list")
+        .send({ agentId: "octogee-alice-coach" })
+        .expect(200);
+      expect(denials).toEqual([]);
+    });
+
+    it("still answers 403 when the reporter rejects", async () => {
+      const onDenied = vi.fn(async () => { throw new Error("inbox down"); });
+      const res = await request(app({ boundTenant: BENDER, onDenied })).post("/internal/probe").send({});
+      expect(res.status).toBe(403);
+      expect(onDenied).toHaveBeenCalledOnce();
+    });
   });
 
   it("allows a gateway-bound caller to target its own gatewayId only", async () => {
@@ -617,7 +702,7 @@ describe("tenant enforcement middleware", () => {
   });
 
   it("delegates agent project routes only for the bound gateway tenant", async () => {
-    for (const route of ["create", "list", "set-recipe"]) {
+    for (const route of ["create", "list", "set-recipe", "delegate", "identity"]) {
       const ownedGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/agent-projects/${route}`)
         .send({ agentId: "octogee-alice-coach" });

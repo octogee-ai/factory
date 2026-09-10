@@ -185,7 +185,10 @@ describe("POST /internal/automations/authorize", () => {
     const response = await pending;
 
     expect(response.status).toBe(403);
-    expect(response.body).toEqual({ error: "forbidden" });
+    expect(response.body).toEqual({
+      error: "forbidden: request carries no gateway tenant binding",
+      code: "tenant-enforcement",
+    });
   });
 
   it("returns the owner slug only when the authenticated user assignment and workspace ownership match the bound gateway", async () => {
