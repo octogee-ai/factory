@@ -1,3 +1,4 @@
+import type { CrashLoopEvictionClaim } from "./surge-crashloop-eviction.js";
 import { createMigrationProgress } from "./migration-progress.js";
 import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
@@ -15,6 +16,7 @@ export interface SurgePod {
   podIP: string;
   ready: boolean;
   terminating: boolean;
+  crashLooping: boolean;
 }
 
 export interface SurgePodSnapshot {
@@ -84,6 +86,8 @@ export interface SurgeCustomerHandoffDeps {
   reportMigrationProgress: (input: { gatewayId: string; targetPod: SurgePod; event: MigrationProgressRequestBody }) => Promise<unknown>;
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
   readPodHealth: (pod: SurgePod, gatewayId: string) => Promise<SurgePodHealth | null>;
+  deleteCrashLoopingPod: (input: { gatewayId: string; pod: SurgePod }) => Promise<void>;
+  claimCrashLoopEviction: (input: { gatewayId: string; imageTag: string; pod: SurgePod }) => Promise<CrashLoopEvictionClaim>;
   readAssignments: (gatewayId: string) => Promise<SurgeAssignment[]>;
   markAssignment: (input: {
     gatewayId: string;
@@ -1263,10 +1267,50 @@ async function standDownForSupersedingRelease(
   return { ready: false };
 }
 
-export async function reconcileSurgeCustomerHandoff(
+async function evictCrashLoopingSurgeTargets(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
-): Promise<{ ready: boolean }> {
+  pods: readonly SurgePod[],
+  healthByUid: ReadonlyMap<string, SurgePodHealth>,
+): Promise<boolean> {
+  const predecessorServing = pods.some((pod) =>
+    pod.ready && !pod.terminating && healthByUid.has(pod.uid));
+  const wedged = pods.filter((pod) =>
+    pod.crashLooping && !pod.ready && !pod.terminating && !healthByUid.has(pod.uid));
+  if (!predecessorServing || wedged.length === 0) return false;
+  let evicted = false;
+  for (const pod of wedged) {
+    const claim = await deps.claimCrashLoopEviction({ gatewayId: input.gatewayId, imageTag: input.desiredImageTag, pod });
+    if (!claim.allowed) {
+      deps.log(
+        `[surge-handoff] gateway=${input.gatewayId} leaving crash-looping surge target pod=${pod.name} in place: ` +
+          `the eviction budget of ${claim.budget} for image ${input.desiredImageTag} is spent; repair the release or delete the pod by hand`,
+      );
+      continue;
+    }
+    await deps.deleteCrashLoopingPod({ gatewayId: input.gatewayId, pod });
+    deps.log(
+      `[surge-handoff] gateway=${input.gatewayId} deleted crash-looping surge target pod=${pod.name} ` +
+        `(eviction ${claim.count} of ${claim.budget} for image ${input.desiredImageTag}); ` +
+        "its Deployment recreates it with a fresh emptyDir and the handoff restarts from zero",
+    );
+    evicted = true;
+  }
+  return evicted;
+}
+
+interface SurgePassObservation {
+  pods: readonly SurgePod[];
+  observedPodUids: readonly string[];
+  healthByUid: ReadonlyMap<string, SurgePodHealth>;
+  target: SurgePod;
+  targetHealth: SurgePodHealth;
+}
+
+async function observeSurgePass(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+): Promise<SurgePassObservation | null> {
   const { pods, observedPodUids } = await deps.listPods(input.gatewayId);
   const healthEntries = await Promise.all(pods.map(async (pod) => [
     pod.uid,
@@ -1275,6 +1319,7 @@ export async function reconcileSurgeCustomerHandoff(
   const healthByUid = new Map(
     healthEntries.filter((entry): entry is readonly [string, SurgePodHealth] => entry[1] !== null),
   );
+  if (await evictCrashLoopingSurgeTargets(deps, input, pods, healthByUid)) return null;
   const target = selectTarget(pods, healthByUid, input.desiredImageTag);
   if (!target) {
     const assignments = await deps.readAssignments(input.gatewayId);
@@ -1285,10 +1330,19 @@ export async function reconcileSurgeCustomerHandoff(
       null,
       { observedPodUids },
     );
-    return { ready: false };
+    return null;
   }
   const targetHealth = healthByUid.get(target.uid);
-  if (!targetHealth) return { ready: false };
+  return targetHealth ? { pods, observedPodUids, healthByUid, target, targetHealth } : null;
+}
+
+export async function reconcileSurgeCustomerHandoff(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+): Promise<{ ready: boolean }> {
+  const observation = await observeSurgePass(deps, input);
+  if (!observation) return { ready: false };
+  const { pods, observedPodUids, healthByUid, target, targetHealth } = observation;
 
   const ownedBy = operationId(input.gatewayId, target.uid);
   const source = selectSource(pods, target);

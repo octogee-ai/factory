@@ -41,6 +41,7 @@ interface PodList {
       phase?: string;
       podIP?: string;
       conditions?: Array<{ type?: string; status?: string }>;
+      containerStatuses?: Array<{ state?: { waiting?: { reason?: string } } }>;
     };
   }>;
 }
@@ -68,7 +69,7 @@ export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
   const pods: SurgePod[] = [];
   for (const item of parsed.items ?? []) {
     const { uid, name, deletionTimestamp } = item.metadata ?? {};
-    const { phase, podIP, conditions } = item.status ?? {};
+    const { phase, podIP, conditions, containerStatuses } = item.status ?? {};
     if (uid) observedPodUids.push(uid);
     if (phase !== "Running" || !uid || !name || !podIP) continue;
     pods.push({
@@ -78,6 +79,8 @@ export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
       ready: (conditions ?? []).some((condition) =>
         condition.type === "Ready" && condition.status === "True"),
       terminating: Boolean(deletionTimestamp),
+      crashLooping: (containerStatuses ?? []).some((container) =>
+        container.state?.waiting?.reason === "CrashLoopBackOff"),
     });
   }
   return { pods, observedPodUids };
@@ -104,6 +107,19 @@ export async function listSurgePods(
     );
   }
   return parseSurgePodSnapshot(result.stdout);
+}
+
+export async function deleteSurgePod(
+  runKubectl: SurgeKubectl,
+  namespace: string,
+  pod: SurgePod,
+): Promise<void> {
+  const result = await runKubectl(["-n", namespace, "delete", "pod", pod.name, "--wait=false"]);
+  if (result.code !== 0) {
+    throw new Error(
+      `kubectl delete surge pod ${pod.name} failed: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
 }
 
 export const POD_SESSION_DIGEST_SCRIPT = [

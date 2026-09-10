@@ -109,6 +109,7 @@ import {
 import { pruneSurgeOrphanAssignments } from "./surge-orphan-assignment.js";
 import {
   createSurgePodTransport,
+  deleteSurgePod,
   listSurgePods,
   readPodDurableSessionDigest,
 } from "./surge-customer-handoff-runtime.js";
@@ -308,6 +309,7 @@ import {
   type MirrorDocChange,
 } from "./fleet-informer.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import { claimCrashLoopEviction } from "./surge-crashloop-eviction.js";
 import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
@@ -2459,6 +2461,9 @@ function buildSurgeHandoffDeps(input: {
         log,
       }),
     }),
+    deleteCrashLoopingPod: ({ pod }) => deleteSurgePod(runKubectl, NAMESPACE, pod),
+    claimCrashLoopEviction: ({ gatewayId, imageTag, pod }) =>
+      claimCrashLoopEviction(db, { gatewayId, imageTag, pod, now: Date.now() }),
     readAssignments: async (gatewayId) => {
       const [assignments, userSnapshot] = await Promise.all([
         readAssignmentDocsForGateway(db, gatewayId),

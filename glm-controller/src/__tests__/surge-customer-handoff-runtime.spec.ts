@@ -29,6 +29,7 @@ const source: SurgePod = {
   podIP: "10.0.0.1",
   ready: true,
   terminating: false,
+  crashLooping: false,
 };
 const target: SurgePod = {
   uid: "new",
@@ -36,6 +37,7 @@ const target: SurgePod = {
   podIP: "10.0.0.2",
   ready: false,
   terminating: false,
+  crashLooping: false,
 };
 
 const LOCAL_CORE_PORTABLE_PLAN = fileURLToPath(new URL(
@@ -177,10 +179,27 @@ describe("surge handoff Kubernetes projection", () => {
           podIP: "10.0.0.3",
           ready: false,
           terminating: true,
+          crashLooping: false,
         },
       ],
       observedPodUids: ["old", "new", "gone", "pending"],
     });
+  });
+
+  it("marks a Running pod whose container sits in CrashLoopBackOff", () => {
+    const wedged = parseSurgePodSnapshot(JSON.stringify({
+      items: [{
+        metadata: { uid: "wedged", name: "wedged-pod" },
+        status: {
+          phase: "Running", podIP: "10.0.0.4", conditions: [{ type: "Ready", status: "False" }],
+          containerStatuses: [
+            { name: "gateway-edge", ready: true, state: { running: { startedAt: "now" } } },
+            { name: "gateway", ready: false, restartCount: 6, state: { waiting: { reason: "CrashLoopBackOff" } } },
+          ],
+        },
+      }],
+    }));
+    expect(wedged.pods).toEqual([{ uid: "wedged", name: "wedged-pod", podIP: "10.0.0.4", ready: false, terminating: false, crashLooping: true }]);
   });
 
   it("reads the session digest through kubectl exec so the source may run the prior image", async () => {

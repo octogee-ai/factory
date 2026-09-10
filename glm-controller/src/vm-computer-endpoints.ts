@@ -15,7 +15,7 @@ export function computerEndpointFromVm(gatewayId: string, vm: Partial<GatewayVmS
   ) {
     return null;
   }
-  return { uid: gatewayVmPodName(gatewayId, vm.instanceId), name: vm.instanceName, podIP: vm.internalIp, terminating: false };
+  return { uid: gatewayVmPodName(gatewayId, vm.instanceId), name: vm.instanceName, podIP: vm.internalIp, terminating: false, crashLooping: false };
 }
 
 export async function listComputerEndpoints(

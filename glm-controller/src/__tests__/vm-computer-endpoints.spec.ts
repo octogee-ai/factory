@@ -16,7 +16,7 @@ const vm = {
   status: "RUNNING", provisioningModel: "SPOT", stopReason: null, updatedAt: 1,
 };
 const podSnapshot: SurgePodSnapshot = {
-  pods: [{ uid: "pod-uid", name: "octogee-gateway-b-x-abc", podIP: "10.0.0.2", ready: true, terminating: false }],
+  pods: [{ uid: "pod-uid", name: "octogee-gateway-b-x-abc", podIP: "10.0.0.2", ready: true, terminating: false, crashLooping: false }],
   observedPodUids: ["pod-uid"],
 };
 
@@ -42,10 +42,10 @@ describe("createSurgeEndpointLister", () => {
   it("presents a running computer as the gateway's single endpoint with the readiness the probe reports", async () => {
     const h = lister({ "b-x": { runtime: "gce-vm", vm } }, vi.fn(async () => false));
     expect(await h.listEndpoints("b-x")).toEqual({
-      pods: [{ uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", ready: false, terminating: false }],
+      pods: [{ uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", ready: false, terminating: false, crashLooping: false }],
       observedPodUids: ["octogee-gateway-b-x-vm-4242"],
     });
-    expect(h.ready).toHaveBeenCalledWith({ uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false }, "b-x");
+    expect(h.ready).toHaveBeenCalledWith({ uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false, crashLooping: false }, "b-x");
     expect(h.listPods).not.toHaveBeenCalled();
   });
 
@@ -66,7 +66,7 @@ describe("createSurgeEndpointLister", () => {
 });
 
 describe("createComputerReadinessProbe", () => {
-  const endpoint = { uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false };
+  const endpoint = { uid: "octogee-gateway-b-x-vm-4242", name: "octogee-computer-test-uida", podIP: "172.20.0.9", terminating: false, crashLooping: false };
 
   it("performs the readiness probe the kubelet would against the computer's fleet port", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));

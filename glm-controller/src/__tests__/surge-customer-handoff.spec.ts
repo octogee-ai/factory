@@ -27,6 +27,7 @@ const oldPod: SurgePod = {
   podIP: "10.0.0.1",
   ready: true,
   terminating: false,
+  crashLooping: false,
 };
 const targetPod: SurgePod = {
   uid: "target-uid",
@@ -34,6 +35,7 @@ const targetPod: SurgePod = {
   podIP: "10.0.0.2",
   ready: false,
   terminating: false,
+  crashLooping: false,
 };
 const abandonedPodUid = "11111111-2222-4333-8444-555555555555";
 const abandonedOperationId = `surge-default-${abandonedPodUid}`;
@@ -56,6 +58,8 @@ function assignment(
 
 function harness(input: {
   pods?: SurgePod[];
+  unreachableUids?: string[];
+  evictionBudgetSpent?: boolean;
   observedPodUids?: string[];
   assignments?: SurgeAssignment[];
   targetReleased?: boolean;
@@ -97,7 +101,7 @@ function harness(input: {
         observedPodUids: input.observedPodUids ?? pods.map((pod) => pod.uid),
       };
     }),
-    readPodHealth: vi.fn(async (pod) => ({
+    readPodHealth: vi.fn(async (pod) => input.unreachableUids?.includes(pod.uid) ? null : ({
       status: input.bootingUids?.includes(pod.uid) ? "booting" as const : "ready" as const,
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       fleetSignatureCapability: input.fleetSignatureCapabilityByUid?.[pod.uid] ?? "gateway-scoped",
@@ -114,6 +118,12 @@ function harness(input: {
         ? input.targetMountedCustomers ?? []
         : input.sourceMountedCustomers ?? assignments.map((item) => item.slug),
     })),
+    deleteCrashLoopingPod: vi.fn(async ({ pod }) => {
+      events.push(`delete-pod:${pod.uid}`);
+    }),
+    claimCrashLoopEviction: vi.fn(async () => (
+      input.evictionBudgetSpent ? { allowed: false, count: 3, budget: 3 } : { allowed: true, count: 1, budget: 3 }
+    )),
     stopSourceOpenClaw: vi.fn(async ({ sourcePod, slug }) => {
       events.push(`stop-source:${sourcePod.uid}:${slug}`);
       if (input.stopSourceLegacy) {
@@ -1786,3 +1796,43 @@ describe("surge customer handoff", () => {
     expect(h.assignments()[0]).toMatchObject({ state: "serving" });
   });
 });
+
+describe("crash-looping surge target self-heal", () => {
+  const wedgedTarget: SurgePod = { ...targetPod, crashLooping: true };
+  const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: false, stateMigration: MIGRATE_STATE };
+
+  it("deletes an unreachable crash-looping target so a fresh pod restarts the handoff, while the predecessor keeps serving", async () => {
+    const h = harness({ pods: [oldPod, wedgedTarget], unreachableUids: [wedgedTarget.uid] });
+
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+
+    expect(h.deps.claimCrashLoopEviction).toHaveBeenCalledExactlyOnceWith({ gatewayId: "default", imageTag: "new-sha", pod: wedgedTarget });
+    expect(h.deps.deleteCrashLoopingPod).toHaveBeenCalledExactlyOnceWith({ gatewayId: "default", pod: wedgedTarget });
+    expect(h.events).toEqual([`delete-pod:${wedgedTarget.uid}`]);
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/deleted crash-looping surge target pod=gateway-new \(eviction 1 of 3 for image new-sha\)/));
+  });
+
+  it("leaves the pod in place once the eviction budget for that image is spent, so a broken release stays visible", async () => {
+    const h = harness({ pods: [oldPod, wedgedTarget], unreachableUids: [wedgedTarget.uid], evictionBudgetSpent: true });
+
+    await reconcileSurgeCustomerHandoff(h.deps, input).catch(() => undefined);
+
+    expect(h.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/leaving crash-looping surge target pod=gateway-new in place: the eviction budget of 3 for image new-sha is spent/));
+  });
+
+  it("leaves the pod alone when it is the only pod, when it is merely unreachable, or when it is Ready", async () => {
+    const alone = harness({ pods: [wedgedTarget], unreachableUids: [wedgedTarget.uid] });
+    await reconcileSurgeCustomerHandoff(alone.deps, input);
+    expect(alone.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
+
+    const unreachable = harness({ pods: [oldPod, targetPod], unreachableUids: [targetPod.uid] });
+    await reconcileSurgeCustomerHandoff(unreachable.deps, input);
+    expect(unreachable.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
+
+    const readyButFlagged = harness({ pods: [{ ...oldPod, crashLooping: true }, targetPod] });
+    await reconcileSurgeCustomerHandoff(readyButFlagged.deps, input);
+    expect(readyButFlagged.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
+  });
+});
+
