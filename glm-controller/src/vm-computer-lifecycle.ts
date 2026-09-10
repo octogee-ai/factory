@@ -149,13 +149,21 @@ async function finalHomeCheckpoint(
   throw new Error(`computer ${description.name} is taking its final home checkpoint (requested at ${requestedAt}); parking on a later converge`);
 }
 
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parkedComputerOwner(data: Record<string, unknown> | undefined, description: GatewayVmDescription): string | null {
+  const stamped = (data?.vmInstance as { ownerUid?: unknown } | undefined)?.ownerUid;
+  return nonEmptyString(stamped) ?? nonEmptyString(description.metadata["octogee-owner-uid"]);
+}
+
 async function recordParkedComputer(
   deps: ComputerLifecycleDeps,
   gatewayId: string,
-  data: Record<string, unknown> | undefined,
+  ownerUid: string | null,
   parked: ParkedVmState,
 ): Promise<void> {
-  const ownerUid = typeof data?.ownerUid === "string" && data.ownerUid.length > 0 ? data.ownerUid : null;
   if (!ownerUid) {
     deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: parked ${parked.instanceName} without an owner; it is not replaceable while parked`);
     return;
@@ -289,8 +297,10 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   async function parkComputer(gatewayId: string, opts: ParkComputerOptions = {}): Promise<{ recordExists: boolean; vm: GatewayVmState | null }> {
     const { data, vm } = await readVmRecord(gatewayId);
     if (!vm) return { recordExists: data !== undefined, vm: null };
-    const parked = await stopForIdle(gatewayId, vm, readVmHome(data), opts);
-    if (parked) await recordParkedComputer(deps, gatewayId, data, parked);
+    const description = await stoppableComputer(gatewayId, vm);
+    if (!description) return { recordExists: true, vm: null };
+    const parked = await stopForIdle(gatewayId, vm, description, readVmHome(data), opts);
+    await recordParkedComputer(deps, gatewayId, parkedComputerOwner(data, description), parked);
     return { recordExists: true, vm: parked };
   }
 
@@ -304,11 +314,10 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   async function stopForIdle(
     gatewayId: string,
     vm: GatewayVmState,
+    description: GatewayVmDescription,
     home: Partial<GatewayVmHomeState> | undefined,
     opts: ParkComputerOptions,
-  ): Promise<ParkedVmState | null> {
-    const description = await stoppableComputer(gatewayId, vm);
-    if (!description) return null;
+  ): Promise<ParkedVmState> {
     const checkpoint = needsStop(description)
       ? await finalHomeCheckpoint(deps, gatewayId, description, home, opts)
       : parkedCheckpointFrom(home);

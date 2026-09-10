@@ -626,7 +626,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
     expect(rebound.log).toHaveBeenCalledWith(expect.stringMatching(/leaving octogee-computer-test-uida running: bound to b-new/));
   });
 
-  const ownedDoc = { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", ownerUid: "UidA", vm: { ...recorded }, vmInstance: { enabled: true } };
+  const ownedDoc = { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmInstance: { enabled: true, ownerUid: "UidA" } };
   const userDoc = { provisioning: { openclaw: { gatewayId: "b-x", slug: "mama" } }, tier: "builder" };
 
   it("records the parked computer on the Builder's provisioning record with the checkpoint outcome, keeping the rest of the record", async () => {
@@ -644,7 +644,14 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
       },
     });
 
-    const ownerless = harness({ "glmGateways/b-x": { ...ownedDoc, ownerUid: undefined, vmHome: { checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 1_000, parkRequestedAt: 1_000, lastCheckpoint: { completedAt: 1_500 } } } }, {
+    const vmHome = { checkpointRequestedAt: 1_000, checkpointAcknowledgedAt: 1_000, parkRequestedAt: 1_000, lastCheckpoint: { completedAt: 1_500 } };
+    const unstamped = harness({ "glmGateways/b-x": { ...ownedDoc, vmInstance: { enabled: true }, vmHome }, "users/UidA": { ...userDoc } }, {
+      describe: vi.fn(async () => ({ ...stopped, metadata: { ...stopped.metadata, "octogee-owner-uid": "UidA" } })).mockResolvedValueOnce({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA" } }),
+    }, "172.20.7.7", {}, { clock: { now: 2_000 } });
+    await unstamped.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
+    expect(readPath(unstamped.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER, gatewayId: "b-x", parkedAt: 2_000 });
+
+    const ownerless = harness({ "glmGateways/b-x": { ...ownedDoc, vmInstance: { enabled: true }, vmHome } }, {
       describe: vi.fn(async () => stopped).mockResolvedValueOnce(running),
     }, "172.20.7.7", {}, { clock: { now: 2_000 } });
     await ownerless.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
