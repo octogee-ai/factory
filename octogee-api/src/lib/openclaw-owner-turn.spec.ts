@@ -14,12 +14,44 @@ interface FakeChannel {
   data?: Record<string, unknown>;
 }
 
+interface FakeMember {
+  mattermostUserId?: string;
+  canonicalSource?: string;
+  canonicalState?: string;
+  mattermostChannelId?: string;
+}
+
+const MEMBER_ID = "m".repeat(26);
+
+function activeMember(overrides: FakeMember = {}): FakeMember {
+  return {
+    mattermostUserId: MEMBER_ID,
+    canonicalSource: "mattermost-general",
+    canonicalState: "active",
+    mattermostChannelId: CHANNEL_ID,
+    ...overrides,
+  };
+}
+
 function fakeDb(input: {
   workspaceOwner?: string;
   coachId?: string;
   channels?: FakeChannel[];
+  members?: FakeMember[];
 } = {}) {
   const channels = input.channels ?? [];
+  const members = input.members ?? [];
+  const memberWhere = vi.fn((field: string, _op: string, value: unknown) => ({
+    limit: (count: number) => ({
+      get: async () => ({
+        docs: members
+          .filter((member) => member[field as keyof FakeMember] === value)
+          .slice(0, count)
+          .map((member) => ({ data: () => member })),
+      }),
+    }),
+  }));
+  const collection = vi.fn(() => ({ where: memberWhere }));
   const queryGet = vi.fn(async () => ({
     docs: channels.map((channel) => ({
       ref: { path: channel.path },
@@ -39,8 +71,9 @@ function fakeDb(input: {
       }),
     }),
     collectionGroup,
+    collection,
   };
-  return { db: db as never, collectionGroup, where, limit };
+  return { db: db as never, collectionGroup, where, limit, collection, memberWhere };
 }
 
 function input(
@@ -101,6 +134,58 @@ describe("createOwnerWorkspaceTurnVerifier", () => {
       expect(harness.limit).toHaveBeenCalledWith(2);
     },
   );
+
+  it("allows an active workspace member in a workspace channel under the owner's grant", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/channels/general" }],
+      members: [activeMember()],
+    });
+    const verify = createOwnerWorkspaceTurnVerifier(harness.db);
+
+    await expect(verify(input(context(`channel:${CHANNEL_ID}`, { requesterSenderId: MEMBER_ID })))).resolves.toBe(true);
+    expect(harness.collection).toHaveBeenCalledWith("workspaces/eggman/members");
+    expect(harness.memberWhere).toHaveBeenCalledWith("mattermostUserId", "==", MEMBER_ID);
+  });
+
+  it("does not consult the member mirror for the assigned Builder", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/channels/general" }],
+    });
+    const verify = createOwnerWorkspaceTurnVerifier(harness.db);
+
+    await expect(verify(input(context(`channel:${CHANNEL_ID}`)))).resolves.toBe(true);
+    expect(harness.collection).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["non-member", []],
+    ["revoking member", [activeMember({ canonicalState: "revoking" })]],
+    ["member without a canonical Mattermost source", [activeMember({ canonicalSource: "manual" })]],
+    ["member missing the canonical channel", [activeMember({ mattermostChannelId: undefined })]],
+    ["ambiguous member mapping", [activeMember(), activeMember()]],
+  ])("rejects a %s in a workspace channel", async (_label, members) => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/channels/general" }],
+      members,
+    });
+    const verify = createOwnerWorkspaceTurnVerifier(harness.db);
+
+    await expect(verify(input(context(`channel:${CHANNEL_ID}`, { requesterSenderId: MEMBER_ID })))).resolves.toBe(false);
+  });
+
+  it("keeps the coach-dm direct lane for the assigned Builder only", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/channels/coach-dm" }],
+      members: [activeMember()],
+    });
+    const verify = createOwnerWorkspaceTurnVerifier(harness.db);
+
+    await expect(verify(input(context(`user:${MEMBER_ID}`, { requesterSenderId: MEMBER_ID })))).resolves.toBe(false);
+  });
 
   it("accepts the same exact trusted context from a read-only broker query", async () => {
     const harness = fakeDb({
@@ -238,6 +323,18 @@ describe("createProjectWorkspaceTurnVerifier", () => {
     await expect(verify(projectInput())).resolves.toBe(true);
     expect(harness.where).toHaveBeenCalledWith("mattermost.channelId", "==", CHANNEL_ID);
     expect(harness.limit).toHaveBeenCalledWith(2);
+  });
+
+  it("allows an active workspace member in the project agent's canonical project channel", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/projects/orbit/channels/general" }],
+      members: [activeMember()],
+    });
+    const verify = createProjectWorkspaceTurnVerifier(harness.db);
+
+    await expect(verify(projectInput(projectContext({ requesterSenderId: MEMBER_ID })))).resolves.toBe(true);
+    expect(harness.collection).toHaveBeenCalledWith("workspaces/eggman/members");
   });
 
   it.each([

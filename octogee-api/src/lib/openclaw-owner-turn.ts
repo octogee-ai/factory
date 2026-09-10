@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 
+import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 import {
   isValidCustomChannelName,
   parseAgentId,
@@ -167,6 +168,29 @@ async function workspaceChannelName(
   return channelName;
 }
 
+async function isActiveWorkspaceMember(
+  db: Firestore,
+  slug: string,
+  senderId: string,
+): Promise<boolean> {
+  const snap = await db
+    .collection(`workspaces/${slug}/members`)
+    .where("mattermostUserId", "==", senderId)
+    .limit(2)
+    .get();
+  return snap.docs.length === 1 && isCanonicalWorkspaceMembership(snap.docs[0].data());
+}
+
+async function trustedWorkspaceSender(
+  db: Firestore,
+  slug: string,
+  assignedData: Record<string, unknown>,
+  senderId: string,
+): Promise<boolean> {
+  if (assignedMattermostUserId(assignedData) === senderId) return true;
+  return isActiveWorkspaceMember(db, slug, senderId);
+}
+
 async function isCanonicalProjectChannel(
   db: Firestore,
   channelId: string,
@@ -194,7 +218,6 @@ export function createOwnerWorkspaceTurnVerifier(
       || !context
       || context.accountId !== workspaceCoachMmUsername(parsed.username)
       || assignedData.workspaceId !== parsed.username
-      || assignedMattermostUserId(assignedData) !== context.requesterSenderId
     ) return false;
 
     const workspace = await db.doc(`workspaces/${parsed.username}`).get();
@@ -208,14 +231,23 @@ export function createOwnerWorkspaceTurnVerifier(
     );
     if (!channelName) return false;
     if (context.routeKind === "user") {
-      return context.routeId === context.requesterSenderId && channelName === "coach-dm";
+      return context.routeId === context.requesterSenderId
+        && channelName === "coach-dm"
+        && assignedMattermostUserId(assignedData) === context.requesterSenderId;
     }
-    return context.routeId === context.nativeChannelId;
+    if (context.routeId !== context.nativeChannelId) return false;
+    return trustedWorkspaceSender(db, parsed.username, assignedData, context.requesterSenderId);
   };
 }
 
-async function projectSenderAuthorized(db: Firestore, ownerUid: string, assignedData: Record<string, unknown>, senderId: string): Promise<boolean> {
-  if (assignedMattermostUserId(assignedData) === senderId) return true;
+async function projectSenderAuthorized(
+  db: Firestore,
+  slug: string,
+  ownerUid: string,
+  assignedData: Record<string, unknown>,
+  senderId: string,
+): Promise<boolean> {
+  if (await trustedWorkspaceSender(db, slug, assignedData, senderId)) return true;
   const coach = await db.doc(`agents/${ownerUid}`).get();
   return coach.data()?.mattermost?.userId === senderId;
 }
@@ -239,7 +271,7 @@ export function createProjectWorkspaceTurnVerifier(
     if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
       || workspace.data()?.ownerActive !== true) return false;
 
-    if (!await projectSenderAuthorized(db, ownerUid, assignedData, context.requesterSenderId)) return false;
+    if (!await projectSenderAuthorized(db, parsed.username, ownerUid, assignedData, context.requesterSenderId)) return false;
     return isCanonicalProjectChannel(
       db,
       context.nativeChannelId,
