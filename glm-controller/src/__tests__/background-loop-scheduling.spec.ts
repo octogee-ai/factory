@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startGatewayHeartbeatPoller } from "../gateway-heartbeat-poller.js";
 import { startOrphanHeartbeatReaper } from "../orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "../stuck-op-reaper.js";
+import { startNativeReturnHoldReaper } from "../native-return-hold-reaper.js";
 
 type Start = (work: () => Promise<void>, log: (message: string) => void) => () => void;
 const loops: Array<[string, Start]> = [
@@ -18,6 +19,12 @@ const loops: Array<[string, Start]> = [
     db: {} as Parameters<typeof startStuckOpReaper>[0]["db"],
     now: Date.now, stalenessMs: 1000, intervalMs: 100, log,
     runTick: async () => { await work(); return { scanned: 0, reaped: 0 }; },
+  })],
+  ["native return hold reaper", (work, log) => startNativeReturnHoldReaper({
+    db: {} as Parameters<typeof startNativeReturnHoldReaper>[0]["db"],
+    informer: { glmGateways: () => null },
+    now: Date.now, intervalMs: 100, log,
+    runTick: async () => { await work(); return { scanned: 0, released: 0 }; },
   })],
 ];
 

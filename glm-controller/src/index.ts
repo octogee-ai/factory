@@ -306,6 +306,7 @@ import {
   type MirrorDocChange,
 } from "./fleet-informer.js";
 import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import { completeHealthySharedPoolAddGatewayOperations } from "./shared-pool-add-gateway-recovery.js";
@@ -2328,6 +2329,13 @@ function startControllerBackgroundTasks({
     stalenessMs: 15 * 60 * 1000,
     now: () => Date.now(),
   });
+  const stopNativeReturnHoldReaper = startNativeReturnHoldReaper({
+    db,
+    informer,
+    log,
+    intervalMs: 60_000,
+    now: () => Date.now(),
+  });
   const stopHelmRecoverySweeper = startHelmRecoverySweeper({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
     isRecoverableRevision: (gatewayId) => isRecoverableGatewayRelease(db, gatewayId),
@@ -2391,6 +2399,7 @@ function startControllerBackgroundTasks({
     stopPoller,
     stopReaper,
     stopStuckOpReaper,
+    stopNativeReturnHoldReaper,
     stopHelmRecoverySweeper,
     stopPlacementPolicyReconciler,
     stopDisruptionObserver,
