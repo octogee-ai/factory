@@ -2,8 +2,11 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=zones.sh
+source "$HERE/zones.sh"
 PROJECT=""
 ZONE="us-west1-b"
+FALLBACK_ZONES=""
 IMAGE=""
 FAMILY="octogee-computer"
 MACHINE="n2-standard-4"
@@ -15,7 +18,7 @@ SERVICE_ACCOUNT=""
 
 usage() {
   cat <<EOF
-usage: $0 --project <gcp-project> [--zone $ZONE] [--image <name> | --family $FAMILY]
+usage: $0 --project <gcp-project> [--zone $ZONE] [--fallback-zones <zone,zone>] [--image <name> | --family $FAMILY]
           [--machine-type $MACHINE] [--stop-start] [--keep] [--service-account <email>]
 
 Boots a VM from the image, waits for SSH (key delivered through instance
@@ -29,6 +32,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) PROJECT="$2"; shift 2 ;;
     --zone) ZONE="$2"; shift 2 ;;
+    --fallback-zones) FALLBACK_ZONES="$2"; shift 2 ;;
     --image) IMAGE="$2"; shift 2 ;;
     --family) FAMILY="$2"; shift 2 ;;
     --machine-type) MACHINE="$2"; shift 2 ;;
@@ -85,10 +89,10 @@ wait_desktop() {
 image_args=(--image-family "$FAMILY" --image-project "$PROJECT")
 [[ -n "$IMAGE" ]] && image_args=(--image "$IMAGE" --image-project "$PROJECT")
 t_create=$(date +%s)
-gcloud compute instances create "$NAME" --project "$PROJECT" --zone "$ZONE" --machine-type "$MACHINE" \
+create_instance_in_first_available_zone "$NAME" --project "$PROJECT" --machine-type "$MACHINE" \
   "${image_args[@]}" --boot-disk-type pd-ssd \
   --metadata-from-file ssh-keys="$work/ssh-keys" \
-  --labels "purpose=octogee-computer-test,octogee-image-run=${run_label}" "${service_account_args[@]}" "${ci_lifetime_args[@]}" --format='value(name)' >/dev/null
+  --labels "purpose=octogee-computer-test,octogee-image-run=${run_label}" "${service_account_args[@]}" "${ci_lifetime_args[@]}"
 IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 wait_ssh 300
 t_ssh=$(date +%s)
@@ -136,6 +140,7 @@ cat <<RESULT
 
 | Metric | Value |
 | --- | --- |
+| Zone | ${ZONE} |
 | Create to SSH | $((t_ssh - t_create)) s |
 | Create to desktop healthy (Chromium mapped) | $((t_desktop - t_create)) s |
 | Guest boot (systemd-analyze) | ${boot} |

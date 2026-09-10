@@ -2,8 +2,11 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=zones.sh
+source "$HERE/zones.sh"
 PROJECT=""
 ZONE="us-west1-b"
+FALLBACK_ZONES=""
 OMARCHY_VERSION="4.0.3"
 BUCKET=""
 BUILDER="octogee-computer-image-builder"
@@ -22,7 +25,7 @@ iso_sha256_for() {
 
 usage() {
   cat <<EOF
-usage: $0 --project <gcp-project> [--zone $ZONE] [--omarchy-version $OMARCHY_VERSION]
+usage: $0 --project <gcp-project> [--zone $ZONE] [--fallback-zones <zone,zone>] [--omarchy-version $OMARCHY_VERSION]
           [--bucket gs://...] [--builder-name $BUILDER] [--keep-builder] [--candidate] [--image-name <name>] [--service-account <email>]
        OCTOGEE_GCE_SSH_KEY=<ed25519 key> (default ~/.ssh/octogee_gce_ed25519, created if absent)
 
@@ -38,6 +41,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) PROJECT="$2"; shift 2 ;;
     --zone) ZONE="$2"; shift 2 ;;
+    --fallback-zones) FALLBACK_ZONES="$2"; shift 2 ;;
     --omarchy-version) OMARCHY_VERSION="$2"; shift 2 ;;
     --bucket) BUCKET="$2"; shift 2 ;;
     --builder-name) BUILDER="$2"; shift 2 ;;
@@ -101,13 +105,13 @@ tar -C "$payload" -czf "$payload.tgz" .
 printf 'imagebuilder:%s\n' "$(cat "$SSH_KEY.pub")" > "$payload/ssh-keys"
 log "builder ${BUILDER}"
 if ! gcloud compute instances describe "$BUILDER" --zone "$ZONE" --project "$PROJECT" >/dev/null 2>&1; then
-  gcloud compute instances create "$BUILDER" --project "$PROJECT" --zone "$ZONE" \
+  create_instance_in_first_available_zone "$BUILDER" --project "$PROJECT" \
     --machine-type n2-standard-8 --enable-nested-virtualization \
     --image-family debian-12 --image-project debian-cloud \
     --boot-disk-size 150GB --boot-disk-type pd-ssd \
     --scopes storage-rw,logging-write \
     --labels "purpose=octogee-computer-image-build,octogee-image-run=${run_label}" \
-    --metadata enable-oslogin=false --metadata-from-file "ssh-keys=$payload/ssh-keys" "${service_account_args[@]}" "${ci_lifetime_args[@]}" --format='value(name)' >/dev/null
+    --metadata enable-oslogin=false --metadata-from-file "ssh-keys=$payload/ssh-keys" "${service_account_args[@]}" "${ci_lifetime_args[@]}"
 fi
 trap 'cleanup; rm -rf "$payload" "$payload.tgz"' EXIT
 for _ in $(seq 1 30); do gssh true && break; sleep 6; done

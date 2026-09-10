@@ -15,6 +15,13 @@ if name == 'gcloud':
         ci = os.environ['OCTOGEE_IMAGE_RUN_ID'] != 'manual'
         assert ('--max-run-duration=2h' in args) == ci
         assert ('--instance-termination-action=DELETE' in args) == ci
+        if case == 'zone-exhausted' and 'us-central1-a' in args:
+            print('ERROR: (gcloud.compute.instances.create) Could not fetch resource:\ncode: ZONE_RESOURCE_POOL_EXHAUSTED', file=sys.stderr)
+            sys.exit(1)
+        if case == 'create-failed':
+            print('ERROR: (gcloud.compute.instances.create) permission denied', file=sys.stderr)
+            sys.exit(1)
+    if 'describe' in args: assert '--zone' in args and args[args.index('--zone') + 1] == os.environ['ACCEPTANCE_EXPECTED_ZONE']
     if 'describe' in args: print('192.0.2.1')
 elif name == 'scp':
     pathlib.Path(args[-1]).write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * 8 + struct.pack('>II', 1440, 900))
@@ -50,7 +57,7 @@ elif name == 'ssh':
 
 
 class ImageAcceptanceTests(unittest.TestCase):
-    def run_acceptance(self, case, ci=False):
+    def run_acceptance(self, case, ci=False, expected_zone='us-central1-a'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ('gcloud', 'scp', 'ssh'):
@@ -58,9 +65,10 @@ class ImageAcceptanceTests(unittest.TestCase):
                 path.write_text(MOCK)
                 path.chmod(0o755)
             return subprocess.run(
-                ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', '--stop-start'],
+                ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', '--stop-start', '--zone', 'us-central1-a', '--fallback-zones', 'us-central1-b,us-central1-c'],
                 env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
-                     'ACCEPTANCE_CASE': case, 'OCTOGEE_IMAGE_RUN_ID': '123-1' if ci else 'manual', 'ACCEPTANCE_MARKER': str(root / 'marker')},
+                     'ACCEPTANCE_CASE': case, 'OCTOGEE_IMAGE_RUN_ID': '123-1' if ci else 'manual', 'ACCEPTANCE_MARKER': str(root / 'marker'),
+                     'ACCEPTANCE_EXPECTED_ZONE': expected_zone},
                 capture_output=True, text=True, timeout=15,
             )
 
@@ -72,6 +80,18 @@ class ImageAcceptanceTests(unittest.TestCase):
     def test_ci_vm_has_independent_cloud_deletion_deadline(self):
         result = self.run_acceptance('success', ci=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_exhausted_zone_falls_back_and_addresses_the_vm_there(self):
+        result = self.run_acceptance('zone-exhausted', expected_zone='us-central1-b')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('zone us-central1-a has no capacity', result.stderr)
+        self.assertIn('| Zone | us-central1-b |', result.stdout)
+
+    def test_non_capacity_create_failure_does_not_fall_back(self):
+        result = self.run_acceptance('create-failed')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('permission denied', result.stderr)
+        self.assertNotIn('trying the next zone', result.stderr)
 
     def test_missing_resize_api_fails_acceptance(self):
         result = self.run_acceptance('missing-resize')
