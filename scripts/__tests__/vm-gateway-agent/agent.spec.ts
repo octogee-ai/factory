@@ -10,6 +10,7 @@ import { HOME_CHECKPOINT_INTERVAL_MS } from "../../lib/vm-gateway-agent/home-che
 import { bundleFixture } from "./fixture";
 
 const SHA = "c".repeat(64);
+const DISK = { sizeBytes: 42_949_672_960, freeBytes: 3_221_225_472 };
 const CHECKPOINT = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: SHA, completedAt: 5, download: { url: "https://storage.example/download", method: "GET", gcsPath: "p", expiresAt: "e" } };
 
 interface FakeDocker {
@@ -52,7 +53,7 @@ function deps(
   docker: FakeDocker,
   bundleResponse: () => Reply,
   clock: { now: number },
-  opts: { routes?: Record<string, () => Reply>; home?: { entries?: string[]; dirty?: boolean } } = {},
+  opts: { routes?: Record<string, () => Reply>; home?: { entries?: string[]; dirty?: boolean }; diskUsage?: VmAgentDeps["fs"]["diskUsage"] } = {},
 ) {
   const files = new Map<string, { content: string; mode: number }>();
   const dirs = new Set<string>();
@@ -92,6 +93,7 @@ function deps(
       mkdir: async (p) => { dirs.add(p); },
       writeFile: async (p, content, mode) => { files.set(p, { content, mode }); },
       chown: async (p) => { chowns.push(p); },
+      diskUsage: opts.diskUsage ?? (async () => DISK),
     },
     home: {
       desktop: { run: vi.fn(async () => {}) },
@@ -135,6 +137,20 @@ const calls = (fetchImpl: typeof fetch, suffix: string) =>
   (fetchImpl as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls.filter(([url]) => String(url).endsWith(suffix));
 
 describe("convergeOnce", () => {
+  it("reports the state root's disk usage with every bundle poll, and still polls when the measurement fails", async () => {
+    const clock = { now: 1_000 };
+    const reported = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock);
+    await convergeOnce(reported.d, initialAgentState());
+    const [, init] = calls(reported.fetchImpl, "/internal/fleet/vm-runtime")[0];
+    expect(JSON.parse(String(init.body))).toEqual({ gatewayId: "b-x", disk: DISK });
+
+    const unmeasured = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock, { diskUsage: async () => { throw new Error("ENOENT: statfs"); } });
+    const state = await convergeOnce(unmeasured.d, initialAgentState());
+    expect(state.appliedVersion).toBe("v1");
+    expect(JSON.parse(String(calls(unmeasured.fetchImpl, "/internal/fleet/vm-runtime")[0][1].body))).toEqual({ gatewayId: "b-x" });
+    expect(unmeasured.d.log).toHaveBeenCalledWith(expect.stringContaining("disk usage unavailable for /srv/octogee: ENOENT: statfs"));
+  });
+
   it("waits while the bundle is unrendered, then writes tokens, prepares volumes, runs init, and starts the services", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };

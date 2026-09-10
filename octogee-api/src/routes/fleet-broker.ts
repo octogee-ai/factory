@@ -1,7 +1,7 @@
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
-import { readComputerRuntimeObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
+import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
@@ -9,11 +9,13 @@ import {
   COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
   computerHomeCheckpointName,
   gatewayVmRuntimeDocPath,
+  isGatewayVmDiskSample,
   isGatewayVmRuntimeBundle,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
   type GatewayVmHomeCheckpoint,
   type GatewayVmHomeState,
+  type GatewayVmRuntimeRequest,
   type GatewayVmRuntimeResponse,
 } from "@octogee/shared/types/glm";
 import {
@@ -3299,6 +3301,29 @@ function respondWebResearchError(res: Response, error: unknown): void {
   res.status(502).json({ error: "Web research provider failed", code: "provider_error" });
 }
 
+async function recordVmDiskReport(
+  deps: ResolvedFleetBrokerRouteDeps,
+  req: Request,
+  res: Response,
+  bound: GatewayBinding,
+  observation: Record<string, unknown> | undefined,
+): Promise<boolean> {
+  const disk = (req.body as Partial<GatewayVmRuntimeRequest> | undefined)?.disk;
+  if (disk === undefined) return true;
+  if (!isGatewayVmDiskSample(disk)) {
+    res.status(400).json({ error: "invalid_disk_sample" });
+    return false;
+  }
+  const vm = observation?.vm as { instanceId?: unknown } | null | undefined;
+  if (!bound.podUid || vm?.instanceId !== bound.podUid) return true;
+  try {
+    await recordComputerDiskObservation(deps.db, bound.gatewayId, observation?.vmDisk, { ...disk, instanceId: bound.podUid, observedAt: deps.now() });
+  } catch (error) {
+    logger.error("[fleet-broker] computer disk observation failed", { gatewayId: bound.gatewayId, error });
+  }
+  return true;
+}
+
 function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db } = deps;
   router.post("/vm-runtime", async (req, res) => {
@@ -3313,6 +3338,7 @@ function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDe
       res.status(404).json({ error: "vm_runtime_not_rendered" });
       return;
     }
+    if (!(await recordVmDiskReport(deps, req, res, bound, observation))) return;
     const home = observation?.vmHome as Partial<GatewayVmHomeState> | undefined;
     const response: GatewayVmRuntimeResponse = {
       bundle,

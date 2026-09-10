@@ -65,6 +65,22 @@ export function isGatewayVmRuntimeBundle(value) {
         && !!b.hostAliases && typeof b.hostAliases === "object"
         && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
 }
+export function isGatewayVmDiskSample(value) {
+    const d = value;
+    return !!d && typeof d === "object"
+        && typeof d.sizeBytes === "number" && Number.isSafeInteger(d.sizeBytes) && d.sizeBytes > 0
+        && typeof d.freeBytes === "number" && Number.isSafeInteger(d.freeBytes) && d.freeBytes >= 0 && d.freeBytes <= d.sizeBytes;
+}
+export function isGatewayVmDiskObservation(value) {
+    const o = value;
+    return isGatewayVmDiskSample(o)
+        && typeof o.instanceId === "string"
+        && typeof o.observedAt === "number"
+        && Number.isFinite(o.observedAt);
+}
+export function vmDiskFreePercent(sample) {
+    return Math.floor((sample.freeBytes / sample.sizeBytes) * 100);
+}
 export const COMPUTER_HOME_CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 export const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
 export const COMPUTER_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;

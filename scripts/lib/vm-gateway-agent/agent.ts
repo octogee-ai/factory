@@ -1,4 +1,10 @@
-import { isGatewayVmRuntimeBundle, type GatewayVmRuntimeBundle, type GatewayVmRuntimeResponse } from "@octogee/shared/types/glm";
+import {
+  isGatewayVmRuntimeBundle,
+  type GatewayVmDiskSample,
+  type GatewayVmRuntimeBundle,
+  type GatewayVmRuntimeRequest,
+  type GatewayVmRuntimeResponse,
+} from "@octogee/shared/types/glm";
 import { brokerFailure, brokerPost } from "./broker.js";
 import {
   createContainer,
@@ -39,6 +45,7 @@ export interface AgentFs {
   mkdir(path: string): Promise<void>;
   writeFile(path: string, content: string, mode: number): Promise<void>;
   chown(path: string, uid: number, gid: number): Promise<void>;
+  diskUsage(path: string): Promise<GatewayVmDiskSample>;
 }
 
 export interface VmAgentDeps {
@@ -72,8 +79,17 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+async function diskReport(deps: VmAgentDeps): Promise<GatewayVmRuntimeRequest> {
+  try {
+    return { disk: await deps.fs.diskUsage(deps.stateRoot) };
+  } catch (err) {
+    deps.log(`[vm-agent] disk usage unavailable for ${deps.stateRoot}: ${err instanceof Error ? err.message : String(err)}`);
+    return {};
+  }
+}
+
 export async function fetchRuntimeBundle(deps: VmAgentDeps): Promise<BundleFetch> {
-  const res = await brokerPost(deps, "vm-runtime", {});
+  const res = await brokerPost(deps, "vm-runtime", { ...(await diskReport(deps)) });
   if (res.status === 404) return { kind: "not-rendered" };
   if (!res.ok) throw await brokerFailure("vm-runtime", res);
   const body = (await res.json()) as Partial<GatewayVmRuntimeResponse>;

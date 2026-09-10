@@ -295,7 +295,9 @@ import {
   recordReconcile,
   recordSharedGatewayMaxCapacity,
   recordSharedPoolReplicaBounds,
+  recordVmDiskUsage,
 } from "./metrics.js";
+import { applyVmDiskChanges, type VmDiskSample } from "./lib/vm-disk-usage.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
@@ -1440,6 +1442,7 @@ function reconcileFingerprintStableStringify(v: unknown): string {
 function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
   const { heartbeat, kubernetes, helm, ...rest } = data;
   delete rest.podReplacements;
+  delete rest.vmDisk;
   const heartbeatRecord =
     heartbeat !== null && typeof heartbeat === "object" && !Array.isArray(heartbeat)
       ? heartbeat as Record<string, unknown>
@@ -1610,6 +1613,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
   // collection, so it resets the mirror; later deliveries are deltas.
   let glmMirrorPrimed = false;
   let rootMirrorPrimed = false;
+  const vmDiskSamples = new Map<string, VmDiskSample>();
 
   const unsub = deps.db.collection(GLM_GATEWAYS_COLLECTION).onSnapshot(
     (snap?: { docChanges?: () => MirrorDocChange[] }) => {
@@ -1622,6 +1626,7 @@ export function startReconciler(deps: ControllerDeps): () => void {
         return;
       }
       informer?.ingestGlmGateways(changes, { reset: !glmMirrorPrimed });
+      recordVmDiskUsage(applyVmDiskChanges(vmDiskSamples, changes, { reset: !glmMirrorPrimed }));
       glmMirrorPrimed = true;
       for (const gatewayId of snapshotReconcileRelevantGatewayIds(
         changes,

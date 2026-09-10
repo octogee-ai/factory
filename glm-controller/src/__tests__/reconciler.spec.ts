@@ -242,6 +242,19 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
+  it("ignores Builder computer disk reports on the runtime doc", () => {
+    const fingerprints = new Map<string, string>();
+    const disk = (freeBytes: number, observedAt: number) => servingRuntime({
+      runtime: "gce-vm",
+      vmDisk: { sizeBytes: 100, freeBytes, instanceId: "4242", observedAt },
+    });
+    snapshotHasReconcileRelevantChange([{ type: "added", doc: { id: "default", data: () => disk(50, 1) } }], fingerprints);
+
+    expect(
+      snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => disk(10, 2) } }], fingerprints),
+    ).toBe(false);
+  });
+
   it.each([
     ["status", { status: "unreachable", version: "abc1234" }],
     ["version", { status: "ready", version: "def5678" }],

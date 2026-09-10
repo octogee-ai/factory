@@ -55,7 +55,8 @@ python3 -m unittest infra/desktop/image/test_acceptance.py
 
 Boots the newest image in the family (or `--image <name>`), waits for SSH,
 verifies every installed Octogee service executable with `systemd-analyze`,
-checks the modules and all five services (including the registration agent),
+checks the modules, all five services (including the registration agent), and
+the root-growth oneshot's result,
 waits for the desktop to report a Chromium
 client on the loopback control API, takes a screenshot, drives a navigation
 and verifies it through the window title, optionally stops and starts the VM
@@ -70,6 +71,7 @@ and take over the desktop.
 
 | Unit | Role |
 | --- | --- |
+| `octo-grow-root.service` | oneshot before Docker and the agent: grows the root partition (`sfdisk` + `partx`) and the btrfs filesystem to fill the boot disk, so `gcloud compute disks resize` plus a reboot recovers a full computer; a no-op when the partition already fills the disk |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
 | `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |
 | `octo-desktop.service` | as `octo`: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium; everything bound to 127.0.0.1 |

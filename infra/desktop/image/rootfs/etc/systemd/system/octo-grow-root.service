@@ -1,0 +1,13 @@
+[Unit]
+Description=Octogee root filesystem growth to the boot disk
+After=local-fs.target
+Before=docker.service octo-gateway-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/octo-grow-root
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -156,6 +156,20 @@ export interface GatewayVmRuntimeResponse {
         completedAt: number | null;
     };
 }
+export interface GatewayVmDiskSample {
+    sizeBytes: number;
+    freeBytes: number;
+}
+export interface GatewayVmRuntimeRequest {
+    disk?: GatewayVmDiskSample;
+}
+export interface GatewayVmDiskObservation extends GatewayVmDiskSample {
+    instanceId: string;
+    observedAt: number;
+}
+export declare function isGatewayVmDiskSample(value: unknown): value is GatewayVmDiskSample;
+export declare function isGatewayVmDiskObservation(value: unknown): value is GatewayVmDiskObservation;
+export declare function vmDiskFreePercent(sample: GatewayVmDiskSample): number;
 export declare const COMPUTER_HOME_CHECKPOINT_MAX_BYTES: number;
 export declare const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
 export declare const COMPUTER_HOME_CHECKPOINT_NAME_RE: RegExp;

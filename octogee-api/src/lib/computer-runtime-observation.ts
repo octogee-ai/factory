@@ -1,5 +1,14 @@
 import type { Firestore } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, resolveGatewayRuntime, type GatewayVmHomeState } from "@octogee/shared/types/glm";
+import {
+  GLM_GATEWAYS_COLLECTION,
+  isGatewayVmDiskObservation,
+  resolveGatewayRuntime,
+  vmDiskFreePercent,
+  type GatewayVmDiskObservation,
+  type GatewayVmHomeState,
+} from "@octogee/shared/types/glm";
+
+export const COMPUTER_DISK_OBSERVATION_REFRESH_MS = 10 * 60_000;
 
 type RuntimeDb = Pick<Firestore, "collection">;
 
@@ -30,4 +39,21 @@ export async function recordComputerHomeCheckpoint(db: Pick<Firestore, "doc" | "
     if (previousName === incoming.name && (previous?.checkpointAcknowledgedAt ?? -1) >= (home.checkpointAcknowledgedAt ?? -1)) return;
     tx.set(ref, { vmHome: home }, { merge: true });
   });
+}
+
+export function computerDiskObservationDue(previous: unknown, next: GatewayVmDiskObservation): boolean {
+  if (!isGatewayVmDiskObservation(previous) || previous.instanceId !== next.instanceId) return true;
+  if (next.observedAt - previous.observedAt >= COMPUTER_DISK_OBSERVATION_REFRESH_MS) return true;
+  return vmDiskFreePercent(previous) !== vmDiskFreePercent(next);
+}
+
+export async function recordComputerDiskObservation(
+  db: Pick<Firestore, "doc">,
+  gatewayId: string,
+  previous: unknown,
+  next: GatewayVmDiskObservation,
+): Promise<boolean> {
+  if (!computerDiskObservationDue(previous, next)) return false;
+  await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).set({ vmDisk: next }, { merge: true });
+  return true;
 }

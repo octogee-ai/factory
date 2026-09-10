@@ -102,6 +102,8 @@ units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docke
 [[ "$modules" == 2 ]] || { echo "required DRM modules missing: ${modules}/2 loaded" >&2; exit 1; }
 read -r -a unit_states <<< "$units"
 [[ "${unit_states[*]}" == 'active active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
+grow_root="$(vssh 'systemctl show octo-grow-root.service --property=Result --value')"
+[[ "$grow_root" == success ]] || { echo "octo-grow-root did not succeed: $grow_root" >&2; vssh 'journalctl -u octo-grow-root --no-pager | tail -20' >&2 || true; exit 1; }
 wait_desktop
 t_desktop=$(date +%s)
 vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
@@ -139,6 +141,7 @@ cat <<RESULT
 | Guest boot (systemd-analyze) | ${boot} |
 | vkms + vgem loaded | ${modules}/2 |
 | Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
+| Root filesystem growth (octo-grow-root) | ${grow_root} |
 | Desktop service restarts needed | 0 |
 | Chromium window | "${chromium_title}" |
 | Resize + screenshot + XWayland geometry | 800x600, 1024x768, restored 1440x900 |

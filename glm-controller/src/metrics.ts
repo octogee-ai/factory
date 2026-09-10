@@ -7,6 +7,7 @@ let reconcileOk = 0;
 let reconcileFail = 0;
 let lastSuccessMs: number | null = null;
 let gatewayHealth: GatewayHealthSample[] = [];
+let vmDiskUsage: VmDiskUsageSample[] = [];
 const configRoll = new Map<string, number>();
 const disruptionObservations = new Map<string, number>();
 let disruptionLastObservedMs: number | null = null;
@@ -37,6 +38,13 @@ export interface ConfigRollSample {
 export interface GatewayHealthSample {
   gatewayId: string;
   availableReplicas: number;
+}
+
+export interface VmDiskUsageSample {
+  gatewayId: string;
+  sizeBytes: number;
+  freeBytes: number;
+  observedAt: number;
 }
 
 export interface DisruptionObservationSample {
@@ -75,6 +83,7 @@ export function resetMetrics(): void {
   reconcileFail = 0;
   lastSuccessMs = null;
   gatewayHealth = [];
+  vmDiskUsage = [];
   configRoll.clear();
   disruptionObservations.clear();
   disruptionLastObservedMs = null;
@@ -101,6 +110,15 @@ export function recordGatewayHealth(samples: GatewayHealthSample[]): void {
   gatewayHealth = samples.map((sample) => ({
     gatewayId: sample.gatewayId,
     availableReplicas: Math.max(0, Math.trunc(sample.availableReplicas)),
+  }));
+}
+
+export function recordVmDiskUsage(samples: VmDiskUsageSample[]): void {
+  vmDiskUsage = samples.map((sample) => ({
+    gatewayId: sample.gatewayId,
+    sizeBytes: Math.max(0, Math.trunc(sample.sizeBytes)),
+    freeBytes: Math.max(0, Math.trunc(sample.freeBytes)),
+    observedAt: sample.observedAt,
   }));
 }
 
@@ -162,6 +180,15 @@ export function renderMetrics(): string {
           sample.availableReplicas > 0 ? 0 : 1
         }`,
     ),
+    "# HELP glm_gateway_vm_disk_size_bytes Boot disk filesystem size reported by each running Builder computer.",
+    "# TYPE glm_gateway_vm_disk_size_bytes gauge",
+    ...vmDiskUsage.map((sample) => `glm_gateway_vm_disk_size_bytes{gateway_id="${escapeLabel(sample.gatewayId)}"} ${sample.sizeBytes}`),
+    "# HELP glm_gateway_vm_disk_free_bytes Boot disk filesystem bytes still free on each running Builder computer.",
+    "# TYPE glm_gateway_vm_disk_free_bytes gauge",
+    ...vmDiskUsage.map((sample) => `glm_gateway_vm_disk_free_bytes{gateway_id="${escapeLabel(sample.gatewayId)}"} ${sample.freeBytes}`),
+    "# HELP glm_gateway_vm_disk_observed_timestamp_seconds Unix time of each running Builder computer's last disk report.",
+    "# TYPE glm_gateway_vm_disk_observed_timestamp_seconds gauge",
+    ...vmDiskUsage.map((sample) => `glm_gateway_vm_disk_observed_timestamp_seconds{gateway_id="${escapeLabel(sample.gatewayId)}"} ${(sample.observedAt / 1000).toFixed(3)}`),
     "# HELP glm_config_roll_total Durable config roll fencing outcomes.",
     "# TYPE glm_config_roll_total counter",
     ...[...configRoll.entries()].map(([key, count]) => {

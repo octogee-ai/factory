@@ -233,6 +233,39 @@ export interface GatewayVmRuntimeResponse {
   homeCheckpoint: { requestedAt: number | null; completedAt: number | null };
 }
 
+export interface GatewayVmDiskSample {
+  sizeBytes: number;
+  freeBytes: number;
+}
+
+export interface GatewayVmRuntimeRequest {
+  disk?: GatewayVmDiskSample;
+}
+
+export interface GatewayVmDiskObservation extends GatewayVmDiskSample {
+  instanceId: string;
+  observedAt: number;
+}
+
+export function isGatewayVmDiskSample(value: unknown): value is GatewayVmDiskSample {
+  const d = value as Partial<GatewayVmDiskSample> | null;
+  return !!d && typeof d === "object"
+    && typeof d.sizeBytes === "number" && Number.isSafeInteger(d.sizeBytes) && d.sizeBytes > 0
+    && typeof d.freeBytes === "number" && Number.isSafeInteger(d.freeBytes) && d.freeBytes >= 0 && d.freeBytes <= d.sizeBytes;
+}
+
+export function isGatewayVmDiskObservation(value: unknown): value is GatewayVmDiskObservation {
+  const o = value as Partial<GatewayVmDiskObservation> | null;
+  return isGatewayVmDiskSample(o)
+    && typeof (o as Partial<GatewayVmDiskObservation>).instanceId === "string"
+    && typeof (o as Partial<GatewayVmDiskObservation>).observedAt === "number"
+    && Number.isFinite((o as Partial<GatewayVmDiskObservation>).observedAt);
+}
+
+export function vmDiskFreePercent(sample: GatewayVmDiskSample): number {
+  return Math.floor((sample.freeBytes / sample.sizeBytes) * 100);
+}
+
 export const COMPUTER_HOME_CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 export const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
 export const COMPUTER_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;

@@ -36,6 +36,7 @@ elif name == 'ssh':
         if 'octo-gateway-agent.service' in command:
             states.append('failed' if case == 'inactive-agent' else 'active')
         print(' '.join(states))
+    elif 'systemctl show octo-grow-root.service' in command: print('exit-code' if case == 'grow-root-failed' else 'success')
     elif 'systemctl show' in command: print(1 if case == 'desktop-restarted' else 0)
     elif '/health' in command: print(json.dumps({'clients': ['chromium']}))
     elif '/windows' in command: print(json.dumps([{'class': 'chromium', 'title': 'Example Domain - Chromium'}]))
@@ -91,6 +92,11 @@ class ImageAcceptanceTests(unittest.TestCase):
     def test_failed_unit_fails_acceptance(self):
         result = self.run_acceptance('inactive-unit')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_failed_root_growth_fails_acceptance(self):
+        result = self.run_acceptance('grow-root-failed')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('octo-grow-root did not succeed: exit-code', result.stderr)
 
     def test_boot_that_requires_service_restart_fails_acceptance(self):
         result = self.run_acceptance('desktop-restarted')

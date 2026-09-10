@@ -1,4 +1,4 @@
-import { chown, mkdir, writeFile } from "node:fs/promises";
+import { chown, mkdir, statfs, writeFile } from "node:fs/promises";
 import { runVmGatewayAgent } from "../lib/vm-gateway-agent/agent.js";
 import { createDockerEngine } from "../lib/vm-gateway-agent/docker-engine.js";
 import { createDesktopControl } from "../lib/vm-gateway-agent/desktop-control.js";
@@ -25,6 +25,10 @@ await runVmGatewayAgent(
       mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
       writeFile: (path, content, mode) => writeFile(path, content, { mode }),
       chown,
+      diskUsage: async (path) => {
+        const stats = await statfs(path);
+        return { sizeBytes: stats.blocks * stats.bsize, freeBytes: stats.bavail * stats.bsize };
+      },
     },
     home: { shell: homeShell, fs: createHomeFs(stateRoot), desktop: createDesktopControl() },
     now: () => Date.now(),

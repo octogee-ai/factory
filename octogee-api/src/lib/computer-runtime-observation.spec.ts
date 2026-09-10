@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { expect, it } from "vitest";
-import { recordComputerHomeCheckpoint } from "./computer-runtime-observation.js";
+import { COMPUTER_DISK_OBSERVATION_REFRESH_MS, recordComputerDiskObservation, recordComputerHomeCheckpoint } from "./computer-runtime-observation.js";
 
 function fixture(exists = true) {
   let data: Record<string, unknown> = { vmHome: {} };
@@ -29,4 +29,24 @@ it("does not erase an acknowledgment on an identical-checkpoint retry or recreat
   const deleted = fixture(false);
   await recordComputerHomeCheckpoint(deleted.db, "b-x", accepted);
   expect(deleted.writes).toEqual([]);
+});
+
+it("writes a disk observation when the free-percent bucket, instance, or refresh window moves, and skips the rest", async () => {
+  const writes: unknown[] = [];
+  const db = { doc: () => ({ set: async (next: unknown) => { writes.push(next); } }) } as unknown as Firestore;
+  const sample = (freeBytes: number, observedAt: number, instanceId = "4242") => ({ sizeBytes: 1_000, freeBytes, observedAt, instanceId });
+
+  expect(await recordComputerDiskObservation(db, "b-x", undefined, sample(500, 1_000))).toBe(true);
+  expect(await recordComputerDiskObservation(db, "b-x", sample(500, 1_000), sample(509, 1_000 + 30_000))).toBe(false);
+  expect(await recordComputerDiskObservation(db, "b-x", sample(500, 1_000), sample(499, 1_000 + 30_000))).toBe(true);
+  expect(await recordComputerDiskObservation(db, "b-x", sample(500, 1_000), sample(500, 1_000 + COMPUTER_DISK_OBSERVATION_REFRESH_MS))).toBe(true);
+  expect(await recordComputerDiskObservation(db, "b-x", sample(500, 1_000), sample(500, 1_000 + 30_000, "9999"))).toBe(true);
+  expect(await recordComputerDiskObservation(db, "b-x", { sizeBytes: "1000" }, sample(500, 1_000 + 30_000))).toBe(true);
+  expect(writes).toEqual([
+    { vmDisk: sample(500, 1_000) },
+    { vmDisk: sample(499, 31_000) },
+    { vmDisk: sample(500, 1_000 + COMPUTER_DISK_OBSERVATION_REFRESH_MS) },
+    { vmDisk: sample(500, 31_000, "9999") },
+    { vmDisk: sample(500, 31_000) },
+  ]);
 });

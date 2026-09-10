@@ -117,6 +117,38 @@ spec:
           annotations:
             summary: "Shared Barn reached its configured member limit"
             description: "Cowboy needs another whole Shared Barn member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
+        - alert: BuilderComputerDiskLow
+          expr: |
+            (
+              glm_gateway_vm_disk_free_bytes{namespace=~"octogee|octogee-test"}
+              / glm_gateway_vm_disk_size_bytes{namespace=~"octogee|octogee-test"}
+            ) < 0.15
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Builder computer {{ $labels.gateway_id }} has {{ $value | humanizePercentage }} of its disk free"
+            description: "The vm-agent on gateway {{ $labels.gateway_id }} reports under 15% free on its boot disk. The home checkpoint stages a gzip archive of up to 4 GiB on that disk, so a full disk fails every checkpoint and hangs a return at checkpoint-native-computer. Grow the disk with `gcloud compute disks resize` and reboot the VM (octo-grow-root extends the partition and filesystem at boot), or clean up over SSH."
+        - alert: BuilderComputerDiskCritical
+          expr: |
+            (
+              glm_gateway_vm_disk_free_bytes{namespace=~"octogee|octogee-test"}
+              / glm_gateway_vm_disk_size_bytes{namespace=~"octogee|octogee-test"}
+            ) < 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Builder computer {{ $labels.gateway_id }} is out of disk ({{ $value | humanizePercentage }} free)"
+            description: "Under 5% free on gateway {{ $labels.gateway_id }}'s boot disk. Home checkpoints are failing or about to; a Builder return will hang. Resize the disk and reboot the VM now."
+        - alert: BuilderComputerDiskReportStale
+          expr: (time() - glm_gateway_vm_disk_observed_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 900
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Builder computer {{ $labels.gateway_id }} stopped reporting its disk"
+            description: "Cowboy still lists gateway {{ $labels.gateway_id }}'s computer as running, but the broker has not refreshed its disk observation for over 15 minutes (the vm-agent reports every poll and the broker persists at least every 10 minutes). The disk gauges for this gateway are stale, so the low/critical disk alerts cannot be trusted; check octo-gateway-agent on the VM and the vm-runtime broker route."
         - alert: GlmControllerReconcileStalled
           expr: (time() - glm_reconcile_last_success_timestamp_seconds{namespace=~"octogee|octogee-test"}) > 600
           for: 5m

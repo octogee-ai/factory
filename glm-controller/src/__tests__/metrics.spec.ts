@@ -7,6 +7,7 @@ import {
   recordDisruptionSnapshot,
   recordReconcile,
   recordSharedGatewayMaxCapacity,
+  recordVmDiskUsage,
   renderMetrics,
   resetMetrics,
 } from "../metrics";
@@ -60,6 +61,19 @@ describe("glm-controller metrics", () => {
 
     expect(out).not.toContain("old-blue");
     expect(out).toContain("new-green");
+  });
+
+  it("renders Builder computer disk gauges per gateway and replaces them on each refresh", () => {
+    recordVmDiskUsage([{ gatewayId: "b-old", sizeBytes: 1, freeBytes: 1, observedAt: 1_000 }]);
+    recordVmDiskUsage([{ gatewayId: "b-x", sizeBytes: 42_949_672_960, freeBytes: 3_221_225_472.9, observedAt: 1_700_000_000_000 }]);
+
+    const out = renderMetrics();
+
+    expect(out).toContain("# TYPE glm_gateway_vm_disk_free_bytes gauge");
+    expect(out).toContain('glm_gateway_vm_disk_size_bytes{gateway_id="b-x"} 42949672960');
+    expect(out).toContain('glm_gateway_vm_disk_free_bytes{gateway_id="b-x"} 3221225472');
+    expect(out).toContain('glm_gateway_vm_disk_observed_timestamp_seconds{gateway_id="b-x"} 1700000000.000');
+    expect(out).not.toContain("b-old");
   });
 
   it("counts config checkpoint, proof, and unfreeze outcomes without customer labels", () => {
