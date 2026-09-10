@@ -3,6 +3,7 @@ import type {
   QueryDocumentSnapshot,
   Transaction,
 } from "firebase-admin/firestore";
+import { isReapedOperationError } from "./stuck-op-reaper.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { createHash } from "node:crypto";
 
@@ -3727,6 +3728,45 @@ export function retirementAuthorityFenceAllows(
     retirementAssignmentFenceAllows(input);
 }
 
+type RetiredDisposableGatewayVerdict = "delete" | "rearmed" | "skip";
+
+function retiredDisposableGatewayVerdict(input: {
+  request: DeleteRetiredDisposableGatewayInput;
+  operationId: string;
+  root: ReturnType<typeof projectGatewayDesiredRootForGateway>;
+  claimOperationId: unknown;
+  operation: Record<string, unknown> | undefined;
+  ownerMirrorGatewayId: string | null;
+}): RetiredDisposableGatewayVerdict {
+  const { request, root, operation } = input;
+  const fenced = [
+    root !== null,
+    root?.desiredStatus === "retired",
+    root?.ownerUid === request.ownerUid,
+    root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
+    !isOperatorManaged(root?.managedBy),
+    input.claimOperationId === input.operationId,
+    operation !== undefined,
+    operation?.kind === "retire-gateway",
+    input.ownerMirrorGatewayId !== request.gatewayId,
+  ].every(Boolean);
+  if (!fenced) return "skip";
+  if (operation?.status === "succeeded") return "delete";
+  if (operation?.status === "failed" && isReapedOperationError(operation.error)) return "rearmed";
+  return "skip";
+}
+
+function rearmedRetireOperationPatch(): Record<string, unknown> {
+  return {
+    status: "pending",
+    startedAt: null,
+    completedAt: null,
+    steps: [],
+    error: FieldValue.delete(),
+    lastProgressAt: FieldValue.delete(),
+  };
+}
+
 async function deleteRetiredDisposableGatewayFirestore(
   input: FirestorePlacementPolicyInput,
   request: DeleteRetiredDisposableGatewayInput,
@@ -3735,7 +3775,7 @@ async function deleteRetiredDisposableGatewayFirestore(
   const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
   const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
   const ownerRef = input.db.collection("users").doc(request.ownerUid);
-  const deletable = await input.db.runTransaction(async (transaction) => {
+  const verdict = await input.db.runTransaction(async (transaction): Promise<RetiredDisposableGatewayVerdict> => {
     const [rootSnapshot, operationSnapshot, ownerSnapshot] = await Promise.all([
       transaction.get(gatewayRef),
       transaction.get(operationRef),
@@ -3754,20 +3794,24 @@ async function deleteRetiredDisposableGatewayFirestore(
     const ownerMirrorGatewayId = ownerSnapshot.exists
       ? currentGatewayId(ownerSnapshot.data() as Record<string, unknown>)
       : null;
-    return [
-      root !== null,
-      root?.desiredStatus === "retired",
-      root?.ownerUid === request.ownerUid,
-      root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
-      !isOperatorManaged(root?.managedBy),
-      claim?.operationId === operationId,
-      operationSnapshot.exists,
-      operation?.kind === "retire-gateway",
-      operation?.status === "succeeded",
-      ownerMirrorGatewayId !== request.gatewayId,
-    ].every(Boolean);
+    const verdict = retiredDisposableGatewayVerdict({
+      request,
+      operationId,
+      root,
+      claimOperationId: claim?.operationId,
+      operation: operationSnapshot.exists ? operation : undefined,
+      ownerMirrorGatewayId,
+    });
+    if (verdict === "rearmed") transaction.update(operationRef, rearmedRetireOperationPatch());
+    return verdict;
   });
-  if (!deletable) return false;
+  if (verdict === "rearmed") {
+    input.log(
+      `[placement-policy] re-armed reaped retirement ${operationId} for ${request.gatewayId}; the op runner re-drives it`,
+    );
+    return false;
+  }
+  if (verdict !== "delete") return false;
   // Deletion order makes every partial failure re-drivable: auxiliary docs
   // first (idempotent), the root next (its claim + the retire op are the
   // re-verification fence), and the retire op only once nothing else remains.

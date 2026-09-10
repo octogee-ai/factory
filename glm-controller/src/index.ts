@@ -2037,7 +2037,15 @@ async function runClaimedOperation(
   }
   const { ctx, steps } = createOperationContext({
     persist: async (next) => {
-      await ref.update({ steps: next, lastProgressAt: Date.now() });
+      await deps.db.runTransaction(async (txn) => {
+        const fresh = await txn.get(ref);
+        const data = fresh.exists ? fresh.data() as Operation : undefined;
+        if (data?.startedAt !== op.startedAt) {
+          deps.log(`[glm-controller] op=${op.id} step progress discarded because the operation was re-claimed`);
+          return;
+        }
+        txn.update(ref, { steps: next, lastProgressAt: Date.now() });
+      });
     },
     persistCustomerMigrationV2: async (state) => {
       await deps.db.runTransaction(async (txn) => {
@@ -2083,7 +2091,7 @@ async function runClaimedOperation(
     if (!fresh.exists) return null;
     const freshOp = fresh.data() as Operation | undefined;
     const status = freshOp?.status ?? "missing";
-    if (!shouldPersistClaimedOperationCompletion(status)) return null;
+    if (!shouldPersistClaimedOperationCompletion({ status, startedAt: freshOp?.startedAt, claimedStartedAt: op.startedAt })) return null;
     const completion = buildOperationCompletionUpdate({
       op: {
         id: ref.id,
@@ -2124,7 +2132,7 @@ async function runClaimedOperation(
     return completion;
   });
   if (!completion) {
-    deps.log(`[glm-controller] op=${op.id} completion discarded because the operation was cancelled`);
+    deps.log(`[glm-controller] op=${op.id} completion discarded because the operation was cancelled or re-claimed`);
     return;
   }
 

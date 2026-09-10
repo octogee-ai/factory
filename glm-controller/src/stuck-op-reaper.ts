@@ -8,6 +8,12 @@ import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
 
+export const REAPED_OPERATION_ERROR_PREFIX = "reaped: ";
+
+export function isReapedOperationError(error: unknown): boolean {
+  return typeof error === "string" && error.startsWith(REAPED_OPERATION_ERROR_PREFIX);
+}
+
 export interface StuckOpReaperDeps {
   db: Firestore;
   log: (msg: string) => void;
@@ -185,7 +191,7 @@ export async function runStuckOpReaperTick(
   const results = await Promise.allSettled(
     stuck.map(async ({ doc, data, ageMin }) => {
       try {
-        const error = `reaped: op exceeded ${budgetMin}m running budget — controller likely restarted mid-op or the work hung past the inner deadlines`;
+        const error = `${REAPED_OPERATION_ERROR_PREFIX}op exceeded ${budgetMin}m running budget — controller likely restarted mid-op or the work hung past the inner deadlines`;
         const legacyResult = await reapLegacyMigrationWithGateRecovery({
           deps,
           doc,

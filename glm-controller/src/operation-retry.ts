@@ -72,8 +72,12 @@ export function retryBackoffMs(attempt: number): number {
   return RETRY_BACKOFF_MS_BY_ATTEMPT[attempt] ?? RETRY_BACKOFF_MS_CAP;
 }
 
-export function shouldPersistClaimedOperationCompletion(status: string): boolean {
-  return status === "running";
+export function shouldPersistClaimedOperationCompletion(input: {
+  status: string;
+  startedAt: unknown;
+  claimedStartedAt: unknown;
+}): boolean {
+  return input.status === "running" && input.startedAt === input.claimedStartedAt;
 }
 
 export function operationNeedsDurableCustomerMigrationV2Resume(op: {

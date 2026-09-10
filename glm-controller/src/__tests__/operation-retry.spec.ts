@@ -46,9 +46,14 @@ describe("supersededRollMigrationAction", () => {
 
 describe("shouldPersistClaimedOperationCompletion", () => {
   it("does not let an in-memory worker overwrite a durably cancelled operation", () => {
-    expect(shouldPersistClaimedOperationCompletion("running")).toBe(true);
-    expect(shouldPersistClaimedOperationCompletion("rolled-back")).toBe(false);
-    expect(shouldPersistClaimedOperationCompletion("failed")).toBe(false);
+    expect(shouldPersistClaimedOperationCompletion({ status: "running", startedAt: 100, claimedStartedAt: 100 })).toBe(true);
+    expect(shouldPersistClaimedOperationCompletion({ status: "rolled-back", startedAt: 100, claimedStartedAt: 100 })).toBe(false);
+    expect(shouldPersistClaimedOperationCompletion({ status: "failed", startedAt: 100, claimedStartedAt: 100 })).toBe(false);
+  });
+
+  it("does not let a stale executor overwrite an operation that was re-armed and claimed again", () => {
+    expect(shouldPersistClaimedOperationCompletion({ status: "running", startedAt: 200, claimedStartedAt: 100 })).toBe(false);
+    expect(shouldPersistClaimedOperationCompletion({ status: "running", startedAt: null, claimedStartedAt: 100 })).toBe(false);
   });
 });
 
