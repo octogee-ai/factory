@@ -77,26 +77,48 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The selected release is `v2026.9.3`, peeled to
-[upstream commit `1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7`](https://github.com/openclaw/openclaw/commit/1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7).
-[Runtime source `630287c1c845a32bb98b50690a9a00b10f65dff8`](https://github.com/ceckert/openclaw/commit/630287c1c845a32bb98b50690a9a00b10f65dff8)
-on `ceckert/openclaw:codex/restore-mattermost-channel-scope` carries these fixes:
+The selected release is `v2026.9.4`, peeled to
+[upstream commit `3a9d69db306cd7f081e06254cb89c4bcc14a7107`](https://github.com/openclaw/openclaw/commit/3a9d69db306cd7f081e06254cb89c4bcc14a7107).
+[Runtime source `d266aa7e0270f74a486c103d5e8484c916bf771a`](https://github.com/ceckert/openclaw/commit/d266aa7e0270f74a486c103d5e8484c916bf771a)
+on `ceckert/openclaw:codex/octogee-v2026.9.4` carries the remaining overlay:
 
-| Fix | Behavior pinned by its regressions | Upstream contribution |
+| Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
-| Config revision freshness | Agent create/update/delete expose the persisted config hash before deferred reload acceptance. The ordinary write limiter remains unchanged. | [PR #142169](https://github.com/openclaw/openclaw/pull/142169) |
-| Account-scoped reload inspection | Source SecretRefs use account inspection when planning reloads; failed inspection and global policy changes retain whole-channel fallback. Runtime account resolution stays strict. | [PR #142193](https://github.com/openclaw/openclaw/pull/142193) |
-| Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit owner grants in either grant order. | [Fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
-| Preferences and workspace icons | Resolve preferences without a session target, authorize icons with native visibility, and bound repeated credential failures while allowing recovery. | [Fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
-| Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Downstream restoration; upstream consideration pending |
+| Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit human grants in either grant order. | Still needed; [fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
+| Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures while allowing recovery. | Still needed; [fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
+| Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; upstream consideration pending |
 
-The root artifact is `openclaw-fork-630287c1.tgz`
-(SHA-256 `1cf429a4065a9b27d84fb9c0d99f5d699bd652ca043fd98988535a446bd5677f`).
-Mattermost is `openclaw-mattermost-a0bcaffe.tgz`
-(SHA-256 `a0bcaffea4f8142f23918a7733ec52fbf878f5c86f3bb516947b9fe5db31f2fd`).
-The exact runtime commit passed a full build and 66 focused Mattermost routing
-regressions. The packed root installed successfully; its CLI and the matching
-Mattermost runtime imported successfully using the Dockerfile's bundled layout.
+The config revision freshness patch [#142169](https://github.com/openclaw/openclaw/pull/142169)
+and account-scoped SecretRef reload inspection patch
+[#142193](https://github.com/openclaw/openclaw/pull/142193) are dropped from the
+overlay. Both exact upstream merge commits are ancestors of the selected GA tag;
+their upstream regression coverage remains intact.
+
+The membership RPC reconciles grants owned by its calling principal. Octogee
+always calls it as the durable `svc:gateway-edge` profile; browser and device
+changes do not change that principal. Human sharing operations use human
+profiles, so explicit human grants remain separate. Reusing the synchronization
+principal for manual grants, or changing it between syncs, is outside this
+integration contract and would require explicit grant-origin representation.
+
+The port uses GA's schema-derived Mattermost config types and current gateway
+session-store owner. Generated protocol bindings and config metadata are refreshed.
+A test-only upstream media fixture repair creates the attached worker environment
+before dispatch and surfaces setup failures, so denial assertions exercise the
+intended ownership transition instead of passing after setup throws.
+
+The root artifact is `openclaw-fork-d266aa7e.tgz`
+(SHA-256 `bd946618107a56a24b299f0fbe5ab1a3603743092eb996e47b33f839af577909`).
+Mattermost is `openclaw-mattermost-81ca0eed.tgz`
+(SHA-256 `81ca0eedc687f9a6858550be5427a759a6419362c6daa5a24c718ab70f42f84a`).
+
+The exact overlay commit passed the full build, 730 core/config regressions,
+79 Mattermost regressions, and 11 UI regressions. Changed-source type, lint,
+format, protocol, config metadata, and repository guards passed; the consolidated
+sharing suite and its lint check were rerun after correcting two test-local names.
+The packed root installed in a clean npm prefix, reported the exact overlay commit,
+and imported the matching Mattermost runtime in the Dockerfile's bundled layout.
+The Octogee base-reuse and native Mattermost contract suites passed all 16 tests.
 
 ### Mattermost session and delivery policy
 
@@ -116,7 +138,7 @@ Human posts retain Octogee's submission ID in namespaced Mattermost properties,
 bound to the posting user. Mattermost clears `pending_post_id` in later REST reads;
 the durable ID lets native history reconcile the optimistic user bubble.
 
-A disposable runtime connected to the real TEST Mattermost service proved that
+For v2026.9.3, a disposable runtime connected to the real TEST Mattermost service proved that
 two humans, separate roots, and an existing thread share one channel session;
 another channel remains isolated. An overlapping two-human test used distinct
 answers and verified each appeared under its own root with `followup`. The test
