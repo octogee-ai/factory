@@ -53,6 +53,24 @@ export interface CreateGatewayRouterOptions {
   namespace: string;
   targetOriginForGateway?: (surface: GatewayRouterSurface, serviceId: string) => string;
   log: (message: string, meta?: Record<string, unknown>) => void;
+  upstreamConnectTimeoutMs?: number;
+  upstreamIdleTimeoutMs?: number;
+}
+
+export const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
+export const DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS = 180_000;
+
+export type UpstreamUnavailableReason = "gateway_timeout" | "gateway_unreachable";
+
+class UpstreamTimeoutError extends Error {
+  constructor(readonly phase: "connect" | "idle") {
+    super(`upstream ${phase} timeout`);
+    this.name = "UpstreamTimeoutError";
+  }
+}
+
+function upstreamUnavailableReason(err: unknown): UpstreamUnavailableReason {
+  return err instanceof UpstreamTimeoutError ? "gateway_timeout" : "gateway_unreachable";
 }
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -163,12 +181,17 @@ interface GatewayProxyContext {
   log: CreateGatewayRouterOptions["log"];
 }
 
+interface GatewayHttpProxyContext extends GatewayProxyContext {
+  connectTimeoutMs: number;
+  idleTimeoutMs: number;
+}
+
 function proxyHttp(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  context: GatewayProxyContext,
+  context: GatewayHttpProxyContext,
 ): void {
-  const { target, log } = context;
+  const { target, log, connectTimeoutMs, idleTimeoutMs } = context;
   const origin = new URL(target.origin);
   const proxyReq = (origin.protocol === "https:" ? https : http).request({
     protocol: origin.protocol,
@@ -177,6 +200,7 @@ function proxyHttp(
     method: req.method,
     path: target.path,
     headers: requestHeaders(req, origin),
+    timeout: connectTimeoutMs,
   }, (proxyRes) => {
     proxyRes.on("error", (err) => {
       log("[gateway-router] upstream response socket error", {
@@ -189,15 +213,32 @@ function proxyHttp(
     res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
     proxyRes.pipe(res);
   });
-  const writeUpstreamUnavailable = (): void => {
+  const writeUpstreamUnavailable = (reason: UpstreamUnavailableReason): void => {
     if (res.headersSent) return;
     res.writeHead(502, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "gateway upstream unavailable" }));
+    res.end(JSON.stringify({
+      error: "gateway upstream unavailable",
+      reason,
+      gatewayId: target.gatewayId,
+      surface: target.surface,
+    }));
   };
+  proxyReq.on("socket", (socket) => {
+    if (socket.connecting) {
+      socket.once("connect", () => socket.setTimeout(idleTimeoutMs));
+    } else {
+      socket.setTimeout(idleTimeoutMs);
+    }
+  });
+  proxyReq.on("timeout", () => {
+    proxyReq.destroy(new UpstreamTimeoutError(proxyReq.socket?.connecting ? "connect" : "idle"));
+  });
   proxyReq.on("error", (err) => {
+    const reason = upstreamUnavailableReason(err);
     log("[gateway-router] upstream HTTP proxy failed", {
       gatewayId: target.gatewayId,
       surface: target.surface,
+      reason,
       error: err instanceof Error ? err.message : String(err),
     });
     if (res.headersSent) {
@@ -207,7 +248,7 @@ function proxyHttp(
       res.destroy();
       return;
     }
-    writeUpstreamUnavailable();
+    writeUpstreamUnavailable(reason);
   });
   req.on("error", (err) => {
     log("[gateway-router] client request socket error", {
@@ -362,6 +403,10 @@ function proxyUpgrade(
 }
 
 export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Server {
+  const proxyTimeouts = {
+    connectTimeoutMs: opts.upstreamConnectTimeoutMs ?? DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS,
+    idleTimeoutMs: opts.upstreamIdleTimeoutMs ?? DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS,
+  };
   const server = http.createServer((req, res) => {
     if ((req.url ?? "").split("?")[0] === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -386,7 +431,7 @@ export function createGatewayRouter(opts: CreateGatewayRouterOptions): http.Serv
       writeRevisionGone(res, target, null);
       return;
     }
-    proxyHttp(req, res, { target, log: opts.log });
+    proxyHttp(req, res, { target, log: opts.log, ...proxyTimeouts });
   });
 
   server.on("upgrade", (req, socket, head) => {

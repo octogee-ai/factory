@@ -288,6 +288,67 @@ describe("createGatewayRouter", () => {
     });
   });
 
+  it("answers a typed 502 instead of hanging when the upstream accepts the socket but never responds", async () => {
+    const silentSockets = new Set<net.Socket>();
+    const silentUpstream = net.createServer((socket) => {
+      silentSockets.add(socket);
+      socket.on("error", () => undefined);
+      socket.on("close", () => silentSockets.delete(socket));
+    });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      silentUpstream.listen(0, "127.0.0.1", () => resolve((silentUpstream.address() as AddressInfo).port));
+    });
+    const log = vi.fn();
+    const router = createGatewayRouter({
+      namespace: "octogee",
+      targetOriginForGateway: () => `http://127.0.0.1:${upstreamPort}`,
+      log,
+      upstreamIdleTimeoutMs: 200,
+    });
+    const routerPort = await listen(router);
+
+    const startedAt = Date.now();
+    const res = await requestText(`http://127.0.0.1:${routerPort}/g/ceckert-m-42e59213/workspace/github/repos`, {
+      host: "api.octogee.com",
+    });
+
+    expect(res.status).toBe(502);
+    expect(JSON.parse(res.body)).toEqual({
+      error: "gateway upstream unavailable",
+      reason: "gateway_timeout",
+      gatewayId: "ceckert-m-42e59213",
+      surface: "api",
+    });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(log).toHaveBeenCalledWith("[gateway-router] upstream HTTP proxy failed", expect.objectContaining({
+      gatewayId: "ceckert-m-42e59213",
+      reason: "gateway_timeout",
+    }));
+    for (const socket of silentSockets) socket.destroy();
+    await new Promise<void>((resolve) => silentUpstream.close(() => resolve()));
+  });
+
+  it("names a refused upstream as unreachable in the typed 502", async () => {
+    const closed = net.createServer();
+    const closedPort = await new Promise<number>((resolve) => {
+      closed.listen(0, "127.0.0.1", () => resolve((closed.address() as AddressInfo).port));
+    });
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const router = createGatewayRouter({
+      namespace: "octogee",
+      targetOriginForGateway: () => `http://127.0.0.1:${closedPort}`,
+      log: () => undefined,
+    });
+    const routerPort = await listen(router);
+
+    const res = await requestText(`http://127.0.0.1:${routerPort}/g/bender-blue/byosub/health`, {
+      host: "api.octogee.com",
+    });
+
+    expect(res.status).toBe(502);
+    expect(JSON.parse(res.body)).toMatchObject({ error: "gateway upstream unavailable", reason: "gateway_unreachable" });
+  });
+
   it("never proxies preview-host requests to a gateway-local execution port", async () => {
     const upstreamSeen = vi.fn();
     const upstream = http.createServer((req, res) => {
