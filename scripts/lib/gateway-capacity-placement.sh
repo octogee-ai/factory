@@ -81,7 +81,7 @@ shared_gateway_ids = {
         .get("template", {})
         .get("metadata", {})
         .get("labels", {})
-        .get("gateway-id")
+        .get("gateway-instance")
     for item in live_deployments
     if item.get("metadata", {}).get("labels", {}).get("gateway-class") == "shared"
 }
@@ -93,6 +93,8 @@ shared_pdbs = [
         .get("selector", {})
         .get("matchLabels", {})
         .get("gateway-class")
+    ) == "shared" or gateway_class_by_instance.get(
+        item.get("spec", {}).get("selector", {}).get("matchLabels", {}).get("gateway-instance")
     ) == "shared"
 ]
 if shared_gateway_ids:
@@ -105,11 +107,10 @@ if shared_gateway_ids:
         pdb_spec = pdb.get("spec", {})
         pdb_selector = pdb_spec.get("selector", {})
         pdb_labels = pdb_selector.get("matchLabels") or {}
-        pdb_gateway_id = pdb_labels.get("gateway-id")
+        pdb_gateway_id = pdb_labels.get("gateway-instance")
         expected_labels = {
             "app": "octogee-gateway",
-            "gateway-class": "shared",
-            "gateway-id": pdb_gateway_id,
+            "gateway-instance": pdb_gateway_id,
         }
         if (
             pdb_gateway_id not in shared_gateway_ids
@@ -143,6 +144,8 @@ for deployment in live_deployments:
     node_selector = pod_spec.get("nodeSelector") or {}
     compute_class = node_selector.get(compute_class_label)
     if gateway_class == "shared":
+        if instance != gateway_id:
+            errors.append(f"shared Deployment {name} must use its stable gateway-id as gateway-instance")
         if compute_class is not None:
             errors.append(
                 f"Deployment {name} must use platform on-demand capacity without a custom ComputeClass"
@@ -193,14 +196,13 @@ for deployment in live_deployments:
             errors.append(f"shared PDB for Deployment {name} must not set maxUnavailable")
         expected_labels = {
             "app": "octogee-gateway",
-            "gateway-class": "shared",
-            "gateway-id": gateway_id,
+            "gateway-instance": instance,
         }
         if (
             (pdb_selector.get("matchLabels") or {}) != expected_labels
             or pdb_selector.get("matchExpressions")
         ):
-            errors.append(f"shared PDB for Deployment {name} must exactly select its stable gateway-id")
+            errors.append(f"shared PDB for Deployment {name} must exactly select its stable gateway-instance")
     else:
         if str(pdb_spec.get("minAvailable")) != "1":
             errors.append(f"PDB for Deployment {name} must set minAvailable=1")

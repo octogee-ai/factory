@@ -145,8 +145,7 @@ function sharedPdb(instance: string, overrides: Record<string, unknown> = {}) {
       selector: {
         matchLabels: {
           app: "octogee-gateway",
-          "gateway-class": "shared",
-          "gateway-id": instance,
+          "gateway-instance": instance,
         },
       },
       ...overrides,
@@ -250,6 +249,27 @@ describe("gateway capacity placement verifier", () => {
     expect(result.stdout).toContain(
       "gateway capacity placement verified: 3 Deployment(s), 2 shared on-demand pod(s), 0 owner-bound on-demand fallback pod(s)",
     );
+  });
+
+  it("accepts the chart's per-instance shared disruption budgets", () => {
+    const result = runPlacementCheck({
+      pdbs: { items: [pdb("shared-a"), pdb("shared-b"), pdb("builder")] },
+    });
+
+    expect(result.status, result.stdout).toBe(0);
+  });
+
+  it("rejects a revision-specific shared instance identity", () => {
+    const shared = deployment("shared-a");
+    shared.metadata.labels["gateway-instance"] = "shared-a-r2";
+    shared.spec.template.metadata.labels["gateway-instance"] = "shared-a-r2";
+    const result = runPlacementCheck({
+      deployments: { items: [shared, deployment("builder")] },
+      pdbs: { items: [pdb("shared-a-r2"), pdb("builder")] },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("must use its stable gateway-id as gateway-instance");
   });
 
   it("rejects the retired operator customer gateway class", () => {
