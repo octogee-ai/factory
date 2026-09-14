@@ -204,4 +204,6 @@ roleRef:
 subjects:
   - kind: User
     name: {{ required "global.computer.serviceAccountEmail is required" $computer.serviceAccountEmail }}
+  - kind: User
+    name: {{ required "global.computer.serviceAccountUniqueId is required" ($computer.serviceAccountUniqueId | toString) | quote }}
 {{- end }}
