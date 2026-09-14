@@ -63,6 +63,13 @@ export const CONFIG_PATCH_DEADLINE_MS = 120_000;
 // in request terms.
 export const CONFIG_RELOAD_DEADLINE_MS = 120_000;
 
+// A surge import's activation patch can make the target gateway restart instead of
+// hot-reloading; the gateway then answers "gateway starting" for the whole boot and
+// changes its config hash as its own reconcile catches up. The import waits through
+// one full restart plus a reload on top of the ordinary patch budget.
+export const IMPORT_ACTIVATION_PATCH_DEADLINE_MS =
+  CONFIG_PATCH_DEADLINE_MS + 2 * CONFIG_RELOAD_DEADLINE_MS;
+
 export const ADD_CUSTOMER_DEADLINE_MS = 300_000;
 
 export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;

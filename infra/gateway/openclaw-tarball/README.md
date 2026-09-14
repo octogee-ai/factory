@@ -80,7 +80,7 @@ select TEST or PROD later.
 The selected build is upstream `main`, locked at the start of the recut to
 [`167653ddfa338d4d664de11524735c52b48dc139`](https://github.com/openclaw/openclaw/commit/167653ddfa338d4d664de11524735c52b48dc139).
 Its package version is `2026.9.4`; this is a main snapshot, not the GA tag.
-[Runtime source `c94ec031913aa04c34ed690de2294d9836ce0b15`](https://github.com/ceckert/openclaw/commit/c94ec031913aa04c34ed690de2294d9836ce0b15)
+[Runtime source `777fb63f01dd62d58e393c950c2bb12f0fe19b74`](https://github.com/ceckert/openclaw/commit/777fb63f01dd62d58e393c950c2bb12f0fe19b74)
 on `ceckert/openclaw:codex/octogee-main-20260913` carries the remaining overlay:
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
@@ -88,6 +88,7 @@ on `ceckert/openclaw:codex/octogee-main-20260913` carries the remaining overlay:
 | Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit human grants in either grant order. | Still needed; contributing to the existing [upstream policy discussion #135631](https://github.com/openclaw/openclaw/issues/135631#issuecomment-5657833033), not silently redefining upstream's `none` policy. |
 | Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures while allowing recovery. | Still needed; the generic preferences fix is [upstream PR #147930](https://github.com/openclaw/openclaw/pull/147930). |
 | Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; existing [upstream proposal #132759](https://github.com/openclaw/openclaw/issues/132759) awaits the shared-room policy/configuration decision. |
+| Deferred cron monitor convergence | A committed hot reload whose system cron monitor reconcile answers retry-scheduled stays live and logs the deferral instead of forcing a gateway restart; the cron service's own retry finishes the monitors. Pinned by the reload model-state and partial-monitor-write regressions. | Needed by Octogee's multi-customer surge imports (PROD shared-0, 2026-09-14); candidate upstream fix, not yet filed. |
 
 The config revision freshness patch [#142169](https://github.com/openclaw/openclaw/pull/142169)
 and account-scoped SecretRef reload inspection patch
@@ -111,12 +112,12 @@ revocation removes prepared-icon access, mention eligibility, and delayed mentio
 delivery. Native activity-summary authorization uses the same sharing policy;
 no custom Activity journal or transcript recovery is restored.
 
-The root artifact is `openclaw-fork-c94ec031.tgz`
-(SHA-256 `c0c652fa9a13dd332b82aa5b0e02b64c5991d062c5aa34554a8da8a534f57e46`).
-Mattermost is `openclaw-mattermost-bcf4fa36.tgz`
-(SHA-256 `bcf4fa3655ea94b2538209e6e7433e2f7863d8deff156e1b63bad98b57b3bf32`).
+The root artifact is `openclaw-fork-777fb63f.tgz`
+(SHA-256 `d9cd664b96b1691a86d84d81f0c63c5d1a3d0cd7553e444e264b1c302950a5e5`).
+Mattermost is `openclaw-mattermost-1646abef.tgz`
+(SHA-256 `1646abefea8337b52927af362025d6f7a6d0c6f9331851fecda9f671b5441247`).
 
-The exact overlay commit passed the full build. Focused gateway/runtime suites
+The exact overlay commit passed the full build. The 2026-09-14 recut adds one overlay commit (deferred cron monitor convergence) on the same locked upstream snapshot; the gateway reload-handler and cron suites passed 269 tests, and the Octogee surge-import deadline change is covered separately in `core/src/apply-config-patch.spec.ts`. Focused gateway/runtime suites
 cover membership, sharing, preferences, read visibility, mentions, media, and
 icons; Mattermost routing/participation suites passed 152 tests and the UI icon
 suite passed 11. Changed-source type, lint, format, protocol, config metadata,

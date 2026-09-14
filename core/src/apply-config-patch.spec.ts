@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
+import { CONFIG_PATCH_DEADLINE_MS, IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -1413,5 +1413,63 @@ describe("staleProjectAgentAccountNulls", () => {
       "alice-proj-old": null,
       "alice-proj-orbit": null,
     });
+  });
+});
+
+describe("applyConfigPatch — a target that restarts after committing the patch", () => {
+  // The gateway answers the activation patch with "persisted, restart required", then is
+  // unreachable while it restarts, then reports "gateway starting" for the rest of its boot,
+  // then its own reconcile moves the config hash once, then the patch is a server no-op.
+  function restartingGateway(clock: { now: number }) {
+    const t0 = clock.now;
+    const configGet = vi.fn(async () => ({ config: {}, hash: `h-${Math.floor((clock.now - t0) / 60_000)}` }));
+    const configPatch = vi.fn(async (_patch: object, hash: string) => {
+      const elapsed = clock.now - t0;
+      if (elapsed < 1_000) {
+        throw new OpenclawWireError(
+          "rpc-error",
+          "config.patch persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision",
+        );
+      }
+      if (elapsed < 60_000) throw new OpenclawWireError("connect-failed", "WS open failed: Unexpected server response: 503");
+      if (elapsed < 170_000) throw new OpenclawWireError("auth-failed", "gateway starting; retry shortly");
+      if (hash !== `h-${Math.floor(elapsed / 60_000)}`) throw new OpenclawWireError("hash-mismatch", "config changed since last load; re-run config.get and retry");
+      return { ok: true as const, path: "/fake/openclaw.json", noop: true };
+    });
+    return makeFakeRpc({ configGet, configPatch });
+  }
+
+  function clockedOpts(clock: { now: number }, totalDeadlineMs: number) {
+    return {
+      log: () => {},
+      now: () => clock.now,
+      sleep: vi.fn(async (ms: number) => {
+        clock.now += ms;
+      }),
+      totalDeadlineMs,
+    };
+  }
+
+  it("rides through the restart within the import activation deadline and lands as a no-op", async () => {
+    const clock = { now: 1_000_000 };
+    const rpc = restartingGateway(clock);
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({ agents: { entries: { "octogee-jack-coach": {} } } }) },
+      { ...clockedOpts(clock, IMPORT_ACTIVATION_PATCH_DEADLINE_MS), rpc },
+    );
+    expect(result.noop).toBe(true);
+    expect(clock.now - 1_000_000).toBeGreaterThan(170_000);
+    expect(clock.now - 1_000_000).toBeLessThan(IMPORT_ACTIVATION_PATCH_DEADLINE_MS);
+  });
+
+  it("gives up inside the ordinary config-patch deadline while the gateway is still booting", async () => {
+    const clock = { now: 1_000_000 };
+    const rpc = restartingGateway(clock);
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({ agents: { entries: { "octogee-jack-coach": {} } } }) },
+        { ...clockedOpts(clock, CONFIG_PATCH_DEADLINE_MS), rpc },
+      ),
+    ).rejects.toThrow(/totalDeadlineMs=120000ms exceeded/);
   });
 });

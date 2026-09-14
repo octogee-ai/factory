@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
+import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, filterOutCustomerBindings, orderBuilderGatewayRoster, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
@@ -394,7 +394,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
         cache: opts.cache,
         signal: opts.signal,
         log: opts.log,
-        totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
+        totalDeadlineMs: IMPORT_ACTIVATION_PATCH_DEADLINE_MS,
     });
     return {
         elapsedMs: Date.now() - startedAt,
