@@ -18,9 +18,16 @@ vi.mock("../lib/byosub-broker.js", () => ({
   readByosubFlow: (...a: unknown[]) => readByosubFlow(...a),
 }));
 
-const readGatewayAuthorization = vi.fn();
+const firestore = vi.hoisted(() => ({
+  doc: vi.fn(),
+  collection: vi.fn(),
+  readGatewayAuthorization: vi.fn(),
+}));
+vi.mock("../lib/db.js", () => ({
+  db: { doc: firestore.doc, collection: firestore.collection },
+}));
 vi.mock("@octogee/core/gateway-live-release", () => ({
-  readGatewayAuthorization: (...args: unknown[]) => readGatewayAuthorization(...args),
+  readGatewayAuthorization: (...args: unknown[]) => firestore.readGatewayAuthorization(...args),
 }));
 
 const ssoStart = vi.fn();
@@ -53,12 +60,12 @@ function app() {
 describe("byosub-auth sidecar router", () => {
   beforeEach(() => {
     process.env.GATEWAY_ID = "bender";
+    process.env.GATEWAY_CLASS = "builder";
     resolveByosubUserGateway.mockReset().mockResolvedValue({ slug: "tester5", gatewayId: "bender" });
     readByosubFlow.mockReset();
-    readGatewayAuthorization.mockReset().mockResolvedValue({
-      kind: "durable",
-      config: { gatewayClass: "builder" },
-    });
+    firestore.doc.mockReset();
+    firestore.collection.mockReset();
+    firestore.readGatewayAuthorization.mockReset();
     ssoStart.mockReset();
     ssoStatus.mockReset();
     ssoSubmit.mockReset();
@@ -67,6 +74,7 @@ describe("byosub-auth sidecar router", () => {
   });
   afterEach(() => {
     delete process.env.GATEWAY_ID;
+    delete process.env.GATEWAY_CLASS;
   });
 
   it("connect (anthropic): starts the in-pod SSO flow locally and brokers the flow write", async () => {
@@ -90,11 +98,8 @@ describe("byosub-auth sidecar router", () => {
     expect(brokerByosubFlow).not.toHaveBeenCalled();
   });
 
-  it("connect: refuses the shared gateway before a subscription flow starts", async () => {
-    readGatewayAuthorization.mockResolvedValue({
-      kind: "durable",
-      config: { gatewayClass: "shared" },
-    });
+  it("connect: refuses the shared gateway from the pod's own class, never reading Firestore", async () => {
+    process.env.GATEWAY_CLASS = "shared";
 
     const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
 
@@ -102,6 +107,30 @@ describe("byosub-auth sidecar router", () => {
     expect(res.body).toMatchObject({ code: "subscription-runtime-required" });
     expect(ssoStart).not.toHaveBeenCalled();
     expect(brokerByosubFlow).not.toHaveBeenCalled();
+    expect(firestore.readGatewayAuthorization).not.toHaveBeenCalled();
+    expect(firestore.doc).not.toHaveBeenCalled();
+    expect(firestore.collection).not.toHaveBeenCalled();
+  });
+
+  it("connect: refuses when the pod does not declare a Builder class", async () => {
+    delete process.env.GATEWAY_CLASS;
+
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: "subscription-runtime-required" });
+    expect(ssoStart).not.toHaveBeenCalled();
+  });
+
+  it("connect: starts the Builder flow without touching Firestore", async () => {
+    ssoStart.mockResolvedValue({ flowId: "f1", verificationUrl: "https://x", state: "pending" });
+
+    const res = await request(app()).post("/byosub/connect").send({ provider: "anthropic" });
+
+    expect(res.status).toBe(200);
+    expect(firestore.readGatewayAuthorization).not.toHaveBeenCalled();
+    expect(firestore.doc).not.toHaveBeenCalled();
+    expect(firestore.collection).not.toHaveBeenCalled();
   });
 
   it("connect: 400 on an unsupported provider", async () => {

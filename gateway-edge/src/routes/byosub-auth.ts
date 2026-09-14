@@ -1,7 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 
 import { requireAuthenticatedUid } from "../middleware/auth.js";
-import { db } from "../lib/db.js";
 import {
   coachAgentId,
   gatewayClaudeSsoClient,
@@ -21,7 +20,6 @@ import {
   type ModelCredentialOAuthProviderId,
   type ModelCredentialSubscriptionProviderId,
 } from "@octogee/shared/types/model-credentials";
-import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 
 function subscriptionProviderIds(): ModelCredentialSubscriptionProviderId[] {
   return [...MODEL_CREDENTIAL_SUBSCRIPTION_PROVIDER_IDS];
@@ -49,9 +47,8 @@ function flowIsMountedHere(flow: ByosubFlowRecord): boolean {
   return !!local && flow.gatewayId === local;
 }
 
-async function hasPrivateSubscriptionRuntime(gatewayId: string): Promise<boolean> {
-  const authorization = await readGatewayAuthorization(db, gatewayId);
-  return authorization?.kind === "durable" && authorization.config.gatewayClass !== "shared";
+function hasPrivateSubscriptionRuntime(): boolean {
+  return process.env.GATEWAY_CLASS?.trim() === "builder";
 }
 
 export function createByosubAuthRouter(): Router {
@@ -82,7 +79,7 @@ export function createByosubAuthRouter(): Router {
           res.status(409).json({ error: "not_on_this_pod" });
           return;
         }
-        if (!await hasPrivateSubscriptionRuntime(resolved.gatewayId)) {
+        if (!hasPrivateSubscriptionRuntime()) {
           res.status(409).json({
             code: "subscription-runtime-required",
             error: "A private Builder runtime is required before connecting a personal subscription",
