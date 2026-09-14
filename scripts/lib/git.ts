@@ -729,10 +729,46 @@ function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
 // no admin-token HTTP fallback: a missing key is a loud failure the reconcile
 // heals by regenerating + re-registering. Repo existence is checked through the
 // admin broker (no admin token on this container).
+export interface WorkspaceTreeState {
+  tracked: number;
+  missing: number;
+}
+
+export function workspaceTreeState(repoDir: string): WorkspaceTreeState | null {
+  const listed = gitExec(repoDir, ["ls-files", "-z"]);
+  if (listed === null) return null;
+  const tracked = listed.split("\0").filter((entry) => entry.length > 0);
+  let missing = 0;
+  for (const entry of tracked) {
+    try {
+      fs.lstatSync(path.join(repoDir, entry));
+    } catch {
+      missing += 1;
+    }
+  }
+  return { tracked: tracked.length, missing };
+}
+
+function restoreEmptiedWorkspaceTree(dest: string, slug: string): boolean | null {
+  const state = workspaceTreeState(dest);
+  if (state === null) {
+    log(`⚠ [git] ${slug} workspace has git metadata that git cannot read — refusing to treat it as cloned`);
+    return null;
+  }
+  if (state.tracked === 0 || state.missing < state.tracked) return false;
+  if (gitExec(dest, ["checkout", "--", "."]) === null) {
+    log(`⚠ [git] ${slug} workspace tree is empty and could not be restored from its checkout`);
+    return null;
+  }
+  log(`[git] ${slug} workspace tree was empty — restored ${state.tracked} tracked file(s) from the checkout`);
+  return true;
+}
+
 export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug);
 
   if (repositoryMetadataExists(dest)) {
+    if (restoreEmptiedWorkspaceTree(dest, slug) === null) return false;
     setRepoSshCommand(dest, slug);
     return true;
   }
