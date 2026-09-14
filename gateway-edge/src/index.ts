@@ -14,7 +14,6 @@ import { createNotificationMetrics, setNotificationMetrics } from "./lib/notific
 import { mountApi } from "./routes/mount-api.js";
 import automationsRoutes from "./routes/automations.js";
 import gitRoutes from "./routes/workspace/git.js";
-import githubReposRoutes from "./routes/workspace/github-repos.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
@@ -244,7 +243,6 @@ function mountSidecarLocalitySurface(app: Express, options: {
   const workspaceLocality = Router();
   workspaceLocality.use("/git", requireAuth);
   workspaceLocality.use(gitRoutes);
-  workspaceLocality.use(githubReposRoutes);
   mountApi(app, "/workspace", workspaceLocality);
 
   // Deep byosub health runs on the customer's own pod (reached via the

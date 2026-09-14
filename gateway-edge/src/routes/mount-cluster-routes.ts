@@ -36,6 +36,7 @@ import workspaceUploadRoutes from "./workspace/upload.js";
 import workspaceDeleteBlobRoutes from "./workspace/delete-blob.js";
 import workspaceExtractZipRoutes from "./workspace/extract-zip.js";
 import workspaceImportRepoRoutes from "./workspace/import-repo.js";
+import workspaceGithubReposRoutes from "./workspace/github-repos.js";
 
 import channelsRoutes from "./channels/index.js";
 
@@ -80,6 +81,7 @@ const WORKSPACE_ROUTES: readonly RouteHandler[] = [
   workspaceDeleteBlobRoutes,
   workspaceExtractZipRoutes,
   workspaceImportRepoRoutes,
+  workspaceGithubReposRoutes,
 ];
 
 const CHANNEL_ROUTES: readonly RouteHandler[] = [requireAuth, channelsRoutes];

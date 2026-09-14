@@ -39,14 +39,16 @@ afterEach(() => {
 });
 
 // Guards the canary against the mount it actually rides: the picker calls the
-// gateway-locality path /api/g/<id>/workspace/github/repos. A 403/422 here (not
-// 404) proves the route is mounted; an unmounted route would 404 the picker.
+// cluster path /api/workspace/github/repos (octogee-api holds the Firestore
+// credentials and the connector token authority; a gateway edge holds neither).
+// A 403/422 here (not 404) proves the route is mounted; an unmounted route would
+// 404 the picker.
 describe("GET /workspace/github/repos — mounted + caller's own connection", () => {
   it("403s a non-admin (route reachable, not 404)", async () => {
     await seed("user");
     const token = await getIdTokenForUid(UID);
     const r = await request(createApp())
-      .get("/api/g/test/workspace/github/repos")
+      .get("/api/workspace/github/repos")
       .set("Authorization", `Bearer ${token}`);
     expect(r.status, r.text).toBe(403);
   });
@@ -55,7 +57,7 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
     await seed("admin");
     const token = await getIdTokenForUid(UID);
     const r = await request(createApp())
-      .get("/api/g/test/workspace/github/repos")
+      .get("/api/workspace/github/repos")
       .set("Authorization", `Bearer ${token}`);
     expect(r.status, r.text).toBe(422);
     expect(r.body.reason).toBe("github_not_connected");
@@ -93,7 +95,7 @@ describe("GET /workspace/github/repos — mounted + caller's own connection", ()
 
     const token = await getIdTokenForUid(UID);
     const r = await request(createApp())
-      .get("/api/g/test/workspace/github/repos")
+      .get("/api/workspace/github/repos")
       .set("Authorization", `Bearer ${token}`);
 
     expect(r.status, r.text).toBe(200);

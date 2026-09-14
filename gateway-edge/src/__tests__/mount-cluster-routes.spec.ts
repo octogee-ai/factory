@@ -47,7 +47,7 @@ describe("mountClusterRoutes", () => {
     mountClusterRoutes(app);
 
     const workspace = useCalls(app, "/api/workspace");
-    expect(workspace).toHaveLength(10);
+    expect(workspace).toHaveLength(11);
     expect((workspace[0].handlers[0] as { name?: string }).name).toBe("requireAuth");
   });
 
@@ -112,6 +112,7 @@ describe("mountClusterRoutes", () => {
     mountClusterRoutes(app);
 
     expect(app.calls.map((c) => c.path)).toEqual([
+      "/api/workspace",
       "/api/workspace",
       "/api/workspace",
       "/api/workspace",
