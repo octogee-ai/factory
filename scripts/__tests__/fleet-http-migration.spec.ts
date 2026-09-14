@@ -63,6 +63,8 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 
 const spawnMock = vi.fn();
+const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../lib/agent-store-upgrade.js", () => ({ upgradeStagedAgentStores: upgradeStoresMock }));
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
@@ -327,6 +329,7 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
 
 beforeEach(() => {
   spawnMock.mockReset();
+  upgradeStoresMock.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -2926,6 +2929,31 @@ describe("agent sqlite stores across an rsync carry", () => {
     await expect(fs.access(`${stale}-wal`)).rejects.toThrow();
     await expect(fs.access(`${stale}-shm`)).rejects.toThrow();
   });
+
+  it.each(["pre", "final"] as const)("upgrades staged %s state before copying or activating it", async (mode) => {
+    const importDir = await mkTempRoot();
+    const migrationId = `mig-schema-upgrade-${mode}`;
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode });
+    await writeStore(stageDir, CARRIED_STORE, () => {});
+    spawnMock.mockImplementationOnce(() => {
+      expect(upgradeStoresMock).toHaveBeenCalledWith(stageDir, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      return mkFakeChild({ exitCode: 0 });
+    });
+    const { getStatus } = await finishImport(deps, migrationId, mode);
+    expect(getStatus()).toBe(200);
+  });
+
+  it("does not deliver or activate state when offline upgrade fails", async () => {
+    const importDir = await mkTempRoot();
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-schema-failure", importDir, daemon: mkFakeChild() });
+    await writeStore(stageDir, CARRIED_STORE, () => {});
+    upgradeStoresMock.mockRejectedValueOnce(new Error("schema upgrade failed"));
+    const { getStatus } = await finishImport(deps, "mig-schema-failure");
+    expect(getStatus()).toBe(500);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
+  });
 });
 
 describe("createPushStateHandler", () => {
@@ -3493,6 +3521,8 @@ describe("createImportHandler", () => {
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
     expect(spawnMock.mock.calls[0][1][0]).toBe("-tf");
     expect(spawnMock.mock.calls[1][1][0]).toBe("-xf");
+    expect(upgradeStoresMock).toHaveBeenCalledTimes(1);
+    expect(upgradeStoresMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[2]!);
   });
 
   it("imports keys mode without activating the customer", async () => {
@@ -3525,6 +3555,7 @@ describe("createImportHandler", () => {
     expect(adapter.prepareImportDir).not.toHaveBeenCalled();
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
     expect(adapter.writeMountMarker).not.toHaveBeenCalled();
+    expect(upgradeStoresMock).not.toHaveBeenCalled();
   });
 
   it("stages pre-sync state without activating or marking the target mounted", async () => {

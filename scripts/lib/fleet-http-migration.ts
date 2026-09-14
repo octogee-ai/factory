@@ -90,6 +90,7 @@ import {
   SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS,
 } from "./openclaw-config-builders.js";
 import { OpenclawWireError } from "./gateway-rpc.js";
+import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
 import type { SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
@@ -1813,9 +1814,6 @@ async function validateStagedRsyncImport(
     assertConfiguredBuilderPortableStatePlanOnDisk(session.stageDir, configuredBuilderStatePlan);
     assertConfiguredBuilderPortableStatePlanOnDisk(session.importDir, configuredBuilderStatePlan);
   }
-  await clearSqliteSidecars(
-    staged.map((store) => path.join(session.importDir, path.relative(session.stageDir, store))),
-  );
   return null;
 }
 
@@ -1956,6 +1954,13 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
+      if (mode !== "keys") {
+        await upgradeStagedAgentStores(session.stageDir, { signal: controller.signal, log });
+      }
+      await clearSqliteSidecars(
+        (await listSqliteStores(session.stageDir)).map((store) =>
+          path.join(session.importDir, path.relative(session.stageDir, store))),
+      );
       await copyStageToOpenClaw(session.stageDir, session.importDir, body.slug);
       const verificationPending = mode === "final"
         ? await activateFinishedRsyncImport({
@@ -2300,6 +2305,8 @@ async function extractValidatedImport(input: {
   importDir: string;
   slug: string;
   mode: MigrationImportMode;
+  signal: AbortSignal;
+  log: (message: string) => void;
 }): Promise<string | null> {
   const entries = await listTarEntries(input.tarPath);
   const traversal = findPathTraversalViolation(entries, input.slug, input.mode);
@@ -2313,6 +2320,9 @@ async function extractValidatedImport(input: {
     .map((entry) => path.join(stageDir, entry));
   const unreadable = await findUnreadableStore({ storePaths: delivered, relativeTo: stageDir });
   if (unreadable) return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
+  if (input.mode !== "keys") {
+    await upgradeStagedAgentStores(stageDir, { signal: input.signal, log: input.log });
+  }
   await clearSqliteSidecars(delivered.map((store) => path.join(input.importDir, path.relative(stageDir, store))));
   await copyStageToOpenClaw(stageDir, input.importDir, input.slug);
   return null;
@@ -2347,7 +2357,7 @@ export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler 
 
       await streamRequestToFile(req, tarPath);
 
-      const violation = await extractValidatedImport({ tarPath, importDir, slug, mode });
+      const violation = await extractValidatedImport({ tarPath, importDir, slug, mode, signal: controller.signal, log });
       if (violation !== null) {
         log(
           `[migration-http] 🔴 import migrationId=${migrationId} slug=${slug} rejected: ${violation}`,
