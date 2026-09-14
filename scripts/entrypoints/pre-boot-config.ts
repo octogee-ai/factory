@@ -145,6 +145,11 @@ export function applyMattermostPreBootPatches(
   if (!mattermost) return false;
   let changed = applyMattermostAccountSessionPolicy(mattermost, "channels.mattermost", logFn);
   changed = applyMattermostQueuePolicy(config, logFn) || changed;
+  if (mattermost.replyToMode === undefined) {
+    mattermost.replyToMode = "all";
+    changed = true;
+    logFn("set channels.mattermost.replyToMode=all");
+  }
 
   if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
     mattermost.baseUrl = MM_URL_PLACEHOLDER;

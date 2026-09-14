@@ -437,7 +437,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 describe("applyPreBootPatches — Mattermost runtime", () => {
   it.each([undefined, "steer", "collect", "followup"])("queues Mattermost turns separately from other channel policy (%s)", (mattermostMode) => {
     const config: any = {
-      channels: { mattermost: { threadSessionScope: "channel", commands: { native: false } } },
+      channels: { mattermost: { threadSessionScope: "channel", replyToMode: "all", commands: { native: false } } },
       messages: { queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
     };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "followup");
@@ -463,12 +463,29 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.agents.defaults.verboseDefault).toBe("off");
   });
 
-  it("does not introduce reply or streaming overrides into a new account configuration", () => {
+  it("defaults room replies to threads without introducing streaming or direct-message overrides", () => {
     const config: any = { channels: { mattermost: {} } };
     applyPreBootPatches(config, {});
-    expect(config.channels.mattermost).not.toHaveProperty("replyToMode");
+    expect(config.channels.mattermost.replyToMode).toBe("all");
+    expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.channels.mattermost).not.toHaveProperty("streaming");
     expect(config.channels.mattermost.threadSessionScope).toBe("channel");
+  });
+
+  it("defaults inherited replies while preserving account and chat-type choices, idempotently", () => {
+    const config: any = { channels: { mattermost: {
+      replyToModeByChatType: { direct: "first", group: "off" },
+      accounts: { inherited: {}, optedOut: { replyToMode: "off" }, first: { replyToMode: "first" } },
+    } } };
+    const log = vi.fn();
+    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
+    expect(config.channels.mattermost.replyToMode).toBe("all");
+    expect(config.channels.mattermost.replyToModeByChatType).toEqual({ direct: "first", group: "off" });
+    expect(config.channels.mattermost.accounts.inherited).not.toHaveProperty("replyToMode");
+    expect(config.channels.mattermost.accounts.optedOut.replyToMode).toBe("off");
+    expect(config.channels.mattermost.accounts.first.replyToMode).toBe("first");
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.replyToMode=all");
+    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(false);
   });
 
   it("removes unsupported fork settings while retaining native account policy and SecretRefs", () => {

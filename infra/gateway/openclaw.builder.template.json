@@ -187,6 +187,7 @@
   "channels": {
     "mattermost": {
       "threadSessionScope": "channel",
+      "replyToMode": "all",
       "enabled": true,
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",

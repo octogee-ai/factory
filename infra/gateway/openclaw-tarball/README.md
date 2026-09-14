@@ -132,7 +132,10 @@ checks do not constitute a live TEST rollout for this recut.
 ### Mattermost session and delivery policy
 
 Templates and pre-boot set `threadSessionScope: "channel"` for Mattermost accounts.
-Existing reply and streaming preferences remain intact. This restores shared
+Templates default room replies to threads with native `replyToMode: "all"`;
+pre-boot fills this default only when unset. Explicit channel/account reply modes,
+per-chat-type overrides, and streaming preferences remain intact. Native direct
+messages stay unthreaded unless explicitly configured otherwise. This restores shared
 context across a room's threads without restoring answer-commit observation,
 Activity publication, or transcript reconstruction. Sessions and tool history
 remain in native OpenClaw SQLite state. Existing thread sessions are not deleted
