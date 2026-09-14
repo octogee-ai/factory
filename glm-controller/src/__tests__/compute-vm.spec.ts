@@ -75,7 +75,12 @@ describe("instanceInsertBody", () => {
     expect(body.disks[0].initializeParams.diskSizeGb).toBe("40");
     expect(body.disks[0].autoDelete).toBe(true);
     expect(body.networkInterfaces).toEqual([{ subnetwork: input.subnetwork }]);
-    expect(body.serviceAccounts[0].email).toBe(input.serviceAccountEmail);
+    expect(body.serviceAccounts).toEqual([
+      {
+        email: input.serviceAccountEmail,
+        scopes: ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email"],
+      },
+    ]);
     expect(body.scheduling).toEqual({
       provisioningModel: "SPOT",
       instanceTerminationAction: "STOP",

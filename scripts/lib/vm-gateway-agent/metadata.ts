@@ -1,4 +1,8 @@
 export const METADATA_BASE = "http://169.254.169.254/computeMetadata/v1";
+export const ACCESS_TOKEN_SCOPES = [
+  "https://www.googleapis.com/auth/cloud-platform",
+  "https://www.googleapis.com/auth/userinfo.email",
+] as const;
 
 export interface InstanceIdentity {
   instanceId: string;
@@ -26,8 +30,8 @@ export function createMetadataClient(fetchImpl: typeof fetch = fetch): MetadataC
     identityToken: (audience) =>
       text(`instance/service-accounts/default/identity?audience=${encodeURIComponent(audience)}&format=full`),
     async accessToken() {
-      const res = await get("instance/service-accounts/default/token");
-      if (!res.ok) throw new Error(`metadata access token: HTTP ${res.status}`);
+      const res = await get(`instance/service-accounts/default/token?scopes=${encodeURIComponent(ACCESS_TOKEN_SCOPES.join(","))}`);
+      if (!res.ok) throw new Error(`metadata access token: HTTP ${res.status} ${(await res.text()).trim()}`);
       const body = (await res.json()) as { access_token?: string };
       if (!body.access_token) throw new Error("metadata access token: empty response");
       return body.access_token;

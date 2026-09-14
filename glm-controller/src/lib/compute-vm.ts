@@ -248,6 +248,11 @@ async function placeAcrossZones(
   };
 }
 
+export const GATEWAY_VM_ACCESS_SCOPES = [
+  "https://www.googleapis.com/auth/cloud-platform",
+  "https://www.googleapis.com/auth/userinfo.email",
+] as const;
+
 export function instanceInsertBody(projectId: string, input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
   return {
     name: input.instanceName,
@@ -265,7 +270,7 @@ export function instanceInsertBody(projectId: string, input: CreateGatewayVmInpu
     ],
     networkInterfaces: [{ subnetwork: input.subnetwork }],
     serviceAccounts: [
-      { email: input.serviceAccountEmail, scopes: ["https://www.googleapis.com/auth/cloud-platform"] },
+      { email: input.serviceAccountEmail, scopes: [...GATEWAY_VM_ACCESS_SCOPES] },
     ],
     scheduling: schedulingFor(provisioningModel),
     shieldedInstanceConfig: { enableSecureBoot: false, enableVtpm: true, enableIntegrityMonitoring: true },
