@@ -63,10 +63,6 @@ export const CONFIG_PATCH_DEADLINE_MS = 120_000;
 // in request terms.
 export const CONFIG_RELOAD_DEADLINE_MS = 120_000;
 
-// A surge import's activation patch can make the target gateway restart instead of
-// hot-reloading; the gateway then answers "gateway starting" for the whole boot and
-// changes its config hash as its own reconcile catches up. The import waits through
-// one full restart plus a reload on top of the ordinary patch budget.
 export const IMPORT_ACTIVATION_PATCH_DEADLINE_MS =
   CONFIG_PATCH_DEADLINE_MS + 2 * CONFIG_RELOAD_DEADLINE_MS;
 
@@ -81,7 +77,11 @@ export const MIGRATION_VERIFY_TIMEOUT_MS = VERIFY_ACCOUNT_TIMEOUT_MS + 30_000;
 // reconcile evict direction. Must outlast import→cutover so a slow import never false-evicts;
 // also bounds how long a failed-migration orphan lingers before lazy eviction. See
 // local-coach-wired.ts (the pin) and fleet-provisioner getEvictObservedSlugs (the skip).
-export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
+export const MIGRATING_IN_PIN_TTL_MS =
+  MIGRATION_TRANSFER_TIMEOUT_MS +
+  IMPORT_ACTIVATION_PATCH_DEADLINE_MS +
+  MIGRATION_VERIFY_TIMEOUT_MS +
+  60_000;
 
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 

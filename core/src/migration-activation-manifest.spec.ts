@@ -2,6 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
+import { applyConfigPatch } from "./apply-config-patch";
+
+vi.mock("./apply-config-patch", async (importActual) => {
+  const actual = await importActual<typeof import("./apply-config-patch")>();
+  return { ...actual, applyConfigPatch: vi.fn(actual.applyConfigPatch) };
+});
 import {
   activationManifestAgentIds,
   activationManifestTarPath,
@@ -1133,6 +1140,27 @@ describe("migration activation manifest", () => {
         "bindings",
         "channels.mattermost.accounts.alice-coach.groupAllowFrom",
       ],
+    });
+  });
+});
+
+describe("migration activation manifest — patch budget", () => {
+  it("gives the activation patch the import deadline, not the ordinary config-patch one", async () => {
+    vi.mocked(applyConfigPatch).mockClear();
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: { agents: { entries: {} }, channels: { mattermost: { accounts: {} } }, bindings: [] },
+      })),
+      configPatch: vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch })),
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), { rpc: rpc as never, log: vi.fn() });
+
+    expect(vi.mocked(applyConfigPatch)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(applyConfigPatch).mock.calls[0][1]).toMatchObject({
+      totalDeadlineMs: IMPORT_ACTIVATION_PATCH_DEADLINE_MS,
     });
   });
 });
