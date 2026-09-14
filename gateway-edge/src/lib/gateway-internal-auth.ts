@@ -6,6 +6,13 @@ import {
   TOKEN_REVIEW_AUDIENCE,
   type Reviewer,
 } from "./kubernetes-token-review.js";
+import {
+  createGceIdentityReviewer,
+  createIssuerDispatchingReviewer,
+  parseGatewayComputerIdentity,
+  serviceAccountLocalPart,
+  type VerifyGoogleIdToken,
+} from "./gce-identity-review.js";
 
 export type GatewayInternalAuthMode = "platform" | "gateway-service-account";
 
@@ -39,8 +46,32 @@ function readProjectedServiceAccountToken(env: Record<string, string | undefined
   }
 }
 
-function getReviewer(): Reviewer {
-  if (sharedReviewer === null) sharedReviewer = createKubernetesTokenReviewer();
+export interface GatewayInternalAuthReviewerDeps {
+  kubernetes?: Reviewer;
+  verify?: VerifyGoogleIdToken;
+}
+
+export function createGatewayInternalAuthReviewer(
+  env: Record<string, string | undefined>,
+  deps: GatewayInternalAuthReviewerDeps = {},
+): Reviewer {
+  const kubernetes = deps.kubernetes ?? createKubernetesTokenReviewer();
+  const computer = parseGatewayComputerIdentity(env);
+  if (!computer) return kubernetes;
+  return createIssuerDispatchingReviewer({
+    kubernetes,
+    gce: createGceIdentityReviewer({
+      ...computer,
+      audience: TOKEN_REVIEW_AUDIENCE,
+      namespace: expectedNamespace(env),
+      verify: deps.verify,
+    }),
+  });
+}
+
+function getReviewer(env: Record<string, string | undefined>): Reviewer {
+  if (env !== process.env) return createGatewayInternalAuthReviewer(env);
+  if (sharedReviewer === null) sharedReviewer = createGatewayInternalAuthReviewer(env);
   return sharedReviewer;
 }
 
@@ -50,6 +81,8 @@ function expectedNamespace(env: Record<string, string | undefined>): string {
 
 function allowedGatewayServiceAccounts(env: Record<string, string | undefined>): Set<string> {
   const allowed = new Set<string>(["octogee-api"]);
+  const computer = parseGatewayComputerIdentity(env);
+  if (computer) allowed.add(serviceAccountLocalPart(computer.serviceAccountEmail));
   const configured = nonBlank(env.GATEWAY_ALLOWED_K8S_SERVICE_ACCOUNTS);
   if (configured) {
     for (const item of configured.split(",")) {
@@ -115,7 +148,7 @@ export async function isValidGatewayInternalAuth(
 
   if (secret.mode === "platform") return timingSafeStringEqual(provided, secret.value);
 
-  const review = await (opts.reviewer ?? getReviewer())(provided);
+  const review = await (opts.reviewer ?? getReviewer(env))(provided);
   if (!review.authenticated) return false;
   if (!review.audiences.includes(TOKEN_REVIEW_AUDIENCE)) return false;
   if (review.namespace !== expectedNamespace(env)) return false;

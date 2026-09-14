@@ -143,7 +143,7 @@ function harness(
       if (args[0] === "apply" && extra.applyFails) return { stdout: "", stderr: "configmaps is forbidden", code: 1 };
       return { stdout: "", stderr: "", code: 0 };
     },
-    vm, vmSpec: spec, bridgeServiceName: "octogee-vm-bridge",
+    vm, vmSpec: spec, computeProjectId: "octogee", bridgeServiceName: "octogee-vm-bridge",
     hostAliasNames: ["octogee-api.octogee-test.svc.cluster.local", "mattermost.octogee-test.svc.cluster.local"],
     kubernetes: { apiHost: "172.20.16.18", apiPort: "443", caCert: "CA" },
     routesConfigMap: "octogee-vm-routes",

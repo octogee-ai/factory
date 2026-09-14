@@ -108,11 +108,17 @@ interface K8sDeployment {
   };
 }
 
+export interface GatewayComputerIdentity {
+  serviceAccountEmail: string;
+  projectId: string;
+}
+
 export interface RenderVmRuntimeBundleInput {
   gatewayId: string;
   namespace: string;
   imageRepository: string;
   imageTag: string;
+  computer: GatewayComputerIdentity;
   manifests: unknown[];
   readSecret: (name: string, key: string) => Promise<string>;
   hostAliases: Record<string, string>;
@@ -198,7 +204,14 @@ async function renderContainer(
   volumes: Set<string>,
 ): Promise<GatewayVmRuntimeContainer> {
   let env = await renderEnv(container.env, input);
-  if (container.name === GATEWAY_EDGE_CONTAINER_NAME) env = { ...env, ...GATEWAY_COMPUTER_ENV };
+  if (container.name === GATEWAY_EDGE_CONTAINER_NAME) {
+    env = {
+      ...env,
+      ...GATEWAY_COMPUTER_ENV,
+      GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: input.computer.serviceAccountEmail,
+      GATEWAY_COMPUTER_PROJECT_ID: input.computer.projectId,
+    };
+  }
   else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm" };
   return {
     name: container.name,

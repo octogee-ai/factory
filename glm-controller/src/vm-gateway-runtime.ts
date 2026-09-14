@@ -34,6 +34,7 @@ export interface VmGatewayRuntimeDeps {
   runKubectl: KubectlSubprocess;
   vm: GatewayVmClient;
   vmSpec: GatewayVmSpec;
+  computeProjectId: string;
   bridgeServiceName: string;
   hostAliasNames: readonly string[];
   kubernetes: { apiHost: string; apiPort: string; caCert: string };
@@ -242,6 +243,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         namespace: deps.namespace,
         imageRepository: opts.imageRepository,
         imageTag: opts.imageTag,
+        computer: { serviceAccountEmail: deps.vmSpec.serviceAccountEmail, projectId: deps.computeProjectId },
         manifests,
         readSecret,
         hostAliases: Object.fromEntries(deps.hostAliasNames.map((name) => [name, bridge])),

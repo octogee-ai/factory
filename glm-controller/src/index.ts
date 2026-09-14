@@ -2585,6 +2585,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       runKubectl,
       vm: createGatewayComputeClient(log),
       vmSpec: BUILDER_VM_SPEC,
+      computeProjectId: gatewayComputeProjectId(),
       bridgeServiceName: process.env.GATEWAY_VM_BRIDGE_SERVICE ?? "octogee-vm-bridge",
       hostAliasNames: GATEWAY_VM_HOST_ALIASES.map((service) => `${service}.${NAMESPACE}.svc.cluster.local`),
       kubernetes: {

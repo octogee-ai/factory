@@ -26,6 +26,7 @@ function render(overrides: Partial<Parameters<typeof renderVmRuntimeBundle>[0]> 
     namespace: "octogee-test",
     imageRepository: "us-docker.pkg.dev/octogee/octogee/gateway",
     imageTag: "main.abc123",
+    computer: { serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com", projectId: "octogee" },
     manifests,
     readSecret: async (name, key) => {
       const value = secrets[`${name}/${key}`];
@@ -112,8 +113,11 @@ describe("renderVmRuntimeBundle", () => {
     expect(edge.env).toMatchObject({
       GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777",
       GATEWAY_COMPUTER_VNC_URL: "ws://127.0.0.1:6080",
+      GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "octogee-computer-test@octogee.iam.gserviceaccount.com",
+      GATEWAY_COMPUTER_PROJECT_ID: "octogee",
     });
     expect(gateway.env).toMatchObject({ GATEWAY_RUNTIME_KIND: "gce-vm" });
+    expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL");
     expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_CONTROL_URL");
     expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_VNC_URL");
     expect(bundle.init?.env).not.toHaveProperty("GATEWAY_RUNTIME_KIND");
