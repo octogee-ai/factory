@@ -123,6 +123,7 @@ function app(opts: {
   a.post("/internal/openclaw/activity/dispatch-context", enforcement, handler);
   a.post("/internal/agent-support/ask", enforcement, handler);
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
+  a.post("/internal/workspace-git/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
   a.post("/internal/agent-projects/set-recipe", enforcement, handler);
@@ -930,6 +931,7 @@ describe("tenant enforcement middleware", () => {
       "/internal/fleet/configured-builder-bootstrap",
       "/internal/fleet/builder-runtime-state/download-url",
       "/internal/openclaw-control/authorize",
+      "/internal/workspace-git/authorize",
       "/internal/byok/agent-usage-status",
       "/internal/agent-projects/list",
       "/internal/agent-access/prepare",

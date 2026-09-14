@@ -4,22 +4,28 @@ import { join } from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/db", () => ({
-  auth: { verifyIdToken: vi.fn() },
-  db: {
-    collection: () => ({
-      doc: () => ({
-        get: async () => ({ exists: false, data: () => undefined }),
-        update: async () => undefined,
-        collection: () => ({
-          doc: () => ({ get: async () => ({ exists: false, data: () => undefined }) }),
-        }),
-      }),
-      where: () => ({ where: () => ({ get: async () => ({ size: 0, docs: [] }) }) }),
-    }),
+const firestore = vi.hoisted(() => ({
+  verifyIdToken: vi.fn(),
+  collection: vi.fn(() => ({
     doc: () => ({
       get: async () => ({ exists: false, data: () => undefined }),
+      update: async () => undefined,
+      collection: () => ({
+        doc: () => ({ get: async () => ({ exists: false, data: () => undefined }) }),
+      }),
     }),
+    where: () => ({ where: () => ({ get: async () => ({ size: 0, docs: [] }) }) }),
+  })),
+  doc: vi.fn(() => ({
+    get: async () => ({ exists: false, data: () => undefined }),
+  })),
+}));
+
+vi.mock("../lib/db", () => ({
+  auth: { verifyIdToken: firestore.verifyIdToken },
+  db: {
+    collection: firestore.collection,
+    doc: firestore.doc,
   },
   FieldValue: {
     delete: () => ({ __op: "delete" }),
@@ -80,8 +86,10 @@ describe("gateway-edge sidecar surface", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     _setGatewayTokenReviewerForTests(null);
     delete process.env.INTERNAL_SERVICE_KEY;
+    delete process.env.OPENCLAW_RUNTIME_BROKER_URL;
     delete process.env.GATEWAY_PROFILE;
     delete process.env.GATEWAY_CLASS;
     delete process.env.GATEWAY_ID;
@@ -133,6 +141,40 @@ describe("gateway-edge sidecar surface", () => {
       (await request(app).post("/api/g/gw-bender/projects/acme/widget/publish").send({}))
         .status,
     ).toBe(404);
+  });
+
+  it("authorizes gateway-local git through octogee-api with the caller's bearer, never Firestore", async () => {
+    configureGatewayServiceAccountAuth();
+    process.env.OPENCLAW_RUNTIME_BROKER_URL = "http://octogee-api:3001";
+    const brokerFetch = vi.fn(async () => new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", brokerFetch);
+    const app = createApp({ surface: "sidecar" });
+
+    const res = await request(app)
+      .get("/api/g/bender/workspace/git/status?slug=alice&project=orbit")
+      .set("authorization", "Bearer firebase-token");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Forbidden" });
+    expect(brokerFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = brokerFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://octogee-api:3001/internal/workspace-git/authorize");
+    const headers = init.headers as Headers;
+    expect(headers.get("authorization")).toBe("Bearer firebase-token");
+    expect(headers.get("x-k8s-sa-token")).toBe("projected-reviewer-token");
+    expect(JSON.parse(String(init.body))).toEqual({
+      gatewayId: "bender",
+      slug: "alice",
+      projectSlug: "orbit",
+      access: "read",
+      resolveGithubToken: false,
+    });
+    expect(firestore.verifyIdToken).not.toHaveBeenCalled();
+    expect(firestore.collection).not.toHaveBeenCalled();
+    expect(firestore.doc).not.toHaveBeenCalled();
   });
 
   it("keeps workspace commits mounted but retires the in-pod project publisher", async () => {

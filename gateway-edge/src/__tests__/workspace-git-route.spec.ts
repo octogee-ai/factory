@@ -1,37 +1,29 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, expect, it, vi } from "vitest";
-import type { FileTarget, ResolveFileTargetOpts } from "../lib/fileTarget.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { WorkspaceGitAuthorizationOutcome } from "../lib/workspace-git-authorization-broker.js";
 
 const h = vi.hoisted(() => ({
-  target: null as FileTarget | null,
-  options: [] as ResolveFileTargetOpts[],
+  authorize: vi.fn(),
+  gitStatus: vi.fn(),
+  gitCommit: vi.fn(),
   gitPush: vi.fn(),
+  resolveCustomerDir: vi.fn(),
   resolveProjectDir: vi.fn(),
   runWorkspaceGitMutation: vi.fn(),
-}));
-
-vi.mock("../lib/fileTarget.js", () => ({
-  withFileTarget: (
-    handler: (...args: unknown[]) => unknown,
-    options: ResolveFileTargetOpts = {},
-  ) => {
-    h.options.push(options);
-    return (req: unknown, res: unknown, next: unknown) =>
-      handler(req, res, next, h.target);
-  },
 }));
 
 vi.mock("../lib/workspace-git.js", () => ({
   gitBranches: vi.fn(),
   gitCheckout: vi.fn(),
-  gitCommit: vi.fn(),
+  gitCommit: (...args: unknown[]) => h.gitCommit(...args),
   gitCommitDiff: vi.fn(),
   gitDiff: vi.fn(),
   gitLog: vi.fn(),
   gitPush: (...args: unknown[]) => h.gitPush(...args),
-  gitStatus: vi.fn(),
-  resolveCustomerDir: vi.fn(),
+  gitStatus: (...args: unknown[]) => h.gitStatus(...args),
+  resolveCustomerDir: (...args: unknown[]) => h.resolveCustomerDir(...args),
   resolveProjectDir: (...args: unknown[]) => h.resolveProjectDir(...args),
   runWorkspaceGitMutation: (...args: unknown[]) => h.runWorkspaceGitMutation(...args),
 }));
@@ -40,27 +32,43 @@ vi.mock("../middleware/logging.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { default: workspaceGitRouter } = await import("../routes/workspace/git.js");
+const { createWorkspaceGitRouter } = await import("../routes/workspace/git.js");
+
+const BEARER = "Bearer firebase-token";
+
+function grant(overrides: Partial<Extract<WorkspaceGitAuthorizationOutcome, { kind: "authorized" }>["authorization"]> = {}) {
+  return {
+    kind: "authorized" as const,
+    authorization: {
+      gatewayId: "bender",
+      uid: "uid-member",
+      slug: "alice",
+      projectSlug: "orbit",
+      githubToken: "gh-member-token",
+      commitAuthor: { name: "Mem Ber", email: "member@example.com" },
+      ...overrides,
+    },
+  };
+}
 
 function app() {
   const instance = express();
   instance.use(express.json());
-  instance.use("/api/workspace", workspaceGitRouter);
+  const router = createWorkspaceGitRouter({
+    authorize: (...args: unknown[]) => h.authorize(...args),
+    localGatewayId: () => "bender",
+  });
+  instance.use("/api/workspace", router);
+  instance.use("/api/g/:gatewayId/workspace", router);
   return instance;
 }
 
 beforeEach(() => {
-  h.target = {
-    slug: "alice",
-    projectSlug: "orbit",
-    provider: "github",
-    org: "octogee-ai",
-    repoName: "orbit",
-    gcsPrefix: "customers/alice/projects/orbit",
-    githubToken: "gh-member-token",
-    brokered: true,
-  };
+  h.authorize.mockReset().mockResolvedValue(grant());
+  h.gitStatus.mockReset().mockResolvedValue({ ok: true, entries: [] });
+  h.gitCommit.mockReset().mockResolvedValue({ ok: true, result: { sha: "abc123", empty: false } });
   h.gitPush.mockReset().mockResolvedValue({ ok: true });
+  h.resolveCustomerDir.mockReset().mockResolvedValue("/customers/alice");
   h.resolveProjectDir.mockReset().mockResolvedValue("/customers/alice/projects/orbit");
   h.runWorkspaceGitMutation.mockReset().mockImplementation(async (_dir, work) => ({
     ok: true,
@@ -68,15 +76,110 @@ beforeEach(() => {
   }));
 });
 
-it("resolves a caller token for remote writes and passes it only to git push", async () => {
-  const res = await request(app())
-    .post("/api/workspace/git/push")
-    .send({ branch: "feature/member" });
+describe("gateway-local workspace git authorization", () => {
+  it("only answers on its own fleet-scoped path and never consults the broker for another gateway", async () => {
+    expect((await request(app()).get("/api/workspace/git/status?slug=alice").set("authorization", BEARER)).status).toBe(404);
+    expect((await request(app()).get("/api/g/other/workspace/git/status?slug=alice").set("authorization", BEARER)).status).toBe(404);
+    expect(h.authorize).not.toHaveBeenCalled();
+  });
 
-  expect(res.status).toBe(200);
-  expect(h.options).toContainEqual({ access: "write", resolveGithubToken: true });
-  expect(h.gitPush).toHaveBeenCalledWith("/customers/alice/projects/orbit", {
-    branch: "feature/member",
-    githubToken: "gh-member-token",
+  it("answers 401 without a bearer and 400 without a slug before reaching the broker", async () => {
+    const unauthenticated = await request(app()).get("/api/g/bender/workspace/git/status?slug=alice");
+    expect(unauthenticated.status).toBe(401);
+    const missingSlug = await request(app()).get("/api/g/bender/workspace/git/status").set("authorization", BEARER);
+    expect(missingSlug.status).toBe(400);
+    expect(missingSlug.body).toEqual({ error: "Missing slug" });
+    expect(h.authorize).not.toHaveBeenCalled();
+  });
+
+  it("authorizes reads through the broker with the caller's bearer, the local gateway, and the read lane", async () => {
+    const res = await request(app())
+      .get("/api/g/bender/workspace/git/status?slug=alice&project=orbit")
+      .set("authorization", BEARER);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ entries: [] });
+    expect(h.authorize).toHaveBeenCalledWith({
+      gatewayId: "bender",
+      authorization: BEARER,
+      slug: "alice",
+      projectSlug: "orbit",
+      lane: { access: "read", resolveGithubToken: false },
+    });
+    expect(h.gitStatus).toHaveBeenCalledWith("/customers/alice/projects/orbit");
+  });
+
+  it("passes broker refusals through with their status and body", async () => {
+    h.authorize.mockResolvedValueOnce({ kind: "unauthenticated" });
+    expect((await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER)).status).toBe(401);
+
+    h.authorize.mockResolvedValueOnce({ kind: "denied", status: 403, error: "Forbidden" });
+    const forbidden = await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER);
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body).toEqual({ error: "Forbidden" });
+
+    h.authorize.mockResolvedValueOnce({
+      kind: "denied", status: 409, error: "Project is archived", reason: "project_archived",
+    });
+    const archived = await request(app())
+      .post("/api/g/bender/workspace/git/commit")
+      .set("authorization", BEARER)
+      .send({ slug: "alice", project: "orbit", message: "wip" });
+    expect(archived.status).toBe(409);
+    expect(archived.body).toEqual({ error: "Project is archived", reason: "project_archived" });
+    expect(h.gitStatus).not.toHaveBeenCalled();
+    expect(h.gitCommit).not.toHaveBeenCalled();
+  });
+
+  it("answers 503 with a code when the broker is unreachable", async () => {
+    h.authorize.mockRejectedValueOnce(new Error("workspace git authorization broker timed out"));
+    const res = await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER);
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "Authorization unavailable", code: "AUTH_BROKER_UNAVAILABLE" });
+  });
+
+  it("commits under the write lane as the broker-resolved author", async () => {
+    const res = await request(app())
+      .post("/api/g/bender/workspace/git/commit")
+      .set("authorization", BEARER)
+      .send({ slug: "alice", project: "orbit", message: "  ship it  " });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sha: "abc123", empty: false });
+    expect(h.authorize).toHaveBeenCalledWith(expect.objectContaining({
+      lane: { access: "write", resolveGithubToken: false },
+    }));
+    expect(h.gitCommit).toHaveBeenCalledWith("/customers/alice/projects/orbit", {
+      message: "ship it",
+      author: { name: "Mem Ber", email: "member@example.com" },
+    });
+  });
+
+  it("resolves a caller token for remote writes and passes it only to git push", async () => {
+    const res = await request(app())
+      .post("/api/g/bender/workspace/git/push")
+      .set("authorization", BEARER)
+      .send({ slug: "alice", project: "orbit", branch: "feature/member" });
+
+    expect(res.status).toBe(200);
+    expect(h.authorize).toHaveBeenCalledWith(expect.objectContaining({
+      lane: { access: "write", resolveGithubToken: true },
+    }));
+    expect(h.gitPush).toHaveBeenCalledWith("/customers/alice/projects/orbit", {
+      branch: "feature/member",
+      githubToken: "gh-member-token",
+    });
+  });
+
+  it("pushes a gitea-backed workspace tree without a github token", async () => {
+    h.authorize.mockResolvedValueOnce(grant({ projectSlug: null, githubToken: null }));
+    const res = await request(app())
+      .post("/api/g/bender/workspace/git/push")
+      .set("authorization", BEARER)
+      .send({ slug: "alice" });
+
+    expect(res.status).toBe(200);
+    expect(h.resolveCustomerDir).toHaveBeenCalledWith(expect.any(String), "alice");
+    expect(h.gitPush).toHaveBeenCalledWith("/customers/alice", { branch: undefined, githubToken: undefined });
   });
 });

@@ -45,6 +45,7 @@ import { createAgentAccessRoutes } from "./routes/agent-access.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
+import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
 import { createComputerAccessBrokerRoutes } from "./routes/computer-access-broker.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
@@ -797,6 +798,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     createAutomationAuthorizationBrokerRoutes({ db }),
   );
   app.use("/internal/computer", requireAuthenticatedUid, createComputerAccessBrokerRoutes({ db }));
+  app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ db }));
   app.use(
     "/internal/agent-imports",
     requireAuthenticatedUid,

@@ -49,6 +49,44 @@ vi.mock("../lib/db", () => ({
   Timestamp: { fromDate: (d: Date) => ({ toDate: () => d }) },
 }));
 
+vi.mock("../lib/workspace-git-authorization-broker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/workspace-git-authorization-broker.js")>();
+  const { auth, db } = await import("../lib/db.js");
+  const { resolveFileTarget } = await import("../lib/fileTarget.js");
+  const { resolveCanonicalWorkspaceSlug } = await import("../lib/canonical-workspace.js");
+  const { resolveCommitAuthor } = await import("../routes/workspace/helpers.js");
+  const { accountAllowsInteractiveAccess } = await import("@octogee/shared/types/account-lifecycle");
+  const authorizeWorkspaceGit: typeof actual.authorizeWorkspaceGit = async (args) => {
+    if (!args.authorization?.startsWith("Bearer ")) return { kind: "unauthenticated" };
+    const { uid } = await auth.verifyIdToken(args.authorization.slice(7));
+    const userSnap = await db.collection("users").doc(uid).get();
+    const user = userSnap.exists ? userSnap.data() : undefined;
+    if (!user || !accountAllowsInteractiveAccess(user)) {
+      return { kind: "denied", status: 403, error: "Account is not active" };
+    }
+    const callerWorkspaceSlug = await resolveCanonicalWorkspaceSlug(uid, user);
+    const result = await resolveFileTarget(
+      { slug: args.slug, projectSlug: args.projectSlug, callerUid: uid, callerWorkspaceSlug },
+      args.lane,
+    );
+    if (!result.ok) {
+      return { kind: "denied", status: result.status, error: result.error, ...(result.reason ? { reason: result.reason } : {}) };
+    }
+    return {
+      kind: "authorized",
+      authorization: {
+        gatewayId: args.gatewayId,
+        uid,
+        slug: args.slug,
+        projectSlug: args.projectSlug,
+        githubToken: result.target.githubToken ?? null,
+        commitAuthor: resolveCommitAuthor(user, args.slug),
+      },
+    };
+  };
+  return { ...actual, authorizeWorkspaceGit };
+});
+
 vi.mock("../lib/mattermost", () => ({
   mmApi: vi.fn(),
   MM_URL: "http://mattermost-test:8065",
@@ -138,6 +176,7 @@ beforeAll(async () => {
   customersRoot = path.join(testRoot, "customers");
   await fs.mkdir(customersRoot);
   process.env.CUSTOMERS_DIR = customersRoot;
+  process.env.GATEWAY_ID = "bender";
   const slugDir = path.join(customersRoot, SLUG);
   await fs.mkdir(slugDir);
   gitInit(slugDir);
@@ -151,6 +190,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.GATEWAY_ID;
   await fs.rm(testRoot, { recursive: true, force: true });
 });
 
@@ -185,7 +225,7 @@ describe("GET /api/workspace/git/status", () => {
   it("returns clean tree as empty entries", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ entries: [] });
@@ -195,7 +235,7 @@ describe("GET /api/workspace/git/status", () => {
     await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "modified\n");
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body.entries).toEqual([{ path: "README.md", change: "modified" }]);
@@ -208,7 +248,7 @@ describe("GET /api/workspace/git/status", () => {
     firestoreData[`workspaces/ghost`] = { id: "ghost", ownerUid: "caller-uid", slug: "ghost" };
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=ghost`)
+      .get(`/api/g/bender/workspace/git/status?slug=ghost`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(503);
     expect(res.body.code).toBe("CUSTOMER_DIR_MISSING");
@@ -218,7 +258,7 @@ describe("GET /api/workspace/git/status", () => {
     firestoreData[`users/caller-uid`] = { uid: "caller-uid", username: "other", workspaceId: "other" };
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(403);
   });
@@ -229,7 +269,7 @@ describe("GET /api/workspace/git/diff", () => {
     await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "changed\n");
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/diff?slug=${SLUG}&path=README.md`)
+      .get(`/api/g/bender/workspace/git/diff?slug=${SLUG}&path=README.md`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toMatch(/text\/plain/);
@@ -241,7 +281,7 @@ describe("GET /api/workspace/git/diff", () => {
   it("rejects path traversal with 400", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/diff?slug=${SLUG}&path=../etc/passwd`)
+      .get(`/api/g/bender/workspace/git/diff?slug=${SLUG}&path=../etc/passwd`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_PATH");
@@ -250,7 +290,7 @@ describe("GET /api/workspace/git/diff", () => {
   it("rejects ref names with shell metacharacters with 400", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/diff?slug=${SLUG}&ref=main;rm -rf /`)
+      .get(`/api/g/bender/workspace/git/diff?slug=${SLUG}&ref=main;rm -rf /`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_REF");
@@ -259,7 +299,7 @@ describe("GET /api/workspace/git/diff", () => {
   it("rejects ref names that start with a dash (would be parsed as a flag)", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/diff?slug=${SLUG}&ref=-deadbeef`)
+      .get(`/api/g/bender/workspace/git/diff?slug=${SLUG}&ref=-deadbeef`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_REF");
@@ -270,7 +310,7 @@ describe("GET /api/workspace/git/log", () => {
   it("returns the initial commit for a fresh repo", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/log?slug=${SLUG}&limit=5`)
+      .get(`/api/g/bender/workspace/git/log?slug=${SLUG}&limit=5`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body.entries).toHaveLength(1);
@@ -281,7 +321,7 @@ describe("GET /api/workspace/git/log", () => {
   it("rejects branch names with shell metacharacters", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/log?slug=${SLUG}&branch=main$(whoami)`)
+      .get(`/api/g/bender/workspace/git/log?slug=${SLUG}&branch=main$(whoami)`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_BRANCH");
@@ -319,7 +359,7 @@ const PROJECT = "myproj";
     );
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body.entries).toEqual([{ path: "PROJECT.md", change: "modified" }]);
@@ -337,7 +377,7 @@ const PROJECT = "myproj";
     );
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/diff?slug=${SLUG}&project=${PROJECT}&path=PROJECT.md`)
+      .get(`/api/g/bender/workspace/git/diff?slug=${SLUG}&project=${PROJECT}&path=PROJECT.md`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.text).toContain("--- a/PROJECT.md");
@@ -351,7 +391,7 @@ const PROJECT = "myproj";
   it("/git/log returns the project repo's history (not the parent workspace's)", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/log?slug=${SLUG}&project=${PROJECT}&limit=5`)
+      .get(`/api/g/bender/workspace/git/log?slug=${SLUG}&project=${PROJECT}&limit=5`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     expect(res.body.entries).toHaveLength(1);
@@ -361,7 +401,7 @@ const PROJECT = "myproj";
   it("/git/branches lists the project repo's local branches", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/branches?slug=${SLUG}&project=${PROJECT}`)
+      .get(`/api/g/bender/workspace/git/branches?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
     const names = res.body.entries.map((e: { name: string }) => e.name);
@@ -371,14 +411,14 @@ const PROJECT = "myproj";
   it("/git/branch/checkout creates and switches a branch on the project tree", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "feat/proj-work", create: true });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, branch: "feat/proj-work" });
     
     await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "main" });
   });
@@ -399,12 +439,12 @@ const PROJECT = "myproj";
     };
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(200);
   });
 
-  it("non-owner / non-member is still 403'd by withFileTarget", async () => {
+  it("non-owner / non-member is still 403'd by the authorization broker", async () => {
     firestoreData[`users/caller-uid`] = {
       uid: "caller-uid",
       username: "ghost",
@@ -417,7 +457,7 @@ const PROJECT = "myproj";
     
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}&project=${PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(403);
   });
@@ -453,7 +493,7 @@ describe("GitHub-backed project working tree", () => {
     );
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/status?slug=${SLUG}&project=${GH_PROJECT}`)
+      .get(`/api/g/bender/workspace/git/status?slug=${SLUG}&project=${GH_PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status, res.text).toBe(200);
     expect(res.body.entries).toEqual([{ path: "GH.md", change: "modified" }]);
@@ -462,7 +502,7 @@ describe("GitHub-backed project working tree", () => {
   it("/git/commit writes a commit to the github-backed checkout", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "github-backed commit" });
     expect(res.status, res.text).toBe(200);
@@ -479,7 +519,7 @@ describe("GitHub-backed project working tree", () => {
     expect(lease).not.toBeNull();
     try {
       const res = await request(createApp())
-        .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
+        .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
         .set("Authorization", "Bearer caller-idtoken")
         .send({ message: "must wait" });
       expect(res.status, res.text).toBe(409);
@@ -492,13 +532,13 @@ describe("GitHub-backed project working tree", () => {
   it("/git/branch/checkout switches branches on the github-backed checkout", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${GH_PROJECT}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}&project=${GH_PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "feat/gh-work", create: true });
     expect(res.status, res.text).toBe(200);
     expect(res.body).toEqual({ ok: true, branch: "feat/gh-work" });
     await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}&project=${GH_PROJECT}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}&project=${GH_PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "main" });
   });
@@ -516,7 +556,7 @@ describe("GitHub-backed project working tree", () => {
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}&project=${GH_PROJECT}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "not mine" });
     expect(res.status).toBe(403);
@@ -536,7 +576,7 @@ describe("POST /api/workspace/git/commit (Phase 6.C.2)", () => {
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "Owner-driven change" });
     expect(res.status).toBe(200);
@@ -557,7 +597,7 @@ await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
   it("returns 200 with empty: true for clean working tree (idempotent — no error)", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "nothing to commit" });
     expect(res.status).toBe(200);
@@ -567,7 +607,7 @@ await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
   it("rejects empty message with 400 BAD_MESSAGE", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "   " });
     expect(res.status).toBe(400);
@@ -577,14 +617,14 @@ await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
   it("rejects 5001-char message with 400 MESSAGE_TOO_LONG", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "x".repeat(5_001) });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("MESSAGE_TOO_LONG");
   });
 
-  it("returns 403 when caller is not the workspace owner (withFileTarget primary gate)", async () => {
+  it("returns 403 when caller is not the workspace owner (authorization broker primary gate)", async () => {
     firestoreData[`users/caller-uid`] = {
       uid: "caller-uid",
       username: "someone-else",
@@ -592,7 +632,7 @@ await fs.writeFile(path.join(customersRoot, SLUG, "README.md"), "hello\n");
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "not my workspace" });
     expect(res.status).toBe(403);
@@ -614,7 +654,7 @@ firestoreData[`users/caller-uid`] = {
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/commit?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/commit?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ message: "trying to write workspace tree as a project member" });
     expect(res.status).toBe(403);
@@ -622,7 +662,7 @@ firestoreData[`users/caller-uid`] = {
 });
 
 describe("POST /api/workspace/git/push (Phase 6.C.2)", () => {
-  it("returns 403 for non-owner callers (withFileTarget primary gate)", async () => {
+  it("returns 403 for non-owner callers (authorization broker primary gate)", async () => {
     firestoreData[`users/caller-uid`] = {
       uid: "caller-uid",
       username: "someone-else",
@@ -630,7 +670,7 @@ describe("POST /api/workspace/git/push (Phase 6.C.2)", () => {
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/push?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/push?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(403);
   });
@@ -638,7 +678,7 @@ describe("POST /api/workspace/git/push (Phase 6.C.2)", () => {
   it("rejects unsafe branch ref names with 400 BAD_BRANCH", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/push?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/push?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "-deletes-everything" });
     expect(res.status).toBe(400);
@@ -650,7 +690,7 @@ describe("POST /api/workspace/git/branch/checkout (Phase 6.C.3)", () => {
   it("rejects unsafe branch ref names with 400 BAD_BRANCH", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "; rm -rf /" });
     expect(res.status).toBe(400);
@@ -660,7 +700,7 @@ describe("POST /api/workspace/git/branch/checkout (Phase 6.C.3)", () => {
   it("rejects empty body with 400 BAD_BRANCH", async () => {
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({});
     expect(res.status).toBe(400);
@@ -675,7 +715,7 @@ describe("POST /api/workspace/git/branch/checkout (Phase 6.C.3)", () => {
     };
     const app = createApp();
     const res = await request(app)
-      .post(`/api/workspace/git/branch/checkout?slug=${SLUG}`)
+      .post(`/api/g/bender/workspace/git/branch/checkout?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken")
       .send({ branch: "main" });
     expect(res.status).toBe(403);
@@ -689,7 +729,7 @@ describe("concurrency cap (P1-1)", () => {
     const responses = await Promise.all(
       Array.from({ length: 6 }, () =>
         request(app)
-          .get(`/api/workspace/git/status?slug=${SLUG}`)
+          .get(`/api/g/bender/workspace/git/status?slug=${SLUG}`)
           .set("Authorization", "Bearer caller-idtoken"),
       ),
     );
@@ -715,7 +755,7 @@ describe("GET /api/workspace/git/commit-diff", () => {
 
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/commit-diff?slug=${SLUG}&commit=${sha}`)
+      .get(`/api/g/bender/workspace/git/commit-diff?slug=${SLUG}&commit=${sha}`)
       .set("Authorization", "Bearer caller-idtoken");
 
     expect(res.status).toBe(200);
@@ -729,7 +769,7 @@ describe("GET /api/workspace/git/commit-diff", () => {
   it("rejects a commit ref with shell metacharacters with 400 BAD_REF", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/commit-diff?slug=${SLUG}&commit=abc123;rm -rf /`)
+      .get(`/api/g/bender/workspace/git/commit-diff?slug=${SLUG}&commit=abc123;rm -rf /`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_REF");
@@ -738,7 +778,7 @@ describe("GET /api/workspace/git/commit-diff", () => {
   it("rejects a missing commit param with 400 BAD_REF", async () => {
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/commit-diff?slug=${SLUG}`)
+      .get(`/api/g/bender/workspace/git/commit-diff?slug=${SLUG}`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("BAD_REF");
@@ -748,7 +788,7 @@ describe("GET /api/workspace/git/commit-diff", () => {
     firestoreData[`users/caller-uid`] = { uid: "caller-uid", username: "other", workspaceId: "other" };
     const app = createApp();
     const res = await request(app)
-      .get(`/api/workspace/git/commit-diff?slug=${SLUG}&commit=HEAD`)
+      .get(`/api/g/bender/workspace/git/commit-diff?slug=${SLUG}&commit=HEAD`)
       .set("Authorization", "Bearer caller-idtoken");
     expect(res.status).toBe(403);
   });

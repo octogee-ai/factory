@@ -1,10 +1,12 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import * as path from "node:path";
 import {
-  withFileTarget,
-  type FileTarget,
-  type ResolveFileTargetOpts,
-} from "../../lib/fileTarget.js";
+  authorizeWorkspaceGit,
+  type WorkspaceGitAuthorization,
+  type WorkspaceGitAuthorizationOutcome,
+  type WorkspaceGitAuthorizationRequest,
+  type WorkspaceGitLane,
+} from "../../lib/workspace-git-authorization-broker.js";
 import {
   gitBranches,
   gitCheckout,
@@ -19,23 +21,31 @@ import {
   runWorkspaceGitMutation,
   type WorkspaceGitError,
 } from "../../lib/workspace-git.js";
-import { resolveCommitAuthor } from "./helpers.js";
 import { logger } from "../../middleware/logging.js";
 
-const router = Router();
+export interface WorkspaceGitRouterDeps {
+  authorize(request: WorkspaceGitAuthorizationRequest): Promise<WorkspaceGitAuthorizationOutcome>;
+  localGatewayId(): string | null;
+}
 
-const GIT_LANE_READ: ResolveFileTargetOpts = { resolveGithubToken: false };
-const GIT_LANE_WRITE: ResolveFileTargetOpts = { access: "write", resolveGithubToken: false };
-const GIT_LANE_REMOTE_WRITE: ResolveFileTargetOpts = { access: "write", resolveGithubToken: true };
+const GIT_LANE_READ: WorkspaceGitLane = { access: "read", resolveGithubToken: false };
+const GIT_LANE_WRITE: WorkspaceGitLane = { access: "write", resolveGithubToken: false };
+const GIT_LANE_REMOTE_WRITE: WorkspaceGitLane = { access: "write", resolveGithubToken: true };
+
+type AuthorizedHandler = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  target: WorkspaceGitAuthorization,
+) => Promise<void>;
 
 function customersRoot(): string {
-
-return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
+  return process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 }
 
 async function resolveTargetDir(
   root: string,
-  target: FileTarget,
+  target: WorkspaceGitAuthorization,
 ): Promise<string | null> {
   if (target.projectSlug) {
     return resolveProjectDir(root, target.slug, target.projectSlug);
@@ -43,20 +53,77 @@ async function resolveTargetDir(
   return resolveCustomerDir(root, target.slug);
 }
 
-function ensureWriteAuth(
-  req: import("express").Request,
-  res: import("express").Response,
-  target: FileTarget,
-): boolean {
-  if (target.projectSlug) return true;
-  if (req.workspaceSlug !== target.slug) {
-    res.status(403).json({
-      error: "Workspace owner only",
-      code: "OWNER_ONLY",
-    });
-    return false;
+function requestedGatewayId(req: Request): string | null {
+  const raw = (req.params as { gatewayId?: unknown }).gatewayId;
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+function requestedField(req: Request, key: string): string | null {
+  const query = req.query as Record<string, unknown>;
+  if (typeof query[key] === "string" && query[key]) return query[key] as string;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  return typeof body[key] === "string" && body[key] ? body[key] as string : null;
+}
+
+function requestedTarget(req: Request): { slug: string | null; projectSlug: string | null } {
+  return { slug: requestedField(req, "slug"), projectSlug: requestedField(req, "project") };
+}
+
+function respondDenied(res: Response, outcome: Exclude<WorkspaceGitAuthorizationOutcome, { kind: "authorized" }>): void {
+  if (outcome.kind === "unauthenticated") {
+    res.status(401).json({ error: "Unauthenticated" });
+    return;
   }
-  return true;
+  res.status(outcome.status).json({
+    error: outcome.error,
+    ...(outcome.reason ? { reason: outcome.reason } : {}),
+  });
+}
+
+function withGitAuthorization(
+  deps: WorkspaceGitRouterDeps,
+  handler: AuthorizedHandler,
+  lane: WorkspaceGitLane,
+): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const authorization = req.headers.authorization;
+      if (!authorization?.startsWith("Bearer ")) {
+        res.status(401).json({ error: "Unauthenticated" });
+        return;
+      }
+      const gatewayId = requestedGatewayId(req);
+      if (!gatewayId || deps.localGatewayId() !== gatewayId) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      const { slug, projectSlug } = requestedTarget(req);
+      if (!slug) {
+        res.status(400).json({ error: "Missing slug" });
+        return;
+      }
+      let outcome: WorkspaceGitAuthorizationOutcome;
+      try {
+        outcome = await deps.authorize({ gatewayId, authorization, slug, projectSlug, lane });
+      } catch (error) {
+        logger.warn("workspace-git: authorization broker unavailable", {
+          gatewayId,
+          slug,
+          projectSlug,
+          message: (error as Error).message,
+        });
+        res.status(503).json({ error: "Authorization unavailable", code: "AUTH_BROKER_UNAVAILABLE" });
+        return;
+      }
+      if (outcome.kind !== "authorized") {
+        respondDenied(res, outcome);
+        return;
+      }
+      await handler(req, res, next, outcome.authorization);
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 
 const MAX_CONCURRENT_PER_SLUG = 4;
@@ -77,7 +144,7 @@ function releaseSlot(slug: string): void {
 
 async function withSlugLimit<T>(
   slug: string,
-  res: import("express").Response,
+  res: Response,
   body: () => Promise<T>,
 ): Promise<T | undefined> {
   if (!acquireSlot(slug)) {
@@ -95,142 +162,15 @@ async function withSlugLimit<T>(
   }
 }
 
-router.get(
-  "/git/status",
-  withFileTarget(async (req, res, _next, target) => {
-    const start = Date.now();
-    await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
-      if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
-        return;
-      }
-      const r = await gitStatus(dir);
-      if (!r.ok) {
-        respondGitError(res, r.error);
-        return;
-      }
-      res.json({ entries: r.entries });
-    });
-    logger.info(`git/status slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_READ),
-);
-
-router.get(
-  "/git/diff",
-  withFileTarget(async (req, res, _next, target) => {
-    const start = Date.now();
-    const filePath = typeof req.query.path === "string" ? req.query.path : undefined;
-    const ref = typeof req.query.ref === "string" ? req.query.ref : undefined;
-    if (filePath && !isSafeRelativePath(filePath)) {
-      res.status(400).json({ error: "Invalid path", code: "BAD_PATH" });
-      return;
-    }
-    if (ref && !isSafeRefName(ref)) {
-      res.status(400).json({ error: "Invalid ref", code: "BAD_REF" });
-      return;
-    }
-    await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
-      if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
-        return;
-      }
-      const r = await gitDiff(dir, { path: filePath, ref });
-      if (!r.ok) {
-        respondGitError(res, r.error);
-        return;
-      }
-      res.type("text/plain; charset=utf-8").send(r.diff);
-    });
-    logger.info(`git/diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_READ),
-);
-
-router.get(
-  "/git/commit-diff",
-  withFileTarget(async (req, res, _next, target) => {
-    const start = Date.now();
-    const commit = typeof req.query.commit === "string" ? req.query.commit : undefined;
-    if (!commit || !isSafeRefName(commit)) {
-      res.status(400).json({ error: "Invalid commit ref", code: "BAD_REF" });
-      return;
-    }
-    await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
-      if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
-        return;
-      }
-      const r = await gitCommitDiff(dir, commit);
-      if (!r.ok) {
-        respondGitError(res, r.error);
-        return;
-      }
-      res.type("text/plain; charset=utf-8").send(r.diff);
-    });
-    logger.info(`git/commit-diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_READ),
-);
-
-router.get(
-  "/git/log",
-  withFileTarget(async (req, res, _next, target) => {
-    const start = Date.now();
-    const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : undefined;
-    const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
-    if (branch && !isSafeRefName(branch)) {
-      res.status(400).json({ error: "Invalid branch", code: "BAD_BRANCH" });
-      return;
-    }
-    await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
-      if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
-        return;
-      }
-      const r = await gitLog(dir, { limit, branch });
-      if (!r.ok) {
-        respondGitError(res, r.error);
-        return;
-      }
-      res.json({ entries: r.entries });
-    });
-    logger.info(`git/log slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_READ),
-);
-
-router.get(
-  "/git/branches",
-  withFileTarget(async (req, res, _next, target) => {
-    const start = Date.now();
-    await withSlugLimit(target.slug, res, async () => {
-      const dir = await resolveTargetDir(customersRoot(), target);
-      if (!dir) {
-        respondCustomerDirMissing(res, target.slug);
-        return;
-      }
-      const r = await gitBranches(dir);
-      if (!r.ok) {
-        respondGitError(res, r.error);
-        return;
-      }
-      res.json({ entries: r.entries });
-    });
-    logger.info(`git/branches slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_READ),
-);
-
-function respondCustomerDirMissing(res: import("express").Response, slug: string): void {
-
-logger.warn(`git: working tree not accessible for slug=${slug} — verify sidecar volume mount`);
+function respondCustomerDirMissing(res: Response, slug: string): void {
+  logger.warn(`git: working tree not accessible for slug=${slug} — verify sidecar volume mount`);
   res.status(503).json({
     error: "Working tree temporarily unavailable; retry in a few seconds.",
     code: "CUSTOMER_DIR_MISSING",
   });
 }
 
-function respondGitError(res: import("express").Response, err: WorkspaceGitError): void {
+function respondGitError(res: Response, err: WorkspaceGitError): void {
   switch (err.code) {
     case "NOT_A_REPO":
       res.status(503).json({ error: "Not a git repository", code: err.code });
@@ -276,10 +216,118 @@ function isSafeRefName(ref: string): boolean {
   return /^[A-Za-z0-9._/-]+$/.test(ref);
 }
 
-router.post(
-  "/git/commit",
-  withFileTarget(async (req, res, _next, target) => {
-    if (!ensureWriteAuth(req, res, target)) return;
+const gitStatusHandler: AuthorizedHandler = async (req, res, _next, target) => {
+    const start = Date.now();
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitStatus(dir);
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ entries: r.entries });
+    });
+    logger.info(`git/status slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+};
+
+const gitDiffHandler: AuthorizedHandler = async (req, res, _next, target) => {
+    const start = Date.now();
+    const filePath = typeof req.query.path === "string" ? req.query.path : undefined;
+    const ref = typeof req.query.ref === "string" ? req.query.ref : undefined;
+    if (filePath && !isSafeRelativePath(filePath)) {
+      res.status(400).json({ error: "Invalid path", code: "BAD_PATH" });
+      return;
+    }
+    if (ref && !isSafeRefName(ref)) {
+      res.status(400).json({ error: "Invalid ref", code: "BAD_REF" });
+      return;
+    }
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitDiff(dir, { path: filePath, ref });
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.type("text/plain; charset=utf-8").send(r.diff);
+    });
+    logger.info(`git/diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+};
+
+const gitCommitDiffHandler: AuthorizedHandler = async (req, res, _next, target) => {
+    const start = Date.now();
+    const commit = typeof req.query.commit === "string" ? req.query.commit : undefined;
+    if (!commit || !isSafeRefName(commit)) {
+      res.status(400).json({ error: "Invalid commit ref", code: "BAD_REF" });
+      return;
+    }
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitCommitDiff(dir, commit);
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.type("text/plain; charset=utf-8").send(r.diff);
+    });
+    logger.info(`git/commit-diff slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+};
+
+const gitLogHandler: AuthorizedHandler = async (req, res, _next, target) => {
+    const start = Date.now();
+    const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : undefined;
+    const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
+    if (branch && !isSafeRefName(branch)) {
+      res.status(400).json({ error: "Invalid branch", code: "BAD_BRANCH" });
+      return;
+    }
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitLog(dir, { limit, branch });
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ entries: r.entries });
+    });
+    logger.info(`git/log slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+};
+
+const gitBranchesHandler: AuthorizedHandler = async (req, res, _next, target) => {
+    const start = Date.now();
+    await withSlugLimit(target.slug, res, async () => {
+      const dir = await resolveTargetDir(customersRoot(), target);
+      if (!dir) {
+        respondCustomerDirMissing(res, target.slug);
+        return;
+      }
+      const r = await gitBranches(dir);
+      if (!r.ok) {
+        respondGitError(res, r.error);
+        return;
+      }
+      res.json({ entries: r.entries });
+    });
+    logger.info(`git/branches slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
+};
+
+const gitCommitHandler: AuthorizedHandler = async (req, res, _next, target) => {
     const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
     if (!message) {
       res.status(400).json({ error: "Missing or empty `message`", code: "BAD_MESSAGE" });
@@ -296,10 +344,9 @@ router.post(
         respondCustomerDirMissing(res, target.slug);
         return;
       }
-      const author = resolveCommitAuthor(req.user, target.slug);
       const mutation = await runWorkspaceGitMutation(
         dir,
-        () => gitCommit(dir, { message, author }),
+        () => gitCommit(dir, { message, author: target.commitAuthor }),
       );
       if (!mutation.ok) {
         respondGitError(res, mutation.error);
@@ -313,13 +360,9 @@ router.post(
       res.json({ sha: r.result.sha, empty: r.result.empty });
     });
     logger.info(`git/commit slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_WRITE),
-);
+};
 
-router.post(
-  "/git/push",
-  withFileTarget(async (req, res, _next, target) => {
-    if (!ensureWriteAuth(req, res, target)) return;
+const gitPushHandler: AuthorizedHandler = async (req, res, _next, target) => {
     const branch = typeof req.body?.branch === "string" ? req.body.branch : undefined;
     if (branch && !isSafeRefName(branch)) {
       res.status(400).json({ error: "Invalid branch", code: "BAD_BRANCH" });
@@ -334,7 +377,7 @@ router.post(
       }
       const mutation = await runWorkspaceGitMutation(
         dir,
-        () => gitPush(dir, { branch, githubToken: target.githubToken }),
+        () => gitPush(dir, { branch, githubToken: target.githubToken ?? undefined }),
       );
       if (!mutation.ok) {
         respondGitError(res, mutation.error);
@@ -348,13 +391,9 @@ router.post(
       res.json({ ok: true });
     });
     logger.info(`git/push slug=${target.slug} project=${target.projectSlug ?? "-"} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_REMOTE_WRITE),
-);
+};
 
-router.post(
-  "/git/branch/checkout",
-  withFileTarget(async (req, res, _next, target) => {
-    if (!ensureWriteAuth(req, res, target)) return;
+const gitBranchCheckoutHandler: AuthorizedHandler = async (req, res, _next, target) => {
     const branch = typeof req.body?.branch === "string" ? req.body.branch : "";
     const create = req.body?.create === true;
     if (!branch || !isSafeRefName(branch)) {
@@ -384,7 +423,28 @@ router.post(
       res.json({ ok: true, branch });
     });
     logger.info(`git/branch/checkout slug=${target.slug} project=${target.projectSlug ?? "-"} branch=${branch} create=${create} dur=${Date.now() - start}ms status=${res.statusCode}`);
-  }, GIT_LANE_WRITE),
-);
+};
 
-export default router;
+export function createWorkspaceGitRouter(deps: WorkspaceGitRouterDeps): Router {
+  const router = Router({ mergeParams: true });
+  const authorized = (handler: AuthorizedHandler, lane: WorkspaceGitLane) =>
+    withGitAuthorization(deps, handler, lane);
+
+  router.get("/git/status", authorized(gitStatusHandler, GIT_LANE_READ));
+  router.get("/git/diff", authorized(gitDiffHandler, GIT_LANE_READ));
+  router.get("/git/commit-diff", authorized(gitCommitDiffHandler, GIT_LANE_READ));
+  router.get("/git/log", authorized(gitLogHandler, GIT_LANE_READ));
+  router.get("/git/branches", authorized(gitBranchesHandler, GIT_LANE_READ));
+  router.post("/git/commit", authorized(gitCommitHandler, GIT_LANE_WRITE));
+  router.post("/git/push", authorized(gitPushHandler, GIT_LANE_REMOTE_WRITE));
+  router.post("/git/branch/checkout", authorized(gitBranchCheckoutHandler, GIT_LANE_WRITE));
+
+  return router;
+}
+
+const workspaceGitRouter = createWorkspaceGitRouter({
+  authorize: authorizeWorkspaceGit,
+  localGatewayId: () => process.env.GATEWAY_ID ?? null,
+});
+
+export default workspaceGitRouter;

@@ -11,6 +11,7 @@ import {
 
 import { createApp } from "../index.js";
 import { db } from "../lib/db.js";
+import { resolveFileTarget } from "../lib/fileTarget.js";
 
 setupEmulatorTest();
 
@@ -64,12 +65,15 @@ describe("GitHub-backed project provider gate", () => {
     token = await getIdTokenForUid(UID);
   });
 
-  it("/git/status resolves a github target against the local checkout", async () => {
-    const r = await request(createApp())
-      .get(`/api/g/test/workspace/git/status?slug=${WS}&project=${PID}`)
-      .set("Authorization", `Bearer ${token}`);
-    expect(r.status, r.text).toBe(503);
-    expect(r.body.code).toBe("CUSTOMER_DIR_MISSING");
+  it("the git read lane resolves a github target without a connector token", async () => {
+    const result = await resolveFileTarget(
+      { slug: WS, projectSlug: PID, callerUid: UID, callerWorkspaceSlug: WS },
+      { access: "read", resolveGithubToken: false },
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.target.provider).toBe("github");
+    expect(result.target.githubToken).toBeUndefined();
   });
 
   it("/upload refuses a github target (409) — blob writes stay Gitea-only", async () => {

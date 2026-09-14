@@ -6,7 +6,7 @@ import { requestLogger } from "./middleware/logging.js";
 import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
 import { helmetMiddleware, globalRateLimit, internalRateLimit } from "./middleware/security.js";
-import { requireAuth, requireAuthenticatedUid } from "./middleware/auth.js";
+import { requireAuthenticatedUid } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
 import { createNotificationMetrics, setNotificationMetrics } from "./lib/notification-metrics.js";
@@ -240,8 +240,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
       authorizationCache: options.openClawControlAuthorizationCache,
     }));
   }
-  const workspaceLocality = Router();
-  workspaceLocality.use("/git", requireAuth);
+  const workspaceLocality = Router({ mergeParams: true });
   workspaceLocality.use(gitRoutes);
   mountApi(app, "/workspace", workspaceLocality);
 
