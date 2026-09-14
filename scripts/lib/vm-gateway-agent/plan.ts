@@ -6,6 +6,7 @@ import {
   type GatewayVmRuntimeContainer,
   type GatewayVmRuntimeVolume,
 } from "@octogee/shared/types/glm";
+import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 
 export const BUNDLE_VERSION_LABEL = "ai.octogee.bundle-version";
 export const GATEWAY_ID_LABEL = "ai.octogee.gateway-id";
@@ -96,6 +97,14 @@ export function planContainer(
             ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
             : []),
         ],
+        ...(role === "service" && container.name === "gateway" ? {
+          Mounts: [{
+            Type: "bind",
+            Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`,
+            Target: GATEWAY_HOST_DESKTOP_AUTH_DIR,
+            ReadOnly: true,
+          }],
+        } : {}),
         ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),
         RestartPolicy: { Name: role === "service" ? "unless-stopped" : "no" },
         LogConfig: { Type: "json-file", Config: { "max-size": "50m", "max-file": "3" } },

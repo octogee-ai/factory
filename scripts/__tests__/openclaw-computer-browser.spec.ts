@@ -90,6 +90,19 @@ describe("computer browser runtime", () => {
     expect(config.plugins.entries.browser.enabled).toBe(true);
   });
 
+  it("attaches the native gateway desktop to Omarchy during pre-boot so local sessions select it automatically", () => {
+    const config = template();
+    config.desktop = { host: { enabled: false, managed: true, port: 5999 } };
+    applyPreBootPatches(config, vmEnv);
+    expect(config.desktop.host).toEqual({
+      enabled: true,
+      managed: false,
+      port: 5901,
+      passwordFile: "/run/octogee-desktop-vnc/password",
+    });
+    expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
+  });
+
   it("denies the desktop tools for every agent when the VM has no assigned owner", () => {
     const config = { agents: { entries: { "octogee-owner-coach": {} } } };
     applyOpenClawComputerBrowserConfig(config, { ...vmEnv, GATEWAY_BUILDER_SLUG: "" });

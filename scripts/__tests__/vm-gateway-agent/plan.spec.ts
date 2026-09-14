@@ -115,6 +115,22 @@ describe("planBundle", () => {
     expect(binds(1)).not.toContain("/tmp/.X11-unix:/tmp/.X11-unix:ro");
   });
 
+  it("gives only the gateway service read-only access to its native desktop password", () => {
+    const bundle = bundleFixture();
+    const plan = planBundle(bundle, ctx);
+    expect(plan.services[0].config.HostConfig).toMatchObject({
+      Mounts: [{
+        Type: "bind",
+        Source: "/run/user/1000/octogee-openclaw-vnc",
+        Target: "/run/octogee-desktop-vnc",
+        ReadOnly: true,
+      }],
+    });
+    expect(plan.services[1].config.HostConfig).not.toHaveProperty("Mounts");
+    expect(plan.init!.config.HostConfig).not.toHaveProperty("Mounts");
+    expect(planContainer(bundle, bundle.containers[0], ctx, "init").config.HostConfig).not.toHaveProperty("Mounts");
+  });
+
   it("refuses a mount onto an unknown volume and lists each image once", () => {
     const bundle = bundleFixture();
     bundle.containers[0].mounts.push({ volume: "ghost", mountPath: "/x", readOnly: true, subPath: null });

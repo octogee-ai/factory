@@ -23,6 +23,7 @@ function stringList(parent: JsonObject, key: string): string[] {
 }
 
 export const DESKTOP_TOOLS = ["browser", "computer"] as const;
+export const GATEWAY_HOST_DESKTOP_AUTH_DIR = "/run/octogee-desktop-vnc";
 export const DESKTOP_NODE_DENIED_COMMANDS = [
   "system.run",
   "system.run.prepare",
@@ -70,6 +71,12 @@ export function applyOpenClawComputerBrowserConfig(
 ): boolean {
   if (!builderComputer(env)) return false;
   const before = JSON.stringify(config);
+  Object.assign(objectAt(objectAt(config, "desktop"), "host"), {
+    enabled: true,
+    managed: false,
+    port: 5901,
+    passwordFile: `${GATEWAY_HOST_DESKTOP_AUTH_DIR}/password`,
+  });
   const browser = objectAt(config, "browser");
   Object.assign(browser, {
     enabled: true,
