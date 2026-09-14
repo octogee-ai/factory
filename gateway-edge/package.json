@@ -61,13 +61,13 @@
     "@types/node": "^26.3.0",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.0",
     "firebase-tools": "^15.29.0",
     "supertest": "^7.2.2",
     "tsc-alias": "^1.9.4",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.4"
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "@modelcontextprotocol/sdk": {
