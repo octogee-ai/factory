@@ -77,21 +77,22 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The selected release is `v2026.9.4`, peeled to
-[upstream commit `3a9d69db306cd7f081e06254cb89c4bcc14a7107`](https://github.com/openclaw/openclaw/commit/3a9d69db306cd7f081e06254cb89c4bcc14a7107).
-[Runtime source `d266aa7e0270f74a486c103d5e8484c916bf771a`](https://github.com/ceckert/openclaw/commit/d266aa7e0270f74a486c103d5e8484c916bf771a)
-on `ceckert/openclaw:codex/octogee-v2026.9.4` carries the remaining overlay:
+The selected build is upstream `main`, locked at the start of the recut to
+[`167653ddfa338d4d664de11524735c52b48dc139`](https://github.com/openclaw/openclaw/commit/167653ddfa338d4d664de11524735c52b48dc139).
+Its package version is `2026.9.4`; this is a main snapshot, not the GA tag.
+[Runtime source `c94ec031913aa04c34ed690de2294d9836ce0b15`](https://github.com/ceckert/openclaw/commit/c94ec031913aa04c34ed690de2294d9836ce0b15)
+on `ceckert/openclaw:codex/octogee-main-20260913` carries the remaining overlay:
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
-| Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit human grants in either grant order. | Still needed; [fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
-| Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures while allowing recovery. | Still needed; [fork PR #4](https://github.com/ceckert/openclaw/pull/4) |
-| Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; upstream consideration pending |
+| Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit human grants in either grant order. | Still needed; contributing to the existing [upstream policy discussion #135631](https://github.com/openclaw/openclaw/issues/135631#issuecomment-5657833033), not silently redefining upstream's `none` policy. |
+| Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures while allowing recovery. | Still needed; the generic preferences fix is [upstream PR #147930](https://github.com/openclaw/openclaw/pull/147930). |
+| Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; existing [upstream proposal #132759](https://github.com/openclaw/openclaw/issues/132759) awaits the shared-room policy/configuration decision. |
 
 The config revision freshness patch [#142169](https://github.com/openclaw/openclaw/pull/142169)
 and account-scoped SecretRef reload inspection patch
 [#142193](https://github.com/openclaw/openclaw/pull/142193) are dropped from the
-overlay. Both exact upstream merge commits are ancestors of the selected GA tag;
+overlay. Both exact upstream merge commits are ancestors of the locked main snapshot;
 their upstream regression coverage remains intact.
 
 The membership RPC reconciles grants owned by its calling principal. Octogee
@@ -101,24 +102,32 @@ profiles, so explicit human grants remain separate. Reusing the synchronization
 principal for manual grants, or changing it between syncs, is outside this
 integration contract and would require explicit grant-origin representation.
 
-The port uses GA's schema-derived Mattermost config types and current gateway
-session-store owner. Generated protocol bindings and config metadata are refreshed.
-A test-only upstream media fixture repair creates the attached worker environment
-before dispatch and surfaces setup failures, so denial assertions exercise the
-intended ownership transition instead of passing after setup throws.
+The port uses upstream's schema-derived Mattermost config types and current
+gateway session-store owner. Generated protocol bindings, plugin asset hashes,
+and config metadata are refreshed. The media fixture workaround is dropped:
+upstream #146508 now tests dispatch admission directly. Upstream's newer
+`openRootFile` boundary remains intact. Added regressions prove channel membership
+revocation removes prepared-icon access, mention eligibility, and delayed mention
+delivery. Native activity-summary authorization uses the same sharing policy;
+no custom Activity journal or transcript recovery is restored.
 
-The root artifact is `openclaw-fork-d266aa7e.tgz`
-(SHA-256 `bd946618107a56a24b299f0fbe5ab1a3603743092eb996e47b33f839af577909`).
-Mattermost is `openclaw-mattermost-81ca0eed.tgz`
-(SHA-256 `81ca0eedc687f9a6858550be5427a759a6419362c6daa5a24c718ab70f42f84a`).
+The root artifact is `openclaw-fork-c94ec031.tgz`
+(SHA-256 `c0c652fa9a13dd332b82aa5b0e02b64c5991d062c5aa34554a8da8a534f57e46`).
+Mattermost is `openclaw-mattermost-bcf4fa36.tgz`
+(SHA-256 `bcf4fa3655ea94b2538209e6e7433e2f7863d8deff156e1b63bad98b57b3bf32`).
 
-The exact overlay commit passed the full build, 730 core/config regressions,
-79 Mattermost regressions, and 11 UI regressions. Changed-source type, lint,
-format, protocol, config metadata, and repository guards passed; the consolidated
-sharing suite and its lint check were rerun after correcting two test-local names.
+The exact overlay commit passed the full build. Focused gateway/runtime suites
+cover membership, sharing, preferences, read visibility, mentions, media, and
+icons; Mattermost routing/participation suites passed 152 tests and the UI icon
+suite passed 11. Changed-source type, lint, format, protocol, config metadata,
+and repository guards passed. The aggregate changed-check run hit a test-file
+line limit; after tightening redundant assertions, its affected lint/tests and
+remaining guards passed separately. Native mobile app builds were not run.
 The packed root installed in a clean npm prefix, reported the exact overlay commit,
 and imported the matching Mattermost runtime in the Dockerfile's bundled layout.
-The Octogee base-reuse and native Mattermost contract suites passed all 16 tests.
+Octogee's base-reuse, native Mattermost, image fingerprint, CUA installer, and
+gateway-edge membership/identity contracts are checked separately. Automated
+checks do not constitute a live TEST rollout for this recut.
 
 ### Mattermost session and delivery policy
 
@@ -159,18 +168,25 @@ rewrite is removed because the released Mattermost package resolves it natively.
 
 ## Temporary native CUA driver patch
 
-`Dockerfile.base` builds the CUA SDK from the 0.22.2 backport commit
-[`6309cc93dea771c7980a23d586608b465293a4de`](https://github.com/ceckert/cua/commit/6309cc93dea771c7980a23d586608b465293a4de)
+`Dockerfile.base` builds the CUA SDK from the 0.23.2 backport commit
+[`2721eda5f2801d9d0695759c39c0ed9c812c82c9`](https://github.com/ceckert/cua/commit/2721eda5f2801d9d0695759c39c0ed9c812c82c9)
 and installs its Linux library into OpenClaw's native driver package. The
 backport carries [CUA PR #3659](https://github.com/trycua/cua/pull/3659):
 standalone modifier aliases need native keysym and evdev translations.
 No Omarchy keybindings or OpenClaw tool semantics change.
 
 The build runs the focused Wayland tests, requires native package version
-0.22.2, and records the source commit in `octogee-patch.json` beside the
+0.23.2, and records the source commit in `octogee-patch.json` beside the
 library. The Dockerfile is already part of the immutable base fingerprint;
 changing the source pin produces a new base identity. The original npm Node
-runtime and generated bindings remain from the same 0.22.2 release.
+runtime and generated bindings remain from the same 0.23.2 release.
+
+The September 13 audit verified that published 0.23.2 and current CUA main
+still lack these mappings; PR #3659 remains a draft awaiting native platform
+proof. The exact 40-line backport applies unchanged. Source-extracted Rust
+mapping regressions fail without the fix and pass with it, and four installer
+regressions pass. These checks do not replace the image's Linux crate tests
+or a real Wayland modifier/launcher smoke.
 
 Remove the native builder stage and installer overlay when the selected
 OpenClaw package uses a published CUA version containing the fix and passes
