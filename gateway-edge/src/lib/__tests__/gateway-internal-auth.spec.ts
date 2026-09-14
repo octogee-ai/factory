@@ -120,13 +120,14 @@ describe("gateway internal auth on a Builder computer", () => {
     K8S_NAMESPACE: "octogee-test",
     GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: computerEmail,
     GATEWAY_COMPUTER_PROJECT_ID: "octogee",
+    GATEWAY_COMPUTER_INSTANCE_ID: "5114356976453632468",
   };
   const kubernetes: Reviewer = async (jwt) => jwt === "k8s-caller-jwt"
     ? { authenticated: true, namespace: "octogee-test", saName: "octogee-gw-bender", audiences: ["octogee-api"] }
     : { authenticated: false };
 
   it("accepts the computer's Google identity token as the gateway service-account credential", async () => {
-    const reviewer = createGatewayInternalAuthReviewer(env, { kubernetes, verify: async () => googlePayload() });
+    const reviewer = createGatewayInternalAuthReviewer(env, { kubernetes, verify: async () => googlePayload(), onComputerTokenRejected: () => {} });
     await withTokenFile("projected-sa-token\n", async (tokenPath) => {
       const fullEnv = { ...env, OCTOGEE_API_SA_TOKEN_PATH: tokenPath };
       await expect(isValidGatewayInternalAuth(googleJwt, fullEnv, { reviewer })).resolves.toBe(true);
@@ -135,9 +136,11 @@ describe("gateway internal auth on a Builder computer", () => {
   });
 
   it("rejects another service account's Google token and does not consult Google without computer identity", async () => {
+    const rejected: string[] = [];
     const otherSa = createGatewayInternalAuthReviewer(env, {
       kubernetes,
       verify: async () => googlePayload({ email: "someone-else@octogee.iam.gserviceaccount.com" }),
+      onComputerTokenRejected: (reason) => rejected.push(reason),
     });
     const verify = vi.fn(async () => googlePayload());
     const noComputer = createGatewayInternalAuthReviewer(
@@ -150,5 +153,6 @@ describe("gateway internal auth on a Builder computer", () => {
       await expect(isValidGatewayInternalAuth(googleJwt, fullEnv, { reviewer: noComputer })).resolves.toBe(false);
     });
     expect(verify).not.toHaveBeenCalled();
+    expect(rejected).toEqual(["token is not the computer service account on a Compute Engine instance in this project"]);
   });
 });

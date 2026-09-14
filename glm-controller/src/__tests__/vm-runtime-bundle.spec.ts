@@ -115,6 +115,7 @@ describe("renderVmRuntimeBundle", () => {
       GATEWAY_COMPUTER_VNC_URL: "ws://127.0.0.1:6080",
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "octogee-computer-test@octogee.iam.gserviceaccount.com",
       GATEWAY_COMPUTER_PROJECT_ID: "octogee",
+      GATEWAY_COMPUTER_INSTANCE_ID: "",
     });
     expect(gateway.env).toMatchObject({ GATEWAY_RUNTIME_KIND: "gce-vm" });
     expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL");

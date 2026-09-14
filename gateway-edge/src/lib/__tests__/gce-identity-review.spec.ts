@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ComputerIdentityVerifierUnavailableError,
   computeInstanceFromPayload,
   createGceIdentityReviewer,
   createIssuerDispatchingReviewer,
@@ -11,6 +12,7 @@ import type { Reviewer } from "../kubernetes-token-review.js";
 const EXPECTED = {
   projectId: "octogee",
   serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com",
+  instanceId: "5114356976453632468",
 };
 
 function payload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -80,11 +82,39 @@ describe("createGceIdentityReviewer", () => {
     });
   });
 
-  it("fails closed when verification throws, returns nothing, the issuer is not Google, or the instance claims do not match", async () => {
-    expect(await createGceIdentityReviewer({ ...options, verify: async () => { throw new Error("bad sig"); } })("x.y.z")).toEqual({ authenticated: false });
-    expect(await createGceIdentityReviewer({ ...options, verify: async () => null })("x.y.z")).toEqual({ authenticated: false });
-    expect(await createGceIdentityReviewer({ ...options, verify: async () => payload({ iss: "https://evil.example" }) })("x.y.z")).toEqual({ authenticated: false });
-    expect(await createGceIdentityReviewer({ ...options, verify: async () => payload({ email: "other@octogee.iam.gserviceaccount.com" }) })("x.y.z")).toEqual({ authenticated: false });
+  it("rejects a bad token, an empty payload, a non-Google issuer, another service account, and says why", async () => {
+    const reasons: string[] = [];
+    const reviewer = (verify: () => Promise<Record<string, unknown> | null>) =>
+      createGceIdentityReviewer({ ...options, verify, onRejected: (reason) => reasons.push(reason) });
+    expect(await reviewer(async () => { throw new Error("Invalid token signature"); })("x.y.z")).toEqual({ authenticated: false });
+    expect(await reviewer(async () => null)("x.y.z")).toEqual({ authenticated: false });
+    expect(await reviewer(async () => payload({ iss: "https://evil.example" }))("x.y.z")).toEqual({ authenticated: false });
+    expect(await reviewer(async () => payload({ email: "other@octogee.iam.gserviceaccount.com" }))("x.y.z")).toEqual({ authenticated: false });
+    expect(reasons).toEqual([
+      "token verification failed: Invalid token signature",
+      "token verification returned no payload",
+      "issuer https://evil.example is not Google",
+      "token is not the computer service account on a Compute Engine instance in this project",
+    ]);
+  });
+
+  it("rejects a token minted on another computer that shares the service account", async () => {
+    const reasons: string[] = [];
+    const other = payload({
+      google: { compute_engine: { project_id: "octogee", zone: "us-central1-a", instance_id: "999", instance_name: "octogee-pool-other" } },
+    });
+    expect(await createGceIdentityReviewer({ ...options, verify: async () => other, onRejected: (r) => reasons.push(r) })("x.y.z"))
+      .toEqual({ authenticated: false });
+    expect(reasons).toEqual(["token was minted on instance octogee-pool-other (999), not this computer (5114356976453632468)"]);
+  });
+
+  it("surfaces a verifier outage instead of reporting a bad token", async () => {
+    const dns = Object.assign(new Error("getaddrinfo ENOTFOUND www.googleapis.com"), { code: "ENOTFOUND" });
+    await expect(createGceIdentityReviewer({ ...options, verify: async () => { throw dns; } })("x.y.z"))
+      .rejects.toBeInstanceOf(ComputerIdentityVerifierUnavailableError);
+    const fetchFailed = new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) });
+    await expect(createGceIdentityReviewer({ ...options, verify: async () => { throw fetchFailed; } })("x.y.z"))
+      .rejects.toThrow(/verifier unavailable/);
   });
 });
 
@@ -102,12 +132,23 @@ describe("createIssuerDispatchingReviewer", () => {
 });
 
 describe("parseGatewayComputerIdentity", () => {
-  it("is off when neither variable is set, on when both are, and loud when only one is", () => {
+  it("is off when nothing is set, on when all three are, and loud when the set is partial or the instance id is not numeric", () => {
     expect(parseGatewayComputerIdentity({})).toBeNull();
     expect(parseGatewayComputerIdentity({
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: " sa@p.iam.gserviceaccount.com ",
       GATEWAY_COMPUTER_PROJECT_ID: "p",
-    })).toEqual({ serviceAccountEmail: "sa@p.iam.gserviceaccount.com", projectId: "p" });
+      GATEWAY_COMPUTER_INSTANCE_ID: "4242",
+    })).toEqual({ serviceAccountEmail: "sa@p.iam.gserviceaccount.com", projectId: "p", instanceId: "4242" });
     expect(() => parseGatewayComputerIdentity({ GATEWAY_COMPUTER_PROJECT_ID: "p" })).toThrow(/set together/);
+    expect(() => parseGatewayComputerIdentity({
+      GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "sa@p.iam.gserviceaccount.com",
+      GATEWAY_COMPUTER_PROJECT_ID: "p",
+      GATEWAY_COMPUTER_INSTANCE_ID: "",
+    })).toThrow(/set together/);
+    expect(() => parseGatewayComputerIdentity({
+      GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "sa@p.iam.gserviceaccount.com",
+      GATEWAY_COMPUTER_PROJECT_ID: "p",
+      GATEWAY_COMPUTER_INSTANCE_ID: "octogee-pool-x",
+    })).toThrow(/numeric/);
   });
 });

@@ -49,6 +49,7 @@ function readProjectedServiceAccountToken(env: Record<string, string | undefined
 export interface GatewayInternalAuthReviewerDeps {
   kubernetes?: Reviewer;
   verify?: VerifyGoogleIdToken;
+  onComputerTokenRejected?: (reason: string) => void;
 }
 
 export function createGatewayInternalAuthReviewer(
@@ -65,6 +66,9 @@ export function createGatewayInternalAuthReviewer(
       audience: TOKEN_REVIEW_AUDIENCE,
       namespace: expectedNamespace(env),
       verify: deps.verify,
+      onRejected: deps.onComputerTokenRejected ?? ((reason) => {
+        console.warn(JSON.stringify({ severity: "WARNING", message: `Builder computer identity token rejected — ${reason}` }));
+      }),
     }),
   });
 }

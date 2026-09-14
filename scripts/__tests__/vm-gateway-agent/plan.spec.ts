@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { createSurgeReadinessGate } from "../../lib/surge-readiness";
 import { createSurgeOpenClawProcessGate } from "../../lib/surge-openclaw-process-gate";
 import { describe, expect, it } from "vitest";
-import { imagesToPull, planBundle, planContainer, runningVersion } from "../../lib/vm-gateway-agent/plan";
+import { envFor, imagesToPull, planBundle, planContainer, runningVersion } from "../../lib/vm-gateway-agent/plan";
 import { bundleFixture } from "./fixture";
 
 const ctx = { stateRoot: "/srv/octogee", instanceId: "4242" };
@@ -129,5 +129,20 @@ describe("planBundle", () => {
     expect(runningVersion({ Config: { Labels: { "ai.octogee.bundle-version": "v7" } } })).toBe("v7");
     expect(runningVersion({ Config: {} })).toBeNull();
     expect(runningVersion(null)).toBeNull();
+  });
+});
+
+describe("envFor", () => {
+  it("fills the edge's computer instance id placeholder with this VM's instance id", () => {
+    const bundle = bundleFixture();
+    const edge = {
+      ...bundle.containers[1],
+      env: { ...bundle.containers[1].env, GATEWAY_COMPUTER_INSTANCE_ID: "", GATEWAY_COMPUTER_PROJECT_ID: "octogee" },
+    };
+    expect(envFor(bundle, edge, ctx)).toEqual(expect.arrayContaining([
+      "GATEWAY_COMPUTER_INSTANCE_ID=4242",
+      "GATEWAY_COMPUTER_PROJECT_ID=octogee",
+    ]));
+    expect(envFor(bundle, bundle.containers[1], ctx)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^GATEWAY_COMPUTER_INSTANCE_ID=/)]));
   });
 });

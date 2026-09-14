@@ -8,12 +8,14 @@ export type VerifyGoogleIdToken = (idToken: string, audience: string) => Promise
 export interface GatewayComputerIdentityConfig {
   serviceAccountEmail: string;
   projectId: string;
+  instanceId: string;
 }
 
 export interface GceIdentityReviewerOptions extends GatewayComputerIdentityConfig {
   audience: string;
   namespace: string;
   verify?: VerifyGoogleIdToken;
+  onRejected?: (reason: string) => void;
 }
 
 export interface ComputeInstanceIdentity {
@@ -21,6 +23,26 @@ export interface ComputeInstanceIdentity {
   zone: string;
   instanceId: string;
   instanceName: string;
+}
+
+export class ComputerIdentityVerifierUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`computer identity verifier unavailable: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "ComputerIdentityVerifierUnavailableError";
+  }
+}
+
+const VERIFIER_UNAVAILABLE_CODES = new Set([
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EPIPE",
+]);
+
+export function isVerifierUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && VERIFIER_UNAVAILABLE_CODES.has(code)) return true;
+  if (error.name === "AbortError" || error.name === "FetchError") return true;
+  if (error.message === "fetch failed") return true;
+  return error.cause !== undefined && isVerifierUnavailableError(error.cause);
 }
 
 export function jwtIssuer(token: string): string | null {
@@ -44,13 +66,17 @@ export function parseGatewayComputerIdentity(
 ): GatewayComputerIdentityConfig | null {
   const serviceAccountEmail = env.GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL?.trim();
   const projectId = env.GATEWAY_COMPUTER_PROJECT_ID?.trim();
-  if (!serviceAccountEmail && !projectId) return null;
-  if (!serviceAccountEmail || !projectId) {
+  const instanceId = env.GATEWAY_COMPUTER_INSTANCE_ID?.trim();
+  if (!serviceAccountEmail && !projectId && !instanceId) return null;
+  if (!serviceAccountEmail || !projectId || !instanceId) {
     throw new Error(
-      "GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL and GATEWAY_COMPUTER_PROJECT_ID must be set together",
+      "GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL, GATEWAY_COMPUTER_PROJECT_ID and GATEWAY_COMPUTER_INSTANCE_ID must be set together",
     );
   }
-  return { serviceAccountEmail, projectId };
+  if (!/^\d+$/.test(instanceId)) {
+    throw new Error(`GATEWAY_COMPUTER_INSTANCE_ID must be the numeric Compute Engine instance id (got ${instanceId})`);
+  }
+  return { serviceAccountEmail, projectId, instanceId };
 }
 
 export function serviceAccountLocalPart(email: string): string {
@@ -72,7 +98,7 @@ function nonEmptyString(value: unknown): string | null {
 
 export function computeInstanceFromPayload(
   payload: Record<string, unknown>,
-  expected: GatewayComputerIdentityConfig,
+  expected: Pick<GatewayComputerIdentityConfig, "projectId" | "serviceAccountEmail">,
 ): ComputeInstanceIdentity | null {
   if (payload.email !== expected.serviceAccountEmail || payload.email_verified !== true) return null;
   const google = payload.google as { compute_engine?: Record<string, unknown> } | undefined;
@@ -90,15 +116,25 @@ export function computeInstanceFromPayload(
 export function createGceIdentityReviewer(opts: GceIdentityReviewerOptions): Reviewer {
   const verify = opts.verify ?? defaultVerify();
   const saName = serviceAccountLocalPart(opts.serviceAccountEmail);
+  const rejected = (reason: string): ReviewResult => {
+    opts.onRejected?.(reason);
+    return { authenticated: false };
+  };
   return async (jwt: string): Promise<ReviewResult> => {
     let payload: Record<string, unknown> | null;
     try {
       payload = await verify(jwt, opts.audience);
-    } catch {
-      return { authenticated: false };
+    } catch (error) {
+      if (isVerifierUnavailableError(error)) throw new ComputerIdentityVerifierUnavailableError(error);
+      return rejected(`token verification failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!payload || !GOOGLE_TOKEN_ISSUERS.has(String(payload.iss))) return { authenticated: false };
-    if (!computeInstanceFromPayload(payload, opts)) return { authenticated: false };
+    if (!payload) return rejected("token verification returned no payload");
+    if (!GOOGLE_TOKEN_ISSUERS.has(String(payload.iss))) return rejected(`issuer ${String(payload.iss)} is not Google`);
+    const computeInstance = computeInstanceFromPayload(payload, opts);
+    if (!computeInstance) return rejected("token is not the computer service account on a Compute Engine instance in this project");
+    if (computeInstance.instanceId !== opts.instanceId) {
+      return rejected(`token was minted on instance ${computeInstance.instanceName} (${computeInstance.instanceId}), not this computer (${opts.instanceId})`);
+    }
     return {
       authenticated: true,
       saName,

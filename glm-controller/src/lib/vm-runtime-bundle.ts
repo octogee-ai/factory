@@ -127,6 +127,7 @@ export interface RenderVmRuntimeBundleInput {
 }
 
 export const VM_POD_UID_PLACEHOLDER = "";
+export const VM_INSTANCE_ID_PLACEHOLDER = "";
 
 function findDeployment(manifests: unknown[]): K8sDeployment {
   const deployments = manifests.filter(
@@ -210,6 +211,7 @@ async function renderContainer(
       ...GATEWAY_COMPUTER_ENV,
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: input.computer.serviceAccountEmail,
       GATEWAY_COMPUTER_PROJECT_ID: input.computer.projectId,
+      GATEWAY_COMPUTER_INSTANCE_ID: VM_INSTANCE_ID_PLACEHOLDER,
     };
   }
   else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm" };
