@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TERRAFORM_VERSION="1.15.8"
+TERRAFORM_VERSION="1.16.2"
 
 if command -v terraform >/dev/null 2>&1; then
   INSTALLED_VERSION="$(terraform version | sed -n '1s/^Terraform v//p')"
@@ -14,19 +14,19 @@ fi
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
     PLATFORM="darwin_arm64"
-    CHECKSUM="f210110c5698b94d803a7a63cdb0251b5455c150841478808e2bbb343f95ed68"
+    CHECKSUM="7c0a0b31c8aa541351369bcf7b62a7289fbc21de7e577669aeba6d42f4e6cc41"
     ;;
   Darwin-x86_64)
     PLATFORM="darwin_amd64"
-    CHECKSUM="e2e812e783771159bf758fd4e55d6dc9bb08f63e2af2c63d212721807a02c5dc"
+    CHECKSUM="275f50ed172af2f23e15a2ce7e3251aac8b17b768f2e62eceb81c353cd106abf"
     ;;
   Linux-x86_64)
     PLATFORM="linux_amd64"
-    CHECKSUM="d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d"
+    CHECKSUM="0d17011f0c4664539b164b044903d04e296c86c13cb9f28040076c65cfb3985a"
     ;;
   Linux-aarch64)
     PLATFORM="linux_arm64"
-    CHECKSUM="8891e9dcedc9e3b8950bc6af9d4d8af1f4cfade3062f53b9dc403a89f6ce8c9c"
+    CHECKSUM="c040bd1e3122b4290f70f74288d8c5a54ddd4254a3e52a29e7cc666653f50a0a"
     ;;
   *)
     echo "Unsupported Terraform platform: $(uname -s)-$(uname -m)" >&2

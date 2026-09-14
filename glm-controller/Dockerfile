@@ -19,7 +19,7 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 # which the per-image build-fingerprint (.github/actions/build-image-fingerprint/)
 # can't see: two builds from an identical git tree could silently get
 # different kubectl versions, defeating fingerprint-based reuse.
-ARG HELM_VERSION=v4.2.4
+ARG HELM_VERSION=v4.3.0
 ARG KUBECTL_VERSION=v1.36.4
 
 RUN apt-get update \

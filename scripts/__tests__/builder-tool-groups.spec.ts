@@ -37,12 +37,12 @@ describe("Builder tool groups", () => {
       manifest.groups.flatMap((group) => Object.entries(group.npmPackages ?? {})),
     );
     expect(npmPackages).toEqual({
-      "@anthropic-ai/claude-code": "2.1.257",
-      "@openai/codex": "0.152.0",
-      "@sparticuz/chromium": "149.0.0",
-      "firebase-tools": "15.28.2",
+      "@anthropic-ai/claude-code": "2.1.270",
+      "@openai/codex": "0.154.0",
+      "@sparticuz/chromium": "153.0.0",
+      "firebase-tools": "15.30.0",
       "npm-check-updates": "23.1.0",
-      "pnpm": "12.2.1",
+      "pnpm": "12.4.1",
       "tsx": "4.23.13",
       "typescript": "7.0.2",
     });
@@ -64,16 +64,16 @@ describe("Builder tool groups", () => {
       "PyYAML==6.0.3",
       "beautifulsoup4==4.15.0",
       "pandas==3.0.5",
-      "matplotlib==3.11.1",
+      "matplotlib==3.11.2",
     ]);
     expect(manifest.standaloneTools).toEqual({
       gcloud: {
-        version: "579.0.0",
-        sha256: "a9a7fbe51cda37cf6142b1bbcff12227550e60a6c67e8cf84644fb301371c4de",
+        version: "584.0.0",
+        sha256: "02f0a54a1c5f9e582c568cd8da8258e22275b8ab033532fa03fd46bd9f7a3398",
       },
-      gh: { version: "2.98.0" },
-      helm: { version: "4.2.4" },
-      terraform: { version: "1.15.8" },
+      gh: { version: "2.100.0" },
+      helm: { version: "4.3.0" },
+      terraform: { version: "1.16.2" },
       yq: { version: "4.53.6" },
     });
   });

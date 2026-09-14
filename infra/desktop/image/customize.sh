@@ -5,14 +5,14 @@ OMARCHY_VERSION="${OMARCHY_VERSION:?}"
 IMAGE_NAME="${IMAGE_NAME:?}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WLRCTL_REF="${WLRCTL_REF:-v0.2.2}"
-NOVNC_VERSION="${NOVNC_VERSION:-1.6.0}"
-NOVNC_SHA256="${NOVNC_SHA256:-5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa}"
+NOVNC_VERSION="${NOVNC_VERSION:-1.7.0}"
+NOVNC_SHA256="${NOVNC_SHA256:-b1003a11b6e6e8d8f7f5e5586daae7f8ca651d8aee0aa155ff9ac841c48f52c6}"
 WEBSOCKIFY_VERSION="${WEBSOCKIFY_VERSION:-0.13.0}"
 
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S) [customize]" "$*"; }
 
 log "packages"
-pacman -Sy --noconfirm --needed \
+pacman -Syu --noconfirm --needed \
   wayvnc x11vnc grim wtype wl-clipboard slurp jq python python-pip python-websocket-client bc \
   meson ninja wayland wayland-protocols libxkbcommon git \
   chromium xorg-xwayland noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono >/tmp/pacman.log 2>&1 \

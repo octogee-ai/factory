@@ -1,10 +1,10 @@
-FROM node:26-bookworm-slim AS gateway-core-system
+FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS gateway-core-system
 
 ARG NPM_VERSION=12.0.2
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates curl git jq openssh-client rsync tar \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,8 +21,8 @@ ENV HOME=/home/node
 FROM gateway-core-system AS gateway-system
 
 ARG FD_VERSION=10.5.0
-ARG CLAUDE_CODE_VERSION=2.1.251
-ARG CODEX_VERSION=0.151.0
+ARG CLAUDE_CODE_VERSION=2.1.270
+ARG CODEX_VERSION=0.154.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
