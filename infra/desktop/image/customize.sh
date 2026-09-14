@@ -12,11 +12,14 @@ WEBSOCKIFY_VERSION="${WEBSOCKIFY_VERSION:-0.13.0}"
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S) [customize]" "$*"; }
 
 log "packages"
-pacman -Syu --noconfirm --needed \
+OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu --noconfirm --needed \
   wayvnc x11vnc grim wtype wl-clipboard slurp jq python python-pip python-websocket-client bc \
   meson ninja wayland wayland-protocols libxkbcommon git \
   chromium xorg-xwayland noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono >/tmp/pacman.log 2>&1 \
   || { tail -20 /tmp/pacman.log; exit 1; }
+
+log "Omarchy migrations"
+sudo -H -u octo bash -lc 'omarchy migrate'
 
 log "wlrctl ${WLRCTL_REF}"
 rm -rf /tmp/wlrctl
