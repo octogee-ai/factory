@@ -57,8 +57,11 @@ function fakeDb(docs: Docs) {
     },
     delete: async () => { deletes.push(path); delete docs[path]; },
   });
+  type Ref = ReturnType<typeof docRef>;
   const db = {
     doc: docRef,
+    runTransaction: async <T>(fn: (tx: { get: (ref: Ref) => Promise<unknown>; set: (ref: Ref, data: Record<string, unknown>, opts?: { merge?: boolean }) => void }) => Promise<T>) =>
+      fn({ get: (ref) => ref.get(), set: (ref, data, opts) => { void ref.set(data, opts); } }),
     collection: (name: string) => ({
       doc: (id: string) => docRef(`${name}/${id}`),
       where: (field: string, _op: string, value: unknown) => ({
@@ -725,6 +728,22 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
     expect(earlier.docs["glmGateways/b-x"].vm).toMatchObject({ parkedCheckpoint: { outcome: "stale", requestedAt: null, completedAt: 600 } });
     expect(readPath(earlier.docs["glmGateways/b-x"], "vmHome.checkpointRequestedAt")).toBe(500);
   });
+
+  it("drops the park observation instead of re-creating a runtime record that retirement deleted mid-park", async () => {
+    const vmHome = { checkpointRequestedAt: 500, checkpointAcknowledgedAt: 500, parkRequestedAt: 500, lastCheckpoint: { completedAt: 600 } };
+    const h = harness({ "glmGateways/b-x": { ...ownedDoc, vmHome }, "glmGateways/b-x/vm/runtime": { version: "v" }, "users/UidA": { ...userDoc } }, {
+      describe: vi.fn(async () => stopped).mockResolvedValueOnce(running),
+      stop: vi.fn(async () => { delete h.docs["glmGateways/b-x"]; }),
+    });
+
+    await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
+
+    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"]).toBeUndefined();
+    expect(h.deletes).toContain("glmGateways/b-x/vm/runtime");
+    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toMatchObject({ instanceName: COMPUTER, gatewayId: "b-x", checkpoint: { outcome: "fresh" } });
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: runtime record is gone; dropped the park observation/));
+  });
 });
 
 describe("createVmGatewayRuntime.upsertInstance after a park", () => {
@@ -814,6 +833,16 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
     await gone.runtime.recoverUnreachable("b-x");
     expect(gone.log).toHaveBeenCalledWith(expect.stringMatching(/octogee-computer-test-uida is absent from Compute/));
     expect(gone.docs["glmGateways/b-x"].vm).toEqual(recorded);
+  });
+
+  it("stops recovering once retirement has deleted the runtime record: no preemption write, no restart", async () => {
+    const h = harness(live(), { describe: vi.fn(async () => { delete h.docs["glmGateways/b-x"]; return stopped; }) });
+
+    await h.runtime.recoverUnreachable("b-x");
+
+    expect(h.vm.start).not.toHaveBeenCalled();
+    expect(h.docs["glmGateways/b-x"]).toBeUndefined();
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: runtime record is gone; dropped the preempted observation/));
   });
 });
 

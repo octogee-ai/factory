@@ -738,7 +738,12 @@ interface DurableRuntimeState {
   gateways: DurableGateway[];
   runtimeDocs: GatewayRuntimeDoc[];
   invalidRootIds: string[];
-  strayGlmDocIds: string[];
+  strayGlmDocs: StrayGlmDoc[];
+}
+
+interface StrayGlmDoc {
+  id: string;
+  remedy: string;
 }
 
 interface RuntimeQueryDoc {
@@ -763,28 +768,33 @@ function collectDurableRuntimeRoots(docs: ReadonlyArray<RuntimeQueryDoc>): {
   return { gateways, invalidRootIds };
 }
 
-// glmGateways holds ONLY bare-id runtime docs under the simple-roll model. Any
-// other doc (legacy desired doc, revision realization) is a stray the cutover
-// script must clean — the controller refuses fleet mutation until it does.
+const REVISION_GLM_DOC_ID = /-r\d+$/u;
+
+function strayGlmDocRemedy(doc: RuntimeQueryDoc, data: Record<string, unknown> | undefined): string {
+  if (REVISION_GLM_DOC_ID.test(doc.id)) return "revision doc; run scripts/ops/cutover-simple-roll.ts";
+  const fields = Object.keys(data ?? {}).sort().join(", ") || "none";
+  return `not a runtime doc of a durable gateway, fields: ${fields}; delete ${GLM_GATEWAYS_COLLECTION}/${doc.id}`;
+}
+
 function classifyDurableRuntimeGlmDocs(
   docs: ReadonlyArray<RuntimeQueryDoc>,
   gateways: readonly DurableGateway[],
 ): {
   runtimeDocs: GatewayRuntimeDoc[];
-  strayGlmDocIds: string[];
+  strayGlmDocs: StrayGlmDoc[];
 } {
   const runtimeDocs: GatewayRuntimeDoc[] = [];
-  const strayGlmDocIds: string[] = [];
+  const strayGlmDocs: StrayGlmDoc[] = [];
   const gatewayIds = new Set(gateways.map((gateway) => gateway.gatewayId));
   for (const doc of docs) {
     const data = doc.data();
     if (isGatewayRuntimeDoc(data) && data.gatewayId === doc.id && gatewayIds.has(doc.id)) {
       runtimeDocs.push(data);
     } else {
-      strayGlmDocIds.push(doc.id);
+      strayGlmDocs.push({ id: doc.id, remedy: strayGlmDocRemedy(doc, data as Record<string, unknown> | undefined) });
     }
   }
-  return { runtimeDocs, strayGlmDocIds };
+  return { runtimeDocs, strayGlmDocs };
 }
 
 async function readDurableRuntimeGateways(db: Firestore): Promise<DurableRuntimeState> {
@@ -809,7 +819,7 @@ export async function readTargetedDurableRuntimeGateways(
 ): Promise<DurableRuntimeState> {
   const ids = [...new Set(gatewayIds)];
   if (ids.length === 0) {
-    return { gateways: [], runtimeDocs: [], invalidRootIds: [], strayGlmDocIds: [] };
+    return { gateways: [], runtimeDocs: [], invalidRootIds: [], strayGlmDocs: [] };
   }
   const [rootSnaps, glmSnaps] = await Promise.all([
     db.getAll(...ids.map((id) => db.collection(GATEWAYS_COLLECTION).doc(id))),
@@ -832,11 +842,13 @@ function assertDurableRuntimeState(state: DurableRuntimeState): void {
       `invalid durable root document(s): ${state.invalidRootIds.slice().sort().join(", ")}; refusing fleet mutation`,
     );
   }
-  if (state.strayGlmDocIds.length > 0) {
-    throw new Error(
-      `stray glmGateway document(s): ${state.strayGlmDocIds.slice().sort().join(", ")}; ` +
-        `run scripts/ops/cutover-simple-roll.ts before fleet mutation`,
-    );
+  if (state.strayGlmDocs.length > 0) {
+    const listed = state.strayGlmDocs
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((doc) => `${doc.id} (${doc.remedy})`)
+      .join(", ");
+    throw new Error(`stray glmGateway document(s): ${listed}; refusing fleet mutation`);
   }
 }
 

@@ -46,13 +46,30 @@ export interface ParkComputerOptions {
 
 export interface ComputerLifecycle {
   ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState>;
-  parkComputer(gatewayId: string, opts?: ParkComputerOptions): Promise<{ recordExists: boolean; vm: GatewayVmState | null }>;
+  parkComputer(gatewayId: string, opts?: ParkComputerOptions): Promise<GatewayVmState | null>;
   pauseComputer(gatewayId: string): Promise<void>;
   recoverUnreachable(gatewayId: string): Promise<void>;
   deleteComputer(ownerUid: string): Promise<boolean>;
 }
 
 type ParkedVmState = GatewayVmState & { parkedCheckpoint: GatewayVmParkedCheckpoint };
+
+export async function recordVmObservation(
+  deps: Pick<ComputerLifecycleDeps, "db" | "log">,
+  gatewayId: string,
+  observation: Record<string, unknown>,
+  what: string,
+): Promise<boolean> {
+  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
+  const recorded = await deps.db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists) return false;
+    transaction.set(ref, observation, { merge: true });
+    return true;
+  });
+  if (!recorded) deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime record is gone; dropped the ${what} observation instead of re-creating it`);
+  return recorded;
+}
 
 function stateFrom(
   description: GatewayVmDescription,
@@ -126,7 +143,7 @@ async function finalHomeCheckpoint(
   let requestedAt = typeof home?.parkRequestedAt === "number" ? home.parkRequestedAt : null;
   if (requestedAt === null) {
     requestedAt = deps.now();
-    await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).set({ vmHome: { checkpointRequestedAt: requestedAt, parkRequestedAt: requestedAt } }, { merge: true });
+    await recordVmObservation(deps, gatewayId, { vmHome: { checkpointRequestedAt: requestedAt, parkRequestedAt: requestedAt } }, "park request");
     deps.log(`[vm-gateway-runtime] ${gatewayId}: requested the final home checkpoint of ${description.name} before parking`);
   }
   const completedAt = homeCheckpointCompletedAt(home);
@@ -219,8 +236,8 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     return { data, vm: vm ?? null };
   }
 
-  async function recordVm(gatewayId: string, vm: GatewayVmState | null): Promise<void> {
-    await glm(gatewayId).set({ vm }, { merge: true });
+  async function recordVm(gatewayId: string, vm: GatewayVmState | null, what: string): Promise<boolean> {
+    return recordVmObservation(deps, gatewayId, { vm }, what);
   }
 
   async function assertComputerUnbound(gatewayId: string, description: GatewayVmDescription): Promise<void> {
@@ -294,21 +311,21 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     return state;
   }
 
-  async function parkComputer(gatewayId: string, opts: ParkComputerOptions = {}): Promise<{ recordExists: boolean; vm: GatewayVmState | null }> {
+  async function parkComputer(gatewayId: string, opts: ParkComputerOptions = {}): Promise<GatewayVmState | null> {
     const { data, vm } = await readVmRecord(gatewayId);
-    if (!vm) return { recordExists: data !== undefined, vm: null };
+    if (!vm) return null;
     const description = await stoppableComputer(gatewayId, vm);
-    if (!description) return { recordExists: true, vm: null };
+    if (!description) return null;
     const parked = await stopForIdle(gatewayId, vm, description, readVmHome(data), opts);
     await recordParkedComputer(deps, gatewayId, parkedComputerOwner(data, description), parked);
-    return { recordExists: true, vm: parked };
+    return parked;
   }
 
   async function pauseComputer(gatewayId: string): Promise<void> {
     const { vm } = await readVmRecord(gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
-    await recordVm(gatewayId, description ? await stopComputer(gatewayId, description, vm.origin, "operator") : null);
+    await recordVm(gatewayId, description ? await stopComputer(gatewayId, description, vm.origin, "operator") : null, "pause");
   }
 
   async function stopForIdle(
@@ -369,16 +386,12 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       return;
     }
     if (STOPPED_STATUSES.has(description.status)) {
-      await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", vm.origin));
-      deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} was preempted (${description.status}); restarting`);
-      const after = await startComputer(gatewayId, description, "restarted");
-      await recordVm(gatewayId, stateFrom(after, deps.now(), null, vm.origin));
-      await deps.reconcileRoutes();
+      await restartPreempted(gatewayId, description, vm.origin);
       return;
     }
     if (description.status === "STOPPING") {
       if (sameObservation(vm, description, "preempted")) return;
-      await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", vm.origin));
+      await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", vm.origin), "preempted");
       deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} is being stopped by Compute; restarting once it is TERMINATED`);
       return;
     }
@@ -386,8 +399,20 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: ${description.name} is SUSPENDED outside Cowboy; not resuming it`);
       return;
     }
+    await recordRunningAgain(gatewayId, vm, description);
+  }
+
+  async function restartPreempted(gatewayId: string, description: GatewayVmDescription, origin: GatewayVmOrigin | undefined): Promise<void> {
+    if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", origin), "preempted"))) return;
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} was preempted (${description.status}); restarting`);
+    const after = await startComputer(gatewayId, description, "restarted");
+    await recordVm(gatewayId, stateFrom(after, deps.now(), null, origin), "restart");
+    await deps.reconcileRoutes();
+  }
+
+  async function recordRunningAgain(gatewayId: string, vm: GatewayVmState, description: GatewayVmDescription): Promise<void> {
     if (sameObservation(vm, description, null)) return;
-    await recordVm(gatewayId, stateFrom(description, deps.now(), null, vm.origin));
+    if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), null, vm.origin), "running"))) return;
     await deps.reconcileRoutes();
     deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} is ${description.status} again at ${description.internalIp ?? "no-ip"}`);
   }

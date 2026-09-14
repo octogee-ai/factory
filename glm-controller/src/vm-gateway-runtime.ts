@@ -10,7 +10,7 @@ import {
   type HelmInstancesMap,
 } from "@octogee/shared/types/glm";
 import type { GatewayVmClient } from "./lib/compute-vm.js";
-import { createComputerLifecycle } from "./vm-computer-lifecycle.js";
+import { createComputerLifecycle, recordVmObservation } from "./vm-computer-lifecycle.js";
 import type { KubectlSubprocess } from "./fleet-ingress.js";
 import {
   helmTemplateArgsFromUpgradeArgs,
@@ -280,7 +280,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     async removeInstance({ gatewayId, awaitHomeCheckpoint }) {
       const parked = await computers.parkComputer(gatewayId, { awaitHomeCheckpoint: awaitHomeCheckpoint === true });
       await deps.db.doc(gatewayVmRuntimeDocPath(gatewayId)).delete();
-      if (parked.recordExists) await glm(gatewayId).set({ vm: parked.vm, vmInstance: FieldValue.delete() }, { merge: true });
+      await recordVmObservation(deps, gatewayId, { vm: parked, vmInstance: FieldValue.delete() }, "park");
       await reconcileRoutes();
     },
 

@@ -557,7 +557,7 @@ describe("targeted durable state reads", () => {
     expect(state.gateways.map((gateway) => gateway.gatewayId)).toEqual(["default"]);
     expect(state.runtimeDocs.map((doc) => doc.gatewayId)).toEqual(["default"]);
     expect(state.invalidRootIds).toEqual([]);
-    expect(state.strayGlmDocIds).toEqual([]);
+    expect(state.strayGlmDocs).toEqual([]);
   });
 
   it("treats a fully removed gateway as absent, not invalid", async () => {
@@ -567,7 +567,7 @@ describe("targeted durable state reads", () => {
       gateways: [],
       runtimeDocs: [],
       invalidRootIds: [],
-      strayGlmDocIds: [],
+      strayGlmDocs: [],
     });
   });
 
@@ -584,7 +584,7 @@ describe("targeted durable state reads", () => {
       runtimes: { orphan: servingRuntime({ gatewayId: "orphan" }) },
     });
     await expect(readTargetedDurableRuntimeGateways(stray.db as never, ["orphan"]))
-      .resolves.toMatchObject({ strayGlmDocIds: ["orphan"] });
+      .resolves.toMatchObject({ strayGlmDocs: [{ id: "orphan", remedy: expect.stringContaining("delete glmGateways/orphan") }] });
   });
 
   it("does not scan either fleet collection for a targeted convergence pass", async () => {
@@ -689,8 +689,38 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     expect(reconcileImagePins).not.toHaveBeenCalled();
     expect(syncFleetIngress).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("stray glmGateway document(s): default-r2"),
+      expect.stringContaining("stray glmGateway document(s): default-r2 (revision doc; run scripts/ops/cutover-simple-roll.ts)"),
     );
+  });
+
+  it("names deletion, not the cutover script, for a vm-only stray that no durable root owns", async () => {
+    const callbacks: SnapshotCallbacks = {};
+    const log = vi.fn();
+    const reconcileImagePins = vi.fn(async () => {});
+    const syncFleetIngress = vi.fn(async () => {});
+    const stop = startReconciler({
+      db: makeDb({
+        roots: { default: durableRoot() },
+        runtimes: {
+          "jefe-s-3e8d49e8": { vm: { status: "TERMINATED", stopReason: "idle", instanceName: "octogee-pool-dd5de412", updatedAt: 1 } },
+        },
+        callbacks,
+      }),
+      helm: {} as never,
+      handlers: {} as never,
+      reconcileImagePins,
+      syncFleetIngress,
+      log,
+    });
+
+    await runTick(callbacks);
+    stop();
+
+    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("stray glmGateway document(s): jefe-s-3e8d49e8 (not a runtime doc of a durable gateway, fields: vm; delete glmGateways/jefe-s-3e8d49e8)"),
+    );
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("cutover-simple-roll"));
   });
 
   it("refuses fleet mutation for an invalid durable root", async () => {
