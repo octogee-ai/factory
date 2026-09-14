@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { strictRateLimit } from "../../middleware/security.js";
 import { db, FieldValue } from "../../lib/db.js";
 import { mmApi } from "../../lib/mattermost.js";
+import { createFreshPrivateChannel } from "../../lib/mattermost-channel-name.js";
 import { logger } from "../../middleware/logging.js";
 import { projectGeneralChannelName } from "@octogee/shared/types/identity";
 import { defaultProjectRecipe, isProjectRecipeId } from "@octogee/shared/types/project";
@@ -61,14 +62,7 @@ async function lookupRetryChannel(
 }
 
 async function createRetryChannel(teamId: string, channelName: string, displayName: string): Promise<string> {
-  const channel = (await mmApi("/channels", "POST", {
-    team_id: teamId,
-    name: channelName,
-    display_name: displayName,
-    type: "P",
-  })) as { id?: string };
-  if (!channel?.id) throw new Error("MM returned no channel id");
-  return channel.id;
+  return createFreshPrivateChannel(teamId, channelName, displayName);
 }
 
 async function ensureRetryChannel(ctx: ProjectCtx, teamId: string, channelName: string): Promise<string> {

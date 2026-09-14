@@ -1,6 +1,7 @@
 import { FieldValue, db } from "./db.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
+import { ChannelNameInUseError, createFreshPrivateChannel } from "./mattermost-channel-name.js";
 import { getWorkspaceMmContext, type WorkspaceMmContext } from "./mattermost-context.js";
 import {
   projectGeneralChannelName,
@@ -414,19 +415,15 @@ async function createMattermostProjectChannel(
 ): Promise<string> {
   const channelName = projectGeneralChannelName(plan.workspaceId, plan.slug);
   try {
-    const ch = (await mmApi("/channels", "POST", {
-      team_id: teamId,
-      name: channelName,
-      display_name: plan.trimmedName,
-      type: "P",
-    })) as { id?: string };
-    if (!ch?.id) throw new Error("MM returned no channel id");
-    artifacts.primaryChannel = { channelId: ch.id, teamId, name: channelName };
-    return ch.id;
+    const channelId = await createFreshPrivateChannel(teamId, channelName, plan.trimmedName);
+    artifacts.primaryChannel = { channelId, teamId, name: channelName };
+    return channelId;
   } catch (err) {
     throw new ProjectProvisioningError(
       errorMessage(err),
-      "Project provisioning failed - could not create chat channel",
+      err instanceof ChannelNameInUseError
+        ? "Project provisioning failed - chat channel name is in use"
+        : "Project provisioning failed - could not create chat channel",
     );
   }
 }

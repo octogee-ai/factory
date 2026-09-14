@@ -103,13 +103,26 @@ interface ProjectMattermostFixture {
   existingPrimary?: boolean;
   primaryType?: "P" | "O";
   teamId?: string;
+  archivedRemnantId?: string;
 }
+
+const remnantOps: string[] = [];
 
 function mockProjectMattermost(options: ProjectMattermostFixture): void {
   const teamId = options.teamId ?? "team-abc";
   const primaryMembers = new Set<string>();
   let primaryExists = options.existingPrimary ?? false;
   let primaryType = options.primaryType ?? "P";
+  let remnant = options.archivedRemnantId
+    ? { id: options.archivedRemnantId, name: options.primaryName, deleteAt: 1_700_000_000_000 }
+    : null;
+  const nameTaken = () => {
+    const error = new Error(
+      'MM API 400: {"id":"store.sql_channel.save_channel.exists.app_error","message":"A channel with that name already exists on the same team."}',
+    ) as Error & { status: number };
+    error.status = 400;
+    return error;
+  };
 
   const channel = (id: string, name: string, type: "P" | "O") => ({
     id,
@@ -130,6 +143,28 @@ function mockProjectMattermost(options: ProjectMattermostFixture): void {
     body?: Record<string, unknown>,
   ) => {
     const verb = method ?? "GET";
+    if (verb === "GET" && path === `/teams/${teamId}/channels/name/${options.primaryName}?include_deleted=true`) {
+      if (remnant && remnant.name === options.primaryName) {
+        return { id: remnant.id, name: remnant.name, team_id: teamId, type: "P", delete_at: remnant.deleteAt };
+      }
+      if (primaryExists) return channel(options.primaryId, options.primaryName, primaryType);
+      throw notFound(path);
+    }
+    if (remnant && verb === "POST" && path === `/channels/${remnant.id}/restore`) {
+      remnantOps.push("restore");
+      remnant.deleteAt = 0;
+      return { id: remnant.id };
+    }
+    if (remnant && verb === "PUT" && path === `/channels/${remnant.id}/patch`) {
+      remnantOps.push(`rename:${String(body?.name)}`);
+      remnant = { ...remnant, name: String(body?.name) };
+      return { id: remnant.id, name: remnant.name };
+    }
+    if (remnant && verb === "DELETE" && path === `/channels/${remnant.id}`) {
+      remnantOps.push("archive");
+      remnant.deleteAt = 1_700_000_000_000;
+      return {};
+    }
     if (verb === "GET" && path === `/teams/${teamId}/channels/name/${options.primaryName}`) {
       if (!primaryExists) throw notFound(path);
       return channel(options.primaryId, options.primaryName, primaryType);
@@ -142,6 +177,10 @@ function mockProjectMattermost(options: ProjectMattermostFixture): void {
       return [...primaryMembers].map((userId) => ({ user_id: userId }));
     }
     if (verb === "POST" && path === "/channels") {
+      if (body?.name === options.primaryName && remnant && remnant.name === options.primaryName) {
+        remnantOps.push("create:taken");
+        throw nameTaken();
+      }
       if (body?.name === options.primaryName && !primaryExists) {
         primaryExists = true;
         primaryType = body.type === "O" ? "O" : "P";
@@ -513,6 +552,41 @@ describe("POST /api/projects — MM channel failure is hard-failure", () => {
       slug: "mygame",
       name: "My Game",
       visibility: "public",
+    });
+  });
+
+  it("frees an archived channel that still holds the name, then creates fresh", async () => {
+    remnantOps.length = 0;
+    mockGetWorkspaceMmContext.mockResolvedValue({
+      ownerUid: CALLER_UID,
+      slug: "alice",
+      teamId: "team-abc",
+      userId: "mock-mm-user",
+      username: "alice-mm",
+      coachUserId: "mock-mm-coach",
+      coachDmChannelId: null,
+      generalChannelId: null,
+      adminChannelId: null,
+    });
+    mockProjectMattermost({
+      primaryId: "ch-fresh-1",
+      primaryName: "alice-proj-mygame-general",
+      archivedRemnantId: "ch-old-deleted",
+    });
+    const res = await request(createApp())
+      .post("/api/projects")
+      .set(await authHeader())
+      .send({ name: "My Game", slug: "mygame", visibility: "private" });
+    expect(res.status).toBe(200);
+    expect(res.body.channelId).toBe("ch-fresh-1");
+    expect(remnantOps).toEqual([
+      "create:taken",
+      "restore",
+      expect.stringMatching(/^rename:alice-proj-mygame-general-x[0-9a-z]+$/),
+      "archive",
+    ]);
+    expect(await getProjectChannel("alice", "mygame", "general")).toMatchObject({
+      mattermost: { channelId: "ch-fresh-1" },
     });
   });
 

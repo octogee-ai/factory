@@ -29,6 +29,7 @@ const {
   addChannelMember,
   mapMattermostMembershipError,
   removeChannelMember,
+  retireStoredChannel,
   setStoredChannelArchived,
   setStoredPrimaryChannelArchived,
 } = await import("../lib/channel-lifecycle.js");
@@ -181,6 +182,43 @@ describe("channel lifecycle", () => {
       ["/channels/primary"],
       ["/channels/primary/restore", "POST"],
     ]);
+  });
+
+  it("retires the canonical channel: one verification, rename while live, then archive", async () => {
+    let name = "alice-general";
+    let deleteAt = 0;
+    h.mmApi.mockImplementation(async (path: string, method = "GET", body?: { name?: string }) => {
+      if (path === "/channels/primary" && method === "GET") return channel("primary", name, "team", "P", deleteAt);
+      if (path === "/channels/primary/patch" && method === "PUT") {
+        name = String(body?.name);
+        return channel("primary", name, "team", "P", deleteAt);
+      }
+      if (path === "/channels/primary" && method === "DELETE") {
+        deleteAt = 1;
+        return {};
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await retireStoredChannel(channelPath, () => 1_789_070_223_358);
+
+    expect(h.mmApi.mock.calls).toEqual([
+      ["/channels/primary"],
+      ["/channels/primary/patch", "PUT", { name: `alice-general-x${Math.floor(1_789_070_223_358 / 1000).toString(36)}` }],
+      ["/channels/primary", "DELETE"],
+    ]);
+    expect(deleteAt).toBe(1);
+  });
+
+  it("archives an already-retired-by-name channel only once and never renames an archived one", async () => {
+    h.mmApi.mockImplementation(async (path: string, method = "GET") => {
+      if (path === "/channels/primary" && method === "GET") return channel("primary", "alice-general", "team", "P", 5);
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    await retireStoredChannel(channelPath);
+
+    expect(h.mmApi.mock.calls).toEqual([["/channels/primary"]]);
   });
 
   it("changes the primary lifecycle without binding or mutating a legacy history pointer", async () => {

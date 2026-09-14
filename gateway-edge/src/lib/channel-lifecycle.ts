@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { db } from "./db.js";
 import { mmApi } from "./mattermost.js";
+import { retiredChannelName } from "./mattermost-channel-name.js";
 import { logger } from "../middleware/logging.js";
 import {
   CHANNEL_NAME_MAX_LENGTH,
@@ -89,6 +90,19 @@ export async function setStoredChannelArchived(
   archived: boolean,
 ): Promise<void> {
   await setStoredPrimaryChannelArchived(channelDocPath, archived);
+}
+
+export async function retireStoredChannel(
+  channelDocPath: string,
+  now: () => number = Date.now,
+): Promise<void> {
+  const stored = await readStoredChannel(channelDocPath);
+  const primary = await requireMattermostChannel(stored.primaryChannelId, "primary");
+  assertChannelBinding(primary, stored.binding, "primary");
+  if (primary.deleteAt <= 0) {
+    await mmApi(`/channels/${primary.id}/patch`, "PUT", { name: retiredChannelName(primary.name, now()) });
+  }
+  await setMattermostChannelArchived(primary, true);
 }
 
 export async function ensureActiveMattermostUser(mmUserId: string): Promise<void> {
