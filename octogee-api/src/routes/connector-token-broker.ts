@@ -10,7 +10,13 @@ import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connect
 import { isSafeCanvasPath, resolveCanvasFile } from "../../../gateway-edge/src/lib/canvas-file.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
-import type { GatewayPodOwnerIdentityReader } from "../lib/gateway-pod-owner-identity.js";
+import { gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
+import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+import { readComputerRuntimeObservation } from "../lib/computer-runtime-observation.js";
+import type {
+  GatewayPodOwnerIdentity,
+  GatewayPodOwnerIdentityReader,
+} from "../lib/gateway-pod-owner-identity.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -186,26 +192,58 @@ async function publicCanvasAccessAuthorized(
   return access.canvasPath === resolveCanvasFile(project?.canvasFile);
 }
 
+function refused(bound: GatewayBinding, reason: string): null {
+  logger.warn("[connector-broker] gateway access refused", {
+    gatewayId: bound.gatewayId,
+    podName: bound.podName,
+    reason,
+  });
+  return null;
+}
+
+function recordOf(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function vmOwnerIdentity(
+  runtime: Record<string, unknown> | undefined,
+  bound: GatewayBinding,
+): GatewayPodOwnerIdentity | null {
+  const instanceId = recordOf(runtime?.vm).instanceId;
+  if (typeof instanceId !== "string" || !/^\d+$/.test(instanceId)) return null;
+  if (bound.podUid !== instanceId || bound.podName !== gatewayVmPodName(bound.gatewayId, instanceId)) {
+    return null;
+  }
+  const { ownerUid, builderSlug } = recordOf(runtime?.vmInstance);
+  return typeof ownerUid === "string" && ownerUid && typeof builderSlug === "string" && builderSlug
+    ? { ownerUid, builderSlug }
+    : null;
+}
+
 async function verifiedGatewayAuthorization(
   db: Firestore,
   bound: GatewayBinding,
   readPodOwnerIdentity: GatewayPodOwnerIdentityReader,
 ): Promise<{ builderSlug: string; gatewayClass: string } | null> {
   const authorization = await readServingGatewayAuthorization(db, bound.gatewayId);
-  if (!authorization || authorization.config.ownerUid !== bound.ownerUid) return null;
-  const podOwnerIdentity = await readPodOwnerIdentity({
-    podName: bound.podName!,
-    podUid: bound.podUid!,
-  });
+  if (!authorization) return refused(bound, "gateway is not serving");
+  if (authorization.config.ownerUid !== bound.ownerUid) return refused(bound, "bound owner differs from gateway owner");
+  const runtime = await readComputerRuntimeObservation(db, bound.gatewayId);
+  const vmRuntime = resolveGatewayRuntime(runtime?.runtime) === "gce-vm";
+  const ownerIdentity = vmRuntime
+    ? vmOwnerIdentity(runtime, bound)
+    : await readPodOwnerIdentity({ podName: bound.podName!, podUid: bound.podUid! });
+  if (!ownerIdentity) return refused(bound, vmRuntime ? "caller is not the gateway's VM instance" : "pod identity unresolved");
   if (
-    !podOwnerIdentity
-    || podOwnerIdentity.ownerUid !== authorization.config.ownerUid
-    || podOwnerIdentity.builderSlug !== authorization.config.builderSlug
+    ownerIdentity.ownerUid !== authorization.config.ownerUid
+    || ownerIdentity.builderSlug !== authorization.config.builderSlug
   ) {
-    return null;
+    return refused(bound, "runtime owner identity differs from gateway authorization");
   }
   return {
-    builderSlug: podOwnerIdentity.builderSlug,
+    builderSlug: ownerIdentity.builderSlug,
     gatewayClass: authorization.config.gatewayClass,
   };
 }
@@ -273,24 +311,24 @@ async function projectCloneSourceAuthorized(input: {
   readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
 }): Promise<{ owner: string; repo: string } | null> {
   const { db, bound, uid, access, readPodOwnerIdentity } = input;
-  if (!bound.ownerUid || uid !== bound.ownerUid) return null;
+  if (!bound.ownerUid || uid !== bound.ownerUid) return refused(bound, "clone request is not from the owner runtime");
   const authorization = await verifiedGatewayAuthorization(db, bound, readPodOwnerIdentity);
-  if (
-    !authorization ||
-    authorization.gatewayClass !== "builder" ||
-    authorization.builderSlug !== access.builderSlug
-  ) return null;
+  if (!authorization) return null;
+  if (authorization.gatewayClass !== "builder" || authorization.builderSlug !== access.builderSlug) {
+    return refused(bound, `clone requested for ${access.builderSlug} on a ${authorization.gatewayClass} gateway of ${authorization.builderSlug}`);
+  }
 
   const project = await db.doc(`workspaces/${access.builderSlug}/projects/${access.projectSlug}`).get();
   const data = project.data() as Record<string, unknown> | undefined;
   const source = data?.repoSource;
   if (!project.exists || data?.ownerUid !== bound.ownerUid || !source || typeof source !== "object") {
-    return null;
+    return refused(bound, `project ${access.builderSlug}/${access.projectSlug} is missing, foreign, or has no repo source`);
   }
   const { provider, owner, repo } = source as Record<string, unknown>;
-  return provider === "github" && typeof owner === "string" && typeof repo === "string"
-    ? { owner, repo }
-    : null;
+  if (provider !== "github" || typeof owner !== "string" || typeof repo !== "string") {
+    return refused(bound, `project ${access.builderSlug}/${access.projectSlug} is not GitHub-backed`);
+  }
+  return { owner, repo };
 }
 
 function connectorAllowedForAccess(
