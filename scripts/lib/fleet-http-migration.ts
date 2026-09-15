@@ -92,6 +92,7 @@ import {
 import { OpenclawWireError } from "./gateway-rpc.js";
 import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
 import type { SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
+import { pendingCloneAppliedFingerprint } from "./pending-clone-fingerprint.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as const;
@@ -203,11 +204,13 @@ async function activateImportedCustomerForMigration(input: {
   const { deps, slug, mode, signal, loadStrategy = "standard" } = input;
   await ensureMigrationGiteaKey(deps, slug, "target-activation");
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
+  let deferredCheckouts: string[] = [];
   if (
     loadStrategy === "standard" &&
     deps.adapter.projectCheckoutScope?.(slug) !== "workspace-only"
   ) {
     const { pending, deferred } = await cloneMissingProjects(deps.adapter, slug, { githubCheckouts: "defer" });
+    deferredCheckouts = deferred;
     if (deferred.length > 0) {
       deps.log?.(
         `[migration-http] GitHub checkouts for ${slug} hydrate after cutover, once this gateway holds the assignment: ${deferred.join(", ")}`,
@@ -223,7 +226,12 @@ async function activateImportedCustomerForMigration(input: {
     ? await deps.adapter.activateImportedCustomer(slug, { signal })
     : await deps.adapter.activateImportedCustomer(slug);
   if (loadStrategy === "standard") {
-    deps.adapter.recordAppliedFingerprint?.(slug, activation.appliedFingerprint);
+    deps.adapter.recordAppliedFingerprint?.(
+      slug,
+      deferredCheckouts.length > 0
+        ? pendingCloneAppliedFingerprint(activation.appliedFingerprint)
+        : activation.appliedFingerprint,
+    );
   } else {
     deps.log?.(`[migration-http] expedited activation defers project hydration slug=${slug}`);
   }

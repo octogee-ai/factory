@@ -1,6 +1,7 @@
 
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { pendingCloneAppliedFingerprint } from "../lib/pending-clone-fingerprint";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
 import * as fsSync from "node:fs";
@@ -1699,6 +1700,7 @@ describe("queued-rsync migration control handlers", () => {
 
   it("activates an import onto the owner's own Builder runtime with its GitHub checkout left for the post-cutover reconcile", async () => {
     const cloneProjectRepo = vi.fn(async () => false);
+    const recordAppliedFingerprint = vi.fn();
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
       isConfiguredBuilderCustomer: vi.fn(() => true),
@@ -1707,6 +1709,7 @@ describe("queued-rsync migration control handlers", () => {
       ]),
       cloneProjectRepo,
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+      recordAppliedFingerprint,
     });
     const body: ActivateImportRequestBody = {
       migrationId: "mig-github-owner-runtime",
@@ -1723,6 +1726,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", pendingCloneAppliedFingerprint("fp-chris"));
     expect(getBody()).toMatchObject({ migrationId: "mig-github-owner-runtime", slug: "chris", imported: true });
   });
 

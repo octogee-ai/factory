@@ -206,18 +206,8 @@ export interface ConvergenceHooks {
 // level-triggered loop keeps selecting the slug — and ensureSlug recognizes it and retries
 // ONLY the checkout. Restart-safe on durable disks because the marker persists with the
 // applied-fingerprint store.
-const PENDING_CLONE_FINGERPRINT_SUFFIX = "!clones-pending";
-
-export function pendingCloneAppliedFingerprint(fingerprint: string | undefined): string {
-  return `${fingerprint ?? ""}${PENDING_CLONE_FINGERPRINT_SUFFIX}`;
-}
-
-export function pendingCloneOnlyStale(
-  applied: string | undefined,
-  desired: string | undefined,
-): boolean {
-  return applied !== undefined && applied === pendingCloneAppliedFingerprint(desired);
-}
+export { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
+import { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 
 export interface SettleConvergenceInput {
   now: number;
