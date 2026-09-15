@@ -1,3 +1,4 @@
+import { assertWorkspaceIdentityReady } from "./openclaw-workspace-bootstrap.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -1079,6 +1080,7 @@ function deviceConnectParams(params: OpenAndConnectParams, nonce: string): Recor
 }
 
 async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> {
+  if (params.proxyIdentity) assertWorkspaceIdentityReady();
   const t0 = Date.now();
   let wsOpenMs: number | undefined;
   let challengeMs: number | undefined;

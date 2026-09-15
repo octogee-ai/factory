@@ -9,8 +9,6 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
-  GatewayPermissionSetId,
-  OpenClawBrokerProfile,
 } from "@octogee/core/gateway-principal-access";
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 import { reconcilePlatformInvariants } from "@octogee/core/system-config-invariants";
@@ -26,7 +24,7 @@ import {
   openClawControlUpstreamPath,
 } from "./surface.js";
 import { OpenClawControlSessionManager } from "./session.js";
-import { OPENCLAW_CONTROL_ALLOWED_METHODS } from "./rpc-policy.js";
+const OPENCLAW_TEST_METHODS = ["health", "status", "config.get", "config.schema", "config.patch", "config.set", "config.apply", "agents.list", "models.list", "channels.status", "tools.catalog", "skills.status", "tools.invoke", "approval.history", "approval.get", "approval.resolve"];
 import { OpenClawControlResourceLimiter } from "./limits.js";
 import {
   createOpenClawControlAuthorizationCache,
@@ -52,26 +50,16 @@ function sessions(now = () => 1_000): OpenClawControlSessionManager {
 
 function issue(
   manager: OpenClawControlSessionManager,
-  brokerProfile: OpenClawBrokerProfile = "native-owner",
 ): string {
-  const permissionSetByProfile: Record<Exclude<OpenClawBrokerProfile, "native-owner" | "native-member">, GatewayPermissionSetId> = {
-    "native-member-helper": "trusted-helper.v1",
-    "native-co-owner": "co-owner.v1",
-    "delegated-config": "trusted-helper.v1",
-    "delegated-read": "agent-viewer.v1",
-  };
-  const permissionSetIds = brokerProfile === "native-owner" || brokerProfile === "native-member"
-    ? []
-    : [permissionSetByProfile[brokerProfile]];
   return manager.issue({
     sessionId: SESSION_ID,
     uid: "uid-owner",
     gatewayId: "bender",
     workspaceSlug: "alice",
     revisionId: "bender-r7",
-    brokerProfile,
-    permissionSetIds,
-    grantRevision: brokerProfile === "native-owner" || brokerProfile === "native-member" ? null : 1,
+
+
+
     absoluteExpiresAt: 3_601_000,
   }).cookie.split(";", 1)[0];
 }
@@ -114,7 +102,7 @@ async function listen(server: http.Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-it.each(["native-owner", "delegated-read"] as const)("forwards parameterless reads for %s through the socket bridge", async (profile) => {
+it.each(["admin", "member"] as const)("forwards parameterless reads for %s through the socket bridge", async (profile) => {
   const upstream = http.createServer();
   const upstreamWs = new WebSocketServer({ server: upstream });
   const seen: Record<string, unknown>[] = [];
@@ -124,7 +112,7 @@ it.each(["native-owner", "delegated-read"] as const)("forwards parameterless rea
       const frame = JSON.parse(data.toString());
       seen.push(frame);
       ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: frame.method === "connect"
-        ? { type: "hello-ok", features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS, "terminal.list"] } }
+        ? { type: "hello-ok", features: { methods: [...OPENCLAW_TEST_METHODS, "terminal.list"] } }
         : { items: [] } }));
     });
   });
@@ -137,9 +125,9 @@ it.each(["native-owner", "delegated-read"] as const)("forwards parameterless rea
   router.attach(edge);
   const edgePort = await listen(edge);
   const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
-    headers: { cookie: issue(manager, profile), origin: "https://api.octogee.com" },
+    headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
   });
-  const method = profile === "native-owner" ? "terminal.list" : "status";
+  const method = profile === "admin" ? "terminal.list" : "status";
   try {
     const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
       const deadline = setTimeout(() => reject(new Error("parameterless read did not settle")), 1_000);
@@ -151,7 +139,7 @@ it.each(["native-owner", "delegated-read"] as const)("forwards parameterless rea
         else if (frame.id === "read") { clearTimeout(deadline); resolve(frame); }
       });
     });
-    expect(result).toMatchObject({ ok: true, payload: profile === "native-owner" ? { items: [] } : {} });
+    expect(result).toMatchObject({ ok: true, payload: profile === "admin" ? { items: [] } : {} });
     expect(seen).toContainEqual({ type: "req", id: "read", method, params: {} });
   } finally {
     browser.terminate();
@@ -213,15 +201,15 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       gatewayId: input.gatewayId,
       workspaceSlug: "alice",
       revisionId: input.revisionId,
-      brokerProfile: "native-owner" as const,
-      permissionSetIds: [],
-      grantRevision: null,
+
+
+
       expiresAt: 3_601_000,
     }));
     const response = await request(appWith({ env: env(), sessions: manager, redeem }))
       .get(`/api/g/bender/openclaw/launch/${ticket}`);
     expect(response.status).toBe(303);
-    expect(response.headers.location).toBe("/g/bender/openclaw/");
+    expect(response.headers.location).toBe("/g/bender/openclaw/new");
     expect(response.headers["set-cookie"]?.[0]).toContain("HttpOnly");
     expect(response.headers["set-cookie"]?.[0]).toContain("Secure");
     expect(response.headers["set-cookie"]?.[0]).toContain("SameSite=None");
@@ -236,15 +224,10 @@ describe("OpenClaw Dashboard HTTP surface", () => {
       sessionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
     }));
   });
-  it.each([
-    ["delegated-config", ["trusted-helper.v1"], 1, "settings/agents"],
-    ["delegated-read", ["agent-viewer.v1"], 1, "settings/agents"],
-    ["native-member", [], null, "new"],
-    ["native-member-helper", ["trusted-helper.v1"], 1, "new"],
-  ] as const)("lands %s on a page it can use", async (brokerProfile, ids, grantRevision, page) => {
+  it.each([["member", "new"]] as const)("lands %s on a page it can use", async (operatorRole, page) => {
     const response = await request(appWith({ env: env(), sessions: sessions(), redeem: async (input) => ({
       uid: "uid-member", gatewayId: input.gatewayId, workspaceSlug: "alice", revisionId: input.revisionId,
-      brokerProfile, permissionSetIds: [...ids], grantRevision, expiresAt: 3_601_000,
+         expiresAt: 3_601_000,
     }) })).get(`/api/g/bender/openclaw/launch/${"a".repeat(43)}`);
     expect(response.status).toBe(303);
     expect(response.headers.location).toBe(`/g/bender/openclaw/${page}`);
@@ -448,34 +431,6 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(requests).toBe(1);
     expect(authorization).toBe("Bearer gateway-secret");
     expect(loadGatewayToken).toHaveBeenCalledTimes(1);
-  });
-
-  it.each<OpenClawBrokerProfile>([
-    "native-co-owner",
-    "delegated-config",
-    "delegated-read",
-  ])("does not expose owner assistant media to the %s profile", async (brokerProfile) => {
-    let requests = 0;
-    const loadGatewayToken = vi.fn(async () => "gateway-secret");
-    const upstream = http.createServer((_req, res) => {
-      requests += 1;
-      res.end("unexpected");
-    });
-    const port = await listen(upstream);
-    const manager = sessions();
-
-    const response = await request(appWith({
-      env: env(port),
-      sessions: manager,
-      loadGatewayToken,
-    }))
-      .get("/api/g/bender/openclaw/__openclaw__/assistant-media?source=%2Fhome%2Fnode%2F.openclaw%2Fmedia%2Fbrowser.png")
-      .set("cookie", issue(manager, brokerProfile));
-
-    expect(response.status).toBe(404);
-    expect(response.body).toEqual({ error: "dashboard-resource-not-found" });
-    expect(requests).toBe(0);
-    expect(loadGatewayToken).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -976,7 +931,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               ok: true,
               payload: {
                 type: "hello-ok",
-                features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+                features: { methods: [...OPENCLAW_TEST_METHODS] },
               },
             }));
           } else if (frame.method === "config.get") {
@@ -1152,7 +1107,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         }
@@ -1234,7 +1189,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               type: "hello-ok",
               auth: { token: "gateway-secret" },
               features: {
-                methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS],
+                methods: [...OPENCLAW_TEST_METHODS],
               },
             },
           }));
@@ -1393,7 +1348,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               type: "hello-ok",
               features: {
                 methods: [
-                  ...OPENCLAW_CONTROL_ALLOWED_METHODS.filter((method) => method !== "status"),
+                  ...OPENCLAW_TEST_METHODS.filter((method) => method !== "status"),
                   "future.write",
                 ],
               },
@@ -1542,7 +1497,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         } else if (frame.method === "status") {
@@ -1626,7 +1581,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         }
@@ -1696,7 +1651,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         }
@@ -1763,7 +1718,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         } else if (frame.method === "models.list") {
@@ -1862,7 +1817,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         } else if (frame.method === "models.list") {
@@ -2015,7 +1970,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             ok: true,
             payload: {
               type: "hello-ok",
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         } else if (frame.method === "status") {
@@ -2070,11 +2025,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
   });
 
   it.each([
-    ["delegated-config", "allowed"], ["native-co-owner", "allowed"],
-    ["delegated-read", "denied"], ["delegated-config", "unsafe"],
-    ["delegated-config", "service-auth-failure"], ["delegated-config", "service-timeout"],
-  ] as const)("handles %s config edits with %s service outcome", async (profile, outcome) => {
-    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-service-config-"));
+    ["admin", "allowed"],
+    ["member", "denied"], ["admin", "unsafe"],
+    ["admin", "demoted"], ["admin", "timeout"],
+  ] as const)("handles %s config edits on the native caller connection with outcome %s", async (profile, outcome) => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-config-"));
     tempDirs.push(openclawDir);
     const config: Record<string, unknown> = { agents: { defaults: { timeoutSeconds: 60 } } };
     reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" });
@@ -2088,15 +2043,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       ws.on("message", (data) => {
         const frame = JSON.parse(data.toString());
         calls.push({ method: frame.method, user });
-        if (user === "svc:gateway-edge" && frame.method === "connect" && outcome === "service-auth-failure") {
-          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { code: "FORBIDDEN", message: "service denied" } }));
-          return;
-        }
-        if (user === "svc:gateway-edge" && frame.method === "config.patch" && outcome === "service-timeout") return;
+        if (frame.method === "config.patch" && outcome === "timeout") return;
         let payload: unknown;
-        if (frame.method === "connect") payload = { type: "hello-ok", features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] } };
+        if (frame.method === "connect") payload = { type: "hello-ok", auth: { scopes: profile === "admin" ? ["operator.admin"] : ["operator.read", "operator.write"] }, features: { methods: [...OPENCLAW_TEST_METHODS] } };
         else if (frame.method === "config.get") payload = { raw: JSON.stringify(config), hash: "hash-1" };
-        else if (frame.method === "config.patch" && user !== "svc:gateway-edge") {
+        else if (frame.method === "config.patch" && (user !== "uid-helper" || outcome === "demoted")) {
           ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { code: "FORBIDDEN", message: "missing scope: operator.admin" } }));
           return;
         } else payload = { applied: true };
@@ -2119,7 +2070,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     });
     router.attach(edge);
     const edgePort = await listen(edge);
-    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, { headers: { cookie: issue(manager, profile), origin: "https://api.octogee.com" } });
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, { headers: { cookie: issue(manager), origin: "https://api.octogee.com" } });
     const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
       browser.once("error", reject);
       browser.once("close", () => resolve({ closed: true }));
@@ -2127,25 +2078,26 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         const frame = JSON.parse(data.toString());
         if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
         else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "read", method: "config.get", params: {} }));
-        else if (frame.id === "read") browser.send(JSON.stringify({ type: "req", id: "write", method: "config.patch", params: { raw: JSON.stringify(outcome === "unsafe" ? { unknownSetting: "forbidden" } : { agents: { defaults: { timeoutSeconds: 90 } } }), baseHash: "hash-1" } }));
+        else if (frame.id === "read") browser.send(JSON.stringify({ type: "req", id: "write", method: "config.patch", params: { raw: JSON.stringify(outcome === "unsafe" ? { gateway: { bind: "loopback" } } : { agents: { defaults: { timeoutSeconds: 90 } } }), baseHash: "hash-1" } }));
         else if (frame.id === "write") resolve(frame);
       });
     });
     browser.terminate();
     for (const client of wss.clients) client.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+    expect(calls.some(call => call.user === "svc:gateway-edge")).toBe(false);
     if (outcome === "allowed") {
       expect(result.ok).toBe(true);
-      expect(calls.filter((call) => call.method === "config.patch")).toEqual([{ method: "config.patch", user: "svc:gateway-edge" }]);
-    } else if (outcome === "service-timeout") {
+      expect(calls.filter((call) => call.method === "config.patch")).toEqual([{ method: "config.patch", user: "uid-helper" }]);
+    } else if (outcome === "timeout") {
       expect(result.ok === false || result.closed === true).toBe(true);
-      expect(calls.filter((call) => call.method === "config.patch")).toEqual([{ method: "config.patch", user: "svc:gateway-edge" }]);
+      expect(calls.filter((call) => call.method === "config.patch")).toEqual([{ method: "config.patch", user: "uid-helper" }]);
       await vi.waitFor(() => expect(retained).toHaveLength(1));
       expect(acquireSystemConfigSyncLeaseSync({ openclawDir })).toBeNull();
       await retained[0].release();
     } else {
       expect(result.ok).not.toBe(true);
-      expect(calls.filter((call) => call.method === "config.patch")).toEqual([]);
+      expect(calls.filter((call) => call.method === "config.patch")).toEqual(outcome === "demoted" ? [{ method: "config.patch", user: "uid-helper" }] : []);
       expect(retained).toEqual([]);
       await vi.waitFor(() => expect(fs.existsSync(path.join(openclawDir, "system_config.sync.lock"))).toBe(false));
       const retryLease = acquireSystemConfigSyncLeaseSync({ openclawDir });
@@ -2154,8 +2106,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     }
   });
 
-  it.each(["native-member", "native-member-helper", "native-co-owner", "delegated-read", "delegated-config", "native-owner"] as const)(
-    "leaves per-user RPC authority and server capabilities with OpenClaw for %s", async (profile) => {
+  it(
+    "leaves per-user RPC authority and server capabilities with OpenClaw", async () => {
       const received: unknown[] = [];
       const hello = { type: "hello-ok", auth: { role: "operator", scopes: ["operator.read", "operator.questions"] },
         snapshot: { presence: [{ id: "permitted-user" }] },
@@ -2193,7 +2145,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       router.attach(edge);
       const port = await listen(edge);
       const browser = new WebSocket(`ws://127.0.0.1:${port}/openclaw`, {
-        headers: { cookie: issue(manager, profile), origin: "https://api.octogee.com" } });
+        headers: { cookie: issue(manager), origin: "https://api.octogee.com" } });
       const frames: Array<Record<string, unknown>> = [];
       browser.on("message", (data) => {
         const frame = JSON.parse(data.toString()); frames.push(frame);
@@ -2218,7 +2170,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         expect(frames.find((frame) => frame.id === "users.setRole")).toMatchObject({ ok: false, error: denial });
         expect(proxyIdentity.serviceHeaders).not.toHaveBeenCalled();
         const media = await request(edge).get("/api/g/bender/openclaw/__openclaw__/assistant-media?source=image.png")
-          .set("cookie", issue(manager, profile));
+          .set("cookie", issue(manager));
         expect(media.status).toBe(403);
         expect(media.text).toBe("upstream-media-denial");
       } finally {
@@ -2260,7 +2212,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             payload: {
               type: "hello-ok",
               auth: { role: "operator", scopes: ["operator.read"] },
-              features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
+              features: { methods: [...OPENCLAW_TEST_METHODS] },
             },
           }));
         }
@@ -2285,8 +2237,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       connectScopes: () => ["operator.read", "operator.write", "operator.approvals"],
       resolveChatProfile: async () => null,
       syncChannelMemberships: vi.fn(async () => { syncOrder.push("channel-sync"); }),
-      syncProfile: vi.fn(async (session: { uid: string; brokerProfile: string }) => {
-        syncOrder.push(`sync:${session.uid}:${session.brokerProfile}`);
+      syncProfile: vi.fn(async (session: { uid: string }) => {
+        syncOrder.push(`sync:${session.uid}`);
       }),
     };
     const edge = http.createServer(appWith({
@@ -2316,7 +2268,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
 
     const asset = await request(edge)
       .get("/api/g/bender/openclaw/assets/app.js")
-      .set("cookie", issue(manager, "delegated-config"))
+      .set("cookie", issue(manager))
       .set("x-octogee-user", "forged-uid")
       .set("x-octogee-proxy", "1");
     expect(asset.status).toBe(200);
@@ -2324,12 +2276,12 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     expect(assetHeaders[0]).not.toHaveProperty("authorization");
     expect(proxyIdentity.syncChannelMemberships).not.toHaveBeenCalled();
     const page = await request(edge).get("/api/g/bender/openclaw/")
-      .set("cookie", issue(manager, "delegated-config"));
+      .set("cookie", issue(manager));
     expect(page.status).toBe(200);
     expect(proxyIdentity.syncChannelMemberships).toHaveBeenCalledTimes(1);
     proxyIdentity.syncChannelMemberships.mockRejectedValueOnce(new Error("Membership sync unavailable"));
     const deniedPage = await request(edge).get("/api/g/bender/openclaw/")
-      .set("cookie", issue(manager, "delegated-config"));
+      .set("cookie", issue(manager));
     expect(deniedPage.status).toBe(502);
     expect(assetHeaders).toHaveLength(2);
     proxyIdentity.syncChannelMemberships.mockClear();
@@ -2338,7 +2290,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const browserFrames: Array<Record<string, unknown>> = [];
     const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: {
-        cookie: issue(manager, "delegated-config"),
+        cookie: issue(manager),
         origin: "https://api.octogee.com",
         "x-octogee-user": "forged-uid",
         "x-octogee-proxy": "1",
@@ -2362,7 +2314,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         }
       });
     });
-    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner:delegated-config", "channel-sync"]);
+    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner", "channel-sync"]);
     expect(proxyIdentity.syncChannelMemberships).toHaveBeenCalledWith(expect.objectContaining({ uid: "uid-owner" }), { force: true });
     const clock = vi.spyOn(Date, "now");
     const now = Date.now();

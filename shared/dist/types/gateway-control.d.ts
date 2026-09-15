@@ -1,4 +1,4 @@
-import type { GatewayAccessCapabilities, GatewayAccessPermissionSetId, GatewayAccessRole } from "./gateway-access.js";
+import type { GatewayAccessCapabilities, GatewayAccessRole } from "./gateway-access.js";
 export interface GatewayControlListEntry {
     gatewayId: string;
     workspaceSlug: string;
@@ -12,10 +12,7 @@ export interface GatewayControlListEntry {
     isCurrentAssignment: boolean;
     configStatus?: GatewayConfigStatus;
     via: GatewayAccessRole;
-    permissionSetIds: GatewayAccessPermissionSetId[];
     capabilities: GatewayAccessCapabilities;
-    grantRevision: number | null;
-    accessExpiresAt: string | null;
 }
 export type GatewayConfigState = "clean" | "dirty" | "syncing" | "error" | "unavailable";
 export interface GatewayConfigStatus {

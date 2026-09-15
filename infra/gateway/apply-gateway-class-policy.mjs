@@ -75,7 +75,6 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_board_card_update",
   "octogee_board_card_move",
   "octogee_board_card_comment",
-  "delegated_access",
   "workspace_commit",
   "brave_search",
   "tavily_search",
@@ -159,7 +158,6 @@ const PROJECT_AGENT_DENIED_TOOLS = [
   "octogee_project_create",
   "octogee_project_delegate",
   "octogee_project_publish",
-  "delegated_access",
   "octogee_status",
   "octogee_chat_search",
   "octogee_chat_history",
@@ -1512,6 +1510,9 @@ function applyBuilderPolicy(config, openclawDir, env) {
 }
 
 function applyControlIdentityPolicy(config, env) {
+  config.plugins ??= {};
+  config.plugins.entries ??= {};
+  config.plugins.entries["octogee-identity-tools"] = { enabled: isPerUserControlIdentity(env) };
   if (isPerUserControlIdentity(env)) {
     config.gateway ??= {};
     config.gateway.auth ??= {};
@@ -1522,7 +1523,8 @@ function applyControlIdentityPolicy(config, env) {
     auth.trustedProxy = structuredClone(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy);
     auth.identityScopes = openClawIdentityScopes(resolveOwnerUidFromEnv(env));
     config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
-    config.gateway.roles = openClawOperatorRoles(env.GATEWAY_BUILDER_SLUG);
+    config.gateway.roles ??= openClawOperatorRoles(env.GATEWAY_BUILDER_SLUG);
+    config.plugins.allow = [...new Set([...(config.plugins.allow ?? []), "octogee-identity-tools"])];
     return;
   }
   const gateway = config.gateway;

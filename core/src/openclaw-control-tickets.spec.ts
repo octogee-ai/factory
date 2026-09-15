@@ -19,9 +19,9 @@ describe("OpenClaw Control tickets", () => {
       gatewayId: "bender",
       workspaceSlug: "alex",
       revisionId: "bender-r7",
-      brokerProfile: "delegated-config",
-      permissionSetIds: ["trusted-helper.v1"],
-      grantRevision: 4,
+
+
+
       now: 1_000,
       random: () => Buffer.alloc(32, 7),
     });
@@ -33,9 +33,9 @@ describe("OpenClaw Control tickets", () => {
       gatewayId: "bender",
       workspaceSlug: "alex",
       revisionId: "bender-r7",
-      brokerProfile: "delegated-config",
-      permissionSetIds: ["trusted-helper.v1"],
-      grantRevision: 4,
+
+
+
       expiresAt: 1_000 + OPENCLAW_CONTROL_TICKET_TTL_MS,
     });
     expect(JSON.stringify(minted.document)).not.toContain(minted.ticket);
@@ -48,9 +48,9 @@ describe("OpenClaw Control tickets", () => {
       workspaceSlug: "alex",
       revisionId: "bender-r7",
       expiresAt: 20_000,
-      brokerProfile: "delegated-config",
-      permissionSetIds: ["trusted-helper.v1"],
-      grantRevision: 4,
+
+
+
     };
     expect(redeemableOpenClawControlTicket({
       document,
@@ -85,9 +85,9 @@ describe("OpenClaw Control tickets", () => {
       workspaceSlug: "alex",
       revisionId: "bender-r7",
       expiresAt: 20_000,
-      brokerProfile: "delegated-config",
-      permissionSetIds: ["trusted-helper.v1"],
-      grantRevision: 4,
+
+
+
     };
     expect(inspectOpenClawControlTicket({
       document,

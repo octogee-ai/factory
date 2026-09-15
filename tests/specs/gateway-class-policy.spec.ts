@@ -33,7 +33,6 @@ const workflowTools = [
   "octogee_board_card_update",
   "octogee_board_card_move",
   "octogee_board_card_comment",
-  "delegated_access",
   "workspace_commit",
   "brave_search",
   "tavily_search",
@@ -1644,7 +1643,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
   });
 
-  it("switches a per-user Builder gateway to trusted-proxy auth with grants for services and the owner", () => {
+  it("switches a per-user Builder gateway to trusted-proxy auth with authenticated identities for services and the owner", () => {
     const { config: out } = runPolicyWithDir(
       "builder",
       { gateway: { auth: { mode: "token", token: "pod-token", rateLimit: { maxAttempts: 10 } } } },
@@ -1659,7 +1658,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         allowLoopback: true,
         deviceAutoApprove: {
           enabled: true,
-          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+          scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.pairing"],
         },
       },
       identityScopes: {
@@ -1671,9 +1670,16 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(out.gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
     expect(out.gateway.roles.default).toBe("member");
-    expect(out.gateway.roles.definitions.member.scopes).toContain("operator.admin");
-    expect(out.gateway.roles.definitions.viewer.scopes).toEqual(["operator.read"]);
-    expect(out.gateway.roles.definitions["team-member"].agents).toEqual(["octogee-team-workspace-coach"]);
+    expect(out.gateway.roles.definitions.member.scopes).not.toContain("operator.admin");
+    expect(out.gateway.roles.definitions.admin.scopes).toContain("operator.admin");
+    expect(out.gateway.roles.definitions.member.agents).toEqual(["octogee-team-workspace-coach"]);
+  });
+
+  it("preserves native role definitions across gateway restarts", () => {
+    const roles = { default: "reader", definitions: { reader: { scopes: ["operator.read"], sessions: { others: "none" }, agents: "*" } } };
+    const { config } = runPolicyWithDir("builder", { gateway: { roles } }, undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner" });
+    expect(config.gateway.roles).toEqual(roles);
   });
 
   it("returns a Builder gateway to token auth when the control identity is not per-user", () => {

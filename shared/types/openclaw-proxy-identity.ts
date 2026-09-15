@@ -35,13 +35,6 @@ export const OPENCLAW_FULL_OPERATOR_SCOPES = [
   OPERATOR_PAIRING,
 ] as const;
 
-export const OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES = [
-  OPERATOR_READ,
-  OPERATOR_WRITE,
-  OPERATOR_APPROVALS,
-  OPERATOR_QUESTIONS,
-] as const;
-
 export const OPENCLAW_TRUSTED_PROXY_AUTH = Object.freeze({
   mode: "trusted-proxy",
   trustedProxy: Object.freeze({
@@ -50,7 +43,7 @@ export const OPENCLAW_TRUSTED_PROXY_AUTH = Object.freeze({
     allowLoopback: true,
     deviceAutoApprove: Object.freeze({
       enabled: true,
-      scopes: [...OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES],
+      scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES],
     }),
   }),
 });
@@ -64,35 +57,15 @@ export function openClawIdentityScopes(ownerUid?: string | null): Record<string,
   };
 }
 
-export const OPENCLAW_OPERATOR_ROLE_NAMES = [
-  "member",
-  "team-member",
-  "service",
-  "owner",
-  "co-owner",
-  "trusted-helper",
-  "viewer",
-] as const;
+export const OPENCLAW_OPERATOR_ROLE_NAMES = ["member", "admin", "service"] as const;
 export type OpenClawOperatorRole = (typeof OPENCLAW_OPERATOR_ROLE_NAMES)[number];
 
 export const OPENCLAW_OPERATOR_ROLES = Object.freeze({
   default: "member",
   definitions: Object.freeze({
-    member: { sessions: { others: "none" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
-    "team-member": { sessions: { others: "none" }, agents: [] as string[], scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_QUESTIONS] },
+    member: { sessions: { others: "none" }, agents: [] as string[], scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_QUESTIONS] },
+    admin: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
     service: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
-    owner: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
-    "co-owner": {
-      sessions: { others: "write" },
-      agents: "*",
-      scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_APPROVALS, OPERATOR_QUESTIONS],
-    },
-    "trusted-helper": {
-      sessions: { others: "view" },
-      agents: "*",
-      scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_APPROVALS],
-    },
-    viewer: { sessions: { others: "view" }, agents: "*", scopes: [OPERATOR_READ] },
   }),
 });
 
@@ -100,39 +73,13 @@ export function openClawOperatorRoles(workspaceSlug?: string): typeof OPENCLAW_O
   const roles = structuredClone(OPENCLAW_OPERATOR_ROLES);
   if (workspaceSlug) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(workspaceSlug)) throw new Error("invalid gateway workspace slug");
-    roles.definitions["team-member"].agents = [`octogee-${workspaceSlug}-coach`];
+    roles.definitions.member.agents = [`octogee-${workspaceSlug}-coach`];
   }
   return roles;
 }
 
 export function openClawRoleScopes(role: OpenClawOperatorRole): string[] {
   return [...OPENCLAW_OPERATOR_ROLES.definitions[role].scopes];
-}
-
-export function openClawDeviceRequestScopes(role: OpenClawOperatorRole): string[] {
-  const approvable = new Set<string>(OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES);
-  return openClawRoleScopes(role).filter((scope) => approvable.has(scope));
-}
-
-export type OpenClawBrokerProfileLike =
-  | "native-owner"
-  | "native-member"
-  | "native-member-helper"
-  | "native-co-owner"
-  | "delegated-config"
-  | "delegated-read";
-
-const ROLE_BY_BROKER_PROFILE: Record<OpenClawBrokerProfileLike, OpenClawOperatorRole> = {
-  "native-owner": "owner",
-  "native-member": "team-member",
-  "native-member-helper": "team-member",
-  "native-co-owner": "co-owner",
-  "delegated-config": "trusted-helper",
-  "delegated-read": "viewer",
-};
-
-export function openClawRoleForBrokerProfile(profile: OpenClawBrokerProfileLike): OpenClawOperatorRole {
-  return ROLE_BY_BROKER_PROFILE[profile];
 }
 
 export function resolveControlIdentityFromEnv(
@@ -158,8 +105,8 @@ export function serviceProxyIdentity(name: string): string {
   return `${OPENCLAW_SERVICE_IDENTITY_PREFIX}${trimmed}`;
 }
 
-export function openClawDeviceSubject(gatewayId: string, uid: string, role: OpenClawOperatorRole): string {
-  return `octogee-openclaw-device:v2:${gatewayId}:${uid}:${role}`;
+export function openClawDeviceSubject(gatewayId: string, uid: string): string {
+  return `octogee-openclaw-device:v3:${gatewayId}:${uid}`;
 }
 
 export function openClawProxyOrigin(env: NodeJS.ProcessEnv = process.env): string {

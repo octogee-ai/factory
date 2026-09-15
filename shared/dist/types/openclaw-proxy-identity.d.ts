@@ -11,7 +11,6 @@ export declare const OPENCLAW_EDGE_SERVICE_IDENTITY = "svc:gateway-edge";
 export declare const OPENCLAW_PROVISIONER_SERVICE_IDENTITY = "svc:octogee-provisioner";
 export declare const OPENCLAW_TRUSTED_PROXIES: readonly ["127.0.0.1", "::1"];
 export declare const OPENCLAW_FULL_OPERATOR_SCOPES: readonly ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.pairing"];
-export declare const OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES: readonly ["operator.read", "operator.write", "operator.approvals", "operator.questions"];
 export declare const OPENCLAW_TRUSTED_PROXY_AUTH: Readonly<{
     mode: "trusted-proxy";
     trustedProxy: Readonly<{
@@ -20,12 +19,12 @@ export declare const OPENCLAW_TRUSTED_PROXY_AUTH: Readonly<{
         allowLoopback: true;
         deviceAutoApprove: Readonly<{
             enabled: true;
-            scopes: ("operator.approvals" | "operator.questions" | "operator.read" | "operator.write")[];
+            scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
         }>;
     }>;
 }>;
 export declare function openClawIdentityScopes(ownerUid?: string | null): Record<string, string[]>;
-export declare const OPENCLAW_OPERATOR_ROLE_NAMES: readonly ["member", "team-member", "service", "owner", "co-owner", "trusted-helper", "viewer"];
+export declare const OPENCLAW_OPERATOR_ROLE_NAMES: readonly ["member", "admin", "service"];
 export type OpenClawOperatorRole = (typeof OPENCLAW_OPERATOR_ROLE_NAMES)[number];
 export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
     default: "member";
@@ -34,15 +33,15 @@ export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
             sessions: {
                 others: string;
             };
-            agents: string;
-            scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
+            agents: string[];
+            scopes: string[];
         };
-        "team-member": {
+        admin: {
             sessions: {
                 others: string;
             };
-            agents: string[];
-            scopes: string[];
+            agents: string;
+            scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
         };
         service: {
             sessions: {
@@ -51,46 +50,15 @@ export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
             agents: string;
             scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
         };
-        owner: {
-            sessions: {
-                others: string;
-            };
-            agents: string;
-            scopes: ("operator.admin" | "operator.approvals" | "operator.pairing" | "operator.questions" | "operator.read" | "operator.write")[];
-        };
-        "co-owner": {
-            sessions: {
-                others: string;
-            };
-            agents: string;
-            scopes: string[];
-        };
-        "trusted-helper": {
-            sessions: {
-                others: string;
-            };
-            agents: string;
-            scopes: string[];
-        };
-        viewer: {
-            sessions: {
-                others: string;
-            };
-            agents: string;
-            scopes: string[];
-        };
     }>;
 }>;
 export declare function openClawOperatorRoles(workspaceSlug?: string): typeof OPENCLAW_OPERATOR_ROLES;
 export declare function openClawRoleScopes(role: OpenClawOperatorRole): string[];
-export declare function openClawDeviceRequestScopes(role: OpenClawOperatorRole): string[];
-export type OpenClawBrokerProfileLike = "native-owner" | "native-member" | "native-member-helper" | "native-co-owner" | "delegated-config" | "delegated-read";
-export declare function openClawRoleForBrokerProfile(profile: OpenClawBrokerProfileLike): OpenClawOperatorRole;
 export declare function resolveControlIdentityFromEnv(env?: NodeJS.ProcessEnv): GatewayControlIdentity;
 export declare function isPerUserControlIdentity(env?: NodeJS.ProcessEnv): boolean;
 export declare function resolveOwnerUidFromEnv(env?: NodeJS.ProcessEnv): string | undefined;
 export declare function serviceProxyIdentity(name: string): string;
-export declare function openClawDeviceSubject(gatewayId: string, uid: string, role: OpenClawOperatorRole): string;
+export declare function openClawDeviceSubject(gatewayId: string, uid: string): string;
 export declare function openClawProxyOrigin(env?: NodeJS.ProcessEnv): string;
 export interface OpenClawProxyIdentity {
     user: string;

@@ -31,7 +31,7 @@ const h = vi.hoisted(() => ({
 
 function snap(path: string) {
   const data = h.docs.get(path);
-  return { exists: data !== undefined, data: () => data };
+  return { id: path.split("/").at(-1)!, ref: { path }, exists: data !== undefined, data: () => data };
 }
 
 function docRef(path: string) {
@@ -73,6 +73,7 @@ function userDocsMatchingMattermost(field: "in" | "==", value: unknown) {
 
 function colRef(path: string) {
   return {
+    limit: () => ({ get: async () => ({ docs: [...h.docs.keys()].filter((key) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes("/")).map(snap) }) }),
     doc: (id: string) => docRef(`${path}/${id}`),
     where: (field: string, op: string, value: unknown) => ({
       limit: (_limit: number) => ({
@@ -334,4 +335,22 @@ describe("entities routes", () => {
       path: "workspaces/acme/members/member-1",
     });
   });
+
+  it("workspace settings removal cleans up all group channels before deleting membership", async () => {
+  h.resolveWorkspaceUid.mockResolvedValue("caller-1");
+  h.getWorkspaceMmContext.mockResolvedValue({ generalChannelId: "general" });
+  h.docs.set("users/caller-1", { mattermost: { userId: "mmowner" } });
+  h.docs.set("users/member", { mattermost: { userId: "mmmember" } });
+  h.docs.set("workspaces/acme/members/member", { canonicalState: "active" });
+  h.docs.set("workspaces/acme/channels/planning", { kind: "session" });
+  h.docs.set("workspaces/acme/channels/coach-dm", { kind: "coach-dm" });
+  const res = await request(app()).delete("/api/entities/workspace/acme/members/mmmember");
+  expect(res.status).toBe(200);
+  expect(h.removeChannelMember.mock.calls).toEqual([
+    ["workspaces/acme/channels/general", "mmmember"],
+    ["workspaces/acme/channels/planning", "mmmember"],
+  ]);
+  expect(h.docs.has("workspaces/acme/members/member")).toBe(false);
+});
+
 });

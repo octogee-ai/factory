@@ -1,5 +1,3 @@
-
-
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
@@ -10,6 +8,7 @@ import { logger } from "../middleware/logging.js";
 import { workspaceGeneralChannelName } from "@octogee/shared/types/identity";
 import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
 import { readChannel, readProject } from "../lib/firestoreReads.js";
+import { removeWorkspaceChannelMember } from "../lib/workspace-channel-membership.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -246,9 +245,8 @@ async function buildMemberResponses(
   const active = mmMembers.filter(
     (member) => (mmUsersById.get(member.user_id)?.delete_at ?? 0) === 0,
   );
-  return sortMembers(
-    active.map((member) => memberResponse(member, mmUsersById, firestoreByMmId, ownerUserId)),
-  );
+  const members = active.map((member) => memberResponse(member, mmUsersById, firestoreByMmId, ownerUserId));
+  return sortMembers(members);
 }
 
 router.get("/:kind/:id/members", async (req: Request, res: Response) => {
@@ -304,7 +302,7 @@ async function resolveWorkspaceRemovalTarget(id: string, callerUid: string): Pro
   const ownerUid = await resolveWorkspaceUid(id);
   if (!ownerUid) return routeError(404, { error: "Workspace not found" });
   if (ownerUid !== callerUid) {
-    return routeError(403, { error: "Only the workspace owner can remove members" });
+    return routeError(403, { error: "Only the workspace owner can manage members" });
   }
   const ownerCtx = await getWorkspaceMmContext(ownerUid, id);
   const mmChannelId = ownerCtx?.generalChannelId;
@@ -432,7 +430,8 @@ router.delete("/:kind/:id/members/:mmUserId", async (req: Request, res: Response
 
     await markWorkspaceMemberRevoking(target, mmUserId);
     const { removeChannelMember } = await import("../lib/channel-lifecycle.js");
-    await removeChannelMember(target.channelDocPath, mmUserId);
+    if (target.projectRef) await removeChannelMember(target.channelDocPath, mmUserId);
+    else await removeWorkspaceChannelMember(target.workspaceId, mmUserId);
     await removeMemberDocument(target, mmUserId);
 
     logger.info(`[entities] ${callerUid} removed mmUser ${mmUserId} from ${kind}/${id}`);

@@ -75,6 +75,14 @@ export async function addChannelMember(
   await addMember(channelId, mmUserId);
 }
 
+export async function addActiveChannelMember(channelDocPath: string, mmUserId: string): Promise<boolean> {
+  const channelId = await verifiedPrimaryChannelIdFor(channelDocPath);
+  const user = await requireMattermostUser(mmUserId);
+  if (user.deleteAt > 0) return false;
+  await addMember(channelId, mmUserId);
+  return true;
+}
+
 export async function setStoredPrimaryChannelArchived(
   channelDocPath: string,
   archived: boolean,
@@ -141,7 +149,7 @@ interface StoredMattermostChannel {
   deleteAt: number;
 }
 
-async function verifiedPrimaryChannelIdFor(channelDocPath: string): Promise<string> {
+export async function verifiedPrimaryChannelIdFor(channelDocPath: string): Promise<string> {
   const stored = await readStoredChannel(channelDocPath);
   const primary = await requireMattermostChannel(stored.primaryChannelId, "primary");
   assertChannelBinding(primary, stored.binding, "primary");

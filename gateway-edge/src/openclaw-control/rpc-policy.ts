@@ -1,12 +1,5 @@
-import {
-  platformInvariantViolations,
-  type SystemConfigInvariantContext,
-} from "@octogee/core/system-config-invariants";
+import { platformInvariantViolations, type SystemConfigInvariantContext } from "@octogee/core/system-config-invariants";
 import JSON5 from "json5";
-import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
-import { parseChannelScopedMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
-import delegatedInventory from "./openclaw-2026.7.1-delegated-dashboard-inventory.json" with { type: "json" };
-
 export type OpenClawControlRpcCategory =
   | "read"
   | "config_mutation"
@@ -71,6 +64,7 @@ const NATIVE_READ_METHODS = new Set([
 ]);
 
 const CONFIG_MUTATION_METHODS = new Set(["config.set", "config.apply", "config.patch"]);
+
 const APPROVAL_READ_METHODS = new Set([
   "approval.history",
   "approval.get",
@@ -78,103 +72,18 @@ const APPROVAL_READ_METHODS = new Set([
   "plugin.approval.list",
   "openclaw.approval.list",
 ]);
+
 const APPROVAL_MUTATION_METHODS = new Set([
   "approval.resolve",
   "exec.approval.resolve",
   "plugin.approval.resolve",
 ]);
-export const OPENCLAW_CONTROL_ALLOWED_METHODS = Object.freeze([
-  ...READ_METHODS,
-  ...CONFIG_MUTATION_METHODS,
-  ...APPROVAL_READ_METHODS,
-  ...APPROVAL_MUTATION_METHODS,
-  "tools.invoke",
-]);
-const DELEGATED_READ_METHODS = new Set(delegatedInventory.delegatedReadMethods);
-const TEAM_MEMBER_METHODS = new Set([
-  "health", "status", "gateway.identity.get", "models.list", "agents.list", "agent.identity.get",
-  "users.self", "users.prefs.get", "users.prefs.set", "users.setDisplayName", "users.setAvatar",
-  "chat.metadata", "chat.startup", "chat.history", "chat.send", "chat.abort",
-  "sessions.list", "sessions.subscribe", "sessions.unsubscribe", "sessions.create", "sessions.patch",
-  "sessions.delete", "sessions.reset", "sessions.resolve", "sessions.compact", "sessions.preview",
-  "sessions.messages.subscribe", "sessions.messages.unsubscribe",
-]);
-const TEAM_MEMBER_EVENTS = new Set(["connect.challenge", "chat", "sessions.changed", "presence", "tick", "shutdown"]);
-const TEAM_SESSION_METHODS = new Set([
-  "agent.identity.get", "chat.metadata", "chat.startup", "chat.history", "chat.send", "chat.abort",
-  "sessions.create", "sessions.patch", "sessions.delete", "sessions.reset", "sessions.resolve",
-  "sessions.compact", "sessions.preview",
-  "sessions.messages.subscribe", "sessions.messages.unsubscribe",
-]);
 
-function memberTargetAllowed(request: Record<string, unknown>, workspaceSlug: string | undefined): boolean {
-  const method = String(request.method);
-  if (!TEAM_SESSION_METHODS.has(method)) return true;
-  if (!workspaceSlug) return false;
-  const params = record(request.params)!;
-  if (["chat.startup", "chat.history", "chat.send"].includes(method) &&
-    parseChannelScopedMattermostSessionRoute(params.sessionKey)) return true;
-  const agentId = `octogee-${workspaceSlug}-coach`;
-  if (params.agentId !== undefined && params.agentId !== agentId) return false;
-  const key = params.sessionKey ?? params.key;
-  if (key !== undefined) return typeof key === "string" && key.startsWith(`agent:${agentId}:`);
-  return params.agentId === agentId && ["sessions.create", "agent.identity.get", "chat.metadata"].includes(method);
-}
-
-function memberSessionsPayload(value: unknown, workspaceSlug: string | undefined): Record<string, unknown> {
-  const payload = record(value) ?? {};
-  const prefix = workspaceSlug ? `agent:octogee-${workspaceSlug}-coach:` : null;
-  const sessions = Array.isArray(payload.sessions)
-    ? payload.sessions.filter((row) => prefix && typeof record(row)?.key === "string" &&
-      String(record(row)!.key).startsWith(prefix) && !parseChannelScopedMattermostSessionRoute(record(row)!.key)) : [];
-  return { ...payload, sessions, count: sessions.length, totalCount: sessions.length };
-}
-
-function memberPresencePayload(value: unknown): Record<string, unknown> {
-  const presence = record(value)?.presence;
-  if (!Array.isArray(presence)) return { presence: [] };
-  return {
-    presence: presence.flatMap((entry) => {
-      const row = record(entry);
-      const user = record(row?.user);
-      const identity = record(user?.identity);
-      if (!row || !user || identity?.type !== "profile" || !safeShortString(identity.id) ||
-        user.id !== identity.id || typeof row.ts !== "number" || !Number.isFinite(row.ts)) return [];
-      return [{
-        ...displayFields(row, ["ts", "onlineSince", "lastActivityAt", "lastInputSeconds", "reason", "instanceId"]),
-        user: { ...displayFields(user, ["id", "name", "avatarUrl"]),
-          identity: { type: "profile", id: identity.id } },
-      }];
-    }),
-  };
-}
 const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
-const ARRAY_IDENTITY_KEYS = ["id", "agentId", "accountId", "key"] as const;
-const METHOD_UNAVAILABLE = "method-unavailable" as const;
+
 const APPROVAL_KINDS = new Set(["exec", "plugin", "system-agent"]);
+
 const APPROVAL_DECISIONS = new Set(["allow-once", "allow-always", "deny"]);
-const DELEGATED_MUTABLE_PATHS = new Set([
-  "agents.defaults.maxConcurrent",
-  "agents.defaults.model",
-  "agents.defaults.model.primary",
-  "agents.defaults.model.fallbacks[]",
-  "agents.defaults.thinkingDefault",
-  "agents.defaults.timeoutSeconds",
-  "agents.list[].model",
-  "agents.list[].model.primary",
-  "agents.list[].model.fallbacks[]",
-  "agents.list[].name",
-  "agents.entries.*.model",
-  "agents.entries.*.model.primary",
-  "agents.entries.*.model.fallbacks[]",
-  "agents.entries.*.name",
-]);
-const DELEGATED_PATH_KEY_WILDCARD = "*";
-const SCHEMA_METADATA_FIELDS = [
-  "type", "title", "description", "format", "minimum", "maximum",
-  "minLength", "maxLength", "minItems", "maxItems", "readOnly",
-] as const;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -201,10 +110,6 @@ function boundedString(value: unknown, max = 4_096): value is string {
 
 function optionalInteger(value: unknown, min: number, max: number): boolean {
   return value === undefined || Number.isInteger(value) && (value as number) >= min && (value as number) <= max;
-}
-
-function optionalNumber(value: unknown, min: number, max: number): boolean {
-  return value === undefined || typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 }
 
 function wellFormedApprovalId(value: unknown): value is string {
@@ -286,54 +191,6 @@ function nativeApprovalDecision(request: Record<string, unknown>): OpenClawContr
   };
 }
 
-function validateMemorySearch(args: Record<string, unknown>): boolean {
-  return exactKeys(args, new Set(["query", "maxResults", "minScore", "corpus"])) &&
-    boundedString(args.query) &&
-    optionalInteger(args.maxResults, 1, 20) &&
-    optionalNumber(args.minScore, 0, 1) &&
-    (args.corpus === undefined || ["memory", "wiki", "all", "sessions"].includes(String(args.corpus)));
-}
-
-function validateSessionStatus(args: Record<string, unknown>): boolean {
-  return exactKeys(args, new Set(["sessionKey", "changesSince"])) &&
-    (args.sessionKey === undefined || boundedString(args.sessionKey, 256)) &&
-    optionalNumber(args.changesSince, 0, Number.MAX_SAFE_INTEGER);
-}
-
-function validateWebSearch(args: Record<string, unknown>): boolean {
-  const allowed = new Set([
-    "query", "count", "country", "language", "freshness", "date_after", "date_before",
-    "search_lang", "ui_lang", "max_tokens", "max_tokens_per_page",
-  ]);
-  const strings = ["country", "language", "date_after", "date_before", "search_lang", "ui_lang"];
-  return exactKeys(args, allowed) &&
-    boundedString(args.query) &&
-    optionalInteger(args.count, 1, 10) &&
-    (args.freshness === undefined || ["day", "week", "month", "year"].includes(String(args.freshness))) &&
-    strings.every((key) => args[key] === undefined || boundedString(args[key], 64)) &&
-    optionalInteger(args.max_tokens, 1, 16_000) &&
-    optionalInteger(args.max_tokens_per_page, 1, 8_000);
-}
-
-function safeToolDecision(request: Record<string, unknown>): OpenClawControlRpcDecision {
-  const params = record(request.params);
-  if (!params || !exactKeys(params, new Set(["name", "args"])) || typeof params.name !== "string") {
-    return { allowed: false, category: "tools_invoke", reason: "tool-schema-invalid" };
-  }
-  const args = record(params.args);
-  if (!args) return { allowed: false, category: "tools_invoke", reason: "tool-schema-invalid" };
-  const validators: Record<string, (input: Record<string, unknown>) => boolean> = {
-    memory_search: validateMemorySearch,
-    session_status: validateSessionStatus,
-    web_search: validateWebSearch,
-  };
-  const validate = validators[params.name];
-  if (!validate) return { allowed: false, category: "tools_invoke", reason: "tool-denied" };
-  return validate(args)
-    ? { allowed: true, category: "tools_invoke", outbound: structuredClone(request) }
-    : { allowed: false, category: "tools_invoke", reason: "tool-schema-invalid" };
-}
-
 function normalizedReplacePaths(value: unknown): Set<string> | null {
   if (value === undefined) return new Set();
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) return null;
@@ -343,170 +200,6 @@ function normalizedReplacePaths(value: unknown): Set<string> | null {
 function stringIdRecord(value: unknown): value is Record<string, unknown> & { id: string } {
   const item = record(value);
   return item !== null && boundedString(item.id, 256);
-}
-
-function containsRedactedSentinel(value: unknown): boolean {
-  if (value === REDACTED_SENTINEL) return true;
-  if (Array.isArray(value)) return value.some(containsRedactedSentinel);
-  const item = record(value);
-  return item ? Object.values(item).some(containsRedactedSentinel) : false;
-}
-
-function structurallyEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
-      left.every((value, index) => structurallyEqual(value, right[index]));
-  }
-  const leftRecord = record(left);
-  const rightRecord = record(right);
-  if (!leftRecord || !rightRecord) return false;
-  const leftKeys = Object.keys(leftRecord).sort();
-  const rightKeys = Object.keys(rightRecord).sort();
-  return leftKeys.length === rightKeys.length &&
-    leftKeys.every((key, index) => key === rightKeys[index] &&
-      structurallyEqual(leftRecord[key], rightRecord[key]));
-}
-
-function collectChangedConfigPaths(
-  current: unknown,
-  proposed: unknown,
-  path: string,
-  changed: Set<string>,
-): void {
-  if (structurallyEqual(current, proposed)) return;
-  if (Array.isArray(current) || Array.isArray(proposed)) {
-    const currentItems = Array.isArray(current) ? current : [];
-    const proposedItems = Array.isArray(proposed) ? proposed : [];
-    const itemPath = `${path}[]`;
-    const length = Math.max(currentItems.length, proposedItems.length);
-    for (let index = 0; index < length; index++) {
-      collectChangedConfigPaths(currentItems[index], proposedItems[index], itemPath, changed);
-    }
-    return;
-  }
-  const currentRecord = record(current);
-  const proposedRecord = record(proposed);
-  if (currentRecord || proposedRecord) {
-    const keys = new Set([
-      ...Object.keys(currentRecord ?? {}),
-      ...Object.keys(proposedRecord ?? {}),
-    ]);
-    for (const key of keys) {
-      const childPath = path ? `${path}.${key}` : key;
-      collectChangedConfigPaths(currentRecord?.[key], proposedRecord?.[key], childPath, changed);
-    }
-    return;
-  }
-  changed.add(path);
-}
-
-function pathSegmentMatches(patternSegment: string, segment: string): boolean {
-  return patternSegment === segment ||
-    patternSegment === DELEGATED_PATH_KEY_WILDCARD && segment.length > 0 && !segment.endsWith("[]");
-}
-
-function pathMatchesDelegatedPattern(path: string, pattern: string): boolean {
-  const segments = path.split(".");
-  const patternSegments = pattern.split(".");
-  return segments.length === patternSegments.length &&
-    segments.every((segment, index) => pathSegmentMatches(patternSegments[index], segment));
-}
-
-function pathWithinDelegatedPattern(path: string, pattern: string): boolean {
-  const segments = path.split(".");
-  const patternSegments = pattern.split(".");
-  return segments.length <= patternSegments.length &&
-    segments.every((segment, index) =>
-      pathSegmentMatches(patternSegments[index], segment) ||
-      index === segments.length - 1 && patternSegments[index] === `${segment}[]`);
-}
-
-function delegatedMutablePath(path: string): boolean {
-  return [...DELEGATED_MUTABLE_PATHS].some((pattern) =>
-    pathMatchesDelegatedPattern(path, pattern));
-}
-
-function rosterEntryIds(config: Record<string, unknown>): string[] | null {
-  const entries = record(record(config.agents)?.entries);
-  return entries
-    ? Object.entries(entries)
-      .filter(([, entry]) => entry !== null && entry !== undefined)
-      .map(([id]) => id)
-      .sort()
-    : null;
-}
-
-function delegatedRosterMembershipPreserved(
-  current: Record<string, unknown>,
-  proposed: Record<string, unknown>,
-): boolean {
-  const currentIds = rosterEntryIds(current);
-  const proposedIds = rosterEntryIds(proposed);
-  if (!currentIds || !proposedIds) return currentIds === proposedIds;
-  return currentIds.length === proposedIds.length &&
-    currentIds.every((id, index) => id === proposedIds[index]);
-}
-
-function delegatedMutationIsSafe(
-  current: Record<string, unknown>,
-  proposed: Record<string, unknown>,
-): boolean {
-  const changed = new Set<string>();
-  collectChangedConfigPaths(current, proposed, "", changed);
-  return delegatedRosterMembershipPreserved(current, proposed) &&
-    [...changed].every((path) => delegatedMutablePath(path));
-}
-
-function normalizedConfigPath(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 && value.length <= 512
-    ? value.replace(/\[\d+\]/gu, "[]")
-    : null;
-}
-
-function delegatedConfigPathIsSafe(path: string): boolean {
-  return [...DELEGATED_MUTABLE_PATHS].some((pattern) =>
-    pathWithinDelegatedPattern(path, pattern));
-}
-
-function delegatedSchemaLookupIsSafe(request: Record<string, unknown>): boolean {
-  const params = record(request.params);
-  if (!params || !exactKeys(params, new Set(["path"]))) return false;
-  const path = normalizedConfigPath(params.path);
-  return path !== null && delegatedConfigPathIsSafe(path);
-}
-
-function arrayItemIdentityPreserved(current: unknown, proposed: unknown): boolean {
-  const currentItem = record(current);
-  const proposedItem = record(proposed);
-  if (!currentItem || !proposedItem) return structurallyEqual(current, proposed);
-  for (const key of ARRAY_IDENTITY_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(currentItem, key)) continue;
-    const value = currentItem[key];
-    if ((typeof value !== "string" && typeof value !== "number") || value === REDACTED_SENTINEL) {
-      return structurallyEqual(current, proposed);
-    }
-    return Object.is(value, proposedItem[key]);
-  }
-  return structurallyEqual(current, proposed);
-}
-
-function redactedArrayStructurePreserved(current: unknown, proposed: unknown): boolean {
-  if (Array.isArray(current)) {
-    if (!Array.isArray(proposed)) return !containsRedactedSentinel(current);
-    if (containsRedactedSentinel(current) &&
-      (current.length !== proposed.length ||
-        current.some((entry, index) => !arrayItemIdentityPreserved(entry, proposed[index])))) {
-      return false;
-    }
-    return current.every((entry, index) =>
-      redactedArrayStructurePreserved(entry, proposed[index]));
-  }
-  const currentItem = record(current);
-  if (!currentItem) return true;
-  const proposedItem = record(proposed);
-  return Object.entries(currentItem).every(([key, value]) =>
-    redactedArrayStructurePreserved(value, proposedItem?.[key]));
 }
 
 function mergeIdentifiedArray(
@@ -565,19 +258,6 @@ function mergePatch(
   return candidate;
 }
 
-function allowedMutationParams(method: unknown): ReadonlySet<string> {
-  if (method === "config.set") return new Set(["raw", "baseHash"]);
-  if (method === "config.apply") return new Set(["raw", "baseHash", "sessionKey"]);
-  return new Set(["raw", "baseHash", "sessionKey", "note", "replacePaths"]);
-}
-
-function validMutationParams(params: Record<string, unknown>, method: unknown): boolean {
-  return exactKeys(params, allowedMutationParams(method)) &&
-    (params.sessionKey === undefined ||
-      typeof params.sessionKey === "string" && params.sessionKey.length <= 512) &&
-    (params.note === undefined || typeof params.note === "string" && params.note.length <= 512);
-}
-
 function proposedMutationConfig(
   method: unknown,
   current: Record<string, unknown>,
@@ -587,49 +267,6 @@ function proposedMutationConfig(
   return method === "config.patch"
     ? mergePatch(current, raw, replacePaths)
     : structuredClone(raw);
-}
-
-function configMutationDecision(
-  request: Record<string, unknown>,
-  context: OpenClawControlRpcPolicyContext,
-): OpenClawControlRpcDecision {
-  if (context.configFrozen) {
-    return { allowed: false, category: "config_mutation", reason: "config-frozen" };
-  }
-  const params = record(request.params);
-  const current = context.currentConfig;
-  if (!params || !current || params.baseHash !== current.hash) {
-    return { allowed: false, category: "config_mutation", reason: "config-base-mismatch" };
-  }
-  if (!validMutationParams(params, request.method)) {
-    return { allowed: false, category: "config_mutation", reason: "config-invalid" };
-  }
-  const replacePaths = normalizedReplacePaths(params.replacePaths);
-  const parsed = parsedRaw(params.raw);
-  if (!replacePaths || !parsed) {
-    return { allowed: false, category: "config_mutation", reason: "config-invalid" };
-  }
-  const raw = parsed;
-  const proposed = proposedMutationConfig(request.method, current.raw, raw, replacePaths);
-  if (!redactedArrayStructurePreserved(current.raw, proposed)) {
-    return {
-      allowed: false,
-      category: "config_mutation",
-      reason: "redacted-array-structural-edit",
-    };
-  }
-  if (platformInvariantViolations(proposed, context.invariantContext).length > 0) {
-    return { allowed: false, category: "config_mutation", reason: "platform-invariant" };
-  }
-  return {
-    allowed: true,
-    category: "config_mutation",
-    proposedConfig: proposed,
-    outbound: {
-      ...structuredClone(request),
-      params: { ...structuredClone(params), raw: JSON.stringify(raw) },
-    },
-  };
 }
 
 function parsedOpenClawControlRequest(
@@ -643,10 +280,6 @@ function parsedOpenClawControlRequest(
   return { request: { ...request, params: request.params ?? {} }, method: request.method as string };
 }
 
-function unavailableMethodDecision(): OpenClawControlRpcDecision {
-  return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
-}
-
 export function openClawControlRpcCategory(method: string): OpenClawControlRpcCategory {
   if (READ_METHODS.has(method) || NATIVE_READ_METHODS.has(method)) return "read";
   if (CONFIG_MUTATION_METHODS.has(method)) return "config_mutation";
@@ -656,10 +289,7 @@ export function openClawControlRpcCategory(method: string): OpenClawControlRpcCa
   return "unknown";
 }
 
-// A native owner's config write keeps OpenClaw's own parameter contract (base
-// hash, shape) but never the platform wiring: the same invariants the durable
-// sync watcher would reject are denied here, before OpenClaw applies them live.
-function nativeOwnerConfigMutationDecision(
+function nativeConfigMutationDecision(
   request: Record<string, unknown>,
   context: OpenClawControlRpcPolicyContext,
 ): OpenClawControlRpcDecision {
@@ -681,9 +311,10 @@ function nativeOwnerConfigMutationDecision(
   return { allowed: true, category, proposedConfig: proposed, outbound: structuredClone(request) };
 }
 
-export function evaluateNativeOwnerOpenClawControlRpc(
+export function evaluateOpenClawControlRpc(
   frame: unknown,
   context: OpenClawControlRpcPolicyContext,
+  canAdminister: boolean,
 ): OpenClawControlRpcDecision {
   const parsed = parsedOpenClawControlRequest(frame);
   if ("allowed" in parsed) return parsed;
@@ -692,503 +323,14 @@ export function evaluateNativeOwnerOpenClawControlRpc(
   }
   const category = openClawControlRpcCategory(parsed.method);
   if (category === "config_mutation") {
-    return nativeOwnerConfigMutationDecision(parsed.request, context);
+    if (!canAdminister) return { allowed: false, category, reason: "method-unavailable" };
+    return nativeConfigMutationDecision(parsed.request, context);
   }
   return {
     allowed: true,
     category,
     outbound: structuredClone(parsed.request),
   };
-}
-
-export function evaluateOpenClawControlRpc(
-  frame: unknown,
-  context: OpenClawControlRpcPolicyContext,
-): OpenClawControlRpcDecision {
-  const parsed = parsedOpenClawControlRequest(frame);
-  if ("allowed" in parsed) return parsed;
-  const { request, method } = parsed;
-  if (!context.installedMethods.has(method)) return unavailableMethodDecision();
-  if (READ_METHODS.has(method)) {
-    return { allowed: true, category: "read", outbound: structuredClone(request) };
-  }
-  if (CONFIG_MUTATION_METHODS.has(method)) return configMutationDecision(request, context);
-  if (APPROVAL_READ_METHODS.has(method) || APPROVAL_MUTATION_METHODS.has(method)) {
-    return nativeApprovalDecision(request);
-  }
-  if (method === "tools.invoke") return safeToolDecision(request);
-  return { allowed: false, category: "forbidden_mutation", reason: METHOD_UNAVAILABLE };
-}
-
-const MEMBER_HELPER_PROFILE = "native-member-helper";
-const DELEGATED_CONFIG_PROFILE = "delegated-config";
-
-function isMemberProfile(profile: OpenClawBrokerProfile): boolean {
-  return profile === "native-member" || profile === MEMBER_HELPER_PROFILE;
-}
-
-function profileCanConfigure(profile: OpenClawBrokerProfile): boolean {
-  return profile === DELEGATED_CONFIG_PROFILE || profile === MEMBER_HELPER_PROFILE;
-}
-
-function profileMethods(profile: OpenClawBrokerProfile): ReadonlySet<string> {
-  if (profile === "native-member") return TEAM_MEMBER_METHODS;
-  const delegated = profileCanConfigure(profile)
-    ? new Set([...DELEGATED_READ_METHODS, ...CONFIG_MUTATION_METHODS])
-    : DELEGATED_READ_METHODS;
-  if (profile === MEMBER_HELPER_PROFILE) return new Set([...TEAM_MEMBER_METHODS, ...delegated]);
-  return delegated;
-}
-
-export function evaluateDelegatedOpenClawControlRpc(
-  frame: unknown,
-  context: OpenClawControlRpcPolicyContext,
-  profile: "delegated-read" | typeof DELEGATED_CONFIG_PROFILE,
-): OpenClawControlRpcDecision {
-  const decision = evaluateOpenClawControlRpc(frame, context);
-  if (!decision.allowed) return decision;
-  const request = record(frame);
-  const method = typeof request?.method === "string" ? request.method : "";
-  if (method === "config.schema.lookup" && request && !delegatedSchemaLookupIsSafe(request)) {
-    return { allowed: false, category: "read", reason: METHOD_UNAVAILABLE };
-  }
-  if (decision.category === "read" && DELEGATED_READ_METHODS.has(method)) return decision;
-  if (profile === DELEGATED_CONFIG_PROFILE && decision.category === "config_mutation") {
-    const proposed = decision.proposedConfig;
-    const current = context.currentConfig?.raw;
-    return proposed && current && delegatedMutationIsSafe(current, proposed)
-      ? decision
-      : { allowed: false, category: decision.category, reason: "config-unsafe-path" };
-  }
-  return { allowed: false, category: decision.category, reason: METHOD_UNAVAILABLE };
-}
-
-export function evaluateOpenClawControlRpcForProfile(
-  frame: unknown,
-  context: OpenClawControlRpcPolicyContext,
-  profile: OpenClawBrokerProfile,
-): OpenClawControlRpcDecision {
-  if (profile === "native-owner") {
-    return evaluateNativeOwnerOpenClawControlRpc(frame, context);
-  }
-  if (isMemberProfile(profile)) {
-    const parsed = parsedOpenClawControlRequest(frame);
-    if ("allowed" in parsed) return parsed;
-    if (context.installedMethods.has(parsed.method) && TEAM_MEMBER_METHODS.has(parsed.method)) {
-      if (!memberTargetAllowed(parsed.request, context.invariantContext.workspaceSlug)) return unavailableMethodDecision();
-      return { allowed: true, category: "unknown", outbound: structuredClone(parsed.request) };
-    }
-    return profile === MEMBER_HELPER_PROFILE
-      ? evaluateDelegatedOpenClawControlRpc(frame, context, DELEGATED_CONFIG_PROFILE)
-      : unavailableMethodDecision();
-  }
-  return profile === "delegated-read" || profile === DELEGATED_CONFIG_PROFILE
-    ? evaluateDelegatedOpenClawControlRpc(frame, context, profile)
-    : evaluateOpenClawControlRpc(frame, context);
-}
-
-export function projectOpenClawHelloForProfile(
-  frame: Record<string, unknown>,
-  profile: OpenClawBrokerProfile,
-): Record<string, unknown> {
-  if (profile === "native-owner") {
-    return structuredClone(frame);
-  }
-  const projected = structuredClone(frame);
-  const payload = record(projected.payload);
-  const features = record(payload?.features);
-  if (payload?.type !== "hello-ok") return projected;
-  if (profile === "native-co-owner") {
-    if (Array.isArray(features?.methods)) {
-      features.methods = features.methods.filter((method) => method !== "browser.request");
-    }
-    return projected;
-  }
-  const auth = record(payload.auth);
-  if (isMemberProfile(profile)) {
-    payload.snapshot = memberPresencePayload(payload.snapshot);
-    if (Array.isArray(features?.events)) features.events = features.events.filter((event) => TEAM_MEMBER_EVENTS.has(String(event)));
-  }
-  if (auth) {
-    auth.scopes = Array.isArray(auth.scopes)
-      ? auth.scopes.filter((scope): scope is string =>
-        typeof scope === "string" && scope !== "operator.approvals")
-      : [];
-  }
-  if (!Array.isArray(features?.methods)) return projected;
-  const allowed = profileMethods(profile);
-  features.methods = features.methods.filter(
-    (method): method is string => typeof method === "string" && allowed.has(method),
-  );
-  features.octogeeAccess = {
-    profile,
-    canConfigure: profileCanConfigure(profile),
-    canUseShell: false,
-  };
-  return projected;
-}
-
-function safeShortString(value: unknown): value is string {
-  return boundedString(value, 256) && value !== REDACTED_SENTINEL;
-}
-
-function safeModelSelection(value: unknown): unknown {
-  if (safeShortString(value)) return value;
-  const item = record(value);
-  if (!item) return undefined;
-  const primary = safeShortString(item.primary) ? item.primary : undefined;
-  const fallbacks = Array.isArray(item.fallbacks)
-    ? item.fallbacks.filter((entry) => safeShortString(entry))
-    : undefined;
-  return {
-    ...(primary ? { primary } : {}),
-    ...(fallbacks ? { fallbacks } : {}),
-  };
-}
-
-function safeAgentDefaults(value: unknown): Record<string, unknown> | null {
-  const item = record(value);
-  if (!item) return null;
-  const model = safeModelSelection(item.model);
-  return {
-    ...(model ? { model } : {}),
-    ...(typeof item.timeoutSeconds === "number" ? { timeoutSeconds: item.timeoutSeconds } : {}),
-    ...(typeof item.maxConcurrent === "number" ? { maxConcurrent: item.maxConcurrent } : {}),
-    ...(boundedString(item.thinkingDefault, 128)
-      ? { thinkingDefault: item.thinkingDefault }
-      : {}),
-  };
-}
-
-function safeAgentEntry(value: unknown): Record<string, unknown> | null {
-  const item = record(value);
-  if (!item) return null;
-  const model = safeModelSelection(item.model);
-  return {
-    ...(safeShortString(item.name) ? { name: item.name } : {}),
-    ...(typeof item.default === "boolean" ? { default: item.default } : {}),
-    ...(model ? { model } : {}),
-  };
-}
-
-function safeAgent(value: unknown): Record<string, unknown> | null {
-  const item = record(value);
-  if (!item || !safeShortString(item.id)) return null;
-  const entry = safeAgentEntry(item);
-  return entry ? { id: item.id, ...entry } : null;
-}
-
-function safeAgentEntries(value: unknown): Record<string, unknown> | undefined {
-  const entries = record(value);
-  if (!entries) return undefined;
-  const projected: Record<string, unknown> = {};
-  for (const [id, entry] of Object.entries(entries)) {
-    const safe = safeAgentEntry(entry);
-    if (!safe || !safeShortString(id) || BLOCKED_OBJECT_KEYS.has(id)) continue;
-    projected[id] = safe;
-  }
-  return projected;
-}
-
-function safeDelegatedConfig(value: unknown): Record<string, unknown> {
-  const config = record(value);
-  const agents = record(config?.agents);
-  if (!agents) return {};
-  const defaults = safeAgentDefaults(agents.defaults);
-  const entries = safeAgentEntries(agents.entries);
-  const list = Array.isArray(agents.list)
-    ? agents.list.map(safeAgent).filter((agent): agent is Record<string, unknown> => agent !== null)
-    : undefined;
-  return {
-    agents: {
-      ...(defaults ? { defaults } : {}),
-      ...(entries ? { entries } : {}),
-      ...(list ? { list } : {}),
-    },
-  };
-}
-
-function projectDelegatedConfigGet(frame: Record<string, unknown>): Record<string, unknown> {
-  const projected = {
-    type: frame.type,
-    id: frame.id,
-    ok: frame.ok,
-  } as Record<string, unknown>;
-  const payload = record(frame.payload);
-  const raw = parsedRaw(payload?.raw);
-  if (frame.ok === true && payload && raw && boundedString(payload.hash, 512)) {
-    projected.payload = {
-      hash: payload.hash,
-      raw: JSON.stringify(safeDelegatedConfig(raw)),
-    };
-  } else if (frame.ok !== true) {
-    projected.error = { code: "REQUEST_FAILED", message: "OpenClaw request failed" };
-  }
-  return projected;
-}
-
-function displayFields(
-  value: unknown,
-  fields: readonly string[],
-): Record<string, unknown> | null {
-  const item = record(value);
-  if (!item) return null;
-  const projected: Record<string, unknown> = {};
-  for (const field of fields) {
-    const candidate = item[field];
-    if (typeof candidate === "string" && candidate !== REDACTED_SENTINEL ||
-      typeof candidate === "number" && Number.isFinite(candidate) ||
-      typeof candidate === "boolean") {
-      projected[field] = candidate;
-    } else if (Array.isArray(candidate) && candidate.every((entry) =>
-      typeof entry === "string" && entry !== REDACTED_SENTINEL)) {
-      projected[field] = structuredClone(candidate);
-    }
-  }
-  return projected;
-}
-
-function projectedListPayload(
-  payload: unknown,
-  key: string,
-  fields: readonly string[],
-): Record<string, unknown> {
-  const items = record(payload)?.[key];
-  return {
-    [key]: Array.isArray(items)
-      ? items.map((item) => displayFields(item, fields)).filter((item) => item !== null)
-      : [],
-  };
-}
-
-function schemaMetadata(value: Record<string, unknown>): Record<string, unknown> {
-  const projected: Record<string, unknown> = {};
-  for (const field of SCHEMA_METADATA_FIELDS) {
-    const candidate = value[field];
-    if (typeof candidate === "string" && candidate !== REDACTED_SENTINEL ||
-      typeof candidate === "number" && Number.isFinite(candidate) ||
-      typeof candidate === "boolean") {
-      projected[field] = candidate;
-    }
-  }
-  if (Array.isArray(value.enum) && value.enum.every((entry) =>
-    typeof entry === "string" && entry !== REDACTED_SENTINEL ||
-    typeof entry === "number" && Number.isFinite(entry) ||
-    typeof entry === "boolean" || entry === null)) {
-    projected.enum = structuredClone(value.enum);
-  }
-  return projected;
-}
-
-function delegatedSchemaProperties(value: unknown, path: string): Record<string, unknown> {
-  const properties = record(value);
-  if (!properties) return {};
-  const safeProperties: Record<string, unknown> = {};
-  for (const [name, child] of Object.entries(properties)) {
-    if (BLOCKED_OBJECT_KEYS.has(name)) continue;
-    const childPath = path ? `${path}.${name}` : name;
-    if (!delegatedConfigPathIsSafe(childPath)) continue;
-    const projectedChild = delegatedSchemaNode(child, childPath);
-    if (projectedChild) safeProperties[name] = projectedChild;
-  }
-  return safeProperties;
-}
-
-function delegatedSchemaAdditionalProperties(
-  value: unknown,
-  path: string,
-): Record<string, unknown> | null {
-  const wildcardPath = path
-    ? `${path}.${DELEGATED_PATH_KEY_WILDCARD}`
-    : DELEGATED_PATH_KEY_WILDCARD;
-  return value !== undefined && delegatedConfigPathIsSafe(wildcardPath)
-    ? delegatedSchemaNode(value, wildcardPath)
-    : null;
-}
-
-function delegatedSchemaItems(value: unknown, path: string): Record<string, unknown> | null {
-  const itemsPath = `${path}[]`;
-  return value !== undefined && delegatedConfigPathIsSafe(itemsPath)
-    ? delegatedSchemaNode(value, itemsPath)
-    : null;
-}
-
-function delegatedRequiredFields(
-  value: unknown,
-  properties: Record<string, unknown>,
-): string[] {
-  return Array.isArray(value)
-    ? value.filter((name): name is string =>
-      typeof name === "string" && Object.prototype.hasOwnProperty.call(properties, name))
-    : [];
-}
-
-function delegatedSchemaNode(value: unknown, path = ""): Record<string, unknown> | null {
-  const node = record(value);
-  if (!node) return null;
-  const projected = schemaMetadata(node);
-  const properties = delegatedSchemaProperties(node.properties, path);
-  if (Object.keys(properties).length > 0) projected.properties = properties;
-  const additionalProperties = delegatedSchemaAdditionalProperties(node.additionalProperties, path);
-  if (additionalProperties) projected.additionalProperties = additionalProperties;
-  const items = delegatedSchemaItems(node.items, path);
-  if (items) projected.items = items;
-  const required = delegatedRequiredFields(node.required, properties);
-  if (required.length > 0) projected.required = required;
-  return projected;
-}
-
-function delegatedSchemaPayload(payload: unknown): Record<string, unknown> {
-  const source = record(payload);
-  if (!source) return {};
-  const schema = delegatedSchemaNode(source.schema ?? source);
-  if (!schema) return {};
-  return source.schema === undefined ? schema : { schema };
-}
-
-function delegatedReadPayload(method: string, payload: unknown): Record<string, unknown> {
-  if (method === "config.schema" || method === "config.schema.lookup") {
-    return delegatedSchemaPayload(payload);
-  }
-  if (method === "models.list") {
-    return projectedListPayload(payload, "models", [
-      "id", "name", "displayName", "provider", "family", "description",
-      "contextWindow", "maxTokens", "reasoning", "input", "output", "available", "status",
-    ]);
-  }
-  if (method === "agents.list") {
-    return projectedListPayload(payload, "agents", [
-      "id", "name", "displayName", "model", "default", "status", "enabled",
-    ]);
-  }
-  if (method === "channels.status") {
-    return projectedListPayload(payload, "channels", [
-      "id", "name", "displayName", "type", "status", "connected", "enabled", "accountId",
-    ]);
-  }
-  const fieldsByMethod: Record<string, readonly string[]> = {
-    health: ["status", "healthy", "uptime", "version", "timestamp"],
-    status: ["status", "healthy", "uptime", "version", "timestamp"],
-    "system.info": ["version", "platform", "runtime", "arch"],
-    "gateway.identity.get": ["id", "gatewayId", "name", "version", "profile"],
-  };
-  return displayFields(payload, fieldsByMethod[method] ?? []) ?? {};
-}
-
-function projectDelegatedReadResponse(
-  frame: Record<string, unknown>,
-  method: string,
-): Record<string, unknown> {
-  const projected: Record<string, unknown> = {
-    type: frame.type,
-    id: frame.id,
-    ok: frame.ok,
-  };
-  if (frame.ok === true) projected.payload = delegatedReadPayload(method, frame.payload);
-  else projected.error = { code: "REQUEST_FAILED", message: "OpenClaw request failed" };
-  return projected;
-}
-
-function projectDelegatedOutcome(frame: Record<string, unknown>): Record<string, unknown> {
-  const projected: Record<string, unknown> = {
-    type: frame.type,
-    id: frame.id,
-    ok: frame.ok,
-  };
-  if (frame.ok !== true) {
-    projected.error = { code: "REQUEST_FAILED", message: "OpenClaw request failed" };
-  }
-  return projected;
-}
-
-function projectDelegatedConnectChallenge(
-  frame: Record<string, unknown>,
-): Record<string, unknown> | null {
-  const payload = record(frame.payload);
-  return frame.type === "event" && frame.event === "connect.challenge" &&
-    boundedString(payload?.nonce, 512)
-    ? {
-      type: "event",
-      event: "connect.challenge",
-      payload: {
-        nonce: payload.nonce,
-        ...(typeof payload.ts === "number" && Number.isSafeInteger(payload.ts) && payload.ts > 0
-          ? { ts: payload.ts }
-          : {}),
-      },
-    }
-    : null;
-}
-
-function projectMemberEvent(frame: Record<string, unknown>, workspaceSlug?: string): Record<string, unknown> | null {
-  if (frame.type !== "event" || typeof frame.event !== "string" || !TEAM_MEMBER_EVENTS.has(frame.event)) return null;
-  if (frame.event === "presence") {
-    return { ...frame, payload: memberPresencePayload(frame.payload) };
-  }
-  if (frame.event === "chat" || frame.event === "sessions.changed") {
-    const sessionKey = record(frame.payload)?.sessionKey;
-    if (!workspaceSlug || typeof sessionKey !== "string" ||
-      !sessionKey.startsWith(`agent:octogee-${workspaceSlug}-coach:`) || parseChannelScopedMattermostSessionRoute(sessionKey)) return null;
-  }
-  return structuredClone(frame);
-}
-
-function projectMemberSubscription(payload: Record<string, unknown> | null, workspaceSlug?: string): unknown {
-  if (!payload?.list) return payload;
-  return { ...payload, list: memberSessionsPayload(payload.list, workspaceSlug) };
-}
-
-function projectMemberFrame(
-  frame: Record<string, unknown>,
-  requestedMethod: string | undefined,
-  profile: OpenClawBrokerProfile,
-  workspaceSlug?: string,
-): Record<string, unknown> | null | undefined {
-  if (record(frame.payload)?.type === "hello-ok") return projectOpenClawHelloForProfile(frame, profile);
-  if (!requestedMethod) {
-    return projectMemberEvent(frame, workspaceSlug);
-  }
-  if (requestedMethod === "agents.list" && frame.ok === true) {
-    const coach = workspaceSlug ? `octogee-${workspaceSlug}-coach` : null;
-    const payload = record(frame.payload);
-    const agents = Array.isArray(payload?.agents) ? payload.agents.filter((agent) => record(agent)?.id === coach) : [];
-    return { ...frame, payload: { defaultId: coach, selectionRequired: false, mainKey: "main", scope: "per-sender", agents } };
-  }
-  if (requestedMethod === "health" || requestedMethod === "status") return projectDelegatedReadResponse(frame, requestedMethod);
-  if (requestedMethod === "sessions.subscribe" && frame.ok === true) {
-    const payload = record(frame.payload);
-    return { ...frame, payload: projectMemberSubscription(payload, workspaceSlug) };
-  }
-  if (TEAM_MEMBER_METHODS.has(requestedMethod)) return structuredClone(frame);
-  return undefined;
-}
-
-export function projectOpenClawServerFrameForProfile(
-  frame: Record<string, unknown>,
-  requestedMethod: string | undefined,
-  profile: OpenClawBrokerProfile,
-  workspaceSlug?: string,
-): Record<string, unknown> | null {
-  if (["native-owner", "native-co-owner"].includes(profile)) {
-    return record(frame.payload)?.type === "hello-ok"
-      ? projectOpenClawHelloForProfile(frame, profile)
-      : structuredClone(frame);
-  }
-  if (isMemberProfile(profile)) {
-    const memberFrame = projectMemberFrame(frame, requestedMethod, profile, workspaceSlug);
-    if (memberFrame !== undefined) return memberFrame;
-  }
-  if (requestedMethod === "config.get" && frame.type === "res") {
-    return projectDelegatedConfigGet(frame);
-  }
-  if (requestedMethod && frame.type === "res" && DELEGATED_READ_METHODS.has(requestedMethod)) {
-    return projectDelegatedReadResponse(frame, requestedMethod);
-  }
-  if (record(frame.payload)?.type === "hello-ok") {
-    return projectOpenClawHelloForProfile(frame, profile);
-  }
-  if (requestedMethod && frame.type === "res") return projectDelegatedOutcome(frame);
-  return projectDelegatedConnectChallenge(frame);
 }
 
 export function openClawConfigSnapshotFromGetResponse(

@@ -2,6 +2,7 @@ import { FieldValue, db } from "./db.js";
 import { logger } from "../middleware/logging.js";
 import { mmApi } from "./mattermost.js";
 import { getWorkspaceMmContext } from "./mattermost-context.js";
+import { enrollWorkspaceChannelMembers } from "./workspace-channel-membership.js";
 import {
   workspaceCustomChannelName,
   projectChannelName,
@@ -139,7 +140,7 @@ async function createSessionChannelImpl(
 
   const docRef = db.doc(channelDocPath(workspaceId, project, normalized.name));
   const existingResult = await existingSessionChannelResult(docRef, scope, normalized.name);
-  if (existingResult) return existingResult;
+  if (existingResult) return completeExistingSessionChannel(project, workspaceId, normalized.name, existingResult);
 
   const ctx = await getWorkspaceMmContext(actor.uid, workspaceId, actor.userData);
   if (!ctx?.teamId) {
@@ -179,9 +180,33 @@ async function createSessionChannelImpl(
     createdBy: actor.uid,
     createdAt: FieldValue.serverTimestamp(),
   });
+  if (!project) {
+    const failure = await enrollWorkspaceGroup(workspaceId, normalized.name);
+    if (failure) return failure;
+  }
   logger.info(`[channels] Created session channel ${scope}`, { uid: actor.uid });
 
   return { status: 200, body: { success: true, channelId, name: normalized.name } };
+}
+
+async function completeExistingSessionChannel(
+  project: string | null,
+  workspaceId: string,
+  name: string,
+  result: SessionChannelResult,
+): Promise<SessionChannelResult> {
+  if (project || result.status !== 200) return result;
+  return await enrollWorkspaceGroup(workspaceId, name) ?? result;
+}
+
+async function enrollWorkspaceGroup(workspaceId: string, name: string): Promise<SessionChannelResult | null> {
+  try {
+    await enrollWorkspaceChannelMembers(workspaceId, name);
+    return null;
+  } catch (error) {
+    logger.error(`[channels] Workspace group enrollment failed for ${workspaceId}/${name}:`, { err: error });
+    return bad(502, "Channel creation failed - could not add workspace members");
+  }
 }
 
 interface NormalizedSessionChannelCreateInput {

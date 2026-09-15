@@ -156,7 +156,7 @@ describe("system config platform invariants", () => {
       allowLoopback: true,
       deviceAutoApprove: {
         enabled: true,
-        scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+        scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.pairing"],
       },
     });
     expect(Object.keys(gateway.auth.identityScopes).sort()).toEqual(
@@ -166,10 +166,10 @@ describe("system config platform invariants", () => {
     expect(gateway.auth.identityScopes).not.toHaveProperty("x@y");
     expect(gateway.trustedProxies).toEqual(["127.0.0.1", "::1"]);
     expect(gateway.roles.default).toBe("member");
-    expect(gateway.roles.definitions.member.scopes).toContain("operator.admin");
-    expect(gateway.roles.definitions["team-member"].agents).toEqual(["octogee-alice-coach"]);
+    expect(gateway.roles.definitions.member.scopes).not.toContain("operator.admin");
+    expect(gateway.roles.definitions.member.agents).toEqual(["octogee-alice-coach"]);
     expect(Object.keys(gateway.roles.definitions).sort()).toEqual(
-      ["co-owner", "member", "owner", "service", "team-member", "trusted-helper", "viewer"],
+      ["admin", "member", "service"],
     );
     expect(platformInvariantViolations(config, perUser)).toEqual([]);
   });
@@ -994,4 +994,14 @@ describe("system config platform invariants", () => {
 it("makes native Mattermost reactions available to coach and project coding policies", () => {
   expect(CUSTOMER_WORKFLOW_TOOLS).toContain("message");
   expect(PROJECT_AGENT_ALLOWED_TOOLS).toContain("message");
+});
+
+
+it("preserves native role definitions through reconciliation and configuration validation", () => {
+  const context = { gatewayClass: "builder" as const, gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" as const };
+  const roles = { default: "collaborator", definitions: { collaborator: { scopes: ["operator.read"], sessions: { others: "none" } } } };
+  const config = { gateway: { roles } };
+  reconcilePlatformInvariants(config, context);
+  expect(config.gateway.roles).toEqual(roles);
+  expect(platformInvariantViolations(config, context)).toEqual([]);
 });

@@ -21,9 +21,9 @@ describe("OpenClaw Dashboard broker client", () => {
             gatewayId: "bender",
             workspaceSlug: "alice",
             revisionId: "bender-r7",
-            brokerProfile: "native-owner",
-            permissionSetIds: [],
-            grantRevision: null,
+
+
+
             expiresAt: 10_000,
           }), { status: 200, headers: { "content-type": "application/json" } })
         : new Response(null, { status: 204 });
@@ -38,7 +38,7 @@ describe("OpenClaw Dashboard broker client", () => {
     })).resolves.toMatchObject({
       uid: "uid-owner",
       workspaceSlug: "alice",
-      brokerProfile: "native-owner",
+
     });
     await expect(authorizeOpenClawControlSession({
       sessionId,

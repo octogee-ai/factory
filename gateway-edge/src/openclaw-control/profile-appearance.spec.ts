@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadOpenClawProfileAppearance, loadOpenClawChatProfileAppearance } from "./profile-appearance.js";
 
 vi.mock("../lib/db.js", () => { throw new Error("Gateway profile reads must not use Google ADC"); });
-const session = { uid: "uid-A", gatewayId: "bender", revisionId: "bender", sessionId: "opaque-session", brokerProfile: "native-owner" as const };
+const session = { uid: "uid-A", gatewayId: "bender", revisionId: "bender", sessionId: "opaque-session"};
 const env = { OPENCLAW_CONTROL_BROKER_URL: "https://broker.test" };
 
 describe("Gateway profile broker client", () => {

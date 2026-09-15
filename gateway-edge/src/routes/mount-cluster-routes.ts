@@ -22,8 +22,6 @@ import onboardingRoutes from "./onboarding.js";
 import postsRoutes from "./posts.js";
 import agentRoutes from "./agents.js";
 import builderGatewaysRoutes from "./builder/gateways.js";
-import gatewayAccessRoutes from "./gateway-access.js";
-import accessApprovalRoutes from "./access-approvals.js";
 import productivityApprovalRoutes from "./productivity-approvals.js";
 import voiceRoutes from "./voice.js";
 
@@ -125,8 +123,6 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/posts", postsRoutes],
   ["/api/agents", agentRoutes],
   ["/api/builder", builderGatewaysRoutes],
-  ["/api/gateways", gatewayAccessRoutes],
-  ["/api/access-approvals", accessApprovalRoutes],
   ["/api/productivity-approvals", productivityApprovalRoutes],
   ["/api/voice", voiceRoutes],
 ];

@@ -223,6 +223,8 @@ if [ -f "$CLASS_POLICY" ]; then
   node "$CLASS_POLICY"
 fi
 
+node --input-type=module -e 'import { beginWorkspaceIdentityBoot } from "/octogee/core/dist/openclaw-workspace-bootstrap.js"; beginWorkspaceIdentityBoot();'
+
 # Publish the fresh gateway auth token to Secret Manager only when explicitly
 # requested. The normal Kubernetes path keeps gateway auth pod-local:
 # gateway-edge gets the same per-gateway OPENCLAW_GATEWAY_TOKEN env exception,

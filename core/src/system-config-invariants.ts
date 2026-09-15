@@ -215,7 +215,6 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_board_card_update",
   "octogee_board_card_move",
   "octogee_board_card_comment",
-  "delegated_access",
   "workspace_commit",
   "brave_search",
   "tavily_search",
@@ -302,7 +301,6 @@ export const PROJECT_AGENT_DENIED_TOOLS = [
   "octogee_project_create",
   "octogee_project_delegate",
   "octogee_project_publish",
-  "delegated_access",
   "octogee_status",
   "octogee_chat_search",
   "octogee_chat_history",
@@ -387,8 +385,10 @@ function customerToolInvariants(): PlatformInvariant[] {
   ];
 }
 
-function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefined, workspaceSlug: string | undefined): PlatformInvariant[] {
+function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefined): PlatformInvariant[] {
   return [
+    { kind: "exact", path: "plugins.entries.octogee-identity-tools.enabled", value: perUser },
+    ...(perUser ? [{ kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["octogee-identity-tools"] }] : []),
     { kind: "exact", path: "gateway.auth.mode", value: perUser ? "trusted-proxy" : "token" },
     {
       kind: "exact",
@@ -401,7 +401,7 @@ function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefine
       value: perUser ? openClawIdentityScopes(ownerUid) : ABSENT,
     },
     { kind: "exact", path: "gateway.trustedProxies", value: perUser ? [...OPENCLAW_TRUSTED_PROXIES] : ABSENT },
-    { kind: "exact", path: "gateway.roles", value: perUser ? openClawOperatorRoles(workspaceSlug) : ABSENT },
+    ...(!perUser ? [{ kind: "exact" as const, path: "gateway.roles", value: ABSENT }] : []),
   ];
 }
 
@@ -420,7 +420,7 @@ export function platformInvariantTable(
     { kind: "exact", path: "gateway.port", value: 18789 },
     { kind: "exact", path: "gateway.mode", value: "local" },
     { kind: "exact", path: "gateway.bind", value: "lan" },
-    ...controlIdentityInvariants(perUser, context.ownerUid, context.workspaceSlug),
+    ...controlIdentityInvariants(perUser, context.ownerUid),
     { kind: "exact", path: "gateway.auth.token", value: ABSENT },
     { kind: "exact", path: "gateway.auth.password", value: ABSENT },
     { kind: "exact", path: "gateway.auth.allowTailscale", value: ABSENT },
@@ -913,6 +913,13 @@ export function reconcilePlatformInvariants(
   ));
   for (const invariant of table) {
     if (changedPaths.includes(invariant.path)) applyInvariant(config, invariant);
+  }
+  if (context.gatewayClass === "builder" && context.controlIdentity === "per-user") {
+    const gateway = config.gateway as JsonObject;
+    if (gateway.roles === undefined) {
+      gateway.roles = openClawOperatorRoles(context.workspaceSlug);
+      changedPaths.push("gateway.roles");
+    }
   }
   return { changedPaths };
 }

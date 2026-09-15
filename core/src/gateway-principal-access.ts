@@ -1,123 +1,25 @@
-import { createHash } from "node:crypto";
-
-export const GATEWAY_ACCESS_GRANTS_COLLECTION = "gatewayAccessGrants";
+import { resolveBuilderTier, type TierResolvable } from "@octogee/shared/types/billing";
 export const GATEWAY_ACCESS_AUDIT_COLLECTION = "gatewayAccessAudit";
 
-export const GATEWAY_PERMISSION_SET_IDS = [
-  "agent-viewer.v1",
-  "trusted-helper.v1",
-  "co-owner.v1",
-] as const;
-
-export type GatewayPermissionSetId = (typeof GATEWAY_PERMISSION_SET_IDS)[number];
-export type OpenClawBrokerProfile =
-  | "native-owner"
-  | "native-member"
-  | "native-member-helper"
-  | "native-co-owner"
-  | "delegated-config"
-  | "delegated-read";
-
-export function hasNativeOpenClawChatAccess(profile: OpenClawBrokerProfile): boolean {
-  return profile === "native-owner" || profile === "native-co-owner" ||
-    profile === "native-member" || profile === "native-member-helper";
-}
-
-export interface GatewayPermissionSetDefinition {
-  label: string;
-  purpose: string;
-  can: readonly string[];
-  cannot: readonly string[];
-}
-
-export const GATEWAY_PERMISSION_SETS: Readonly<
-  Record<GatewayPermissionSetId, GatewayPermissionSetDefinition>
-> = Object.freeze({
-  "agent-viewer.v1": Object.freeze({
-    label: "Agent viewer",
-    purpose: "Check agent health and non-secret settings.",
-    can: Object.freeze([
-      "Check health and runtime status",
-      "Review non-secret settings",
-      "See connection readiness",
-    ]),
-    cannot: Object.freeze([
-      "Change settings",
-      "Read private conversations or secrets",
-    ]),
-  }),
-  "trusted-helper.v1": Object.freeze({
-    label: "Trusted Helper",
-    purpose: "Help care for your agent.",
-    can: Object.freeze([
-      "Check health",
-      "Update safe agent settings",
-      "Help start connection setup",
-    ]),
-    cannot: Object.freeze([
-      "See passwords or tokens",
-      "Approve personal account access",
-      "Manage billing or give access",
-    ]),
-  }),
-  "co-owner.v1": Object.freeze({
-    label: "Co-owner",
-    purpose: "Operate the OpenClaw Dashboard with you.",
-    can: Object.freeze([
-      "Use the full OpenClaw Dashboard",
-      "Manage ordinary workspace settings",
-    ]),
-    cannot: Object.freeze([
-      "Manage billing or ownership",
-      "Give or remove Agent access",
-    ]),
-  }),
-});
-
 export interface GatewayPrincipalGateway {
-  teamAccess?: boolean;
+  perUserIdentity?: boolean;
   gatewayId: string;
   ownerUid: string | null;
   workspaceSlug: string | null;
 }
 
 export interface ResolvedGatewayAccess {
-  kind: "owner" | "delegate" | "member";
-  permissionSetIds: GatewayPermissionSetId[];
-  brokerProfile: OpenClawBrokerProfile | null;
+  kind: "owner" | "member";
   dashboard: boolean;
-  config: boolean;
   workspaceManagement: boolean;
-  grantRevision: number | null;
-  expiresAt: number | null;
 }
 
-export type GatewayAccessDenialReason =
-  | "gateway_unowned"
-  | "grant_missing"
-  | "grant_invalid"
-  | "grant_revoked"
-  | "grant_expired"
-  | "membership_required";
-
-export type GatewayPrincipalAccess =
-  | ResolvedGatewayAccess
-  | { kind: "denied"; reason: GatewayAccessDenialReason };
-
-interface ParsedGrant {
-  workspaceSlug: string;
-  ownerUid: string;
-  granteeUid: string;
-  permissionSetIds: GatewayPermissionSetId[];
-  state: "active" | "revoked";
-  revision: number;
-  expiresAt: number | null;
-}
+export type GatewayAccessDenialReason = "gateway_unowned" | "membership_required" | "identity_required";
+export type GatewayPrincipalAccess = ResolvedGatewayAccess | { kind: "denied"; reason: GatewayAccessDenialReason };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+    ? value as Record<string, unknown> : null;
 }
 
 function nonEmptyString(value: unknown): value is string {
@@ -132,148 +34,20 @@ export function isCanonicalWorkspaceMembership(value: unknown): boolean {
     nonEmptyString(membership.mattermostUserId);
 }
 
-export function isGatewayPermissionSetId(value: unknown): value is GatewayPermissionSetId {
-  return typeof value === "string" &&
-    (GATEWAY_PERMISSION_SET_IDS as readonly string[]).includes(value);
-}
-
-export function permissionSetIds(value: unknown): GatewayPermissionSetId[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 4) return null;
-  if (!value.every(isGatewayPermissionSetId)) return null;
-  const unique = [...new Set(value)];
-  return unique.length === value.length ? unique : null;
-}
-
-export function timestampMillis(value: unknown): number | null | undefined {
-  if (value === null) return null;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (value instanceof Date) return value.getTime();
-  const candidate = record(value);
-  if (candidate && typeof candidate.toMillis === "function") {
-    const millis = (candidate.toMillis as () => unknown)();
-    return typeof millis === "number" && Number.isFinite(millis) ? millis : undefined;
-  }
-  if (candidate && typeof candidate.seconds === "number" && Number.isFinite(candidate.seconds)) {
-    const nanos = typeof candidate.nanoseconds === "number" ? candidate.nanoseconds : 0;
-    return candidate.seconds * 1_000 + nanos / 1_000_000;
-  }
-  return undefined;
-}
-
-function parseGrant(value: unknown): ParsedGrant | null {
-  const input = record(value);
-  if (!input || input.schemaVersion !== 2) return null;
-  const ids = permissionSetIds(input.permissionSetIds);
-  const expiresAt = timestampMillis(input.expiresAt);
-  if (
-    !nonEmptyString(input.workspaceSlug) ||
-    !nonEmptyString(input.ownerUid) ||
-    !nonEmptyString(input.granteeUid) ||
-    !ids ||
-    (input.state !== "active" && input.state !== "revoked") ||
-    !Number.isSafeInteger(input.revision) ||
-    (input.revision as number) < 1 ||
-    expiresAt === undefined
-  ) return null;
-  return {
-    workspaceSlug: input.workspaceSlug,
-    ownerUid: input.ownerUid,
-    granteeUid: input.granteeUid,
-    permissionSetIds: ids,
-    state: input.state,
-    revision: input.revision as number,
-    expiresAt,
-  };
-}
-
-function delegateProfile(ids: readonly GatewayPermissionSetId[]): OpenClawBrokerProfile | null {
-  if (ids.includes("co-owner.v1")) return "native-co-owner";
-  if (ids.includes("trusted-helper.v1")) return "delegated-config";
-  if (ids.includes("agent-viewer.v1")) return "delegated-read";
-  return null;
-}
-
-function grantMatchesPrincipal(
-  grant: ParsedGrant,
-  gateway: GatewayPrincipalGateway,
-  uid: string,
-): boolean {
-  return grant.workspaceSlug === gateway.workspaceSlug &&
-    grant.ownerUid === gateway.ownerUid &&
-    grant.granteeUid === uid;
-}
-
-function resolveGrantedGatewayPrincipalAccess(input: {
+export function resolveGatewayPrincipalAccess(input: {
   gateway: GatewayPrincipalGateway;
   uid: string;
-  grant: unknown;
-  isWorkspaceMember: boolean;
-  now?: number;
+  membership: unknown;
 }): GatewayPrincipalAccess {
-  if (!input.gateway.ownerUid || !input.gateway.workspaceSlug) {
-    return { kind: "denied", reason: "gateway_unowned" };
-  }
+  if (!input.gateway.ownerUid || !input.gateway.workspaceSlug) return { kind: "denied", reason: "gateway_unowned" };
   if (input.gateway.ownerUid === input.uid) {
-    return {
-      kind: "owner",
-      permissionSetIds: [],
-      brokerProfile: "native-owner",
-      dashboard: true,
-      config: true,
-      workspaceManagement: true,
-      grantRevision: null,
-      expiresAt: null,
-    };
+    return { kind: "owner", dashboard: true, workspaceManagement: true };
   }
-  if (input.grant === null || input.grant === undefined) {
-    return { kind: "denied", reason: "grant_missing" };
-  }
-  const grant = parseGrant(input.grant);
-  if (!grant || !grantMatchesPrincipal(grant, input.gateway, input.uid)) {
-    return { kind: "denied", reason: "grant_invalid" };
-  }
-  if (grant.state === "revoked") return { kind: "denied", reason: "grant_revoked" };
-  if (grant.expiresAt !== null && grant.expiresAt <= (input.now ?? Date.now())) {
-    return { kind: "denied", reason: "grant_expired" };
-  }
-  if (!input.isWorkspaceMember) return { kind: "denied", reason: "membership_required" };
-  const brokerProfile = delegateProfile(grant.permissionSetIds);
-  return {
-    kind: "delegate",
-    permissionSetIds: grant.permissionSetIds,
-    brokerProfile,
-    dashboard: brokerProfile !== null,
-    config: brokerProfile === "delegated-config" || brokerProfile === "native-co-owner",
-    workspaceManagement: grant.permissionSetIds.includes("co-owner.v1"),
-    grantRevision: grant.revision,
-    expiresAt: grant.expiresAt,
-  };
+  if (!isCanonicalWorkspaceMembership(input.membership)) return { kind: "denied", reason: "membership_required" };
+  if (input.gateway.perUserIdentity !== true) return { kind: "denied", reason: "identity_required" };
+  return { kind: "member", dashboard: true, workspaceManagement: false };
 }
 
-export function resolveGatewayPrincipalAccess(input: Parameters<typeof resolveGrantedGatewayPrincipalAccess>[0]): GatewayPrincipalAccess {
-  const access = resolveGrantedGatewayPrincipalAccess(input);
-  if (access.kind === "owner" || !input.gateway.ownerUid || !input.gateway.workspaceSlug ||
-    input.gateway.teamAccess !== true || !input.isWorkspaceMember) return access;
-  if (access.kind === "delegate" && access.permissionSetIds.includes("co-owner.v1")) return access;
-  if (access.kind === "delegate" && access.permissionSetIds.includes("trusted-helper.v1")) {
-    return { ...access, brokerProfile: "native-member-helper" };
-  }
-  return {
-    kind: "member", brokerProfile: "native-member", permissionSetIds: [],
-    dashboard: true, config: false, workspaceManagement: false, grantRevision: null, expiresAt: null,
-  };
-}
-
-export function workspaceAgentAccessGrantId(
-  ownerUid: string,
-  workspaceSlug: string,
-  granteeUid: string,
-): string {
-  return createHash("sha256")
-    .update(ownerUid)
-    .update("\0")
-    .update(workspaceSlug)
-    .update("\0")
-    .update(granteeUid)
-    .digest("hex");
+export function workspacePermissionsEnabled(config: { gatewayClass?: string; builderAccess?: { controlIdentity?: string } | null }, owner: TierResolvable, now = new Date()): boolean {
+  return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user" && resolveBuilderTier(owner, now) !== null;
 }

@@ -1,9 +1,9 @@
+import { assertWorkspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import { isIP } from "node:net";
 import os from "node:os";
-import { hasNativeOpenClawChatAccess, type OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
-import { deriveDeviceIdentity, type DeviceIdentity } from "@octogee/shared/types/device-identity";
+import { deriveDeviceIdentity, signConnectDevice, type DeviceIdentity } from "@octogee/shared/types/device-identity";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import {
   sendWsRequest,
@@ -14,12 +14,10 @@ import {
   OPENCLAW_CONTROL_UI_CLIENT_ID,
   OPENCLAW_EDGE_SERVICE_IDENTITY,
   isPerUserControlIdentity,
-  openClawDeviceRequestScopes,
+  OPENCLAW_FULL_OPERATOR_SCOPES,
   openClawDeviceSubject,
   openClawProxyIdentityHeaders,
   openClawProxyOrigin,
-  openClawRoleForBrokerProfile,
-  type OpenClawOperatorRole,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 import { WebSocket } from "ws";
 
@@ -35,7 +33,6 @@ export interface OpenClawControlProxyIdentitySession {
   gatewayId: string;
   revisionId: string;
   sessionId: string;
-  brokerProfile: OpenClawBrokerProfile;
 }
 
 export interface OpenClawControlProxyIdentity {
@@ -46,7 +43,7 @@ export interface OpenClawControlProxyIdentity {
   connectScopes(session: OpenClawControlProxyIdentitySession): string[];
   resolveChatProfile(session: OpenClawControlProxyIdentitySession, source: { channelId: string; postId: string }): Promise<OpenClawChatSenderProfile | null>;
   syncChannelMemberships(session: OpenClawControlSession, options?: { force?: boolean }): Promise<void>;
-  syncProfile(session: OpenClawControlProxyIdentitySession, options?: { assignRole: boolean }): Promise<void>;
+  syncProfile(session: OpenClawControlProxyIdentitySession): Promise<void>;
 }
 
 interface OpenClawProfileListItem {
@@ -108,14 +105,17 @@ export async function openProxyIdentitySocket(args: {
   url: URL;
   headers: Record<string, string>;
   timeoutMs: number;
+  identity?: DeviceIdentity;
+  onScopes?: (scopes: string[]) => void;
 }): Promise<WebSocket> {
   const ws = new WebSocket(args.url, { headers: args.headers });
   ws.on("error", () => {});
   const nonceTracker = startConnectChallengeTracker(ws);
   try {
     await waitForWsOpen(ws, args.timeoutMs);
-    await nonceTracker.wait(args.timeoutMs);
-    await sendWsRequest({
+    const nonce = await nonceTracker.wait(args.timeoutMs);
+    const scopes = [...OPENCLAW_FULL_OPERATOR_SCOPES];
+    const hello = await sendWsRequest({
       ws,
       id: randomUUID(),
       method: "connect",
@@ -130,10 +130,17 @@ export async function openProxyIdentitySocket(args: {
           mode: "backend",
         },
         role: "operator",
+        ...(args.identity ? { scopes, device: signConnectDevice({ identity: args.identity,
+          clientId: OPENCLAW_CONTROL_UI_CLIENT_ID, clientMode: "backend", role: "operator", scopes, nonce, platform: process.platform }) } : {}),
       },
       timeoutMs: args.timeoutMs,
       mapConnectErrors: true,
     });
+    if (args.onScopes) {
+      const auth = (hello as { auth?: { scopes?: unknown } })?.auth;
+      if (!Array.isArray(auth?.scopes) || !auth.scopes.every(scope => typeof scope === "string")) throw new Error("OpenClaw did not return effective scopes");
+      args.onScopes(auth.scopes as string[]);
+    }
     return ws;
   } catch (error) {
     ws.terminate();
@@ -180,13 +187,10 @@ export function createOpenClawControlProxyIdentity(
       && previous?.updatedAt === profile.updatedAt);
   };
 
-  const roleFor = (session: OpenClawControlProxyIdentitySession): OpenClawOperatorRole =>
-    openClawRoleForBrokerProfile(session.brokerProfile);
-
-  const identityHeaders = (user: string, clientAddress: string | undefined): Record<string, string> => ({
-    ...openClawProxyIdentityHeaders({ user, clientAddress }),
-    origin: openClawProxyOrigin(env),
-  });
+  const identityHeaders = (user: string, clientAddress: string | undefined): Record<string, string> => {
+    assertWorkspaceIdentityReady(env);
+    return { ...openClawProxyIdentityHeaders({ user, clientAddress }), origin: openClawProxyOrigin(env) };
+  };
   const serviceHeaders = (): Record<string, string> =>
     identityHeaders(OPENCLAW_EDGE_SERVICE_IDENTITY, fallbackAddress());
 
@@ -206,9 +210,8 @@ export function createOpenClawControlProxyIdentity(
   };
 
   const synchronizeProfile = async (
-    session: OpenClawControlProxyIdentitySession, assignRole: boolean, suppliedAppearance?: OpenClawProfileAppearance,
+    session: OpenClawControlProxyIdentitySession, suppliedAppearance?: OpenClawProfileAppearance,
   ): Promise<OpenClawProfileListItem> => {
-    const desired = roleFor(session);
     const ws = await openSocket({ url: identityUrl(), headers: serviceHeaders(), timeoutMs });
     const rpc = attachUpstreamRpcClient(ws, { timeoutMs });
     try {
@@ -230,7 +233,6 @@ export function createOpenClawControlProxyIdentity(
         if (!result.ok) throw new Error(`${method} failed: ${result.reason}`);
         profile = result.result.profile;
       };
-      if (assignRole && (profile.role ?? null) !== desired) await update("users.setRole", { role: desired });
       if ((profile.displayName ?? null) !== appearance.displayName) {
         await update("users.setDisplayName", { displayName: appearance.displayName });
       }
@@ -250,17 +252,17 @@ export function createOpenClawControlProxyIdentity(
     }
   };
 
-  const syncProfile = (session: OpenClawControlProxyIdentitySession, { assignRole = true } = {}): Promise<void> => {
-    const key = JSON.stringify([session.gatewayId, session.uid, roleFor(session), assignRole]);
+  const syncProfile = (session: OpenClawControlProxyIdentitySession): Promise<void> => {
+    const key = JSON.stringify([session.gatewayId, session.uid]);
     const pending = pendingSyncs.get(key);
     if (pending) return pending;
-    const sync = synchronizeProfile(session, assignRole).then(() => {}).finally(() => { pendingSyncs.delete(key); });
+    const sync = synchronizeProfile(session).then(() => {}).finally(() => { pendingSyncs.delete(key); });
     pendingSyncs.set(key, sync);
     return sync;
   };
 
   const syncChannelMemberships = async (session: OpenClawControlSession, settings: { force?: boolean } = {}): Promise<void> => {
-    if (!enabled || !hasNativeOpenClawChatAccess(session.brokerProfile)) return;
+    if (!enabled) return;
     const key = JSON.stringify([session.gatewayId, session.uid, session.workspaceSlug]);
     const existing = channelSyncs.get(key);
     if (existing?.pending) {
@@ -276,8 +278,8 @@ export function createOpenClawControlProxyIdentity(
         const profiles = await rpc.call<{ profiles: OpenClawProfileListItem[] }>("users.list", {});
         if (!profiles.ok) throw new Error(`users.list failed: ${profiles.reason}`);
         let member = profileFor(profiles.result.profiles, session.uid);
-        if (!member || (member.role ?? null) !== roleFor(session)) {
-          member = await synchronizeProfile(session, true);
+        if (!member) {
+          member = await synchronizeProfile(session);
         }
         const service = profileFor(profiles.result.profiles, OPENCLAW_EDGE_SERVICE_IDENTITY);
         if (!member || !service) throw new Error("Channel membership identity is not initialized");
@@ -305,20 +307,21 @@ export function createOpenClawControlProxyIdentity(
     enabled,
     syncChannelMemberships,
     userHeaders: (session, req) =>
-      identityHeaders(session.uid, openClawControlClientAddress(req, fallbackAddress)),
+      ({ ...identityHeaders(session.uid, openClawControlClientAddress(req, fallbackAddress)),
+      }),
     serviceHeaders,
     deviceIdentity: (session) =>
       deriveDeviceIdentity({
         secret: deviceSecret(env),
-        subject: openClawDeviceSubject(session.gatewayId, session.uid, roleFor(session)),
+        subject: openClawDeviceSubject(session.gatewayId, session.uid),
       }),
-    connectScopes: (session) => openClawDeviceRequestScopes(roleFor(session)),
+    connectScopes: () => [...OPENCLAW_FULL_OPERATOR_SCOPES],
     async resolveChatProfile(session, source) {
       if (!enabled) return null;
       const load = options.loadChatAppearance ?? (await import("./profile-appearance.js")).loadOpenClawChatProfileAppearance;
       const author = await load(session, source, env);
       if (!author) return null;
-      const profile = await synchronizeProfile({ ...session, uid: author.uid }, false, author.appearance);
+      const profile = await synchronizeProfile({ ...session, uid: author.uid }, author.appearance);
       return {
         mattermostUserId: author.mattermostUserId, profileId: profile.id, username: author.username,
         ...(profile.hasAvatar ? { avatarUrl: `/api/users/${encodeURIComponent(profile.id)}/avatar?v=${profile.updatedAt ?? 0}` } : {}),

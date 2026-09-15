@@ -1,4 +1,3 @@
-import { type GatewayPermissionSetId, type OpenClawBrokerProfile } from "./gateway-principal-access.js";
 export declare const OPENCLAW_CONTROL_TICKETS_COLLECTION = "openclawControlTickets";
 export declare const OPENCLAW_CONTROL_TICKET_TTL_MS = 120000;
 export interface OpenClawControlTicketDocument {
@@ -6,9 +5,6 @@ export interface OpenClawControlTicketDocument {
     gatewayId: string;
     workspaceSlug: string;
     revisionId: string;
-    brokerProfile: OpenClawBrokerProfile;
-    permissionSetIds: GatewayPermissionSetId[];
-    grantRevision: number | null;
     expiresAt: number;
     createdAt: unknown;
     redeemedAt?: number;
@@ -18,9 +14,6 @@ export interface OpenClawControlRedemption {
     gatewayId: string;
     workspaceSlug: string;
     revisionId: string;
-    brokerProfile: OpenClawBrokerProfile;
-    permissionSetIds: GatewayPermissionSetId[];
-    grantRevision: number | null;
     expiresAt: number;
 }
 export type OpenClawControlTicketRejectionReason = "ticket_invalid" | "gateway_mismatch" | "revision_mismatch" | "ticket_replay" | "ticket_expired";
@@ -37,9 +30,6 @@ export declare function createOpenClawControlTicket(args: {
     gatewayId: string;
     workspaceSlug: string;
     revisionId: string;
-    brokerProfile: OpenClawBrokerProfile;
-    permissionSetIds: GatewayPermissionSetId[];
-    grantRevision: number | null;
     now?: number;
     random?: (size: number) => Buffer;
 }): {

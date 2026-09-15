@@ -1,18 +1,10 @@
 import { internalFetch } from "../lib/internal-fetch.js";
-import {
-  permissionSetIds,
-  type GatewayPermissionSetId,
-  type OpenClawBrokerProfile,
-} from "@octogee/core/gateway-principal-access";
 
 export interface OpenClawControlRedemptionResponse {
   uid: string;
   gatewayId: string;
   workspaceSlug: string;
   revisionId: string;
-  brokerProfile: OpenClawBrokerProfile;
-  permissionSetIds: GatewayPermissionSetId[];
-  grantRevision: number | null;
   expiresAt: number;
 }
 
@@ -76,18 +68,6 @@ function boundedIdentifier(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
-function validAccessBinding(
-  profile: unknown,
-  ids: GatewayPermissionSetId[] | null,
-  grantRevision: unknown,
-): boolean {
-  if (profile === "native-owner" || profile === "native-member") return ids?.length === 0 && grantRevision === null;
-  const delegatedProfile = profile === "native-member-helper" || profile === "native-co-owner" || profile === "delegated-config" ||
-    profile === "delegated-read";
-  return delegatedProfile && ids !== null && Number.isSafeInteger(grantRevision) &&
-    (grantRevision as number) >= 1;
-}
-
 function validRedemptionIdentity(item: Record<string, unknown>): boolean {
   return boundedIdentifier(item.uid, 256) &&
     boundedIdentifier(item.gatewayId, 128) &&
@@ -98,12 +78,7 @@ function validRedemptionIdentity(item: Record<string, unknown>): boolean {
 function validRedemptionResponse(value: unknown): value is OpenClawControlRedemptionResponse {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
-  const profile = item.brokerProfile;
-  const ids = Array.isArray(item.permissionSetIds) && item.permissionSetIds.length === 0
-    ? []
-    : permissionSetIds(item.permissionSetIds);
   return validRedemptionIdentity(item) &&
-    validAccessBinding(profile, ids, item.grantRevision) &&
     typeof item.expiresAt === "number" &&
     Number.isFinite(item.expiresAt) &&
     item.expiresAt > 0;
@@ -151,9 +126,6 @@ export async function redeemOpenClawControlTicket(args: {
     gatewayId: body.gatewayId,
     workspaceSlug: body.workspaceSlug,
     revisionId: body.revisionId,
-    brokerProfile: body.brokerProfile,
-    permissionSetIds: body.permissionSetIds,
-    grantRevision: body.grantRevision,
     expiresAt: body.expiresAt,
   };
 }

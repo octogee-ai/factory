@@ -12,7 +12,6 @@ import {
   acquireSystemConfigMutationLease,
   type SystemConfigMutationLease,
 } from "@octogee/core/system-config-mutation-lease";
-import type { OpenClawBrokerProfile } from "@octogee/core/gateway-principal-access";
 import type { SystemConfigInvariantContext } from "@octogee/core/system-config-invariants";
 import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
 import { Router, type Request, type Response } from "express";
@@ -38,20 +37,18 @@ import {
   sanitizeOpenClawControlServerFrame,
   type OpenClawConnectIdentity,
 } from "./connect-rewrite.js";
-import { executeServiceConfigMutation } from "./config-mutation.js";
 import {
   createOpenClawControlProxyIdentity,
   type OpenClawControlProxyIdentity,
 } from "./proxy-identity.js";
 import {
-  evaluateOpenClawControlRpcForProfile,
+  evaluateOpenClawControlRpc,
   openClawControlRpcCategory,
   installedMethodsFromHello,
   isOpenClawControlMutation,
   openClawConfigSnapshotFromGetResponse,
   openClawControlPolicyError,
   openClawControlTimeoutError,
-  projectOpenClawServerFrameForProfile,
   type OpenClawConfigSnapshot,
   type OpenClawControlRpcDecision,
   type OpenClawControlRpcCategory,
@@ -609,7 +606,6 @@ function rejectDashboardHttpRequest(
   res: Response,
   frameAncestor: string,
   gatewayId: string,
-  { brokerProfile, perUserIdentity }: { brokerProfile: OpenClawBrokerProfile; perUserIdentity: boolean },
 ): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
     securityHeaders(res, frameAncestor);
@@ -622,12 +618,7 @@ function rejectDashboardHttpRequest(
     res.status(404).json({ error: "dashboard-resource-not-found" });
     return true;
   }
-  if (!perUserIdentity && brokerProfile !== "native-owner" &&
-    isDashboardAssistantMediaResource(openClawControlHttpSuffix(req.originalUrl, gatewayId))) {
-    securityHeaders(res, frameAncestor);
-    res.status(404).json({ error: "dashboard-resource-not-found" });
-    return true;
-  }
+
   return false;
 }
 
@@ -709,11 +700,7 @@ function defaultProxyIdentity(env: NodeJS.ProcessEnv): OpenClawControlProxyIdent
   });
 }
 
-function controlLandingPage(profile: OpenClawControlSession["brokerProfile"]): string {
-  if (profile === "delegated-config" || profile === "delegated-read") return "settings/agents";
-  if (profile === "native-member" || profile === "native-member-helper") return "new";
-  return "";
-}
+
 
 // eslint-disable-next-line max-lines-per-function -- launch and asset proxy routes share one session, policy, and metrics closure.
 export function createOpenClawControlHttpRouter(
@@ -772,14 +759,11 @@ export function createOpenClawControlHttpRouter(
         gatewayId,
         workspaceSlug: redeemed.workspaceSlug,
         revisionId,
-        brokerProfile: redeemed.brokerProfile,
-        permissionSetIds: redeemed.permissionSetIds,
-        grantRevision: redeemed.grantRevision,
         absoluteExpiresAt: redeemed.expiresAt,
       });
       securityHeaders(res, frameAncestor);
       res.setHeader("set-cookie", issued.cookie);
-      const page = controlLandingPage(redeemed.brokerProfile);
+      const page = "new";
       res.setHeader("location", `/g/${gatewayId}/openclaw/${page}`);
       outcome = "ok";
       res.status(303).end();
@@ -844,9 +828,7 @@ export function createOpenClawControlHttpRouter(
         return;
       }
       metrics?.session(identity, "authorize", "ok");
-      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId, {
-        brokerProfile: session.brokerProfile, perUserIdentity: proxyIdentity.enabled,
-      })) return;
+      if (rejectDashboardHttpRequest(req, res, frameAncestor, gatewayId)) return;
       const touched = sessions.touchSession(session);
       if (!touched) {
         outcome = "policy_denied";
@@ -1087,6 +1069,7 @@ class OpenClawControlSocketBridge {
   private bufferedConnect?: BrowserRpcFrame;
   private connectForwarded = false;
   private installedMethods?: Set<string>;
+  private nativeScopes: ReadonlySet<string> = new Set();
   private currentConfig?: OpenClawConfigSnapshot;
   private readonly pending = new Map<string, PendingRpc>();
   private readonly admittingIds = new Set<string>();
@@ -1214,7 +1197,7 @@ class OpenClawControlSocketBridge {
       || this.profileSyncPending || Date.now() < this.nextProfileSyncAt) return;
     this.profileSyncPending = true;
     this.nextProfileSyncAt = Date.now() + 60_000;
-    void this.args.proxyIdentity.syncProfile(this.activeSession, { assignRole: false }).catch((error: unknown) => {
+    void this.args.proxyIdentity.syncProfile(this.activeSession).catch((error: unknown) => {
       logger.error("OpenClaw Dashboard identity profile refresh failed", {
         gatewayId: this.activeSession.gatewayId,
         error: error instanceof Error ? error.message : String(error),
@@ -1422,6 +1405,7 @@ class OpenClawControlSocketBridge {
     }
     if (response && this.drainQuarantined(response.id)) return;
     const request = response ? this.settlePending(response.id) : undefined;
+    this.acceptNativeScopes(frame, request);
     this.acceptInstalledMethods(frame);
     this.updateCurrentConfig(frame, request);
     this.refreshConfigAfterMutation(frame, request);
@@ -1433,12 +1417,7 @@ class OpenClawControlSocketBridge {
     request: PendingRpc | undefined,
   ): void {
     if (request?.internal || this.args.browser.readyState !== WebSocket.OPEN) return;
-    let projected = this.args.proxyIdentity.enabled ? frame : projectOpenClawServerFrameForProfile(
-      frame,
-      request?.method,
-      this.activeSession.brokerProfile,
-      this.activeSession.workspaceSlug,
-    );
+    let projected = frame;
     if (projected && request?.method === "desktop.observe") {
       try {
         projected = this.args.desktopTickets.project(projected, this.activeSession);
@@ -1452,6 +1431,13 @@ class OpenClawControlSocketBridge {
     }
     if (projected) {
       this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));
+    }
+  }
+
+  private acceptNativeScopes(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
+    if (request?.method === "connect" && frame.ok === true) {
+      const auth = (frame.payload as { auth?: { scopes?: unknown } } | undefined)?.auth;
+      this.nativeScopes = new Set(Array.isArray(auth?.scopes) ? auth.scopes.filter((scope): scope is string => typeof scope === "string") : []);
     }
   }
 
@@ -1591,7 +1577,6 @@ class OpenClawControlSocketBridge {
         logger.error("OpenClaw Dashboard identity profile sync failed", {
           gatewayId: this.activeSession.gatewayId,
           revisionId: this.activeSession.revisionId,
-          brokerProfile: this.activeSession.brokerProfile,
           error: error instanceof Error ? error.message : String(error),
         });
         this.settlePending(frame.id);
@@ -1608,12 +1593,12 @@ class OpenClawControlSocketBridge {
     const managedConfigWrite = category === "config_mutation";
     const decision: OpenClawControlRpcDecision = this.args.proxyIdentity.enabled && !managedConfigWrite
       ? { allowed: true, category, outbound: frame }
-      : evaluateOpenClawControlRpcForProfile(frame, {
+      : evaluateOpenClawControlRpc(frame, {
         installedMethods: this.installedMethods!,
         invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
         currentConfig: this.currentConfig,
         configFrozen: configFrozen(this.args.env),
-      }, this.activeSession.brokerProfile);
+      }, !this.args.proxyIdentity.enabled || this.nativeScopes.has("operator.admin"));
     if (!decision.allowed) {
       this.deny(frame, decision, decision.reason ?? "method-denied");
       return;
@@ -1658,7 +1643,6 @@ class OpenClawControlSocketBridge {
     logger.warn("OpenClaw Dashboard RPC denied by policy", {
       gatewayId: this.activeSession.gatewayId,
       revisionId: this.activeSession.revisionId,
-      brokerProfile: this.activeSession.brokerProfile,
       category,
       reason,
     });
@@ -1759,11 +1743,11 @@ class OpenClawControlSocketBridge {
     this.track(frame.id, frame.method, decision.category, lease, {
       proposed: decision.proposedConfig,
       mutationLease,
-      mutationDispatched: !this.serviceConfigMutation(decision),
+      mutationDispatched: true,
       timerMs: remainingMs,
       ...mattermostProjectionOptions(mattermost),
     });
-    await this.dispatchAllowed(frame, decision, mattermost, deadlineAt);
+    this.dispatchAllowed(frame, decision, mattermost);
     this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
   }
 
@@ -1792,42 +1776,18 @@ class OpenClawControlSocketBridge {
     });
   }
 
-  private async dispatchAllowed(
+  private dispatchAllowed(
     frame: BrowserRpcFrame,
     decision: OpenClawControlRpcDecision,
     mattermost: MattermostChatPreparation | null,
-    deadlineAt: number,
-  ): Promise<void> {
+  ): void {
     const outbound = decision.outbound ?? frame;
-    if (this.serviceConfigMutation(decision)) {
-      await this.forwardServiceConfigMutation(frame, outbound, deadlineAt);
-      return;
-    }
     try {
       this.upstreamSocket().send(JSON.stringify(mattermostOutboundFrame(outbound, mattermost)));
     } catch (error) {
       this.settlePending(frame.id);
       throw error;
     }
-  }
-
-  private serviceConfigMutation(decision: OpenClawControlRpcDecision): boolean {
-    return this.args.proxyIdentity.enabled && decision.category === "config_mutation";
-  }
-
-  private async forwardServiceConfigMutation(frame: BrowserRpcFrame, outbound: Record<string, unknown>, deadlineAt: number): Promise<void> {
-    const response = await executeServiceConfigMutation({
-      base: openClawControlUpstreamBase(this.args.env),
-      headers: this.args.proxyIdentity.serviceHeaders(),
-      frame: { id: frame.id, method: frame.method, params: outbound.params },
-      deadlineAt,
-      canSend: () => !this.closing && this.pending.has(frame.id),
-      onDispatch: () => {
-        const pending = this.pending.get(frame.id);
-        if (pending) pending.mutationDispatched = true;
-      },
-    });
-    if (!this.closing) this.handleUpstreamMessage(response);
   }
 
   private async acquireMutationLease(

@@ -220,6 +220,6 @@ describe("system config platform invariants", () => {
       GATEWAY_BUILDER_SLUG: "alice",
     });
     expect((candidate.gateway as { auth: { mode: string } }).auth.mode).toBe("trusted-proxy");
-    expect(candidate.gateway).toMatchObject({ roles: { definitions: { "team-member": { agents: ["octogee-alice-coach"] } } } });
+    expect(candidate.gateway).toMatchObject({ roles: { definitions: { member: { agents: ["octogee-alice-coach"] } } } });
   });
 });

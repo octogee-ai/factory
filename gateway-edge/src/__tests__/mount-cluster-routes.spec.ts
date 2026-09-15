@@ -158,8 +158,6 @@ describe("mountClusterRoutes", () => {
       "/api/posts",
       "/api/agents",
       "/api/builder",
-      "/api/gateways",
-      "/api/access-approvals",
       "/api/productivity-approvals",
       "/api/voice",
       "/internal/agents",

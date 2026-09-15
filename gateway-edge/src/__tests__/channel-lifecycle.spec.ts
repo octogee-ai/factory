@@ -27,6 +27,7 @@ const {
   MattermostChannelBindingError,
   MattermostIdentityMissingError,
   addChannelMember,
+  addActiveChannelMember,
   mapMattermostMembershipError,
   removeChannelMember,
   retireStoredChannel,
@@ -300,4 +301,15 @@ describe("channel lifecycle", () => {
     });
     expect(mapMattermostMembershipError(new MattermostChannelBindingError("forged"))).toBeNull();
   });
+});
+
+
+it("new-channel enrollment skips deactivated General members without reactivating them", async () => {
+  h.mmApi.mockImplementation(async (path: string) => {
+    if (path === "/channels/primary") return channel("primary", "alice-general");
+    if (path === "/users/retired") return { id: "retired", delete_at: 123 };
+    throw new Error(`unexpected call ${path}`);
+  });
+  expect(await addActiveChannelMember(channelPath, "retired")).toBe(false);
+  expect(h.mmApi.mock.calls.every(([, method]) => !method || method === "GET")).toBe(true);
 });

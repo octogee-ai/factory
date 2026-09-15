@@ -51,7 +51,7 @@ export async function computerContext(options: ComputerBrokerOptions): Promise<C
   const token = (await readToken(options.tokenPath ?? "/var/run/octogee/api-token/token")).trim();
   const baseUrl = options.brokerUrl ?? process.env.FLEET_BROKER_URL ?? process.env.OCTOGEE_API_URL ??
     `http://octogee-api.${process.env.K8S_NAMESPACE ?? "octogee"}.svc.cluster.local:3001`;
-  const response = await (options.fetchImpl ?? fetch)(`${baseUrl.replace(/\/$/u, "")}/internal/agent-access/computer-context`, {
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl.replace(/\/$/u, "")}/internal/computer/agent-context`, {
     method: "POST",
     headers: { "x-k8s-sa-token": token, "content-type": "application/json" },
     body: JSON.stringify({ agentId: options.agentId }),

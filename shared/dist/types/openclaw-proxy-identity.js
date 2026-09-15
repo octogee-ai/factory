@@ -24,12 +24,6 @@ export const OPENCLAW_FULL_OPERATOR_SCOPES = [
     OPERATOR_QUESTIONS,
     OPERATOR_PAIRING,
 ];
-export const OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES = [
-    OPERATOR_READ,
-    OPERATOR_WRITE,
-    OPERATOR_APPROVALS,
-    OPERATOR_QUESTIONS,
-];
 export const OPENCLAW_TRUSTED_PROXY_AUTH = Object.freeze({
     mode: "trusted-proxy",
     trustedProxy: Object.freeze({
@@ -38,7 +32,7 @@ export const OPENCLAW_TRUSTED_PROXY_AUTH = Object.freeze({
         allowLoopback: true,
         deviceAutoApprove: Object.freeze({
             enabled: true,
-            scopes: [...OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES],
+            scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES],
         }),
     }),
 });
@@ -50,33 +44,13 @@ export function openClawIdentityScopes(ownerUid) {
         ...(owner ? { [owner]: [...OPENCLAW_FULL_OPERATOR_SCOPES] } : {}),
     };
 }
-export const OPENCLAW_OPERATOR_ROLE_NAMES = [
-    "member",
-    "team-member",
-    "service",
-    "owner",
-    "co-owner",
-    "trusted-helper",
-    "viewer",
-];
+export const OPENCLAW_OPERATOR_ROLE_NAMES = ["member", "admin", "service"];
 export const OPENCLAW_OPERATOR_ROLES = Object.freeze({
     default: "member",
     definitions: Object.freeze({
-        member: { sessions: { others: "none" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
-        "team-member": { sessions: { others: "none" }, agents: [], scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_QUESTIONS] },
+        member: { sessions: { others: "none" }, agents: [], scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_QUESTIONS] },
+        admin: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
         service: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
-        owner: { sessions: { others: "write" }, agents: "*", scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES] },
-        "co-owner": {
-            sessions: { others: "write" },
-            agents: "*",
-            scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_APPROVALS, OPERATOR_QUESTIONS],
-        },
-        "trusted-helper": {
-            sessions: { others: "view" },
-            agents: "*",
-            scopes: [OPERATOR_READ, OPERATOR_WRITE, OPERATOR_APPROVALS],
-        },
-        viewer: { sessions: { others: "view" }, agents: "*", scopes: [OPERATOR_READ] },
     }),
 });
 export function openClawOperatorRoles(workspaceSlug) {
@@ -84,27 +58,12 @@ export function openClawOperatorRoles(workspaceSlug) {
     if (workspaceSlug) {
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(workspaceSlug))
             throw new Error("invalid gateway workspace slug");
-        roles.definitions["team-member"].agents = [`octogee-${workspaceSlug}-coach`];
+        roles.definitions.member.agents = [`octogee-${workspaceSlug}-coach`];
     }
     return roles;
 }
 export function openClawRoleScopes(role) {
     return [...OPENCLAW_OPERATOR_ROLES.definitions[role].scopes];
-}
-export function openClawDeviceRequestScopes(role) {
-    const approvable = new Set(OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES);
-    return openClawRoleScopes(role).filter((scope) => approvable.has(scope));
-}
-const ROLE_BY_BROKER_PROFILE = {
-    "native-owner": "owner",
-    "native-member": "team-member",
-    "native-member-helper": "team-member",
-    "native-co-owner": "co-owner",
-    "delegated-config": "trusted-helper",
-    "delegated-read": "viewer",
-};
-export function openClawRoleForBrokerProfile(profile) {
-    return ROLE_BY_BROKER_PROFILE[profile];
 }
 export function resolveControlIdentityFromEnv(env = process.env) {
     return resolveGatewayControlIdentity(env[OPENCLAW_CONTROL_IDENTITY_ENV]?.trim());
@@ -123,8 +82,8 @@ export function serviceProxyIdentity(name) {
     }
     return `${OPENCLAW_SERVICE_IDENTITY_PREFIX}${trimmed}`;
 }
-export function openClawDeviceSubject(gatewayId, uid, role) {
-    return `octogee-openclaw-device:v2:${gatewayId}:${uid}:${role}`;
+export function openClawDeviceSubject(gatewayId, uid) {
+    return `octogee-openclaw-device:v3:${gatewayId}:${uid}`;
 }
 export function openClawProxyOrigin(env = process.env) {
     const error = "per-user proxy authentication requires API_PUBLIC_URL to be an HTTP(S) origin";

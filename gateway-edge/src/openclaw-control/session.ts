@@ -1,9 +1,4 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  permissionSetIds,
-  type GatewayPermissionSetId,
-  type OpenClawBrokerProfile,
-} from "@octogee/core/gateway-principal-access";
 
 export const OPENCLAW_CONTROL_SESSION_COOKIE = "__Secure-octogee-openclaw";
 export const OPENCLAW_CONTROL_SESSION_IDLE_MS = 15 * 60_000;
@@ -14,9 +9,6 @@ export interface OpenClawControlSession {
   gatewayId: string;
   workspaceSlug: string;
   revisionId: string;
-  brokerProfile: OpenClawBrokerProfile;
-  permissionSetIds: GatewayPermissionSetId[];
-  grantRevision: number | null;
   idleExpiresAt: number;
   absoluteExpiresAt: number;
 }
@@ -27,9 +19,6 @@ interface SessionPayload {
   gid: string;
   wid: string;
   rid: string;
-  prf: OpenClawBrokerProfile;
-  ps: GatewayPermissionSetId[];
-  gr: number | null;
   abs: number;
 }
 
@@ -52,24 +41,6 @@ function cookieValue(header: string | undefined): string | null {
   return null;
 }
 
-function sessionBinding(
-  profile: unknown,
-  rawPermissionSetIds: unknown,
-  grantRevision: unknown,
-): { ids: GatewayPermissionSetId[]; revision: number | null } | null {
-  const ids = Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0
-    ? []
-    : permissionSetIds(rawPermissionSetIds);
-  if (profile === "native-owner" || profile === "native-member") {
-    return ids?.length === 0 && grantRevision === null ? { ids: [], revision: null } : null;
-  }
-  const delegated = profile === "native-member-helper" || profile === "native-co-owner" || profile === "delegated-config" ||
-    profile === "delegated-read";
-  return delegated && ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
-    ? { ids, revision: grantRevision as number }
-    : null;
-}
-
 function hasSessionIdentity(item: Record<string, unknown>): boolean {
   return SESSION_IDENTITY_FIELDS.every((key) =>
     typeof item[key] === "string" && item[key].length > 0
@@ -79,10 +50,7 @@ function hasSessionIdentity(item: Record<string, unknown>): boolean {
 function parsePayload(value: unknown): SessionPayload | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
-  const profile = item.prf;
-  const binding = sessionBinding(profile, item.ps, item.gr);
   return hasSessionIdentity(item) &&
-    binding !== null &&
     typeof item.abs === "number" && Number.isFinite(item.abs)
     ? item as unknown as SessionPayload
     : null;
@@ -114,9 +82,6 @@ export class OpenClawControlSessionManager {
     gatewayId: string;
     workspaceSlug: string;
     revisionId: string;
-    brokerProfile: OpenClawBrokerProfile;
-    permissionSetIds: GatewayPermissionSetId[];
-    grantRevision: number | null;
     absoluteExpiresAt: number;
   }): { session: OpenClawControlSession; cookie: string } {
     const now = this.now();
@@ -129,9 +94,6 @@ export class OpenClawControlSessionManager {
       gid: args.gatewayId,
       wid: args.workspaceSlug,
       rid: args.revisionId,
-      prf: args.brokerProfile,
-      ps: args.permissionSetIds,
-      gr: args.grantRevision,
       abs: args.absoluteExpiresAt,
       lastActivityAt: now,
     };
@@ -166,8 +128,8 @@ export class OpenClawControlSessionManager {
     const stored = this.sessions.get(session.sessionId);
     if (!stored || stored.uid !== session.uid || stored.gid !== session.gatewayId ||
       stored.wid !== session.workspaceSlug ||
-      stored.rid !== session.revisionId || stored.prf !== session.brokerProfile ||
-      stored.gr !== session.grantRevision || stored.abs !== session.absoluteExpiresAt) return null;
+      stored.rid !== session.revisionId ||
+      stored.abs !== session.absoluteExpiresAt) return null;
     const now = this.now();
     if (stored.abs <= now || stored.lastActivityAt + this.idleMs <= now) {
       this.sessions.delete(stored.sid);
@@ -186,9 +148,7 @@ export class OpenClawControlSessionManager {
     const stored = this.sessions.get(payload.sid);
     if (!stored || stored.uid !== payload.uid || stored.gid !== payload.gid ||
       stored.wid !== payload.wid ||
-      stored.rid !== payload.rid || stored.prf !== payload.prf || stored.gr !== payload.gr ||
-      stored.ps.length !== payload.ps.length ||
-      stored.ps.some((id, index) => id !== payload.ps[index]) || stored.abs !== payload.abs) return null;
+      stored.rid !== payload.rid || stored.abs !== payload.abs) return null;
     const now = this.now();
     if (stored.abs <= now || stored.lastActivityAt + this.idleMs <= now) {
       this.sessions.delete(stored.sid);
@@ -204,9 +164,6 @@ export class OpenClawControlSessionManager {
       gatewayId: stored.gid,
       workspaceSlug: stored.wid,
       revisionId: stored.rid,
-      brokerProfile: stored.prf,
-      permissionSetIds: [...stored.ps],
-      grantRevision: stored.gr,
       idleExpiresAt: Math.min(stored.lastActivityAt + this.idleMs, stored.abs),
       absoluteExpiresAt: stored.abs,
     };
@@ -238,9 +195,6 @@ export class OpenClawControlSessionManager {
       gid: stored.gid,
       wid: stored.wid,
       rid: stored.rid,
-      prf: stored.prf,
-      ps: stored.ps,
-      gr: stored.gr,
       abs: stored.abs,
     } satisfies SessionPayload));
     const signature = createHmac("sha256", this.key).update(body).digest("base64url");

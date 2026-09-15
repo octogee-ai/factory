@@ -26,10 +26,9 @@ import {
   createOpenClawControlTicket,
 } from "@octogee/core/openclaw-control-tickets";
 import {
-  GATEWAY_ACCESS_GRANTS_COLLECTION,
-  workspaceAgentAccessGrantId,
   isCanonicalWorkspaceMembership,
   resolveGatewayPrincipalAccess,
+  workspacePermissionsEnabled,
   type GatewayPrincipalAccess,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
@@ -46,12 +45,7 @@ const CAPABILITY_DISABLED = "capability-disabled";
 const NOT_READY = "not-ready";
 
 function accessRole(access: ResolvedGatewayAccess): GatewayControlListEntry["via"] {
-  if (access.kind === "owner") return "owner";
-  if (access.kind === "member") return "member";
-  if (access.permissionSetIds.includes("co-owner.v1")) return "co-owner";
-  if (access.permissionSetIds.includes("trusted-helper.v1")) return "trusted-helper";
-  if (access.permissionSetIds.includes("agent-viewer.v1")) return "agent-viewer";
-  throw new Error("resolved gateway access has no recognized role");
+  return access.kind;
 }
 
 const openClawTicketRateLimit = rateLimit({
@@ -116,16 +110,10 @@ function builderViewOf({
     isCurrentAssignment,
     ...(configStatus ? { configStatus } : {}),
     via: accessRole(access),
-    permissionSetIds: access.permissionSetIds,
     capabilities: {
       dashboard: access.dashboard,
-      config: access.config,
       workspaceManagement: access.workspaceManagement,
     },
-    grantRevision: access.grantRevision,
-    accessExpiresAt: access.expiresAt === null
-      ? null
-      : new Date(access.expiresAt).toISOString(),
   };
 }
 
@@ -215,70 +203,43 @@ export async function principalAccess(
   scope: GatewayWorkspaceScope,
   uid: string,
   get: DocumentReader,
-  now = Date.now(),
 ): Promise<GatewayPrincipalAccess> {
   const { gatewayId, workspaceSlug, ownerUid } = scope;
-  if (ownerUid === uid) {
-    return resolveGatewayPrincipalAccess({
-      gateway: { gatewayId, ownerUid, workspaceSlug },
-      uid,
-      grant: null,
-      isWorkspaceMember: false,
-      now,
-    });
-  }
-  const [grantSnap, membershipSnap, workspaceSnap, gatewaySnap] = await Promise.all([
-    get(`${GATEWAY_ACCESS_GRANTS_COLLECTION}/${workspaceAgentAccessGrantId(ownerUid, workspaceSlug, uid)}`),
+  if (ownerUid === uid) return resolveGatewayPrincipalAccess({ gateway: scope, uid, membership: null });
+  const [membershipSnap, workspaceSnap, gatewaySnap, ownerSnap] = await Promise.all([
     get(`workspaces/${workspaceSlug}/members/${uid}`),
     get(`workspaces/${workspaceSlug}`),
     get(`gateways/${gatewayId}`),
+    get(`users/${ownerUid}`),
   ]);
-  const workspace = workspaceSnap.data() as { ownerUid?: string; gatewayAccessMode?: string } | undefined;
+  const workspace = record(workspaceSnap.data());
   return resolveGatewayPrincipalAccess({
     gateway: { gatewayId, ownerUid, workspaceSlug,
-      teamAccess: workspaceSnap.exists && workspace?.ownerUid === ownerUid && workspace.gatewayAccessMode === "team" &&
-        gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId)?.config.builderAccess?.controlIdentity === "per-user",
+      perUserIdentity: workspaceSnap.exists && workspace?.ownerUid === ownerUid &&
+        workspacePermissionsEnabled(gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId)?.config ?? {}, ownerSnap.data() ?? {}),
     },
     uid,
-    grant: grantSnap.exists ? grantSnap.data() : null,
-    isWorkspaceMember: membershipSnap.exists &&
-      isCanonicalWorkspaceMembership(membershipSnap.data()),
-    now,
+    membership: membershipSnap.exists ? membershipSnap.data() : null,
   });
 }
 
 async function builderGatewayCandidates(uid: string) {
-  const [userSnap, ownedSnap, grantSnap, membershipsSnap] = await Promise.all([
+  const [userSnap, ownedSnap, membershipsSnap] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     db.collection("gateways").where("ownerUid", "==", uid).get(),
-    db.collection(GATEWAY_ACCESS_GRANTS_COLLECTION)
-      .where("granteeUid", "==", uid)
-      .where("state", "==", "active")
-      .get(),
     db.collectionGroup("members").where("id", "==", uid).get(),
   ]);
   const user = record(userSnap.exists ? userSnap.data() : undefined);
   const assignedOpenClaw = record(record(user?.provisioning)?.openclaw);
   const selfGatewayId = typeof assignedOpenClaw?.gatewayId === "string" ? assignedOpenClaw.gatewayId : null;
   const selfWorkspaceSlug = slugFromAssignedUser(user ?? undefined);
-  const delegatedRoots = await Promise.all(grantSnap.docs.map(async (grant) => {
-    const data = grant.data() as Record<string, unknown>;
-    if (data.schemaVersion !== 2 || typeof data.ownerUid !== "string" || typeof data.workspaceSlug !== "string") return null;
-    const owner = await db.doc(`users/${data.ownerUid}`).get();
-    const ownerData = record(owner.exists ? owner.data() : undefined);
-    const assignment = record(record(ownerData?.provisioning)?.openclaw);
-    const gatewayId = assignment?.gatewayId;
-    if (typeof gatewayId !== "string" || !userAssignmentMatchesGateway(ownerData ?? undefined, gatewayId, data.workspaceSlug)) return null;
-    const root = await db.doc(`gateways/${gatewayId}`).get();
-    return root.exists ? { root, workspaceSlug: data.workspaceSlug } : null;
-  }));
   const teamRoots = await Promise.all(membershipsSnap.docs.map(async (member) => {
     if (!isCanonicalWorkspaceMembership(member.data())) return null;
     const workspaceRef = member.ref.parent.parent;
     if (!workspaceRef || workspaceRef.parent.id !== "workspaces") return null;
     const workspace = await workspaceRef.get();
     const data = workspace.data();
-    if (data?.gatewayAccessMode !== "team" || typeof data.ownerUid !== "string") return null;
+    if (typeof data?.ownerUid !== "string") return null;
     const owner = await db.doc(`users/${data.ownerUid}`).get();
     const ownerData = owner.data();
     const gatewayId = record(record(ownerData?.provisioning)?.openclaw)?.gatewayId;
@@ -294,7 +255,7 @@ async function builderGatewayCandidates(uid: string) {
     ...(assignedRoot?.exists && selfWorkspaceSlug
       ? [{ root: assignedRoot, workspaceSlug: selfWorkspaceSlug }]
       : []),
-    ...[...delegatedRoots, ...teamRoots].filter((item): item is { root: typeof ownedSnap.docs[number]; workspaceSlug: string } => item !== null),
+    ...teamRoots.filter((item): item is { root: typeof ownedSnap.docs[number]; workspaceSlug: string } => item !== null),
   ];
 }
 
@@ -379,7 +340,7 @@ function controlUiAccess(
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
   access: GatewayPrincipalAccess,
 ): "allowed" | typeof NOT_FOUND | typeof CAPABILITY_DISABLED {
-  if (access.kind === "denied" || !access.dashboard || !access.brokerProfile) return NOT_FOUND;
+  if (access.kind === "denied" || !access.dashboard) return NOT_FOUND;
   const gatewayClass = resolveGatewayClass({
     gatewayClass: authorization.config.gatewayClass,
     profile: authorization.config.profile ?? undefined,
@@ -406,8 +367,6 @@ function denialAuditInput(
     reason,
     source: "system" as const,
     now: Date.now(),
-    beforePermissionSetIds: access.kind === "denied" ? [] : access.permissionSetIds,
-    beforeRevision: access.kind === "denied" ? null : access.grantRevision,
   };
 }
 
@@ -483,7 +442,7 @@ async function mintOpenClawTicket(
         return { exists: snap.exists, data: () => snap.data() };
       },
     );
-    if (principal.kind === "denied" || !principal.brokerProfile) {
+    if (principal.kind === "denied") {
       setGatewayAccessDenialAudit(db, tx, denialAuditInput(
         scope,
         uid,
@@ -506,9 +465,6 @@ async function mintOpenClawTicket(
       gatewayId,
       workspaceSlug: scope.workspaceSlug,
       revisionId,
-      brokerProfile: principal.brokerProfile,
-      permissionSetIds: principal.permissionSetIds,
-      grantRevision: principal.grantRevision,
     });
     tx.set(db.collection(OPENCLAW_CONTROL_TICKETS_COLLECTION).doc(minted.ticketHash), {
       ...minted.document,

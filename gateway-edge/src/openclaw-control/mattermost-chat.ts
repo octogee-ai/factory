@@ -1479,8 +1479,7 @@ async function prepareSessionsList(
       limit: SESSION_LIST_SOURCE_LIMIT,
     },
     project: (upstream) => projectSessionsList(frame, upstream, authorizedRows, params,
-      !perUserIdentity && (session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper")
-        ? `octogee-${session.workspaceSlug}-coach` : undefined),
+      undefined),
   };
 }
 
@@ -1578,9 +1577,6 @@ async function prepareHistory(
     channelId: access.route.primaryChannelId,
     agentId: access.authorization.target.agentId,
   }, resolveChatProfile, signal);
-  if (session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper") {
-    return rpcSuccess(frame, { sessionKey: params.sessionKey, ...page });
-  }
   return {
     kind: "upstream",
     project: (upstream) => projectUpstreamHistory(upstream, page),

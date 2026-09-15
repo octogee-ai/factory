@@ -136,9 +136,7 @@ function app(opts: {
   a.post("/internal/agent-board/card-move", enforcement, handler);
   a.post("/internal/agent-board/card-comment", enforcement, handler);
   a.post("/internal/agent-productivity/google/calendar/events", enforcement, handler);
-  a.get("/internal/agent-access/context", enforcement, handler);
-  a.post("/internal/agent-access/prepare", enforcement, handler);
-  a.get("/internal/agent-access/approvals/:approvalId/status", enforcement, handler);
+  a.post("/internal/computer/agent-context", enforcement, handler);
   a.get("/internal/agent-imports/github/sources", enforcement, handler);
   a.get("/internal/agent-imports/records/:importId", enforcement, handler);
   a.patch("/internal/agent-imports/identity", enforcement, handler);
@@ -559,21 +557,10 @@ describe("tenant enforcement middleware", () => {
     expect(foreignGateway.status).toBe(403);
   });
 
-  it("lets the delegated-access broker perform its own assigned-agent authorization", async () => {
+  it("lets computer context resolve its own assigned-agent authorization", async () => {
     const target = app({ boundTenant: BENDER });
-    const context = await request(target)
-      .get("/internal/agent-access/context")
-      .query({ agentId: "octogee-alice-coach" });
-    const prepare = await request(target)
-      .post("/internal/agent-access/prepare")
-      .send({ agentId: "octogee-alice-coach", granteeUid: "victim" });
-    const status = await request(target)
-      .get("/internal/agent-access/approvals/approval-1/status")
-      .query({ agentId: "octogee-alice-coach" });
-
-    expect(context.status).toBe(200);
-    expect(prepare.status).toBe(200);
-    expect(status.status).toBe(200);
+    const response = await request(target).post("/internal/computer/agent-context").send({ agentId: "octogee-alice-coach" });
+    expect(response.status).toBe(200);
   });
 
   it("lets the byosub flow broker perform its own roster authorization for new flows", async () => {
@@ -934,7 +921,7 @@ describe("tenant enforcement middleware", () => {
       "/internal/workspace-git/authorize",
       "/internal/byok/agent-usage-status",
       "/internal/agent-projects/list",
-      "/internal/agent-access/prepare",
+      "/internal/computer/agent-context",
     ]) {
       expect((await send(path)).status, path).toBe(403);
     }

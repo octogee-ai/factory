@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
-import { timestampMillis } from "@octogee/core/gateway-principal-access";
+import { timestampMillis } from "@octogee/core/timestamps";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isProjectRecipeId } from "@octogee/shared/types/project";
 

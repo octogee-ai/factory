@@ -41,12 +41,12 @@ import { createAgentBoardRoutes } from "./routes/agent-board.js";
 import { createAgentObsidianRoutes } from "./routes/agent-productivity-obsidian.js";
 import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
-import { createAgentAccessRoutes } from "./routes/agent-access.js";
+import { createAgentComputerContextRoutes } from "./routes/agent-computer-context.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
-import { createComputerAccessBrokerRoutes } from "./routes/computer-access-broker.js";
+import { createWorkspaceNativeAccessRoutes } from "./routes/workspace-native-access.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
@@ -790,14 +790,14 @@ export function createApp(opts: CreateAppOptions = {}) {
       logError: (message, fields) => logger.error(message, fields),
     }),
   );
-  app.use("/internal/agent-access", createAgentAccessRoutes({ db, actionBaseUrl: appOrigin }));
+  app.use("/internal/computer", createAgentComputerContextRoutes({ db }));
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
   app.use(
     "/internal/automations",
     requireAuthenticatedUid,
     createAutomationAuthorizationBrokerRoutes({ db }),
   );
-  app.use("/internal/computer", requireAuthenticatedUid, createComputerAccessBrokerRoutes({ db }));
+  app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ db }));
   app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ db }));
   app.use(
     "/internal/agent-imports",

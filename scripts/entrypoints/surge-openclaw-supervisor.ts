@@ -1,3 +1,4 @@
+import { beginWorkspaceIdentityBoot } from "@octogee/core/openclaw-workspace-bootstrap";
 import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as http from "node:http";
@@ -121,6 +122,7 @@ export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS
 }
 
 function defaultSpawnOpenClaw(): SpawnedOpenClaw {
+  beginWorkspaceIdentityBoot();
   return spawn(OPENCLAW_BINARY, ["gateway", "run", "--bind", "lan", "--port", "18789"], {
     stdio: "inherit",
     detached: true,

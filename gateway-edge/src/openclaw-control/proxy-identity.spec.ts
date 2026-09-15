@@ -112,14 +112,13 @@ function identityFor(gateway: MockGateway, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-const helper = { uid: "uid-Helper", gatewayId: "bender", revisionId: "bender", sessionId: "session-id", brokerProfile: "delegated-config" as const };
+const helper = { uid: "uid-Helper", gatewayId: "bender", revisionId: "bender", sessionId: "session-id"};
 
 describe("OpenClaw control proxy identity", () => {
-  it.each((["native-owner", "native-co-owner", "native-member", "native-member-helper"] as const)
-    .flatMap((brokerProfile) => [false, true].map((firstVisit) => ({ brokerProfile, firstVisit }))))(
-    "synchronizes $brokerProfile channel access on admission (first visit: $firstVisit)", async ({ brokerProfile, firstVisit }) => {
+  it.each([false, true].map(firstVisit => ({ firstVisit })))(
+    "synchronizes native channel access on admission (first visit: $firstVisit)", async ({ firstVisit }) => {
     const gateway = await mockGateway([
-      ...(firstVisit ? [] : [{ id: "member-profile", emails: ["uid-helper"], role: "trusted-helper" }]),
+      ...(firstVisit ? [] : [{ id: "member-profile", emails: ["uid-helper"], role: "admin" }]),
       { id: "service-profile", emails: ["svc:gateway-edge"], role: "service" },
     ]);
     const key = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
@@ -129,37 +128,16 @@ describe("OpenClaw control proxy identity", () => {
       podAddress: () => "10.8.0.4", loadChannelMemberships: load,
       loadAppearance: async () => ({ displayName: null, avatar: null }),
     });
-    const session = { ...helper, brokerProfile, workspaceSlug: "alice", permissionSetIds: [], grantRevision: null,
+    const session = { ...helper,  workspaceSlug: "alice",
       idleExpiresAt: 1, absoluteExpiresAt: 2 };
     await identity.syncChannelMemberships(session, { force: true });
     expect(gateway.calls).toContainEqual({ method: "sessions.channel.sync", user: "svc:gateway-edge",
       params: { agentId: "octogee-alice-coach", channel: "mattermost", peerKind: "group",
         peerId: "a".repeat(26), profileId: firstVisit ? "profile-2" : "member-profile", member: true, displayName: "General" } });
-    if (firstVisit) {
-      expect(gateway.connects.some((connection) => connection.headers["x-octogee-user"] === helper.uid)).toBe(true);
-      expect(gateway.calls.findIndex((call) => call.method === "users.setRole"))
-        .toBeLessThan(gateway.calls.findIndex((call) => call.method === "sessions.channel.sync"));
-    }
     await identity.syncChannelMemberships(session);
     expect(load).toHaveBeenCalledTimes(1);
     await identity.syncChannelMemberships(session, { force: true });
     expect(load).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["delegated-read", "delegated-config"] as const)("does not call the native-only Mattermost broker for %s", async (brokerProfile) => {
-    const loadChannelMemberships = vi.fn(async () => { throw new Error("forbidden"); });
-    const openSocket = vi.fn();
-    const identity = createOpenClawControlProxyIdentity({
-      env: { OPENCLAW_CONTROL_IDENTITY: "per-user" },
-      upstreamBase: () => new URL("http://127.0.0.1:18789"),
-      loadChannelMemberships, openSocket,
-    });
-    const session = { ...helper, brokerProfile, workspaceSlug: "alice", permissionSetIds: [], grantRevision: null,
-      idleExpiresAt: 1, absoluteExpiresAt: 2 };
-    await expect(identity.syncChannelMemberships(session, { force: true })).resolves.toBeUndefined();
-    await expect(identity.syncChannelMemberships(session)).resolves.toBeUndefined();
-    expect(loadChannelMemberships).not.toHaveBeenCalled();
-    expect(openSocket).not.toHaveBeenCalled();
   });
 
   it("is disabled unless the pod runs per-user control identity", () => {
@@ -170,30 +148,27 @@ describe("OpenClaw control proxy identity", () => {
     expect(identity.enabled).toBe(false);
   });
 
-  it("creates the person's profile through their own identity, then assigns their role from the service socket", async () => {
+  it("initializes a new guest with OpenClaw's default and never assigns a second role", async () => {
     const gateway = await mockGateway();
-
     await identityFor(gateway).syncProfile(helper);
+    expect(gateway.profiles[0].role).toBeNull();
+    expect(gateway.calls.some(call => call.method === "users.setRole")).toBe(false);
+  });
 
-    expect(gateway.connects.map((connect) => connect.headers["x-octogee-user"])).toEqual([
-      "svc:gateway-edge",
-      "uid-Helper",
-    ]);
-    expect(gateway.connects.every((connect) => connect.headers["x-octogee-proxy"] === "1")).toBe(true);
-    expect(gateway.connects.every((connect) => connect.headers["x-forwarded-for"] === "10.8.0.4")).toBe(true);
-    expect(gateway.connects.every((connect) => connect.headers.origin === "https://api-test.octogee.com")).toBe(true);
-    expect(gateway.connects[0]!.params).toMatchObject({
-      client: { id: "openclaw-control-ui", mode: "backend" },
-      role: "operator",
+  it("preserves the initialized owner when first encountered as a chat author and after native edits", async () => {
+    const gateway = await mockGateway([{ id: "owner-profile", emails: ["owner"], role: "admin" }]);
+    const identity = createOpenClawControlProxyIdentity({
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
+      loadAppearance: async () => ({ displayName: "Owner", avatar: null }),
+      loadChatAppearance: async () => ({ uid: "owner", username: "owner", mattermostUserId: "m".repeat(26), appearance: { displayName: "Owner", avatar: null } }),
     });
-    expect(gateway.connects[0]!.params).not.toHaveProperty("auth");
-    expect(gateway.calls.map((call) => [call.method, call.user])).toEqual([
-      ["users.list", "svc:gateway-edge"],
-      ["users.list", "svc:gateway-edge"],
-      ["users.setRole", "svc:gateway-edge"],
-    ]);
-    expect(gateway.calls[2]!.params).toEqual({ profileId: "profile-1", role: "trusted-helper" });
-    expect(gateway.profiles[0]).toEqual({ id: "profile-1", emails: ["uid-helper"], role: "trusted-helper" });
+    await identity.resolveChatProfile(helper, { channelId: "general", postId: "owner-post" });
+    expect(gateway.profiles[0].role).toBe("admin");
+    gateway.profiles[0].role = null;
+    await identity.syncProfile({ ...helper, uid: "owner" });
+    expect(gateway.profiles[0].role).toBeNull();
+    expect(gateway.calls.filter(call => call.method === "users.setRole")).toHaveLength(0);
   });
 
   it("reuses the profile/avatar sync for chat authors without assigning the viewer's role", async () => {
@@ -213,7 +188,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("syncs Octogee appearance through the service even when the role is unchanged", async () => {
-    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "trusted-helper" }]);
+    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "admin" }]);
     const read = vi.fn(async () => Buffer.from("avatar"));
     const appearance = { displayName: "Chris", avatar: { revision: "upload-1", read } };
     const loadAppearance = vi.fn(async () => appearance);
@@ -240,14 +215,14 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("refreshes appearance without reassigning roles on an established connection", async () => {
-    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "viewer" }]);
+    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "member" }]);
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
       upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
       loadAppearance: async () => ({ displayName: "Chris", avatar: null }),
     });
-    await identity.syncProfile(helper, { assignRole: false });
-    expect(gateway.profiles[0]).toMatchObject({ displayName: "Chris", role: "viewer" });
+    await identity.syncProfile(helper);
+    expect(gateway.profiles[0]).toMatchObject({ displayName: "Chris", role: "member" });
     expect(gateway.calls.map((call) => call.method)).toEqual(["users.list", "users.setDisplayName"]);
   });
 
@@ -265,7 +240,7 @@ describe("OpenClaw control proxy identity", () => {
   });
 
   it("retries refused avatar writes instead of caching them as synchronized", async () => {
-    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "trusted-helper" }]);
+    const gateway = await mockGateway([{ id: "person", emails: ["uid-helper"], role: "admin" }]);
     const read = vi.fn(async () => Buffer.from("avatar"));
     const identity = createOpenClawControlProxyIdentity({
       env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
@@ -287,49 +262,25 @@ describe("OpenClaw control proxy identity", () => {
       .toBe("https://api-test.octogee.com");
   });
 
-  it("leaves an already-correct role alone and corrects a stale one", async () => {
-    const gateway = await mockGateway([
-      { id: "profile-9", emails: ["uid-helper"], role: "trusted-helper" },
-    ]);
+  it("preserves native role changes, including an explicit default, on reconnect", async () => {
+    const gateway = await mockGateway([{ id: "profile", emails: ["uid-helper"], role: "admin" }]);
     const identity = identityFor(gateway);
-
-    await identity.syncProfile(helper);
-    expect(gateway.calls.map((call) => call.method)).toEqual(["users.list"]);
-
-    await identity.syncProfile({ ...helper, brokerProfile: "delegated-read" });
-    expect(gateway.calls.map((call) => call.method)).toEqual(["users.list", "users.list", "users.setRole"]);
-    expect(gateway.calls[2]!.params).toEqual({ profileId: "profile-9", role: "viewer" });
-    expect(gateway.connects).toHaveLength(2);
+    for (const role of ["admin", "member", null]) {
+      gateway.profiles[0].role = role;
+      await identity.syncProfile(helper);
+      expect(gateway.profiles[0].role).toBe(role);
+    }
+    expect(gateway.calls.some(call => call.method === "users.setRole")).toBe(false);
   });
-
-  it("fails loudly when the gateway refuses the role assignment", async () => {
-    const gateway = await mockGateway([{ id: "ghost", emails: ["uid-helper"], role: null }]);
-
-    await expect(identityFor(gateway).syncProfile(helper)).rejects.toThrow(/users.setRole failed/);
-    expect(gateway.profiles[0]!.role).toBeNull();
-  });
-
-  it("binds devices to each person and role while preserving Team identity during support elevation", () => {
+  it("keeps devices stable across native role changes and leaves scope capping to OpenClaw", () => {
     const identity = createOpenClawControlProxyIdentity({
-      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_GATEWAY_TOKEN: "pod-secret" },
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_GATEWAY_TOKEN: "pod-secret", API_PUBLIC_URL: "https://api.octogee.com" },
       upstreamBase: () => new URL("http://127.0.0.1:18789"),
     });
-    const first = identity.deviceIdentity(helper);
-    expect(identity.deviceIdentity(helper)).toEqual(first);
-    const member = { ...helper, brokerProfile: "native-member" as const };
-    expect(identity.deviceIdentity(member).deviceId).not.toBe(first.deviceId);
-    expect(identity.deviceIdentity({ ...member, brokerProfile: "native-member-helper" })).toEqual(identity.deviceIdentity(member));
-    expect(identity.deviceIdentity({ ...helper, brokerProfile: "delegated-read" }).deviceId).not.toBe(first.deviceId);
-    expect(identity.deviceIdentity({ ...helper, uid: "uid-other" }).deviceId).not.toBe(first.deviceId);
-    expect(identity.deviceIdentity({ ...helper, gatewayId: "other-gateway" }).deviceId).not.toBe(first.deviceId);
-    expect(identity.connectScopes(helper)).toEqual(["operator.read", "operator.write", "operator.approvals"]);
-    expect(identity.connectScopes({ ...helper, brokerProfile: "native-owner" })).toEqual([
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-    ]);
-    expect(identity.connectScopes({ ...helper, brokerProfile: "delegated-read" })).toEqual(["operator.read"]);
+    expect(identity.deviceIdentity(helper)).toEqual(identity.deviceIdentity(helper));
+    expect(identity.deviceIdentity({ ...helper, uid: "other" }).deviceId).not.toBe(identity.deviceIdentity(helper).deviceId);
+    expect(identity.connectScopes(helper)).toContain("operator.admin");
+    expect(identity.userHeaders(helper, {} as never)).not.toHaveProperty("x-openclaw-scopes");
   });
 
   it("refuses to derive devices without the pod secret", () => {

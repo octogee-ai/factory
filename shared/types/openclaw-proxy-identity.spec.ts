@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { deriveDeviceIdentity, generateIdentity } from "./device-identity";
 import {
-  OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES,
   OPENCLAW_EDGE_SERVICE_IDENTITY,
   OPENCLAW_FULL_OPERATOR_SCOPES,
   OPENCLAW_OPERATOR_ROLES,
@@ -12,12 +11,11 @@ import {
   OPENCLAW_TRUSTED_PROXY_AUTH,
   isOpenClawProxyIdentityHeader,
   isPerUserControlIdentity,
-  openClawDeviceRequestScopes,
+  openClawRoleScopes,
   openClawDeviceSubject,
   openClawIdentityScopes,
   openClawOperatorRoles,
   openClawProxyIdentityHeaders,
-  openClawRoleForBrokerProfile,
   resolveControlIdentityFromEnv,
   resolveOwnerUidFromEnv,
   serviceProxyIdentity,
@@ -26,14 +24,12 @@ import {
 describe("OpenClaw proxy identity contract", () => {
   it("limits ordinary Team members to the workspace coach and their own sessions", () => {
     const roles = openClawOperatorRoles("ceckert-test");
-    expect(roles.definitions["team-member"]).toEqual({
+    expect(roles.definitions.member).toEqual({
       sessions: { others: "none" }, agents: ["octogee-ceckert-test-coach"],
       scopes: ["operator.read", "operator.write", "operator.questions"],
     });
-    expect(openClawOperatorRoles().definitions["team-member"].agents).toEqual([]);
-    expect(roles.definitions.member.scopes).toContain("operator.admin");
-    expect(openClawRoleForBrokerProfile("native-member")).toBe("team-member");
-    expect(openClawRoleForBrokerProfile("native-member-helper")).toBe("team-member");
+    expect(openClawOperatorRoles().definitions.member.agents).toEqual([]);
+    expect(roles.definitions.member.scopes).not.toContain("operator.admin");
   });
   it("activates only on the explicit per-user environment value", () => {
     expect(resolveControlIdentityFromEnv({})).toBe("shared-operator");
@@ -77,47 +73,35 @@ describe("OpenClaw proxy identity contract", () => {
     expect(Object.keys(openClawIdentityScopes("  "))).toHaveLength(2);
   });
 
-  it("auto-approves every other person's device without admin authority", () => {
+  it("auto-approves devices up to the authenticated role ceiling", () => {
     expect(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy.deviceAutoApprove).toEqual({
       enabled: true,
-      scopes: [...OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES],
+      scopes: [...OPENCLAW_FULL_OPERATOR_SCOPES],
     });
-    expect(OPENCLAW_DEVICE_AUTO_APPROVE_SCOPES).not.toContain("operator.admin");
+    expect(OPENCLAW_FULL_OPERATOR_SCOPES).toContain("operator.admin");
   });
 
-  it("keeps the default role a ceiling that never strangles a granted scope", () => {
+  it("defaults new profiles to Member permissions", () => {
     expect(OPENCLAW_OPERATOR_ROLES.default).toBe("member");
-    expect(OPENCLAW_OPERATOR_ROLES.definitions.member.scopes).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
+    expect(OPENCLAW_OPERATOR_ROLES.definitions.member.scopes).toEqual(["operator.read", "operator.write", "operator.questions"]);
     expect(OPENCLAW_OPERATOR_ROLES.definitions.member.sessions.others).toBe("none");
     expect(Object.keys(OPENCLAW_OPERATOR_ROLES.definitions).sort()).toEqual(
-      ["co-owner", "member", "owner", "service", "team-member", "trusted-helper", "viewer"],
+      ["admin", "member", "service"],
     );
   });
 
-  it("maps every broker profile onto a role and requests only auto-approvable device scopes", () => {
-    expect(openClawRoleForBrokerProfile("native-owner")).toBe("owner");
-    expect(openClawRoleForBrokerProfile("native-co-owner")).toBe("co-owner");
-    expect(openClawRoleForBrokerProfile("delegated-config")).toBe("trusted-helper");
-    expect(openClawRoleForBrokerProfile("delegated-read")).toBe("viewer");
-    expect(openClawDeviceRequestScopes("owner")).toEqual([
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-    ]);
-    expect(openClawDeviceRequestScopes("trusted-helper")).toEqual([
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-    ]);
-    expect(openClawDeviceRequestScopes("viewer")).toEqual(["operator.read"]);
+  it("requests the exact native Member or Admin scopes", () => {
+    expect(openClawRoleScopes("member")).toEqual(["operator.read", "operator.write", "operator.questions"]);
+    expect(openClawRoleScopes("admin")).toEqual([...OPENCLAW_FULL_OPERATOR_SCOPES]);
+    expect(OPENCLAW_OPERATOR_ROLES.definitions.admin.sessions.others).toBe("write");
+    expect(OPENCLAW_OPERATOR_ROLES.definitions.admin.agents).toBe("*");
   });
 
   it("derives one stable device per gateway, person and role from the pod secret", () => {
-    const subject = openClawDeviceSubject("bender", "uid-alice", "team-member");
+    const subject = openClawDeviceSubject("bender", "uid-alice");
     const first = deriveDeviceIdentity({ secret: "pod-secret", subject });
     const again = deriveDeviceIdentity({ secret: "pod-secret", subject });
-    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("bender", "uid-bob", "team-member") });
+    const otherPerson = deriveDeviceIdentity({ secret: "pod-secret", subject: openClawDeviceSubject("bender", "uid-bob") });
     const otherSecret = deriveDeviceIdentity({ secret: "rotated", subject });
     expect(again).toEqual(first);
     expect(otherPerson.deviceId).not.toBe(first.deviceId);

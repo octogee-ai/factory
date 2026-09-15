@@ -18,15 +18,9 @@ import {
 } from "@octogee/core/openclaw-control-tickets";
 import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
 import {
-  GATEWAY_ACCESS_GRANTS_COLLECTION,
-  hasNativeOpenClawChatAccess,
-  workspaceAgentAccessGrantId,
-  isCanonicalWorkspaceMembership,
-  permissionSetIds,
   resolveGatewayPrincipalAccess,
-  type GatewayPermissionSetId,
   type GatewayPrincipalAccess,
-  type OpenClawBrokerProfile,
+  workspacePermissionsEnabled,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
 import {
@@ -53,9 +47,6 @@ interface ControlSession {
   gatewayId: string;
   workspaceSlug: string;
   revisionId: string;
-  brokerProfile: OpenClawBrokerProfile;
-  permissionSetIds: GatewayPermissionSetId[];
-  grantRevision: number | null;
   expiresAt: number;
 }
 
@@ -125,7 +116,7 @@ function controlUiAuthorization(
   const authorization = gatewayAuthorizationFromRootDocument(root, gatewayId);
   if (!authorization) return null;
   const config = authorization.config;
-  if (!access.dashboard || !access.brokerProfile) return null;
+  if (!access.dashboard) return null;
   const gatewayClass = resolveGatewayClass({
     gatewayClass: config.gatewayClass,
     profile: config.profile ?? undefined,
@@ -136,18 +127,8 @@ function controlUiAuthorization(
     : null;
 }
 
-function accessBindingMatches(
-  access: ResolvedGatewayAccess,
-  binding: Pick<ControlSession, "brokerProfile" | "permissionSetIds" | "grantRevision">,
-): boolean {
-  return access.brokerProfile === binding.brokerProfile &&
-    access.grantRevision === binding.grantRevision &&
-    access.permissionSetIds.length === binding.permissionSetIds.length &&
-    access.permissionSetIds.every((id, index) => id === binding.permissionSetIds[index]);
-}
-
 interface ScopedPrincipalAccess {
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; teamAccess: boolean };
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean };
   principal: GatewayPrincipalAccess | null;
   assignmentMissing: boolean;
 }
@@ -160,6 +141,7 @@ async function storedOwnerScope(
     tx: Transaction;
     gatewayId: string;
     workspaceSlug: string;
+    now: number;
   },
   authorization: GatewayRootAuthorization,
 ): Promise<{ scope: ScopedPrincipalAccess["scope"]; assignmentMissing: boolean } | null> {
@@ -177,11 +159,11 @@ async function storedOwnerScope(
     : authorization.config.ownerUid;
   if (typeof ownerUid !== "string" || !ownerUid) return null;
   const workspaceData = workspace.data();
-  const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
-    teamAccess: workspaceData?.ownerUid === ownerUid && workspaceData?.gatewayAccessMode === "team" &&
-      authorization.config.builderAccess?.controlIdentity === "per-user",
-  };
   const owner = await args.tx.get(args.db.doc(`users/${ownerUid}`));
+  const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
+    perUserIdentity: workspaceData?.ownerUid === ownerUid &&
+      workspacePermissionsEnabled(authorization.config, owner.data() ?? {}, new Date(args.now)),
+  };
   return {
     scope,
     assignmentMissing: !owner.exists || !userAssignmentMatchesGateway(
@@ -192,7 +174,7 @@ async function storedOwnerScope(
   };
 }
 
-async function storedGranteePrincipal(
+async function storedMemberPrincipal(
   args: {
     db: Firestore;
     tx: Transaction;
@@ -201,23 +183,8 @@ async function storedGranteePrincipal(
   },
   scope: ScopedPrincipalAccess["scope"],
 ): Promise<GatewayPrincipalAccess> {
-  const [grantSnap, memberSnap] = await Promise.all([
-    args.tx.get(args.db.doc(
-      `${GATEWAY_ACCESS_GRANTS_COLLECTION}/${workspaceAgentAccessGrantId(
-        scope.ownerUid,
-        scope.workspaceSlug,
-        args.uid,
-      )}`,
-    )),
-    args.tx.get(args.db.doc(`workspaces/${scope.workspaceSlug}/members/${args.uid}`)),
-  ]);
-  return resolveGatewayPrincipalAccess({
-    gateway: scope,
-    uid: args.uid,
-    grant: grantSnap.exists ? grantSnap.data() : null,
-    isWorkspaceMember: memberSnap.exists && isCanonicalWorkspaceMembership(memberSnap.data()),
-    now: args.now,
-  });
+  const memberSnap = await args.tx.get(args.db.doc(`workspaces/${scope.workspaceSlug}/members/${args.uid}`));
+  return resolveGatewayPrincipalAccess({ gateway: scope, uid: args.uid, membership: memberSnap.exists ? memberSnap.data() : null });
 }
 
 async function storedPrincipalAccess(args: {
@@ -240,22 +207,20 @@ async function storedPrincipalAccess(args: {
     const principal = resolveGatewayPrincipalAccess({
       gateway: storedScope.scope,
       uid: args.uid,
-      grant: null,
-      isWorkspaceMember: false,
-      now: args.now,
+      membership: null,
     });
     return principal.kind === "denied"
       ? null
       : { scope: storedScope.scope, principal, assignmentMissing: false };
   }
-  const principal = await storedGranteePrincipal(args, storedScope.scope);
+  const principal = await storedMemberPrincipal(args, storedScope.scope);
   return { scope: storedScope.scope, principal, assignmentMissing: false };
 }
 
 function auditPrincipalDenial(args: {
   db: Firestore;
   tx: Transaction;
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; teamAccess: boolean };
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean };
   uid: string;
   principal: GatewayPrincipalAccess;
   now: number;
@@ -268,10 +233,6 @@ function auditPrincipalDenial(args: {
     reason: args.principal.kind === "denied" ? args.principal.reason : "binding_changed",
     source: "system",
     now: args.now,
-    beforePermissionSetIds: args.principal.kind === "denied"
-      ? []
-      : args.principal.permissionSetIds,
-    beforeRevision: args.principal.kind === "denied" ? null : args.principal.grantRevision,
   });
 }
 
@@ -307,29 +268,6 @@ export function openClawControlSessionHash(sessionId: string): string {
   return createHash("sha256").update("openclaw-control-session\0").update(sessionId).digest("hex");
 }
 
-function controlProfile(value: unknown): OpenClawBrokerProfile | null {
-  return value === "native-owner" || value === "native-member" || value === "native-member-helper" || value === "native-co-owner" ||
-    value === "delegated-config" || value === "delegated-read"
-    ? value
-    : null;
-}
-
-function controlSessionBinding(
-  profile: OpenClawBrokerProfile,
-  rawPermissionSetIds: unknown,
-  grantRevision: unknown,
-): { ids: GatewayPermissionSetId[]; revision: number | null } | null {
-  const ids = Array.isArray(rawPermissionSetIds) && rawPermissionSetIds.length === 0
-    ? []
-    : permissionSetIds(rawPermissionSetIds);
-  if (profile === "native-owner" || profile === "native-member") {
-    return ids?.length === 0 && grantRevision === null ? { ids: [], revision: null } : null;
-  }
-  return ids && Number.isSafeInteger(grantRevision) && (grantRevision as number) >= 1
-    ? { ids, revision: grantRevision as number }
-    : null;
-}
-
 function parseSession(
   value: unknown,
   gatewayId: string,
@@ -340,15 +278,9 @@ function parseSession(
   if (!item) return null;
   const uid = boundedString(item.uid, 128);
   const workspaceSlug = boundedString(item.workspaceSlug, 128);
-  const profile = controlProfile(item.brokerProfile);
-  const binding = profile
-    ? controlSessionBinding(profile, item.permissionSetIds, item.grantRevision)
-    : null;
   if (
     !uid ||
     !workspaceSlug ||
-    !profile ||
-    !binding ||
     item.gatewayId !== gatewayId ||
     item.revisionId !== revisionId ||
     typeof item.expiresAt !== "number" ||
@@ -362,9 +294,6 @@ function parseSession(
     gatewayId,
     workspaceSlug,
     revisionId,
-    brokerProfile: profile,
-    permissionSetIds: binding.ids,
-    grantRevision: binding.revision,
     expiresAt: item.expiresAt,
   };
 }
@@ -401,7 +330,7 @@ async function sessionAccessInTransaction(args: {
   });
   if (stored?.assignmentMissing) return { kind: ASSIGNMENT_MISSING };
   const principal = stored?.principal;
-  if (!stored || !principal || principal.kind === "denied" || !accessBindingMatches(principal, session)) {
+  if (!stored || !principal || principal.kind === "denied") {
     if (stored && principal) {
       auditPrincipalDenial({
         db: args.db,
@@ -581,7 +510,7 @@ function rejectRedeemPrincipal(args: {
   attempt: RedeemAttempt;
   inspected: RedeemableTicket;
   principal: GatewayPrincipalAccess | null;
-  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; teamAccess: boolean } | null;
+  scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean } | null;
   tx: Transaction;
 }): RedeemResult {
   if (args.principal && args.scope) {
@@ -621,8 +550,7 @@ async function redeemPrincipalFailure(args: {
   const authorization = principal && principal.kind !== "denied"
     ? controlUiAuthorization(args.root, gatewayId, principal)
     : null;
-  if (!authorization || !principal || principal.kind === "denied" ||
-    !accessBindingMatches(principal, args.inspected)) {
+  if (!authorization || !principal || principal.kind === "denied") {
     return rejectRedeemPrincipal({ ...args, principal, scope: stored?.scope ?? null });
   }
   return null;
@@ -642,9 +570,6 @@ function persistRedeemedSession(args: {
     gatewayId: attempt.authenticated.bound.gatewayId,
     workspaceSlug: inspected.workspaceSlug,
     revisionId: attempt.authenticated.revisionId,
-    brokerProfile: inspected.brokerProfile,
-    permissionSetIds: inspected.permissionSetIds,
-    grantRevision: inspected.grantRevision,
     createdAt: attempt.attemptAt,
     expiresAt,
     expireAt: Timestamp.fromMillis(expiresAt),
@@ -799,10 +724,6 @@ async function loadControlProfile(
     }
     let author: Awaited<ReturnType<typeof context.chatAuthor>> = null;
     if (typeof body.postId === "string") {
-      if (!hasNativeOpenClawChatAccess(result.session.brokerProfile)) {
-        res.status(403).json({ error: "forbidden" });
-        return;
-      }
       author = await context.chatAuthor(result.session.uid, result.session.workspaceSlug, body.channelId as string, body.postId);
       if (!author) {
         res.status(204).end();
@@ -865,10 +786,6 @@ async function controlMattermostRequest(
     }));
     if (access.kind !== "allowed") {
       sendSessionAccessFailure(access, res);
-      return;
-    }
-    if (!hasNativeOpenClawChatAccess(access.session.brokerProfile)) {
-      res.status(403).json({ error: "forbidden" });
       return;
     }
     const signal = AbortSignal.timeout(5_000);

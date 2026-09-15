@@ -7,7 +7,7 @@ vi.mock("./mattermost-events.js", () => ({ watchMattermostChannelEvents: vi.fn()
 
 const session = {
   sessionId: "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70", uid: "owner", gatewayId: "builder", revisionId: "builder",
-  workspaceSlug: "alice", brokerProfile: "native-owner", permissionSetIds: [], grantRevision: null,
+  workspaceSlug: "alice",
   idleExpiresAt: 10000, absoluteExpiresAt: 20000,
 } satisfies OpenClawControlSession;
 const channelId = "a".repeat(26);

@@ -360,6 +360,15 @@
     "./shared-gateway-pool-read": {
       "types": "./dist/shared-gateway-pool-read.d.ts",
       "default": "./dist/shared-gateway-pool-read.js"
+    },
+    "./timestamps": {
+      "types": "./dist/timestamps.d.ts",
+      "import": "./dist/timestamps.js",
+      "default": "./dist/timestamps.js"
+    },
+    "./openclaw-workspace-bootstrap": {
+      "types": "./dist/openclaw-workspace-bootstrap.d.ts",
+      "default": "./dist/openclaw-workspace-bootstrap.js"
     }
   },
   "typesVersions": {
@@ -618,6 +627,12 @@
       ],
       "shared-gateway-pool-read": [
         "dist/shared-gateway-pool-read.d.ts"
+      ],
+      "timestamps": [
+        "dist/timestamps.d.ts"
+      ],
+      "openclaw-workspace-bootstrap": [
+        "dist/openclaw-workspace-bootstrap.d.ts"
       ]
     }
   },

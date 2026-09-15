@@ -1,3 +1,4 @@
+import { assertWorkspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
@@ -51,6 +52,7 @@ function localOpenClawCredential(env: NodeJS.ProcessEnv = process.env): OpenClaw
 }
 
 function credentialHeaders(credential: OpenClawCredential): Record<string, string> {
+  if (credential.kind === "proxy-identity") assertWorkspaceIdentityReady();
   return credential.kind === "token"
     ? { authorization: `Bearer ${credential.gatewayToken}` }
     : openClawProxyIdentityHeaders({ user: OPENCLAW_EDGE_SERVICE_IDENTITY });

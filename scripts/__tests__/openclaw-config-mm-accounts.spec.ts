@@ -713,7 +713,6 @@ describe("buildProjectAgents", () => {
         "browser",
         "automations",
         "skill_workshop",
-        "delegated_access",
         "octogee_status",
       ]),
     });

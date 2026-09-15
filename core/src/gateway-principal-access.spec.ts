@@ -1,164 +1,48 @@
 import { describe, expect, it } from "vitest";
+import { resolveGatewayPrincipalAccess, workspacePermissionsEnabled } from "./gateway-principal-access.js";
 
-import {
-  GATEWAY_PERMISSION_SETS,
-  hasNativeOpenClawChatAccess,
-  workspaceAgentAccessGrantId,
-  isCanonicalWorkspaceMembership,
-  resolveGatewayPrincipalAccess,
-} from "./gateway-principal-access.js";
+const gateway = { gatewayId: "alice-gateway", ownerUid: "alice", workspaceSlug: "alice", perUserIdentity: true };
+const member = { id: "bob", role: "member", canonicalSource: "mattermost-general", canonicalState: "active", mattermostChannelId: "general", mattermostUserId: "mm-bob" };
+const resolve = (membership: unknown, uid = "bob") => resolveGatewayPrincipalAccess({ gateway, uid, membership });
 
-const gateway = {
-  gatewayId: "bender",
-  ownerUid: "owner",
-  workspaceSlug: "alex",
-};
-
-function grant(overrides: Record<string, unknown> = {}) {
-  return {
-    schemaVersion: 2,
-    gatewayId: "bender",
-    workspaceSlug: "alex",
-    ownerUid: "owner",
-    granteeUid: "helper",
-    permissionSetIds: ["trusted-helper.v1"],
-    state: "active",
-    revision: 3,
-    expiresAt: null,
-    ...overrides,
-  };
-}
-
-describe("gateway principal access", () => {
-  it.each([
-    ["native-owner", true], ["native-co-owner", true], ["native-member", true], ["native-member-helper", true],
-    ["delegated-read", false], ["delegated-config", false],
-  ] as const)("classifies %s native channel access as %s", (profile, allowed) => {
-    expect(hasNativeOpenClawChatAccess(profile)).toBe(allowed);
+describe("workspace gateway membership", () => {
+  it("gives every active workspace member Dashboard access without a grant", () => {
+    expect(resolve(member)).toMatchObject({ kind: "member",  dashboard: true });
   });
-  it("accepts only a server-maintained Mattermost general-channel membership assertion", () => {
-    expect(isCanonicalWorkspaceMembership({ role: "member" })).toBe(false);
-    expect(isCanonicalWorkspaceMembership({
-      role: "member",
-      canonicalSource: "mattermost-general",
-      canonicalState: "active",
-      mattermostChannelId: "channel-1",
-      mattermostUserId: "user-1",
-    })).toBe(true);
-    expect(isCanonicalWorkspaceMembership({
-      role: "member",
-      canonicalSource: "mattermost-general",
-      canonicalState: "revoking",
-      mattermostChannelId: "channel-1",
-      mattermostUserId: "user-1",
-    })).toBe(false);
+  it("does not interpret membership role fields as OpenClaw permissions", () => {
+    expect(resolve({ ...member, role: "admin" })).toMatchObject({ kind: "member",  dashboard: true });
   });
-
-  it("keeps the owner native without requiring a grant or membership", () => {
-    expect(resolveGatewayPrincipalAccess({
-      gateway,
-      uid: "owner",
-      grant: null,
-      isWorkspaceMember: false,
-      now: 1_000,
-    })).toEqual(expect.objectContaining({
-      kind: "owner",
-      brokerProfile: "native-owner",
-      dashboard: true,
-    }));
+  it("keeps Dashboard access when an Admin becomes a Member", () => {
+    expect(resolve({ ...member, role: "admin" })).toEqual(resolve(member));
+    expect(resolve(member)).toMatchObject({  dashboard: true });
   });
-
-  it.each([
-    ["agent-viewer.v1", "delegated-read", false],
-    ["trusted-helper.v1", "delegated-config", true],
-    ["co-owner.v1", "native-co-owner", true],
-  ] as const)("resolves %s to its exact broker and capability profile", (
-    permissionSetId,
-    brokerProfile,
-    config,
-  ) => {
-    expect(resolveGatewayPrincipalAccess({
-      gateway,
-      uid: "helper",
-      grant: grant({ permissionSetIds: [permissionSetId] }),
-      isWorkspaceMember: true,
-      now: 1_000,
-    })).toEqual(expect.objectContaining({
-      kind: "delegate",
-      permissionSetIds: [permissionSetId],
-      brokerProfile,
-      dashboard: brokerProfile !== null,
-      config,
-      grantRevision: 3,
-    }));
+  it("admits the workspace owner independently of guest membership", () => {
+    expect(resolve(null, "alice")).toMatchObject({ kind: "owner",  dashboard: true });
   });
-
-  it.each([
-    [null, "grant_missing"],
-    [grant({ state: "revoked" }), "grant_revoked"],
-    [grant({ expiresAt: 999 }), "grant_expired"],
-    [grant({ permissionSetIds: ["trusted-helper.v2"] }), "grant_invalid"],
-    [grant({ permissionSetIds: [] }), "grant_invalid"],
-    [grant({ ownerUid: "other" }), "grant_invalid"],
-    [grant({ workspaceSlug: "other" }), "grant_invalid"],
-    [grant({ schemaVersion: 1 }), "grant_invalid"],
-  ] as const)("fails closed for invalid grant state: %s", (candidate, reason) => {
-    expect(resolveGatewayPrincipalAccess({
-      gateway,
-      uid: "helper",
-      grant: candidate,
-      isWorkspaceMember: true,
-      now: 1_000,
-    })).toEqual({ kind: "denied", reason });
+  it.each([null, { ...member, canonicalState: "revoking" }, { ...member, canonicalState: "pending" }, { ...member, mattermostUserId: "" }, { ...member, mattermostChannelId: "" }])("denies missing or invalid membership", (membership) => {
+    expect(resolve(membership)).toMatchObject({ kind: "denied" });
   });
-
-  it("keeps a workspace grant across gateway replacement without changing its expiry or revision", () => {
-    expect(resolveGatewayPrincipalAccess({
-      gateway: { ...gateway, gatewayId: "replacement" }, uid: "helper",
-      grant: grant({ expiresAt: 2000 }), isWorkspaceMember: true, now: 1000,
-    })).toMatchObject({ kind: "delegate", grantRevision: 3, expiresAt: 2000 });
+  it("denies members on a gateway without per-user identity", () => {
+    expect(resolveGatewayPrincipalAccess({ gateway: { ...gateway, perUserIdentity: false }, uid: "bob", membership: member })).toMatchObject({ kind: "denied" });
   });
-
-  it("denies an otherwise active grant immediately when membership is absent", () => {
-    expect(resolveGatewayPrincipalAccess({
-      gateway,
-      uid: "helper",
-      grant: grant(),
-      isWorkspaceMember: false,
-      now: 1_000,
-    })).toEqual({ kind: "denied", reason: "membership_required" });
+  it("does not authorize access to an unowned gateway", () => {
+    expect(resolveGatewayPrincipalAccess({ gateway: { ...gateway, ownerUid: null }, uid: "bob", membership: member })).toMatchObject({ kind: "denied" });
   });
+});
 
-  it("admits team members permanently without a support grant and keeps support elevation separate", () => {
-    const input = { gateway: { ...gateway, teamAccess: true }, uid: "helper", isWorkspaceMember: true, now: 1000 };
-    for (const candidate of [null, grant({ state: "revoked" }), grant({ expiresAt: 999 })]) {
-      expect(resolveGatewayPrincipalAccess({ ...input, grant: candidate })).toMatchObject({
-        kind: "member", brokerProfile: "native-member", expiresAt: null, config: false, grantRevision: null,
-      });
-    }
-    expect(resolveGatewayPrincipalAccess({ ...input, grant: grant({ expiresAt: 2000 }) })).toMatchObject({
-      kind: "delegate", brokerProfile: "native-member-helper", expiresAt: 2000, config: true,
-    });
-    expect(resolveGatewayPrincipalAccess({ ...input, grant: null, isWorkspaceMember: false })).toMatchObject({ kind: "denied" });
-    expect(resolveGatewayPrincipalAccess({ ...input, gateway, grant: null })).toMatchObject({ kind: "denied" });
-  });
 
-  it("uses a stable collision-resistant document id", () => {
-    expect(workspaceAgentAccessGrantId("owner", "alex", "helper")).toMatch(/^[a-f0-9]{64}$/u);
-    expect(workspaceAgentAccessGrantId("ab", "c", "d")).not.toBe(
-      workspaceAgentAccessGrantId("a", "bc", "d"),
-    );
-    expect(workspaceAgentAccessGrantId("owner", "alex", "helper")).not.toBe(
-      workspaceAgentAccessGrantId("owner", "other-workspace", "helper"),
-    );
-  });
-
-  it("publishes complete versioned preset copy without internal RPC names", () => {
-    expect(Object.keys(GATEWAY_PERMISSION_SETS)).toEqual([
-      "agent-viewer.v1",
-      "trusted-helper.v1",
-      "co-owner.v1",
-    ]);
-    expect(JSON.stringify(GATEWAY_PERMISSION_SETS)).not.toMatch(/tools\.invoke|config\.patch|RPC/u);
+describe("Builder workspace permission availability", () => {
+  const config = { gatewayClass: "builder", builderAccess: { controlIdentity: "per-user" } };
+  const paid = { builderSubscription: { tier: "hobby", status: "active" } };
+  const now = new Date("2026-09-15");
+  it("admits paid and active-trial Builders, and excludes free, expired, shared, and shared-identity gateways", () => {
+    const trialGrant = { schemaVersion: 3, offerId: "builder-signup", offerVersion: 1, personalTier: "personal", builderTier: "hobby",
+      configHash: "trial", claimedAt: new Date("2026-09-14"), endsAt: new Date("2026-09-20") };
+    expect(workspacePermissionsEnabled(config, paid, now)).toBe(true);
+    expect(workspacePermissionsEnabled(config, { trialGrant }, now)).toBe(true);
+    expect(workspacePermissionsEnabled(config, { trialGrant: { ...trialGrant, endsAt: new Date("2026-09-14") } }, now)).toBe(false);
+    expect(workspacePermissionsEnabled(config, {}, now)).toBe(false);
+    expect(workspacePermissionsEnabled({ ...config, gatewayClass: "shared" }, paid, now)).toBe(false);
+    expect(workspacePermissionsEnabled({ ...config, builderAccess: { controlIdentity: "shared-operator" } }, paid, now)).toBe(false);
   });
 });

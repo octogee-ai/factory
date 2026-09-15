@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   writes: [] as Write[],
   updates: [] as Update[],
   setError: null as Error | null,
+  enrollWorkspaceChannelMembers: vi.fn(),
   getWorkspaceMmContext: vi.fn(),
   mmApi: vi.fn(),
   setStoredChannelArchived: vi.fn(),
@@ -61,6 +62,10 @@ vi.mock("../lib/mattermost.js", () => ({
 
 vi.mock("../lib/mattermost-context.js", () => ({
   getWorkspaceMmContext: (...args: unknown[]) => h.getWorkspaceMmContext(...args),
+}));
+
+vi.mock("../lib/workspace-channel-membership.js", () => ({
+  enrollWorkspaceChannelMembers: (...args: unknown[]) => h.enrollWorkspaceChannelMembers(...args),
 }));
 
 vi.mock("../lib/channel-lifecycle.js", () => ({
@@ -121,6 +126,7 @@ beforeEach(() => {
   h.writes.length = 0;
   h.updates.length = 0;
   h.setError = null;
+  h.enrollWorkspaceChannelMembers.mockReset().mockResolvedValue(undefined);
   h.getWorkspaceMmContext.mockReset().mockResolvedValue({
     teamId: "team-1",
     userId: "owner-mm",
@@ -441,6 +447,7 @@ describe("createSessionChannel", () => {
     expect(h.writes).toEqual([]);
 
     h.setError = null;
+  h.enrollWorkspaceChannelMembers.mockReset().mockResolvedValue(undefined);
     await expect(createSessionChannel(actor(), input)).resolves.toEqual({
       status: 200,
       body: { success: true, channelId: "channel-1", name: "patchroll" },
@@ -892,5 +899,25 @@ describe("reserved names are refused on rename/archive too (forged-doc lane atta
       body: { error: "Session channel not found" },
     });
     expect(h.mmApi).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("workspace group enrollment during channel creation", () => {
+  it("publishes the channel before enrolling current workspace members", async () => {
+    h.enrollWorkspaceChannelMembers.mockImplementation(async () => {
+      expect(h.writes).toContainEqual(expect.objectContaining({ path: DOC_PATH }));
+    });
+    const result = await createSessionChannel(actor(), { name: "patchroll", displayName: "Planning" });
+    expect(result.status).toBe(200);
+    expect(h.enrollWorkspaceChannelMembers).toHaveBeenCalledWith("mira", "patchroll");
+  });
+
+  it("reports failed enrollment and completes it when creation is retried", async () => {
+    h.enrollWorkspaceChannelMembers.mockRejectedValueOnce(new Error("Mattermost unavailable"));
+    expect((await createSessionChannel(actor(), { name: "patchroll", displayName: "Planning" })).status).toBe(502);
+    seedSessionDoc();
+    expect((await createSessionChannel(actor(), { name: "patchroll", displayName: "Planning" })).status).toBe(200);
+    expect(h.enrollWorkspaceChannelMembers).toHaveBeenCalledTimes(2);
   });
 });

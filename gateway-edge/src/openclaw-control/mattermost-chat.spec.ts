@@ -115,9 +115,9 @@ function session(): OpenClawControlSession {
     gatewayId: "bender",
     workspaceSlug: "alice",
     revisionId: "bender-r7",
-    brokerProfile: "native-owner",
-    permissionSetIds: [],
-    grantRevision: null,
+
+
+
     idleExpiresAt: 10_000,
     absoluteExpiresAt: 20_000,
   };
@@ -967,19 +967,6 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     expect(JSON.stringify(response)).not.toContain("sqlite-cursor");
   });
 
-  it("serves a Team member canonical channel history without reading another runtime user's session", async () => {
-    const authorize = vi.fn(async () => authorized({
-      listChannelPosts: vi.fn(async () => ({ posts: committedPosts(), reachedEnd: true })),
-    }));
-    const prepared = await createMattermostControlChat({ authorize }).prepare({
-      type: "req", id: "member-history", method: "chat.startup", params: { sessionKey, agentId, limit: 800 },
-    }, { ...session(), uid: "uid-member", brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
-    expect(prepared?.kind).toBe("response");
-    if (prepared?.kind !== "response") throw new Error("expected canonical response");
-    expect(prepared.frame).toMatchObject({ ok: true, payload: { sessionKey, messages: expect.any(Array) } });
-    expect(prepared.watch?.sessionKey).toBe(sessionKey);
-    expect(authorize).toHaveBeenCalledWith("uid-member", channelId, "alice", { requireActiveLedger: true });
-  });
 
   it("continues paging for every post referenced by a delivered answer commit", async () => {
     const [commit, commentary, answer, root] = committedPosts();
@@ -1266,7 +1253,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     const adapter = createMattermostControlChat();
     const prepared = await adapter.prepare({ type: "req", id: "subscribe-member", method: "sessions.subscribe",
       params: { ownerFirst: true, limit: 60 } },
-    { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    { ...session()});
     if (prepared?.kind !== "upstream") throw new Error("expected upstream subscription");
     expect(prepared.upstreamParams).toEqual({});
     expect(prepared.project({ type: "res", id: "subscribe-member", ok: true,
@@ -1292,7 +1279,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     });
     const prepared = await adapter.prepare({ type: "req", id: "member-owner-first", method: "sessions.list",
       params: { ownerFirst: true, limit: 60 } },
-    { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+    { ...session()});
     if (prepared?.kind !== "upstream") throw new Error("expected native session projection");
     expect(prepared.project({ type: "res", ok: true, payload: {
       sessions: [], count: 0, totalCount: 0, hasMore: false, nextOffset: null,
@@ -1306,7 +1293,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
         display_name: "General", create_at: 10, update_at: 20, delete_at: 0, last_post_at: 40,
       })) })), listWorkspaceChannels: async () => [{ channelId }] });
     const prepared = await adapter.prepare({ type: "req", id: "list", method: "sessions.list", params: {} },
-      { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
+      { ...session()});
     if (prepared?.kind !== "upstream") throw new Error("expected native channel projection");
     expect(prepared.project({ type: "res", ok: true, payload: {
       sessions: [], count: 0, totalCount: 0, hasMore: false, nextOffset: null,
@@ -1320,7 +1307,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
   it("preserves OpenClaw-authorized native sessions and subscription requests for per-user gateways", async () => {
     const adapter = createMattermostControlChat({ perUserIdentity: true,
       authorize: vi.fn(), listWorkspaceChannels: async () => [] });
-    const member = { ...session(), brokerProfile: "native-member" as const, permissionSetIds: [], grantRevision: null };
+    const member = { ...session()};
     const subscribe = { type: "req", id: "subscription", method: "sessions.subscribe", params: { futureOption: true } };
     await expect(adapter.prepare(subscribe, member)).resolves.toBeNull();
     await expect(adapter.prepare({ ...subscribe, method: "sessions.list" }, member)).resolves.toBeNull();
@@ -1332,17 +1319,6 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     } })).toMatchObject({ payload: { sessions: [native], count: 1 } });
   });
 
-  it("removes formerly owned private-project sessions before paginating Team discovery", async () => {
-    const adapter = createMattermostControlChat({ authorize: vi.fn(), listWorkspaceChannels: async () => [] });
-    const prepared = await adapter.prepare({ type: "req", id: "list-member", method: "sessions.list", params: {} },
-      { ...session(), brokerProfile: "native-member", permissionSetIds: [], grantRevision: null });
-    if (prepared?.kind !== "upstream") throw new Error("expected native session projection");
-    const own = { key: "agent:octogee-alice-coach:personal", updatedAt: 1 };
-    expect(prepared.project({ type: "res", ok: true, payload: {
-      sessions: [own, { key: "agent:octogee-alice-proj-private:formerly-owned", updatedAt: 2 }],
-      count: 2, totalCount: 2, hasMore: false, nextOffset: null,
-    } })).toMatchObject({ payload: { count: 1, totalCount: 1, sessions: [own] } });
-  });
 
   it("preserves valid native direct and threaded Mattermost sessions in the roster", async () => {
     const adapter = createMattermostControlChat({

@@ -19,9 +19,9 @@ describe("OpenClaw Dashboard session", () => {
       gatewayId: "bender",
       workspaceSlug: "alice",
       revisionId: "bender-r7",
-      brokerProfile: "delegated-config",
-      permissionSetIds: ["trusted-helper.v1"],
-      grantRevision: 4,
+
+
+
       absoluteExpiresAt: 5_000,
     });
     expect(issued.cookie).toContain(`${OPENCLAW_CONTROL_SESSION_COOKIE}=`);
@@ -37,9 +37,9 @@ describe("OpenClaw Dashboard session", () => {
       .toMatchObject({
         uid: "uid-owner",
         workspaceSlug: "alice",
-        brokerProfile: "delegated-config",
-        permissionSetIds: ["trusted-helper.v1"],
-        grantRevision: 4,
+
+
+
         idleExpiresAt: 2_000,
         absoluteExpiresAt: 5_000,
       });
@@ -78,9 +78,9 @@ describe("OpenClaw Dashboard session", () => {
       gatewayId: "bender",
       workspaceSlug: "alice",
       revisionId: "bender-r7",
-      brokerProfile: "native-owner",
-      permissionSetIds: [],
-      grantRevision: null,
+
+
+
       absoluteExpiresAt: 5_000,
     });
     const cookieHeader = issued.cookie.split(";", 1)[0];

@@ -1,3 +1,4 @@
+import { assertWorkspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import type { WebSocket } from "ws";
 
 import type { DeviceIdentity } from "@octogee/shared/types/device-identity";
@@ -91,6 +92,7 @@ function connectWithProxyIdentity(
   opts: AuthenticatedUpstreamOptions,
   deps: AuthenticatedUpstreamDeps,
 ): Promise<WebSocket> {
+  assertWorkspaceIdentityReady();
   const clientAddress = deps.serviceClientAddress();
   if (!clientAddress) {
     throw new OpenclawWireError("auth-failed", "service identity upstream requires a non-loopback IPv4 address");

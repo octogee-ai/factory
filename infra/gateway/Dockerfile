@@ -103,6 +103,13 @@ RUN node /octogee/infra/gateway/build-extensions.mjs \
       /octogee/extensions \
       /octogee/scripts/node_modules/.bin/esbuild
 
+COPY infra/gateway/bundled-extensions/octogee-identity-tools/ /octogee/bundled-extensions/octogee-identity-tools/
+RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/bundled-extensions/octogee-identity-tools/index.ts \
+      --bundle --platform=node --format=esm --target=node24 --packages=external \
+      --alias:@octogee/core=/octogee/core/dist --alias:@octogee/shared=/octogee/shared/dist \
+      --outfile=/octogee/bundled-extensions/octogee-identity-tools/index.js \
+    && rm /octogee/bundled-extensions/octogee-identity-tools/index.ts
+
 # ── Extension runtime deps ──────────────────────────────────────────────────
 # Every extension declaring `dependencies`, enumerated from the image tree.
 # A hand-maintained list here is what shipped octogee-board-tools with no
@@ -132,6 +139,7 @@ COPY --from=gateway-build --chown=node:node /octogee/scripts /octogee/scripts
 COPY --from=gateway-build --chown=node:node /octogee/.github/actions/release-digest-manifest /octogee/.github/actions/release-digest-manifest
 COPY --from=gateway-build --chown=node:node /octogee/shared /octogee/shared
 COPY --from=gateway-build --chown=node:node /octogee/extensions /octogee/extensions
+COPY --from=gateway-build --chown=root:root /octogee/bundled-extensions/octogee-identity-tools /usr/local/lib/node_modules/openclaw/dist/extensions/octogee-identity-tools
 RUN chown root:root /octogee/scripts \
     && chmod 755 /octogee/scripts \
     && chmod 500 /octogee/scripts/secret-resolver.mjs

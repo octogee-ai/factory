@@ -67,6 +67,7 @@ import {
   resolveComputerEndpoints,
 } from "./routes/computer.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
+import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveComputerAccess } from "./lib/computer-access-broker.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -262,6 +263,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
+  mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
   const computer = resolveComputerEndpoints(process.env);
   mountApi(app, "/computer", createComputerRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
@@ -416,7 +418,8 @@ if (process.env.NODE_ENV !== "test") {
   );
   loadChatProxyModule().then((chatProxy) => {
     chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
-    const computer = resolveComputerEndpoints(process.env);
+    mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
+  const computer = resolveComputerEndpoints(process.env);
     if (computer) {
       attachComputerVncWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
