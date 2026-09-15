@@ -1140,16 +1140,30 @@ async function reconcileCommunityMembershipIfSupported(
   }
 }
 
+function githubCheckoutsHydrateHere(adapter: CustomerLifecycleAdapter, slug: string): boolean {
+  if (!adapter.isBuilderGateway || !adapter.isConfiguredBuilderCustomer) return true;
+  return adapter.isBuilderGateway() && adapter.isConfiguredBuilderCustomer(slug);
+}
+
 export async function cloneMissingProjects(
   adapter: CustomerLifecycleAdapter,
   slug: string,
-): Promise<{ steps: AddCustomerStep[]; pending: string[] }> {
+): Promise<{ steps: AddCustomerStep[]; pending: string[]; deferred: string[] }> {
   const toClone = await adapter.listProjectsNeedingClone(slug);
   const steps: AddCustomerStep[] = [];
+  const deferred = new Set<string>();
+  const ownerRuntime = githubCheckoutsHydrateHere(adapter, slug);
   for (const p of toClone) {
     if (!hasProjectCloneSource(p)) {
       adapter.log(
         `[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`,
+      );
+      continue;
+    }
+    if (githubRepoSourceOf(p) && !ownerRuntime) {
+      deferred.add(p.projectSlug);
+      adapter.log(
+        `[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`,
       );
       continue;
     }
@@ -1173,13 +1187,16 @@ export async function cloneMissingProjects(
   // reasons (repo absent upstream, no SSH key), so only a re-probe can say whether the
   // checkout actually landed.
   const remaining = await adapter.listProjectsNeedingClone(slug);
-  const pending = remaining.map((p) => p.projectSlug).sort();
+  const pending = remaining
+    .map((p) => p.projectSlug)
+    .filter((projectSlug) => !deferred.has(projectSlug))
+    .sort();
   if (pending.length > 0) {
     adapter.log(
       `[add:${slug}] ✖ project checkout still absent after converge: ${pending.join(", ")} — the pending-checkout retry lane re-runs the clone`,
     );
   }
-  return { steps, pending };
+  return { steps, pending, deferred: [...deferred].sort() };
 }
 
 async function provisionMattermostIfMissing(

@@ -1668,6 +1668,35 @@ describe("queued-rsync migration control handlers", () => {
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
+  it("activates a standard migration when the only missing checkout is a GitHub project that hydrates on the owner's Builder runtime", async () => {
+    const cloneProjectRepo = vi.fn(async () => false);
+    const adapter = mkAdapter({
+      isBuilderGateway: vi.fn(() => false),
+      isConfiguredBuilderCustomer: vi.fn(() => false),
+      listProjectsNeedingClone: vi.fn(async () => [
+        { projectSlug: "octogee", giteaRepoName: null, repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } },
+      ]),
+      cloneProjectRepo,
+      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+    });
+    const body: ActivateImportRequestBody = {
+      migrationId: "mig-github-deferred",
+      slug: "chris",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signForPod(body.migrationId, rawBody);
+    const handler = createActivateImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(cloneProjectRepo).not.toHaveBeenCalled();
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(getBody()).toMatchObject({ migrationId: "mig-github-deferred", slug: "chris", imported: true });
+  });
+
   it("createPrepareRsyncImportHandler opens a one-time target rsync import session", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),

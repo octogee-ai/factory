@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   addCustomerToGateway,
+  cloneMissingProjects,
   ConcurrentMountError,
   _resetInFlightUidsForTests,
   _inFlightUidsHasForTests,
@@ -2593,5 +2594,49 @@ expect(orgIdx).toBeGreaterThan(-1);
     } else {
       expect(repoTouchIdxs).toEqual([]);
     }
+  });
+});
+
+describe("cloneMissingProjects — GitHub checkouts hydrate only on the owner's Builder runtime", () => {
+  const targets: ProjectCloneTarget[] = [
+    { projectSlug: "hedgeherd", giteaRepoName: "chris-hedgeherd" },
+    { projectSlug: "octogee", giteaRepoName: null, repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } },
+  ];
+
+  function adapterFor(ownerRuntime: boolean, cloned: Set<string>) {
+    const cloneProjectRepo = vi.fn(async (_slug: string, projectSlug: string) => {
+      cloned.add(projectSlug);
+      return true;
+    });
+    const adapter = {
+      log: vi.fn(),
+      isBuilderGateway: () => ownerRuntime,
+      isConfiguredBuilderCustomer: () => ownerRuntime,
+      listProjectsNeedingClone: vi.fn(async () => targets.filter((t) => !cloned.has(t.projectSlug))),
+      cloneProjectRepo,
+    } as unknown as CustomerLifecycleAdapter;
+    return { adapter, cloneProjectRepo };
+  }
+
+  it("defers the GitHub project on a shared gateway and still clones the Gitea one", async () => {
+    const { adapter, cloneProjectRepo } = adapterFor(false, new Set());
+
+    const result = await cloneMissingProjects(adapter, "chris");
+
+    expect(cloneProjectRepo).toHaveBeenCalledTimes(1);
+    expect(cloneProjectRepo.mock.calls[0][1]).toBe("hedgeherd");
+    expect(result).toEqual({ steps: ["project-clone"], pending: [], deferred: ["octogee"] });
+  });
+
+  it("attempts the GitHub project on the owner's Builder runtime and reports it pending when it fails", async () => {
+    const { adapter, cloneProjectRepo } = adapterFor(true, new Set());
+    cloneProjectRepo.mockImplementation(async (_slug: string, projectSlug: string) => projectSlug === "hedgeherd");
+    (adapter.listProjectsNeedingClone as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+      cloneProjectRepo.mock.calls.length === 0 ? targets : targets.filter((t) => t.projectSlug === "octogee"));
+
+    const result = await cloneMissingProjects(adapter, "chris");
+
+    expect(cloneProjectRepo).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ steps: ["project-clone"], pending: ["octogee"], deferred: [] });
   });
 });

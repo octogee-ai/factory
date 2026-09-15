@@ -278,6 +278,7 @@ export declare function restoreCustomerRuntimeFromSnapshot(adapter: CustomerLife
 export declare function cloneMissingProjects(adapter: CustomerLifecycleAdapter, slug: string): Promise<{
     steps: AddCustomerStep[];
     pending: string[];
+    deferred: string[];
 }>;
 export declare function removeCustomerFromGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: {
     evictionBatch?: readonly string[];

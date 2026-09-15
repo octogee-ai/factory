@@ -207,7 +207,12 @@ async function activateImportedCustomerForMigration(input: {
     loadStrategy === "standard" &&
     deps.adapter.projectCheckoutScope?.(slug) !== "workspace-only"
   ) {
-    const { pending } = await cloneMissingProjects(deps.adapter, slug);
+    const { pending, deferred } = await cloneMissingProjects(deps.adapter, slug);
+    if (deferred.length > 0) {
+      deps.log?.(
+        `[migration-http] GitHub checkouts for ${slug} hydrate on its Builder runtime, not here: ${deferred.join(", ")}`,
+      );
+    }
     if (pending.length > 0) {
       throw new Error(
         `[migration-http] project checkout hydration incomplete for ${slug}: ${pending.join(", ")}`,
