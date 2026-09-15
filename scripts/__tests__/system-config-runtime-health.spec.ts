@@ -154,6 +154,44 @@ describe("refreshSystemConfigRuntimeHealth", () => {
 });
 
 describe("createSystemConfigStatusPublisher", () => {
+  it("publishes renewed Dashboard proof before the status heartbeat is due", async () => {
+    const openclawDir = tempDir();
+    const start = Date.parse("2026-09-15T23:00:00.000Z");
+    let nowMs = start;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    updateSystemConfigStatus(openclawDir, { state: "clean" });
+    writeDashboardCapability(openclawDir, new Date(nowMs));
+    const publish = vi.fn(async () => {});
+    const publisher = createSystemConfigStatusPublisher({
+      openclawDir,
+      publish,
+      refreshRuntimeHealth: () => refreshSystemConfigRuntimeHealth({
+        openclawDir,
+        env: env({ OPENCLAW_DASHBOARD_BRIDGE_REQUIRED: "true" }),
+        probeOpenClaw: async () => true,
+        now: () => new Date(nowMs),
+      }),
+    });
+
+    try {
+      await publisher.publishNow();
+      nowMs += 5_000;
+      writeDashboardCapability(openclawDir, new Date(nowMs));
+      await publisher.publishNow();
+
+      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
+        runtimeReady: true,
+        dashboardControlState: "ready",
+        dashboardControlObservedAt: new Date(nowMs).toISOString(),
+      }));
+      await publisher.publishNow();
+      expect(publish).toHaveBeenCalledTimes(2);
+    } finally {
+      publisher.close();
+    }
+  });
+
   it("publishes only changed status and republished heartbeats on the bounded interval", async () => {
     const openclawDir = tempDir();
     updateSystemConfigStatus(openclawDir, { state: "clean" });

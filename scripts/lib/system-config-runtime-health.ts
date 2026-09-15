@@ -47,7 +47,6 @@ function canonicalJson(value: unknown): string {
 
 function statusFingerprint(status: SystemConfigObservedStatus): string {
   const stable = { ...status };
-  delete stable.dashboardControlObservedAt;
   delete stable.runtimeHealthCheckedAt;
   delete stable.updatedAt;
   return createHash("sha256").update(canonicalJson(stable)).digest("hex");
