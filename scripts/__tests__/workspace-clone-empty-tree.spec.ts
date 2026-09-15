@@ -71,6 +71,22 @@ afterEach(() => {
 });
 
 describe("cloneWorkspaceRepo on a directory that already has git metadata", () => {
+  it("restores a removed worktree from retained external Git metadata", async () => {
+    const dest = seedCheckout();
+    const head = git(dest, ["rev-parse", "HEAD"]);
+    fs.rmSync(dest, { recursive: true });
+
+    await expect(cloneWorkspaceRepo(SLUG)).resolves.toBe(true);
+
+    for (const [rel, body] of Object.entries(TRACKED)) {
+      expect(fs.readFileSync(path.join(dest, rel), "utf8")).toBe(body);
+    }
+    expect(fs.readFileSync(path.join(dest, ".git"), "utf8"))
+      .toBe(`gitdir: ${metadataDir()}\n`);
+    expect(git(dest, ["rev-parse", "HEAD"])).toBe(head);
+    expect(workspaceTreeState(dest)).toEqual({ tracked: 3, missing: 0 });
+  });
+
   it("restores the tracked files when the working tree was emptied", async () => {
     const dest = seedCheckout();
     emptyTree(dest);

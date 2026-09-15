@@ -750,6 +750,7 @@ export function workspaceTreeState(repoDir: string): WorkspaceTreeState | null {
 }
 
 function restoreEmptiedWorkspaceTree(dest: string, slug: string): boolean | null {
+  fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
   const state = workspaceTreeState(dest);
   if (state === null) {
     log(`⚠ [git] ${slug} workspace has git metadata that git cannot read — refusing to treat it as cloned`);
