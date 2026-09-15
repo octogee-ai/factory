@@ -98,8 +98,18 @@ function projectBindings(current: unknown, input: ConfiguredBuilderProjectAgentI
       (entry.agentId === `octogee-${input.slug}-coach` || match.accountId === `${input.slug}-coach`);
     return match.channel !== "mattermost" || !(coachProjectRoute || agentIds.has(String(entry.agentId)) || accountIds.has(String(match.accountId)) || channelIds.has(String(record(match.peer).id)));
   });
-  const desired = buildCustomerBindings([{ slug: input.slug, channels: input.channels, agentProjects: active }]).filter((binding) => agentIds.has(binding.agentId));
-  const next = [...kept, ...desired];
+  const desired = buildCustomerBindings([{ slug: input.slug, channels: input.channels, agentProjects: active }]);
+  const projectRoutes = desired.filter((binding) => agentIds.has(binding.agentId));
+  const workspaceChannelIds = new Set(input.channels.filter((channel) => channel.scope === "workspace").map((channel) => channel.channelId));
+  const routedPeers = new Set([...kept, ...projectRoutes].map((binding) => {
+    const match = record(record(binding).match);
+    return `${String(match.accountId)}:${String(record(match.peer).id)}`;
+  }));
+  const coachWorkspaceRoutes = desired.filter((binding) =>
+    binding.agentId === `octogee-${input.slug}-coach` &&
+    workspaceChannelIds.has(binding.match.peer?.id ?? "") &&
+    !routedPeers.has(`${binding.match.accountId}:${binding.match.peer?.id}`));
+  const next = [...kept, ...projectRoutes, ...coachWorkspaceRoutes];
   const sorted = (items: unknown[]) => JSON.stringify(items.map((item) => JSON.stringify(item)).sort());
   return sorted(next) === sorted(bindings) ? bindings : next;
 }

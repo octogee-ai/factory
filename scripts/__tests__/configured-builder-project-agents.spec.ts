@@ -150,6 +150,36 @@ describe("configuredBuilderProjectAgentPatch", () => {
     expect(retiredAgentIds).toEqual([retiredProject.id]);
   });
 
+  it("binds the workspace coach to a Task channel created after the Builder overlay was configured", () => {
+    const task = { channelId: "task-channel", scope: "workspace" as const, kind: "session" };
+    const current = currentConfig("entries", desired.projectAgentEntries);
+    current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, ...desired.projectAccounts };
+    const { patch } = configuredBuilderProjectAgentPatch(current, { ...desired, activationProjectIds: [], channels: [...channels, task] });
+    expect(patch.bindings).toContainEqual({
+      agentId: "octogee-alice-coach",
+      match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "task-channel" } },
+    });
+    expect(patch.bindings.filter((binding: { match: { peer?: { id: string } } }) => binding.match.peer?.id === "workspace-channel")).toHaveLength(1);
+  });
+
+  it("leaves an owner-customized route for a workspace channel alone", () => {
+    const custom = { agentId: "owner-agent", match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "workspace-channel" } } };
+    const current = { ...currentConfig("entries"), bindings: [custom] };
+    const { patch } = configuredBuilderProjectAgentPatch(current, { ...desired, projectAgentEntries: [], projectAccounts: {} });
+    expect(patch.bindings.filter((binding: { match: { peer?: { id: string } } }) => binding.match.peer?.id === "workspace-channel")).toEqual([custom]);
+  });
+
+  it("never binds the workspace coach to the admin channel or to a project channel without an active agent", () => {
+    const admin = { channelId: "admin-channel", scope: "workspace" as const, kind: "admin" };
+    const { patch } = configuredBuilderProjectAgentPatch(currentConfig("entries"), {
+      ...desired, projectAgentEntries: [], projectAccounts: {}, channels: [...channels, admin],
+    });
+    const coachPeers = patch.bindings
+      .filter((binding: { agentId: string; match: { peer?: { id: string } } }) => binding.agentId === "octogee-alice-coach" && binding.match.peer)
+      .map((binding: { match: { peer?: { id: string } } }) => binding.match.peer?.id);
+    expect(coachPeers).toEqual(["workspace-channel"]);
+  });
+
   it("retains binding order when desired project routes are already present", () => {
     const first = configuredBuilderProjectAgentPatch(currentConfig("entries"), desired);
     const current = { ...currentConfig("entries"), bindings: [...first.patch.bindings].reverse() };
@@ -169,7 +199,8 @@ describe("configuredBuilderProjectAgentPatch", () => {
     const ready = configuredBuilderProjectAgentPatch(config, { ...desired, activationProjectIds: [] }).patch;
     expect(ready.agents.entries[agentId]).toEqual({ workspace: "/owner/project", model: "owner-model", name: desired.projectAgentEntries[0].name, identity: desired.projectAgentEntries[0].identity });
     expect(ready.channels.mattermost.accounts["alice-proj-launch"]).toEqual(customAccount);
-    expect(ready.bindings).toEqual([customBinding]);
+    expect(ready.bindings.filter((binding: { match: { peer?: { id: string } } }) => binding.match.peer?.id === "launch-channel")).toEqual([customBinding]);
+    expect(ready.bindings.some((binding: { agentId: string }) => binding.agentId === agentId)).toBe(false);
 
     const activating = configuredBuilderProjectAgentPatch(config, desired).patch;
     expect(activating.channels.mattermost.accounts["alice-proj-launch"]).toEqual({
