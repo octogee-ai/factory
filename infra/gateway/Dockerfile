@@ -192,7 +192,9 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /
 
 # ── Runtime image gate ──────────────────────────────────────────────────────
 ARG IMAGE_PROFILE=gateway
-RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE"
+RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE" \
+    && cd /octogee/scripts \
+    && node --input-type=module -e 'import { beginWorkspaceIdentityBoot } from "@octogee/core/openclaw-workspace-bootstrap"; beginWorkspaceIdentityBoot({ GATEWAY_CLASS: "shared" });'
 
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc
