@@ -56,9 +56,24 @@ fi
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/openclaw-[0-9]*.tgz
 
-PKG_BACKUP="$(mktemp)"
-cp package.json "$PKG_BACKUP"
-restore() { cp "$PKG_BACKUP" package.json; rm -rf vendor; rm -f "$PKG_BACKUP"; }
+OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG=1 \
+  node --import ./scripts/tsx.mjs --input-type=module -e '
+    const { preparePrepackArtifacts } = await import("./scripts/openclaw-prepack.ts");
+    await preparePrepackArtifacts();
+  ' >&2
+
+PKG_BACKUP="$(mktemp)" || { node scripts/openclaw-postpack.mjs >&2; exit 1; }
+if ! cp package.json "$PKG_BACKUP"; then
+  node scripts/openclaw-postpack.mjs >&2
+  rm -f "$PKG_BACKUP"
+  exit 1
+fi
+restore() {
+  cp "$PKG_BACKUP" package.json || return 1
+  rm -rf vendor || return 1
+  node scripts/openclaw-postpack.mjs >&2 || return 1
+  rm -f "$PKG_BACKUP"
+}
 trap restore EXIT
 
 WS_DEPS="$(node -e '
@@ -133,4 +148,6 @@ done
 
 npm pack --ignore-scripts --pack-destination "$OUT_DIR" >&2
 TARBALL="$OUT_DIR/$(ls -t "$OUT_DIR"/openclaw-[0-9]*.tgz | head -1 | xargs basename)"
+trap - EXIT
+restore
 echo "$TARBALL"
