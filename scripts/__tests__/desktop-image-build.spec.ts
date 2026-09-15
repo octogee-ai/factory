@@ -27,6 +27,32 @@ it('retests an uncached candidate with the same inputs after a later main commit
   expect(build).not.toHaveBeenCalled(); expect(accept).toHaveBeenCalledWith(name);
 });
 
+const settle = { sleep: async () => {} };
+it('waits for a PENDING candidate to become READY instead of building or failing', async () => {
+  const readImage = vi.fn().mockResolvedValueOnce({ ...image, status: 'PENDING' }).mockResolvedValueOnce({ ...image, status: 'PENDING' }).mockResolvedValue(image);
+  const build = vi.fn(), remove = vi.fn(), accept = vi.fn(), save = vi.fn();
+  expect(await ensureDesktopImage({ fingerprint, sourceSha, cached: null, readImage, build, remove, accept, save, ...settle })).toEqual(artifact);
+  expect(build).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled(); expect(accept).toHaveBeenCalledWith(name);
+});
+it('deletes a FAILED candidate, waits for it to disappear, and builds a fresh one', async () => {
+  const order: string[] = [];
+  const readImage = vi.fn().mockResolvedValueOnce({ ...image, status: 'FAILED' }).mockResolvedValueOnce({ ...image, status: 'FAILED' }).mockResolvedValueOnce({ ...image, status: 'DELETING' }).mockResolvedValueOnce(null).mockResolvedValue(image);
+  await ensureDesktopImage({ fingerprint, sourceSha, cached: null, readImage, remove: () => { order.push('remove'); }, build: () => { order.push('build'); }, accept: () => { order.push('accept'); }, save: () => { order.push('save'); }, ...settle });
+  expect(order).toEqual(['remove', 'build', 'accept', 'save']);
+});
+it('still rejects a READY candidate whose labels do not match the inputs', async () => {
+  const build = vi.fn(), remove = vi.fn();
+  const mismatched = { ...image, labels: { ...image.labels, 'input-b': 'c'.repeat(32) } };
+  await expect(ensureDesktopImage({ fingerprint, sourceSha, cached: null, readImage: async () => mismatched, build, remove, accept: vi.fn(), save: vi.fn(), ...settle })).rejects.toThrow('candidate does not match');
+  expect(build).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+});
+it('gives up on a candidate that never leaves PENDING before the deadline', async () => {
+  let clock = 0;
+  const readImage = vi.fn().mockResolvedValue({ ...image, status: 'PENDING' });
+  await expect(ensureDesktopImage({ fingerprint, sourceSha, cached: null, readImage, build: vi.fn(), remove: vi.fn(), accept: vi.fn(), save: vi.fn(), sleep: async (ms: number) => { clock += ms; }, now: () => clock })).rejects.toThrow('PENDING');
+  expect(readImage.mock.calls.length).toBeGreaterThan(1);
+});
+
 import { cleanupCandidates } from '../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
 it('cleanup excludes operator VMs and other active CI runs', () => {
   const vm = (run: string) => ({ labels: { 'octogee-image-run': run, purpose: 'octogee-computer-test' }, creationTimestamp: '2026-09-07T00:00:00Z' });
