@@ -1697,6 +1697,35 @@ describe("queued-rsync migration control handlers", () => {
     expect(getBody()).toMatchObject({ migrationId: "mig-github-deferred", slug: "chris", imported: true });
   });
 
+  it("activates an import onto the owner's own Builder runtime with its GitHub checkout left for the post-cutover reconcile", async () => {
+    const cloneProjectRepo = vi.fn(async () => false);
+    const adapter = mkAdapter({
+      isBuilderGateway: vi.fn(() => true),
+      isConfiguredBuilderCustomer: vi.fn(() => true),
+      listProjectsNeedingClone: vi.fn(async () => [
+        { projectSlug: "octogee", giteaRepoName: null, repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } },
+      ]),
+      cloneProjectRepo,
+      activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
+    });
+    const body: ActivateImportRequestBody = {
+      migrationId: "mig-github-owner-runtime",
+      slug: "chris",
+    };
+    const rawBody = JSON.stringify(body);
+    const sig = signForPod(body.migrationId, rawBody);
+    const handler = createActivateImportHandler(mkDeps({ adapter }));
+    const req = mkRequest(body, { signature: sig });
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(cloneProjectRepo).not.toHaveBeenCalled();
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(getBody()).toMatchObject({ migrationId: "mig-github-owner-runtime", slug: "chris", imported: true });
+  });
+
   it("createPrepareRsyncImportHandler opens a one-time target rsync import session", async () => {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => "/openclaw"),

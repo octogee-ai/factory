@@ -2628,6 +2628,16 @@ describe("cloneMissingProjects — GitHub checkouts hydrate only on the owner's 
     expect(result).toEqual({ steps: ["project-clone"], pending: [], deferred: ["octogee"] });
   });
 
+  it("defers the GitHub project even on the owner's runtime when a migration import asks it to", async () => {
+    const { adapter, cloneProjectRepo } = adapterFor(true, new Set());
+
+    const result = await cloneMissingProjects(adapter, "chris", { githubCheckouts: "defer" });
+
+    expect(cloneProjectRepo).toHaveBeenCalledTimes(1);
+    expect(cloneProjectRepo.mock.calls[0][1]).toBe("hedgeherd");
+    expect(result).toEqual({ steps: ["project-clone"], pending: [], deferred: ["octogee"] });
+  });
+
   it("attempts the GitHub project on the owner's Builder runtime and reports it pending when it fails", async () => {
     const { adapter, cloneProjectRepo } = adapterFor(true, new Set());
     cloneProjectRepo.mockImplementation(async (_slug: string, projectSlug: string) => projectSlug === "hedgeherd");

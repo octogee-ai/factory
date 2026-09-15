@@ -1145,14 +1145,22 @@ function githubCheckoutsHydrateHere(adapter: CustomerLifecycleAdapter, slug: str
   return adapter.isBuilderGateway() && adapter.isConfiguredBuilderCustomer(slug);
 }
 
+export interface CloneMissingProjectsOptions {
+  // A migration import runs before cutover, while the customer is still assigned to the
+  // source gateway; the GitHub clone broker cannot be granted the owner's credential for
+  // this gateway until the assignment moves, so those checkouts wait for the reconcile.
+  githubCheckouts?: "hydrate-here" | "defer";
+}
+
 export async function cloneMissingProjects(
   adapter: CustomerLifecycleAdapter,
   slug: string,
+  options: CloneMissingProjectsOptions = {},
 ): Promise<{ steps: AddCustomerStep[]; pending: string[]; deferred: string[] }> {
   const toClone = await adapter.listProjectsNeedingClone(slug);
   const steps: AddCustomerStep[] = [];
   const deferred = new Set<string>();
-  const ownerRuntime = githubCheckoutsHydrateHere(adapter, slug);
+  const ownerRuntime = options.githubCheckouts !== "defer" && githubCheckoutsHydrateHere(adapter, slug);
   for (const p of toClone) {
     if (!hasProjectCloneSource(p)) {
       adapter.log(
@@ -1163,7 +1171,9 @@ export async function cloneMissingProjects(
     if (githubRepoSourceOf(p) && !ownerRuntime) {
       deferred.add(p.projectSlug);
       adapter.log(
-        `[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`,
+        options.githubCheckouts === "defer"
+          ? `[add:${slug}/${p.projectSlug}] GitHub checkout deferred until the customer is assigned here — the reconcile clones it after cutover`
+          : `[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`,
       );
       continue;
     }

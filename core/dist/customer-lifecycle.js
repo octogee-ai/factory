@@ -561,11 +561,11 @@ function githubCheckoutsHydrateHere(adapter, slug) {
         return true;
     return adapter.isBuilderGateway() && adapter.isConfiguredBuilderCustomer(slug);
 }
-export async function cloneMissingProjects(adapter, slug) {
+export async function cloneMissingProjects(adapter, slug, options = {}) {
     const toClone = await adapter.listProjectsNeedingClone(slug);
     const steps = [];
     const deferred = new Set();
-    const ownerRuntime = githubCheckoutsHydrateHere(adapter, slug);
+    const ownerRuntime = options.githubCheckouts !== "defer" && githubCheckoutsHydrateHere(adapter, slug);
     for (const p of toClone) {
         if (!hasProjectCloneSource(p)) {
             adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
@@ -573,7 +573,9 @@ export async function cloneMissingProjects(adapter, slug) {
         }
         if (githubRepoSourceOf(p) && !ownerRuntime) {
             deferred.add(p.projectSlug);
-            adapter.log(`[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`);
+            adapter.log(options.githubCheckouts === "defer"
+                ? `[add:${slug}/${p.projectSlug}] GitHub checkout deferred until the customer is assigned here — the reconcile clones it after cutover`
+                : `[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`);
             continue;
         }
         try {
