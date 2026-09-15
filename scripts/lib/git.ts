@@ -830,6 +830,9 @@ export async function cloneProjectRepo(
       return restoreMissingProjectGitMetadata(slug, projectSlug, dest, giteaRepoName, opts);
     }
     if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)) {
+      if (githubCloneIsBrokered(opts.repoSource, opts.githubToken)) {
+        return switchProjectCheckoutViaBroker(slug, projectSlug, dest, opts.repoSource!, opts);
+      }
       return replaceProjectRepoCheckout(slug, projectSlug, dest, giteaRepoName, opts);
     }
     setRepoSshCommand(dest, slug, {
@@ -1110,6 +1113,155 @@ async function cloneGiteaProjectRepo(
   return true;
 }
 
+function githubCloneIsBrokered(
+  repoSource: ProjectRepoSource | null | undefined,
+  githubToken: string | null | undefined,
+): boolean {
+  return repoSource?.provider === "github" && !githubToken && Boolean(process.env.GATEWAY_EDGE_INTERNAL_URL);
+}
+
+function localCloneOriginUrl(gitDir: string): string | null {
+  try {
+    return execFileSync(
+      GIT_BINARY,
+      ["config", "--file", path.join(gitDir, "config"), "--get", "remote.origin.url"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+  } catch {
+    return null;
+  }
+}
+
+// The edge broker leaves a plain clone (its own .git directory, no canonical metadata or
+// trust receipt), so the next probe would not recognise it as this project's source. Set the
+// broker's .git aside, let the externalizer build fresh canonical metadata from it — the
+// provisioner holds no GitHub credential, so the canonical remote cannot be fetched here —
+// and verify the checkout the same way a direct clone is verified.
+async function cloneGithubProjectViaBrokerCanonically(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  repoSource: ProjectRepoSource,
+  prepareRepository: typeof setRepoSshCommand,
+): Promise<boolean> {
+  const label = `${slug}/${projectSlug}`;
+  try {
+    if (!(await cloneGithubProjectViaBroker(slug, projectSlug))) return false;
+  } catch (error) {
+    log(`⚠ [git] GitHub project clone broker failed for ${label}: ${errMessage(error)}`);
+    return false;
+  }
+  const localGit = path.join(dest, ".git");
+  let localGitStat: fs.Stats;
+  try {
+    localGitStat = fs.lstatSync(localGit);
+  } catch (error) {
+    log(`⚠ [git] brokered GitHub checkout for ${label} has no git metadata: ${errMessage(error)}`);
+    return false;
+  }
+  if (!localGitStat.isDirectory() || localGitStat.isSymbolicLink()) {
+    if (projectCheckoutMatchesSource(slug, projectSlug, "", repoSource) && customerRepositoryHasCanonicalRemote(dest)) {
+      return true;
+    }
+    log(`⚠ [git] brokered GitHub checkout for ${label} carries metadata that does not verify`);
+    return false;
+  }
+  const expectedRemote = githubHttpsRemoteUrl(repoSource.owner, repoSource.repo);
+  const actualRemote = localCloneOriginUrl(localGit);
+  if (actualRemote !== expectedRemote) {
+    log(`⚠ [git] brokered GitHub checkout for ${label} points at ${actualRemote ?? "no remote"}, expected ${expectedRemote}`);
+    return false;
+  }
+  const sideline = path.join(path.dirname(dest), `.${projectSlug}-brokered-git-${randomUUID()}`);
+  fs.renameSync(localGit, sideline);
+  try {
+    prepareRepository(dest, slug, {
+      repoSource,
+      fetchCanonical: (_worktree, gitDir) => {
+        execFileSync(
+          GIT_BINARY,
+          [
+            ...gitHardeningArgs(),
+            "-c",
+            "protocol.file.allow=always",
+            "--git-dir",
+            gitDir,
+            "fetch",
+            "--quiet",
+            sideline,
+            "+refs/heads/*:refs/remotes/origin/*",
+          ],
+          { cwd: dest, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: customerGitEnvironmentForRefresh(slug) },
+        );
+      },
+    });
+  } catch (error) {
+    fs.rmSync(localGit, { recursive: true, force: true });
+    fs.renameSync(sideline, localGit);
+    log(`⚠ [git] brokered GitHub checkout for ${label} could not be prepared canonically: ${errMessage(error)}`);
+    return false;
+  }
+  fs.rmSync(sideline, { recursive: true, force: true });
+  if (!projectCheckoutMatchesSource(slug, projectSlug, "", repoSource) || !customerRepositoryHasCanonicalRemote(dest)) {
+    log(`⚠ [git] brokered GitHub checkout for ${label} did not verify against its canonical source`);
+    return false;
+  }
+  log(`[git] ✅ Cloned ${repoSource.owner}/${repoSource.repo} → customers/${slug}/projects/${projectSlug}/ via the edge broker`);
+  return true;
+}
+
+async function switchProjectCheckoutViaBroker(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  repoSource: ProjectRepoSource,
+  opts: CloneProjectRepoOptions,
+): Promise<boolean> {
+  const label = `${slug}/${projectSlug}`;
+  let lease: ReturnType<typeof acquireWorkspaceMutationLeaseSync>;
+  try {
+    lease = acquireProjectSourceSwitchLease(
+      opts.acquireMutationLease ?? acquireWorkspaceMutationLeaseSync,
+      dest,
+      slug,
+      projectSlug,
+    );
+  } catch (error) {
+    log(`⚠ [git] Cannot lease ${label}: ${errMessage(error)}`);
+    return false;
+  }
+  if (!lease) return false;
+  const quarantineRoot = path.join(OPENCLAW_DIR, "git-worktree-quarantine", slug);
+  const quarantine = path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`);
+  const identity = customerGitIdentity(dest);
+  try {
+    fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+    if (identity) {
+      for (const entry of [
+        identity.metadataDir,
+        customerGitTrustReceipt(identity.metadataDir),
+        customerGitRefreshMarker(identity.metadataDir),
+      ]) {
+        quarantineCustomerGitEntry(entry, identity);
+      }
+    }
+    fs.renameSync(dest, quarantine);
+  } catch (error) {
+    log(`⚠ [git] Cannot set aside ${label} before the brokered clone: ${errMessage(error)}`);
+    return false;
+  } finally {
+    lease.release();
+  }
+  log(`[git] ${label} checkout did not match its GitHub source — set aside at ${quarantine}; cloning via the edge broker`);
+  return cloneGithubProjectViaBrokerCanonically(
+    slug,
+    projectSlug,
+    dest,
+    repoSource,
+    opts.prepareRepository ?? setRepoSshCommand,
+  );
+}
+
 // eslint-disable-next-line max-params -- clone dependencies remain explicit to preserve credential and metadata boundaries
 async function cloneGithubProjectRepo(
   slug: string,
@@ -1120,13 +1272,8 @@ async function cloneGithubProjectRepo(
   runGit: GitRunner,
   prepareRepository: typeof setRepoSshCommand,
 ): Promise<boolean> {
-  if (!githubToken && process.env.GATEWAY_EDGE_INTERNAL_URL) {
-    try {
-      return await cloneGithubProjectViaBroker(slug, projectSlug);
-    } catch (error) {
-      log(`⚠ [git] GitHub project clone broker failed for ${slug}/${projectSlug}: ${errMessage(error)}`);
-      return false;
-    }
+  if (githubCloneIsBrokered(repoSource, githubToken)) {
+    return cloneGithubProjectViaBrokerCanonically(slug, projectSlug, dest, repoSource, prepareRepository);
   }
   const remoteUrl = githubHttpsRemoteUrl(repoSource.owner, repoSource.repo);
   const cloned = checkoutProjectRepo({

@@ -11,7 +11,9 @@ const paths = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/config.js", () => ({
-  log: vi.fn(),
+  log: vi.fn((message: string) => {
+    if (process.env.DEBUG_GIT_LOG) process.stderr.write(`${message}\n`);
+  }),
   dlog: vi.fn(),
   GIT_API_URL: "http://gitea-http.octogee.svc.cluster.local:3000/api/v1",
   GIT_SSH_HOST: "gitea",
@@ -19,6 +21,19 @@ vi.mock("../lib/config.js", () => ({
   CUSTOMERS_DIR: paths.customers,
   CUSTOMER_KEYS_DIR: paths.keys,
   AGENTS_DIR: "/tmp/octogee-test/agents",
+}));
+
+const broker = vi.hoisted(() => ({
+  clone: null as null | ((slug: string, projectSlug: string) => Promise<boolean>),
+  calls: 0,
+}));
+
+vi.mock("../lib/github-project-clone-broker.js", () => ({
+  cloneGithubProjectViaBroker: vi.fn(async (slug: string, projectSlug: string) => {
+    broker.calls += 1;
+    if (!broker.clone) throw new Error("broker not configured for this test");
+    return broker.clone(slug, projectSlug);
+  }),
 }));
 
 vi.mock("../lib/gitea-admin-broker-client.js", () => ({
@@ -34,6 +49,7 @@ const {
   cloneProjectRepo,
   externalizeCustomerGitDir,
   githubCloneCredentialEnv,
+  projectCheckoutMatchesSource,
 } = await import("../lib/git.js");
 
 const SLUG = "alice";
@@ -413,5 +429,83 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
     expect(ok).toBe(true);
     expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
     expect(localConfig(dest, "user.email")).toBe(`${SLUG}@octogee.com`);
+  });
+});
+
+describe("GitHub checkouts brokered through gateway-edge", () => {
+  const repoSource = { provider: "github" as const, owner: "octogee-ai", repo: "demo" };
+
+  function edgeBrokerClone(): (slug: string, projectSlug: string) => Promise<boolean> {
+    return async (slug, projectSlug) => {
+      const dest = path.join(paths.customers, slug, "projects", projectSlug);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      git(path.dirname(dest), ["clone", "-q", canonicalOrigin, dest]);
+      git(dest, ["remote", "set-url", "origin", GITHUB_REMOTE]);
+      return true;
+    };
+  }
+
+  beforeEach(() => {
+    broker.calls = 0;
+    broker.clone = edgeBrokerClone();
+    process.env.GATEWAY_EDGE_INTERNAL_URL = "http://127.0.0.1:3001";
+  });
+
+  afterEach(() => {
+    delete process.env.GATEWAY_EDGE_INTERNAL_URL;
+    broker.clone = null;
+  });
+
+  it("prepares a brokered clone canonically so the next probe recognises the checkout", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+
+    const ok = await cloneProjectRepo(SLUG, "demo", "", { repoSource });
+
+    expect(ok).toBe(true);
+    expect(broker.calls).toBe(1);
+    expect(fs.lstatSync(path.join(dest, ".git")).isFile()).toBe(true);
+    expect(fs.readFileSync(path.join(dest, "README.md"), "utf8")).toBe("from github\n");
+    expect(projectCheckoutMatchesSource(SLUG, "demo", "", repoSource)).toBe(true);
+    expect(localConfig(dest, "remote.origin.url")).toBe(GITHUB_REMOTE);
+    expect(fs.readdirSync(path.dirname(dest)).filter((name) => name.startsWith(".demo-brokered-git-"))).toEqual([]);
+
+    await expect(cloneProjectRepo(SLUG, "demo", "", { repoSource })).resolves.toBe(true);
+    expect(broker.calls).toBe(1);
+  });
+
+  it("sets a checkout that does not match its GitHub source aside and re-clones through the broker", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
+    fs.writeFileSync(path.join(dest, "local-only.md"), "local work\n");
+    externalizeCustomerGitDir(dest, {
+      giteaRepoName: `${SLUG}-demo`,
+      fetchCanonical: (worktree, gitDir) => {
+        execFileSync("git", ["--git-dir", gitDir, "--work-tree", worktree, "fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
+      },
+    });
+    expect(projectCheckoutMatchesSource(SLUG, "demo", `${SLUG}-demo`, null)).toBe(true);
+
+    const ok = await cloneProjectRepo(SLUG, "demo", "", { repoSource });
+
+    expect(ok).toBe(true);
+    expect(broker.calls).toBe(1);
+    expect(projectCheckoutMatchesSource(SLUG, "demo", "", repoSource)).toBe(true);
+    expect(fs.existsSync(path.join(dest, "local-only.md"))).toBe(false);
+    const quarantineRoot = path.join(paths.openclaw, "git-worktree-quarantine", SLUG);
+    const quarantined = fs.readdirSync(quarantineRoot);
+    expect(quarantined).toHaveLength(1);
+    expect(fs.readFileSync(path.join(quarantineRoot, quarantined[0]!, "local-only.md"), "utf8")).toBe("local work\n");
+  });
+
+  it("reports a brokered clone whose origin is not the project's repository", async () => {
+    broker.clone = async (slug, projectSlug) => {
+      const dest = path.join(paths.customers, slug, "projects", projectSlug);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      git(path.dirname(dest), ["clone", "-q", canonicalOrigin, dest]);
+      git(dest, ["remote", "set-url", "origin", GITHUB_REMOTE_B]);
+      return true;
+    };
+
+    await expect(cloneProjectRepo(SLUG, "demo", "", { repoSource })).resolves.toBe(false);
   });
 });
