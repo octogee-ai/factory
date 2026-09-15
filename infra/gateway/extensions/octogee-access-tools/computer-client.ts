@@ -31,6 +31,21 @@ function parseComputerContext(body: unknown): ComputerContext {
     agentAccountId: data.agentAccountId, ownerMattermostUserId: data.ownerMattermostUserId };
 }
 
+async function computerContextFailure(response: Response): Promise<Error> {
+  const failure = new Error(`Computer context request failed (${response.status})`);
+  if (response.status !== 409) return failure;
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return failure;
+  }
+  if (body && typeof body === "object" && "error" in body && body.error === "computer-unavailable") {
+    return new Error("Computer is unavailable (computer-unavailable): the gateway or VM is not ready. Retry when the computer is running.");
+  }
+  return failure;
+}
+
 export async function computerContext(options: ComputerBrokerOptions): Promise<ComputerContext> {
   const readToken = options.readTokenImpl ?? ((path: string) => readFile(path, "utf8"));
   const token = (await readToken(options.tokenPath ?? "/var/run/octogee/api-token/token")).trim();
@@ -42,6 +57,6 @@ export async function computerContext(options: ComputerBrokerOptions): Promise<C
     body: JSON.stringify({ agentId: options.agentId }),
     signal: AbortSignal.any([options.signal, AbortSignal.timeout(5_000)]),
   });
-  if (!response.ok) throw new Error(`Computer authorization is unavailable (${response.status})`);
+  if (!response.ok) throw await computerContextFailure(response);
   return parseComputerContext(await response.json());
 }
