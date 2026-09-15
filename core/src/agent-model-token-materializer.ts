@@ -54,6 +54,8 @@ export interface OpenRouterBrokerModelInput {
   model: string;
   contextTokens?: number;
   input?: readonly ModelInputModality[];
+  maxOutputTokens?: number;
+  reasoning?: boolean;
 }
 
 export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
@@ -73,6 +75,8 @@ export interface OpenRouterBrokerModelConfig {
   contextTokens?: number;
   contextWindow?: number;
   input?: ModelInputModality[];
+  maxTokens?: number;
+  reasoning?: boolean;
 }
 
 export interface OpenRouterBrokerModelsJson {
@@ -106,7 +110,7 @@ export function openRouterBrokerProviderConfig(
 }
 
 export function openRouterBrokerModelConfig(
-  input: Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">,
+  input: Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input" | "maxOutputTokens" | "reasoning">,
 ): OpenRouterBrokerModelConfig {
   return {
     id: input.model,
@@ -115,6 +119,8 @@ export function openRouterBrokerModelConfig(
       ? { contextTokens: input.contextTokens, contextWindow: input.contextTokens }
       : {}),
     ...(input.input ? { input: [...input.input] } : {}),
+    ...(input.maxOutputTokens !== undefined ? { maxTokens: input.maxOutputTokens } : {}),
+    ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
   };
 }
 
@@ -172,7 +178,7 @@ export function openRouterBrokerModelsJson(
 
 export interface OpenRouterBrokerCatalogInput {
   baseUrl: string;
-  models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">>;
+  models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input" | "maxOutputTokens" | "reasoning">>;
 }
 
 export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput {
@@ -182,6 +188,8 @@ export function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBro
       model: entry.id,
       ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
       ...(entry.input ? { input: entry.input } : {}),
+      ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+      ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
     })),
   };
 }
@@ -193,6 +201,8 @@ export function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerC
       model: entry.id,
       ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
       ...(entry.input ? { input: entry.input } : {}),
+      ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+      ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
     })),
   };
 }

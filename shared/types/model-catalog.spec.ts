@@ -9,24 +9,31 @@ import {
 } from "./model-catalog";
 
 describe("MODEL_CATALOG", () => {
-  it("serves both broker providers — anthropic house pair + OpenRouter catalog", () => {
-    expect(modelCatalogForProvider("anthropic").map((e) => e.id)).toEqual([
+  it("serves direct providers and the broad OpenRouter catalog", () => {
+    expect(modelCatalogForProvider("anthropic").map((e) => e.id)).toEqual(expect.arrayContaining([
+      "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-fable-5-1",
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-haiku-4-5",
-    ]);
-    expect(modelCatalogForProvider("openrouter").map((e) => e.id)).toEqual([
+    ]));
+    expect(modelCatalogForProvider("openrouter").map((e) => e.id)).toEqual(expect.arrayContaining([
       "z-ai/glm-5.2",
       "minimax/minimax-m3",
       "deepseek/deepseek-v4-pro",
       "openai/gpt-5.6-luna",
-    ]);
+      "openai/gpt-6-astra",
+      "anthropic/claude-opus-5",
+      "x-ai/grok-4.6",
+      "google/gemini-3.8-flash",
+    ]));
   });
 
   it("carries DeepSeek V4 Pro as a free-tier dial candidate", () => {
     const entry = modelCatalogEntryFor("openrouter", "deepseek/deepseek-v4-pro");
-    expect(entry?.label).toBe("DeepSeek V4 Pro");
+    expect(entry?.label).toContain("DeepSeek V4 Pro");
     expect(entry?.contextTokens).toBe(1_048_576);
-    expect(entry?.reasoningEfforts).toEqual([]);
+    expect(entry?.reasoningEfforts).toEqual(["high", "xhigh"]);
   });
 
   it("carries GPT-5.6 Luna through OpenRouter with its full context window", () => {
@@ -42,11 +49,11 @@ describe("MODEL_CATALOG", () => {
   it("marks the GPT models as image-capable and leaves the others text-only", () => {
     expect(modelCatalogEntryFor("openrouter", "openai/gpt-5.6-luna")?.input).toEqual(["text", "image"]);
     expect(modelCatalogEntryFor("openai", "gpt-5.4-mini")?.input).toEqual(["text", "image"]);
-    expect(modelCatalogEntryFor("openrouter", "z-ai/glm-5.2")?.input).toBeUndefined();
+    expect(modelCatalogEntryFor("openrouter", "z-ai/glm-5.2")?.input).toEqual(["text"]);
   });
 
   it("carries GPT-5.4 Mini on the OpenAI platform provider", () => {
-    expect(modelCatalogForProvider("openai").map((e) => e.id)).toEqual(["gpt-5.4-mini"]);
+    expect(modelCatalogForProvider("openai").map((e) => e.id)).toEqual(expect.arrayContaining(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"]));
     const entry = modelCatalogEntryFor("openai", "gpt-5.4-mini");
     expect(entry?.label).toBe("GPT-5.4 Mini");
     expect(entry?.contextTokens).toBe(400_000);

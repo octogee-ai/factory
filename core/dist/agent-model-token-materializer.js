@@ -46,6 +46,8 @@ export function openRouterBrokerModelConfig(input) {
             ? { contextTokens: input.contextTokens, contextWindow: input.contextTokens }
             : {}),
         ...(input.input ? { input: [...input.input] } : {}),
+        ...(input.maxOutputTokens !== undefined ? { maxTokens: input.maxOutputTokens } : {}),
+        ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
     };
 }
 export function agentModelTokenProfileEntry(agentId) {
@@ -94,6 +96,8 @@ export function openRouterCatalogInputForBaseUrl(baseUrl) {
             model: entry.id,
             ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
             ...(entry.input ? { input: entry.input } : {}),
+            ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+            ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
         })),
     };
 }
@@ -104,6 +108,8 @@ export function openAiCatalogInputForBaseUrl(baseUrl) {
             model: entry.id,
             ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
             ...(entry.input ? { input: entry.input } : {}),
+            ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+            ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
         })),
     };
 }

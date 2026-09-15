@@ -247,7 +247,7 @@ describe("parsePlatformModelConfig", () => {
   });
 
   it("rejects refs outside the catalog", () => {
-    expect(parsePlatformModelConfig({ freeTierModelRef: "anthropic/claude-opus-4-8" })).toBeNull();
+    expect(parsePlatformModelConfig({ freeTierModelRef: "anthropic/model-not-in-catalog" })).toBeNull();
     expect(parsePlatformModelConfig({ freeTierModelRef: "z-ai/glm-5.2" })).toBeNull();
     expect(parsePlatformModelConfig({ freeTierModelRef: "" })).toBeNull();
     expect(parsePlatformModelConfig({ freeTierModelRef: 42 })).toBeNull();

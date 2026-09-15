@@ -102,6 +102,7 @@ export declare function refreshCoachRuntimeSessions(slug: string, deps?: {
     refreshed: boolean;
     resetCount: number;
 }>;
+export declare function applyPlatformModelAllowlist(applyConfigPatchFn?: typeof applyConfigPatch, builder?: boolean): Promise<boolean>;
 export declare function gateCustomerByosub(desired: DesiredByotState, userData: SyncByotUserData, logFn: (m: string) => void): {
     desired: DesiredByotState;
     suppressed: boolean;

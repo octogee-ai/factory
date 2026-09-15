@@ -117,8 +117,8 @@ describe("model broker usage helpers", () => {
 
     expect(cost.pricingModel).toBe("openrouter:z-ai/glm-5.2");
     expect(isUnknownOpenRouterPricingModel(cost.pricingModel)).toBe(false);
-    expect(cost.input).toBe(0.94);
-    expect(cost.output).toBe(3);
+    expect(cost.input).toBe(1.4);
+    expect(cost.output).toBe(4.4);
   });
 
   it("keeps rollup keys and usage windows stable", () => {
@@ -144,10 +144,10 @@ describe("OpenRouter cost estimation", () => {
 
   it("bills OpenRouter cache reads at the discounted rate, not full input price", () => {
     const cost = estimateModelBrokerCost("openrouter", "z-ai/glm-5.2", MILLION_EACH);
-    expect(cost.input).toBeCloseTo(0.94);
-    expect(cost.output).toBeCloseTo(3);
-    expect(cost.cacheRead).toBeCloseTo(0.094);
-    expect(cost.total).toBeCloseTo(4.034);
+    expect(cost.input).toBeCloseTo(1.4);
+    expect(cost.output).toBeCloseTo(4.4);
+    expect(cost.cacheRead).toBeCloseTo(0.14);
+    expect(cost.total).toBeCloseTo(5.94);
     expect(cost.pricingModel).toBe("openrouter:z-ai/glm-5.2");
   });
 
@@ -162,22 +162,50 @@ describe("OpenRouter cost estimation", () => {
   it("prices DeepSeek V4 Pro (the free-tier default) from the table, not the fallback", () => {
     const cost = estimateModelBrokerCost("openrouter", "deepseek/deepseek-v4-pro", MILLION_EACH);
     expect(cost.pricingModel).toBe("openrouter:deepseek/deepseek-v4-pro");
-    expect(cost.input).toBeCloseTo(0.435);
-    expect(cost.output).toBeCloseTo(0.87);
-    expect(cost.cacheRead).toBeCloseTo(0.0435);
+    expect(cost.input).toBeCloseTo(1.6);
+    expect(cost.output).toBeCloseTo(3.2);
+    expect(cost.cacheRead).toBeCloseTo(0.135);
   });
 
   it("prices GPT-5.6 Luna at OpenRouter's promotional rate", () => {
-    const cost = estimateModelBrokerCost("openrouter", "openai/gpt-5.6-luna", MILLION_EACH);
+    const cost = estimateModelBrokerCost("openrouter", "openai/gpt-5.6-luna", { ...MILLION_EACH, inputTokens: 100_000, cacheReadInputTokens: 100_000 });
     expect(cost.pricingModel).toBe("openrouter:openai/gpt-5.6-luna");
-    expect(cost.input).toBeCloseTo(0.1);
+    expect(cost.input).toBeCloseTo(0.01);
     expect(cost.output).toBeCloseTo(0.6);
-    expect(cost.cacheRead).toBeCloseTo(0.01);
-    expect(cost.total).toBeCloseTo(0.71);
+    expect(cost.cacheRead).toBeCloseTo(0.001);
+    expect(cost.total).toBeCloseTo(0.611);
+  });
+
+  it("applies OpenRouter token-price overrides strictly above their threshold", () => {
+    const usage = { inputTokens: 200_000, cacheReadInputTokens: 70_000, cacheCreationInputTokens: 2_000, outputTokens: 1_000 };
+    const atThreshold = estimateModelBrokerCost("openrouter", "openai/gpt-5.6-luna", usage);
+    expect(atThreshold.output).toBeCloseTo(0.0006, 8);
+    const aboveThreshold = estimateModelBrokerCost("openrouter", "openai/gpt-5.6-luna", { ...usage, inputTokens: 200_001 });
+    expect(aboveThreshold.output).toBeCloseTo(0.0009, 8);
+    expect(aboveThreshold.cacheRead).toBeCloseTo(0.0014, 8);
+    expect(aboveThreshold.cacheWrite).toBeCloseTo(0.0005, 8);
   });
 });
 
 describe("OpenAI cost estimation", () => {
+  it("prices the current Sonnet generation separately from Sonnet 4", () => {
+    const cost = estimateModelBrokerCost("anthropic", "claude-sonnet-5", {
+      inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+    });
+    expect(cost.total).toBe(12);
+  });
+  it("prices Astra cache writes and the long-context boundary using all input tokens", () => {
+    const usage = { inputTokens: 200_000, cacheReadInputTokens: 70_000, cacheCreationInputTokens: 2_000, outputTokens: 1_000 };
+    const short = estimateModelBrokerCost("openai", "gpt-6-astra", usage);
+    expect(short.pricingModel).toBe("openai:gpt-6-astra");
+    expect(short.total).toBeCloseTo(2 + 0.07 + 0.025 + 0.05);
+    const long = estimateModelBrokerCost("openai", "gpt-6-astra", { ...usage, inputTokens: 200_001 });
+    expect(long.input).toBeCloseTo(4.00002);
+    expect(long.output).toBeCloseTo(0.075);
+    expect(long.cacheRead).toBeCloseTo(0.14);
+    expect(long.cacheWrite).toBeCloseTo(0.05);
+  });
+
   const MILLION_EACH = {
     inputTokens: 1_000_000,
     outputTokens: 1_000_000,

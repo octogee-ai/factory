@@ -589,6 +589,15 @@ function normalizedCatalogSelection(value: unknown): { primary: string; fallback
 }
 
 function canonicalCustomerModelDefinition(modelRef: string): Record<string, unknown> {
+  const popularAliases: Record<string, string> = {
+    "platform-openai/gpt-6-astra": "astra",
+    "platform-openrouter/openai/gpt-6-astra": "astra-openrouter",
+    "anthropic/claude-opus-5": "opus",
+    "anthropic/claude-fable-5-1": "fable",
+    "platform-openrouter/x-ai/grok-4.6": "grok",
+    "platform-openrouter/google/gemini-3.8-flash": "gemini",
+  };
+  if (popularAliases[modelRef]) return { alias: popularAliases[modelRef] };
   if (modelRef === "platform-openrouter/deepseek/deepseek-v4-pro") {
     return { alias: "deepseek" };
   }
@@ -1537,7 +1546,33 @@ async function materializePlatformBrokerSurfaces(slug: string): Promise<boolean>
         ` — openclaw refused the secrets apply; the level-triggered sweep retries it`,
     );
   }
-  return result.materialized > 0;
+  const allowlistChanged = await applyPlatformModelAllowlist();
+  return result.materialized > 0 || allowlistChanged;
+}
+
+export async function applyPlatformModelAllowlist(
+  applyConfigPatchFn: typeof applyConfigPatch = applyConfigPatch,
+  builder = isBuilderGateway(),
+): Promise<boolean> {
+  const result = await applyConfigPatchFn({
+    buildPatch: (current) => {
+      const existing = (current as { agents?: { defaults?: { models?: unknown } } } | null)?.agents?.defaults?.models;
+      const models: Record<string, unknown> = Object.fromEntries(
+        platformModelRefs().map((ref) => [ref, canonicalCustomerModelDefinition(ref)]),
+      );
+      for (const ref of Object.keys(isRecord(existing) ? existing : {})) {
+        if (isPlatformProviderRef(ref) && !Object.prototype.hasOwnProperty.call(models, ref)) models[ref] = null;
+      }
+      return { agents: { defaults: {
+        models,
+        modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
+      } } };
+    },
+    buildReplacePaths: () => ["agents.defaults.modelPolicy.allow"],
+    skipIfAlreadyApplied: true,
+    logPrefix: "[byot-sync:platform-models]",
+  }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
+  return result.noop !== true;
 }
 
 function configuredOpenRouterBaseUrl(): string | null {

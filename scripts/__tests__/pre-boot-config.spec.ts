@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 import {
   applyAnthropicBaseUrlPatch,
   applyOpenClawBeta5CompatibilityPatch,
@@ -1092,10 +1093,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
       messages: { queue: { byChannel: { mattermost: "followup" } } },
       agents: {
         defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": {},
-            "anthropic/claude-haiku-4-5": {},
-          },
+          models: Object.fromEntries(modelCatalogForProvider("anthropic").map(({ id }) => [id, {}])),
           verboseDefault: "on",
           toolProgressDetail: "raw",
         },

@@ -5,6 +5,12 @@ export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
 export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
 export declare const MODEL_INPUT_MODALITIES: readonly ["text", "image"];
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
+export interface ModelTokenPricing {
+    inputPerMTok: number;
+    outputPerMTok: number;
+    cacheReadPerMTok: number;
+    cacheWritePerMTok: number;
+}
 export interface ModelCatalogEntry {
     provider: ModelCatalogProvider;
     id: string;
@@ -13,6 +19,12 @@ export interface ModelCatalogEntry {
     aliases?: readonly string[];
     contextTokens?: number;
     input?: readonly ModelInputModality[];
+    maxOutputTokens?: number;
+    reasoning?: boolean;
+    pricing?: ModelTokenPricing;
+    pricingOverrides?: readonly (Partial<ModelTokenPricing> & {
+        aboveInputTokens: number;
+    })[];
     reasoningEfforts: readonly ModelReasoningEffort[];
     defaultReasoningEffort?: ModelReasoningEffort;
 }

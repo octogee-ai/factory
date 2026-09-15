@@ -229,7 +229,7 @@ describe("admin platform-config", () => {
   it("PUT rejects a non-catalog ref with 400 and writes nothing", async () => {
     const res = await request(app)
       .put("/api/admin/platform-config")
-      .send({ freeTierModelRef: "anthropic/claude-opus-4-8" });
+      .send({ freeTierModelRef: "anthropic/model-not-in-catalog" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_model_ref");
     expect(setCalls).toHaveLength(0);

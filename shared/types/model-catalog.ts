@@ -1,8 +1,4 @@
-// The platform model catalog: every model a plan with catalog access may run,
-// per billing provider. Gateways boot model-ready against this list (both
-// broker provider profiles per agent), so switching any agent to any entry is
-// a pure config flip — no provisioning step. Plan policy (house_only vs
-// catalog) is enforced at the LLM broker, never on the pod.
+import { OPENROUTER_MODEL_CATALOG } from "./openrouter-model-catalog.generated.js";
 
 export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai"] as const;
 export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
@@ -14,6 +10,13 @@ export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
 export const MODEL_INPUT_MODALITIES = ["text", "image"] as const;
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
+export interface ModelTokenPricing {
+  inputPerMTok: number;
+  outputPerMTok: number;
+  cacheReadPerMTok: number;
+  cacheWritePerMTok: number;
+}
+
 export interface ModelCatalogEntry {
   provider: ModelCatalogProvider;
   id: string;
@@ -22,11 +25,25 @@ export interface ModelCatalogEntry {
   aliases?: readonly string[];
   contextTokens?: number;
   input?: readonly ModelInputModality[];
+  maxOutputTokens?: number;
+  reasoning?: boolean;
+  pricing?: ModelTokenPricing;
+  pricingOverrides?: readonly (Partial<ModelTokenPricing> & { aboveInputTokens: number })[];
   reasoningEfforts: readonly ModelReasoningEffort[];
   defaultReasoningEffort?: ModelReasoningEffort;
 }
 
-export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+const DIRECT_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+  ...[
+    ["claude-fable-5-1", "Claude Fable 5.1"],
+    ["claude-opus-5", "Claude Opus 5"],
+    ["claude-sonnet-5", "Claude Sonnet 5"],
+    ["claude-opus-4-8", "Claude Opus 4.8"],
+  ].map(([id, label]): ModelCatalogEntry => ({
+    provider: "anthropic", id: `anthropic/${id}`, label, source: "openclaw-release",
+    aliases: [id], contextTokens: 1_000_000, input: ["text", "image"],
+    reasoningEfforts: ["high"],
+  })),
   {
     provider: "anthropic",
     id: "anthropic/claude-sonnet-4-6",
@@ -44,37 +61,55 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     reasoningEfforts: [],
   },
   {
-    provider: "openrouter",
-    id: "z-ai/glm-5.2",
-    label: "GLM 5.2",
-    source: "openrouter",
-    contextTokens: 1_048_576,
-    reasoningEfforts: ["high", "xhigh"],
-    defaultReasoningEffort: "xhigh",
-  },
-  {
-    provider: "openrouter",
-    id: "minimax/minimax-m3",
-    label: "MiniMax M3",
-    source: "openrouter",
-    contextTokens: 524_288,
-    reasoningEfforts: [],
-  },
-  {
-    provider: "openrouter",
-    id: "deepseek/deepseek-v4-pro",
-    label: "DeepSeek V4 Pro",
-    source: "openrouter",
-    contextTokens: 1_048_576,
-    reasoningEfforts: [],
-  },
-  {
-    provider: "openrouter",
-    id: "openai/gpt-5.6-luna",
-    label: "GPT-5.6 Luna",
-    source: "openrouter",
+    provider: "openai",
+    id: "gpt-6-astra",
+    label: "GPT-6 Astra",
+    source: "openai",
     contextTokens: 1_050_000,
+    maxOutputTokens: 128_000,
     input: ["text", "image"],
+    reasoning: true,
+    pricing: { inputPerMTok: 10, outputPerMTok: 50, cacheReadPerMTok: 1.0, cacheWritePerMTok: 12.5 },
+    pricingOverrides: [{ aboveInputTokens: 272_000, inputPerMTok: 20, outputPerMTok: 75.0, cacheReadPerMTok: 2.0, cacheWritePerMTok: 25.0 }],
+    reasoningEfforts: ["high", "xhigh"],
+  },
+  {
+    provider: "openai",
+    id: "gpt-5.6-sol",
+    label: "GPT-5.6 Sol",
+    source: "openai",
+    contextTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    input: ["text", "image"],
+    reasoning: true,
+    pricing: { inputPerMTok: 4, outputPerMTok: 20, cacheReadPerMTok: 0.4, cacheWritePerMTok: 5.0 },
+    pricingOverrides: [{ aboveInputTokens: 272_000, inputPerMTok: 8, outputPerMTok: 30.0, cacheReadPerMTok: 0.8, cacheWritePerMTok: 10.0 }],
+    reasoningEfforts: ["high", "xhigh"],
+  },
+  {
+    provider: "openai",
+    id: "gpt-5.6-terra",
+    label: "GPT-5.6 Terra",
+    source: "openai",
+    contextTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    input: ["text", "image"],
+    reasoning: true,
+    pricing: { inputPerMTok: 2, outputPerMTok: 12, cacheReadPerMTok: 0.2, cacheWritePerMTok: 2.5 },
+    pricingOverrides: [{ aboveInputTokens: 272_000, inputPerMTok: 4, outputPerMTok: 18.0, cacheReadPerMTok: 0.4, cacheWritePerMTok: 5.0 }],
+    reasoningEfforts: ["high", "xhigh"],
+  },
+  {
+    provider: "openai",
+    id: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
+    source: "openai",
+    contextTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    input: ["text", "image"],
+    reasoning: true,
+    pricing: { inputPerMTok: 0.2, outputPerMTok: 1.2, cacheReadPerMTok: 0.02, cacheWritePerMTok: 0.25 },
+    pricingOverrides: [{ aboveInputTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8, cacheReadPerMTok: 0.04, cacheWritePerMTok: 0.5 }],
     reasoningEfforts: ["high", "xhigh"],
   },
   {
@@ -86,6 +121,13 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     input: ["text", "image"],
     reasoningEfforts: [],
   },
+];
+
+export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+  ...DIRECT_MODEL_CATALOG,
+  ...OPENROUTER_MODEL_CATALOG.map((entry): ModelCatalogEntry => entry.id === "z-ai/glm-5.2"
+    ? { ...entry, reasoningEfforts: ["high", "xhigh"], defaultReasoningEffort: "xhigh" }
+    : entry),
 ];
 
 export function isModelCatalogProvider(value: unknown): value is ModelCatalogProvider {

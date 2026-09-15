@@ -381,7 +381,10 @@ describe("openAiCatalogInputForBaseUrl", () => {
     const input = openAiCatalogInputForBaseUrl(
       "http://llm-broker.octogee.svc.cluster.local:3010/v1",
     );
-    expect(input.models).toEqual([{ model: "gpt-5.4-mini", contextTokens: 400_000, input: ["text", "image"] }]);
+    expect(input.models).toContainEqual({ model: "gpt-5.4-mini", contextTokens: 400_000, input: ["text", "image"] });
+    expect(input.models).toContainEqual({ model: "gpt-6-astra", contextTokens: 1_050_000, input: ["text", "image"], maxOutputTokens: 128_000, reasoning: true });
+    expect(openRouterBrokerModelConfig(input.models.find((model) => model.model === "gpt-6-astra")!))
+      .toMatchObject({ id: "gpt-6-astra", contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true });
   });
 });
 
@@ -677,11 +680,11 @@ describe("openRouterCatalogInputForBaseUrl", () => {
     expect(input.models.map((m) => m.model)).toEqual(
       modelCatalogForProvider("openrouter").map((e) => e.id),
     );
-    expect(input.models[0]).toEqual({ model: "z-ai/glm-5.2", contextTokens: 1_048_576 });
-    expect(input.models).toContainEqual({
+    expect(input.models).toContainEqual(expect.objectContaining({ model: "z-ai/glm-5.2", contextTokens: 1_048_576 }));
+    expect(input.models).toContainEqual(expect.objectContaining({
       model: "openai/gpt-5.6-luna",
       contextTokens: 1_050_000,
       input: ["text", "image"],
-    });
+    }));
   });
 });

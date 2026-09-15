@@ -7,6 +7,7 @@ import type {
 } from "firebase-admin/firestore";
 
 import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
+import { modelCatalogEntryFor } from "@octogee/shared/types/model-catalog";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
@@ -175,16 +176,11 @@ const ANTHROPIC_PRICING: Record<string, AnthropicPricing> = {
   "opus-latest": pricing(5, 25, "opus-latest"),
   "opus-legacy": pricing(15, 75, "opus-legacy"),
   sonnet: pricing(3, 15, "sonnet"),
+  "sonnet-5": pricing(2, 10, "sonnet-5"),
   "haiku-4.5": pricing(1, 5, "haiku-4.5"),
   "haiku-3.5": pricing(0.8, 4, "haiku-3.5"),
 };
 const UNKNOWN_MODEL_FALLBACK_PRICING = pricing(10, 50, "unknown-fable-fallback");
-// Snapshot from OpenRouter's model API, verified 2026-07-30. Luna includes the 50% promotion.
-const OPENROUTER_PRICING: Record<string, AnthropicPricing> = {
-  "z-ai/glm-5.2": pricing(0.94, 3, "openrouter:z-ai/glm-5.2"),
-  "deepseek/deepseek-v4-pro": pricing(0.435, 0.87, "openrouter:deepseek/deepseek-v4-pro"),
-  "openai/gpt-5.6-luna": pricing(0.1, 0.6, "openrouter:openai/gpt-5.6-luna"),
-};
 const UNKNOWN_OPENROUTER_FALLBACK_PRICING = pricing(1, 5, "openrouter:unknown-fallback");
 // Snapshot from the OpenAI API pricing page, verified 2026-07-08:
 // https://developers.openai.com/api/docs/pricing (cached input = 10% of input).
@@ -255,6 +251,7 @@ function modelPricing(model: string): AnthropicPricing {
   const normalized = model.toLowerCase();
   if (normalized.includes("fable")) return ANTHROPIC_PRICING.fable;
   if (normalized.includes("mythos")) return ANTHROPIC_PRICING.mythos;
+  if (/^(anthropic\/)?claude-sonnet-5(?:-\d{8})?$/.test(normalized)) return ANTHROPIC_PRICING["sonnet-5"];
   if (normalized.includes("sonnet")) return ANTHROPIC_PRICING.sonnet;
   if (
     normalized.includes("haiku-3-5") ||
@@ -305,14 +302,6 @@ export function estimateAnthropicCost(
   };
 }
 
-function openRouterModelPricing(model: string): AnthropicPricing {
-  const normalized = model.toLowerCase();
-  if (normalized === "z-ai/glm-5.2" || normalized.startsWith("z-ai/glm-5.2-")) {
-    return OPENROUTER_PRICING["z-ai/glm-5.2"];
-  }
-  return OPENROUTER_PRICING[normalized] ?? UNKNOWN_OPENROUTER_FALLBACK_PRICING;
-}
-
 function openAiModelPricing(model: string): AnthropicPricing {
   const normalized = model.toLowerCase();
   return (
@@ -345,7 +334,9 @@ export function estimateModelBrokerCost(
       source: "estimated",
     };
   }
-  const prices = provider === "openai" ? openAiModelPricing(model) : openRouterModelPricing(model);
+  const prices = provider === "openai" ? openAiModelPricing(model) : UNKNOWN_OPENROUTER_FALLBACK_PRICING;
+  const catalogCost = estimateCatalogCost(provider, model, usage, cacheWriteTtl);
+  if (catalogCost) return catalogCost;
   const input = usd(usage.inputTokens + usage.cacheCreationInputTokens, prices.inputPerMTok);
   const output = usd(usage.outputTokens, prices.outputPerMTok);
   const cacheRead = usd(usage.cacheReadInputTokens, prices.cacheReadPerMTok);
@@ -358,6 +349,30 @@ export function estimateModelBrokerCost(
     pricingModel: prices.pricingModel,
     cacheWriteTtl,
     source: "estimated",
+  };
+}
+
+function estimateCatalogCost(
+  provider: "openai" | "openrouter",
+  model: string,
+  usage: AnthropicTokenUsage,
+  cacheWriteTtl: AnthropicCacheWriteTtl,
+): ModelBrokerUsageCost | null {
+  const canonicalModel = provider === "openrouter" && model.startsWith("z-ai/glm-5.2-")
+    ? "z-ai/glm-5.2" : model;
+  const entry = modelCatalogEntryFor(provider, canonicalModel);
+  const inputTokens = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens;
+  if (!entry?.pricing) return null;
+  const prices = (entry.pricingOverrides ?? []).reduce((rates, override) =>
+    inputTokens > override.aboveInputTokens ? { ...rates, ...override } : rates,
+  entry.pricing);
+  const input = usd(usage.inputTokens, prices.inputPerMTok);
+  const output = usd(usage.outputTokens, prices.outputPerMTok);
+  const cacheRead = usd(usage.cacheReadInputTokens, prices.cacheReadPerMTok);
+  const cacheWrite = usd(usage.cacheCreationInputTokens, prices.cacheWritePerMTok);
+  return {
+    input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite,
+    pricingModel: `${provider}:${canonicalModel}`, cacheWriteTtl, source: "estimated",
   };
 }
 

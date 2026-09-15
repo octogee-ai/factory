@@ -2664,6 +2664,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       },
       {
         isBuilderGateway: () => true,
+        materializePlatformBrokerSurfaces: vi.fn(async () => false),
         purgeCustomerOauthRuntime: noCustomerOauthRuntimePurge,
         applyByotState: applyByotStateFn,
         restoreOauthStoreForSlug: restoreOauthFn,
@@ -2822,6 +2823,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
           present: true,
           providers: ["openai"] as const,
         })),
+        materializePlatformBrokerSurfaces: vi.fn(async () => false),
         applyOauthRuntimeModelAllowlist: (providers) =>
           applyOauthRuntimeModelAllowlist(providers, {
             applyConfigPatch: async (args) => {

@@ -29,6 +29,8 @@ export interface OpenRouterBrokerModelInput {
     model: string;
     contextTokens?: number;
     input?: readonly ModelInputModality[];
+    maxOutputTokens?: number;
+    reasoning?: boolean;
 }
 export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
     apiKey: string;
@@ -45,6 +47,8 @@ export interface OpenRouterBrokerModelConfig {
     contextTokens?: number;
     contextWindow?: number;
     input?: ModelInputModality[];
+    maxTokens?: number;
+    reasoning?: boolean;
 }
 export interface OpenRouterBrokerModelsJson {
     providers: Record<string, {
@@ -56,7 +60,7 @@ export interface OpenRouterBrokerModelsJson {
 }
 export declare function agentModelTokenSecretId(agentId: string, provider?: AgentModelBrokerProvider): string;
 export declare function openRouterBrokerProviderConfig(input: OpenRouterBrokerProviderConfigInput): OpenRouterBrokerProviderConfig;
-export declare function openRouterBrokerModelConfig(input: Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">): OpenRouterBrokerModelConfig;
+export declare function openRouterBrokerModelConfig(input: Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input" | "maxOutputTokens" | "reasoning">): OpenRouterBrokerModelConfig;
 export declare function agentModelTokenProfileEntry(agentId: string): AnthropicBrokerProfileEntry;
 export declare function openRouterBrokerProfileEntry(agentId: string): OpenRouterBrokerProfileEntry;
 export interface OpenAiBrokerProfileEntry {
@@ -72,7 +76,7 @@ export declare function openAiBrokerProfileEntry(agentId: string): OpenAiBrokerP
 export declare function openRouterBrokerModelsJson(agentId: string, input: OpenRouterBrokerModelInput): OpenRouterBrokerModelsJson;
 export interface OpenRouterBrokerCatalogInput {
     baseUrl: string;
-    models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input">>;
+    models: Array<Pick<OpenRouterBrokerModelInput, "model" | "contextTokens" | "input" | "maxOutputTokens" | "reasoning">>;
 }
 export declare function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
