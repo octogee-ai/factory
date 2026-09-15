@@ -10,7 +10,7 @@ import { codexAuthJsonPath, purgeCustomerOauthRuntimeArtifacts, restoreByosubCre
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
 import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
-import { agentIdBelongsToSlug, catalogEntryForModelRef, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
+import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalCustomerModelDefinition, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { DEFAULT_FREE_TIER_MODEL_REF, parseBuilderAgentModelDefault, } from "@octogee/shared/types/platform-config";
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
@@ -390,31 +390,6 @@ function normalizedCatalogSelection(value) {
         primary: value.primary,
         fallbacks: Array.from(new Set(fallbacks)).filter((ref) => ref !== value.primary),
     };
-}
-function canonicalCustomerModelDefinition(modelRef) {
-    const popularAliases = {
-        "platform-openai/gpt-6-astra": "astra",
-        "platform-openrouter/openai/gpt-6-astra": "astra-openrouter",
-        "anthropic/claude-opus-5": "opus",
-        "anthropic/claude-fable-5-1": "fable",
-        "platform-openrouter/x-ai/grok-4.6": "grok",
-        "platform-openrouter/google/gemini-3.8-flash": "gemini",
-    };
-    if (popularAliases[modelRef])
-        return { alias: popularAliases[modelRef] };
-    if (modelRef === "platform-openrouter/deepseek/deepseek-v4-pro") {
-        return { alias: "deepseek" };
-    }
-    if (modelRef === "platform-openrouter/z-ai/glm-5.2") {
-        return { alias: "glm", params: { thinking: "xhigh" } };
-    }
-    if (modelRef === "anthropic/claude-sonnet-4-6") {
-        return { alias: "sonnet", params: { cacheRetention: "short" } };
-    }
-    if (modelRef === "anthropic/claude-haiku-4-5") {
-        return { alias: "haiku", params: { cacheRetention: "short" } };
-    }
-    return {};
 }
 function catalogModelMapPlan(value, ensureModelRef) {
     const current = isRecord(value) ? value : {};

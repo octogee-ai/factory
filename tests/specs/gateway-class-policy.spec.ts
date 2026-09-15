@@ -9,6 +9,8 @@ import {
   reconcilePlatformInvariants,
 } from "../../core/dist/system-config-invariants.js";
 
+import { platformModelRefs } from "../../shared/dist/types/agent-models.js";
+
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
 const workflowTools = [
@@ -194,6 +196,70 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
 }
 
 describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
+  it("keeps the broad catalog and popular choices after the boot policy runs", () => {
+    const agentId = "octogee-acme-coach";
+    const astra = "platform-openai/gpt-6-astra";
+    const grok = "platform-openrouter/x-ai/grok-4.6";
+    const result = runPolicyWithDir("shared", {
+      agents: {
+        defaults: {
+          models: Object.fromEntries(platformModelRefs().map((ref) => [ref, {}])),
+          modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+          model: { primary: astra, fallbacks: [grok] },
+        },
+        entries: { [agentId]: { model: { primary: grok, fallbacks: [astra] } } },
+      },
+    }, (dir) => seedCanonicalAgentRuntimeDisk(dir, agentId), {
+      OPENROUTER_BASE_URL: "http://broker/openrouter",
+      PLATFORM_OPENAI_BASE_URL: "http://broker/openai",
+    });
+    expect(Object.keys(result.config.agents.defaults.models).sort()).toEqual(platformModelRefs().sort());
+    expect(result.config.agents.defaults.models[astra]).toEqual({ alias: "astra" });
+    expect(result.config.agents.defaults.models[grok]).toEqual({ alias: "grok" });
+    expect(result.config.agents.defaults.modelPolicy.allow).toEqual([
+      "anthropic/*", "platform-openrouter/*", "platform-openai/*",
+    ]);
+    expect(result.config.agents.defaults.model).toEqual({ primary: astra, fallbacks: [grok] });
+    expect(result.config.agents.entries[agentId].model).toEqual({ primary: grok, fallbacks: [astra] });
+    const disk = JSON.parse(readFileSync(path.join(result.dir, "agents", agentId, "agent", "models.json"), "utf8"));
+    expect(disk.providers["platform-openai"].models).toContainEqual(expect.objectContaining({ id: "gpt-6-astra" }));
+    expect(disk.providers["platform-openrouter"].models).toContainEqual(expect.objectContaining({
+      id: "x-ai/grok-4.6", contextWindow: expect.any(Number), maxTokens: expect.any(Number),
+    }));
+    const sessionsDir = path.join(result.dir, "agents", agentId, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const sessions = { active: { providerOverride: "platform-openai", modelOverride: "gpt-6-astra" } };
+    writeFileSync(path.join(sessionsDir, "sessions.json"), JSON.stringify(sessions));
+    const rerun = spawnSync("node", [script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DIR: result.dir,
+        HOME: result.home,
+        GATEWAY_CLASS: "shared",
+        ANTHROPIC_BASE_URL: "",
+        OPENROUTER_BASE_URL: "http://broker/openrouter",
+        PLATFORM_OPENAI_BASE_URL: "http://broker/openai",
+      },
+    });
+    expect(rerun.status).toBe(0);
+    expect(rerun.stdout).toContain("skipped: already-set");
+    expect(JSON.parse(readFileSync(path.join(sessionsDir, "sessions.json"), "utf8"))).toEqual(sessions);
+  });
+
+  it("clears a restored Builder allow list while preserving subscription model definitions", () => {
+    const out = runPolicy("builder", {
+      agents: { defaults: {
+        modelPolicy: { allow: ["platform-openai/gpt-5.4-mini"] },
+        models: { "openai-codex/gpt-6-astra": { alias: "my-astra" } },
+        model: "openai-codex/gpt-6-astra",
+      } },
+    });
+    expect(out.agents.defaults.modelPolicy.allow).toEqual([]);
+    expect(out.agents.defaults.models["openai-codex/gpt-6-astra"]).toEqual({ alias: "my-astra" });
+    expect(out.agents.defaults.model).toBe("openai-codex/gpt-6-astra");
+  });
+
   it("shared class removes every arbitrary-code path and keeps safe workflow tools model-visible", () => {
     const out = runPolicy("shared", {
       agents: {
@@ -1004,6 +1070,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
     expect(out.models.providers).toEqual({});
     expect(out.agents.defaults.models).toEqual({
+      "anthropic/claude-opus-4-8": {},
       "anthropic/claude-sonnet-4-6": {
         alias: "sonnet",
         params: { cacheRetention: "short" },

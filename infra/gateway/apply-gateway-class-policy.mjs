@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import {
+  canonicalCustomerModelDefinition,
+  platformModelRefs,
+} from "../../shared/dist/types/agent-models.js";
+import { modelCatalogForProvider } from "../../shared/dist/types/model-catalog.js";
 import { parseAgentId } from "../../shared/dist/types/identity.js";
 import {
   openClawOperatorRoles,
@@ -312,29 +317,12 @@ const SESSION_RUNTIME_STATE_FIELDS = [
 ];
 const SAFE_CUSTOMER_MODEL = "platform-openrouter/deepseek/deepseek-v4-pro";
 const SAFE_AGENT_ID = /^[a-z0-9-]{1,64}$/;
-const CUSTOMER_MODEL_REFS = new Set([
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-haiku-4-5",
-  "platform-openrouter/z-ai/glm-5.2",
-  "platform-openrouter/minimax/minimax-m3",
-  "platform-openrouter/deepseek/deepseek-v4-pro",
-  "platform-openrouter/openai/gpt-5.6-luna",
-  "platform-openai/gpt-5.4-mini",
-]);
+const CUSTOMER_MODEL_REFS = new Set(platformModelRefs());
 const CUSTOMER_MODEL_PROVIDER_IDS = new Set([
   "anthropic",
   "platform-openrouter",
   "platform-openai",
 ]);
-const CUSTOMER_BROKER_MODELS = {
-  "platform-openrouter": [
-    ["z-ai/glm-5.2", 1_048_576],
-    ["minimax/minimax-m3", 524_288],
-    ["deepseek/deepseek-v4-pro", 1_048_576],
-    ["openai/gpt-5.6-luna", 1_050_000],
-  ],
-  "platform-openai": [["gpt-5.4-mini", 400_000]],
-};
 
 function customerDiskModelProviders(env) {
   const providers = {};
@@ -348,32 +336,20 @@ function customerDiskModelProviders(env) {
       api: "openai-completions",
       baseUrl,
       apiKey: `${providerId}:default`,
-      models: CUSTOMER_BROKER_MODELS[providerId].map(([id, contextTokens]) => ({
-        id,
-        name: id,
-        contextTokens,
-        contextWindow: contextTokens,
+      models: modelCatalogForProvider(providerId === "platform-openrouter" ? "openrouter" : "openai").map((entry) => ({
+        id: entry.id,
+        name: entry.id,
+        ...(entry.contextTokens !== undefined
+          ? { contextTokens: entry.contextTokens, contextWindow: entry.contextTokens } : {}),
+        ...(entry.input ? { input: [...entry.input] } : {}),
+        ...(entry.maxOutputTokens !== undefined ? { maxTokens: entry.maxOutputTokens } : {}),
+        ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
       })),
     };
   }
   return providers;
 }
 
-function canonicalCustomerModelDefinition(modelRef) {
-  if (modelRef === "platform-openrouter/deepseek/deepseek-v4-pro") {
-    return { alias: "deepseek" };
-  }
-  if (modelRef === "platform-openrouter/z-ai/glm-5.2") {
-    return { alias: "glm", params: { thinking: "xhigh" } };
-  }
-  if (modelRef === "anthropic/claude-sonnet-4-6") {
-    return { alias: "sonnet", params: { cacheRetention: "short" } };
-  }
-  if (modelRef === "anthropic/claude-haiku-4-5") {
-    return { alias: "haiku", params: { cacheRetention: "short" } };
-  }
-  return {};
-}
 const CUSTOMER_AGENT_ID = /^octogee-[a-z0-9]+(?:-[a-z0-9]+)*-coach$/;
 
 function addUnique(list, tool) {
@@ -1067,6 +1043,8 @@ function scrubCustomerOauthConfig(config, env) {
   const resetAgentIds = new Set();
   config.agents ??= {};
   config.agents.defaults ??= {};
+  config.agents.defaults.modelPolicy ??= {};
+  config.agents.defaults.modelPolicy.allow = ["anthropic/*", "platform-openrouter/*", "platform-openai/*"];
   const allAgentIds = configuredCustomerAgentIds(config);
   const providers = objectValue(config.models?.providers);
   const expectedProviders = customerModelProviders(env);
@@ -1524,6 +1502,10 @@ function projectBuilderSecretProviders(config, openclawDir) {
 // and the codex BYOSUB plugin stay at the Builder's discretion; the platform
 // keeps only its plugin configuration boundary and tenant-scoped secret providers.
 function applyBuilderPolicy(config, openclawDir, env) {
+  config.agents ??= {};
+  config.agents.defaults ??= {};
+  config.agents.defaults.modelPolicy ??= {};
+  config.agents.defaults.modelPolicy.allow = [];
   preserveBuilderPluginConfiguration(config);
   projectBuilderSecretProviders(config, openclawDir);
   applyControlIdentityPolicy(config, env);

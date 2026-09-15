@@ -53,6 +53,7 @@ import {
 import {
   agentIdBelongsToSlug,
   catalogEntryForModelRef,
+  canonicalCustomerModelDefinition,
   parseAgentModelSelections,
   platformModelRefs,
   type AgentModelSelections,
@@ -586,31 +587,6 @@ function normalizedCatalogSelection(value: unknown): { primary: string; fallback
     primary: value.primary,
     fallbacks: Array.from(new Set(fallbacks as string[])).filter((ref) => ref !== value.primary),
   };
-}
-
-function canonicalCustomerModelDefinition(modelRef: string): Record<string, unknown> {
-  const popularAliases: Record<string, string> = {
-    "platform-openai/gpt-6-astra": "astra",
-    "platform-openrouter/openai/gpt-6-astra": "astra-openrouter",
-    "anthropic/claude-opus-5": "opus",
-    "anthropic/claude-fable-5-1": "fable",
-    "platform-openrouter/x-ai/grok-4.6": "grok",
-    "platform-openrouter/google/gemini-3.8-flash": "gemini",
-  };
-  if (popularAliases[modelRef]) return { alias: popularAliases[modelRef] };
-  if (modelRef === "platform-openrouter/deepseek/deepseek-v4-pro") {
-    return { alias: "deepseek" };
-  }
-  if (modelRef === "platform-openrouter/z-ai/glm-5.2") {
-    return { alias: "glm", params: { thinking: "xhigh" } };
-  }
-  if (modelRef === "anthropic/claude-sonnet-4-6") {
-    return { alias: "sonnet", params: { cacheRetention: "short" } };
-  }
-  if (modelRef === "anthropic/claude-haiku-4-5") {
-    return { alias: "haiku", params: { cacheRetention: "short" } };
-  }
-  return {};
 }
 
 function catalogModelMapPlan(value: unknown, ensureModelRef?: string): {

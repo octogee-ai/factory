@@ -25,6 +25,7 @@ import {
   OPENAI_PLATFORM_PROVIDER_ID,
   OPENROUTER_PLATFORM_PROVIDER_ID,
   platformModelRefs,
+  canonicalCustomerModelDefinition,
 } from "@octogee/shared/types/agent-models";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
@@ -497,7 +498,7 @@ function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.Process
   let changed = false;
   for (const ref of refs) {
     if (models[ref] !== undefined) continue;
-    models[ref] = {};
+    models[ref] = canonicalCustomerModelDefinition(ref);
     changed = true;
   }
   return changed;
