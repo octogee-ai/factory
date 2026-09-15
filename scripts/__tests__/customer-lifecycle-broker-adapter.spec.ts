@@ -327,6 +327,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       slug: "tester10",
       appliedFingerprint: "fp-tester10",
       agentId: "octogee-tester10-coach",
+      agent: { id: "octogee-tester10-coach", workspace: path.join(testRuntime.dir, "customers/tester10") },
       projectAgents: [],
     });
     mocks.applyOpenClawActivationManifest.mockResolvedValue({
@@ -352,6 +353,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       slug: "tester10",
       appliedFingerprint: "fp-tester10",
       agentId: "octogee-tester10-coach",
+      agent: { id: "octogee-tester10-coach", workspace: path.join(testRuntime.dir, "customers/tester10") },
       projectAgents: [],
     });
     const client = mkClient();
@@ -386,6 +388,44 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
+  it.each([false, true])("clears imported project deletion state before activation (already rostered: %s)", async (rostered) => {
+    const agentId = "octogee-tester10-proj-orbit-coach";
+    let deleted = true;
+    mocks.readActivationManifest.mockResolvedValue({
+      slug: "tester10",
+      appliedFingerprint: "fp-tester10",
+      agentId: "octogee-tester10-coach",
+      agent: { id: "octogee-tester10-coach", workspace: path.join(testRuntime.dir, "customers/tester10") },
+      projectAgents: [{
+        agentId,
+        agent: { id: agentId, workspace: path.join(testRuntime.dir, "customers/tester10/projects/orbit") },
+      }],
+    });
+    const rpc = mkGatewayRpc({
+      ...rosterRpc({ agents: { entries: keyedRoster(rostered ? [agentId] : []) } }),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [
+        { accountId: "tester10-coach", running: true, connected: true },
+      ] } })),
+      agentsCreate: vi.fn(async ({ name, workspace }) => {
+        if (name === agentId) {
+          deleted = false;
+          if (rostered) throw new OpenclawWireError("rpc-error", `agent "${name}" already exists`);
+        }
+        return { ok: true, agentId: name, name, workspace };
+      }),
+    });
+    mocks.applyOpenClawActivationManifest.mockImplementationOnce(async () => {
+      if (deleted) throw new Error("agent database is unavailable while agent is deleted");
+      return { elapsedMs: 1, routingActivationRequired: false, restartExistingAccountIds: [] };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.activateImportedCustomer("tester10");
+
+    expect(deleted).toBe(false);
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+  });
+
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
     const client = mkClient();
     const rpc = {
@@ -399,6 +439,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       configGet: vi.fn(async () => configSnapshot({
         agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] },
       })),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
@@ -452,6 +493,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] },
       })),
       configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => {
         throw new OpenclawWireError("timeout", "connect response timed out after 30000ms");
       }),
@@ -473,6 +515,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     const rpc = {
       channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
       configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => {
         controller.abort(cancelled);
         throw cancelled;
@@ -506,6 +549,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet,
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -612,6 +656,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           },
         })),
         configGet: vi.fn(async () => configSnapshot({})),
+        agentsCreate: rosterRpc().agentsCreate,
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
       const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -644,6 +689,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           },
         })),
         configGet: vi.fn(async () => configSnapshot({})),
+        agentsCreate: rosterRpc().agentsCreate,
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
       const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -670,6 +716,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => configSnapshot({ agents: { entries: { "octogee-tester10-coach": { model: "test/model" } } } })),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({
@@ -699,6 +746,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => configSnapshot({})),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => ({ ok: false, warningCount: 2 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -735,6 +783,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => configSnapshot({})),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 4 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
@@ -773,6 +822,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         },
       })),
       configGet: vi.fn(async () => configSnapshot({})),
+      agentsCreate: rosterRpc().agentsCreate,
       secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
     } as unknown as GatewayRpcClient;
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -797,13 +847,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         appliedFingerprint: "fp-tester10",
         agentId: "octogee-tester10-coach",
         accountId: "tester10-coach",
-        agent: { id: "octogee-tester10-coach" },
+        agent: { id: "octogee-tester10-coach", workspace: path.join(testRuntime.dir, "customers/tester10") },
         mattermostAccount: { botToken: "coach-pat" },
         bindings: [],
         projectAgents: [{
           agentId: "octogee-tester10-proj-orbit-coach",
           accountId: "tester10-proj-orbit",
-          agent: { id: "octogee-tester10-proj-orbit-coach" },
+          agent: { id: "octogee-tester10-proj-orbit-coach", workspace: path.join(testRuntime.dir, "customers/tester10/projects/orbit") },
           mattermostAccount: { botToken: "orbit-pat" },
           bindings: [],
         }],
@@ -848,6 +898,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
             ],
           },
         })),
+        agentsCreate: rosterRpc().agentsCreate,
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
       const adapter = buildBrokeredLifecycleAdapter({
@@ -911,7 +962,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         appliedFingerprint: "fp-tester10",
         agentId: "octogee-tester10-coach",
         accountId: "tester10-coach",
-        agent: { id: "octogee-tester10-coach" },
+        agent: { id: "octogee-tester10-coach", workspace: path.join(testRuntime.dir, "customers/tester10") },
         mattermostAccount: { botToken: "coach-pat" },
         bindings: [],
         projectAgents: [],
@@ -928,6 +979,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       const rpc = {
         channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
         configGet: vi.fn(async () => configSnapshot({})),
+        agentsCreate: rosterRpc().agentsCreate,
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
       const adapter = buildBrokeredLifecycleAdapter({
@@ -1519,23 +1571,34 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit" })]);
   });
 
-  it("installs and reports a pending configured Builder project without changing the owner's coach", async () => {
+  it.each([false, true])("reconciles a configured Builder project without changing its owner (already rostered: %s)", async (rostered) => {
     const snapshot = aliceSnapshot({
       status: "complete",
       projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning" }],
       channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
     });
     const coach = { model: "owner-model", tools: { allow: ["owner-tool"] }, workspace: "/owner/workspace" };
+    const projectAgentId = "octogee-alice-proj-orbit-coach";
+    let deleted = rostered;
     let config: Record<string, any> = {
-      agents: { entries: { "octogee-alice-coach": coach }, defaults: { model: "owner-default" } },
+      agents: { entries: {
+        "octogee-alice-coach": coach,
+        ...(rostered ? { [projectAgentId]: { workspace: path.join(testRuntime.dir, "customers/alice/projects/orbit") } } : {}),
+      }, defaults: { model: "owner-default" } },
       channels: { mattermost: { accounts: { "alice-coach": { botToken: "owner-coach-token" } } } },
       bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
     };
     const rpc = mkGatewayRpc({
       configGet: vi.fn(async () => configSnapshot(config)),
+      agentsCreate: vi.fn(async ({ name, workspace }) => {
+        deleted = false;
+        if (rostered) throw new OpenclawWireError("rpc-error", `agent "${name}" already exists`);
+        return { ok: true, agentId: name, name, workspace };
+      }),
       channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 2 }] } })),
     });
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      if (deleted) throw new Error("agent database is unavailable while agent is deleted");
       const patch = args.buildPatch(config) as Record<string, any>;
       config = {
         ...config,
@@ -1554,6 +1617,9 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(config.agents.defaults).toEqual({ model: "owner-default" });
     expect(config.channels.mattermost.accounts["alice-coach"]).toEqual({ botToken: "owner-coach-token" });
     expect(config.agents.entries["octogee-alice-proj-orbit-coach"]).toMatchObject({ workspace: expect.stringContaining("/projects/orbit") });
+    expect(rpc.agentsCreate).toHaveBeenCalledExactlyOnceWith({
+      name: projectAgentId, workspace: expect.stringContaining("/projects/orbit"),
+    });
     expect(rpc.agentsDelete).not.toHaveBeenCalled();
     expect(routingActivationMocks.activate).toHaveBeenCalledWith(rpc, expect.any(String), expect.any(Function), { restartAccountIds: ["alice-proj-orbit"] });
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit", activationId: "activation-1" })]);
@@ -2392,15 +2458,26 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ]);
   });
 
-  it("leaves an already-rostered agent to the pure-patch update path", async () => {
-    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(["octogee-alice-coach"]) } });
+  it("clears completed deletion state for an already-rostered agent before patching", async () => {
+    let deleted = true;
+    const agentId = "octogee-alice-coach";
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster([agentId]) } }, {
+      agentsCreate: vi.fn(async () => {
+        deleted = false;
+        throw new OpenclawWireError("rpc-error", `agent "${agentId}" already exists`);
+      }),
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
+      if (deleted) throw new Error("agent database is unavailable while agent is deleted");
+      return { mode: "rpc", attempts: 1 };
+    });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), {
       _coachPersonalToken: "pat-1",
     });
 
-    expect(rpc.agentsCreate).not.toHaveBeenCalled();
+    expect(deleted).toBe(false);
     expect(rpc.agentsDelete).not.toHaveBeenCalled();
   });
 
@@ -2416,6 +2493,22 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       cache?: { current: unknown; hash: string };
     };
     expect(cache.cache).toEqual({ current: undefined, hash: "" });
+  });
+
+  it("blocks config activation while an existing agent's deletion cleanup is pending", async () => {
+    const agentId = "octogee-alice-coach";
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster([agentId]) } }, {
+      agentsCreate: vi.fn(async () => {
+        throw new OpenclawWireError("rpc-error", `agent "${agentId}" deletion cleanup is still pending`);
+      }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }))
+      .rejects.toThrow("deletion cleanup is still pending");
+
+    expect(applyConfigPatch).not.toHaveBeenCalled();
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
   });
 
   it("patches beta keyed entries with id-free values and skips foreign agents", async () => {

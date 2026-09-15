@@ -41,7 +41,6 @@ import {
 import {
   createRosterAgents,
   rosterAgentSpecsFromEntries,
-  unrosteredAgentSpecs,
 } from "./agent-roster-creation.js";
 import {
   type CustomerContext,
@@ -259,16 +258,6 @@ function buildRemoveCustomerAccountsPatch(
   return { channels: { mattermost: { accounts } } };
 }
 
-async function currentRosterConfig(ctx: BrokerCtx): Promise<unknown> {
-  if (ctx.configCache.hash !== "" && ctx.configCache.current !== undefined) {
-    return ctx.configCache.current;
-  }
-  const fetched = await ctx.rpc.configGet();
-  ctx.configCache.current = fetched.config;
-  ctx.configCache.hash = fetched.hash;
-  return fetched.config;
-}
-
 async function freshRosterConfig(ctx: BrokerCtx): Promise<unknown> {
   const fetched = await ctx.rpc.configGet();
   ctx.configCache.current = fetched.config;
@@ -338,24 +327,16 @@ async function deleteSupersededCustomerAgents(
   );
 }
 
-/**
- * Introduce the agents the roster does not carry yet. config.patch may add a
- * roster entry, but for an id `agents.delete` has already tombstoned it would
- * add a rostered-but-fenced agent whose every store access fails. Only
- * `agents.create` clears the tombstone; already-rostered ids stay on the pure
- * patch path.
- */
-async function createMissingCustomerAgents(
+async function ensureCustomerRosterAgents(
   ctx: BrokerCtx,
   agentEntries: readonly unknown[],
   logPrefix: string,
 ): Promise<void> {
-  const current = await currentRosterConfig(ctx);
-  const missing = unrosteredAgentSpecs(current, rosterAgentSpecsFromEntries(agentEntries));
-  if (missing.length === 0) return;
-  await Promise.all(missing.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
+  const specs = rosterAgentSpecsFromEntries(agentEntries);
+  if (specs.length === 0) return;
+  await Promise.all(specs.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
   try {
-    await createRosterAgents(missing, { rpc: ctx.rpc, log: ctx.log, logPrefix });
+    await createRosterAgents(specs, { rpc: ctx.rpc, log: ctx.log, logPrefix });
   } finally {
     invalidateConfigCache(ctx);
   }
@@ -375,7 +356,7 @@ async function reconcileCustomerRosterAgents(
     keepAgentIds,
     logPrefix,
   });
-  await createMissingCustomerAgents(ctx, agentEntries, logPrefix);
+  await ensureCustomerRosterAgents(ctx, agentEntries, logPrefix);
 }
 
 function cacheSnapshot(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot): void {
@@ -1025,7 +1006,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   const logPrefix = `[project-agents:${snapshot.slug}]`;
   const initial = configuredBuilderProjectAgentPatch(current, patchInput);
   await deleteAgentsAndInvalidateCache(ctx, initial.retiredAgentIds, logPrefix);
-  await createMissingCustomerAgents(ctx, projectAgentEntries, logPrefix);
+  await ensureCustomerRosterAgents(ctx, projectAgentEntries, logPrefix);
   const agentIds = agentIdsFromEntries(projectAgentEntries);
   await Promise.all(agentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })));
   await materializeCustomerBrokerProfiles(agentIds, snapshot.slug, ctx.log);
@@ -1341,6 +1322,10 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
+  await ensureCustomerRosterAgents(ctx, [
+    safeManifest.agent,
+    ...safeManifest.projectAgents.map((entry) => entry.agent),
+  ], `[import:${slug}]`);
   const accountIds = [
     safeManifest.accountId,
     ...safeManifest.projectAgents.map((agent) => agent.accountId),

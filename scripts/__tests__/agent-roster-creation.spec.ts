@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createRosterAgents,
   rosterAgentSpecsFromEntries,
-  unrosteredAgentSpecs,
 } from "../lib/agent-roster-creation.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 
@@ -16,44 +15,6 @@ function mkRpc(
 ) {
   return { rpc: { agentsCreate }, agentsCreate };
 }
-
-describe("unrosteredAgentSpecs", () => {
-  it("keeps only the agents the keyed roster does not already carry", () => {
-    const current = {
-      agents: {
-        entries: {
-          "octogee-alice-coach": { model: "house" },
-          "octogee-bob-coach": { model: "house" },
-        },
-      },
-    };
-
-    expect(
-      unrosteredAgentSpecs(current, [
-        { agentId: "octogee-alice-coach", workspace: "/c/alice" },
-        { agentId: "octogee-alice-proj-orbit-coach", workspace: "/c/alice/projects/orbit" },
-      ]),
-    ).toEqual([
-      { agentId: "octogee-alice-proj-orbit-coach", workspace: "/c/alice/projects/orbit" },
-    ]);
-  });
-
-  it("reads the legacy list roster too", () => {
-    const current = { agents: { list: [{ id: "octogee-alice-coach" }] } };
-
-    expect(
-      unrosteredAgentSpecs(current, [
-        { agentId: "octogee-alice-coach", workspace: "/c/alice" },
-        { agentId: "octogee-bob-coach", workspace: "/c/bob" },
-      ]),
-    ).toEqual([{ agentId: "octogee-bob-coach", workspace: "/c/bob" }]);
-  });
-
-  it("treats a config with no roster at all as introducing every agent", () => {
-    expect(unrosteredAgentSpecs({}, [{ agentId: "octogee-alice-coach", workspace: "/c/alice" }]))
-      .toEqual([{ agentId: "octogee-alice-coach", workspace: "/c/alice" }]);
-  });
-});
 
 describe("rosterAgentSpecsFromEntries", () => {
   it("projects id and workspace out of built agent entries", () => {

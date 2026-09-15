@@ -1,4 +1,3 @@
-import { agentIdsFromConfig } from "./byosub-restore.js";
 import { log as defaultLog } from "./config.js";
 import { isAgentAlreadyExistsRpcError, type GatewayRpcClient } from "./gateway-rpc.js";
 
@@ -42,24 +41,6 @@ export function rosterAgentSpecsFromEntries(
   });
 }
 
-export function unrosteredAgentSpecs(
-  current: unknown,
-  specs: readonly RosterAgentSpec[],
-): RosterAgentSpec[] {
-  const rostered = new Set(agentIdsFromConfig(current));
-  return specs.filter((spec) => !rostered.has(spec.agentId));
-}
-
-/**
- * Introduces an agent openclaw has never rostered — or has since deleted.
- *
- * `agents.delete` leaves a journaled tombstone. Re-adding the same id with a
- * config.patch produces a rostered-but-fenced agent: the roster entry is back,
- * but every store access fails with "OpenClaw agent database is unavailable
- * while agent <id> is deleted". `agents.create` is the only call that clears
- * the tombstone, and passing the agent id as `name` is what yields exactly that
- * agentId. Once created, config.patch may update the entry's fields freely.
- */
 export async function createRosterAgents(
   specs: readonly RosterAgentSpec[],
   opts: CreateRosterAgentsOptions,
