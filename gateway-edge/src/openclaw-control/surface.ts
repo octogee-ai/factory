@@ -1947,16 +1947,20 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         ws.close(1008, "dashboard-session-invalid");
         return;
       }
-      const socketLease = limiter.acquireSocket({
+      const identity = {
         uid: session.uid,
         gatewayId,
         sessionId: session.sessionId,
-      });
+      };
+      const desktopStream = ticket === "/openclaw/desktop/observe";
+      const socketLease = desktopStream
+        ? limiter.acquireDesktopStream(identity)
+        : limiter.acquireSocket(identity);
       if (!socketLease) {
-        ws.close(1013, "dashboard-socket-limit");
+        ws.close(1013, desktopStream ? "desktop-stream-limit" : "dashboard-socket-limit");
         return;
       }
-      if (ticket === "/openclaw/desktop/observe") {
+      if (desktopStream) {
         const observerUrl = new URL(req.url ?? "/", "http://localhost");
         const upstreamPath = desktopTickets.redeem(observerUrl.searchParams.get("token") ?? "", session);
         if (!upstreamPath || [...observerUrl.searchParams.keys()].some((key) => key !== "token")) {

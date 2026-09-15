@@ -6,6 +6,31 @@ import {
 } from "./limits.js";
 
 describe("OpenClaw Dashboard shared resource limits", () => {
+  it("reserves desktop streams independently of the two RPC sockets and releases capacity", () => {
+    const limiter = new OpenClawControlResourceLimiter();
+    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    const rpc = [limiter.acquireSocket(identity), limiter.acquireSocket(identity)];
+    expect(rpc.every(Boolean)).toBe(true);
+    expect(limiter.acquireSocket(identity)).toBeNull();
+    const streams = Array.from({ length: 8 }, () => limiter.acquireDesktopStream(identity));
+    expect(streams.every(Boolean)).toBe(true);
+    expect(limiter.acquireDesktopStream(identity)).toBeNull();
+    rpc.forEach((lease) => lease?.release());
+    expect(limiter.acquireDesktopStream(identity)).toBeNull();
+    streams[0]?.release();
+    expect(limiter.acquireDesktopStream(identity)).not.toBeNull();
+    expect(limiter.acquireDesktopStream(identity)).toBeNull();
+    expect(limiter.acquireSocket(identity)).not.toBeNull();
+  });
+
+  it.each(["uid", "gatewayId", "sessionId"] as const)("isolates desktop capacity by %s", (field) => {
+    const limiter = new OpenClawControlResourceLimiter({ maxDesktopStreams: 1 });
+    const identity = { uid: "uid-owner", gatewayId: "bender", sessionId: "session-1" };
+    expect(limiter.acquireDesktopStream(identity)).not.toBeNull();
+    expect(limiter.acquireDesktopStream({ ...identity })).toBeNull();
+    expect(limiter.acquireDesktopStream({ ...identity, [field]: "other" })).not.toBeNull();
+  });
+
   it("admits the current Dashboard startup burst", () => {
     expect(OPENCLAW_CONTROL_MAX_IN_FLIGHT).toBe(64);
     const limiter = new OpenClawControlResourceLimiter();

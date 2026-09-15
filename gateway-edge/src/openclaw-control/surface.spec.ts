@@ -725,7 +725,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     browser.terminate();
   });
 
-  it("routes a session-bound desktop observer as binary RFB and closes it on revocation", async () => {
+  it("keeps the native desktop viewer connected during control takeover and revokes both streams", async () => {
     const upstream = http.createServer();
     const upstreamWs = new WebSocketServer({ server: upstream });
     const observerPaths: string[] = [];
@@ -741,7 +741,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         const frame = JSON.parse(data.toString());
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: frame.method === "connect"
           ? { type: "hello-ok", features: { methods: ["desktop.observe"] } }
-          : { transport: "rfb", wsPath: frame.id === "bad-observer" ? "https://other.test/desktop/observe?token=bad" : "/desktop/observe?token=native-ticket", expiresAtMs: Date.now() + 30_000, control: true } }));
+          : { transport: "rfb", wsPath: frame.id === "bad-observer" ? "https://other.test/desktop/observe?token=bad" : `/desktop/observe?token=${frame.id}`, expiresAtMs: Date.now() + 30_000, control: frame.params.control === true } }));
       });
     });
     const upstreamPort = await listen(upstream);
@@ -762,9 +762,10 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       const frame = JSON.parse(data.toString());
       messages.push(frame);
       if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
-      if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "observe", method: "desktop.observe", params: { source: { kind: "node", nodeId: "desktop" } } }));
+      if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "observe", method: "desktop.observe", params: { source: { kind: "host" }, control: false } }));
     });
     let desktop: WebSocket | undefined;
+    let controller: WebSocket | undefined;
     try {
       await vi.waitFor(() => expect(messages.some((frame) => frame.id === "observe")).toBe(true));
       const result = messages.find((frame) => frame.id === "observe");
@@ -780,14 +781,28 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       await vi.waitFor(() => expect(bytes[1]).toEqual(Buffer.from([0, 1, 255])));
       sessionNow += 2 * 60_000;
       expect(manager.verify({ cookieHeader: cookie, gatewayId: "bender", revisionId: "bender-r7" })).not.toBeNull();
-      expect(observerPaths).toEqual(["/desktop/observe?token=native-ticket"]);
+      browser.send(JSON.stringify({ type: "req", id: "take-control", method: "desktop.observe", params: { source: { kind: "host" }, control: true } }));
+      await vi.waitFor(() => expect(messages.find((frame) => frame.id === "take-control")).toMatchObject({ ok: true, payload: { control: true } }));
+      const controlResult = messages.find((frame) => frame.id === "take-control");
+      controller = new WebSocket(`ws://127.0.0.1:${edgePort}${controlResult.payload.wsPath.replace('/g/bender', '')}`, { headers });
+      const controlBytes: Buffer[] = [];
+      controller.on("message", (data, binary) => { expect(binary).toBe(true); controlBytes.push(Buffer.from(data as Buffer)); });
+      await vi.waitFor(() => expect(controlBytes[0]?.toString()).toBe("RFB 003.008\n"));
+      expect(desktop.readyState).toBe(WebSocket.OPEN);
+      expect(browser.readyState).toBe(WebSocket.OPEN);
+      const keyPress = Buffer.from([4, 1, 0, 0, 0, 0, 0, 97, 4, 0, 0, 0, 0, 0, 0, 97]);
+      controller.send(keyPress);
+      await vi.waitFor(() => expect(controlBytes[1]).toEqual(keyPress));
+      expect(observerPaths).toEqual(["/desktop/observe?token=observe", "/desktop/observe?token=take-control"]);
       browser.send(JSON.stringify({ type: "req", id: "bad-observer", method: "desktop.observe", params: {} }));
       await vi.waitFor(() => expect(messages.find((frame) => frame.id === "bad-observer")).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } }));
       expect(browser.readyState).toBe(WebSocket.OPEN);
       allowed = false;
       await vi.waitFor(() => expect(desktop?.readyState).toBe(WebSocket.CLOSED));
+      await vi.waitFor(() => expect(controller?.readyState).toBe(WebSocket.CLOSED));
     } finally {
       desktop?.terminate();
+      controller?.terminate();
       browser.terminate();
       for (const client of upstreamWs.clients) client.terminate();
     }
