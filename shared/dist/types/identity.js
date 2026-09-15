@@ -248,3 +248,11 @@ export function deriveContactedUsernames(channels, ownUsername) {
         usernames.delete(ownUsername);
     return Array.from(usernames).sort();
 }
+export function mattermostAccountIdForAgentId(agentId) {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind === 'coach')
+        return `${parsed.username}-coach`;
+    if (parsed.kind === 'project')
+        return `${parsed.username}-proj-${parsed.project}`;
+    return null;
+}

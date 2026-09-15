@@ -11,6 +11,7 @@ import {
   evaluateOpenClawControlRpcForProfile,
   installedMethodsFromHello,
   isOpenClawControlMutation,
+  openClawControlRpcCategory,
   openClawConfigSnapshotFromGetResponse,
 } from "./rpc-policy.js";
 
@@ -19,6 +20,29 @@ const invariantContext = {
   gatewayId: "bender",
   apiOrigin: "https://api.octogee.com",
 };
+
+it("accepts the native optional-params envelope without widening permissions", () => {
+  const frame = { type: "req", id: "list", method: "terminal.list" };
+  expect(evaluateOpenClawControlRpcForProfile(frame, policyContext(), "native-owner"))
+    .toMatchObject({ allowed: true, outbound: { ...frame, params: {} } });
+  expect(evaluateOpenClawControlRpcForProfile(frame, policyContext(), "delegated-read"))
+    .toMatchObject({ allowed: false });
+  for (const params of [null, [], "invalid", 1, true]) {
+    expect(evaluateOpenClawControlRpcForProfile({ ...frame, params }, policyContext(), "native-owner"))
+      .toMatchObject({ allowed: false, reason: "invalid-frame" });
+  }
+});
+
+it("classifies native queries without granting delegated access to new methods", () => {
+  for (const method of ["sessions.describe", "models.authStatus", "terminal.list", "chat.startup"]) {
+    expect(openClawControlRpcCategory(method)).toBe("read");
+    expect(evaluateOpenClawControlRpc(request(method), policyContext({ installedMethods: new Set([method]) })))
+      .toMatchObject({ allowed: false });
+  }
+  for (const method of ["sessions.reset", "chat.send", "plugins.install", "sessions.viewers.set"]) {
+    expect(openClawControlRpcCategory(method)).toBe("unknown");
+  }
+});
 
 function request(method: string, params: Record<string, unknown> = {}) {
   return { type: "req", id: "rpc-1", method, params };
@@ -155,7 +179,7 @@ describe("OpenClaw Dashboard RPC policy", () => {
       request("sessions.list"),
       context,
       "native-owner",
-    )).toMatchObject({ allowed: true, category: "unknown" });
+    )).toMatchObject({ allowed: true, category: "read" });
     expect(evaluateOpenClawControlRpcForProfile(
       request("sessions.usage"),
       context,

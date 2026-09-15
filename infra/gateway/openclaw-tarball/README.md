@@ -80,8 +80,8 @@ select TEST or PROD later.
 The selected build is upstream `main`, locked at the start of the recut to
 [`167653ddfa338d4d664de11524735c52b48dc139`](https://github.com/openclaw/openclaw/commit/167653ddfa338d4d664de11524735c52b48dc139).
 Its package version is `2026.9.4`; this is a main snapshot, not the GA tag.
-[Runtime source `777fb63f01dd62d58e393c950c2bb12f0fe19b74`](https://github.com/ceckert/openclaw/commit/777fb63f01dd62d58e393c950c2bb12f0fe19b74)
-on `ceckert/openclaw:codex/octogee-main-20260913` carries the remaining overlay:
+[Runtime source `8fc4f6ee07a42feb2b94f0db5aefa28d2c37d508`](https://github.com/ceckert/openclaw/commit/8fc4f6ee07a42feb2b94f0db5aefa28d2c37d508)
+on `ceckert/openclaw:codex/octogee-prod-fixes-3849` carries the remaining overlay:
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
@@ -89,6 +89,11 @@ on `ceckert/openclaw:codex/octogee-main-20260913` carries the remaining overlay:
 | Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures while allowing recovery. | Still needed; the generic preferences fix is [upstream PR #147930](https://github.com/openclaw/openclaw/pull/147930). |
 | Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; existing [upstream proposal #132759](https://github.com/openclaw/openclaw/issues/132759) awaits the shared-room policy/configuration decision. |
 | Deferred cron monitor convergence | A committed hot reload whose system cron monitor reconcile answers retry-scheduled stays live and logs the deferral instead of forcing a gateway restart; the cron service's own retry finishes the monitors. Pinned by the reload model-state and partial-monitor-write regressions. | Needed by Octogee's multi-customer surge imports (PROD shared-0, 2026-09-14); candidate upstream fix, not yet filed. |
+| External desktop reconnect | Reread rotated VNC credentials when observing a managed desktop after restart; preserve cancellation and managed desktop lifetime. | Needed by Octogee external desktops; no upstream PR filed. |
+| Published plugin runtime reuse | Detached Skill Workshop reviews reuse the current published generation; cached manifest paths retain canonical provenance under symlink projection. | Reproduced downstream; no upstream PR filed. |
+| Native session and dialog recovery | Preserve readable Mattermost titles, resolve participant names within exact transcript identity namespaces, and keep plugin-dialog Cancel/X usable offline. | Reproduced downstream; no upstream PR filed. |
+| Computer approval authority | Allow a plugin to constrain native approval reviewers using live server facts; preserve requester identity and revalidate authority, cancellation, and admission through execution. | Required by Octogee's gateway-owner policy; two type-only SDK exports, no new RPC or approval store. |
+| Agent tool guidance | Describe literal combined session-list filters and noninteractive computer privilege checks. | Prevents the observed wildcard and password assumptions; no access-policy change. |
 
 The config revision freshness patch [#142169](https://github.com/openclaw/openclaw/pull/142169)
 and account-scoped SecretRef reload inspection patch
@@ -112,23 +117,28 @@ revocation removes prepared-icon access, mention eligibility, and delayed mentio
 delivery. Native activity-summary authorization uses the same sharing policy;
 no custom Activity journal or transcript recovery is restored.
 
-The root artifact is `openclaw-fork-777fb63f.tgz`
-(SHA-256 `d9cd664b96b1691a86d84d81f0c63c5d1a3d0cd7553e444e264b1c302950a5e5`).
-Mattermost is `openclaw-mattermost-1646abef.tgz`
-(SHA-256 `1646abefea8337b52927af362025d6f7a6d0c6f9331851fecda9f671b5441247`).
+The root artifact is `openclaw-fork-8fc4f6ee.tgz`
+(SHA-256 `5432bf3b34e53897910655f6303c8b1538ae3962a3bd4fe08984d3ac4bfd6fd9`).
+Mattermost is `openclaw-mattermost-962a539b.tgz`
+(SHA-256 `962a539b73b712108830fd88af0f3384fd1b9f22a208b314c13a728dca8df471`).
 
-The exact overlay commit passed the full build. The 2026-09-14 recut adds one overlay commit (deferred cron monitor convergence) on the same locked upstream snapshot; the gateway reload-handler and cron suites passed 269 tests, and the Octogee surge-import deadline change is covered separately in `core/src/apply-config-patch.spec.ts`. Focused gateway/runtime suites
-cover membership, sharing, preferences, read visibility, mentions, media, and
-icons; Mattermost routing/participation suites passed 152 tests and the UI icon
-suite passed 11. Changed-source type, lint, format, protocol, config metadata,
-and repository guards passed. The aggregate changed-check run hit a test-file
-line limit; after tightening redundant assertions, its affected lint/tests and
-remaining guards passed separately. Native mobile app builds were not run.
+The September 15 overlay passed the full build from the exact source commit.
+Focused suites passed 94 desktop tests, 205 plugin tests, 70 Skill Workshop review
+tests, 93 native session tests, 55 UI tests, and 565 approval/identity tests.
+The browser fixtures passed one session-title/participant test and three dialog
+recovery tests; synthetic before/after screenshots are attached to
+[Octogee PR #3849](https://github.com/octogee-ai/octogee/pull/3849).
+Affected source and test typechecks, lint, formatting, SDK surface/wiring checks,
+and the Octogee extension's exact native SDK consumer check passed. Independent
+source reviews found no actionable issues. Native mobile builds were not run.
+
 The packed root installed in a clean npm prefix, reported the exact overlay commit,
 and imported the matching Mattermost runtime in the Dockerfile's bundled layout.
-Octogee's base-reuse, native Mattermost, image fingerprint, CUA installer, and
-gateway-edge membership/identity contracts are checked separately. Automated
-checks do not constitute a live TEST rollout for this recut.
+Octogee's RPC quarantine, Dashboard recovery, desktop process supervision,
+toolchain, identity, and approval integration regressions are checked separately.
+These fixes address reproduced defects; the recorded PROD CPU stalls and memory
+provider retries still require rollout observation to establish full recovery.
+Automated checks do not constitute a live TEST or PROD rollout.
 
 ### Mattermost session and delivery policy
 

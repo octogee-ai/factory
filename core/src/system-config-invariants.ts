@@ -1,4 +1,4 @@
-import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
+import { parseAgentId, mattermostAccountIdForAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
 import {
   openClawOperatorRoles,
   OPENCLAW_TRUSTED_PROXIES,
@@ -702,12 +702,6 @@ export function reconcileBuilderAgentEntry(
   return agent;
 }
 
-function accountIdForAgentId(agentId: string): string | null {
-  const parsed = parseAgentId(agentId);
-  if (parsed.kind === "coach") return `${parsed.username}-coach`;
-  if (parsed.kind === "project") return `${parsed.username}-proj-${parsed.project}`;
-  return null;
-}
 
 function allowedToolsForAgent(kind: ParsedAgentId["kind"]): readonly string[] {
   if (kind === "coach") return CUSTOMER_WORKFLOW_TOOLS;
@@ -739,7 +733,7 @@ function managedMattermostAccounts(config: JsonObject): Map<string, "coach" | "p
   const addAgent = (agentId: string): void => {
     const parsed = parseAgentId(agentId);
     if (parsed.kind !== "coach" && parsed.kind !== "project") return;
-    const accountId = accountIdForAgentId(agentId);
+    const accountId = mattermostAccountIdForAgentId(agentId);
     if (accountId) result.set(accountId, parsed.kind);
   };
   if (Array.isArray(agents.list)) {

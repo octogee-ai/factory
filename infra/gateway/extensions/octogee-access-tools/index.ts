@@ -1,6 +1,7 @@
 // @ts-expect-error resolved by the OpenClaw runtime
-import { definePluginEntry, jsonResult } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, jsonResult, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
+import { computerApprovalHook } from "./computer-approval.js";
 
 import {
   AccessToolError,
@@ -23,11 +24,6 @@ interface ToolContext {
     channel?: unknown;
     to?: unknown;
   };
-}
-interface PluginApi {
-  pluginConfig?: unknown;
-  registerTool: (factory: (context: ToolContext) => unknown, meta: { name: string }) => void;
-  logger?: { debug?: (message: string) => void };
 }
 
 function preparedOperation(operation: unknown): "grant" | "change" | "revoke" {
@@ -80,10 +76,12 @@ export default definePluginEntry({
   id: "octogee-access-tools",
   name: "Octogee Access Tools",
   description: "Recommend and prepare owner-reviewed delegated Agent access.",
-  register(api: PluginApi) {
+  register(api: OpenClawPluginApi) {
     const config = (api.pluginConfig ?? {}) as { brokerUrl?: string; tokenPath?: string };
+    api.on("before_tool_call", computerApprovalHook(config));
     api.registerTool((context) => ({
       name: "delegated_access",
+      label: "Delegated access",
       description:
         "List Agent access, recommend the narrowest role, or prepare a grant/change/revoke for the owner to approve in Octogee. This tool never activates or revokes access by itself.",
       parameters: Type.Object({

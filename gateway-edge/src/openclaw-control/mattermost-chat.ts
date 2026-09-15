@@ -3,7 +3,7 @@ import {
   parseMattermostSessionRoute,
   parseThreadedMattermostSessionRoute,
 } from "@octogee/shared/types/mattermost-session-route";
-import { parseAgentId } from "@octogee/shared/types/identity";
+import { parseAgentId, mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 
 import {
   type authorizeChannel,
@@ -18,6 +18,7 @@ import {
 import type { OpenClawControlProxyIdentity } from "./proxy-identity.js";
 import type { OpenClawControlSession } from "./session.js";
 import { createBrokeredMattermostAccess } from "./mattermost-broker.js";
+import { logger } from "../middleware/logging.js";
 
 const MAX_MESSAGE_BYTES = 128 * 1024;
 const MAX_HISTORY_POSTS = 20_000;
@@ -126,6 +127,9 @@ interface ProjectedMessage {
     senderName?: string;
     senderUsername?: string;
     senderIdentity?: { type: "profile"; id: string };
+    senderObservation?: {
+      type: "observation"; pluginId: "mattermost"; accountId: string; senderKind: "unknown"; id: string;
+    };
     senderProfileAvatarUrl?: string;
     turnBoundary?: true;
   };
@@ -1483,11 +1487,13 @@ async function prepareSessionsList(
 async function attributeChatProfiles(
   page: ProjectedHistory,
   session: OpenClawControlSession,
-  channelId: string,
+  { channelId, agentId }: { channelId: string; agentId: string },
   resolve: OpenClawControlProxyIdentity["resolveChatProfile"] | undefined,
   signal?: AbortSignal,
 ): Promise<void> {
   if (!resolve) return;
+  const accountId = mattermostAccountIdForAgentId(agentId);
+  if (!accountId) throw new Error("Mattermost channel agent has no managed account");
   const authors = new Map<string, ProjectedMessage>();
   for (const message of page.messages) {
     if (message.role === "user" && message.__openclaw.senderId) authors.set(message.__openclaw.senderId, message);
@@ -1513,6 +1519,9 @@ async function attributeChatProfiles(
       meta.senderName = "Mattermost user";
       continue;
     }
+    meta.senderObservation = {
+      type: "observation", pluginId: "mattermost", accountId, senderKind: "unknown", id: profile.mattermostUserId,
+    };
     meta.senderId = profile.profileId;
     meta.senderIdentity = { type: "profile", id: profile.profileId };
     meta.senderName = profile.username;
@@ -1526,7 +1535,7 @@ async function prepareHistory(
   session: OpenClawControlSession,
   authorize: Authorize,
   resolveChatProfile: OpenClawControlProxyIdentity["resolveChatProfile"] | undefined,
-  signal?: AbortSignal,
+  { signal, onStage }: { signal?: AbortSignal; onStage: (stage: string) => void },
 ): Promise<MattermostChatPreparation | null> {
   const params = historyParams(frame.params);
   const sessionKey = typeof frame.params.sessionKey === "string"
@@ -1544,6 +1553,7 @@ async function prepareHistory(
       ? null
       : rpcError(frame, "INVALID_REQUEST", "Unsupported Mattermost channel history request");
   }
+  onStage("authorization");
   const access = await authorized(authorize, session, params.sessionKey, signal);
   if (!access) {
     return rpcError(frame, "INVALID_REQUEST", "Unsupported Mattermost channel history request");
@@ -1552,6 +1562,7 @@ async function prepareHistory(
     return rpcError(frame, "INVALID_REQUEST", "Mattermost channel Agent does not match the session");
   }
   const required = Math.min(MAX_HISTORY_POSTS, params.offset + params.limit);
+  onStage("history");
   const history = await readProjectedHistory(
     access.authorization,
     access.route,
@@ -1562,7 +1573,11 @@ async function prepareHistory(
     return rpcError(frame, "UNAVAILABLE", "Mattermost channel history exceeds the recovery window");
   }
   const page = pageHistory(history.messages, params.offset, params.limit, history.reachedEnd);
-  await attributeChatProfiles(page, session, access.route.primaryChannelId, resolveChatProfile, signal);
+  onStage("profiles");
+  await attributeChatProfiles(page, session, {
+    channelId: access.route.primaryChannelId,
+    agentId: access.authorization.target.agentId,
+  }, resolveChatProfile, signal);
   if (session.brokerProfile === "native-member" || session.brokerProfile === "native-member-helper") {
     return rpcSuccess(frame, { sessionKey: params.sessionKey, ...page });
   }
@@ -1669,6 +1684,27 @@ function unavailableResponse(
   );
 }
 
+function initialRequestStage(method: string): string {
+  if (method === "sessions.list") return "session-list";
+  if (method === "chat.send") return "send";
+  return "history";
+}
+
+function watchPreparedHistory(
+  history: MattermostChatPreparation | null,
+  frame: OpenClawControlRequestFrame,
+  broker: ReturnType<typeof createBrokeredMattermostAccess>,
+): void {
+  const route = parseChannelScopedMattermostSessionRoute(frame.params.sessionKey);
+  if (history && route && (history.kind === "upstream" || history.frame.ok === true)) {
+    history.watch = {
+      sessionKey: frame.params.sessionKey as string,
+      agentId: route.agentId,
+      run: (onChange, watchSignal) => broker.watchChannel(route.primaryChannelId, route.agentId, onChange, watchSignal),
+    };
+  }
+}
+
 export function createMattermostControlChat(options: {
   perUserIdentity?: boolean;
   resolveChatProfile?: OpenClawControlProxyIdentity["resolveChatProfile"];
@@ -1681,6 +1717,8 @@ export function createMattermostControlChat(options: {
       const authorize = options.authorize ?? broker.authorize;
       const listWorkspaceChannels = options.listWorkspaceChannels ?? broker.listWorkspaceChannels;
       if (!["sessions.subscribe", "sessions.list", "chat.history", "chat.startup", "chat.send"].includes(frame.method)) return null;
+      const startedAt = performance.now();
+      let stage = initialRequestStage(frame.method);
       try {
         if (frame.method === "sessions.subscribe") return options.perUserIdentity ? null : prepareSessionSubscription(frame);
         if (frame.method === "sessions.list") {
@@ -1693,18 +1731,19 @@ export function createMattermostControlChat(options: {
           );
         }
         if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, signal);
-        const history = await prepareHistory(frame, session, authorize, options.resolveChatProfile, signal);
-        const route = parseChannelScopedMattermostSessionRoute(frame.params.sessionKey);
-        if (history && route && (history.kind === "upstream" || history.frame.ok === true)) {
-          history.watch = {
-            sessionKey: frame.params.sessionKey as string,
-            agentId: route.agentId,
-            run: (onChange, watchSignal) => broker.watchChannel(route.primaryChannelId, route.agentId, onChange, watchSignal),
-          };
-        }
+        const history = await prepareHistory(frame, session, authorize, options.resolveChatProfile, {
+          signal, onStage: (next) => { stage = next; },
+        });
+        watchPreparedHistory(history, frame, broker);
         return history;
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
+        logger.warn("Mattermost Dashboard request failed", {
+          gatewayId: session.gatewayId, method: frame.method, stage,
+          failure: error instanceof Error ? error.name : "unknown",
+          ...(error instanceof ChannelSessionMattermostError && error.status !== undefined ? { status: error.status } : {}),
+          durationMs: Math.round(performance.now() - startedAt),
+        });
         return unavailableResponse(frame, error);
       }
     },

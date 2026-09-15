@@ -59,7 +59,6 @@
         "pnpm",
         "pnpx",
         "tsc",
-        "tsserver",
         "tsx"
       ]
     },

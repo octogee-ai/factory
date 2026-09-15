@@ -1054,6 +1054,7 @@ interface BrowserRpcFrame extends Record<string, unknown> {
 function browserRpcFrame(data: RawData): BrowserRpcFrame | null {
   const frame = parseFrame(data);
   if (!frame || typeof frame.id !== "string" || typeof frame.method !== "string") return null;
+  if (frame.params === undefined) frame.params = {};
   if (!frame.params || typeof frame.params !== "object" || Array.isArray(frame.params)) return null;
   return frame as BrowserRpcFrame;
 }
@@ -1508,12 +1509,22 @@ class OpenClawControlSocketBridge {
   }
 
   private rejectQuarantined(frame: BrowserRpcFrame): boolean {
-    let reason: "request-id-quarantined" | "upstream-quarantined" | undefined;
-    if (this.timedOut.has(frame.id)) reason = "request-id-quarantined";
-    else if (this.timedOut.size > 0) reason = "upstream-quarantined";
-    if (!reason) return false;
-    this.args.browser.send(openClawControlPolicyError(frame, reason));
-    this.recordPolicyDenial("unknown", reason);
+    if (this.timedOut.has(frame.id)) {
+      this.args.browser.send(openClawControlPolicyError(frame, "request-id-quarantined"));
+      this.recordPolicyDenial("unknown", "request-id-quarantined");
+      return true;
+    }
+    const category = openClawControlRpcCategory(frame.method);
+    if (this.timedOut.size === 0 || category === "read" || category === "approval_read") return false;
+    this.args.browser.send(JSON.stringify({
+      type: "res", id: frame.id, ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "An earlier OpenClaw operation is still pending. Wait for it to finish or for the Dashboard to reconnect before retrying.",
+        details: { reason: "upstream-quarantined" },
+      },
+    }));
+    this.args.metrics?.rpc(this.metricsIdentity, category, "timeout");
     return true;
   }
 

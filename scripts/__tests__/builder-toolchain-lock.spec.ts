@@ -107,11 +107,13 @@ function lockFixture(): Record<string, unknown> {
         resolved: "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.270.tgz",
         integrity: "sha512-Y2xhdWRl",
         hasInstallScript: true,
+        bin: { claude: "bin/claude.exe" },
       },
       "node_modules/@openai/codex": {
         version: "0.154.0",
         resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0.tgz",
         integrity: "sha512-Y29kZXg=",
+        bin: { codex: "bin/codex.js" },
       },
       "node_modules/@sparticuz/chromium": {
         version: "149.0.0",
@@ -124,6 +126,7 @@ function lockFixture(): Record<string, unknown> {
           version,
           resolved: `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,
           integrity: "sha512-Y2FjaGVk",
+          bin: { [({ "firebase-tools": "firebase", "npm-check-updates": "ncu", typescript: "tsc" } as Record<string, string>)[name] ?? name]: "bin/cli.js" },
           ...(name === "pnpm" ? { hasInstallScript: true } : {}),
         }])),
       "node_modules/esbuild": {
@@ -211,6 +214,12 @@ async function fakeInstall(destination: string): Promise<void> {
 }
 
 describe("Builder npm toolchain lock", () => {
+  it("rejects an enabled command absent from the pinned npm package exports", () => {
+    const groups = groupsFixture();
+    groups.groups.find((group) => group.id === "web-development")!.commands!.push("tsserver");
+    expect(() => parseBuilderToolchainLock(lockFixture(), groups)).toThrow("missing-command:tsserver");
+  });
+
   it("keeps the checked-in npm lock aligned with the enabled npm groups", async () => {
     const [lock, groups] = await Promise.all([
       fs.readFile(path.resolve("..", "infra/gateway/builder-toolchain/package-lock.json"), "utf8"),
@@ -304,7 +313,7 @@ describe("Builder npm toolchain lock", () => {
         await fakeInstall(destination);
         await fs.rm(path.join(destination, "node_modules", ".bin", "firebase"));
       },
-    })).rejects.toMatchObject({ reasonCode: "missing-command" });
+    })).rejects.toMatchObject({ reasonCode: "missing-command:firebase" });
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
   });
 

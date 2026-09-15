@@ -1,4 +1,4 @@
-import { parseAgentId } from "@octogee/shared/types/identity";
+import { parseAgentId, mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import { openClawOperatorRoles, OPENCLAW_TRUSTED_PROXIES, OPENCLAW_TRUSTED_PROXY_AUTH, openClawIdentityScopes, } from "@octogee/shared/types/openclaw-proxy-identity";
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array";
@@ -589,14 +589,6 @@ export function reconcileBuilderAgentEntry(agentId, entry) {
         delete agent.tools;
     return agent;
 }
-function accountIdForAgentId(agentId) {
-    const parsed = parseAgentId(agentId);
-    if (parsed.kind === "coach")
-        return `${parsed.username}-coach`;
-    if (parsed.kind === "project")
-        return `${parsed.username}-proj-${parsed.project}`;
-    return null;
-}
 function allowedToolsForAgent(kind) {
     if (kind === "coach")
         return CUSTOMER_WORKFLOW_TOOLS;
@@ -629,7 +621,7 @@ function managedMattermostAccounts(config) {
         const parsed = parseAgentId(agentId);
         if (parsed.kind !== "coach" && parsed.kind !== "project")
             return;
-        const accountId = accountIdForAgentId(agentId);
+        const accountId = mattermostAccountIdForAgentId(agentId);
         if (accountId)
             result.set(accountId, parsed.kind);
     };

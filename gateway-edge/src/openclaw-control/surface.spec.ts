@@ -38,6 +38,7 @@ const tempDirs: string[] = [];
 const SESSION_ID = "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70";
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => {
     server.close(() => resolve());
     server.closeAllConnections?.();
@@ -112,6 +113,52 @@ async function listen(server: http.Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return (server.address() as AddressInfo).port;
 }
+
+it.each(["native-owner", "delegated-read"] as const)("forwards parameterless reads for %s through the socket bridge", async (profile) => {
+  const upstream = http.createServer();
+  const upstreamWs = new WebSocketServer({ server: upstream });
+  const seen: Record<string, unknown>[] = [];
+  upstreamWs.on("connection", (ws) => {
+    ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+    ws.on("message", (data) => {
+      const frame = JSON.parse(data.toString());
+      seen.push(frame);
+      ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: frame.method === "connect"
+        ? { type: "hello-ok", features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS, "terminal.list"] } }
+        : { items: [] } }));
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  const manager = sessions();
+  const edge = http.createServer(appWith({ env: env(upstreamPort), sessions: manager }));
+  const router = new WsUpgradeRouter();
+  attachOpenClawControlWsRoute({ router, env: env(upstreamPort), sessions: manager,
+    authorize: async () => true, loadGatewayToken: async () => "gateway-secret" });
+  router.attach(edge);
+  const edgePort = await listen(edge);
+  const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+    headers: { cookie: issue(manager, profile), origin: "https://api.octogee.com" },
+  });
+  const method = profile === "native-owner" ? "terminal.list" : "status";
+  try {
+    const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("parameterless read did not settle")), 1_000);
+      browser.on("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "read", method }));
+        else if (frame.id === "read") { clearTimeout(deadline); resolve(frame); }
+      });
+    });
+    expect(result).toMatchObject({ ok: true, payload: profile === "native-owner" ? { items: [] } : {} });
+    expect(seen).toContainEqual({ type: "req", id: "read", method, params: {} });
+  } finally {
+    browser.terminate();
+    for (const client of upstreamWs.clients) client.terminate();
+    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+  }
+});
 
 describe("OpenClaw Dashboard HTTP surface", () => {
   it("accepts only its exact base path and a loopback HTTP upstream", () => {
@@ -1695,7 +1742,9 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
   });
 
   it("tombstones a timed-out id until its late response drains before allowing safe reuse", async () => {
-    let upstreamSocket: WebSocket | undefined;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let receivedStatus!: () => void;
+    const firstStatus = new Promise<void>((resolve) => { receivedStatus = resolve; });
     let statusRequests = 0;
     let returnFresh = false;
     const upstream = http.createServer();
@@ -1704,7 +1753,6 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       upstreamWs.handleUpgrade(req, socket, head, (ws) => upstreamWs.emit("connection", ws, req));
     });
     upstreamWs.on("connection", (ws) => {
-      upstreamSocket = ws;
       ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
       ws.on("message", (data) => {
         const frame = JSON.parse(data.toString()) as Record<string, unknown>;
@@ -1718,8 +1766,12 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
             },
           }));
+        } else if (frame.method === "models.list") {
+          ws.send(JSON.stringify({ type: "res", id: "reused", ok: true, payload: { generation: "old" } }));
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { models: [] } }));
         } else if (frame.method === "status") {
           statusRequests += 1;
+          receivedStatus();
           if (returnFresh) {
             ws.send(JSON.stringify({
               type: "res",
@@ -1750,8 +1802,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
     });
-    await new Promise<void>((resolve, reject) => {
-      const deadline = setTimeout(() => reject(new Error("timed-id reuse did not settle")), 1_000);
+    const completed = new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error(`timed-id reuse did not settle: ${JSON.stringify(browserFrames)}`)), 1_000);
       browser.on("error", reject);
       browser.on("message", (data) => {
         const frame = JSON.parse(data.toString()) as Record<string, unknown>;
@@ -1762,18 +1814,10 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
           browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
         } else if ((frame.error as Record<string, unknown> | undefined)?.code === "UPSTREAM_TIMEOUT") {
           browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
-          setTimeout(() => {
-            upstreamSocket?.send(JSON.stringify({
-              type: "res",
-              id: "reused",
-              ok: true,
-              payload: { generation: "old" },
-            }));
-            setTimeout(() => {
-              returnFresh = true;
-              browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
-            }, 5);
-          }, 5);
+          browser.send(JSON.stringify({ type: "req", id: "independent-read", method: "models.list", params: {} }));
+        } else if (frame.id === "independent-read" && frame.ok === true) {
+          returnFresh = true;
+          browser.send(JSON.stringify({ type: "req", id: "reused", method: "status", params: {} }));
         } else if ((frame.payload as Record<string, unknown> | undefined)?.generation === "fresh") {
           clearTimeout(deadline);
           resolve();
@@ -1781,7 +1825,13 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       });
     });
 
+    await firstStatus;
+    await vi.advanceTimersByTimeAsync(30);
+    await completed;
+    vi.useRealTimers();
+
     expect(statusRequests).toBe(2);
+    expect(browserFrames).toContainEqual({ type: "res", id: "independent-read", ok: true, payload: { models: [] } });
     expect(browserFrames.some((frame) =>
       (frame.error as Record<string, unknown> | undefined)?.message ===
         "Octogee policy denied this operation (request-id-quarantined)")).toBe(true);
@@ -1793,6 +1843,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
 
   it("quarantines repeated timed-out tools.invoke work and releases the socket after cleanup", async () => {
     let toolRequests = 0;
+    const responses: Array<Record<string, unknown>> = [];
     let connections = 0;
     const upstream = http.createServer();
     const upstreamWs = new WebSocketServer({ noServer: true });
@@ -1814,6 +1865,8 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
               features: { methods: [...OPENCLAW_CONTROL_ALLOWED_METHODS] },
             },
           }));
+        } else if (frame.method === "models.list") {
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { models: [] } }));
         } else if (frame.method === "tools.invoke") {
           toolRequests += 1;
         }
@@ -1830,7 +1883,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       authorize: async () => true,
       loadGatewayToken: async () => "gateway-secret",
       resourceLimiter: new OpenClawControlResourceLimiter({ maxSockets: 1, maxInFlight: 1 }),
-      rpcTimeoutMs: 20,
+      rpcTimeoutMs: 100,
     });
     router.attach(edge);
     const edgePort = await listen(edge);
@@ -1846,6 +1899,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       });
       first.on("message", (data) => {
         const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+        responses.push(frame);
         if (frame.event === "connect.challenge") {
           first.send(JSON.stringify({ type: "req", id: "connect-1", method: "connect", params: {} }));
         } else if ((frame.payload as Record<string, unknown> | undefined)?.type === "hello-ok") {
@@ -1856,6 +1910,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
             params: { name: "web_search", args: { query: "first" } },
           }));
         } else if ((frame.error as Record<string, unknown> | undefined)?.code === "UPSTREAM_TIMEOUT") {
+          first.send(JSON.stringify({ type: "req", id: "independent-read", method: "models.list", params: {} }));
           for (let index = 2; index <= 5; index += 1) {
             first.send(JSON.stringify({
               type: "req",
@@ -1868,6 +1923,10 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       });
     });
     expect(toolRequests).toBe(1);
+    expect(responses).toContainEqual({ type: "res", id: "independent-read", ok: true, payload: { models: [] } });
+    expect(responses.find((frame) => frame.id === "tool-2")).toMatchObject({
+      ok: false, error: { code: "UNAVAILABLE", details: { reason: "upstream-quarantined" } },
+    });
 
     const second = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: { cookie: issue(manager), origin: "https://api.octogee.com" },

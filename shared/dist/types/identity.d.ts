@@ -77,3 +77,4 @@ export declare function deriveContactedUsernames(channels: ReadonlyArray<{
     name: string;
     type: string;
 }>, ownUsername: string | null): string[];
+export declare function mattermostAccountIdForAgentId(agentId: string): string | null;

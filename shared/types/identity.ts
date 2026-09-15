@@ -276,3 +276,10 @@ export function deriveContactedUsernames(
   if (ownUsername) usernames.delete(ownUsername);
   return Array.from(usernames).sort();
 }
+
+export function mattermostAccountIdForAgentId(agentId: string): string | null {
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === 'coach') return `${parsed.username}-coach`;
+  if (parsed.kind === 'project') return `${parsed.username}-proj-${parsed.project}`;
+  return null;
+}

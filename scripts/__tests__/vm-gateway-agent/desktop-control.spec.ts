@@ -32,6 +32,7 @@ it("sends only lifecycle actions through the private socket and surfaces systemd
 it.each([
   ["quiesces applications and recovers lifecycle failures", "test_lifecycle.py"],
   ["keeps managed desktops awake before starting the compositor", "test_idle.py"],
+  ["preserves the desktop when Chromium closes and supervises core services", "test_supervision.py"],
   ["checks fresh-image resize support before and after reboot", "test_acceptance.py"],
   ["checks screenshot and XWayland resize geometry", "test_display_resize.py"],
   ["keeps untested image candidates outside the family", "test_build.py"],

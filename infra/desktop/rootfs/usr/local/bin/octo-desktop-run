@@ -137,9 +137,17 @@ stamp "control api on ${control_port}"
 /usr/local/bin/octo-desktop-browser \
   >"$log_dir/chromium.log" 2>&1 &
 browser_pid=$!
-children+=("$browser_pid")
 stamp "chromium launched"
 
-wait -n || true
-stamp "a child exited; shutting down"
-shutdown
+while true; do
+  child_status=0
+  exited_pid=""
+  wait -n -p exited_pid "${children[@]}" ${browser_pid:+"$browser_pid"} || child_status=$?
+  if [[ "$exited_pid" == "$browser_pid" ]]; then
+    stamp "Chromium exited (status=${child_status}); desktop remains running"
+    browser_pid=""
+    continue
+  fi
+  stamp "desktop service exited (pid=${exited_pid}, status=${child_status}); shutting down"
+  shutdown
+done

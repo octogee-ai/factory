@@ -246,6 +246,13 @@ export function parseBuilderToolchainLock(
 ): BuilderToolchainLock {
   const { packages, dependencies, packagesByVersion } = parseLockPackages(value, manifest);
   validateLockedPackages(packages, dependencies, packagesByVersion);
+  const commands = new Set(Object.keys(packagesByVersion).flatMap((name) => {
+    const bin = objectRecord(objectRecord(packages[`node_modules/${name}`])?.bin);
+    return bin ? Object.keys(bin) : [];
+  }));
+  for (const command of npmGroupCommands(manifest)) {
+    if (!commands.has(command)) throw hydrationError(`missing-command:${command}`);
+  }
   const scriptedPackages = lockedInstallScripts(packages);
   if (!exactKeys(
     Object.fromEntries(scriptedPackages.map((approval) => [approval, true])),
@@ -550,7 +557,7 @@ async function validateCommandFiles(objectPath: string): Promise<void> {
     const commandPath = path.join(objectPath, BUILDER_TOOLCHAIN_COMMAND_PATHS[command]);
     const stat = await fs.lstat(commandPath).catch(() => null);
     if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) {
-      throw hydrationError("missing-command");
+      throw hydrationError(`missing-command:${command}`);
     }
     const realCommand = await fs.realpath(commandPath);
     if (!realCommand.startsWith(`${realRoot}${path.sep}`)) {
@@ -634,7 +641,7 @@ async function activateNpmCommands(
     const executable = path.join(source, command);
     const stat = await fs.lstat(executable).catch(() => null);
     if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) {
-      throw hydrationError("missing-command");
+      throw hydrationError(`missing-command:${command}`);
     }
     const link = path.join(destination, command);
     await fs.rm(link, { force: true });

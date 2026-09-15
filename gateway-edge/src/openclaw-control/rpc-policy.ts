@@ -63,6 +63,13 @@ const READ_METHODS = new Set([
   "skills.status",
 ]);
 
+const NATIVE_READ_METHODS = new Set([
+  "sessions.list", "sessions.describe", "sessions.preview", "sessions.catalog",
+  "sessions.files.get", "chat.history", "chat.startup", "board.get", "question.list",
+  "models.authStatus", "taskSuggestions.list", "progressCard.get", "tasks.list",
+  "talk.catalog", "terminal.list", "plugins.list", "plugins.controlUi.list",
+]);
+
 const CONFIG_MUTATION_METHODS = new Set(["config.set", "config.apply", "config.patch"]);
 const APPROVAL_READ_METHODS = new Set([
   "approval.history",
@@ -630,10 +637,10 @@ function parsedOpenClawControlRequest(
 ): { request: Record<string, unknown>; method: string } | OpenClawControlRpcDecision {
   const request = record(frame);
   if (!request || request.type !== "req" || !boundedString(request.id, 256) ||
-    !boundedString(request.method, 256) || !record(request.params)) {
+    !boundedString(request.method, 256) || (request.params !== undefined && !record(request.params))) {
     return { allowed: false, category: "unknown", reason: "invalid-frame" };
   }
-  return { request, method: request.method as string };
+  return { request: { ...request, params: request.params ?? {} }, method: request.method as string };
 }
 
 function unavailableMethodDecision(): OpenClawControlRpcDecision {
@@ -641,7 +648,7 @@ function unavailableMethodDecision(): OpenClawControlRpcDecision {
 }
 
 export function openClawControlRpcCategory(method: string): OpenClawControlRpcCategory {
-  if (READ_METHODS.has(method)) return "read";
+  if (READ_METHODS.has(method) || NATIVE_READ_METHODS.has(method)) return "read";
   if (CONFIG_MUTATION_METHODS.has(method)) return "config_mutation";
   if (APPROVAL_READ_METHODS.has(method)) return "approval_read";
   if (APPROVAL_MUTATION_METHODS.has(method)) return "approval_mutation";

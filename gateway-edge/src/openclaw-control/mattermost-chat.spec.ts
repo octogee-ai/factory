@@ -7,6 +7,7 @@ import {
   projectMattermostControlMessages,
 } from "./mattermost-chat.js";
 import type { OpenClawControlSession } from "./session.js";
+import { logger } from "../middleware/logging.js";
 
 const channelId = "c".repeat(26);
 const humanId = "h".repeat(26);
@@ -882,10 +883,13 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     if (prepared?.kind !== "upstream") throw new Error("expected upstream projection");
     const response = prepared.project({ type: "res", ok: true, payload: {} });
     expect(response).toMatchObject({ payload: { messages: [
-      { role: "user", __openclaw: { senderId: "existing-profile", senderIdentity: { type: "profile", id: "existing-profile" }, senderName: "alice", senderUsername: "alice", senderProfileAvatarUrl: "/api/users/existing-profile/avatar?v=7" } },
+      { role: "user", __openclaw: { senderId: "existing-profile", senderIdentity: { type: "profile", id: "existing-profile" }, senderObservation: { type: "observation", pluginId: "mattermost", accountId: "alice-coach", senderKind: "unknown", id: humanId }, senderName: "alice", senderUsername: "alice", senderProfileAvatarUrl: "/api/users/existing-profile/avatar?v=7" } },
       { role: "assistant" },
     ] } });
-    expect(JSON.stringify(response)).not.toContain(humanId);
+    expect(response).toMatchObject({ payload: { messages: [{ __openclaw: {
+      senderId: "existing-profile", senderName: "alice",
+      senderObservation: { id: humanId },
+    } }, { role: "assistant" }] } });
     expect(JSON.stringify(response)).not.toContain(agentMmUserId);
   });
 
@@ -1790,6 +1794,7 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
   });
 
   it("fails the session roster visibly instead of returning a partial authorization projection", async () => {
+    const log = vi.spyOn(logger, "warn").mockImplementation(() => {});
     const adapter = createMattermostControlChat({
       authorize: vi.fn(),
       listWorkspaceChannels: vi.fn(async () => {
@@ -1814,6 +1819,12 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
         },
       },
     });
+    expect(log).toHaveBeenCalledWith("Mattermost Dashboard request failed", {
+      gatewayId: "bender", method: "sessions.list", stage: "session-list",
+      failure: "Error", durationMs: expect.any(Number),
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("Firestore unavailable");
+    log.mockRestore();
   });
 
   it("preserves submission identity after Mattermost strips the transient pending post ID", async () => {

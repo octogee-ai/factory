@@ -146,11 +146,21 @@ export async function probeOpenClawHealth(
   healthUrl = "http://127.0.0.1:18789/healthz",
   timeoutMs = 2_000,
 ): Promise<boolean> {
+  const startedAt = performance.now();
+  const signal = AbortSignal.timeout(timeoutMs);
   try {
-    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(timeoutMs) });
+    const response = await fetch(healthUrl, { signal });
     await response.body?.cancel();
+    if (!response.ok) console.warn("[openclaw-health] probe failed", {
+      failure: "http-error", status: response.status,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     return response.ok;
   } catch {
+    console.warn("[openclaw-health] probe failed", {
+      failure: signal.aborted ? "timeout" : "request-failed",
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     return false;
   }
 }
