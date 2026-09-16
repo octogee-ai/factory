@@ -369,7 +369,7 @@ describe("gateway base image", () => {
 
     expect(dockerfile).toContain('OPENCLAW_CORE_VERSION="$(node -e');
     expect(dockerfile).toContain('"$OPENCLAW_ROOT/package.json"');
-    expect(dockerfile).toContain('if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then');
+    expect(dockerfile).toContain('test -f "$OC_VENDOR/openclaw-codex.tgz"');
     expect(dockerfile).toContain('CODEX_REPACK="$(mktemp -d)"');
     expect(dockerfile).toContain('pkg.name !== "@openclaw/codex"');
     expect(dockerfile).toContain('pkg.version = version');
@@ -377,7 +377,7 @@ describe("gateway base image", () => {
       '"$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"',
     );
     expect(dockerfile).toContain('openclaw plugins install "npm-pack:$VENDORED_CODEX" --force');
-    expect(dockerfile).toContain(
+    expect(dockerfile).not.toContain(
       'openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}"',
     );
     expect(dockerfile).toContain('INSTALLED_CODEX="$(node -e');

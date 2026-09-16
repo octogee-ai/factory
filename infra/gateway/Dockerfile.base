@@ -109,11 +109,8 @@ RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
-    if [ -f "$OC_VENDOR/openclaw-parallel-plugin.tgz" ]; then \
-      openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
-    else \
-      openclaw plugins install "@openclaw/parallel-plugin@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
-    fi \
+    test -f "$OC_VENDOR/openclaw-parallel-plugin.tgz"; \
+    openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     MATTERMOST_STAGE="$(mktemp -d)"; \
     tar -xzf /tmp/openclaw-mattermost-fork.tgz -C "$MATTERMOST_STAGE"; \
@@ -145,23 +142,21 @@ COPY --from=openclaw-core-plugin-installer --chown=node:node /opt/openclaw-runti
 
 FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer
 
+COPY infra/gateway/verify-codex-native-hook-runtime.mjs /tmp/verify-codex-native-hook-runtime.mjs
 RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
-    if [ -f "$OC_VENDOR/openclaw-codex.tgz" ]; then \
-      CODEX_REPACK="$(mktemp -d)"; \
-      tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
-      node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package"); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
-      (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK" > /tmp/oc-plugin.log 2>&1); \
-      VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
-      test -n "$VENDORED_CODEX"; \
-      openclaw plugins install "npm-pack:$VENDORED_CODEX" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
-      rm -rf "$CODEX_REPACK"; \
-    else \
-      openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}" --accept-capabilities > /tmp/oc-plugin.log 2>&1; \
-    fi \
+    test -f "$OC_VENDOR/openclaw-codex.tgz"; \
+    CODEX_REPACK="$(mktemp -d)"; \
+    tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
+    node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package"); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
+    (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK" > /tmp/oc-plugin.log 2>&1); \
+    VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
+    test -n "$VENDORED_CODEX"; \
+    openclaw plugins install "npm-pack:$VENDORED_CODEX" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    rm -rf "$CODEX_REPACK"; \
     rm -f /tmp/oc-plugin.log; \
     find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
     rm -rf /opt/openclaw-runtime-deps; \
@@ -172,6 +167,7 @@ RUN set -e; \
     test -n "$CODEX_PACKAGE"; \
     INSTALLED_CODEX="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$CODEX_PACKAGE")"; \
     test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"; \
+    node /tmp/verify-codex-native-hook-runtime.mjs "$CODEX_PACKAGE"; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
     find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .
 

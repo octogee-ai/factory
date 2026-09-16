@@ -53,8 +53,8 @@ ROOT_TGZ=$(OPENCLAW_SKIP_BUILD=1 \
 MATTERMOST_TGZ=$(bash infra/gateway/openclaw-tarball/pack-mattermost-tarball.sh \
   /path/to/openclaw "$ARTIFACT_DIR")
 
-OVERLAY_SHA=$(git -C /path/to/openclaw rev-parse HEAD)
-ROOT_OBJECT="openclaw-fork-${OVERLAY_SHA:0:8}.tgz"
+ROOT_SHA256=$(shasum -a 256 "$ROOT_TGZ" | awk '{print $1}')
+ROOT_OBJECT="openclaw-fork-${ROOT_SHA256:0:8}.tgz"
 MATTERMOST_SHA256=$(shasum -a 256 "$MATTERMOST_TGZ" | awk '{print $1}')
 MATTERMOST_OBJECT="openclaw-mattermost-${MATTERMOST_SHA256:0:8}.tgz"
 
@@ -83,7 +83,16 @@ completed green main CI run found at selection time:
 whose [upstream CI passed](https://github.com/openclaw/openclaw/actions/runs/35104248089).
 Its package version is `2026.9.4`; this is a main snapshot, not the GA tag.
 [Runtime source `c89ccbca203ca60676957ab2607e2c79a4c4e0c0`](https://github.com/ceckert/openclaw/commit/c89ccbca203ca60676957ab2607e2c79a4c4e0c0)
-on `ceckert/openclaw:codex/octogee-main-20260916` carries the remaining overlay:
+on `ceckert/openclaw:codex/octogee-main-20260916` carries the remaining overlay.
+
+The companion-package recut keeps that exact core source and rebuilds Codex and
+Parallel from the same checkout. Main can change private SDK exports without
+changing the package version, so a published npm package with the same version
+is not evidence of compatibility. The packer always includes source-matched
+companion archives, and the base build requires them rather than falling back
+to npm. Its Codex gate imports the lazy native-hook relay consumers, covering
+the turn-start path missed by a top-level plugin import. No new OpenClaw patch
+or database migration is introduced by this packaging correction.
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
@@ -156,9 +165,11 @@ revocation removes prepared-icon access, mention eligibility, and delayed mentio
 delivery. Native activity-summary authorization uses the same sharing policy;
 no custom Activity journal or transcript recovery is restored.
 
-The root artifact is `openclaw-fork-c89ccbca.tgz`
-(SHA-256 `a262df1d0f6ef3f234b9cc1d9eaf9f462ba51c0aab823ff297636fd4b8a9290e`,
-GCS generation `1789572035556043`).
+The root artifact is `openclaw-fork-1d44a605.tgz`
+(SHA-256 `1d44a605eb68197c9850706832235b2322ac17808a1168fbc2fb68aef59460d4`,
+GCS generation `1789580951341754`). This packaging recut uses the artifact
+digest prefix because the unchanged source commit already has a write-once
+artifact with different companion contents; that earlier object is untouched.
 Mattermost is `openclaw-mattermost-97eb0b89.tgz`
 (SHA-256 `97eb0b899a1c88703656b3a97f91bee604e00daecaa0c467021a2ca5c904014a`,
 GCS generation `1789496316868067`). The freshly packed Mattermost artifact is
@@ -166,6 +177,14 @@ byte-identical to the existing object, so that write-once object is reused witho
 upload or mutation. The new root upload used a generation-zero precondition;
 both remote objects were verified against the local artifacts using GCS MD5 and
 CRC32C hashes.
+
+The matched-companion recut passed a fresh full core build, 104 focused Octogee
+packaging/runtime tests, the test-project typecheck, and nine upstream
+source-checkout convergence regressions. An isolated installation reproduced
+the exact missing `registerRetainedNativeHookRelayForBundledRuntime` export with
+published Codex `2026.9.4`; a clean installation of all source-matched archives
+passed the same gate for all three native-hook consumers. Installed core build
+metadata still identifies `c89ccbca203ca60676957ab2607e2c79a4c4e0c0`.
 
 The September 16 overlay passed a full exact-commit build, `pnpm check`,
 `pnpm check:test-types`, and generated channel-config verification, plus 1,067
@@ -280,8 +299,8 @@ prepared-artifact lifecycle before vendoring, including install inventories,
 the pending-install marker, and manifest sanitation. It restores temporary
 manifest, changelog, and docs-map changes after packing, including pack failures.
 It vendors root
-`workspace:*` dependencies and unpublished Codex/Parallel companions when
-needed, so a tag does not depend on a companion publish race.
+`workspace:*` dependencies and always compiles Codex/Parallel companions from
+the same checkout, independently of npm publication status.
 
 `pack-mattermost-tarball.sh` runs OpenClaw's plugin packer and verifies compiled
 runtime output. Mattermost stays separate so its exact native channel runtime

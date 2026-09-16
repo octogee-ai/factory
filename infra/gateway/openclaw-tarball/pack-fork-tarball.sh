@@ -19,14 +19,8 @@
 #    "green", crash-loops at the codex-plugin install step). The `file:` vendor
 #    touches only the one unpublished package.
 #
-# 2. Companion plugins the base image installs from npm (@openclaw/codex,
-#    @openclaw/parallel-plugin). A tagged release publishes them in lockstep
-#    (eventually); a dev-slot snapshot of upstream main has NO published
-#    version. When the exact version is missing from npm, compile each via
-#    upstream's own plugin release tool and ship it as vendor/<pkg>.tgz;
-#    Dockerfile.base prefers the vendored tarball and falls back to npm.
-#    Published versions therefore vendor nothing — self-healing, no Dockerfile
-#    change per cycle.
+# 2. Compile Codex and Parallel from the same checkout as core and include
+#    them as vendor/<pkg>.tgz, including when that version exists on npm.
 #
 # @openclaw/mattermost is deliberately NOT vendored here. It ships as its own
 # content-addressed GCS artifact so the exact channel runtime is independently
@@ -120,16 +114,8 @@ for name in $WS_DEPS; do
 done
 
 for ext in codex parallel; do
-  name="$(node -e "console.log(require('./extensions/$ext/package.json').name)" 2>/dev/null || true)"
-  [ -z "$name" ] && continue
+  name="$(node -e "console.log(require('./extensions/$ext/package.json').name)")"
   ver="$(node -e "console.log(require('./extensions/$ext/package.json').version)")"
-  if published="$(npm view "$name@$ver" version 2>&1)"; then
-    echo "  companion published: $name@$ver — no vendoring" >&2
-    continue
-  elif ! grep -q "E404" <<<"$published"; then
-    echo "FATAL: npm view $name@$ver inconclusive (registry unreachable?): $published" >&2
-    exit 1
-  fi
   mkdir -p vendor
   extout="$(mktemp -d)"
   OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="$extout" \
@@ -143,7 +129,7 @@ for ext in codex parallel; do
     if (!p.files.includes('vendor/')) p.files.push('vendor/');
     fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
   "
-  echo "  vendored unpublished companion: $name@$ver -> $vendtgz" >&2
+  echo "  vendored source-matched companion: $name@$ver -> $vendtgz" >&2
 done
 
 npm pack --ignore-scripts --pack-destination "$OUT_DIR" >&2
