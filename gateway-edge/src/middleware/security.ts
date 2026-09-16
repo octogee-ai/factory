@@ -1,7 +1,9 @@
 import { timingSafeEqual } from "crypto";
 import helmet from "helmet";
 import rateLimit, { Options as RateLimitOptions } from "express-rate-limit";
-import { Request } from "express";
+import { Request, type RequestHandler } from "express";
+import { createDashboardAssetRateLimit } from "./dashboard-asset-rate-limit.js";
+import { isDashboardAssetRequest } from "./dashboard-asset-request.js";
 
 const K8S_SA_TOKEN_HEADER = "x-k8s-sa-token";
 const INTERNAL_SERVICE_KEY_HEADER = "x-internal-service-key";
@@ -60,7 +62,7 @@ function carriesWellFormedSaToken(req: Request): boolean {
   return Boolean(token && isWellFormedServiceAccountJwt(token));
 }
 
-export const globalRateLimit = rateLimit({
+const apiRateLimit = rateLimit({
   ...DEFAULT_RATE_LIMIT_OPTIONS,
   windowMs: 60 * 1000,
   limit: 300,
@@ -72,6 +74,13 @@ export const globalRateLimit = rateLimit({
     return hasMatchingInternalServiceKey(req) || carriesWellFormedSaToken(req);
   },
 });
+
+const dashboardAssetRateLimit = createDashboardAssetRateLimit();
+
+export const globalRateLimit: RequestHandler = (req, res, next) => {
+  if (isDashboardAssetRequest(req)) return dashboardAssetRateLimit(req, res, next);
+  return apiRateLimit(req, res, next);
+};
 
 export const internalRateLimit = rateLimit({
   ...DEFAULT_RATE_LIMIT_OPTIONS,

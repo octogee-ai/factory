@@ -24,6 +24,7 @@ function limiterApp() {
   app.get("/health", (_req, res) => res.json({ ok: true }));
   app.get("/internal/gitea/user-pubkey", (_req, res) => res.json({ ok: true }));
   app.get("/api/probe", (_req, res) => res.json({ ok: true }));
+  app.get("/api/g/bender/openclaw/assets/app.js", (_req, res) => res.send("asset"));
   return app;
 }
 
@@ -100,6 +101,15 @@ describe("security middleware", () => {
       .expect(200);
 
     expect(probe.headers.ratelimit).toContain("limit=300");
+  });
+
+  it("does not spend the ordinary API budget on dashboard assets", async () => {
+    const app = limiterApp();
+    const before = await request(app).get("/api/probe").expect(200);
+    await request(app).get("/api/g/bender/openclaw/assets/app.js").expect(200);
+    const after = await request(app).get("/api/probe").expect(200);
+    const remaining = (header: string) => Number(/remaining=(\d+)/u.exec(header)![1]);
+    expect(remaining(after.headers.ratelimit)).toBe(remaining(before.headers.ratelimit) - 1);
   });
 });
 
