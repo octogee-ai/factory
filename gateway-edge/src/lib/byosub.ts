@@ -295,10 +295,11 @@ export async function brokerByosubFlow(args: {
 }
 
 function gatewayInternalBase(gatewayId: string): string {
-  const ns = process.env.K8S_NAMESPACE ?? "octogee";
-  return process.env.GATEWAY_INTERNAL_URL_TEMPLATE
-    ? process.env.GATEWAY_INTERNAL_URL_TEMPLATE.replace("{gatewayId}", gatewayId)
-    : `http://octogee-gateway-${gatewayId}.${ns}.svc.cluster.local:3003`;
+  const localGatewayId = process.env.GATEWAY_ID?.trim();
+  if (!localGatewayId || gatewayId !== localGatewayId) {
+    throw new Error("Subscription auth must run on the assigned gateway");
+  }
+  return `http://127.0.0.1:${process.env.FLEET_CONTROLLER_PORT?.trim() || "3003"}`;
 }
 
 async function gatewayInternalCall<T>(

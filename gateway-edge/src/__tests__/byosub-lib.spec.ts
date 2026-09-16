@@ -156,20 +156,21 @@ describe("validateClaudeCliCredential — Claude subscription setup-token or SSO
   });
 });
 
-describe("gatewayDeviceAuthClient — addresses the gateway by gatewayId", () => {
+describe("gatewayDeviceAuthClient — uses the local fleet controller", () => {
   const realFetch = globalThis.fetch;
   beforeEach(() => {
     process.env.INTERNAL_SERVICE_KEY = "k";
-    process.env.K8S_NAMESPACE = "octogee";
-    delete process.env.GATEWAY_INTERNAL_URL_TEMPLATE;
+    vi.stubEnv("GATEWAY_ID", "bender");
+    vi.stubEnv("FLEET_CONTROLLER_PORT", "");
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
   afterEach(() => {
     globalThis.fetch = realFetch;
+    vi.unstubAllEnvs();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
 
-  it("derives the K8s Service from the bare gatewayId (resource name keeps the octogee-gateway- prefix)", async () => {
+  it("starts device auth on loopback without Kubernetes DNS", async () => {
     const seen: string[] = [];
     globalThis.fetch = vi.fn(async (url: any) => {
       seen.push(String(url));
@@ -177,21 +178,30 @@ describe("gatewayDeviceAuthClient — addresses the gateway by gatewayId", () =>
     }) as any;
     await gatewayDeviceAuthClient().start({ gatewayId: "bender", agentId: "octogee-x-coach" });
     expect(seen[0]).toBe(
-      "http://octogee-gateway-bender.octogee.svc.cluster.local:3003/internal/byosub/device-auth/start",
+      "http://127.0.0.1:3003/internal/byosub/device-auth/start",
     );
   });
 
-  it("honors the GATEWAY_INTERNAL_URL_TEMPLATE override with {gatewayId}", async () => {
-    process.env.GATEWAY_INTERNAL_URL_TEMPLATE = "http://127.0.0.1:9{gatewayId}9";
+  it("polls device auth on the configured local fleet controller port", async () => {
+    vi.stubEnv("FLEET_CONTROLLER_PORT", "9009");
     const seen: string[] = [];
     globalThis.fetch = vi.fn(async (url: any) => {
       seen.push(String(url));
       return { ok: true, json: async () => ({ state: "x" }) } as any;
     }) as any;
-    await gatewayDeviceAuthClient().status({ gatewayId: "00", flowId: "f1" });
+    await gatewayDeviceAuthClient().status({ gatewayId: "bender", flowId: "f1" });
     expect(seen[0]).toBe(
       "http://127.0.0.1:9009/internal/byosub/device-auth/status/f1",
     );
+  });
+
+  it.each(["other-gateway", ""])("rejects a mismatched or missing local gateway identity: %s", async (localGatewayId) => {
+    vi.stubEnv("GATEWAY_ID", localGatewayId);
+    globalThis.fetch = vi.fn();
+    await expect(
+      gatewayDeviceAuthClient().start({ gatewayId: "bender", agentId: "a" }),
+    ).rejects.toThrow("Subscription auth must run on the assigned gateway");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it("throws on a non-2xx gateway response (surfaced, not swallowed)", async () => {
@@ -206,20 +216,21 @@ describe("gatewayDeviceAuthClient — addresses the gateway by gatewayId", () =>
   });
 });
 
-describe("gatewayClaudeSsoClient — addresses the gateway by gatewayId", () => {
+describe("gatewayClaudeSsoClient — uses the local fleet controller", () => {
   const realFetch = globalThis.fetch;
   beforeEach(() => {
     process.env.INTERNAL_SERVICE_KEY = "k";
-    process.env.K8S_NAMESPACE = "octogee";
-    delete process.env.GATEWAY_INTERNAL_URL_TEMPLATE;
+    vi.stubEnv("GATEWAY_ID", "bender");
+    vi.stubEnv("FLEET_CONTROLLER_PORT", "");
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
   afterEach(() => {
     globalThis.fetch = realFetch;
+    vi.unstubAllEnvs();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
 
-  it("starts the pod-side Claude SSO manager through the gateway service", async () => {
+  it("starts Claude SSO on loopback without Kubernetes DNS", async () => {
     const seen: string[] = [];
     globalThis.fetch = vi.fn(async (url: any) => {
       seen.push(String(url));
@@ -230,11 +241,23 @@ describe("gatewayClaudeSsoClient — addresses the gateway by gatewayId", () => 
       agentId: "octogee-x-coach",
     });
     expect(seen[0]).toBe(
-      "http://octogee-gateway-bender.octogee.svc.cluster.local:3003/internal/byosub/claude-sso/start",
+      "http://127.0.0.1:3003/internal/byosub/claude-sso/start",
     );
   });
 
-  it("authenticates the pod-side Claude SSO hop with the per-gateway token", async () => {
+  it("polls Claude SSO on the configured local fleet controller port", async () => {
+    vi.stubEnv("FLEET_CONTROLLER_PORT", "9009");
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true, json: async () => ({ state: "pending" }),
+    })) as any;
+    await gatewayClaudeSsoClient().status({ gatewayId: "bender", flowId: "f1" });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:9009/internal/byosub/claude-sso/status/f1",
+      expect.anything(),
+    );
+  });
+
+  it("authenticates the local Claude SSO hop with the per-gateway token", async () => {
     delete process.env.INTERNAL_SERVICE_KEY;
     process.env.OPENCLAW_GATEWAY_TOKEN = "gateway-token";
     const seen: string[] = [];
@@ -249,7 +272,7 @@ describe("gatewayClaudeSsoClient — addresses the gateway by gatewayId", () => 
     expect(seen).toEqual(["gateway-token"]);
   });
 
-  it("submits the browser code to the pod-side Claude SSO manager", async () => {
+  it("submits the browser code to the local Claude SSO manager", async () => {
     const seen: Array<{ url: string; body: string | null }> = [];
     globalThis.fetch = vi.fn(async (url: any, init: any) => {
       seen.push({ url: String(url), body: init.body ?? null });
@@ -261,7 +284,7 @@ describe("gatewayClaudeSsoClient — addresses the gateway by gatewayId", () => 
       code: "code#state",
     });
     expect(seen[0]).toEqual({
-      url: "http://octogee-gateway-bender.octogee.svc.cluster.local:3003/internal/byosub/claude-sso/submit",
+      url: "http://127.0.0.1:3003/internal/byosub/claude-sso/submit",
       body: JSON.stringify({ flowId: "flow-1", code: "code#state" }),
     });
   });
