@@ -104,6 +104,7 @@ import {
 } from "./recovered-customer-runtime-reset.js";
 
 const RECONCILE_LOOP_INTERVAL_MS = 2 * 1000;
+export const MOUNT_CONCURRENCY = 4;
 const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
 const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 600_000;
 
@@ -1541,12 +1542,7 @@ function startMaybeReconcileLoop(params: {
     gatewayId: opts.gatewayId,
     intervalMs: opts.subscribeDesiredChanges ? 60_000 : RECONCILE_LOOP_INTERVAL_MS,
     subscribe: opts.subscribeDesiredChanges,
-    // SERIAL (not the default cap): the production lifecycle adapter shares one mutable
-    // `cachedUserData.current` across addCustomerToGateway calls (loadUserSnapshot →
-    // toProvisioningContext → applyConfigPatch), so two concurrent mounts could provision
-    // customer A using customer B's cached user doc / MM identity — tenant-corrupting. Keep
-    // mounts serial until the adapter is request-scoped. See FLEET-RECONCILE-SPEC.
-    maxConcurrent: 1,
+    maxConcurrent: MOUNT_CONCURRENCY,
     log: opts.log,
     getMountObserved: () => {
       const mounted = getMountObservedSlugs(wrappedAdapter);

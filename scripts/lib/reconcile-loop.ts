@@ -159,10 +159,7 @@ async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan):
       }
     });
   }
-  await runBounded(
-    mounts,
-    deps.shouldDeferRemainingMounts ? 1 : (deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT),
-  );
+  await runBounded(mounts, deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
 }
 
 async function enqueueReconcileEvictions(deps: ReconcileLoopDeps, toEvict: readonly string[]): Promise<void> {

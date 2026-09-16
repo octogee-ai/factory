@@ -265,6 +265,53 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(d.ensured).toEqual(["poisoned"]);
   });
 
+  it("mounts concurrently even with the permanent-failure deferral wired", async () => {
+    let active = 0;
+    let peak = 0;
+    const gates = new Map<string, ReturnType<typeof deferred>>();
+    const slugs = ["a", "b", "c", "d"];
+    for (const s of slugs) gates.set(s, deferred());
+    const d = mkDeps({
+      maxConcurrent: 3,
+      readDesired: async () => slugs,
+      shouldDeferRemainingMounts: (error) => error instanceof Error && error.message === "invalid patch",
+      ensureSlug: async (slug) => {
+        active++;
+        peak = Math.max(peak, active);
+        await gates.get(slug)!.promise;
+        active--;
+        return "mounted";
+      },
+    });
+    const p = reconcileFleet(d);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(peak).toBe(3);
+    for (const g of gates.values()) g.resolve();
+    await p;
+  });
+
+  it("skips the mounts not yet started after a permanent config failure in a concurrent lane", async () => {
+    const started: string[] = [];
+    const gate = deferred();
+    const d = mkDeps({
+      maxConcurrent: 2,
+      readDesired: async () => ["poisoned", "in-flight", "later", "last"],
+      ensureSlug: async (slug) => {
+        started.push(slug);
+        if (slug === "poisoned") throw new Error("invalid patch");
+        await gate.promise;
+        return "mounted";
+      },
+      shouldDeferRemainingMounts: (error) => error instanceof Error && error.message === "invalid patch",
+    });
+    const p = reconcileFleet(d);
+    await new Promise((r) => setTimeout(r, 10));
+    gate.resolve();
+    await p;
+
+    expect(started.sort()).toEqual(["in-flight", "poisoned"]);
+  });
+
   it("continues evicting while the ensure lane is held", async () => {
     const d = mkDeps({
       ...observed(["stale"]),
