@@ -77,12 +77,13 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The selected build is upstream `main`, explicitly re-locked for this recut to
-[`8b8ffca0188f15743c97518fae1ca82916185dcc`](https://github.com/openclaw/openclaw/commit/8b8ffca0188f15743c97518fae1ca82916185dcc),
-whose [upstream CI passed](https://github.com/openclaw/openclaw/actions/runs/34995253977).
+The selected build is upstream `main`, locked on September 16 to the newest
+completed green main CI run found at selection time:
+[`82d4d1cc175549e222e3cb2605716f277eff6a00`](https://github.com/openclaw/openclaw/commit/82d4d1cc175549e222e3cb2605716f277eff6a00),
+whose [upstream CI passed](https://github.com/openclaw/openclaw/actions/runs/35104248089).
 Its package version is `2026.9.4`; this is a main snapshot, not the GA tag.
-[Runtime source `61955ecb9a9ebb56c86677395ae7818739c8f895`](https://github.com/ceckert/openclaw/commit/61955ecb9a9ebb56c86677395ae7818739c8f895)
-on `ceckert/openclaw:codex/octogee-main-20260915` carries the remaining overlay:
+[Runtime source `c89ccbca203ca60676957ab2607e2c79a4c4e0c0`](https://github.com/ceckert/openclaw/commit/c89ccbca203ca60676957ab2607e2c79a4c4e0c0)
+on `ceckert/openclaw:codex/octogee-main-20260916` carries the remaining overlay:
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
@@ -94,6 +95,35 @@ on `ceckert/openclaw:codex/octogee-main-20260915` carries the remaining overlay:
 | Published plugin runtime reuse | Detached Skill Workshop reviews reuse the current published generation while retaining their exact model and admission owner. | Reproduced downstream; no matching upstream PR found. Do not claim a performance gain without before/after preparation measurements. |
 | Native session and dialog recovery | Preserve readable Mattermost titles, resolve participant names within exact transcript identity namespaces, and keep plugin-dialog Cancel/X usable offline. | Reproduced downstream; no upstream PR filed. |
 | Computer approval authority | Allow a plugin to constrain native approval reviewers using live server facts; preserve requester identity and revalidate authority, cancellation, and admission through execution. | Required by Octogee's gateway-owner policy; two type-only SDK exports, no new RPC or approval store. |
+
+The September 16 audit covers 535 upstream commits since the prior locked base.
+No remaining production patch has an upstream replacement in this snapshot.
+The membership store now uses upstream's extracted Kysely kernel; its human-grant
+ownership behavior remains downstream. Upstream requester-model inheritance,
+subagent lineage, auxiliary session read scope, and message-action capabilities
+remain intact alongside Octogee's requester authority.
+
+Upstream [#149833](https://github.com/openclaw/openclaw/pull/149833) renews
+website access automatically before asking for sign-in. The same-bearer icon
+regression now covers both automatic and interactive renewal, with service workers
+allowed and blocked. This adopts the upstream recovery flow without retaining an
+older dialog-only test fixture or adding a second recovery owner.
+
+The main reasons to test this snapshot are upstream's reduced session-lookup memory
+growth [#140499](https://github.com/openclaw/openclaw/pull/140499), bounded
+Doctor/startup transcript migration [#149704](https://github.com/openclaw/openclaw/pull/149704),
+published inbound-registry reuse [#149648](https://github.com/openclaw/openclaw/pull/149648),
+and responsive Workshop cron reconciliation
+[#149600](https://github.com/openclaw/openclaw/pull/149600).
+These are not evidence that Octogee's prior live OOM or CPU stalls are resolved.
+The cron hot-reload PR remains open, and no duplicate upstream PR is needed.
+
+This snapshot includes upstream's agent SQLite schema 20 → 21 transition
+[#149388](https://github.com/openclaw/openclaw/pull/149388), which moves canonical
+session validation into bounded worker batches. The unchanged package version does
+not imply database downgrade compatibility. Before deployment, preserve matching
+persistent-state backups; an image-only rollback to the previous build is not a
+verified recovery path. No downstream schema or migration is added.
 
 The config revision freshness patch [#142169](https://github.com/openclaw/openclaw/pull/142169)
 and account-scoped SecretRef reload inspection patch
@@ -126,38 +156,31 @@ revocation removes prepared-icon access, mention eligibility, and delayed mentio
 delivery. Native activity-summary authorization uses the same sharing policy;
 no custom Activity journal or transcript recovery is restored.
 
-The root artifact is `openclaw-fork-61955ecb.tgz`
-(SHA-256 `9a04c6d40f9b30cd9a96f64cac16f7e76b66d7c7969dff4ee140c1583fd77081`,
-GCS generation `1789496313717926`).
+The root artifact is `openclaw-fork-c89ccbca.tgz`
+(SHA-256 `a262df1d0f6ef3f234b9cc1d9eaf9f462ba51c0aab823ff297636fd4b8a9290e`,
+GCS generation `1789572035556043`).
 Mattermost is `openclaw-mattermost-97eb0b89.tgz`
 (SHA-256 `97eb0b899a1c88703656b3a97f91bee604e00daecaa0c467021a2ca5c904014a`,
-GCS generation `1789496316868067`). Both write-once uploads were verified against
-the local artifacts using GCS MD5 and CRC32C hashes.
+GCS generation `1789496316868067`). The freshly packed Mattermost artifact is
+byte-identical to the existing object, so that write-once object is reused without
+upload or mutation. The new root upload used a generation-zero precondition;
+both remote objects were verified against the local artifacts using GCS MD5 and
+CRC32C hashes.
 
-The September 15 overlay passed the full build and `pnpm check` from the exact source commit;
-`dist/build-info.json` reports `61955ecb9a9ebb56c86677395ae7818739c8f895`.
-Before the approved six-commit re-lock, focused suites passed 1,452 tests:
-416 cron/reload, 58 desktop, 26 plugin-loading,
-79 Skill Workshop (including six real-runtime/mock-provider end-to-end cases),
-15 storage/lifecycle, 439 approval/identity, and 419 channel/session/Control UI.
-The overlay diff is byte-identical after rebase. The final base passed 416
-cron/reload tests and 540 authentication/model/requester/approval tests.
-The new native model-attribution test failed twice during concurrent build work,
-with malformed cancellation cleanup masking the initial failure; the original
-test passed unchanged in an idle run. No deadlines, assertions, or runtime code
-were altered to obtain that pass. Five Bun-only desktop cases were skipped on Node.
-Browser fixtures covered both
-service-worker modes for sign-in recovery and all three offline/active-install
-dialog cases. The earlier session-title and dialog screenshots remain in
-[Octogee PR #3849](https://github.com/octogee-ai/octogee/pull/3849); this recut's
-PR also carries the new same-bearer icon-recovery screenshots.
-Full core and extension test typechecks and SDK surface/wiring checks passed.
-The final re-locked source also passed all aggregate production/script/test-root
-typechecks, type-aware lint, formatting, and policy guards.
-The exact native SDK consumer check found no Octogee contract mismatch; three
-existing import suppressions become unused when the real SDK is available.
-Octogee's artifact/image contracts, pack lifecycle, and access-tools plugin passed 77 tests.
-Independent source reviews found no actionable issues. Native mobile builds
+The September 16 overlay passed a full exact-commit build, `pnpm check`,
+`pnpm check:test-types`, and generated channel-config verification, plus 1,067
+focused tests across all retained patch areas and 214 nearby upstream storage,
+session-projection, plugin-reuse, and
+cron tests. Another 63 tests cover schema-21 migration, validation invalidation,
+and backup rollback. Seven Chromium cases cover automatic and interactive access
+renewal with both service-worker modes, offline dialog dismissal, and active-install
+ownership. This recut's PR includes inspected synthetic before/after recovery images.
+Octogee's artifact/packer contracts passed 22 tests, its actual computer-approval
+consumer passed 10, and another 54 runtime-contract tests cover the CUA installer,
+RPC boundaries, runtime dependencies, and image layout. Independent source audits
+and a fresh rebased-diff review found
+no actionable P0–P2 issues. The autoreview helper could not start its reviewer and
+produced no report; it is not counted as a passing review. Native mobile builds
 were not run.
 
 The packed root passed upstream's tarball-integrity checker, installed in a clean
@@ -165,8 +188,6 @@ prefix with the image's npm 12.0.2, reported the exact overlay commit, and impor
 the matching Mattermost runtime in the Dockerfile's bundled layout. npm blocked
 install scripts by default; the native launcher completed the pending package
 lifecycle successfully. No install-script approval workaround was needed.
-Octogee's RPC quarantine, Dashboard recovery, desktop process supervision,
-toolchain, identity, and approval integration regressions are checked separately.
 These fixes address reproduced defects; the recorded PROD CPU stalls and memory
 provider retries still require rollout observation to establish full recovery.
 Automated checks do not constitute a live TEST or PROD rollout.
@@ -242,6 +263,9 @@ proof. The exact 40-line backport applies unchanged. Source-extracted Rust
 mapping regressions fail without the fix and pass with it, and four installer
 regressions pass. These checks do not replace the image's Linux crate tests
 or a real Wayland modifier/launcher smoke.
+
+The September 16 OpenClaw snapshot still pins driver 0.23.2; CUA PR #3659 remains
+open and draft. The installer regressions passed again for this recut.
 
 Remove the native builder stage and installer overlay when the selected
 OpenClaw package uses a published CUA version containing the fix and passes
