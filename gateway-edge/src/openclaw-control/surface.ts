@@ -67,7 +67,8 @@ import {
   type MattermostControlChat,
 } from "./mattermost-chat.js";
 
-const MAX_WS_FRAME_BYTES = 1_048_576;
+const MAX_BROWSER_WS_FRAME_BYTES = 1_048_576;
+const MAX_UPSTREAM_WS_FRAME_BYTES = 25 * 1024 * 1024;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_RPC_TIMEOUT_MS = 15_000;
 const DEFAULT_MUTATION_RPC_TIMEOUT_MS = 30_000;
@@ -1117,7 +1118,7 @@ class OpenClawControlSocketBridge {
     const upstreamUrl = new URL(this.args.requestPath, base);
     upstreamUrl.protocol = "ws:";
     this.upstream = new WebSocket(upstreamUrl, {
-      maxPayload: MAX_WS_FRAME_BYTES,
+      maxPayload: MAX_UPSTREAM_WS_FRAME_BYTES,
       ...(perUser
         ? { headers: this.args.proxyIdentity.userHeaders(this.args.session, this.args.request) }
         : {}),
@@ -1467,7 +1468,7 @@ class OpenClawControlSocketBridge {
 
   private handleBrowserMessage(data: RawData, isBinary: boolean): void {
     const upstream = this.upstreamSocket();
-    if (!this.touch() || isBinary || frameBytes(data) > MAX_WS_FRAME_BYTES) {
+    if (!this.touch() || isBinary || frameBytes(data) > MAX_BROWSER_WS_FRAME_BYTES) {
       this.closeBoth("invalid-dashboard-frame");
       return;
     }
@@ -1883,7 +1884,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
       }
     },
     allowedOrigins: new Set([apiOrigin(env)]),
-    maxPayloadBytes: MAX_WS_FRAME_BYTES,
+    maxPayloadBytes: MAX_BROWSER_WS_FRAME_BYTES,
     authorize: async (req) => {
       const session = sessions.verify({ cookieHeader: req.headers.cookie, gatewayId, revisionId });
       if (!session) {

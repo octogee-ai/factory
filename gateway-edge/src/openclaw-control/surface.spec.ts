@@ -708,6 +708,67 @@ describe("OpenClaw Dashboard HTTP surface", () => {
 });
 
 describe("OpenClaw Dashboard WebSocket surface", () => {
+  it.each([
+    { scenario: "forwards a settings schema larger than 1 MiB and keeps the connection usable", direction: "upstream", bytes: 3 * 1024 * 1024, accepted: true },
+    { scenario: "rejects upstream messages larger than 25 MiB", direction: "upstream", bytes: 25 * 1024 * 1024, accepted: false },
+    { scenario: "still rejects browser requests larger than 1 MiB", direction: "browser", bytes: 1024 * 1024, accepted: false },
+  ])("$scenario", async ({ direction, bytes, accepted }) => {
+    const upstream = http.createServer();
+    const upstreamWs = new WebSocketServer({ server: upstream });
+    const seen: string[] = [];
+    const schema = { type: "object", description: "x".repeat(bytes) };
+    upstreamWs.on("connection", (ws) => {
+      ws.on("error", () => {});
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        seen.push(frame.method);
+        const payload = frame.method === "connect"
+          ? { type: "hello-ok", features: { methods: ["config.schema", "health"] } }
+          : frame.method === "config.schema" ? { schema } : { healthy: true };
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload }));
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const edge = http.createServer();
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({ router, env: env(upstreamPort), sessions: manager,
+      authorize: async () => true, loadGatewayToken: async () => "gateway-secret" });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
+      headers: { cookie: issue(manager), origin: "https://api.octogee.com" },
+    });
+    const messages: Array<{ id: string; ok: boolean; payload: unknown }> = [];
+    let closeCode: number | undefined;
+    browser.on("close", (code) => { closeCode = code; });
+    browser.on("message", (data) => {
+      const frame = JSON.parse(data.toString());
+      messages.push(frame);
+      if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+      else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "schema", method: "config.schema",
+        params: direction === "browser" ? { padding: "x".repeat(bytes) } : {} }));
+      else if (frame.id === "schema") browser.send(JSON.stringify({ type: "req", id: "health", method: "health", params: {} }));
+    });
+    try {
+      if (accepted) {
+        await vi.waitFor(() => expect(messages.find((frame) => frame.id === "health")).toMatchObject({ ok: true, payload: { healthy: true } }));
+        expect(messages.find((frame) => frame.id === "schema")).toEqual({ type: "res", id: "schema", ok: true, payload: { schema } });
+        expect(browser.readyState).toBe(WebSocket.OPEN);
+      } else {
+        await vi.waitFor(() => expect(browser.readyState).toBe(WebSocket.CLOSED));
+        expect(closeCode).toBe(direction === "browser" ? 1009 : 1011);
+        expect(messages.some((frame) => frame.id === "schema")).toBe(false);
+        expect(seen).toEqual(direction === "browser" ? ["connect"] : ["connect", "config.schema"]);
+      }
+    } finally {
+      browser.terminate();
+      for (const client of upstreamWs.clients) client.terminate();
+      await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    }
+  });
+
   it("requires a dashboard session before accepting a desktop observer socket", async () => {
     const edge = http.createServer();
     const router = new WsUpgradeRouter();
