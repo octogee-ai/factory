@@ -332,12 +332,18 @@ async function ensureCustomerRosterAgents(
   ctx: BrokerCtx,
   agentEntries: readonly unknown[],
   logPrefix: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const specs = rosterAgentSpecsFromEntries(agentEntries);
   if (specs.length === 0) return;
   await Promise.all(specs.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
   try {
-    await createRosterAgents(specs, { rpc: ctx.rpc, log: ctx.log, logPrefix });
+    for (const spec of specs) {
+      const [created] = await createRosterAgents([spec], { rpc: ctx.rpc, log: ctx.log, logPrefix });
+      if (created.status === "created") {
+        await waitForAppliedConfigRevision(ctx.rpc, spec.agentId, { timeoutMs: 60_000, logPrefix, signal });
+      }
+    }
   } finally {
     invalidateConfigCache(ctx);
   }
@@ -650,8 +656,9 @@ function throwIfConfigApplicationWaitAborted(signal: AbortSignal | undefined): v
 export async function waitForAppliedConfigRevision(
   rpc: Pick<GatewayRpcClient, "configGet">,
   slug: string,
-  opts: { timeoutMs?: number; pollIntervalMs?: number; signal?: AbortSignal } = {},
+  opts: { timeoutMs?: number; pollIntervalMs?: number; signal?: AbortSignal; logPrefix?: string } = {},
 ): Promise<void> {
+  const logPrefix = opts.logPrefix ?? `[import:${slug}]`;
   const timeoutMs = opts.timeoutMs ?? CONFIG_PATCH_DEADLINE_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? 250;
   const deadline = Date.now() + timeoutMs;
@@ -679,7 +686,7 @@ export async function waitForAppliedConfigRevision(
       targetRevisionHash ??= snapshot.configRevisionHash;
       if (snapshot.configRevisionHash !== targetRevisionHash) {
         throw new Error(
-          `[import:${slug}] config revision changed while waiting ` +
+          `${logPrefix} config revision changed while waiting ` +
             `(expected=${targetRevisionHash}, observed=${snapshot.configRevisionHash})`,
         );
       }
@@ -691,11 +698,11 @@ export async function waitForAppliedConfigRevision(
   }
   if (targetRevisionHash === null) {
     throw new Error(
-      `[import:${slug}] config revision was unreadable for ${timeoutMs}ms: ${lastReadError}`,
+      `${logPrefix} config revision was unreadable for ${timeoutMs}ms: ${lastReadError}`,
     );
   }
   throw new Error(
-    `[import:${slug}] active config did not reach revision ${targetRevisionHash} ` +
+    `${logPrefix} active config did not reach revision ${targetRevisionHash} ` +
       `within ${timeoutMs}ms (applied=${appliedConfigHash ?? lastReadError ?? "none"})`,
   );
 }
@@ -1328,7 +1335,7 @@ async function activateImportedCustomer(
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
-  ], `[import:${slug}]`);
+  ], `[import:${slug}]`, opts?.signal);
   const accountIds = [
     safeManifest.accountId,
     ...safeManifest.projectAgents.map((agent) => agent.accountId),

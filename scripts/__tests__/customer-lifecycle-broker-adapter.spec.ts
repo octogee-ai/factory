@@ -403,6 +403,40 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       .toBeLessThan(rpc.agentsCreate.mock.invocationCallOrder[0]);
   });
 
+  it("waits for a newly rostered agent's active config before applying the import patch", async () => {
+    let created = false;
+    let releaseRead!: () => void;
+    const pending = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const base = rosterRpc();
+    const rpc = {
+      ...base,
+      agentsCreate: vi.fn(async (params: { name: string; workspace: string }) => {
+        const result = await base.agentsCreate(params);
+        created = true;
+        return result;
+      }),
+      configGet: vi.fn(async () => {
+        if (created) await pending;
+        return configSnapshot({});
+      }),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: {
+        mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+      } })),
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(), rpc: rpc as unknown as GatewayRpcClient, log: vi.fn(),
+    });
+    const activation = adapter.activateImportedCustomer("tester10");
+    try {
+      await vi.waitFor(() => expect(rpc.agentsCreate).toHaveBeenCalledOnce());
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    } finally {
+      releaseRead();
+      await activation;
+    }
+    expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+  });
+
   it("deletes target roster residue the manifest does not carry before activating", async () => {
     mocks.readActivationManifest.mockResolvedValue({
       slug: "tester10",
@@ -586,6 +620,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   it("waits for the imported config to apply before reloading its secret runtime", async () => {
     const configGet = vi.fn()
       .mockResolvedValueOnce(configSnapshot({ agents: { list: [] } }))
+      .mockResolvedValueOnce(configSnapshot({ agents: { list: [] } }))
       .mockResolvedValueOnce({
         ...configSnapshot({ agents: { list: [] } }),
         configRevisionHash: "revision-new",
@@ -611,8 +646,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
     await adapter.activateImportedCustomer("tester10");
 
-    expect(configGet).toHaveBeenCalledTimes(3);
-    expect(configGet.mock.invocationCallOrder[2]).toBeLessThan(
+    expect(configGet).toHaveBeenCalledTimes(4);
+    expect(configGet.mock.invocationCallOrder[3]).toBeLessThan(
       rpc.secretsReload.mock.invocationCallOrder[0]!,
     );
     expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
@@ -760,7 +795,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     }
   });
 
-  it.each([["info", 2], ["debug", 3]] as const)("keeps activation diagnostics at %s with %i config reads", async (level, reads) => {
+  it.each([["info", 3], ["debug", 4]] as const)("keeps activation diagnostics at %s with %i config reads", async (level, reads) => {
     process.env.LOG_LEVEL = level;
     const client = mkClient();
     const log = vi.fn();
@@ -2476,7 +2511,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
   it("re-reads the live roster before destructive cleanup instead of trusting a stale patch cache", async () => {
     const liveRoster = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
-    const configGet = vi.fn(async () => ({ config: liveRoster, hash: "live-hash" }));
+    const configGet = vi.fn(async () => ({ ...configSnapshot(liveRoster), hash: "live-hash" }));
     const rpc = mkRemovalRpc(liveRoster, { configGet } as Partial<GatewayRpcClient>);
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
@@ -2496,7 +2531,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
     await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
 
-    expect(configGet).toHaveBeenCalledTimes(2);
+    expect(configGet).toHaveBeenCalledTimes(4);
     expect(rpc.agentsDelete).not.toHaveBeenCalled();
   });
 
