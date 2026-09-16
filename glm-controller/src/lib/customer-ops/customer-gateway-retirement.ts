@@ -3,8 +3,6 @@ import { claimGatewayRetirementAtomic } from "@octogee/core/gateway-retirement-c
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_OPERATIONS_COLLECTION,
-  isOperatorManaged,
-  resolveOperationOrigin,
 } from "@octogee/shared/types/glm";
 
 export type OwnedGatewayRetirementOutcome =
@@ -73,9 +71,9 @@ async function reconcileOwnedGatewayRetirement(
     operation: automaticRetirementOperation(input, doc.id),
     now: input.now,
     updatedBy: "customer-deletion-lifecycle",
-    claimGuard: async ({ root: claimedRoot, transaction }) => {
+    claimGuard: async ({ root: claimedRoot }) => {
       const claimed = claimedRoot as unknown as Record<string, unknown>;
-      await assertAutomaticRetirementClaimAllowed(input, doc.id, claimed, transaction);
+      assertRetirementClaimOwnership(input, doc.id, claimed);
     },
   });
   return true;
@@ -112,57 +110,18 @@ async function finishCompletedGatewayRetirement(
     );
   }
   if (operation?.status !== "succeeded") return true;
-  if (resolveOperationOrigin(operation.origin) === "automatic") {
-    await assertAutomaticRetirementCleanupAllowed(input, doc.id);
-  }
   await input.db.recursiveDelete(doc.ref);
   await input.db.recursiveDelete(operationRef);
   return false;
 }
 
-async function assertAutomaticRetirementClaimAllowed(
+function assertRetirementClaimOwnership(
   input: OwnedGatewayRetirementInput,
   gatewayId: string,
   claimed: Record<string, unknown>,
-  transaction: FirebaseFirestore.Transaction,
-): Promise<void> {
-  if (isOperatorManaged(claimed.managedBy)) {
-    throw new Error(`gateway ${gatewayId} is operator-managed`);
-  }
-  const user = await transaction.get(input.db.collection("users").doc(input.uid));
-  const openclaw = user.data()?.provisioning?.openclaw;
-  if (
-    openclaw &&
-    typeof openclaw === "object" &&
-    !Array.isArray(openclaw) &&
-    isOperatorManaged((openclaw as Record<string, unknown>).managedBy)
-  ) {
-    throw new Error(`customer ${input.uid} is operator-managed`);
-  }
+): void {
   if (claimed.ownerUid !== input.uid || claimed.gatewayClass === "shared") {
     throw new Error(`gateway ${gatewayId} ownership changed during customer deletion`);
   }
 }
 
-async function assertAutomaticRetirementCleanupAllowed(
-  input: OwnedGatewayRetirementInput,
-  gatewayId: string,
-): Promise<void> {
-  const [rootSnap, userSnap] = await Promise.all([
-    input.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get(),
-    input.db.collection("users").doc(input.uid).get(),
-  ]);
-  const root = rootSnap.exists ? rootSnap.data() : undefined;
-  if (isOperatorManaged(root?.managedBy)) {
-    throw new Error(`owned gateway ${gatewayId} is operator-managed`);
-  }
-  const openclaw = userSnap.data()?.provisioning?.openclaw;
-  if (
-    openclaw &&
-    typeof openclaw === "object" &&
-    !Array.isArray(openclaw) &&
-    isOperatorManaged((openclaw as Record<string, unknown>).managedBy)
-  ) {
-    throw new Error(`customer ${input.uid} is operator-managed`);
-  }
-}

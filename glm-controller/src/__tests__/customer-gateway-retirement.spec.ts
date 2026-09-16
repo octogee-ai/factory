@@ -6,7 +6,6 @@ interface Root {
   ownerUid: string | null;
   gatewayClass: "shared" | "builder";
   desiredStatus: "running" | "paused" | "retired";
-  managedBy?: "operator";
   allocation?: { kind: string };
 }
 
@@ -159,7 +158,7 @@ describe("owned customer gateway retirement", () => {
     ]);
   });
 
-  it("leaves an automatic retirement's succeeded root and operation when ownership becomes operator-managed", async () => {
+  it("cleans up a succeeded retirement for a missing-origin operation", async () => {
     const operationId = "delete-retire-delete-1-builder-alice";
     const { db, deleted } = harness(
       {
@@ -167,33 +166,6 @@ describe("owned customer gateway retirement", () => {
           ownerUid: "uid-1",
           gatewayClass: "builder",
           desiredStatus: "retired",
-          managedBy: "operator",
-          allocation: { kind: "disposable-builder" },
-        },
-      },
-      { [operationId]: { status: "succeeded", origin: "automatic" } },
-    );
-
-    await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
-      uid: "uid-1",
-      deletionId: "delete-1",
-      now: 100,
-      claimRetirement: vi.fn() as never,
-    })).rejects.toThrow(/operator-managed/u);
-
-    expect(deleted).toEqual([]);
-  });
-
-  it("does not apply automatic cleanup ownership fences to a missing-origin retirement", async () => {
-    const operationId = "delete-retire-delete-1-builder-alice";
-    const { db, deleted } = harness(
-      {
-        "builder-alice": {
-          ownerUid: "uid-1",
-          gatewayClass: "builder",
-          desiredStatus: "retired",
-          managedBy: "operator",
           allocation: { kind: "disposable-builder" },
         },
       },

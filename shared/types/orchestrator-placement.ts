@@ -1,7 +1,6 @@
 import { resolveBuilderTier } from "./billing.js";
 import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 import type { DisposableBuilderGatewayAllocation } from "./gateway-mutable-config.js";
-import type { ManagedBy } from "./glm.js";
 
 export interface OnboardingOrchestratorConfig {
   defaultGatewayId: string;
@@ -13,7 +12,6 @@ export interface ContinuousPlacementOwnedGateway {
   ownerUid: string | null;
   desiredStatus: string;
   ready: boolean;
-  managedBy?: ManagedBy;
   disposable?: boolean;
   allocation?: DisposableBuilderGatewayAllocation | null;
 }

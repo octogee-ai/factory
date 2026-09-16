@@ -1,5 +1,4 @@
 import {
-  isOperatorManaged,
   isValidGatewayId,
   type GatewayDesiredStatus,
 } from "./glm.js";
@@ -68,7 +67,6 @@ export interface SharedGatewayPoolCandidate {
   gatewayId: string;
   gatewayClass: string;
   desiredStatus: string;
-  managedBy?: unknown;
   ready: boolean;
   serving: boolean;
   heartbeatFresh: boolean;
@@ -96,7 +94,6 @@ export interface SharedPoolMemberRoot {
   gatewayId: string;
   gatewayClass: unknown;
   desiredStatus: unknown;
-  managedBy?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,8 +134,7 @@ export function nextSharedPoolSlotId(existingGatewayIds: readonly string[]): str
 export function isSharedPoolMemberRoot(root: SharedPoolMemberRoot): boolean {
   return isValidGatewayId(root.gatewayId) &&
     root.gatewayClass === "shared" &&
-    SHARED_POOL_MEMBER_STATUSES.has(String(root.desiredStatus)) &&
-    !isOperatorManaged(root.managedBy);
+    SHARED_POOL_MEMBER_STATUSES.has(String(root.desiredStatus));
 }
 
 export function sharedPoolMemberIds(roots: readonly SharedPoolMemberRoot[]): string[] {
@@ -239,7 +235,6 @@ export function isAcceptingSharedGateway(
     config.sharedGatewayIds.includes(candidate.gatewayId) &&
     candidate.gatewayClass === "shared" &&
     candidate.desiredStatus === "running" &&
-    !isOperatorManaged(candidate.managedBy) &&
     candidate.ready &&
     candidate.serving &&
     candidate.heartbeatFresh &&

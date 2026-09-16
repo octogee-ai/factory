@@ -12,11 +12,9 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  isOperatorManaged,
   resolveGatewayRuntime,
   isOperationAuditRow,
   builderGatewayServiceAccountName,
-  resolveOperationOrigin,
   resolveGatewayClass,
   isGatewayClass,
   isGatewayProfile,
@@ -52,11 +50,7 @@ import {
   defaultRandomTokenHex,
   type AuthSecretEnsurer,
 } from "./auth-secret-ensurer.js";
-import {
-  automaticBuilderOperationFenceReason,
-  automaticGatewayOperationFenceReason,
-  MIGRATE_CUSTOMER_KIND,
-} from "./automatic-operation-fence.js";
+import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { createGatewayServiceAccountEnsurer } from "./gateway-service-account-ensurer.js";
 import {
   revisionHeartbeatMerge,
@@ -78,7 +72,6 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import {
   cowboyMayMarkGatewayLive,
-  cowboyMayMutateGateway,
   gatewayImageFor,
   gatewayReleaseAuthorizesChartDrift,
   gatewayUpsertOptsFromRelease,
@@ -639,7 +632,7 @@ async function syncGatewayModelKeySecrets(
   if (!ensurer) return changedBrokerGateways;
 
   for (const gateway of gateways) {
-    if (!(await cowboyMayMutateGatewayNow(deps.db, gateway.gatewayId))) continue;
+    if (!(await gatewayDesiredRootPresent(deps.db, gateway.gatewayId))) continue;
     const gatewayClass =
       gateway.desiredStatus === "retired" ? "shared" : gateway.gatewayClass;
     try {
@@ -672,7 +665,7 @@ async function syncGatewayModelKeySources(
   if (!issuer) return;
 
   for (const gateway of gateways) {
-    if (!(await cowboyMayMutateGatewayNow(deps.db, gateway.gatewayId))) continue;
+    if (!(await gatewayDesiredRootPresent(deps.db, gateway.gatewayId))) continue;
     const gatewayClass = gateway.gatewayClass;
     try {
       await issuer.syncGatewayModelKeySource({
@@ -703,7 +696,7 @@ async function restartGatewayDeploymentsForModelKeyChanges(
       );
       continue;
     }
-    if (!(await cowboyMayMutateGatewayNow(deps.db, gatewayId))) continue;
+    if (!(await gatewayDesiredRootPresent(deps.db, gatewayId))) continue;
     try {
       await deps.restartGatewayDeployment(gatewayId);
     } catch (err) {
@@ -713,13 +706,13 @@ async function restartGatewayDeploymentsForModelKeyChanges(
   }
 }
 
-async function cowboyMayMutateGatewayNow(db: Firestore, gatewayId: string): Promise<boolean> {
+async function gatewayDesiredRootPresent(db: Firestore, gatewayId: string): Promise<boolean> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   const root = projectGatewayDesiredRootForGateway(
     snap.exists ? snap.data() : undefined,
     gatewayId,
   );
-  return root !== null && cowboyMayMutateGateway(root);
+  return root !== null;
 }
 
 async function syncFleetIngressIfConfigured(
@@ -1053,14 +1046,13 @@ export async function refineGatewayConvergenceAction(input: {
     desiredDeploymentIntentFingerprint,
     action,
   } = input;
-  if (!cowboyMayMutateGateway(gateway)) return { kind: "steady" };
   const surgeEligible = gateway.desiredStatus === "running" || (
     gateway.desiredStatus === "draining" && gateway.liveRelease !== gateway.desiredRelease
   );
   if (action.kind !== "steady" || !artifact || !surgeEligible) {
     return action;
   }
-  if (!(await cowboyMayMutateGatewayNow(passDeps.db, gateway.gatewayId))) {
+  if (!(await gatewayDesiredRootPresent(passDeps.db, gateway.gatewayId))) {
     return { kind: "steady" };
   }
   const desiredImage = gatewayImageFor(gateway, artifact);
@@ -1220,10 +1212,10 @@ async function uninstallGateway(
   gateway: DurableGateway,
 ): Promise<void> {
   const { db, helm, log } = passDeps;
-  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
   log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
   await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
-  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
   await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
 }
 
@@ -1240,7 +1232,7 @@ async function upsertGateway(
   const { db, helm, log } = passDeps;
   const { gateway, artifact, runtime, desiredOpts, replicas } = input;
   if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
-  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
   log(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
@@ -1265,7 +1257,7 @@ async function upsertGateway(
       }) as unknown as Record<string, unknown>,
       { merge: true },
     );
-  if (!(await cowboyMayMutateGatewayNow(db, gateway.gatewayId))) return;
+  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
   await helm.upsertInstance(desiredOpts);
 }
 
@@ -1413,7 +1405,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   await runReconcilePhase(deps, "runtime-dependencies", () =>
     syncDurableRuntimeDependencies(
       deps,
-      runtime.gateways.filter(cowboyMayMutateGateway),
+      runtime.gateways,
     )
   );
   await runReconcilePhase(deps, "convergence", () => convergeGatewaysIfConfigured(deps));
@@ -1738,83 +1730,6 @@ const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "erase-customer",
 ]);
 
-const AUTOMATIC_GATEWAY_MUTATION_KINDS: ReadonlySet<string> = new Set([
-  "add-gateway",
-  "retire-gateway",
-  "restart-gateway",
-  "recycle-gateway",
-  "rollout",
-  MIGRATE_CUSTOMER_KIND,
-]);
-
-const AUTOMATIC_BUILDER_MUTATION_KINDS: ReadonlySet<string> = new Set([
-  MIGRATE_CUSTOMER_KIND,
-  "deprovision-customer",
-  "suspend-customer",
-  "erase-customer",
-]);
-
-function operationIsAutomatic(op: Operation): boolean {
-  return resolveOperationOrigin(op.origin) === "automatic";
-}
-
-function automaticOperationGatewayIds(op: Operation): string[] {
-  if (!AUTOMATIC_GATEWAY_MUTATION_KINDS.has(op.kind)) return [];
-  return [...new Set([
-    op.input.gatewayId,
-    op.input.fromGatewayId,
-    op.input.toGatewayId,
-  ].filter((value): value is string => typeof value === "string" && value.length > 0))];
-}
-
-async function automaticOperationFenceReason(
-  txn: FirebaseFirestore.Transaction,
-  db: Firestore,
-  op: Operation,
-): Promise<string | null> {
-  if (!operationIsAutomatic(op)) return null;
-  const gatewayIds = automaticOperationGatewayIds(op);
-  const uid = AUTOMATIC_BUILDER_MUTATION_KINDS.has(op.kind) &&
-    typeof op.input.uid === "string" && op.input.uid.length > 0
-    ? op.input.uid
-    : null;
-  const snapshots = await Promise.all([
-    ...gatewayIds.map((gatewayId) => txn.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId))),
-    ...(uid ? [txn.get(db.collection("users").doc(uid))] : []),
-  ]);
-  for (let index = 0; index < gatewayIds.length; index += 1) {
-    const snapshot = snapshots[index];
-    if (snapshot.exists && isOperatorManaged(snapshot.data()?.managedBy)) {
-      return automaticGatewayOperationFenceReason(op.kind, gatewayIds[index]!);
-    }
-  }
-  if (uid) {
-    const user = snapshots.at(-1);
-    if (isOperatorManaged(readPath(
-      user?.exists ? user.data() as Record<string, unknown> : undefined,
-      "provisioning.openclaw.managedBy",
-    ))) {
-      return automaticBuilderOperationFenceReason(op.kind, uid);
-    }
-  }
-  return null;
-}
-
-function failFencedOperation(
-  txn: FirebaseFirestore.Transaction,
-  ref: FirebaseFirestore.DocumentReference,
-  reason: string,
-  now: number,
-): void {
-  txn.update(ref, {
-    status: "failed",
-    completedAt: now,
-    error: reason,
-    waitingOn: FieldValue.delete(),
-    nextAttemptAt: FieldValue.delete(),
-  });
-}
-
 function operationIsRestartResumable(op: Operation): boolean {
   if (op.kind === "rollout") return true;
   return operationNeedsDurableRestartResume(op);
@@ -1831,7 +1746,7 @@ async function attemptClaimOrQueueOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
-): Promise<{ outcome: "claimed" | "queued" | "skipped" | "fenced"; fresh?: Operation }> {
+): Promise<{ outcome: "claimed" | "queued" | "skipped"; fresh?: Operation }> {
   try {
     return await deps.db.runTransaction(async (txn) => {
       const fresh = await txn.get(ref);
@@ -1839,11 +1754,6 @@ async function attemptClaimOrQueueOperation(
       const data = fresh.data() as unknown;
       if (!data || isOperationAuditRow(data)) return { outcome: "skipped" as const };
       const freshOperation = data as Operation;
-      const fenceReason = await automaticOperationFenceReason(txn, deps.db, freshOperation);
-      if (fenceReason) {
-        failFencedOperation(txn, ref, fenceReason, Date.now());
-        return { outcome: "fenced" as const };
-      }
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
@@ -1933,10 +1843,6 @@ export async function processOperation(
   const claim = await attemptClaimOrQueueOperation(operation, ref, deps);
   if (claim.outcome === "queued") {
     deps.log(`[glm-controller] op=${operation.id} kind=${operation.kind} queued — waiting on a conflicting op`);
-    return;
-  }
-  if (claim.outcome === "fenced") {
-    deps.log(`[glm-controller] op=${op.id} failed — operator-managed target`);
     return;
   }
   if (claim.outcome !== "claimed" || !claim.fresh) return;
@@ -2036,20 +1942,6 @@ async function runClaimedOperation(
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
 ): Promise<void> {
-  const fenced = await deps.db.runTransaction(async (txn) => {
-    const fresh = await txn.get(ref);
-    if (!fresh.exists) return false;
-    const current = fresh.data() as Operation | undefined;
-    if (!current || current.status !== "running") return false;
-    const reason = await automaticOperationFenceReason(txn, deps.db, current);
-    if (!reason) return false;
-    failFencedOperation(txn, ref, reason, Date.now());
-    return true;
-  });
-  if (fenced) {
-    deps.log(`[glm-controller] op=${op.id} failed before execution — operator-managed target`);
-    return;
-  }
   const { ctx, steps } = createOperationContext({
     persist: async (next) => {
       await deps.db.runTransaction(async (txn) => {
@@ -3233,28 +3125,6 @@ async function buildHandlers(
         now: Date.now(),
         updatedBy: "cowboy-retire-gateway",
       }),
-    assertAutomaticRetirementMayMutate: async (gatewayId) => {
-      await db.runTransaction(async (txn) => {
-        const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-        const rootSnap = await txn.get(rootRef);
-        const root = projectGatewayDesiredRootForGateway(
-          rootSnap.exists ? rootSnap.data() : undefined,
-          gatewayId,
-        );
-        if (root === null) throw new Error(`gateway ${gatewayId} durable root is unavailable`);
-        if (isOperatorManaged(root.managedBy)) {
-          throw new Error(`gateway ${gatewayId} is operator-managed`);
-        }
-        if (!root.ownerUid) return;
-        const userSnap = await txn.get(db.collection("users").doc(root.ownerUid));
-        if (isOperatorManaged(readPath(
-          userSnap.exists ? userSnap.data() as Record<string, unknown> : undefined,
-          "provisioning.openclaw.managedBy",
-        ))) {
-          throw new Error(`builder ${root.ownerUid} is operator-managed`);
-        }
-      });
-    },
     readMountedCustomers: async (gatewayId) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
       const runtime = snap.exists ? snap.data() : undefined;

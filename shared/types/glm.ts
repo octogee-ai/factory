@@ -2,18 +2,6 @@ import type { SizingTier } from "./sizing.js";
 
 export type GatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 
-export const MANAGED_BY_VALUES = ["cowboy", "operator"] as const;
-export type ManagedBy = (typeof MANAGED_BY_VALUES)[number];
-export const DEFAULT_MANAGED_BY: ManagedBy = "cowboy";
-
-export function resolveManagedBy(value: unknown): ManagedBy {
-  return value === "operator" ? "operator" : DEFAULT_MANAGED_BY;
-}
-
-export function isOperatorManaged(value: unknown): boolean {
-  return resolveManagedBy(value) === "operator";
-}
-
 export const GATEWAY_PROFILES = ["standard", "builder"] as const;
 export type GatewayProfile = (typeof GATEWAY_PROFILES)[number];
 

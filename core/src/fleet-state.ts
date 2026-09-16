@@ -6,7 +6,6 @@ import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
   type CustomerMigrationV2GatewayRootFence,
-  isOperatorManaged,
   resolveUserGatewayControlState,
 } from "@octogee/shared/types/glm";
 import {
@@ -177,20 +176,6 @@ export async function commitCutoverAtomic(
       targetRootRef,
     );
     const targetRoot = targetRootSnap.exists ? targetRootSnap.data() : undefined;
-    if (params.automatic) {
-      const [sourceRootSnap, userSnap] = await Promise.all([
-        txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
-        txn.get(deps.db.collection("users").doc(params.uid)),
-      ]);
-      assertAutomaticCutoverOwnership({
-        uid: params.uid,
-        fromGatewayId: params.fromGatewayId,
-        toGatewayId: params.toGatewayId,
-        sourceRoot: sourceRootSnap.exists ? sourceRootSnap.data() : undefined,
-        targetRoot,
-        user: userSnap.exists ? userSnap.data() : undefined,
-      });
-    }
     assertTargetAcceptsCutover(targetRoot, params.toGatewayId);
     if (params.customerMigrationV2Fence) {
       const alreadyCommitted = await assertCustomerMigrationV2FenceCurrent({
@@ -206,27 +191,6 @@ export async function commitCutoverAtomic(
     updateUserMirror(txn, deps, params, targetRoot);
     updateAssignment(txn, deps.db, params, prior.epoch, nowMs);
   });
-}
-
-function assertAutomaticCutoverOwnership(input: {
-  uid: string;
-  fromGatewayId: string;
-  toGatewayId: string;
-  sourceRoot: Record<string, unknown> | undefined;
-  targetRoot: Record<string, unknown> | undefined;
-  user: Record<string, unknown> | undefined;
-}): void {
-  if (isOperatorManaged(input.sourceRoot?.managedBy)) {
-    throw new Error(`automatic cutover fenced: gateway ${input.fromGatewayId} is operator-managed`);
-  }
-  if (isOperatorManaged(input.targetRoot?.managedBy)) {
-    throw new Error(`automatic cutover fenced: gateway ${input.toGatewayId} is operator-managed`);
-  }
-  const provisioning = recordOrEmpty(input.user?.provisioning);
-  const openclaw = recordOrEmpty(provisioning.openclaw);
-  if (isOperatorManaged(openclaw.managedBy)) {
-    throw new Error(`automatic cutover fenced: builder ${input.uid} is operator-managed`);
-  }
 }
 
 interface PriorAssignment {
@@ -617,7 +581,6 @@ function recoveryTargetRootReady(
     root.desiredStatus === "running",
     root.liveRelease !== null,
     root.desiredRelease === root.liveRelease,
-    !isOperatorManaged(root.managedBy),
   ].every(Boolean);
 }
 
@@ -669,8 +632,6 @@ function assertRecoverySourceIdentity(
     throw new Error("unavailable gateway recovery source changed before cutover");
   }
   const exact = [
-    !isOperatorManaged(root.managedBy),
-    !isOperatorManaged(openclaw.managedBy),
     openclaw.gatewayId === params.fromGatewayId,
     sourceAssignment.uid === params.uid,
     sourceAssignment.slug === params.slug,
@@ -1021,7 +982,6 @@ function recoveredRuntimeResetTargetIsReady(input: {
     input.targetRoot?.desiredStatus === "running",
     input.targetRoot?.liveRelease !== null,
     input.targetRoot?.desiredRelease === input.targetRoot?.liveRelease,
-    !isOperatorManaged(input.targetRoot?.managedBy),
     input.targetRuntime?.gatewayId === input.params.targetGatewayId,
     input.targetRuntime?.release === input.targetRoot?.liveRelease,
     input.targetRuntime?.lifecycle === "serving",
@@ -1189,18 +1149,6 @@ export async function markAssignmentState(
   params: MarkAssignmentStateParams,
 ): Promise<void> {
   await deps.db.runTransaction(async (txn) => {
-    if (params.automatic) {
-      const [rootSnap, userSnap] = await Promise.all([
-        txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId)),
-        txn.get(deps.db.collection("users").doc(params.uid)),
-      ]);
-      assertAutomaticAssignmentStateOwnership({
-        gatewayId: params.gatewayId,
-        uid: params.uid,
-        root: rootSnap.exists ? rootSnap.data() : undefined,
-        user: userSnap.exists ? userSnap.data() : undefined,
-      });
-    }
     const ref = assignmentRef(deps.db, params.gatewayId, params.uid);
     const snap = await txn.get(ref);
     if (!snap.exists) {
@@ -1220,24 +1168,6 @@ export async function markAssignmentState(
         : {}),
     });
   });
-}
-
-function assertAutomaticAssignmentStateOwnership(input: {
-  gatewayId: string;
-  uid: string;
-  root: Record<string, unknown> | undefined;
-  user: Record<string, unknown> | undefined;
-}): void {
-  if (isOperatorManaged(input.root?.managedBy)) {
-    throw new Error(
-      `automatic assignment state fenced: gateway ${input.gatewayId} is operator-managed`,
-    );
-  }
-  const provisioning = recordOrEmpty(input.user?.provisioning);
-  const openclaw = recordOrEmpty(provisioning.openclaw);
-  if (isOperatorManaged(openclaw.managedBy)) {
-    throw new Error(`automatic assignment state fenced: builder ${input.uid} is operator-managed`);
-  }
 }
 
 function createMissingAssignment(

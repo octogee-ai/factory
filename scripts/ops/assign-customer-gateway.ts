@@ -35,7 +35,6 @@ async function readOrchestratorConfig(db: Firestore): Promise<SharedGatewayPoolC
       gatewayId: doc.id,
       gatewayClass: data.gatewayClass,
       desiredStatus: data.desiredStatus,
-      managedBy: data.managedBy,
     };
   }));
 }
@@ -139,7 +138,6 @@ async function selectAssignmentGateway(
       gatewayId,
       gatewayClass: authorization.config.gatewayClass,
       desiredStatus: authorization.gateway.desiredStatus,
-      managedBy: authorization.gateway.managedBy,
       ready: runtimeReady,
       serving: isGatewayRuntimeDoc(runtime) && runtime.lifecycle === "serving",
       heartbeatFresh,

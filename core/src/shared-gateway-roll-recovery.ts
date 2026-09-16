@@ -7,7 +7,6 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  isOperatorManaged,
 } from "@octogee/shared/types/glm";
 import {
   GATEWAY_RELEASES_SUBCOLLECTION,
@@ -206,8 +205,6 @@ function recoveryRollIsEligible(
     target.gatewayClass === "shared",
     source.desiredStatus === "running",
     target.desiredStatus === "running",
-    !isOperatorManaged(source.managedBy),
-    !isOperatorManaged(target.managedBy),
     target.liveRelease === input.expectedLiveRelease,
     target.desiredRelease === input.expectedDesiredRelease,
     target.latestRelease === input.expectedDesiredRelease,

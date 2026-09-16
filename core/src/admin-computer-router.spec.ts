@@ -7,7 +7,7 @@ import { addAdminFleetRoutes } from "./admin-fleet-router.js";
 const GATEWAY = "b-fixture";
 const OWNER = "fixture-owner";
 const gateway = {
-  gatewayId: GATEWAY, desiredStatus: "running", managedBy: "cowboy",
+  gatewayId: GATEWAY, desiredStatus: "running",
   createdAt: 1, createdBy: "operator", updatedAt: 1, updatedBy: "operator",
   latestRelease: 1, desiredRelease: 1, liveRelease: 1,
   configSchemaVersion: 1, profile: "builder", gatewayClass: "builder", imageProfile: "builder",

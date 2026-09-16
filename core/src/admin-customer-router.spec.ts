@@ -266,7 +266,7 @@ describe("mergeDailyUsage", () => {
 });
 
 describe("GET /api/admin/customer/:uid — placement and parked computer", () => {
-  it("projects operator placement and the parked computer with its checkpoint state", async () => {
+  it("projects the placement and the parked computer with its checkpoint state", async () => {
     const computer = {
       instanceName: "octogee-computer-prod-uid-1",
       zone: "us-central1-a",
@@ -278,7 +278,7 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
     const app = makeApp({
       "users/uid-1": customerDoc({
         provisioning: {
-          openclaw: { status: "complete", slug: "builder", managedBy: "operator", gatewayId: "alice-m-1", gatewayProfile: "builder" },
+          openclaw: { status: "complete", slug: "builder", gatewayId: "alice-m-1", gatewayProfile: "builder" },
           computer,
         },
       }),
@@ -286,16 +286,16 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
 
     const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
 
-    expect(res.body.placement).toEqual({ managedBy: "operator", gatewayId: "alice-m-1", gatewayProfile: "builder" });
+    expect(res.body.placement).toEqual({ gatewayId: "alice-m-1", gatewayProfile: "builder" });
     expect(res.body.computer).toEqual(computer);
   });
 
-  it("defaults to cowboy placement with no computer when the user has never been placed", async () => {
+  it("reports no placement and no computer when the user has never been placed", async () => {
     const app = makeApp({ "users/uid-1": customerDoc() });
 
     const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
 
-    expect(res.body.placement).toEqual({ managedBy: "cowboy", gatewayId: null, gatewayProfile: null });
+    expect(res.body.placement).toEqual({ gatewayId: null, gatewayProfile: null });
     expect(res.body.computer).toBeNull();
   });
 });

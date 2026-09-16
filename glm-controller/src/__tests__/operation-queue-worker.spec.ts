@@ -213,27 +213,6 @@ function buildDeps(
 }
 
 describe("gateway operation queue — enqueue instead of reject (glmOperations wiring)", () => {
-  it("fails an already-queued automatic operation when its transaction sees an operator-managed gateway", async () => {
-    const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
-    const { db, store } = createFakeGlmOperationsDb({
-      "op-bender": baseOp({
-        id: "op-bender",
-        origin: "automatic",
-        input: { gatewayId: "bender" },
-      }),
-    }, {
-      gateways: { bender: { managedBy: "operator" } },
-    });
-
-    await drainPendingOperationsOnce(buildDeps(db, { rollout: rolloutHandler }));
-
-    expect(store.get("op-bender")).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("operator-managed"),
-    });
-    expect(rolloutHandler).not.toHaveBeenCalled();
-  });
-
   it("does not execute an audit record from a pending scan or snapshot", async () => {
     const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createFakeGlmOperationsDb(

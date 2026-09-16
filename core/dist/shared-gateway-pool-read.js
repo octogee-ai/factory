@@ -11,7 +11,6 @@ export function sharedPoolMemberRootsFromSnapshot(snapshot) {
             gatewayId: doc.id,
             gatewayClass: data.gatewayClass,
             desiredStatus: data.desiredStatus,
-            managedBy: data.managedBy,
         };
     });
 }

@@ -16,8 +16,6 @@ import {
   isGatewayClassControlUiAccessEnabled,
   isGatewayControlIdentity,
   resolveGatewayControlIdentity,
-  isOperatorManaged,
-  resolveManagedBy,
   resolveOperationOrigin,
   isOperationAuditRecord,
   isOperationAuditRow,
@@ -27,15 +25,7 @@ import {
   readBuilderParkedComputer,
 } from "./glm";
 
-describe("managedBy ownership", () => {
-  it("defaults absent and invalid values to Cowboy while recognizing an operator override", () => {
-    expect(resolveManagedBy(undefined)).toBe("cowboy");
-    expect(resolveManagedBy("unknown")).toBe("cowboy");
-    expect(resolveManagedBy("operator")).toBe("operator");
-    expect(isOperatorManaged(undefined)).toBe(false);
-    expect(isOperatorManaged("operator")).toBe(true);
-  });
-
+describe("operation origin", () => {
   it("treats operations without an origin as manual", () => {
     expect(resolveOperationOrigin(undefined)).toBe("operator");
     expect(resolveOperationOrigin("operator")).toBe("operator");

@@ -44,7 +44,6 @@ export interface DisruptionGatewayRecord {
   gatewayId: string;
   gatewayClass: string | null;
   desiredStatus: string | null;
-  managedBy: string | null;
   builderSlug: string | null;
   assignments: Array<{ uid: string; slug: string }>;
   operations: Array<{ id: string; kind: string | null; status: string | null; origin: string | null }>;
@@ -333,7 +332,6 @@ async function gatewayRecords(
       gatewayId,
       gatewayClass: stringOrNull(data.gatewayClass),
       desiredStatus: stringOrNull(data.desiredStatus),
-      managedBy: stringOrNull(data.managedBy),
       builderSlug: stringOrNull(data.builderSlug),
       assignments: assignments.docs.flatMap((doc) => {
         const value = doc.data();

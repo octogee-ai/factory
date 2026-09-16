@@ -24,13 +24,10 @@ import {
 } from "../ops/assign-customer-gateway.js";
 import {
   buildFleetMigrateOperationInput,
-  executeFleetAdminMutation,
   executeFleetGatewayMutation,
   parseForceRestartPodList,
   parseFleetArgs,
   releaseStatusRows,
-  resolveFleetBuilderMutationRequest,
-  resolveFleetBuilderMutation,
   runForcedGatewayRestart,
   fleetServiceAccountCredential,
   fleetFirebaseSignerServiceAccountId,
@@ -790,18 +787,13 @@ describe("fleet force gateway restart", () => {
       idempotencyKey: "restart-canary-force",
       mutation: { kind: "restart-gateway", gatewayId: "canary", mode: "force-pod-delete" },
     }));
-    expect(documents.get("gateways/canary")).toMatchObject({
-      managedBy: "operator",
-      updatedAt: 1234,
-      updatedBy: "operator",
-    });
+    expect(documents.get("gateways/canary")?.managedBy).toBeUndefined();
     expect(documents.get("glmOperations/audit-force-restart")?.target).toEqual({
       gatewayId: "canary",
       podName: "octogee-gateway-canary-a",
       podUid: "pod-uid-1",
     });
     expect(writes.map((write) => write.path)).toEqual([
-      "gateways/canary",
       "glmOperations/audit-force-restart",
     ]);
     expect(kubectl.mock.calls.map(([argv]) => argv)).toEqual([
@@ -882,12 +874,6 @@ describe("fleet force gateway restart", () => {
         desiredStatus: "retired",
       });
     }, "cannot force restart a retired gateway: canary"],
-    ["operator ownership loss", (documents: Map<string, Record<string, unknown>>) => {
-      documents.set("gateways/canary", {
-        ...documents.get("gateways/canary")!,
-        managedBy: "cowboy",
-      });
-    }, "gateway canary is no longer operator-managed"],
     ["audit target drift", (documents: Map<string, Record<string, unknown>>) => {
       documents.set("glmOperations/audit-force-restart", {
         ...documents.get("glmOperations/audit-force-restart")!,
@@ -1192,125 +1178,6 @@ describe("fleet CLI args", () => {
     ]) {
       expect(() => resolveFleetGatewayMutation(parseFleetArgs(argv))).toThrow();
     }
-    expect(resolveFleetGatewayMutation(parseFleetArgs([
-      "--env=test", "gw", "override", "canary",
-    ]))).toEqual({
-      method: "PATCH",
-      path: "/api/admin/gateways/canary",
-      body: { managedBy: "operator" },
-    });
-    expect(resolveFleetGatewayMutation(parseFleetArgs([
-      "--env=test", "gw", "release-to-cowboy", "canary",
-    ]))).toEqual({
-      method: "PATCH",
-      path: "/api/admin/gateways/canary",
-      body: { managedBy: "cowboy" },
-    });
-  });
-
-  it("parses Builder placement intents without writing directly to Firestore", () => {
-    expect(resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "evict", "alice", "--to=canary",
-    ]))).toEqual({
-      kind: "evict",
-      slug: "alice",
-      target: { kind: "gateway", gatewayId: "canary" },
-    });
-    expect(resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "evict", "alice", "--park",
-    ]))).toEqual({
-      kind: "evict",
-      slug: "alice",
-      target: { kind: "park" },
-    });
-    expect(resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "place", "alice",
-    ]))).toEqual({ kind: "place", slug: "alice" });
-  });
-
-  it("maps Builder placement intents to the Admin desired-state request", () => {
-    expect(resolveFleetBuilderMutationRequest(
-      resolveFleetBuilderMutation(parseFleetArgs([
-        "--env=test", "builder", "evict", "alice", "--to=canary", "--idempotency-key=move-alice",
-      ])),
-      "uid/alice",
-      "move-alice",
-    )).toEqual({
-      method: "PATCH",
-      path: "/api/admin/customers/uid%2Falice/placement",
-      body: { managedBy: "operator", gatewayId: "canary" },
-      idempotencyKey: "move-alice",
-    });
-    expect(resolveFleetBuilderMutationRequest(
-      resolveFleetBuilderMutation(parseFleetArgs([
-        "--env=test", "builder", "evict", "alice", "--park",
-      ])),
-      "uid-alice",
-    )).toEqual({
-      method: "PATCH",
-      path: "/api/admin/customers/uid-alice/placement",
-      body: { managedBy: "operator", gatewayId: null },
-    });
-    expect(resolveFleetBuilderMutationRequest(
-      resolveFleetBuilderMutation(parseFleetArgs([
-        "--env=test", "builder", "place", "alice",
-      ])),
-      "uid-alice",
-    )).toEqual({
-      method: "PATCH",
-      path: "/api/admin/customers/uid-alice/placement",
-      body: { managedBy: "cowboy" },
-    });
-  });
-
-  it("submits an applied Builder intent once and returns the desired-state response", async () => {
-    const request = vi.fn(async () => ({ operationId: "migrate-alice" }));
-    const mutation = resolveFleetBuilderMutationRequest(
-      resolveFleetBuilderMutation(parseFleetArgs([
-        "--env=test", "builder", "evict", "alice", "--to=canary",
-      ])),
-      "uid-alice",
-    );
-
-    await expect(executeFleetAdminMutation({ request }, mutation, true)).resolves.toEqual({
-      applied: true,
-      response: { operationId: "migrate-alice" },
-    });
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith(mutation);
-  });
-
-  it("rejects ambiguous Builder eviction targets and invalid gateway ids", () => {
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "evict", "alice", "--to=canary", "--park",
-    ]))).toThrow("builder evict accepts exactly one of --to=<gw-id> or --park");
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "evict", "alice",
-    ]))).toThrow("builder evict requires exactly one of --to=<gw-id> or --park");
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "evict", "alice", "--to=a/../b",
-    ]))).toThrow("builder evict received an invalid gateway id: a/../b");
-  });
-
-  it("rejects placement targets from builder place", () => {
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "place", "alice", "--to=canary",
-    ]))).toThrow("builder place does not accept --to or --park");
-  });
-
-  it("rejects ignored Builder arguments, flags, and empty idempotency keys", () => {
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "evict", "alice", "accidental", "--to=canary",
-    ]))).toThrow("builder evict accepts exactly one <slug>");
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "place", "alice", "--gateway=other",
-    ]))).toThrow("builder place does not accept --gateway");
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "place", "alice", "--idempotency-key",
-    ]))).toThrow("builder place requires --idempotency-key=<key>");
-    expect(() => resolveFleetBuilderMutation(parseFleetArgs([
-      "--env=test", "builder", "place", "alice", "--apply=true",
-    ]))).toThrow("builder place accepts --apply without a value");
   });
 
   it("rejects incomplete gateway mutation input before any request", () => {

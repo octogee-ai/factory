@@ -1,7 +1,7 @@
 import { buildCustomerSummary, toISODate, } from "./admin-shape.js";
 import { getTierConfig } from "@octogee/shared/types/billing-tiers";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { isOperatorManaged, readBuilderParkedComputer } from "@octogee/shared/types/glm";
+import { readBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
@@ -255,7 +255,6 @@ export function projectCustomerPlacement(openclaw) {
         ? openclaw
         : {};
     return {
-        managedBy: isOperatorManaged(record.managedBy) ? "operator" : "cowboy",
         gatewayId: typeof record.gatewayId === "string" ? record.gatewayId : null,
         gatewayProfile: typeof record.gatewayProfile === "string" ? record.gatewayProfile : null,
     };

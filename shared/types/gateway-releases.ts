@@ -11,11 +11,9 @@ import {
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import {
   GLM_GATEWAYS_COLLECTION,
-  isOperatorManaged,
 } from "./glm.js";
 import type {
   GatewayDesiredStatus,
-  ManagedBy,
 } from "./glm.js";
 
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
@@ -58,7 +56,6 @@ export interface GatewayDoc {
   desiredRelease: number;
   liveRelease: number | null;
   desiredStatus: GatewayLifecycleStatus;
-  managedBy?: ManagedBy;
   retireAfter?: number | null;
   retirementVersion?: number;
   retirementClaim?: GatewayRetirementClaim | null;
@@ -475,7 +472,6 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "modelBrokerLimits",
   "allocation",
   "desiredStatus",
-  "managedBy",
   "liveRelease",
   "retireAfter",
 ] as const;
@@ -574,8 +570,6 @@ export interface CommitPlacementParams {
 
 export type PlacementRejectReason =
   | "gateway-root-invalid"
-  | "gateway-operator-managed"
-  | "builder-operator-managed"
   | "gateway-not-running"
   | "gateway-not-serving"
   | "gateway-target-not-accepting";
@@ -606,16 +600,6 @@ function placementRuntimeRejectReason(
   return data.lifecycle === "serving" ? null : "gateway-not-serving";
 }
 
-function builderIsOperatorManaged(data: Record<string, unknown> | undefined): boolean {
-  const provisioning = data?.provisioning;
-  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) {
-    return false;
-  }
-  const openclaw = (provisioning as Record<string, unknown>).openclaw;
-  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) return false;
-  return isOperatorManaged((openclaw as Record<string, unknown>).managedBy);
-}
-
 async function preserveExistingAssignment(
   txn: PlacementTxn,
   assignmentRef: PlacementDocRef,
@@ -629,24 +613,11 @@ async function preserveExistingAssignment(
   return true;
 }
 
-function automaticBuilderRejectReason(
-  userData: Record<string, unknown> | undefined,
-  params: CommitPlacementParams,
-): PlacementRejectReason | null {
-  if (!params.automatic) return null;
-  return builderIsOperatorManaged(userData)
-    ? "builder-operator-managed"
-    : null;
-}
-
 function placementGatewayRejectReason(
   gatewayData: Record<string, unknown> | undefined,
   params: CommitPlacementParams,
 ): PlacementRejectReason | null {
   if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) return "gateway-root-invalid";
-  if (params.automatic && isOperatorManaged(gatewayData.managedBy)) {
-    return "gateway-operator-managed";
-  }
   return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
 }
 
@@ -721,7 +692,7 @@ export async function commitPlacementAtomic(
     .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
     .doc(params.uid);
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
-    const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(
+    const { mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(
       db,
       txn,
       userRef,
@@ -729,9 +700,6 @@ export async function commitPlacementAtomic(
     );
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-    const builderRejectReason = automaticBuilderRejectReason(userData, params);
-    if (builderRejectReason) return { kind: "rejected", reason: builderRejectReason };
-
     if (!gatewaySnap.exists) {
       return commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites);
     }

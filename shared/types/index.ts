@@ -381,7 +381,6 @@ export type {
 
 export type {
   GatewayDesiredStatus,
-  ManagedBy,
   GatewayDesiredState,
   GatewayProfile,
   GatewayServiceAccountSpec,
@@ -411,8 +410,6 @@ export type {
 } from './glm.js';
 export {
   GATEWAY_CLASSES,
-  DEFAULT_MANAGED_BY,
-  MANAGED_BY_VALUES,
   OPERATION_ORIGINS,
   GATEWAY_IMAGE_PROFILES,
   OPERATION_AUDIT_RECORD_TYPE,
@@ -425,7 +422,6 @@ export {
   BUILDER_GATEWAY_LOCKED_SERVICE_ACCOUNT,
   BUILDER_GATEWAY_SERVICE_ACCOUNT_PREFIX,
   isGatewayClass,
-  isOperatorManaged,
   isOperationAuditRecord,
   isOperationAuditRow,
   isGatewayClassControlUiAccessEnabled,
@@ -433,7 +429,6 @@ export {
   builderGatewayServiceAccountName,
   resolveGatewayClass,
   resolveGatewayImageProfile,
-  resolveManagedBy,
   resolveOperationOrigin,
 } from './glm.js';
 

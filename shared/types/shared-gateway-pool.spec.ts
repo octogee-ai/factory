@@ -28,7 +28,6 @@ function candidate(
     gatewayId,
     gatewayClass: "shared",
     desiredStatus: "running",
-    managedBy: "cowboy",
     ready: true,
     serving: true,
     heartbeatFresh: true,
@@ -42,7 +41,7 @@ function candidate(
 
 function root(
   gatewayId: string,
-  overrides: Partial<{ gatewayClass: unknown; desiredStatus: unknown; managedBy: unknown }> = {},
+  overrides: Partial<{ gatewayClass: unknown; desiredStatus: unknown }> = {},
 ) {
   return { gatewayId, gatewayClass: "shared", desiredStatus: "running", ...overrides };
 }
@@ -71,13 +70,12 @@ describe("shared pool slot ids", () => {
 });
 
 describe("deriveSharedGatewayPoolConfig", () => {
-  it("derives the pool from Cowboy-managed shared roots only", () => {
+  it("derives the pool from shared roots in a member status only", () => {
     expect(deriveSharedGatewayPoolConfig([
       root("shared-1"),
       root("shared-0", { desiredStatus: "paused" }),
       root("shared-a", { desiredStatus: "draining" }),
       root("bender", { gatewayClass: "builder" }),
-      root("shared-2", { managedBy: "operator" }),
       root("shared-3", { desiredStatus: "retired" }),
       root("NOT VALID"),
     ])).toEqual({
@@ -215,7 +213,6 @@ describe("shared gateway selection", () => {
     for (const overrides of [
       { ready: false },
       { heartbeatFresh: false },
-      { managedBy: "operator" },
       { gatewayClass: "builder" },
       { gatewayId: "isolated" },
     ]) {

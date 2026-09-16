@@ -5,7 +5,6 @@ import {
   resolveGatewayImageProfile,
   resolveBuilderGatewayAccess,
   GATEWAY_PLATFORM_SERVICE_ACCOUNT_NAME,
-  isOperatorManaged,
   type HelmInstanceValue,
 } from "@octogee/shared/types/glm";
 import {
@@ -24,17 +23,11 @@ import { withoutGatewayWorkloadIdentity } from "./gateway-service-account-policy
 
 export type DurableGateway = GatewayDoc & GatewayMutableConfig;
 
-export function cowboyMayMutateGateway(gateway: DurableGateway): boolean {
-  return !isOperatorManaged(gateway.managedBy);
-}
-
 export function cowboyMayMarkGatewayLive(
   gateway: GatewayDoc | null,
   desiredRelease: number,
 ): boolean {
-  return gateway !== null &&
-    !isOperatorManaged(gateway.managedBy) &&
-    gateway.desiredRelease === desiredRelease;
+  return gateway !== null && gateway.desiredRelease === desiredRelease;
 }
 
 export function requiresSurgeCustomerMigration(gateway: DurableGateway): boolean {
@@ -159,7 +152,6 @@ export function planGatewayConvergence(
   input: GatewayConvergencePlanInput,
 ): GatewayConvergenceAction {
   const { gateway, artifact, helm } = input;
-  if (!cowboyMayMutateGateway(gateway)) return { kind: "steady" };
   if (gateway.desiredStatus === "retired") {
     return helm ? { kind: "uninstall" } : { kind: "steady" };
   }

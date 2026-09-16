@@ -141,8 +141,7 @@ describe("planGatewayConvergence", () => {
     });
   });
 
-  it("uses the transaction-time root ownership and release fence before marking a release live", () => {
-    expect(cowboyMayMarkGatewayLive(gateway({ managedBy: "operator" }), 2)).toBe(false);
+  it("uses the transaction-time release fence before marking a release live", () => {
     expect(cowboyMayMarkGatewayLive(gateway(), 1)).toBe(false);
     expect(cowboyMayMarkGatewayLive(gateway(), 2)).toBe(true);
     expect(markLiveRuntimePatch(gateway())).toEqual({ lifecycle: "serving", release: 2 });
@@ -191,17 +190,6 @@ describe("planGatewayConvergence", () => {
       planGatewayConvergence({
         gateway: gateway({ desiredStatus: "retired" }),
         artifact: null,
-        helm: null,
-        deploymentReady: false,
-      }),
-    ).toEqual({ kind: "steady" });
-  });
-
-  it("observes an operator-managed gateway without applying desired state", () => {
-    expect(
-      planGatewayConvergence({
-        gateway: gateway({ managedBy: "operator" }),
-        artifact: artifact(),
         helm: null,
         deploymentReady: false,
       }),

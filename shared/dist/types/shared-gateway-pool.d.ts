@@ -59,7 +59,6 @@ export interface SharedGatewayPoolCandidate {
     gatewayId: string;
     gatewayClass: string;
     desiredStatus: string;
-    managedBy?: unknown;
     ready: boolean;
     serving: boolean;
     heartbeatFresh: boolean;
@@ -85,7 +84,6 @@ export interface SharedPoolMemberRoot {
     gatewayId: string;
     gatewayClass: unknown;
     desiredStatus: unknown;
-    managedBy?: unknown;
 }
 export declare function isSharedPoolSlotId(id: unknown): id is string;
 export declare function sharedPoolSlotOrdinal(id: string): number | null;

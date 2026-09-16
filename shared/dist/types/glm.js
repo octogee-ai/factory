@@ -1,11 +1,3 @@
-export const MANAGED_BY_VALUES = ["cowboy", "operator"];
-export const DEFAULT_MANAGED_BY = "cowboy";
-export function resolveManagedBy(value) {
-    return value === "operator" ? "operator" : DEFAULT_MANAGED_BY;
-}
-export function isOperatorManaged(value) {
-    return resolveManagedBy(value) === "operator";
-}
 export const GATEWAY_PROFILES = ["standard", "builder"];
 export const GATEWAY_CLASSES = ["shared", "builder"];
 export const GATEWAY_IMAGE_PROFILES = ["standard", "builder"];

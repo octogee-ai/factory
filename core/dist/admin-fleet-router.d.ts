@@ -189,7 +189,6 @@ export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<R
     oldestActivationAgeMs: number | null;
 };
 export interface AdminGatewayControlProjection {
-    managedBy: "cowboy" | "operator";
     desiredStatus: string;
     desiredRelease: number | null;
     liveRelease: number | null;

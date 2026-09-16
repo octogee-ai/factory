@@ -20,11 +20,9 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
-  isOperatorManaged,
   resolveGatewayRuntime,
   resolveUserGatewayControlState,
-  type OperationAttemptRecord,
-  type GatewayRuntime,
+    type GatewayRuntime,
 } from "@octogee/shared/types/glm";
 import {
   commitPlacementAtomic,
@@ -76,15 +74,10 @@ import {
   failActivationLeaseFirestore,
   readBuilderActivityFirestore,
 } from "./disposable-gateway-lifecycle.js";
-import {
-  automaticBuilderOperationFenceReason,
-  automaticGatewayOperationFenceReason,
-  MIGRATE_CUSTOMER_KIND,
-} from "./automatic-operation-fence.js";
+import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
 import {
   classifyOperationFailure,
-  MAX_OPERATION_ATTEMPT_HISTORY,
 } from "./operation-retry.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
@@ -630,7 +623,6 @@ function sharedGatewayCandidates(
       gatewayId: gateway.gatewayId,
       gatewayClass: gateway.gatewayClass,
       desiredStatus: gateway.desiredStatus,
-      managedBy: gateway.managedBy,
       ready: kubernetesReady(gateway),
       serving: gatewayRuntimeServing(gateway),
       heartbeatFresh: gatewayHeartbeatFresh(gateway),
@@ -688,7 +680,6 @@ function rollingSharedGatewayPeer(
     context.state.sharedGatewayIds.includes(gateway.gatewayId),
     candidate.gatewayClass === "shared",
     candidate.desiredStatus === "running",
-    !isOperatorManaged(candidate.managedBy),
     kubernetesReady(gateway),
     candidate.serving,
     candidate.heartbeatFresh,
@@ -757,7 +748,6 @@ async function retireUnentitledOwnedGateways(
     (gateway) => gateway.ownerUid === user.uid &&
       gateway.disposable === true &&
       gateway.gatewayClass !== "shared" &&
-      !isOperatorManaged(gateway.managedBy) &&
       gateway.desiredStatus !== "retired",
   );
   for (const gateway of ownedGateways) {
@@ -1906,18 +1896,6 @@ async function reconcileActivationLease(
 ): Promise<boolean> {
   const lease = builderActivationLease(user.data);
   if (!lease) return false;
-  const target = lease.targetGatewayId
-    ? context.gateways.get(lease.targetGatewayId)
-    : null;
-  if (isOperatorManaged(target?.managedBy)) {
-    blockPlacement(context, {
-      uid: user.uid,
-      lease,
-      code: "operator-managed-gateway",
-      reason: `gateway ${target!.gatewayId} is operator-managed`,
-    });
-    return true;
-  }
   if (lease.status === "requested") {
     await reconcileRequestedActivation(context, user, builderSlug, lease);
     return true;
@@ -1947,15 +1925,6 @@ async function reconcileEligibleBuilder(
   builderSlug: string,
 ): Promise<void> {
   const current = currentGatewayId(user.data);
-  const currentGateway = current ? context.gateways.get(current) : null;
-  if (isOperatorManaged(currentGateway?.managedBy)) {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: "operator-managed-gateway",
-      reason: `gateway ${currentGateway!.gatewayId} is operator-managed`,
-    });
-    return;
-  }
   if (
     await reconcileRecoveredDisposableRuntimeReset(
       context,
@@ -2019,15 +1988,6 @@ async function reconcileResolvedPlacement(
   current: string | null,
   placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
 ): Promise<void> {
-  const targetGateway = context.gateways.get(placement.targetGatewayId);
-  if (isOperatorManaged(targetGateway?.managedBy)) {
-    blockPlacement(context, {
-      uid: user.uid,
-      code: "operator-managed-gateway",
-      reason: `gateway ${targetGateway!.gatewayId} is operator-managed`,
-    });
-    return;
-  }
   if (!current) {
     await assignMissingPlacement(context, user, builderSlug, placement);
     return;
@@ -2074,11 +2034,6 @@ async function reconcilePlacementUser(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
 ): Promise<void> {
-  const openclaw = record(record(user.data.provisioning)?.openclaw);
-  if (isOperatorManaged(openclaw?.managedBy)) {
-    context.deps.debug?.(`[placement-policy] ${user.uid} is operator-managed — observing only`);
-    return;
-  }
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
   if (!eligibility.eligible) return;
   await reconcileEligibleBuilder(context, user, eligibility.slug);
@@ -2091,7 +2046,6 @@ function sharedRebalanceBuilder(
   scheduled: ReadonlySet<string>,
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
   if (scheduled.has(user.uid) || currentGatewayId(user.data) !== fromGatewayId) return null;
-  if (isOperatorManaged(record(record(user.data.provisioning)?.openclaw)?.managedBy)) return null;
   const lease = builderActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
@@ -2170,8 +2124,6 @@ function drainingSharedGatewayBuilder(
   fromGatewayId: string,
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
   if (context.migrations.has(user.uid)) return null;
-  const openclaw = record(record(user.data.provisioning)?.openclaw);
-  if (isOperatorManaged(openclaw?.managedBy)) return null;
   const lease = builderActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
   const assignment = context.assignments.get(
@@ -2344,7 +2296,6 @@ async function reconcileDisposableTombstones(
     .filter((gateway) =>
       gateway.disposable &&
       gateway.desiredStatus === "retired" &&
-      !isOperatorManaged(gateway.managedBy) &&
       gateway.ownerUid !== null &&
       !liveTargets.has(gateway.gatewayId))
     .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
@@ -2824,7 +2775,6 @@ function placementGatewayFromDocument(input: {
     gatewayClass: root.gatewayClass,
     ownerUid: root.ownerUid,
     desiredStatus: root.desiredStatus,
-    managedBy: root.managedBy,
     disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
     allocation: root.allocation ?? null,
     ready: runtimeReady,
@@ -2872,7 +2822,6 @@ async function readPlacementPolicySnapshot(
       gatewayId: doc.id,
       gatewayClass: data.gatewayClass,
       desiredStatus: data.desiredStatus,
-      managedBy: data.managedBy,
     };
   }));
   const defaultGatewayId = pool?.defaultGatewayId ?? "";
@@ -2979,135 +2928,6 @@ async function assignInitialPlacementFirestore(
   }
 }
 
-function automaticPlacementOperatorFenceReasons(
-  request: EnqueuePlacementMigrationInput,
-): ReadonlySet<string> {
-  return new Set([
-    automaticGatewayOperationFenceReason(MIGRATE_CUSTOMER_KIND, request.fromGatewayId),
-    automaticGatewayOperationFenceReason(MIGRATE_CUSTOMER_KIND, request.toGatewayId),
-    automaticBuilderOperationFenceReason(MIGRATE_CUSTOMER_KIND, request.uid),
-  ]);
-}
-
-function operatorFenceAttemptMatches(
-  attempt: Record<string, unknown>,
-  error: string,
-  reasons: ReadonlySet<string>,
-): boolean {
-  return reasons.has(error) &&
-    attempt.classification === "terminal" &&
-    Array.isArray(attempt.steps) &&
-    attempt.steps.length === 0;
-}
-
-function operatorFenceAttempt(
-  value: unknown,
-  reasons: ReadonlySet<string>,
-): OperationAttemptRecord | null {
-  const attempt = record(value);
-  const attemptNumber = positiveInteger(attempt?.attempt);
-  const startedAt = millis(attempt?.startedAt);
-  const completedAt = millis(attempt?.completedAt);
-  const error = typeof attempt?.error === "string" ? attempt.error : null;
-  if (
-    !attempt ||
-    attemptNumber === null ||
-    startedAt === null ||
-    completedAt === null ||
-    error === null ||
-    !operatorFenceAttemptMatches(attempt, error, reasons)
-  ) {
-    return null;
-  }
-  return {
-    attempt: attemptNumber,
-    startedAt,
-    completedAt,
-    error,
-    classification: "terminal",
-    steps: [],
-  };
-}
-
-function operatorFenceAttemptHistory(
-  value: unknown,
-  reasons: ReadonlySet<string>,
-): OperationAttemptRecord[] | null {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) return null;
-  const history = value.map((entry) => operatorFenceAttempt(entry, reasons));
-  return history.every((attempt): attempt is OperationAttemptRecord => attempt !== null)
-    ? history
-    : null;
-}
-
-function operatorFenceHistoryIsContiguous(
-  history: readonly OperationAttemptRecord[],
-  attempts: number,
-): boolean {
-  if (history.length === 0) return attempts === 0;
-  return history.at(-1)?.attempt === attempts && history.every(
-    (attempt, index) => index === 0 || attempt.attempt === history[index - 1]!.attempt + 1,
-  );
-}
-
-function automaticPlacementFenceError(
-  data: Record<string, unknown>,
-  reasons: ReadonlySet<string>,
-): string | null {
-  const error = typeof data.error === "string" ? data.error : null;
-  return data.status === "failed" &&
-      data.origin === "automatic" &&
-      data.createdBy === PLACEMENT_POLICY_ACTOR &&
-      error !== null &&
-      reasons.has(error)
-    ? error
-    : null;
-}
-
-function operatorFenceHasNoExecutionEvidence(data: Record<string, unknown>): boolean {
-  return Array.isArray(data.steps) &&
-    data.steps.length === 0 &&
-    data.customerMigrationV2 === undefined &&
-    data.output === undefined &&
-    data.rolledBack !== true;
-}
-
-function operatorFenceRearm(
-  data: Record<string, unknown>,
-  request: EnqueuePlacementMigrationInput,
-): { attempts: number; attemptHistory: OperationAttemptRecord[] } | null {
-  const reasons = automaticPlacementOperatorFenceReasons(request);
-  const history = operatorFenceAttemptHistory(data.attemptHistory, reasons);
-  const attempts = nonNegativeInteger(data.attempts ?? 0);
-  const completedAt = millis(data.completedAt);
-  const startedAt = data.startedAt === null ? completedAt : millis(data.startedAt);
-  const error = automaticPlacementFenceError(data, reasons);
-  if (
-    completedAt === null ||
-    startedAt === null ||
-    error === null ||
-    attempts === null ||
-    history === null ||
-    !operatorFenceHistoryIsContiguous(history, attempts) ||
-    !operatorFenceHasNoExecutionEvidence(data)
-  ) {
-    return null;
-  }
-  const nextAttempt = attempts + 1;
-  return {
-    attempts: nextAttempt,
-    attemptHistory: [...history, {
-      attempt: nextAttempt,
-      startedAt,
-      completedAt,
-      error,
-      classification: "terminal" as const,
-      steps: [],
-    }].slice(-MAX_OPERATION_ATTEMPT_HISTORY),
-  };
-}
-
 function isAutomaticRolledBackPlacement(
   data: Record<string, unknown>,
   request: EnqueuePlacementMigrationInput,
@@ -3156,25 +2976,7 @@ function placementMigrationIsNonTerminal(data: Record<string, unknown>): boolean
   return ["pending", "running", "succeeded"].includes(data.status as string);
 }
 
-interface TerminalPlacementRearmDecision {
-  operatorFence: ReturnType<typeof operatorFenceRearm>;
-}
-
-function terminalPlacementRearmDecision(
-  data: Record<string, unknown>,
-  request: EnqueuePlacementMigrationInput,
-): TerminalPlacementRearmDecision | null {
-  const operatorFence = operatorFenceRearm(data, request);
-  const canRearm = [
-    operatorFence,
-    rolledBackTransientPlacementCanRearm(data, request),
-  ].some(Boolean);
-  return canRearm ? { operatorFence } : null;
-}
-
-function rearmedPlacementMigrationPatch(
-  decision: TerminalPlacementRearmDecision,
-): Record<string, unknown> {
+function rearmedPlacementMigrationPatch(): Record<string, unknown> {
   return {
     status: "pending",
     startedAt: null,
@@ -3187,26 +2989,15 @@ function rearmedPlacementMigrationPatch(
     lastProgressAt: FieldValue.delete(),
     waitingOn: FieldValue.delete(),
     nextAttemptAt: FieldValue.delete(),
-    ...(decision.operatorFence ?? {}),
   };
 }
 
 async function applyTerminalPlacementRearm(input: {
-  firestore: FirestorePlacementPolicyInput;
   transaction: Transaction;
   ref: FirebaseFirestore.DocumentReference;
-  request: EnqueuePlacementMigrationInput;
-  decision: TerminalPlacementRearmDecision;
 }): Promise<void> {
-  const { firestore, transaction, ref, request, decision } = input;
-  await assertAutomaticPlacementMutationAllowed({
-    db: firestore.db,
-    transaction,
-    uid: request.uid,
-    gatewayIds: [request.fromGatewayId, request.toGatewayId],
-    action: `migration ${ref.id}`,
-  });
-  transaction.update(ref, rearmedPlacementMigrationPatch(decision));
+  const { transaction, ref } = input;
+  transaction.update(ref, rearmedPlacementMigrationPatch());
 }
 
 export async function enqueuePlacementMigration(
@@ -3237,13 +3028,6 @@ export async function enqueuePlacementMigration(
   await input.db.runTransaction(async (transaction) => {
     const existing = await transaction.get(ref);
     if (!existing.exists) {
-      await assertAutomaticPlacementMutationAllowed({
-        db: input.db,
-        transaction,
-        uid: request.uid,
-        gatewayIds: [request.fromGatewayId, request.toGatewayId],
-        action: `migration ${ref.id}`,
-      });
       transaction.create(ref, operation);
       return;
     }
@@ -3252,42 +3036,12 @@ export async function enqueuePlacementMigration(
       throw new Error(`migration operation ${ref.id} does not match activation demand`);
     }
     if (placementMigrationIsNonTerminal(data)) return;
-    const decision = terminalPlacementRearmDecision(data, request);
-    if (!decision) throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
-    await applyTerminalPlacementRearm({ firestore: input, transaction, ref, request, decision });
+    if (!rolledBackTransientPlacementCanRearm(data, request)) {
+      throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
+    }
+    await applyTerminalPlacementRearm({ transaction, ref });
   });
   return ref.id;
-}
-
-async function assertAutomaticPlacementMutationAllowed(input: {
-  db: Firestore;
-  transaction: Transaction;
-  uid: string;
-  gatewayIds: readonly string[];
-  action: string;
-}): Promise<void> {
-  const gatewayIds = [...new Set(input.gatewayIds)];
-  const [userSnapshot, ...gatewaySnapshots] = await Promise.all([
-    input.transaction.get(input.db.collection("users").doc(input.uid)),
-    ...gatewayIds.map((gatewayId) =>
-      input.transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(gatewayId))),
-  ]);
-  const user = userSnapshot.exists
-    ? userSnapshot.data() as Record<string, unknown> | undefined
-    : undefined;
-  if (isOperatorManaged(record(record(user?.provisioning)?.openclaw)?.managedBy)) {
-    throw new GatewayRetirementConflictError(
-      `${input.action} is fenced: builder ${input.uid} is operator-managed`,
-    );
-  }
-  for (let index = 0; index < gatewayIds.length; index += 1) {
-    const root = gatewaySnapshots[index];
-    if (root.exists && isOperatorManaged(root.data()?.managedBy)) {
-      throw new GatewayRetirementConflictError(
-        `${input.action} is fenced: gateway ${gatewayIds[index]} is operator-managed`,
-      );
-    }
-  }
 }
 
 function recoveryTargetMatchesRequest(
@@ -3296,7 +3050,6 @@ function recoveryTargetMatchesRequest(
 ): root is NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>> {
   const allocation = root?.allocation;
   return root !== null &&
-    !isOperatorManaged(root.managedBy) &&
     root.ownerUid === request.uid &&
     root.gatewayClass !== "shared" &&
     root.desiredStatus !== "retired" &&
@@ -3383,11 +3136,6 @@ async function recoverUnreachableDisposableGatewayFirestore(
     if (!recoveryTargetMatchesRequest(root, request)) {
       throw new GatewayRetirementConflictError(
         `gateway ${request.gatewayId} no longer matches unreachable recovery demand`,
-      );
-    }
-    if (isOperatorManaged(record(record(userData?.provisioning)?.openclaw)?.managedBy)) {
-      throw new GatewayRetirementConflictError(
-        `Builder ${request.uid} is operator-managed`,
       );
     }
     const runtime = runtimeSnapshot.data() as Record<string, unknown> | undefined;
@@ -3652,13 +3400,6 @@ async function retireOwnedGatewayFirestore(
       ...(telemetryObservedAfter === undefined ? {} : { telemetryObservedAfter }),
       claimGuard: async ({ transaction, root }) => {
         const rootRecord = root as unknown as Record<string, unknown>;
-        await assertAutomaticPlacementMutationAllowed({
-          db: input.db,
-          transaction,
-          uid: request.uid,
-          gatewayIds: [request.gatewayId],
-          action: `retirement ${request.gatewayId}`,
-        });
         if (!retirementAllocationMatches(rootRecord, request)) {
           throw new GatewayRetirementConflictError(
             `gateway ${request.gatewayId} no longer matches disposable allocation for ${request.uid}`,
@@ -3744,7 +3485,6 @@ function retiredDisposableGatewayVerdict(input: {
     root?.desiredStatus === "retired",
     root?.ownerUid === request.ownerUid,
     root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
-    !isOperatorManaged(root?.managedBy),
     input.claimOperationId === input.operationId,
     operation !== undefined,
     operation?.kind === "retire-gateway",

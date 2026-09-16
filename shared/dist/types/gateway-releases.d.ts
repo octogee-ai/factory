@@ -1,6 +1,6 @@
 import type { GatewayPodPlacement, GatewayPodReplacements } from "./gateway-pod-replacements.js";
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
-import type { GatewayDesiredStatus, ManagedBy } from "./glm.js";
+import type { GatewayDesiredStatus } from "./glm.js";
 export declare const GATEWAY_RELEASES_SUBCOLLECTION = "releases";
 export declare const GATEWAY_ASSIGNMENTS_SUBCOLLECTION = "assignments";
 export type GatewayLifecycleStatus = GatewayDesiredStatus;
@@ -27,7 +27,6 @@ export interface GatewayDoc {
     desiredRelease: number;
     liveRelease: number | null;
     desiredStatus: GatewayLifecycleStatus;
-    managedBy?: ManagedBy;
     retireAfter?: number | null;
     retirementVersion?: number;
     retirementClaim?: GatewayRetirementClaim | null;
@@ -146,7 +145,7 @@ export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag"];
-export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "builderAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "managedBy", "liveRelease", "retireAfter"];
+export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "builderAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
 export interface PlacementDocSnap {
     exists: boolean;
@@ -204,7 +203,7 @@ export interface CommitPlacementParams {
     automatic?: boolean;
     validateTarget?: (context: PlacementTargetValidationContext) => Promise<PlacementRejectReason | null>;
 }
-export type PlacementRejectReason = "gateway-root-invalid" | "gateway-operator-managed" | "builder-operator-managed" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
+export type PlacementRejectReason = "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {

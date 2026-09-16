@@ -421,7 +421,7 @@ function seedServingGateway(
   return seed;
 }
 
-function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<string, unknown> {
+function builderUser(gatewayId: string | null): Record<string, unknown> {
   return {
     username: "alice",
     provisioning: {
@@ -433,7 +433,6 @@ function builderUser(gatewayId: string | null, managedBy = "cowboy"): Record<str
           gatewayProfile: "standard",
           controlUiEnabled: true,
         } : {}),
-        managedBy,
       },
     },
   };
@@ -542,33 +541,6 @@ describe("POST /gateways/:id/deploy", () => {
   });
 });
 
-
-describe("PATCH /customers/:uid/placement", () => {
-  it("rejects direct Builder placement without creating a migration", async () => {
-    const { app, store } = mkApp({
-      "users/uid-alice": builderUser("source"),
-      ...seedServingGateway("legacy-owner", sharedPayload(), readyHeartbeat(), {
-        profile: "builder",
-        gatewayClass: "builder",
-        imageProfile: "builder",
-        ownerUid: "uid-alice",
-        builderSlug: "alice",
-      }),
-    });
-
-    await request(app)
-      .patch("/customers/uid-alice/placement")
-      .send({ managedBy: "operator", gatewayId: "legacy-owner" })
-      .expect(400)
-      .expect({
-        error: "Builder gateway placement is managed by the disposable lifecycle",
-        gatewayId: "legacy-owner",
-      });
-
-    expect(store.get("users/uid-alice")).toEqual(builderUser("source"));
-    expect(opsIn(store, "migrate-customer")).toHaveLength(0);
-  });
-});
 
 describe("manual gateway migrations", () => {
   it.each([
@@ -899,53 +871,6 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" }).expect(202);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zeta`)).toBeUndefined();
     expect(store.get("gateways/zeta")?.desiredStatus).toBe("paused");
-  });
-
-  it.each(["operator", "cowboy"] as const)(
-    "persists managedBy=%s on the durable root and journals the completed mutation",
-    async (managedBy) => {
-      const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
-
-      await request(app)
-        .patch("/gateways/zeta")
-        .send({ managedBy })
-        .expect(202)
-        .expect({ gatewayId: "zeta", updated: ["managedBy"] });
-
-      expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zeta`)).toBeUndefined();
-      expect(store.get("gateways/zeta")?.managedBy).toBe(managedBy);
-      expect(auditsIn(store)).toEqual([
-        expect.objectContaining({
-          status: "completed",
-          forced: false,
-          what: "update gateway desired configuration",
-          target: { gatewayId: "zeta" },
-          preActionStatus: {
-            desiredStatus: "running",
-            desiredRelease: 1,
-            managedBy: "cowboy",
-          },
-          mutation: {
-            kind: "patch-gateway",
-            gatewayId: "zeta",
-            patch: { managedBy },
-          },
-        }),
-      ]);
-    },
-  );
-
-  it("rejects an invalid managedBy value before it writes or journals", async () => {
-    const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
-
-    await request(app)
-      .patch("/gateways/zeta")
-      .send({ managedBy: "manual" })
-      .expect(400)
-      .expect({ error: "managedBy must be operator or cowboy" });
-
-    expect(store.get("gateways/zeta")?.managedBy).toBeUndefined();
-    expect(auditsIn(store)).toHaveLength(0);
   });
 
   it("rejects direct ownership PATCHes so they cannot create a standing owner gateway", async () => {

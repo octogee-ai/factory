@@ -174,39 +174,6 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.helmUninstalled).toEqual([]);
   });
 
-  it("stops an automatic retirement when ownership changes after its claim and before teardown", async () => {
-    const state = baseState();
-    const deps = makeDeps(state, {
-      assertAutomaticRetirementMayMutate: vi.fn(async () => {
-        throw new Error("gateway canary is operator-managed");
-      }),
-    });
-
-    const result = await createRetireGatewayHandler(deps)(
-      mkOp({ origin: "automatic" }),
-      makeCtx(),
-    );
-
-    expect(result).toMatchObject({ success: false, error: expect.stringContaining("operator-managed") });
-    expect(state.helmUninstalled).toEqual([]);
-    expect(state.teardownCalls).toEqual([]);
-  });
-
-  it("does not apply the automatic retirement ownership guard to a missing-origin operation", async () => {
-    const state = baseState();
-    const deps = makeDeps(state, {
-      assertAutomaticRetirementMayMutate: vi.fn(async () => {
-        throw new Error("gateway canary is operator-managed");
-      }),
-    });
-
-    await expect(createRetireGatewayHandler(deps)(mkOp(), makeCtx()))
-      .resolves.toMatchObject({ success: true });
-
-    expect(state.helmUninstalled).toEqual(["canary"]);
-    expect(deps.assertAutomaticRetirementMayMutate).not.toHaveBeenCalled();
-  });
-
   it("attempts every teardown step even when one fails, and preserves records for retry", async () => {
     const state = baseState();
     const deps = makeDeps(state, {

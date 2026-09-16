@@ -31,11 +31,10 @@ describe("projectGatewayControl", () => {
     liveRelease: 2,
   };
 
-  it("exposes operator control and every mutable config knob with explicit nulls", () => {
+  it("exposes every mutable config knob with explicit nulls", () => {
     const control = projectGatewayControl(
       {
         ...root,
-        managedBy: "operator",
         gatewayClass: "builder",
         sizingTier: "m",
         ownerUid: "uid-1",
@@ -46,7 +45,6 @@ describe("projectGatewayControl", () => {
     );
 
     expect(control).toMatchObject({
-      managedBy: "operator",
       desiredStatus: "running",
       desiredRelease: 3,
       liveRelease: 2,
@@ -65,9 +63,9 @@ describe("projectGatewayControl", () => {
     });
   });
 
-  it("defaults an unmanaged cluster gateway to cowboy control with no VM", () => {
+  it("projects a cluster gateway with no VM", () => {
     const control = projectGatewayControl(root as never, undefined);
-    expect(control).toMatchObject({ managedBy: "cowboy", runtime: "cluster", gatewayClass: "shared", vm: null, liveRelease: 2 });
+    expect(control).toMatchObject({ runtime: "cluster", gatewayClass: "shared", vm: null, liveRelease: 2 });
   });
 });
 
@@ -1794,7 +1792,6 @@ describe("manual disposable runtime return", () => {
           provisioning: {
             openclaw: {
               gatewayId: "shared-blue",
-              managedBy: "cowboy",
               activationLease: {
                 leaseId: "lease-1",
                 generation: 3,
@@ -1947,7 +1944,6 @@ describe("manual disposable runtime return", () => {
           provisioning: {
             openclaw: {
               gatewayId: targetGatewayId,
-              managedBy: "cowboy",
               activationLease: {
                 leaseId: "lease-1",
                 generation: 3,

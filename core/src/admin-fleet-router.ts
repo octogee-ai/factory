@@ -22,11 +22,9 @@ import {
   GATEWAY_PROFILES,
   NEW_GATEWAY_ID_REQUIREMENT,
   resolveUserGatewayControlState,
-  isValidGatewayId,
   isValidNewGatewayId,
   isGatewayClass,
   isGatewayProfile,
-  isOperatorManaged,
   resolveGatewayClass,
   resolveGatewayImageProfile,
   resolveGatewayRuntime,
@@ -1270,18 +1268,6 @@ async function readDurableGatewayRuntime(
   return { root, runtime, heartbeat: runtimeHeartbeat(runtime) };
 }
 
-function builderPlacementTargetStatus(
-  target: DurableGatewayRuntime,
-): string | null {
-  if (target.root.desiredStatus !== "running") return target.root.desiredStatus;
-  if (typeof target.root.liveRelease !== "number") return "not-live";
-  if (target.runtime?.lifecycle !== "serving") {
-    return target.runtime?.lifecycle ?? "unknown";
-  }
-  const heartbeatStatus = asStringOrNull(target.heartbeat?.status);
-  return heartbeatStatus === "ready" ? null : heartbeatStatus ?? "unknown";
-}
-
 function gatewayRetirementBlocker(
   gatewayId: string,
   runtime: DurableGatewayRuntime,
@@ -1926,8 +1912,6 @@ const ERR_GATEWAY_OPERATION_IN_FLIGHT =
   "another operation is already pending or running for this gateway";
 const ERR_USER_NOT_FOUND = "user not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
-const ERR_BUILDER_MIGRATION_IN_FLIGHT =
-  "a migration for this customer is pending or running";
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
@@ -1967,7 +1951,6 @@ interface StripeRefs {
 }
 
 export interface AdminGatewayControlProjection {
-  managedBy: "cowboy" | "operator";
   desiredStatus: string;
   desiredRelease: number | null;
   liveRelease: number | null;
@@ -1996,7 +1979,6 @@ export function projectGatewayControl(
     profile: root.profile ?? undefined,
   };
   return {
-    managedBy: isOperatorManaged(root.managedBy) ? "operator" : "cowboy",
     desiredStatus: root.desiredStatus,
     desiredRelease: releaseNumberOrNull(root.desiredRelease),
     liveRelease: releaseNumberOrNull(root.liveRelease),
@@ -2365,87 +2347,6 @@ function readUserGatewayId(
   const openclaw =
     (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
   return asStringOrNull(openclaw.gatewayId);
-}
-
-type BuilderPlacementCommand =
-  | { kind: "evict"; gatewayId: string }
-  | { kind: "park" }
-  | { kind: "place" };
-
-type BuilderPlacementMutationOutcome = {
-  status: number;
-  body: Record<string, unknown>;
-};
-
-function parseBuilderPlacementCommand(
-  body: unknown,
-): { ok: BuilderPlacementCommand } | { error: { status: number; body: Record<string, string> } } {
-  if (!isPlainRecord(body)) {
-    return { error: { status: 400, body: { error: "placement body must be an object" } } };
-  }
-  const keys = Object.keys(body);
-  if (body.managedBy === "cowboy" && keys.length === 1 && keys[0] === "managedBy") {
-    return { ok: { kind: "place" } };
-  }
-  if (
-    body.managedBy === "operator" &&
-    keys.length === 2 &&
-    keys.includes("managedBy") &&
-    keys.includes("gatewayId")
-  ) {
-    if (body.gatewayId === null) return { ok: { kind: "park" } };
-    if (isValidGatewayId(body.gatewayId)) {
-      return { ok: { kind: "evict", gatewayId: body.gatewayId } };
-    }
-    if (typeof body.gatewayId === "string") {
-      return {
-        error: {
-          status: 400,
-          body: { error: "placement gatewayId must be a valid gateway id" },
-        },
-      };
-    }
-  }
-  return {
-    error: {
-      status: 400,
-      body: {
-        error:
-          "placement body must be { managedBy: 'operator', gatewayId: string | null } or { managedBy: 'cowboy' }",
-      },
-    },
-  };
-}
-
-function classifyBuilderPlacementMutation(
-  result: BuilderPlacementMutationOutcome,
-): NormalFleetMutationResult {
-  if (result.status < 400) return { outcome: "completed" };
-  return {
-    outcome: "failed",
-    error: typeof result.body.error === "string"
-      ? result.body.error
-      : `builder placement returned ${result.status}`,
-  };
-}
-
-function builderServingAssignment(input: {
-  uid: string;
-  slug: string;
-  gatewayId: string;
-  epoch: number;
-  updatedAt: number;
-}): AssignmentDoc {
-  return {
-    uid: input.uid,
-    slug: input.slug,
-    gatewayId: input.gatewayId,
-    source: "repair",
-    state: "serving",
-    epoch: input.epoch,
-    updatedAt: input.updatedAt,
-    updatedByOperationId: null,
-  };
 }
 
 function resolveCustomerSlug(
@@ -3140,15 +3041,6 @@ function buildDurableGatewayPatch(args: {
   }
   const configPatch = mutableConfigPatchFromBody(args.body);
   const patch: Record<string, unknown> = { ...configPatch };
-  if (Object.prototype.hasOwnProperty.call(args.body, "managedBy")) {
-    const managedBy = args.body.managedBy;
-    if (managedBy !== "operator" && managedBy !== "cowboy") {
-      return {
-        error: { status: 400, body: { error: "managedBy must be operator or cowboy" } },
-      };
-    }
-    patch.managedBy = managedBy;
-  }
   if (args.body.desiredStatus !== undefined) {
     if (typeof args.body.desiredStatus !== "string") {
       return { error: { status: 400, body: { error: "desiredStatus must be a string" } } };
@@ -4152,7 +4044,6 @@ function matchesBuilderReturnRetryState(input: {
       gatewayId: input.targetGatewayId,
     }),
     input.state.target?.gatewayClass === "builder",
-    !isOperatorManaged(input.state.target?.managedBy),
     disposableRuntimeMatchesTermination({
       exists: input.state.targetExists,
       target: input.state.target,
@@ -5471,7 +5362,6 @@ router.post(
           preActionStatus: {
             desiredStatus: root.desiredStatus,
             desiredRelease: root.desiredRelease,
-            managedBy: root.managedBy ?? "cowboy",
           },
           mutation: { kind: "patch-gateway", gatewayId: id, patch: built.ok.patch },
           classifyResult: (result) => result.ok
@@ -5919,371 +5809,6 @@ router.get(
     });
     return doc ? { id: doc.id } : null;
   }
-
-  router.patch(
-    "/customers/:uid/placement",
-    // eslint-disable-next-line max-lines-per-function
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const command = parseBuilderPlacementCommand(req.body);
-        if ("error" in command) {
-          res.status(command.error.status).json(command.error.body);
-          return;
-        }
-        const uid = req.params.uid as string;
-        const userRef = db.collection("users").doc(uid);
-        const userBefore = await userRef.get();
-        if (!userBefore.exists) {
-          res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
-          return;
-        }
-        const userData = (userBefore.data() ?? {}) as Record<string, unknown>;
-        const currentGatewayId = readUserGatewayId(userData);
-        const currentManagedBy = readUserOpenclaw(userData).managedBy === "operator"
-          ? "operator"
-          : "cowboy";
-        const builderSlug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
-        const actor = req as ActorRequest;
-        const createdBy = actor.uid ?? "unknown";
-
-        if (command.ok.kind === "place") {
-          const outcome = await runAdminFleetMutation({
-            req,
-            what: "place builder",
-            why: ADMIN_FLEET_REQUEST_REASON,
-            target: { uid },
-            preActionStatus: {
-              gatewayId: currentGatewayId,
-              managedBy: currentManagedBy,
-            },
-            mutation: { kind: "place-builder", uid },
-            classifyResult: classifyBuilderPlacementMutation,
-            action: async () => db.runTransaction<BuilderPlacementMutationOutcome>(async (txn) => {
-              const [userSnap, operationsSnap] = await Promise.all([
-                txn.get(userRef),
-                txn.get(db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid)),
-              ]);
-              if (!userSnap.exists) {
-                return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
-              }
-              const inFlight = operationsSnap.docs.find(isInFlightCustomerMigration);
-              if (inFlight) {
-                return {
-                  status: 409,
-                  body: {
-                    error: ERR_BUILDER_MIGRATION_IN_FLIGHT,
-                    operationId: inFlight.id,
-                    uid,
-                  },
-                };
-              }
-              txn.update(userRef, { "provisioning.openclaw.managedBy": "cowboy" });
-              return { status: 200, body: { uid, managedBy: "cowboy" } };
-            }),
-          });
-          res.status(outcome.status).json(outcome.body);
-          return;
-        }
-
-        if (command.ok.kind === "park") {
-          const outcome = await runAdminFleetMutation({
-            req,
-            what: "park builder",
-            why: ADMIN_FLEET_REQUEST_REASON,
-            target: { uid },
-            preActionStatus: {
-              gatewayId: currentGatewayId,
-              managedBy: currentManagedBy,
-            },
-            mutation: {
-              kind: "park-builder",
-              uid,
-              ...(currentGatewayId ? { gatewayId: currentGatewayId } : {}),
-            },
-            classifyResult: classifyBuilderPlacementMutation,
-            action: async () => db.runTransaction<BuilderPlacementMutationOutcome>(async (txn) => {
-              const userSnap = await txn.get(userRef);
-              if (!userSnap.exists) {
-                return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
-              }
-              const data = userSnap.data() as Record<string, unknown> | undefined;
-              const gatewayId = readUserGatewayId(data);
-              const operationsSnap = await txn.get(
-                db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid),
-              );
-              const inFlight = operationsSnap.docs.find(isInFlightCustomerMigration);
-              if (inFlight) {
-                return {
-                  status: 409,
-                  body: {
-                    error: ERR_BUILDER_MIGRATION_IN_FLIGHT,
-                    operationId: inFlight.id,
-                    uid,
-                  },
-                };
-              }
-              if (gatewayId) {
-                const assignmentRef = db
-                  .collection(GATEWAYS_COLLECTION)
-                  .doc(gatewayId)
-                  .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-                  .doc(uid);
-                const assignmentSnap = await txn.get(assignmentRef);
-                const assignment = parseAssignmentDoc(
-                  uid,
-                  assignmentSnap.exists ? assignmentSnap.data() : undefined,
-                );
-                if (assignment && assignment.state !== "serving") {
-                  return {
-                    status: 409,
-                    body: {
-                      error: `customer is mid-migration (roster state ${assignment.state}) — cannot park until the migration settles`,
-                      uid,
-                      state: assignment.state,
-                    },
-                  };
-                }
-                txn.delete(assignmentRef);
-              }
-              txn.update(userRef, {
-                "provisioning.openclaw.managedBy": "operator",
-                "provisioning.openclaw.activationLease": FieldValue.delete(),
-                "provisioning.openclaw.gatewayId": FieldValue.delete(),
-                "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
-                "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
-              });
-              return { status: 200, body: { uid, parked: true } };
-            }),
-          });
-          res.status(outcome.status).json(outcome.body);
-          return;
-        }
-
-        if (!builderSlug) {
-          res.status(409).json({ error: "customer has no canonical slug", uid });
-          return;
-        }
-        const target = await readDurableGatewayRuntime(db, command.ok.gatewayId);
-        if (!target) {
-          res.status(404).json({
-            error: ERR_GATEWAY_NOT_FOUND,
-            gatewayId: command.ok.gatewayId,
-          });
-          return;
-        }
-        if (target.root.gatewayClass !== "shared") {
-          res.status(400).json({
-            error: "Builder gateway placement is managed by the disposable lifecycle",
-            gatewayId: command.ok.gatewayId,
-          });
-          return;
-        }
-        const targetStatus = builderPlacementTargetStatus(target);
-        if (targetStatus !== null) {
-          res.status(409).json({
-            error: ERR_TARGET_GATEWAY_NOT_READY,
-            gatewayId: command.ok.gatewayId,
-            status: targetStatus,
-          });
-          return;
-        }
-        const targetGatewayId = command.ok.gatewayId;
-        const targetRootRef = db.collection(GATEWAYS_COLLECTION).doc(targetGatewayId);
-        const targetRuntimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(targetGatewayId);
-        const targetAssignmentRef = targetRootRef
-          .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-          .doc(uid);
-        const outcome = await runAdminFleetMutation({
-          req,
-          what: "evict builder to gateway",
-          why: ADMIN_FLEET_REQUEST_REASON,
-          target: { uid, gatewayId: targetGatewayId },
-          preActionStatus: {
-            gatewayId: currentGatewayId,
-            managedBy: currentManagedBy,
-          },
-          mutation: {
-            kind: "evict-builder-to-gateway",
-            uid,
-            ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
-            toGatewayId: targetGatewayId,
-          },
-          classifyResult: classifyBuilderPlacementMutation,
-          action: async () => {
-            const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-            // eslint-disable-next-line complexity
-            return db.runTransaction<BuilderPlacementMutationOutcome>(async (txn) => {
-              const [
-                userSnap,
-                operationsSnap,
-                targetRootSnap,
-                targetRuntimeSnap,
-                targetAssignmentSnap,
-              ] = await Promise.all([
-                txn.get(userRef),
-                txn.get(db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid)),
-                txn.get(targetRootRef),
-                txn.get(targetRuntimeRef),
-                txn.get(targetAssignmentRef),
-              ]);
-              if (!userSnap.exists) {
-                return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
-              }
-              const inFlight = operationsSnap.docs.find(isInFlightCustomerMigration);
-              if (inFlight) {
-                return {
-                  status: 409,
-                  body: {
-                    error: ERR_BUILDER_MIGRATION_IN_FLIGHT,
-                    operationId: inFlight.id,
-                    uid,
-                  },
-                };
-              }
-
-              const targetRoot = targetRootSnap.exists
-                ? asDurableGatewayRoot(targetRootSnap.data(), targetGatewayId)
-                : null;
-              if (!targetRoot) {
-                return {
-                  status: 404,
-                  body: { error: ERR_GATEWAY_NOT_FOUND, gatewayId: targetGatewayId },
-                };
-              }
-              const targetRuntime = targetRuntimeSnap.exists
-                ? exactRuntimeDoc(targetRoot, targetRuntimeSnap.data())
-                : null;
-              const liveTarget = {
-                root: targetRoot,
-                runtime: targetRuntime,
-                heartbeat: runtimeHeartbeat(targetRuntime),
-              };
-              const liveTargetStatus = builderPlacementTargetStatus(liveTarget);
-              if (liveTargetStatus !== null) {
-                return {
-                  status: 409,
-                  body: {
-                    error: ERR_TARGET_GATEWAY_NOT_READY,
-                    gatewayId: targetGatewayId,
-                    status: liveTargetStatus,
-                  },
-                };
-              }
-
-              const liveUser = userSnap.data() as Record<string, unknown>;
-              const current = readUserGatewayId(liveUser);
-              const liveBuilderSlug = resolveCustomerSlug(liveUser, deps.workspaceSlugsForUser);
-              if (!liveBuilderSlug) {
-                return { status: 409, body: { error: "customer has no canonical slug", uid } };
-              }
-              const targetAssignment = parseAssignmentDoc(
-                uid,
-                targetAssignmentSnap.exists ? targetAssignmentSnap.data() : undefined,
-              );
-              if (
-                targetAssignmentSnap.exists &&
-                (
-                  !targetAssignment ||
-                  targetAssignment.state !== "serving" ||
-                  targetAssignment.gatewayId !== targetGatewayId ||
-                  targetAssignment.slug !== liveBuilderSlug
-                )
-              ) {
-                return {
-                  status: 409,
-                  body: {
-                    error: "target assignment does not match serving builder placement",
-                    uid,
-                    gatewayId: targetGatewayId,
-                  },
-                };
-              }
-              if (current === targetGatewayId) {
-                txn.update(userRef, {
-                  "provisioning.openclaw.managedBy": "operator",
-                  "provisioning.openclaw.activationLease": FieldValue.delete(),
-                });
-                if (!targetAssignment) {
-                  txn.set(targetAssignmentRef, builderServingAssignment({
-                    uid,
-                    slug: liveBuilderSlug,
-                    gatewayId: targetGatewayId,
-                    epoch: 0,
-                    updatedAt: Date.now(),
-                  }));
-                }
-                return {
-                  status: 200,
-                  body: {
-                    uid,
-                    gatewayId: targetGatewayId,
-                    managedBy: "operator",
-                    ...(!targetAssignment ? { repaired: true } : {}),
-                  },
-                };
-              }
-
-              if (!current) {
-                const controlState = resolveUserGatewayControlState(
-                  {
-                    gatewayClass: targetRoot.gatewayClass,
-                    profile: targetRoot.profile ?? undefined,
-                    imageProfile: targetRoot.imageProfile,
-                    ownerUid: targetRoot.ownerUid ?? undefined,
-                    builderAccess: targetRoot.builderAccess ?? undefined,
-                  },
-                  uid,
-                );
-                txn.update(userRef, {
-                  "provisioning.openclaw.gatewayId": targetGatewayId,
-                  "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
-                  "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
-                  "provisioning.openclaw.managedBy": "operator",
-                  "provisioning.openclaw.activationLease": FieldValue.delete(),
-                });
-                txn.set(targetAssignmentRef, builderServingAssignment({
-                  uid,
-                  slug: liveBuilderSlug,
-                  gatewayId: targetGatewayId,
-                  epoch: targetAssignment?.epoch ?? 0,
-                  updatedAt: Date.now(),
-                }));
-                return {
-                  status: 202,
-                  body: { uid, gatewayId: targetGatewayId, managedBy: "operator" },
-                };
-              }
-
-              txn.update(userRef, {
-                "provisioning.openclaw.managedBy": "operator",
-                "provisioning.openclaw.activationLease": FieldValue.delete(),
-              });
-              txn.create(operationRef, operationDoc({
-                kind: OP_KIND_MIGRATE_CUSTOMER,
-                createdBy,
-                origin: "operator",
-                input: {
-                  uid,
-                  builderSlug: liveBuilderSlug,
-                  fromGatewayId: current,
-                  toGatewayId: targetGatewayId,
-                  source: "operator-builder-evict",
-                },
-              }, Date.now()));
-              return {
-                status: 202,
-                body: { uid, gatewayId: targetGatewayId, operationId: operationRef.id },
-              };
-            });
-          },
-        });
-        res.status(outcome.status).json(outcome.body);
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
 
   router.post(
     "/customers/:uid/migrate",

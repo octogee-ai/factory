@@ -439,36 +439,6 @@ describe("gateway convergence surge wiring", () => {
   })).resolves.toEqual({ kind: "steady" });
   });
 
-  it("does not invoke surge handoff reconciliation for an operator-managed gateway", async () => {
-    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
-
-    await expect(refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff),
-      gateway: { ...gateway(), managedBy: "operator" },
-      artifact,
-      runtime: runtime("def5678-oc2026.7.1"),
-      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
-      action: { kind: "steady" },
-    })).resolves.toEqual({ kind: "steady" });
-
-    expect(reconcileSurgeHandoff).not.toHaveBeenCalled();
-  });
-
-  it("rechecks durable ownership before surge handoff work after the convergence snapshot", async () => {
-    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
-
-    await expect(refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff, { ...gateway(), managedBy: "operator" }),
-      gateway: gateway(),
-      artifact,
-      runtime: runtime("def5678-oc2026.7.1"),
-      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
-      action: { kind: "steady" },
-    })).resolves.toEqual({ kind: "steady" });
-
-    expect(reconcileSurgeHandoff).not.toHaveBeenCalled();
-  });
-
   it("stands the handoff down when a queued rollout replaces the pod image", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
     const pendingRoll = { ...gateway(), latestRelease: 3 };

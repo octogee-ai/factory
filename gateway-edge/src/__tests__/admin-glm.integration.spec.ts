@@ -541,7 +541,7 @@ describe("Admin onboarding placement", () => {
   it("projects policy target, assigned gateway, mounted gateway, and pointer drift separately", async () => {
     seedDurableGateway("gw-source", {
       imageTag: "oldsha1",
-      root: { managedBy: "operator" },
+      root: { profile: "builder", gatewayClass: "builder", imageProfile: "builder", ownerUid: "uid-bob", builderSlug: "bob" },
       heartbeat: { status: "ready", mountedCustomers: ["alice"] },
     });
     seedDurableGateway("gw-target", {

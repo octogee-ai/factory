@@ -1,4 +1,4 @@
-import { isOperatorManaged, isValidGatewayId, } from "./glm.js";
+import { isValidGatewayId, } from "./glm.js";
 export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-(0|[1-9]\d*)$/;
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
@@ -37,8 +37,7 @@ export function nextSharedPoolSlotId(existingGatewayIds) {
 export function isSharedPoolMemberRoot(root) {
     return isValidGatewayId(root.gatewayId) &&
         root.gatewayClass === "shared" &&
-        SHARED_POOL_MEMBER_STATUSES.has(String(root.desiredStatus)) &&
-        !isOperatorManaged(root.managedBy);
+        SHARED_POOL_MEMBER_STATUSES.has(String(root.desiredStatus));
 }
 export function sharedPoolMemberIds(roots) {
     return [...new Set(roots.filter(isSharedPoolMemberRoot).map((root) => root.gatewayId))]
@@ -117,7 +116,6 @@ export function isAcceptingSharedGateway(config, candidate) {
     return (config.sharedGatewayIds.includes(candidate.gatewayId) &&
         candidate.gatewayClass === "shared" &&
         candidate.desiredStatus === "running" &&
-        !isOperatorManaged(candidate.managedBy) &&
         candidate.ready &&
         candidate.serving &&
         candidate.heartbeatFresh &&

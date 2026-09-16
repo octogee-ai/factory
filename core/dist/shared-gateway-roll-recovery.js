@@ -1,5 +1,5 @@
 import { GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperatorManaged, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, } from "@octogee/shared/types/glm";
 import { GATEWAY_RELEASES_SUBCOLLECTION, hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash, } from "@octogee/shared/types/gateway-releases";
 import { gatewayArtifactFromReleasePayload } from "./gateway-live-release.js";
 import { readSharedGatewayPoolConfig } from "./shared-gateway-pool-read.js";
@@ -113,8 +113,6 @@ function recoveryRollIsEligible(state, input) {
         target.gatewayClass === "shared",
         source.desiredStatus === "running",
         target.desiredStatus === "running",
-        !isOperatorManaged(source.managedBy),
-        !isOperatorManaged(target.managedBy),
         target.liveRelease === input.expectedLiveRelease,
         target.desiredRelease === input.expectedDesiredRelease,
         target.latestRelease === input.expectedDesiredRelease,
