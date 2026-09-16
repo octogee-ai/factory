@@ -437,7 +437,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     expect(prof.version).toBe(1);
     expect(prof.profiles["openai-codex:default"]).toMatchObject({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "acc-1",
       refresh: "ref-1",
       expires: 0,
@@ -482,7 +482,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       profiles: Record<string, { provider?: string; access?: string }>;
     };
     expect(prof.profiles["openai-codex:default"]).toMatchObject({
-      provider: "openai-codex",
+      provider: "openai",
       access: "acc-1",
     });
     expect(prof.profiles["anthropic:claude-cli"]).toMatchObject({

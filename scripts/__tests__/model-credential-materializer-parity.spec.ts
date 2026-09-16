@@ -39,7 +39,7 @@ const input: ModelCredentialConfigInput = { slug: "tester-70", provider: "openai
   it("emits an oauth profile (no keyRef) — credential is the per-agent codex-home", () => {
     const out = buildModelCredentialConfigForProvider(input);
     const p = out.authProfiles!.profiles["openai-codex"];
-    expect(p).toEqual({ type: "oauth", provider: "openai-codex" });
+    expect(p).toEqual({ type: "oauth", provider: "openai" });
     expect((p as { keyRef?: unknown }).keyRef).toBeUndefined();
     expect(out.models).toBeNull();
   });
@@ -176,7 +176,7 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
       profiles: {
         "openai-codex:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "acc-123",
           refresh: "ref-456",
           expires: 0,
@@ -197,7 +197,7 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
     const p = out.profiles["openai-codex:default"];
     expect(p).toEqual({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "a",
       refresh: "r",
       expires: 0,

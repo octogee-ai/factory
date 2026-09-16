@@ -1,4 +1,5 @@
 import { internalFetch } from "./internal-fetch.js";
+import { isIPv4 } from "node:net";
 import { logger } from "../middleware/logging.js";
 import { db } from "./db.js";
 import { isSafeGatewayId } from "./byosub.js";
@@ -65,13 +66,22 @@ function trimTrailingSlash(value: string): string {
 export function gatewayModelCredentialSyncUrl(
   gatewayId: string,
   env: GatewayModelCredentialSyncEnv = process.env,
+  runtime?: { runtime?: unknown; vm?: { status?: unknown; internalIp?: unknown } },
 ): string {
   if (!isSafeGatewayId(gatewayId)) {
     throw new Error(`invalid gatewayId ${JSON.stringify(gatewayId)}`);
   }
+  let vmOrigin: string | undefined;
+  if (!env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE && runtime?.runtime === "gce-vm") {
+    const ip = runtime.vm?.internalIp;
+    if (runtime.vm?.status !== "RUNNING" || typeof ip !== "string" || !isIPv4(ip)) {
+      throw new Error(`Builder VM is not reachable: ${gatewayId}`);
+    }
+    vmOrigin = `http://${ip}:3001`;
+  }
   const base = env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE
     ? env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE.replace("{gatewayId}", gatewayId)
-    : `http://gateway-edge-${gatewayId}.${env.K8S_NAMESPACE ?? "octogee"}.svc.cluster.local:3001`;
+    : vmOrigin ?? `http://gateway-edge-${gatewayId}.${env.K8S_NAMESPACE ?? "octogee"}.svc.cluster.local:3001`;
   return `${trimTrailingSlash(base)}/api/g/${encodeURIComponent(gatewayId)}/internal/model-credential-sync`;
 }
 
@@ -119,8 +129,15 @@ export async function postGatewayModelCredentialSync(args: {
     throw new Error("BYOT_SYNC_INTERNAL_SIGNING_SECRET is required for model credential sync");
   }
   const logWarn = args.logWarn ?? ((m: string) => logger.warn(m));
+  if (!isSafeGatewayId(args.gatewayId)) throw new Error(`invalid gatewayId ${JSON.stringify(args.gatewayId)}`);
+  const [dials, runtime] = await Promise.all([
+    platformModelDialsForSync(logWarn),
+    env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE
+      ? undefined
+      : db.collection("glmGateways").doc(args.gatewayId).get().then((snapshot) => snapshot.data()),
+  ]);
   const userData: ModelCredentialSyncUserData = {
-    ...(await platformModelDialsForSync(logWarn)),
+    ...dials,
     ...args.userData,
   };
   const body = JSON.stringify(userData);
@@ -128,7 +145,7 @@ export async function postGatewayModelCredentialSync(args: {
     ? createModelCredentialSyncAuthHeaders({ body: userData, secret: signingSecret })
     : {};
   const res = await internalFetch(
-    gatewayModelCredentialSyncUrl(args.gatewayId, env),
+    gatewayModelCredentialSyncUrl(args.gatewayId, env, runtime),
     {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders },

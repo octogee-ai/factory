@@ -410,7 +410,7 @@ export function buildCodexAuthProfilesStore(
 
   const profile: OAuthCredential = {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access,
     refresh,
     expires,

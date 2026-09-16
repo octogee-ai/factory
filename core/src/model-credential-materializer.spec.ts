@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { codexRuntimeConfig } from "./model-credential-materializer.js";
+import { buildCodexAuthProfilesStore, codexRuntimeConfig } from "./model-credential-materializer.js";
 
 describe("ChatGPT subscription model routing", () => {
+  it("materializes ChatGPT OAuth under the native OpenAI route provider", () => {
+    const store = buildCodexAuthProfilesStore(JSON.stringify({
+      tokens: { access_token: "access", refresh_token: "refresh" },
+    }));
+    expect(store.profiles["openai-codex:default"]).toMatchObject({
+      type: "oauth", provider: "openai",
+    });
+  });
   it("routes the current OpenAI catalog through Codex without changing the existing default", () => {
     const config = codexRuntimeConfig();
     expect(config.model).toBe("openai/gpt-5.5");

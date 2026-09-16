@@ -636,7 +636,8 @@ function authProfileRemovalPatch(value: unknown): Record<string, null> | undefin
       .filter(([profileId, profile]) => {
         if (CUSTOMER_OAUTH_PROFILE_IDS.has(profileId)) return true;
         if (!isRecord(profile)) return false;
-        return profile.provider === "openai-codex" || profile.provider === "claude-cli";
+        return profile.provider === "claude-cli" ||
+          (profile.provider === "openai" && (profile.type === "oauth" || profile.mode === "oauth"));
       })
       .map(([profileId]) => [profileId, null]),
   );

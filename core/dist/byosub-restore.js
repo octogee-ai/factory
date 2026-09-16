@@ -480,11 +480,20 @@ function hasUsableCodexDefaultProfile(store) {
     }
     const fields = profile;
     return (fields.type === "oauth" &&
-        fields.provider === "openai-codex" &&
         typeof fields.access === "string" &&
         fields.access.length > 0 &&
         typeof fields.refresh === "string" &&
         fields.refresh.length > 0);
+}
+function alignCodexProfileProvider(agentDir, store, onAligned) {
+    if (!hasUsableCodexDefaultProfile(store))
+        return;
+    const profile = profileStoreProfiles(store)[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+    if (profile.provider === "openai")
+        return;
+    profile.provider = "openai";
+    writeAuthProfileStore(agentDir, store);
+    onAligned();
 }
 function writeMergedAuthProfileStore(agentDir, next) {
     const nextProfiles = profileStoreProfiles(next);
@@ -579,6 +588,9 @@ export async function restoreByosubCredentials(opts) {
         if (item.provider === "openai") {
             codexStore = readAuthProfileStore(agentDir);
             const usableCodexProfilePresent = hasUsableCodexDefaultProfile(codexStore);
+            alignCodexProfileProvider(agentDir, codexStore, () => {
+                log(`byosub: aligned ${item.agentId} ChatGPT credential with the OpenAI runtime provider`);
+            });
             const authStateText = readCodexAuthStateText(item.openclawDir, item.agentId);
             codexAction = shouldRestoreCodexCredential({
                 usableCodexProfilePresent,

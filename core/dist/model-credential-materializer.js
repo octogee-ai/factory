@@ -280,7 +280,7 @@ export function buildCodexAuthProfilesStore(codexAuthJsonText) {
     const { expires, chatgptPlanType, email } = codexJwtDerived(access, idToken);
     const profile = {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access,
         refresh,
         expires,

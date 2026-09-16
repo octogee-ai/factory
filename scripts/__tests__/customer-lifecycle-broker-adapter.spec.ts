@@ -24,6 +24,7 @@ import {
 } from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
+import { _resetBrokerProfileLogStateForTests, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 
 const testRuntime = await vi.hoisted(async () => {
   const { mkdtempSync } = await import("node:fs");
@@ -346,6 +347,60 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       tempStateDir = null;
     }
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  });
+
+  it("defers credential repair until an account import finishes its configuration updates", async () => {
+    _resetBrokerProfileLogStateForTests();
+    let releasePatch!: () => void;
+    mocks.applyOpenClawActivationManifest.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { releasePatch = resolve; });
+      return { elapsedMs: 42, routingActivationRequired: false, restartExistingAccountIds: [] };
+    });
+    const rpc = {
+      ...rosterRpc(),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: {
+        mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+      } })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const activation = adapter.activateImportedCustomer("tester10");
+    try {
+      await vi.waitFor(() => expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce());
+      brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
+      const result = await materializeDeferredBrokerProfiles(vi.fn(), {
+        readConfig: () => ({}), secretsReload: rpc,
+      });
+      expect(result).toMatchObject({ settled: false, skipped: true });
+      expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).not.toHaveBeenCalled();
+      expect(rpc.secretsReload).not.toHaveBeenCalled();
+    } finally {
+      releasePatch();
+      await activation;
+      _resetBrokerProfileLogStateForTests();
+    }
+    await expect(materializeDeferredBrokerProfiles(vi.fn(), {
+      readConfig: () => ({}), secretsReload: rpc,
+    })).resolves.toMatchObject({ settled: true });
+    expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledOnce();
+  });
+
+  it("prepares imported credentials before registering agents for runtime reload", async () => {
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
+    const rpc = {
+      ...rosterRpc(),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: {
+        mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+      } })),
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(), rpc: rpc as unknown as GatewayRpcClient, log: vi.fn(),
+    });
+    await adapter.activateImportedCustomer("tester10");
+    expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledOnce();
+    expect(brokerCatalogMocks.materializeBrokerProfilesForAgents.mock.invocationCallOrder[0])
+      .toBeLessThan(rpc.agentsCreate.mock.invocationCallOrder[0]);
   });
 
   it("deletes target roster residue the manifest does not carry before activating", async () => {

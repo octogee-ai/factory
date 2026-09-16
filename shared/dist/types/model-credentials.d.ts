@@ -193,7 +193,7 @@ export declare const MODEL_CREDENTIAL_CATALOG: readonly [{
         readonly required: false;
     };
     readonly openclaw: {
-        readonly authProvider: 'openai-codex';
+        readonly authProvider: 'openai';
         readonly configProfileId: 'openai-codex';
         readonly storeProfileId: 'openai-codex:default';
         readonly secretRefAllowed: false;

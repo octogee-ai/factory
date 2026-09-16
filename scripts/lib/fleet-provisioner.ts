@@ -12,6 +12,7 @@ import {
   type BrokerProfileSweepOptions,
 } from "./agent-model-token-materializer.js";
 import { createBrokerTokenRefreshScheduler } from "./broker-token-refresh.js";
+import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import {
@@ -762,6 +763,7 @@ export interface BrokerProfileReadiness {
   settled: boolean;
   deferred: string[];
   reason?: string;
+  skipped?: boolean;
 }
 
 function readBrokerProfileAgentIds(
@@ -884,7 +886,11 @@ export function materializeDeferredBrokerProfiles(
   } = {},
 ): Promise<BrokerProfileReadiness> {
   if (brokerProfileSweepInFlight) return brokerProfileSweepInFlight;
-  const shared = runDeferredBrokerProfileSweep(log, deps).finally(() => {
+  const sweep = openClawRuntimeUpdateGuard.tryRun(() => runDeferredBrokerProfileSweep(log, deps));
+  if (!sweep) return Promise.resolve({
+    settled: false, deferred: [], skipped: true, reason: "account import is updating the runtime",
+  });
+  const shared = sweep.finally(() => {
     if (brokerProfileSweepInFlight === shared) brokerProfileSweepInFlight = null;
   });
   brokerProfileSweepInFlight = shared;
@@ -918,7 +924,7 @@ function startBrokerProfileRetry(
     if (sweepInFlight) return;
     sweepInFlight = true;
     void materializeDeferredBrokerProfiles(log, { secretsReload })
-      .then((readiness) => onReadiness?.(readiness))
+      .then((readiness) => { if (!readiness.skipped) onReadiness?.(readiness); })
       .catch((error) => {
         const reason = String(error);
         onReadiness?.({ settled: false, deferred: [], reason });

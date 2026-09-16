@@ -176,7 +176,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
-        "openai-codex:default": { type: "oauth", provider: "openai-codex", access: "x" },
+        "openai-codex:default": { type: "oauth", provider: "openai", access: "x" },
         "anthropic:claude-cli": { type: "oauth", provider: "claude-cli", access: "y" },
         "platform-anthropic:default": { type: "token", provider: "anthropic", token: "kept" },
       },
@@ -700,7 +700,7 @@ describe("restoreByosubCredentials", () => {
     expect(store.version).toBe(1);
     expect(store.profiles["openai-codex:default"]).toMatchObject({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "acc-1",
       refresh: "ref-1",
       expires: 0,
@@ -871,7 +871,7 @@ describe("restoreByosubCredentials", () => {
     expect(store.profiles).toMatchObject(brokerProfiles);
     expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "acc-1",
       refresh: "ref-1",
     });
@@ -889,7 +889,7 @@ describe("restoreByosubCredentials", () => {
       profiles: {
         [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "incorrect-route",
           access: "live",
           refresh: "rotated-refresh",
           expires: Date.now() + 3_600_000,
@@ -923,7 +923,11 @@ describe("restoreByosubCredentials", () => {
     expect(r).toEqual({ restored: 0, failed: 0, skipped: 1 });
     expect(fetched).toBe(false);
 
-    expect(readAuthProfileStore(agentDir)).toEqual(liveCred);
+    expect(readAuthProfileStore(agentDir)).toEqual({
+      ...liveCred, profiles: { ...liveCred.profiles, [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+        ...liveCred.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID], provider: "openai",
+      } },
+    });
     expect(JSON.parse(fs.readFileSync(targetPath, "utf-8")).tokens.access_token).toBe("live");
     expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
   });
@@ -948,7 +952,7 @@ describe("restoreByosubCredentials", () => {
         },
         [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "incorrect-route",
           access: "live",
           refresh: "rotated-refresh",
           expires: Date.now() + 3_600_000,
@@ -985,7 +989,11 @@ describe("restoreByosubCredentials", () => {
         refresh_token: "rotated-refresh",
       },
     });
-    expect(readAuthProfileStore(agentDir)).toEqual(liveCred);
+    expect(readAuthProfileStore(agentDir)).toEqual({
+      ...liveCred, profiles: { ...liveCred.profiles, [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+        ...liveCred.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID], provider: "openai",
+      } },
+    });
   });
 
   it("restores Codex from Secret Manager when only unrelated profiles exist and CODEX_HOME is missing", async () => {

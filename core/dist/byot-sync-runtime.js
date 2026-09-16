@@ -428,7 +428,8 @@ function authProfileRemovalPatch(value) {
             return true;
         if (!isRecord(profile))
             return false;
-        return profile.provider === "openai-codex" || profile.provider === "claude-cli";
+        return profile.provider === "claude-cli" ||
+            (profile.provider === "openai" && (profile.type === "oauth" || profile.mode === "oauth"));
     })
         .map(([profileId]) => [profileId, null]));
     return Object.keys(removals).length > 0 ? removals : undefined;

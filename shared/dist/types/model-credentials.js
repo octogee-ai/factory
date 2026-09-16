@@ -52,7 +52,7 @@ export const MODEL_CREDENTIAL_CATALOG = [
         baseUrl: { kind: 'none' },
         model: { required: false },
         openclaw: {
-            authProvider: 'openai-codex',
+            authProvider: 'openai',
             configProfileId: 'openai-codex',
             storeProfileId: 'openai-codex:default',
             secretRefAllowed: false,

@@ -71,7 +71,7 @@ describe("MODEL_CREDENTIAL_CATALOG", () => {
       storage: { kind: "oauth-secret-manager", secretNamePrefix: "byosub" },
       materialization: { kind: "oauth-profile-store", writesAuthJson: true },
       openclaw: {
-        authProvider: "openai-codex",
+        authProvider: "openai",
         configProfileId: "openai-codex",
         storeProfileId: "openai-codex:default",
         secretRefAllowed: false,

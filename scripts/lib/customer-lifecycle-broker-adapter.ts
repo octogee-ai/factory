@@ -1,4 +1,5 @@
 import { customerFileStatePaths } from "./customer-file-state.js";
+import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
 import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
 import * as fs from "node:fs";
@@ -514,6 +515,7 @@ async function materializeCustomerBrokerProfiles(
   agentIds: string[],
   slug: string,
   logFn: (message: string) => void,
+  logPrefix = `[add:${slug}]`,
 ): Promise<void> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
@@ -527,11 +529,11 @@ async function materializeCustomerBrokerProfiles(
       : {}),
   });
   if (materialized.materialized > 0) {
-    logFn(`[add:${slug}] broker model profiles materialized before config hot-reload`);
+    logFn(`${logPrefix} broker model profiles materialized before config hot-reload`);
   }
   if (materialized.deferred.length > 0) {
     logFn(
-      `[add:${slug}] broker profile deferred for ${materialized.deferred.join(", ")}` +
+      `${logPrefix} broker profile deferred for ${materialized.deferred.join(", ")}` +
         ` — ${materialized.deferralReason ?? "openclaw refused the secrets apply"};` +
         ` the post-boot sweep retries it`,
     );
@@ -1322,6 +1324,7 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
+  await materializeCustomerBrokerProfiles(activationManifestAgentIds(safeManifest), slug, ctx.log, `[import:${slug}]`);
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
@@ -1674,7 +1677,9 @@ export function buildBrokeredLifecycleAdapter(
     prepareImportDir,
     prepareKeyImportDir,
     activateImportedCustomer: (slug, callOpts) =>
-      activateImportedCustomer(ctx, slug, callOpts),
+      openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {
+        signal: callOpts?.signal,
+      }),
     exportOpenClawActivationManifest: (slug) =>
       exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>

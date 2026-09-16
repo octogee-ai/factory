@@ -12,12 +12,14 @@ vi.mock("../lib/internal-fetch", () => ({
 
 let platformModelDoc: Record<string, unknown> | undefined;
 let platformModelDocError: Error | null = null;
+let gatewayRuntimeDoc: Record<string, unknown> | undefined;
 
 vi.mock("../lib/db", () => ({
   db: {
-    collection: () => ({
+    collection: (name: string) => ({
       doc: () => ({
         get: async () => {
+          if (name === "glmGateways") return { data: () => gatewayRuntimeDoc };
           if (platformModelDocError) throw platformModelDocError;
           return { data: () => platformModelDoc };
         },
@@ -63,6 +65,7 @@ describe("model credential sync trigger", () => {
     internalFetchSpy.mockReset();
     platformModelDoc = undefined;
     platformModelDocError = null;
+    gatewayRuntimeDoc = undefined;
     delete process.env.K8S_NAMESPACE;
     delete process.env.GATEWAY_EDGE_INTERNAL_URL_TEMPLATE;
     delete process.env.INTERNAL_SERVICE_KEY;
@@ -81,6 +84,31 @@ describe("model credential sync trigger", () => {
         GATEWAY_EDGE_INTERNAL_URL_TEMPLATE: "http://custom-{gatewayId}.svc:3001/root/",
       }),
     ).toBe("http://custom-gw-1.svc:3001/root/api/g/gw-1/internal/model-credential-sync");
+  });
+
+  it("sends model selections to the running Builder VM instead of a nonexistent Kubernetes service", async () => {
+    gatewayRuntimeDoc = { runtime: "gce-vm", vm: { status: "RUNNING", internalIp: "10.128.0.49" } };
+    internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+    await postGatewayModelCredentialSync({
+      gatewayId: "builder-1", userData,
+      env: { K8S_NAMESPACE: "octogee", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+    });
+    expect(internalFetchSpy.mock.calls[0][0]).toBe(
+      "http://10.128.0.49:3001/api/g/builder-1/internal/model-credential-sync",
+    );
+  });
+
+  it.each([
+    { status: "STOPPED", internalIp: "10.128.0.49" },
+    { status: "RUNNING" },
+    { status: "RUNNING", internalIp: "invalid/address" },
+  ])("rejects an unavailable or malformed VM address instead of falling back to cluster DNS: %j", async (vm) => {
+    gatewayRuntimeDoc = { runtime: "gce-vm", vm };
+    await expect(postGatewayModelCredentialSync({
+      gatewayId: "builder-1", userData,
+      env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+    })).rejects.toThrow("Builder VM is not reachable");
+    expect(internalFetchSpy).not.toHaveBeenCalled();
   });
 
   it("does not export legacy BYOT trigger helper aliases", () => {

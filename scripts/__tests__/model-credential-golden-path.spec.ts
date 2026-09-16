@@ -29,7 +29,7 @@ describe("model credential catalog golden paths", () => {
     expect(buildModelCredentialConfigForProvider({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       authProfiles: {
         profiles: {
-          "openai-codex": { type: "oauth", provider: "openai-codex" },
+          "openai-codex": { type: "oauth", provider: "openai" },
         },
       },
       models: null,
@@ -56,7 +56,7 @@ describe("model credential catalog golden paths", () => {
     expect(Object.keys(store.profiles)).toEqual([OPENAI_CODEX_DEFAULT_PROFILE_ID]);
     expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toEqual({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access,
       refresh: "refresh-token",
       expires: 1_893_456_000_000,
