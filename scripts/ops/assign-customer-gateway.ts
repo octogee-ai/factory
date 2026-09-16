@@ -154,6 +154,7 @@ async function selectAssignmentGateway(
   }
   const selection = selectSharedGateway({
     uid,
+    purpose: "initial-placement",
     config,
     candidates: pinnedGatewayId === null
       ? candidates

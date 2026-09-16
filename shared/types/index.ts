@@ -269,6 +269,7 @@ export {
 } from './orchestrator-placement.js';
 export type {
   SharedGatewayAutoscalingConfig,
+  SharedGatewayPlacementPurpose,
   SharedGatewayPoolCandidate,
   SharedGatewayPoolConfig,
   SharedGatewayRebalance,
@@ -287,6 +288,7 @@ export {
   compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
   isAcceptingSharedGateway,
+  isSettledSharedGateway,
   isSharedPoolMemberRoot,
   isSharedPoolSlotId,
   nextSharedPoolSlotId,

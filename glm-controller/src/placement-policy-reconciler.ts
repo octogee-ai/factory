@@ -47,6 +47,7 @@ import {
   parseSharedGatewayPoolConfig,
   planSharedGatewayRebalance,
   selectSharedGateway,
+  type SharedGatewayPlacementPurpose,
   type SharedGatewayPoolCandidate,
 } from "@octogee/shared/types/shared-gateway-pool";
 import { readSharedGatewayPoolConfig } from "@octogee/core/shared-gateway-pool-read";
@@ -705,10 +706,12 @@ function rollingSharedGatewayPeer(
 function selectAcceptingSharedGateway(
   context: PlacementPolicyReconcileContext,
   uid: string,
+  purpose: SharedGatewayPlacementPurpose,
   currentGatewayId?: string | null,
 ): string | null {
   const selection = selectSharedGateway({
     uid,
+    purpose,
     config: {
       defaultGatewayId: context.state.defaultGatewayId,
       sharedGatewayIds: context.state.sharedGatewayIds,
@@ -724,7 +727,7 @@ function sharedAuthorityGatewayId(
   currentGatewayId: string | null,
 ): string | null {
   if (isSharedPoolGateway(context, currentGatewayId)) return currentGatewayId;
-  return selectAcceptingSharedGateway(context, "placement-policy-authority");
+  return selectAcceptingSharedGateway(context, "placement-policy-authority", "migration");
 }
 
 function projectSharedGatewayPlacement(
@@ -1018,7 +1021,7 @@ async function reconcileUnavailableServingGateway(
   const kind = unavailableRecoveryKind(context, source, user, lease);
   if (!kind) return false;
 
-  const targetGatewayId = selectAcceptingSharedGateway(context, user.uid, source.gatewayId);
+  const targetGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration", source.gatewayId);
   if (!targetGatewayId) {
     await scheduleRollingSharedPeerRecovery(context, source, kind);
     blockPlacement(context, {
@@ -1574,7 +1577,7 @@ async function queueLeaseReturn(
     });
     return;
   }
-  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid);
+  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration");
   if (!sharedGatewayId) {
     blockPlacement(context, {
       uid: user.uid,
@@ -1735,7 +1738,7 @@ async function reconcileReturnMigrationOnTarget(
     }
     return true;
   }
-  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid);
+  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration");
   if (!sharedGatewayId) {
     blockPlacement(context, {
       uid: user.uid,
@@ -1978,7 +1981,12 @@ function eligiblePlacementTargetGatewayId(
   if (activeMigration && isSharedPoolGateway(context, activeMigration.toGatewayId)) {
     return activeMigration.toGatewayId;
   }
-  return selectAcceptingSharedGateway(context, uid, currentGatewayId);
+  return selectAcceptingSharedGateway(
+    context,
+    uid,
+    currentGatewayId === null ? "initial-placement" : "migration",
+    currentGatewayId,
+  );
 }
 
 async function reconcileResolvedPlacement(
@@ -2158,6 +2166,7 @@ async function reconcileDrainingSharedGateway(
       if (!builder) continue;
       const selection = selectSharedGateway({
         uid: user.uid,
+        purpose: "migration",
         config,
         candidates: projectedCandidates,
       });

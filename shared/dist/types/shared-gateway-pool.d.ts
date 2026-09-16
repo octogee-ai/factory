@@ -100,11 +100,14 @@ export declare function parseSharedPoolReplicaBounds(value: {
 }): SharedPoolReplicaBounds | null;
 export declare function authoritativeSharedGatewayLoad(candidate: SharedGatewayPoolCandidate): number;
 export declare function isAcceptingSharedGateway(config: SharedGatewayPoolConfig, candidate: SharedGatewayPoolCandidate): boolean;
+export declare function isSettledSharedGateway(config: SharedGatewayPoolConfig, candidate: SharedGatewayPoolCandidate): boolean;
+export type SharedGatewayPlacementPurpose = "initial-placement" | "migration";
 export declare function stableGatewayUidHash(uid: string): number;
 export declare function selectSharedGateway(input: {
     uid: string;
     config: SharedGatewayPoolConfig;
     candidates: readonly SharedGatewayPoolCandidate[];
+    purpose: SharedGatewayPlacementPurpose;
     currentGatewayId?: string | null;
 }): SharedGatewaySelection;
 export declare function planSharedGatewayRebalance(input: {

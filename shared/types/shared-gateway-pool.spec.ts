@@ -5,6 +5,7 @@ import {
   compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
   isAcceptingSharedGateway,
+  isSettledSharedGateway,
   isSharedPoolSlotId,
   nextSharedPoolSlotId,
   parseSharedGatewayAutoscalingConfig,
@@ -174,6 +175,7 @@ describe("shared gateway selection", () => {
     }))).toBe(3);
     expect(selectSharedGateway({
       uid: "uid-alice",
+      purpose: "initial-placement",
       config,
       candidates: [candidate("shared-0", { assignmentCount: 4 }), candidate("shared-1", { assignmentCount: 2 })],
     })).toMatchObject({ kind: "selected", gatewayId: "shared-1", load: 2 });
@@ -197,12 +199,14 @@ describe("shared gateway selection", () => {
   it("keeps a healthy current member until its load is more than one above the minimum", () => {
     expect(selectSharedGateway({
       uid: "uid-alice",
+      purpose: "initial-placement",
       config,
       currentGatewayId: "shared-0",
       candidates: [candidate("shared-0", { assignmentCount: 3 }), candidate("shared-1", { assignmentCount: 2 })],
     })).toMatchObject({ gatewayId: "shared-0", retainedCurrent: true });
     expect(selectSharedGateway({
       uid: "uid-alice",
+      purpose: "initial-placement",
       config,
       currentGatewayId: "shared-0",
       candidates: [candidate("shared-0", { assignmentCount: 4 }), candidate("shared-1", { assignmentCount: 2 })],
@@ -220,14 +224,63 @@ describe("shared gateway selection", () => {
     }
     expect(selectSharedGateway({
       uid: "uid-alice",
+      purpose: "initial-placement",
       config,
       candidates: [candidate("shared-0", { ready: false })],
     })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
   });
 
+  it("accepts a gateway still mounting an earlier Builder for a new signup, but not as a migration target", () => {
+    const mounting = candidate("shared-0", { rosterComplete: false, assignmentCount: 1 });
+    expect(isAcceptingSharedGateway(config, mounting)).toBe(true);
+    expect(isSettledSharedGateway(config, mounting)).toBe(false);
+    expect(selectSharedGateway({
+      uid: "uid-alice",
+      purpose: "initial-placement",
+      config,
+      candidates: [mounting],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-0", load: 1 });
+    expect(selectSharedGateway({
+      uid: "uid-alice",
+      purpose: "migration",
+      config,
+      candidates: [mounting],
+    })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
+  });
+
+  it("keeps a Builder on its current gateway while that roster is still mounting, even beside a settled peer", () => {
+    const mounting = candidate("shared-0", { rosterComplete: false, assignmentCount: 2 });
+    const settledPeer = candidate("shared-1", { assignmentCount: 1 });
+    expect(selectSharedGateway({
+      uid: "uid-alice",
+      purpose: "migration",
+      config,
+      currentGatewayId: "shared-0",
+      candidates: [mounting, settledPeer],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-0", retainedCurrent: true });
+    expect(selectSharedGateway({
+      uid: "uid-alice",
+      purpose: "migration",
+      config,
+      currentGatewayId: "shared-0",
+      candidates: [mounting],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-0", retainedCurrent: true });
+  });
+
+  it("still leaves a current gateway that is no longer accepting", () => {
+    expect(selectSharedGateway({
+      uid: "uid-alice",
+      purpose: "migration",
+      config,
+      currentGatewayId: "shared-0",
+      candidates: [candidate("shared-0", { serving: false }), candidate("shared-1")],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-1", retainedCurrent: false });
+  });
+
   it("uses queued migrations as projected load without rejecting their target", () => {
     expect(selectSharedGateway({
       uid: "uid-alice",
+      purpose: "initial-placement",
       config,
       candidates: [
         candidate("shared-0", { assignmentCount: 1, incomingMigrationCount: 2 }),
@@ -244,6 +297,13 @@ describe("shared gateway selection", () => {
     expect(planSharedGatewayRebalance({
       config,
       candidates: [candidate("shared-0", { assignmentCount: 3 }), candidate("shared-1", { assignmentCount: 2 })],
+    })).toBeNull();
+    expect(planSharedGatewayRebalance({
+      config,
+      candidates: [
+        candidate("shared-0", { assignmentCount: 4 }),
+        candidate("shared-1", { assignmentCount: 2, rosterComplete: false }),
+      ],
     })).toBeNull();
   });
 });

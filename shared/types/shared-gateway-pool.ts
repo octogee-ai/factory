@@ -239,10 +239,24 @@ export function isAcceptingSharedGateway(
     candidate.serving &&
     candidate.heartbeatFresh &&
     candidate.liveReleaseReady &&
-    candidate.rosterComplete &&
     isNonNegativeInteger(candidate.assignmentCount) &&
     isNonNegativeInteger(candidate.incomingMigrationCount)
   );
+}
+
+export function isSettledSharedGateway(
+  config: SharedGatewayPoolConfig,
+  candidate: SharedGatewayPoolCandidate,
+): boolean {
+  return isAcceptingSharedGateway(config, candidate) && candidate.rosterComplete;
+}
+
+export type SharedGatewayPlacementPurpose = "initial-placement" | "migration";
+
+function sharedGatewayAcceptsFor(
+  purpose: SharedGatewayPlacementPurpose,
+): (config: SharedGatewayPoolConfig, candidate: SharedGatewayPoolCandidate) => boolean {
+  return purpose === "migration" ? isSettledSharedGateway : isAcceptingSharedGateway;
 }
 
 export function stableGatewayUidHash(uid: string): number {
@@ -270,26 +284,31 @@ export function selectSharedGateway(input: {
   uid: string;
   config: SharedGatewayPoolConfig;
   candidates: readonly SharedGatewayPoolCandidate[];
+  purpose: SharedGatewayPlacementPurpose;
   currentGatewayId?: string | null;
 }): SharedGatewaySelection {
-  const accepting = input.candidates.filter((candidate) =>
-    isAcceptingSharedGateway(input.config, candidate));
-  if (accepting.length === 0) return { kind: "blocked", reason: "no-accepting-shared-gateway" };
-
-  const selected = leastLoadedGatewayForUid(input.uid, accepting);
+  const accepts = sharedGatewayAcceptsFor(input.purpose);
+  const destinations = input.candidates.filter((candidate) => accepts(input.config, candidate));
   const current = input.currentGatewayId === undefined || input.currentGatewayId === null
     ? undefined
-    : accepting.find((candidate) => candidate.gatewayId === input.currentGatewayId);
+    : input.candidates.find((candidate) =>
+      candidate.gatewayId === input.currentGatewayId && isAcceptingSharedGateway(input.config, candidate));
+  const retained = (candidate: SharedGatewayPoolCandidate): SharedGatewaySelection => ({
+    kind: "selected",
+    gatewayId: candidate.gatewayId,
+    load: authoritativeSharedGatewayLoad(candidate),
+    retainedCurrent: true,
+  });
+  if (destinations.length === 0) {
+    return current ? retained(current) : { kind: "blocked", reason: "no-accepting-shared-gateway" };
+  }
+
+  const selected = leastLoadedGatewayForUid(input.uid, destinations);
   if (
     current &&
     authoritativeSharedGatewayLoad(current) - authoritativeSharedGatewayLoad(selected) <= 1
   ) {
-    return {
-      kind: "selected",
-      gatewayId: current.gatewayId,
-      load: authoritativeSharedGatewayLoad(current),
-      retainedCurrent: true,
-    };
+    return retained(current);
   }
   return {
     kind: "selected",
@@ -304,7 +323,7 @@ export function planSharedGatewayRebalance(input: {
   candidates: readonly SharedGatewayPoolCandidate[];
 }): SharedGatewayRebalance | null {
   const accepting = input.candidates
-    .filter((candidate) => isAcceptingSharedGateway(input.config, candidate))
+    .filter((candidate) => isSettledSharedGateway(input.config, candidate))
     .slice();
   if (accepting.length < 2) return null;
   accepting.sort((left, right) => {

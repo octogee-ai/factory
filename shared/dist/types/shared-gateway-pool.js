@@ -120,9 +120,14 @@ export function isAcceptingSharedGateway(config, candidate) {
         candidate.serving &&
         candidate.heartbeatFresh &&
         candidate.liveReleaseReady &&
-        candidate.rosterComplete &&
         isNonNegativeInteger(candidate.assignmentCount) &&
         isNonNegativeInteger(candidate.incomingMigrationCount));
+}
+export function isSettledSharedGateway(config, candidate) {
+    return isAcceptingSharedGateway(config, candidate) && candidate.rosterComplete;
+}
+function sharedGatewayAcceptsFor(purpose) {
+    return purpose === "migration" ? isSettledSharedGateway : isAcceptingSharedGateway;
 }
 export function stableGatewayUidHash(uid) {
     let hash = 2166136261;
@@ -141,21 +146,24 @@ function leastLoadedGatewayForUid(uid, candidates) {
     return ties[stableGatewayUidHash(uid) % ties.length];
 }
 export function selectSharedGateway(input) {
-    const accepting = input.candidates.filter((candidate) => isAcceptingSharedGateway(input.config, candidate));
-    if (accepting.length === 0)
-        return { kind: "blocked", reason: "no-accepting-shared-gateway" };
-    const selected = leastLoadedGatewayForUid(input.uid, accepting);
+    const accepts = sharedGatewayAcceptsFor(input.purpose);
+    const destinations = input.candidates.filter((candidate) => accepts(input.config, candidate));
     const current = input.currentGatewayId === undefined || input.currentGatewayId === null
         ? undefined
-        : accepting.find((candidate) => candidate.gatewayId === input.currentGatewayId);
+        : input.candidates.find((candidate) => candidate.gatewayId === input.currentGatewayId && isAcceptingSharedGateway(input.config, candidate));
+    const retained = (candidate) => ({
+        kind: "selected",
+        gatewayId: candidate.gatewayId,
+        load: authoritativeSharedGatewayLoad(candidate),
+        retainedCurrent: true,
+    });
+    if (destinations.length === 0) {
+        return current ? retained(current) : { kind: "blocked", reason: "no-accepting-shared-gateway" };
+    }
+    const selected = leastLoadedGatewayForUid(input.uid, destinations);
     if (current &&
         authoritativeSharedGatewayLoad(current) - authoritativeSharedGatewayLoad(selected) <= 1) {
-        return {
-            kind: "selected",
-            gatewayId: current.gatewayId,
-            load: authoritativeSharedGatewayLoad(current),
-            retainedCurrent: true,
-        };
+        return retained(current);
     }
     return {
         kind: "selected",
@@ -166,7 +174,7 @@ export function selectSharedGateway(input) {
 }
 export function planSharedGatewayRebalance(input) {
     const accepting = input.candidates
-        .filter((candidate) => isAcceptingSharedGateway(input.config, candidate))
+        .filter((candidate) => isSettledSharedGateway(input.config, candidate))
         .slice();
     if (accepting.length < 2)
         return null;
