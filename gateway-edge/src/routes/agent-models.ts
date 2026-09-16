@@ -3,17 +3,18 @@ import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
 import { logger } from "../middleware/logging.js";
 import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
+import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import { byotSnapshotProjectionFromSystemConfig } from "@octogee/core/customer-snapshot-mapping";
 import {
   agentIdBelongsToSlug,
   parseAgentModelSelection,
   parseAgentModelSelections,
   platformModelRefs,
-  modelRefForCatalogEntry,
   type AgentModelSelection,
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
-import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
+import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-credentials";
+import { agentModelCatalog } from "../lib/agent-model-catalog.js";
 import { pickPlanInputs, resolveBillingProfile } from "@octogee/shared/types/billing";
 import {
   PLATFORM_CONFIG_COLLECTION,
@@ -67,29 +68,18 @@ async function platformAgentModelDefault(
   }
 }
 
-function hasActiveByosub(sysData: Record<string, unknown>): boolean {
-  const credential = sysData.modelCredential as
-    | { active?: unknown; mode?: unknown }
-    | undefined;
-  return credential?.active === true && credential?.mode === "oauth";
+async function readSubscriptionProviders(uid: string) {
+  const integration = await db.doc(`users/${uid}/integrations/byosub`).get();
+  const { refs, skipped } = resolveUserByosubCredentialRefs(uid, integration.data());
+  if (skipped.length > 0) logger.warn(`[agent-models] ${uid}: ${skipped.join("; ")}`);
+  return refs.map((ref) => ref.provider);
 }
 
-function isBuilderRuntime(): boolean {
-  return process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_PROFILE === "builder";
-}
-
-function catalogPayload() {
-  return MODEL_CATALOG.map((entry) => ({
-    ref: modelRefForCatalogEntry(entry),
-    provider: entry.provider,
-    id: entry.id,
-    label: entry.label,
-    ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
-    reasoningEfforts: entry.reasoningEfforts,
-    ...(entry.defaultReasoningEffort
-      ? { defaultReasoningEffort: entry.defaultReasoningEffort }
-      : {}),
-  }));
+async function isBuilderRuntime(req: Request): Promise<boolean> {
+  const gatewayId = gatewayIdFromRequest(req);
+  if (!gatewayId) return false;
+  const authorization = await readGatewayAuthorization(db, gatewayId);
+  return authorization?.kind === "durable" && authorization.config.gatewayClass === "builder";
 }
 
 // The picker's live-flip path: persist the pick, then push the FULL selection
@@ -142,9 +132,10 @@ function triggerAgentModelSync(args: {
 router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
-    const [sysData, platformDefault] = await Promise.all([
+    const [sysData, platformDefault, subscriptionProviders] = await Promise.all([
       readSystemConfig(uid),
       platformAgentModelDefault((m) => logger.warn(m)),
+      readSubscriptionProviders(uid),
     ]);
     const plan = resolveBillingProfile(req.user ?? {});
     const slug = slugFromRequest(req);
@@ -153,8 +144,9 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
       tier: plan.tier,
       builderTools: plan.builderTools,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
-      byosub: isBuilderRuntime() && hasActiveByosub(sysData),
-      catalog: catalogPayload(),
+      byosub: subscriptionProviders.length > 0 && await isBuilderRuntime(req),
+      subscriptionProviders,
+      catalog: agentModelCatalog(subscriptionProviders),
       selections: parseAgentModelSelections(sysData.agentModels),
       platformDefault,
     });
@@ -189,8 +181,8 @@ async function gateSelectionRequest(
   if (!selection) {
     return { ok: false, status: 400, error: "primary (and optional fallbacks) must be valid model refs" };
   }
-  const sysData = await readSystemConfig(uid);
-  if (!(isBuilderRuntime() && hasActiveByosub(sysData))) {
+  const [sysData, subscriptionProviders] = await Promise.all([readSystemConfig(uid), readSubscriptionProviders(uid)]);
+  if (!(subscriptionProviders.length > 0 && await isBuilderRuntime(req))) {
     const allowed = new Set(platformModelRefs());
     const strangers = [selection.primary, ...selection.fallbacks].filter((ref) => !allowed.has(ref));
     if (strangers.length > 0) {
