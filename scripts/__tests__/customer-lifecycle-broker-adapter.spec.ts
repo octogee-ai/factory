@@ -716,6 +716,27 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(rpc.configGet).toHaveBeenCalledTimes(1);
   });
 
+  it("settles a rostered agent's wait once the runtime applies a sibling lane's later revision", async () => {
+    const rpc = {
+      configGet: vi.fn()
+        .mockResolvedValueOnce({
+          ...configSnapshot({}), configRevisionHash: "revision-alice", appliedConfigHash: "revision-before",
+        })
+        .mockResolvedValueOnce({
+          ...configSnapshot({}), configRevisionHash: "revision-bob", appliedConfigHash: "revision-alice",
+        })
+        .mockResolvedValueOnce({
+          ...configSnapshot({}), configRevisionHash: "revision-bob", appliedConfigHash: "revision-bob",
+        }),
+    } as Pick<GatewayRpcClient, "configGet">;
+
+    await expect(waitForAppliedConfigRevision(rpc, "alice", {
+      pollIntervalMs: 0,
+      acceptSupersedingRevision: true,
+    })).resolves.toBeUndefined();
+    expect(rpc.configGet).toHaveBeenCalledTimes(3);
+  });
+
   it("rejects an import wait when another config revision supersedes the import", async () => {
     const rpc = {
       configGet: vi.fn()
@@ -2730,7 +2751,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     }
   });
 
-  it("materializes every active agent's broker catalog after the config patch, once the mount's early materialization settles, before the secrets reload", async () => {
+  it("materializes every active agent's broker catalog before agents.create, once the mount's early materialization settles", async () => {
     const events: string[] = [];
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
       events.push("materialize");
@@ -2742,9 +2763,15 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
     vi.stubEnv("OPENROUTER_BASE_URL", "http://llm-broker:3010/v1");
     vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://llm-broker:3010/v1");
+    const roster = rosterRpc();
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
       rpc: mkGatewayRpc({
+        ...roster,
+        agentsCreate: vi.fn(async (params: { name: string; workspace: string }) => {
+          events.push("agents.create");
+          return roster.agentsCreate(params);
+        }),
         secretsReload: vi.fn(async () => { events.push("secrets"); return { ok: true, warningCount: 0 }; }),
       }),
       log: vi.fn(),
@@ -2782,7 +2809,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         openAi: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
       }),
     );
-    expect(events).toEqual(["config-patch", "early", "materialize", "secrets"]);
+    expect(events).toEqual(["early", "materialize", "agents.create", "agents.create", "config-patch", "secrets"]);
   });
 
   it("leaves nothing for the post-mount oauth purge or model override to patch", async () => {

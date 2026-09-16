@@ -83,6 +83,29 @@ process.exitCode = 1;
     await expect(access(await readFile(capture, "utf8"))).rejects.toThrow();
   });
 
+  it("retries a config mutation conflict so a concurrent roster write does not defer the profile", async () => {
+    const capture = await cliFixture(`
+const fs = require("node:fs");
+const counter = process.env.SECRETS_APPLY_CAPTURE + ".attempts";
+const attempts = fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) + 1 : 1;
+fs.writeFileSync(counter, String(attempts));
+if (attempts === 1) {
+  process.stdout.write(JSON.stringify({ok:false,error:{message:"Secrets apply failed: ConfigMutationConflictError: config changed since last load"}}));
+  process.exitCode = 1;
+} else {
+  fs.writeFileSync(process.env.SECRETS_APPLY_CAPTURE, String(attempts));
+  process.stdout.write(JSON.stringify({mode:"write",changed:true,warningCount:0}));
+}
+`);
+    const log = vi.fn();
+    await applyOpenClawSecretsPlan(plan(), { log });
+    expect(await readFile(capture, "utf8")).toBe("2");
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      "[secrets-apply] config mutation conflict on attempt 1/4; retrying in 1000ms",
+      "[secrets-apply] succeeded after 1 config mutation conflict retry",
+    ]);
+  });
+
   it.each(["not JSON", '{"ok":false,"error":{"message":"provider refused"}}', '{"mode":"dry-run","changed":true}'])(
     "rejects an invalid success acknowledgment: %s",
     async (stdout) => {

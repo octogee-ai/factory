@@ -865,9 +865,10 @@ function safeOwnedAgentPatch(value, safeModelRef, forceSafeModel) {
     const hasSelection = Object.prototype.hasOwnProperty.call(record, "model");
     const normalizedSelection = hasSelection ? normalizedCatalogSelection(record.model) : null;
     const unsafeSelection = hasSelection && normalizedSelection === null;
-    const affected = [forceSafeModel, unsafeSelection, directRuntime, models.changed].some(Boolean);
+    const pinToSafe = unsafeSelection || (forceSafeModel && !hasSelection);
+    const affected = [pinToSafe, directRuntime, models.changed].some(Boolean);
     const modelPatch = {};
-    if (forceSafeModel || unsafeSelection) {
+    if (pinToSafe) {
         modelPatch.model = { primary: safeModelRef, fallbacks: [] };
     }
     else if (normalizedSelection && JSON.stringify(record.model) !== JSON.stringify(normalizedSelection)) {
@@ -887,8 +888,9 @@ function customerDefaultRuntimePlan(defaults, safeModelRef, forceSafeModel) {
     const unsafeModel = hasModel && normalizedModel === null;
     const unsafeRuntime = isRecord(defaults.agentRuntime) &&
         isDirectAgentRuntimeId(defaults.agentRuntime.id);
+    const pinToSafe = unsafeModel || (forceSafeModel && !hasModel);
     const patch = { models: models.patch };
-    if (unsafeModel || forceSafeModel) {
+    if (pinToSafe) {
         patch.model = { primary: safeModelRef, fallbacks: [] };
     }
     else if (normalizedModel && JSON.stringify(defaults.model) !== JSON.stringify(normalizedModel)) {
@@ -898,7 +900,7 @@ function customerDefaultRuntimePlan(defaults, safeModelRef, forceSafeModel) {
         patch.agentRuntime = null;
     return {
         patch,
-        affected: unsafeModel || unsafeRuntime || forceSafeModel || models.changed,
+        affected: pinToSafe || unsafeRuntime || models.changed,
         directRuntimeModelRefs: models.removedRefs,
     };
 }

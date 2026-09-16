@@ -776,6 +776,7 @@ async function addCustomerToGatewayInner(
   if (snapshot.status !== "complete") {
     markStep("claim-slot");
     await adapter.setProvisioningStatus(uid, "provisioning");
+    await adapter.setAgentIds(uid, [`octogee-${slug}-coach`]);
     steps.push("claim-slot");
   }
 

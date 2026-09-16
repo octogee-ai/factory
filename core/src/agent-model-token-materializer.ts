@@ -541,7 +541,10 @@ async function applyAgentMaterializations(
   const targets = agents.flatMap((agent) => agent.missingProfiles);
   if (targets.length === 0) return { profilesApplied: false, deferred: [] };
   try {
-    await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), opts.secretsApply ?? {});
+    await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), {
+      ...opts.secretsApply,
+      log: opts.secretsApply?.log ?? opts.logFn,
+    });
     return { profilesApplied: true, deferred: [] };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

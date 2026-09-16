@@ -405,6 +405,15 @@ expect(result.steps).toEqual([
     }
   });
 
+  it("names the coach agent on the Builder when the slot is claimed, before broker profiles start", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+
+    const agentIdsIdx = state.calls.indexOf("write:provisioning.openclaw.agentIds");
+    expect(agentIdsIdx).toBeGreaterThan(state.calls.indexOf("write:provisioning.openclaw.status"));
+    expect(agentIdsIdx).toBeLessThan(state.calls.indexOf("materializeBrokerProfiles"));
+    expect(state.writes.find((w) => w.field === "provisioning.openclaw.agentIds")?.value).toEqual(["octogee-test-coach"]);
+  });
+
   it("starts broker profile materialization before Gitea and settles it for the config patch", async () => {
     let settled = false;
     const adapter = {

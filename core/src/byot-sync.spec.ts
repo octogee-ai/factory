@@ -1997,6 +1997,35 @@ describe("customer OAuth runtime purge", () => {
     });
   });
 
+  it("leaves a catalog-valid coach selection alone when a suppressed byosub forces safe, and pins only a non-catalog one", () => {
+    const platformDefault = {
+      primary: "platform-openrouter/openai/gpt-5.6-luna",
+      fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+    };
+    const patch = customerOauthRuntimeConfigPatch(
+      {
+        agents: {
+          entries: {
+            "octogee-tester-70-coach": { model: platformDefault },
+            "octogee-tester-70-proj-web-coach": { model: { primary: "openai-codex/gpt-5", fallbacks: [] } },
+            "octogee-tester-70-proj-blank-coach": { name: "no selection yet" },
+          },
+        },
+      },
+      "tester-70",
+      platformDefault.primary,
+      { forceSafeAll: true },
+    ) as any;
+
+    expect(patch.agents.entries["octogee-tester-70-coach"]).toBeUndefined();
+    expect(patch.agents.entries["octogee-tester-70-proj-web-coach"]).toEqual({
+      model: { primary: platformDefault.primary, fallbacks: [] },
+    });
+    expect(patch.agents.entries["octogee-tester-70-proj-blank-coach"]).toEqual({
+      model: { primary: platformDefault.primary, fallbacks: [] },
+    });
+  });
+
   it("retains the exact env-owned Anthropic broker provider without forcing safe agent resets", () => {
     const brokerUrl = "http://llm-broker.octogee-test.svc.cluster.local:3010";
     vi.stubEnv("ANTHROPIC_BASE_URL", brokerUrl);

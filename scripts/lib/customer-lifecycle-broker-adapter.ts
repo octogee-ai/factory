@@ -341,7 +341,12 @@ async function ensureCustomerRosterAgents(
     for (const spec of specs) {
       const [created] = await createRosterAgents([spec], { rpc: ctx.rpc, log: ctx.log, logPrefix });
       if (created.status === "created") {
-        await waitForAppliedConfigRevision(ctx.rpc, spec.agentId, { timeoutMs: 60_000, logPrefix, signal });
+        await waitForAppliedConfigRevision(ctx.rpc, spec.agentId, {
+          timeoutMs: 60_000,
+          logPrefix,
+          signal,
+          acceptSupersedingRevision: true,
+        });
       }
     }
   } finally {
@@ -656,7 +661,16 @@ function throwIfConfigApplicationWaitAborted(signal: AbortSignal | undefined): v
 export async function waitForAppliedConfigRevision(
   rpc: Pick<GatewayRpcClient, "configGet">,
   slug: string,
-  opts: { timeoutMs?: number; pollIntervalMs?: number; signal?: AbortSignal; logPrefix?: string } = {},
+  opts: {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    signal?: AbortSignal;
+    logPrefix?: string;
+    /** Settle once the runtime has applied whatever revision is current, instead of
+     *  the exact revision observed first. Revisions are cumulative, so an additive
+     *  write from a concurrent lane never fails this wait. */
+    acceptSupersedingRevision?: boolean;
+  } = {},
 ): Promise<void> {
   const logPrefix = opts.logPrefix ?? `[import:${slug}]`;
   const timeoutMs = opts.timeoutMs ?? CONFIG_PATCH_DEADLINE_MS;
@@ -680,9 +694,10 @@ export async function waitForAppliedConfigRevision(
       return null;
     }
   };
-  for (;;) {
-    const snapshot = await readSnapshot();
-    if (snapshot !== null) {
+  const observe = (snapshot: ConfigGetResult): boolean => {
+    if (opts.acceptSupersedingRevision) {
+      targetRevisionHash = snapshot.configRevisionHash;
+    } else {
       targetRevisionHash ??= snapshot.configRevisionHash;
       if (snapshot.configRevisionHash !== targetRevisionHash) {
         throw new Error(
@@ -690,9 +705,13 @@ export async function waitForAppliedConfigRevision(
             `(expected=${targetRevisionHash}, observed=${snapshot.configRevisionHash})`,
         );
       }
-      appliedConfigHash = snapshot.appliedConfigHash;
-      if (targetRevisionHash === appliedConfigHash) return;
     }
+    appliedConfigHash = snapshot.appliedConfigHash;
+    return targetRevisionHash === appliedConfigHash;
+  };
+  for (;;) {
+    const snapshot = await readSnapshot();
+    if (snapshot !== null && observe(snapshot)) return;
     if (Date.now() >= deadline) break;
     await idle();
   }
@@ -759,18 +778,6 @@ function markPendingProjectActivations(reason: string, accountIds: string[], bas
   return true;
 }
 
-function brokerProfilesBeforeSecretsReload(
-  ctx: BrokerCtx,
-  brokerAgentIds: string[],
-  slug: string,
-  ready: Promise<void> | undefined,
-): () => Promise<void> {
-  return async () => {
-    await ready;
-    await materializeCustomerBrokerProfiles(brokerAgentIds, slug, ctx.log);
-  };
-}
-
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -826,7 +833,6 @@ async function applyAddCustomerConfigPatch(
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
   );
-  const brokerProfiles = brokerProfilesBeforeSecretsReload(ctx, brokerAgentIds, snapshot.slug, callOpts?.brokerProfilesReady);
   const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   evictionSlugs = await currentEvictionSlugs(
     snapshot.slug,
@@ -859,6 +865,8 @@ async function applyAddCustomerConfigPatch(
   let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
+  await callOpts?.brokerProfilesReady;
+  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
   await reconcileCustomerRosterAgents(
     ctx,
     snapshot.slug,
@@ -950,7 +958,6 @@ async function applyAddCustomerConfigPatch(
   );
   await settleProjectAgentActivations(ctx, {
     snapshot, projectAgents, channels: snapshot.channels, baseline: routingActivationBaseline,
-    brokerProfiles,
     activate: () => activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
       accountIds: affectedAccountIds,
       baseline: routingActivationBaseline,
@@ -978,12 +985,10 @@ async function settleProjectAgentActivations(
     projectAgents: NonNullable<UserSnapshot["projectAgents"]>;
     channels: UserSnapshot["channels"];
     baseline: Readonly<Record<string, number>>;
-    brokerProfiles?: () => Promise<void>;
     activate(): Promise<void>;
   },
 ): Promise<void> {
   const errors: unknown[] = [];
-  await input.brokerProfiles?.();
   await reloadRuntimeSecrets(ctx, `[add:${input.snapshot.slug}]`);
   try {
     await input.activate();

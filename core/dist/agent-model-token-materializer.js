@@ -327,7 +327,10 @@ async function applyAgentMaterializations(agents, opts) {
     if (targets.length === 0)
         return { profilesApplied: false, deferred: [] };
     try {
-        await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), opts.secretsApply ?? {});
+        await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), {
+            ...opts.secretsApply,
+            log: opts.secretsApply?.log ?? opts.logFn,
+        });
         return { profilesApplied: true, deferred: [] };
     }
     catch (error) {

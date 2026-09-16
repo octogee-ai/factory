@@ -30,5 +30,6 @@ export declare function authProfileApiKeyTarget(input: {
 export declare function buildOpenClawSecretsPlan(targets: readonly AuthProfileApiKeyTarget[], now?: () => Date): OpenClawSecretsPlan;
 export interface ApplyOpenClawSecretsPlanOptions {
     apply?: (plan: OpenClawSecretsPlan) => Promise<unknown>;
+    log?: (message: string) => void;
 }
 export declare function applyOpenClawSecretsPlan(plan: OpenClawSecretsPlan, opts?: ApplyOpenClawSecretsPlanOptions): Promise<void>;

@@ -69,6 +69,7 @@ export function buildOpenClawSecretsPlan(
 
 export interface ApplyOpenClawSecretsPlanOptions {
   apply?: (plan: OpenClawSecretsPlan) => Promise<unknown>;
+  log?: (message: string) => void;
 }
 
 function cliResult(stdout: string): { mode?: unknown; changed?: unknown; error?: { message?: unknown } } {
@@ -81,7 +82,29 @@ function cliResult(stdout: string): { mode?: unknown; changed?: unknown; error?:
   throw new OpenClawSecretsApplyError("openclaw secrets apply returned an invalid result", null);
 }
 
-async function applyWithCli(plan: OpenClawSecretsPlan): Promise<void> {
+const CONFIG_MUTATION_CONFLICT = /ConfigMutationConflictError|config changed since last load/i;
+const CLI_CONFLICT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+async function applyWithCli(plan: OpenClawSecretsPlan, log?: (message: string) => void): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await applyWithCliOnce(plan);
+      if (attempt > 0) log?.(`[secrets-apply] succeeded after ${attempt} config mutation conflict retr${attempt === 1 ? "y" : "ies"}`);
+      return;
+    } catch (error) {
+      const delay = CLI_CONFLICT_RETRY_DELAYS_MS[attempt];
+      if (!(error instanceof OpenClawSecretsApplyError) || !CONFIG_MUTATION_CONFLICT.test(error.message) || delay === undefined) {
+        throw error;
+      }
+      log?.(
+        `[secrets-apply] config mutation conflict on attempt ${attempt + 1}/${CLI_CONFLICT_RETRY_DELAYS_MS.length + 1}; retrying in ${delay}ms`,
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function applyWithCliOnce(plan: OpenClawSecretsPlan): Promise<void> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "octogee-secrets-plan-"));
   try {
     const filename = path.join(dir, "plan.json");
@@ -113,5 +136,5 @@ export async function applyOpenClawSecretsPlan(
   opts: ApplyOpenClawSecretsPlanOptions = {},
 ): Promise<void> {
   if (plan.targets.length === 0) return;
-  await (opts.apply ?? applyWithCli)(plan);
+  await (opts.apply ?? ((target) => applyWithCli(target, opts.log)))(plan);
 }
