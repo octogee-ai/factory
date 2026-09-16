@@ -39,6 +39,7 @@ import {
   setGatewayAccessDenialAudit,
 } from "../../lib/gateway-access-audit.js";
 import type { FeaturePolicy, FeatureSubject } from "@octogee/shared/types/feature-flags";
+import { registerWorkspaceGatewayStatusRoute } from "./workspace-gateway-status.js";
 
 const NOT_FOUND = "not-found";
 const CAPABILITY_DISABLED = "capability-disabled";
@@ -591,6 +592,7 @@ export function createBuilderGatewayRoutes({ featurePolicy }: { featurePolicy?: 
   const router = Router();
   router.use(requireAuth);
   registerGatewayListRoute(router);
+  registerWorkspaceGatewayStatusRoute(router);
   registerOpenClawTicketRoute(router, featurePolicy);
   return router;
 }

@@ -1,4 +1,6 @@
 import type { GatewayAccessCapabilities, GatewayAccessRole } from "./gateway-access.js";
+import type { GatewayHeartbeatStatus } from "./gateway-releases.js";
+import type { GatewayClass } from "./glm.js";
 export interface GatewayControlListEntry {
     gatewayId: string;
     workspaceSlug: string;
@@ -27,4 +29,22 @@ export interface OpenClawControlTicketResponse {
 }
 export interface GatewayControlListResponse {
     gateways: GatewayControlListEntry[];
+}
+export declare const BUILDER_ACTIVATION_STATUSES: readonly ["requested", "provisioning", "activating", "active", "returning"];
+export type BuilderActivationStatus = (typeof BUILDER_ACTIVATION_STATUSES)[number];
+export declare function isBuilderActivationStatus(value: unknown): value is BuilderActivationStatus;
+export interface BuilderActivationSummary {
+    status: BuilderActivationStatus;
+    targetGatewayId: string | null;
+}
+export declare const WORKSPACE_GATEWAY_STATUS_MAX_SLUGS = 50;
+export interface WorkspaceGatewayStatus {
+    workspaceSlug: string;
+    gatewayId: string | null;
+    gatewayClass: GatewayClass | null;
+    runtimeStatus: GatewayHeartbeatStatus;
+    activation: BuilderActivationSummary | null;
+}
+export interface WorkspaceGatewayStatusResponse {
+    workspaces: WorkspaceGatewayStatus[];
 }
