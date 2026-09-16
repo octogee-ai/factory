@@ -31,6 +31,7 @@ done
 test -e "$global_root/@anthropic-ai/claude-code" || fail "@anthropic-ai/claude-code is absent from $global_root"
 test -e "$global_root/@openai/codex" || fail "@openai/codex is absent from $global_root"
 test -x "$tool_bin/claude" || fail "$tool_bin/claude is not executable"
+"$tool_bin/claude" --version >/dev/null || fail "claude --version failed"
 test -x "$tool_bin/codex" || fail "$tool_bin/codex is not executable"
 test ! -e "$global_root/@sparticuz/chromium" || fail "@sparticuz/chromium must not be installed under $global_root"
 test -x "$chromium_bin" || fail "$chromium_bin is not executable"

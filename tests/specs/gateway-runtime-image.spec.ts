@@ -153,6 +153,17 @@ describe("gateway runtime image gate", () => {
     expect(result.stderr).toContain(`/${tool} is not executable`);
   });
 
+  it.each(["gateway", "builder"])("rejects a %s image whose executable Claude launcher is an installer placeholder", (profile) => {
+    const image = fakeImage();
+    writeFileSync(join(image.env.OCTOGEE_TOOL_BIN_DIR, "claude"),
+      'echo "Error: claude native binary not installed." >&2\nexit 1\n');
+
+    const result = verify(profile, { ...image.env, ...image.toolchainEnv });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("claude --version failed");
+  });
+
   it("rejects a globally installed @sparticuz/chromium payload", () => {
     const image = fakeImage();
     mkdirSync(join(image.globalRoot, "@sparticuz", "chromium"), { recursive: true });

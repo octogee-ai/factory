@@ -54,6 +54,8 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN npm install --global --ignore-scripts --no-audit --no-fund \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
+    && node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
+    && claude --version | grep -F "$CLAUDE_CODE_VERSION" \
     && npm cache clean --force \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
