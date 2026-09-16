@@ -57,12 +57,38 @@ const queuedEvictions = new Set<string>();
 const evictionQueue: Array<{ slug: string; deps: ReconcileLoopDeps }> = [];
 let evictionWorker: Promise<void> | null = null;
 
+// One process-wide mount pool: a tick enqueues its mounts and waits for them, and a
+// later tick's mounts join the same bounded workers instead of waiting for the earlier
+// tick to drain. maxConcurrent therefore caps the process, not one tick.
+interface MountBatch {
+  deferred: boolean;
+  plan: ReconcilePlan;
+}
+interface MountJob {
+  slug: string;
+  deps: ReconcileLoopDeps;
+  batch: MountBatch;
+  settle: () => void;
+}
+const mountQueue: MountJob[] = [];
+const queuedMounts = new Set<string>();
+let activeMountWorkers = 0;
+// Completion clock: a plan whose snapshot predates a slug's last completed mount is
+// stale for that slug and must not re-ensure it.
+let mountClock = 0;
+const lastMountCompletedAt = new Map<string, number>();
+
 export function _resetReconcileInFlightForTests(): void {
   inFlight.clear();
   pendingEvictions.clear();
   queuedEvictions.clear();
   evictionQueue.length = 0;
   evictionWorker = null;
+  mountQueue.length = 0;
+  queuedMounts.clear();
+  activeMountWorkers = 0;
+  mountClock = 0;
+  lastMountCompletedAt.clear();
 }
 
 function errMessage(err: unknown): string {
@@ -83,17 +109,20 @@ interface ReconcileSnapshot {
   evictObserved: Set<string>;
   desired: Set<string>;
   contentStale: Set<string>;
+  clock: number;
 }
 
 interface ReconcilePlan {
   toMount: string[];
   toEvict: string[];
   currentPendingEvictions: () => string[];
+  snapshotClock: number;
 }
 
 async function readReconcileSnapshot(deps: ReconcileLoopDeps): Promise<ReconcileSnapshot | null> {
   if (!(await reconciliationAllowed(deps))) return null;
   const snapshot = {
+    clock: mountClock,
     mountObserved: new Set(deps.getMountObserved()),
     evictObserved: new Set(deps.getEvictObserved()),
     desired: new Set(await deps.readDesired()),
@@ -120,7 +149,12 @@ function planReconciliation(deps: ReconcileLoopDeps, snapshot: ReconcileSnapshot
   );
   const toEvict = evictionCandidates.filter((slug) => !queuedEvictions.has(slug));
   if (toMount.length === 0 && toEvict.length === 0) return null;
-  return { toMount, toEvict, currentPendingEvictions: () => [...pendingEvictions] };
+  return {
+    toMount,
+    toEvict,
+    currentPendingEvictions: () => [...pendingEvictions],
+    snapshotClock: snapshot.clock,
+  };
 }
 
 function logReconcilePlan(deps: ReconcileLoopDeps, plan: ReconcilePlan): void {
@@ -131,35 +165,70 @@ function logReconcilePlan(deps: ReconcileLoopDeps, plan: ReconcilePlan): void {
   );
 }
 
-async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan): Promise<void> {
-  const mounts: Array<() => Promise<void>> = [];
-  let deferRemainingMounts = false;
-  for (const slug of plan.toMount) {
-    mounts.push(async () => {
-      if (deferRemainingMounts || !(await reconciliationAllowed(deps))) return;
-      inFlight.add(slug);
-      try {
-        const outcome = await deps.ensureSlug(
-          slug,
-          plan.currentPendingEvictions(),
-          plan.currentPendingEvictions,
-        );
-        deps.log(`[reconcile] ${deps.gatewayId}: mounted ${slug} (${outcome})`);
-        fireSafely(deps, () => deps.onEnsureSuccess?.(slug));
-      } catch (err) {
-        const message = errMessage(err);
-        deps.log(`[reconcile] ${deps.gatewayId}: ⚠ ensure failed for ${slug}: ${message}`);
-        if (deps.shouldDeferRemainingMounts?.(err)) {
-          deferRemainingMounts = true;
-          deps.log(`[reconcile] ${deps.gatewayId}: deferring remaining mounts after permanent ensure failure`);
-        }
-        fireSafely(deps, () => deps.onEnsureError?.(slug, message, err));
-      } finally {
-        inFlight.delete(slug);
-      }
-    });
+async function runMountJob({ slug, deps, batch }: MountJob): Promise<void> {
+  if (batch.deferred || !(await reconciliationAllowed(deps))) return;
+  try {
+    const outcome = await deps.ensureSlug(
+      slug,
+      batch.plan.currentPendingEvictions(),
+      batch.plan.currentPendingEvictions,
+    );
+    mountClock += 1;
+    lastMountCompletedAt.set(slug, mountClock);
+    deps.log(`[reconcile] ${deps.gatewayId}: mounted ${slug} (${outcome})`);
+    fireSafely(deps, () => deps.onEnsureSuccess?.(slug));
+  } catch (err) {
+    const message = errMessage(err);
+    deps.log(`[reconcile] ${deps.gatewayId}: ⚠ ensure failed for ${slug}: ${message}`);
+    if (deps.shouldDeferRemainingMounts?.(err)) {
+      batch.deferred = true;
+      deps.log(`[reconcile] ${deps.gatewayId}: deferring remaining mounts after permanent ensure failure`);
+    }
+    fireSafely(deps, () => deps.onEnsureError?.(slug, message, err));
   }
-  await runBounded(mounts, deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
+}
+
+async function runMountWorker(): Promise<void> {
+  activeMountWorkers += 1;
+  try {
+    while (mountQueue.length > 0) {
+      const job = mountQueue.shift()!;
+      // Claimed synchronously: a plan computed in the same turn must see the slug
+      // as in flight, never as free to mount again.
+      queuedMounts.delete(job.slug);
+      inFlight.add(job.slug);
+      try {
+        await runMountJob(job);
+      } finally {
+        inFlight.delete(job.slug);
+        job.settle();
+      }
+    }
+  } finally {
+    activeMountWorkers -= 1;
+  }
+}
+
+function spawnMountWorkers(limit: number): void {
+  const wanted = Math.min(Math.max(1, limit) - activeMountWorkers, mountQueue.length);
+  for (let i = 0; i < wanted; i++) void runMountWorker();
+}
+
+async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan): Promise<void> {
+  const batch: MountBatch = { deferred: false, plan };
+  const settled: Promise<void>[] = [];
+  // The snapshot was read across awaits; a sibling tick may have queued, claimed,
+  // or finished a slug since. The pool decides who mounts what.
+  for (const slug of plan.toMount) {
+    if (queuedMounts.has(slug) || inFlight.has(slug)) continue;
+    if ((lastMountCompletedAt.get(slug) ?? 0) > plan.snapshotClock) continue;
+    queuedMounts.add(slug);
+    settled.push(new Promise<void>((settle) => {
+      mountQueue.push({ slug, deps, batch, settle });
+    }));
+  }
+  spawnMountWorkers(deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);
+  await Promise.all(settled);
 }
 
 async function enqueueReconcileEvictions(deps: ReconcileLoopDeps, toEvict: readonly string[]): Promise<void> {
@@ -219,48 +288,37 @@ async function reconciliationAllowed(deps: ReconcileLoopDeps): Promise<boolean> 
   return deps.canReconcile ? await deps.canReconcile() : true;
 }
 
-async function runBounded(actions: Array<() => Promise<void>>, max: number): Promise<void> {
-  const limit = Math.max(1, max);
-  let cursor = 0;
-  const worker = async (): Promise<void> => {
-    while (cursor < actions.length) {
-      const index = cursor;
-      cursor += 1;
-      await actions[index]();
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, actions.length) }, worker));
-}
-
 export interface StartReconcileLoopOptions extends ReconcileLoopDeps {
   intervalMs: number;
   subscribe?: (wake: () => void) => () => void;
 }
 
+// A tick can outlive intervalMs (a mount may wait on the gateway's config.patch),
+// so interval ticks never overlap. A push wake is different: the assignment it
+// carries would otherwise wait for every in-flight mount to drain, so one wake tick
+// may run beside the interval tick. Both feed the process-wide mount pool, which is
+// what keeps maxConcurrent (and the maxConcurrent=1 serial invariant) intact.
+const MAX_OVERLAPPING_TICKS = 2;
+
 export function startReconcileLoop(opts: StartReconcileLoopOptions): () => void {
-  let running = false;
+  let running = 0;
   let stopped = false;
   let pending = false;
-  const tick = () => {
-    // Non-reentrant: reconcileFleet can outlive intervalMs (a mount may wait on
-    // the gateway's config.patch rate limit). Overlapping ticks create independent
-    // runBounded schedulers, so maxConcurrent stops being a process-wide cap; for
-    // callers that set maxConcurrent=1, that also breaks the serial-mount invariant.
-    // Skip; level-triggered, so the next interval after this tick drains catches up.
-    if (stopped || running) return;
+  const tick = (fromWake = false) => {
+    if (stopped || running >= (fromWake ? MAX_OVERLAPPING_TICKS : 1)) return;
     pending = false;
-    running = true;
+    running += 1;
     reconcileFleet(opts)
       .catch((err) => {
         opts.log(`[reconcile] ${opts.gatewayId}: tick failed: ${errMessage(err)}`);
       })
       .finally(() => {
-        running = false;
-        if (pending) tick();
+        running -= 1;
+        if (pending) tick(true);
       });
   };
-  const timer = setInterval(tick, opts.intervalMs);
-  const unsubscribe = opts.subscribe?.(() => { pending = true; tick(); });
+  const timer = setInterval(() => tick(), opts.intervalMs);
+  const unsubscribe = opts.subscribe?.(() => { pending = true; tick(true); });
   return () => {
     stopped = true;
     clearInterval(timer);

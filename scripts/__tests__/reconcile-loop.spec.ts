@@ -388,6 +388,52 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     await first;
   });
 
+  it("starts a slug assigned during a running tick alongside the in-flight lanes", async () => {
+    const gates = new Map([["a", deferred()], ["b", deferred()], ["c", deferred()]]);
+    let desired = ["a", "b"];
+    const d = mkDeps({
+      maxConcurrent: 4,
+      readDesired: async () => desired,
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        await gates.get(slug)!.promise;
+        return "mounted";
+      },
+    });
+    const first = reconcileFleet(d);
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "b"]));
+    desired = ["a", "b", "c"];
+    const second = reconcileFleet(d);
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "b", "c"]));
+    for (const gate of gates.values()) gate.resolve();
+    await Promise.all([first, second]);
+  });
+
+  it("holds the mount cap process-wide across overlapping ticks", async () => {
+    const gates = new Map([["a", deferred()], ["b", deferred()], ["c", deferred()]]);
+    let desired = ["a", "b"];
+    const d = mkDeps({
+      maxConcurrent: 2,
+      readDesired: async () => desired,
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        await gates.get(slug)!.promise;
+        return "mounted";
+      },
+    });
+    const first = reconcileFleet(d);
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "b"]));
+    desired = ["a", "b", "c"];
+    const second = reconcileFleet(d);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(d.ensured).toEqual(["a", "b"]);
+    gates.get("a")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "b", "c"]));
+    gates.get("b")!.resolve();
+    gates.get("c")!.resolve();
+    await Promise.all([first, second]);
+  });
+
   it("caps work at maxConcurrent", async () => {
     let active = 0;
     let peak = 0;
@@ -624,6 +670,30 @@ describe("startReconcileLoop", () => {
       await vi.waitFor(() => expect(mounted).toEqual(["a", "b"]));
     } finally { gate.resolve(); stop(); }
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a push wake immediately while an earlier tick is still mounting", async () => {
+    let wake!: () => void;
+    const gate = deferred();
+    let desired = ["a"];
+    const d = mkDeps({
+      readDesired: async () => desired,
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        if (slug === "a") await gate.promise;
+        return "mounted";
+      },
+    });
+    const stop = startReconcileLoop({ ...d, intervalMs: 60_000,
+      subscribe: (notify) => { wake = notify; return () => undefined; },
+    });
+    try {
+      wake();
+      await vi.waitFor(() => expect(d.ensured).toEqual(["a"]));
+      desired = ["a", "b"];
+      wake();
+      await vi.waitFor(() => expect(d.ensured).toEqual(["a", "b"]));
+    } finally { gate.resolve(); stop(); }
   });
 
   it("reconciles on each interval tick and stops cleanly", async () => {
