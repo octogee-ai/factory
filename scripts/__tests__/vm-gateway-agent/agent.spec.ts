@@ -181,7 +181,7 @@ describe("convergeOnce", () => {
     expect(gatewayStart).toBeGreaterThan(initIndex);
   });
 
-  it("is a no-op while the running containers carry the bundle version, and replaces them on a new version", async () => {
+  it("is a no-op while the running containers match the bundle, and replaces every container and re-runs init on an image roll", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
     let bundle = bundleFixture();
@@ -195,11 +195,75 @@ describe("convergeOnce", () => {
     expect(creates()).toBe(afterFirst);
     expect(state.appliedVersion).toBe("v1");
 
-    bundle = bundleFixture({ version: "v2" });
+    const rolled = bundleFixture();
+    const roll = (image: string) => image.replace("main.abc", "main.def");
+    bundle = {
+      ...rolled,
+      version: "v2",
+      imageTag: "main.def",
+      init: { ...rolled.init!, image: roll(rolled.init!.image) },
+      containers: rolled.containers.map((container) => ({ ...container, image: roll(container.image) })),
+    };
+    const before = docker.log.length;
     state = await convergeOnce(h.d, state);
     expect(creates()).toBe(afterFirst + 3);
+    expect(docker.log.slice(before)).toContain("POST /containers/octogee-fix-perms/wait");
     expect(state.appliedVersion).toBe("v2");
     expect((docker.containers.get("octogee-gateway")?.config.Labels as Record<string, string>)["ai.octogee.bundle-version"]).toBe("v2");
+  });
+
+  it("replaces only the container whose spec changed, leaving the other services and the init step untouched", async () => {
+    const docker = fakeDocker();
+    const clock = { now: 1_000 };
+    let bundle = bundleFixture();
+    const h = deps(docker, () => runtimeReply(bundle), clock);
+
+    let state = await convergeOnce(h.d, initialAgentState());
+    const [gateway, edge] = bundle.containers;
+    bundle = bundleFixture({
+      version: "v2",
+      containers: [{ ...gateway, env: { ...gateway.env, NODE_OPTIONS: "--max-old-space-size=8192" } }, edge],
+    });
+
+    const before = docker.log.length;
+    state = await convergeOnce(h.d, state);
+    const events = docker.log.slice(before);
+
+    expect(events).toContain("DELETE /containers/octogee-gateway");
+    expect(events).toContain("POST /containers/octogee-gateway/start");
+    expect(events).not.toContain("DELETE /containers/octogee-gateway-edge");
+    expect(events).not.toContain("POST /containers/octogee-fix-perms/wait");
+    expect(events.filter((l) => l.startsWith("POST /images/create"))).toHaveLength(1);
+    expect(docker.containers.get("octogee-gateway")?.config.Env).toContain("NODE_OPTIONS=--max-old-space-size=8192");
+    expect(state.appliedVersion).toBe("v2");
+
+    const settled = docker.log.length;
+    await convergeOnce(h.d, state);
+    expect(docker.log.slice(settled).filter((l) => l.startsWith("POST /containers/create"))).toHaveLength(0);
+  });
+
+  it("re-runs init and recreates every service when only the init container changed, then settles", async () => {
+    const docker = fakeDocker();
+    const clock = { now: 1_000 };
+    let bundle = bundleFixture();
+    const h = deps(docker, () => runtimeReply(bundle), clock);
+
+    let state = await convergeOnce(h.d, initialAgentState());
+    bundle = bundleFixture({
+      version: "v2",
+      init: { ...bundleFixture().init!, command: ["sh", "-c", "cp -rn /etc/skel/. /home/node/ && chown -R 1000:1000 /home/node"] },
+    });
+
+    const before = docker.log.length;
+    state = await convergeOnce(h.d, state);
+    const events = docker.log.slice(before);
+    expect(events).toContain("POST /containers/octogee-fix-perms/wait");
+    expect(events.filter((l) => l.startsWith("POST /containers/create"))).toHaveLength(3);
+    expect(state.appliedVersion).toBe("v2");
+
+    const settled = docker.log.length;
+    await convergeOnce(h.d, state);
+    expect(docker.log.slice(settled).filter((l) => l.startsWith("POST /containers/create"))).toHaveLength(0);
   });
 
   it("refreshes token files on the refresh interval and restarts a container that died", async () => {

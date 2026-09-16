@@ -32,8 +32,13 @@ import {
   TOKEN_FILE,
   imagesToPull,
   planBundle,
+  planInitSpec,
+  runningInitSpec,
+  runningSpec,
   runningVersion,
+  specVersion,
   volumeHostPath,
+  type BundlePlan,
   type DockerContainerSpec,
 } from "./plan.js";
 
@@ -188,8 +193,7 @@ export async function restoreHomeIfEmpty(deps: VmAgentDeps, bundle: GatewayVmRun
   else if (result.status === "none") deps.log("[vm-agent] home restore none: no checkpoint for this customer yet");
 }
 
-export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, instanceId: string): Promise<void> {
-  const plan = planBundle(bundle, { stateRoot: deps.stateRoot, instanceId });
+export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, plan: BundlePlan): Promise<void> {
   const accessToken = await deps.metadata.accessToken();
   for (const image of imagesToPull(bundle)) {
     deps.log(`[vm-agent] pulling ${image}`);
@@ -206,6 +210,18 @@ export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
   }
   for (const service of plan.services) {
     deps.log(`[vm-agent] starting ${service.name} (${bundle.version})`);
+    await replaceContainer(deps.engine, service);
+  }
+}
+
+export async function applyServices(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, services: DockerContainerSpec[]): Promise<void> {
+  const accessToken = await deps.metadata.accessToken();
+  for (const image of new Set(services.map((service) => service.config.Image as string))) {
+    deps.log(`[vm-agent] pulling ${image}`);
+    await pullImage(deps.engine, image, accessToken);
+  }
+  for (const service of services) {
+    deps.log(`[vm-agent] replacing ${service.name} (${bundle.version})`);
     await replaceContainer(deps.engine, service);
   }
 }
@@ -265,14 +281,45 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
     if (inspection?.State?.Paused) await setContainerPaused(deps.engine, containerName(bundle.containers[index]), false);
   }
   await deps.home.desktop.run("thaw");
-  const allCurrent = running.every((inspection) => runningVersion(inspection) === bundle.version && inspection?.State?.Running === true);
-  if (allCurrent) {
+  const plan = planBundle(bundle, { stateRoot: deps.stateRoot, instanceId: identity.instanceId });
+  const decision = decideConvergence(plan, running);
+  if (decision.kind === "steady") {
     if (next.appliedVersion !== bundle.version) next = { ...next, appliedVersion: bundle.version };
     return checkpointHomeIfDue(deps, bundle, fetched.homeCheckpoint, next);
   }
-  deps.log(`[vm-agent] converging to bundle ${bundle.version} (running: ${running.map((r) => runningVersion(r) ?? "none").join(",")})`);
-  await applyBundle(deps, bundle, identity.instanceId);
+  await applyDecision(deps, bundle, plan, decision, running);
   return { ...next, appliedVersion: bundle.version };
+}
+
+type ContainerInspection = Awaited<ReturnType<typeof inspectContainer>>;
+
+export type ConvergenceDecision =
+  | { kind: "steady" }
+  | { kind: "full" }
+  | { kind: "services"; services: DockerContainerSpec[] };
+
+async function applyDecision(
+  deps: VmAgentDeps,
+  bundle: GatewayVmRuntimeBundle,
+  plan: BundlePlan,
+  decision: Exclude<ConvergenceDecision, { kind: "steady" }>,
+  running: ContainerInspection[],
+): Promise<void> {
+  const runningVersions = running.map((inspection) => runningVersion(inspection) ?? "none").join(",");
+  const action = decision.kind === "full" ? "full apply" : `replacing ${decision.services.map((service) => service.name).join(",")}`;
+  deps.log(`[vm-agent] converging to bundle ${bundle.version} (running: ${runningVersions}; ${action})`);
+  if (decision.kind === "full") await applyBundle(deps, bundle, plan);
+  else await applyServices(deps, bundle, decision.services);
+}
+
+export function decideConvergence(plan: BundlePlan, running: ContainerInspection[]): ConvergenceDecision {
+  const initSpec = planInitSpec(plan);
+  const initChanged = running.some((inspection) => inspection !== null && runningInitSpec(inspection) !== initSpec);
+  const stale = plan.services.filter((service, index) =>
+    running[index]?.State?.Running !== true || runningSpec(running[index]) !== specVersion(service));
+  if (stale.length === 0 && !initChanged) return { kind: "steady" };
+  if (initChanged || running.every((inspection) => inspection === null)) return { kind: "full" };
+  return { kind: "services", services: stale };
 }
 
 export async function runVmGatewayAgent(deps: VmAgentDeps, opts: { intervalMs: number; sleep: (ms: number) => Promise<void>; stop?: () => boolean }): Promise<void> {

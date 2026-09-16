@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   GATEWAY_DESKTOP_NODE_CONTAINER,
   GATEWAY_DESKTOP_RUNTIME_DIR,
@@ -9,6 +10,9 @@ import {
 import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 
 export const BUNDLE_VERSION_LABEL = "ai.octogee.bundle-version";
+export const CONTAINER_SPEC_LABEL = "ai.octogee.container-spec";
+export const INIT_SPEC_LABEL = "ai.octogee.init-spec";
+export const NO_INIT_SPEC = "none";
 export const GATEWAY_ID_LABEL = "ai.octogee.gateway-id";
 export const CONTAINER_ROLE_LABEL = "ai.octogee.role";
 export const RUNTIME_UID = "1000:1000";
@@ -68,56 +72,72 @@ export function envFor(bundle: GatewayVmRuntimeBundle, container: GatewayVmRunti
   return Object.entries(env).map(([key, value]) => `${key}=${value}`);
 }
 
+export function containerSpecVersion(config: Record<string, unknown>): string {
+  const { Labels: _labels, ...spec } = config;
+  return createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 16);
+}
+
 export function planContainer(
   bundle: GatewayVmRuntimeBundle,
   container: GatewayVmRuntimeContainer,
   ctx: PlanContext,
   role: "init" | "service",
 ): DockerContainerSpec {
-  return {
-    name: containerName(container),
-    config: {
-      Image: container.image,
-      User: RUNTIME_UID,
-      Env: envFor(bundle, container, ctx),
-      ...(container.command ? { Entrypoint: container.command } : {}),
-      ...(container.args ? { Cmd: container.args } : {}),
-      Labels: {
-        [BUNDLE_VERSION_LABEL]: bundle.version,
-        [GATEWAY_ID_LABEL]: bundle.gatewayId,
-        [CONTAINER_ROLE_LABEL]: role,
-      },
-      HostConfig: {
-        NetworkMode: "host",
-        Binds: [
-          ...bindsFor(bundle, container, ctx),
-          ...(role === "service" && container.name === "gateway" ? ["/home/octo/Documents:/home/octo/Documents"] : []),
-          ...(role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER
-            // eslint-disable-next-line sonarjs/publicly-writable-directories -- XWayland requires its standard socket directory; the mount is read-only.
-            ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
-            : []),
-        ],
-        ...(role === "service" && container.name === "gateway" ? {
-          Mounts: [{
-            Type: "bind",
-            Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`,
-            Target: GATEWAY_HOST_DESKTOP_AUTH_DIR,
-            ReadOnly: true,
-          }],
-        } : {}),
-        ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),
-        RestartPolicy: { Name: role === "service" ? "unless-stopped" : "no" },
-        LogConfig: { Type: "json-file", Config: { "max-size": "50m", "max-file": "3" } },
-      },
+  const config: Record<string, unknown> = {
+    Image: container.image,
+    User: RUNTIME_UID,
+    Env: envFor(bundle, container, ctx),
+    ...(container.command ? { Entrypoint: container.command } : {}),
+    ...(container.args ? { Cmd: container.args } : {}),
+    HostConfig: {
+      NetworkMode: "host",
+      Binds: [
+        ...bindsFor(bundle, container, ctx),
+        ...(role === "service" && container.name === "gateway" ? ["/home/octo/Documents:/home/octo/Documents"] : []),
+        ...(role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER
+          // eslint-disable-next-line sonarjs/publicly-writable-directories -- XWayland requires its standard socket directory; the mount is read-only.
+          ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
+          : []),
+      ],
+      ...(role === "service" && container.name === "gateway" ? {
+        Mounts: [{
+          Type: "bind",
+          Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`,
+          Target: GATEWAY_HOST_DESKTOP_AUTH_DIR,
+          ReadOnly: true,
+        }],
+      } : {}),
+      ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),
+      RestartPolicy: { Name: role === "service" ? "unless-stopped" : "no" },
+      LogConfig: { Type: "json-file", Config: { "max-size": "50m", "max-file": "3" } },
     },
   };
+  config.Labels = {
+    [BUNDLE_VERSION_LABEL]: bundle.version,
+    [CONTAINER_SPEC_LABEL]: containerSpecVersion(config),
+    [GATEWAY_ID_LABEL]: bundle.gatewayId,
+    [CONTAINER_ROLE_LABEL]: role,
+  };
+  return { name: containerName(container), config };
+}
+
+export function specVersion(spec: DockerContainerSpec): string {
+  return (spec.config.Labels as Record<string, string>)[CONTAINER_SPEC_LABEL];
 }
 
 export function planBundle(bundle: GatewayVmRuntimeBundle, ctx: PlanContext): BundlePlan {
-  return {
-    init: bundle.init ? planContainer(bundle, bundle.init, ctx, "init") : null,
-    services: bundle.containers.map((container) => planContainer(bundle, container, ctx, "service")),
-  };
+  const init = bundle.init ? planContainer(bundle, bundle.init, ctx, "init") : null;
+  const initSpec = init ? specVersion(init) : NO_INIT_SPEC;
+  const services = bundle.containers.map((container) => {
+    const service = planContainer(bundle, container, ctx, "service");
+    (service.config.Labels as Record<string, string>)[INIT_SPEC_LABEL] = initSpec;
+    return service;
+  });
+  return { init, services };
+}
+
+export function planInitSpec(plan: BundlePlan): string {
+  return plan.init ? specVersion(plan.init) : NO_INIT_SPEC;
 }
 
 export function imagesToPull(bundle: GatewayVmRuntimeBundle): string[] {
@@ -127,6 +147,16 @@ export function imagesToPull(bundle: GatewayVmRuntimeBundle): string[] {
   return [...refs];
 }
 
-export function runningVersion(inspection: { Config?: { Labels?: Record<string, string> } } | null): string | null {
+type Inspection = { Config?: { Labels?: Record<string, string> } } | null;
+
+export function runningVersion(inspection: Inspection): string | null {
   return inspection?.Config?.Labels?.[BUNDLE_VERSION_LABEL] ?? null;
+}
+
+export function runningSpec(inspection: Inspection): string | null {
+  return inspection?.Config?.Labels?.[CONTAINER_SPEC_LABEL] ?? null;
+}
+
+export function runningInitSpec(inspection: Inspection): string | null {
+  return inspection?.Config?.Labels?.[INIT_SPEC_LABEL] ?? null;
 }

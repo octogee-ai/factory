@@ -4,7 +4,17 @@ import * as path from "node:path";
 import { createSurgeReadinessGate } from "../../lib/surge-readiness";
 import { createSurgeOpenClawProcessGate } from "../../lib/surge-openclaw-process-gate";
 import { describe, expect, it } from "vitest";
-import { envFor, imagesToPull, planBundle, planContainer, runningVersion } from "../../lib/vm-gateway-agent/plan";
+import {
+  envFor,
+  imagesToPull,
+  planBundle,
+  planContainer,
+  planInitSpec,
+  runningInitSpec,
+  runningSpec,
+  runningVersion,
+  specVersion,
+} from "../../lib/vm-gateway-agent/plan";
 import { bundleFixture } from "./fixture";
 
 const ctx = { stateRoot: "/srv/octogee", instanceId: "4242" };
@@ -31,7 +41,13 @@ describe("planBundle", () => {
       "/home/octo/Documents:/home/octo/Documents",
     ]);
     expect((gateway.config.HostConfig as { ExtraHosts: string[] }).ExtraHosts).toEqual(["octogee-api.octogee-test.svc.cluster.local:10.128.9.9"]);
-    expect(gateway.config.Labels).toEqual({ "ai.octogee.bundle-version": "v1", "ai.octogee.gateway-id": "b-x", "ai.octogee.role": "service" });
+    expect(gateway.config.Labels).toEqual({
+      "ai.octogee.bundle-version": "v1",
+      "ai.octogee.container-spec": expect.stringMatching(/^[0-9a-f]{16}$/),
+      "ai.octogee.init-spec": expect.stringMatching(/^[0-9a-f]{16}$/),
+      "ai.octogee.gateway-id": "b-x",
+      "ai.octogee.role": "service",
+    });
     expect(gateway.config).not.toHaveProperty("Entrypoint");
 
     const edge = plan.services[1];
@@ -145,6 +161,28 @@ describe("planBundle", () => {
     expect(runningVersion({ Config: { Labels: { "ai.octogee.bundle-version": "v7" } } })).toBe("v7");
     expect(runningVersion({ Config: {} })).toBeNull();
     expect(runningVersion(null)).toBeNull();
+  });
+
+  it("keys each container's spec on its own config, not the bundle version, and shares the init spec across services", () => {
+    const first = planBundle(bundleFixture(), ctx);
+    const renamedBundle = planBundle(bundleFixture({ version: "v2" }), ctx);
+    const [gateway, edge] = bundleFixture().containers;
+    const changedGateway = planBundle(bundleFixture({
+      version: "v3",
+      containers: [{ ...gateway, env: { ...gateway.env, NODE_OPTIONS: "--max-old-space-size=8192" } }, edge],
+    }), ctx);
+    const rolledInit = planBundle(bundleFixture({
+      init: { ...bundleFixture().init!, image: "us-central1-docker.pkg.dev/octogee/octogee/gateway:main.def" },
+    }), ctx);
+
+    expect(specVersion(renamedBundle.services[0])).toBe(specVersion(first.services[0]));
+    expect(specVersion(changedGateway.services[0])).not.toBe(specVersion(first.services[0]));
+    expect(specVersion(changedGateway.services[1])).toBe(specVersion(first.services[1]));
+    expect(runningSpec({ Config: first.services[0].config as { Labels: Record<string, string> } })).toBe(specVersion(first.services[0]));
+
+    expect(planInitSpec(first)).toBe(runningInitSpec({ Config: first.services[1].config as { Labels: Record<string, string> } }));
+    expect(planInitSpec(rolledInit)).not.toBe(planInitSpec(first));
+    expect(planInitSpec(planBundle(bundleFixture({ init: null }), ctx))).toBe("none");
   });
 });
 
