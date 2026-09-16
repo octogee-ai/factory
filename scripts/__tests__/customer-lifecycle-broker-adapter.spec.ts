@@ -24,6 +24,9 @@ import {
 } from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
+import { mergePatchValueAlreadyApplied } from "@octogee/core/apply-config-patch";
+import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch } from "@octogee/core/byot-sync-runtime";
+import { canonicalCustomerModelDefinition } from "../../shared/types/agent-models.js";
 import { _resetBrokerProfileLogStateForTests, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 
 const testRuntime = await vi.hoisted(async () => {
@@ -2727,7 +2730,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     }
   });
 
-  it("materializes every active agent's broker catalog before its config hot-reload", async () => {
+  it("materializes every active agent's broker catalog after the config patch, once the mount's early materialization settles, before the secrets reload", async () => {
     const events: string[] = [];
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
       events.push("materialize");
@@ -2741,9 +2744,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://llm-broker:3010/v1");
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
-      rpc: mkGatewayRpc(),
+      rpc: mkGatewayRpc({
+        secretsReload: vi.fn(async () => { events.push("secrets"); return { ok: true, warningCount: 0 }; }),
+      }),
       log: vi.fn(),
     });
+    const brokerProfilesReady = new Promise<void>((resolve) => setTimeout(() => { events.push("early"); resolve(); }, 5));
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-first",
       slug: "first",
@@ -2767,7 +2773,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       coachMmUserId: "mm-first-coach",
     };
 
-    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-first" });
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-first" }, { brokerProfilesReady });
 
     expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledWith(
       ["octogee-first-coach", "octogee-first-proj-orbit-coach"],
@@ -2776,7 +2782,86 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         openAi: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
       }),
     );
-    expect(events).toEqual(["materialize", "config-patch"]);
+    expect(events).toEqual(["config-patch", "early", "materialize", "secrets"]);
+  });
+
+  it("leaves nothing for the post-mount oauth purge or model override to patch", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "http://llm-broker:3010");
+    const coach = "octogee-alice-coach";
+    const selection = {
+      primary: "platform-openrouter/openai/gpt-5.6-luna",
+      fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+    };
+    const current = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] },
+          models: { "platform-openrouter/deepseek/deepseek-v4-pro": { alias: "deepseek" } },
+        },
+        entries: {},
+      },
+      models: { providers: { anthropic: { baseUrl: "http://llm-broker:3010" } } },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    };
+    const mergePatch = (base: unknown, patch: unknown): unknown => {
+      if (patch === null || typeof patch !== "object" || Array.isArray(patch)) return patch;
+      const out: Record<string, unknown> = {
+        ...(base && typeof base === "object" && !Array.isArray(base) ? base as Record<string, unknown> : {}),
+      };
+      for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+        if (value === null) delete out[key];
+        else out[key] = mergePatch(out[key], value);
+      }
+      return out;
+    };
+    let mountPatch: unknown;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args: { buildPatch(current: unknown): unknown }) => {
+      mountPatch = args.buildPatch(current);
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+    const snapshot = aliceSnapshot({
+      tier: "trial",
+      channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
+      builderAgentDefault: selection,
+      trialGrant: {
+        schemaVersion: 3,
+        offerId: "builder-signup",
+        offerVersion: 1,
+        personalTier: "personal",
+        builderTier: "hobby",
+        configHash: "0123456789abcdef",
+        claimedAt: Date.now() - 60_000,
+        endsAt: Date.now() + 7 * 24 * 60 * 60_000,
+      },
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc({ ...rosterRpc(current) }),
+      log: vi.fn(),
+    });
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const applied = mergePatch(current, mountPatch) as {
+      agents: { entries: Record<string, { model?: unknown }>; defaults: { models: Record<string, unknown> } };
+    };
+    expect(applied.agents.entries[coach]?.model).toEqual(selection);
+    expect(applied.agents.defaults.models[selection.fallbacks[0]!]).toEqual(
+      canonicalCustomerModelDefinition(selection.fallbacks[0]!),
+    );
+    const purge = customerOauthRuntimeConfigPatch(applied, "alice", selection.primary);
+    expect(mergePatchValueAlreadyApplied(applied, purge)).toBe(true);
+    const overridePatches: unknown[] = [];
+    await applyAgentModelOverrides("alice", { [coach]: selection }, { houseOnly: false }, {
+      applyConfigPatch: (async (args: { buildPatch(current: unknown): unknown }) => {
+        overridePatches.push(args.buildPatch(applied));
+        return { mode: "rpc" as const, attempts: 1 };
+      }) as never,
+      logFn: vi.fn(),
+    });
+    expect(overridePatches).toHaveLength(1);
+    expect(mergePatchValueAlreadyApplied(applied, overridePatches[0])).toBe(true);
   });
 
   it("receipts the post-provision snapshot whose Mattermost identity was applied", async () => {

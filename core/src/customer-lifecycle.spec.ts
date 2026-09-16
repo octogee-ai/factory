@@ -53,6 +53,7 @@ giteaReadShouldThrow: boolean;
   communityMembershipCtx?: { uid: string; slug: string };
   byosub?: { restored: boolean; present: boolean };
   lastConfigPatchByosActive?: boolean;
+  lastConfigPatchOpts?: Parameters<CustomerLifecycleAdapter["applyAddCustomerConfigPatch"]>[2];
   configPatchWithoutProjectIds: Array<readonly string[]>;
   configPatchFingerprint?: string;
   healthy: boolean;
@@ -69,6 +70,10 @@ giteaReadShouldThrow: boolean;
   lastGreetingCronParams: unknown;
   
   greetingCronShouldFail: boolean;
+}
+
+function deferredFlag(): { value: boolean } {
+  return { value: false };
 }
 
 function makeAdapter(state: MockState): CustomerLifecycleAdapter {
@@ -228,6 +233,7 @@ return "ssh-pubkey";
 
     applyAddCustomerConfigPatch: async (_snap, _mm, opts) => {
       record("applyAddCustomerConfigPatch");
+      state.lastConfigPatchOpts = opts;
       state.lastConfigPatchByosActive = opts?.byosActive ?? false;
       state.configPatchWithoutProjectIds.push([...(opts?.withoutProjectIds ?? [])]);
       return {
@@ -357,36 +363,136 @@ expect(result.steps).toEqual([
       "init-workspace-repo",
       "mattermost-provision",
       "config-patch",
+      "verify-channel-ready",
       "byot-reassert",
       "context-files-reassert",
-      "verify-channel-ready",
-      "blob-sync",
       "schedule-greeting-cron",
       "mark-complete",
+      "blob-sync",
       "notify-ops",
     ]);
   });
 
-  it("uses channel readiness as the gate after config convergence", async () => {
+  it("verifies channel readiness right after config convergence, before the byot re-assert", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const patchIndex = state.calls.indexOf("applyAddCustomerConfigPatch");
-    const reassertIndex = state.calls.indexOf("reassertByotForCustomer");
     const verifyIndex = state.calls.indexOf("waitForAccountHealthy");
+    const reassertIndex = state.calls.indexOf("reassertByotForCustomer");
 
     expect(verifyIndex).toBeGreaterThan(patchIndex);
-    expect(verifyIndex).toBeGreaterThan(reassertIndex);
+    expect(reassertIndex).toBeGreaterThan(verifyIndex);
   });
 
-  // The mount's first materialization runs before openclaw has created the
-  // agent store, so it defers. Retrying here — after the coach reports
+  it("greets and marks the Builder complete before community membership, blob sync and the ops notice", async () => {
+    const adapter = {
+      ...makeAdapter(state),
+      reconcileCommunityMembership: async () => {
+        state.calls.push("reconcileCommunityMembership");
+      },
+    };
+    await addCustomerToGateway(adapter, "uid-test");
+
+    const greetingIdx = state.calls.indexOf("scheduleBootGreetingCron");
+    const completeIdx = state.calls.indexOf("write:provisioning.openclaw.status");
+    const completeAt = state.calls.lastIndexOf("write:provisioning.openclaw.status");
+    expect(state.writes.filter((w) => w.field === "provisioning.openclaw.status").map((w) => w.value))
+      .toEqual(["provisioning", "complete"]);
+    expect(completeIdx).toBeLessThan(greetingIdx);
+    expect(completeAt).toBeGreaterThan(greetingIdx);
+    for (const later of ["reconcileCommunityMembership", "blobSyncForSlug", "notifyOpsOfSignup"]) {
+      expect(state.calls.indexOf(later), later).toBeGreaterThan(completeAt);
+    }
+  });
+
+  it("starts broker profile materialization before Gitea and settles it for the config patch", async () => {
+    let settled = false;
+    const adapter = {
+      ...makeAdapter(state),
+      materializeBrokerProfiles: async () => {
+        state.calls.push("materializeBrokerProfiles");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        settled = true;
+      },
+    };
+    await addCustomerToGateway(adapter, "uid-test");
+
+    expect(state.calls.indexOf("materializeBrokerProfiles")).toBeLessThan(state.calls.indexOf("createGiteaUser"));
+    expect(state.lastConfigPatchOpts?.brokerProfilesReady).toBeInstanceOf(Promise);
+    await state.lastConfigPatchOpts!.brokerProfilesReady;
+    expect(settled).toBe(true);
+  });
+
+  it("keeps a failed early broker profile materialization non-fatal", async () => {
+    let attempts = 0;
+    const adapter = {
+      ...makeAdapter(state),
+      materializeBrokerProfiles: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("openclaw refused the secrets apply");
+      },
+    };
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(result.steps).toContain("mark-complete");
+    await expect(state.lastConfigPatchOpts!.brokerProfilesReady).resolves.toBeUndefined();
+    expect(state.logs.some((line) => line.includes("early broker profile materialization failed"))).toBe(true);
+  });
+
+  it("provisions the workspace repo and Mattermost concurrently", async () => {
+    const adapter = {
+      ...makeAdapter(state),
+      initWorkspaceRepoFromExistingDir: async () => {
+        const deadline = Date.now() + 500;
+        while (!state.calls.includes("provisionMattermostUser")) {
+          if (Date.now() > deadline) throw new Error("Mattermost provisioning waited for the Gitea repo");
+          await new Promise((resolve) => setTimeout(resolve, 2));
+        }
+        state.calls.push("initWorkspaceRepoFromExistingDir");
+        return "http://gitea.local/test/workspace";
+      },
+    };
+    const result = await addCustomerToGateway(adapter, "uid-test");
+
+    expect(result.steps.slice(0, 5)).toEqual([
+      "claim-slot", "ssh-key", "write-templates", "init-workspace-repo", "mattermost-provision",
+    ]);
+    expect(state.calls.indexOf("applyAddCustomerConfigPatch"))
+      .toBeGreaterThan(state.calls.indexOf("initWorkspaceRepoFromExistingDir"));
+  });
+
+  it("waits for Mattermost provisioning to finish before a Gitea failure releases the mount", async () => {
+    const mattermostDone = deferredFlag();
+    const adapter = {
+      ...makeAdapter(state),
+      initWorkspaceRepoFromExistingDir: async () => {
+        throw new Error("gitea down");
+      },
+      provisionMattermostUser: async () => {
+        state.calls.push("provisionMattermostUser");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        mattermostDone.value = true;
+        state.calls.push("provisionMattermostUser:done");
+        return { "mattermost.userId": "mm-user-123", _coachPersonalToken: "coach-pat" };
+      },
+    };
+
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("gitea down");
+
+    expect(mattermostDone.value).toBe(true);
+    expect(state.calls).toContain("provisionMattermostUser:done");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+  });
+
+  // The mount's first materialization can run before openclaw has created the
+  // agent store, so it may defer. Retrying here — after the coach reports
   // running+connected — is what gets the broker profile in place before the
   // greeting turn resolves its model.
   it("retries the deferred broker profiles once the coach is verified, before the greeting", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
-    const materializeIdx = state.calls.indexOf("materializeBrokerProfiles");
+    const materializeIdx = state.calls.lastIndexOf("materializeBrokerProfiles");
     const greetingIdx = state.calls.indexOf("scheduleBootGreetingCron");
 
     expect(materializeIdx).toBeGreaterThan(verifyIdx);

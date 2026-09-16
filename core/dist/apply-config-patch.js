@@ -66,7 +66,7 @@ function configPatchReplacePathOptions(replacePaths) {
 function isMergePatchObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function mergePatchValueAlreadyApplied(current, patch) {
+export function mergePatchValueAlreadyApplied(current, patch) {
     if (Array.isArray(patch)) {
         return Array.isArray(current) &&
             current.length === patch.length &&

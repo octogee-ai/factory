@@ -759,6 +759,18 @@ function markPendingProjectActivations(reason: string, accountIds: string[], bas
   return true;
 }
 
+function brokerProfilesBeforeSecretsReload(
+  ctx: BrokerCtx,
+  brokerAgentIds: string[],
+  slug: string,
+  ready: Promise<void> | undefined,
+): () => Promise<void> {
+  return async () => {
+    await ready;
+    await materializeCustomerBrokerProfiles(brokerAgentIds, slug, ctx.log);
+  };
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -814,7 +826,7 @@ async function applyAddCustomerConfigPatch(
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
   );
-  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
+  const brokerProfiles = brokerProfilesBeforeSecretsReload(ctx, brokerAgentIds, snapshot.slug, callOpts?.brokerProfilesReady);
   const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   evictionSlugs = await currentEvictionSlugs(
     snapshot.slug,
@@ -938,6 +950,7 @@ async function applyAddCustomerConfigPatch(
   );
   await settleProjectAgentActivations(ctx, {
     snapshot, projectAgents, channels: snapshot.channels, baseline: routingActivationBaseline,
+    brokerProfiles,
     activate: () => activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
       accountIds: affectedAccountIds,
       baseline: routingActivationBaseline,
@@ -965,10 +978,12 @@ async function settleProjectAgentActivations(
     projectAgents: NonNullable<UserSnapshot["projectAgents"]>;
     channels: UserSnapshot["channels"];
     baseline: Readonly<Record<string, number>>;
+    brokerProfiles?: () => Promise<void>;
     activate(): Promise<void>;
   },
 ): Promise<void> {
   const errors: unknown[] = [];
+  await input.brokerProfiles?.();
   await reloadRuntimeSecrets(ctx, `[add:${input.snapshot.slug}]`);
   try {
     await input.activate();
@@ -1576,8 +1591,11 @@ export function buildBrokeredLifecycleAdapter(
       Boolean(opts.isBuilderGateway?.()) &&
       isConfiguredGatewayBuilder(slug) &&
       hasReadableOpenclawConfig(OPENCLAW_CONFIG),
-    materializeBrokerProfiles: (slug) =>
-      materializeCustomerBrokerProfiles([`octogee-${slug}-coach`], slug, opts.log),
+    materializeBrokerProfiles: async (slug) => {
+      const agentId = `octogee-${slug}-coach`;
+      await fsp.mkdir(path.join(AGENTS_DIR, agentId, "agent"), { recursive: true });
+      await materializeCustomerBrokerProfiles([agentId], slug, opts.log);
+    },
     projectCheckoutScope: (slug) =>
       ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope
       ?? ctx.projectCheckoutScope?.(slug)

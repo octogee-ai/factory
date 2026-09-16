@@ -283,58 +283,43 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
         await adapter.setProvisioningStatus(uid, "provisioning");
         steps.push("claim-slot");
     }
+    const brokerProfilesReady = startBrokerProfiles(adapter, slug);
     markStep("ssh-key");
-    steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+    const [workspace, mm] = await settleBoth(adapter, slug, provisionWorkspace(adapter, uid, snapshot, ctx, markStep), provisionMattermostIfMissing(adapter, uid, snapshot, ctx));
+    steps.push(...workspace.steps, ...mm.steps);
     throwIfAborted(signal, uid);
-    markStep("workspace-repo");
-    steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
-    throwIfAborted(signal, uid);
-    const rehydratesProjects = rehydratesProjectCheckouts(adapter, snapshot);
-    markStep("project-clones");
-    const projectClones = rehydratesProjects
-        ? await cloneMissingProjects(adapter, slug)
-        : { steps: [], pending: [] };
-    steps.push(...projectClones.steps);
-    throwIfAborted(signal, uid);
-    markStep("byos-restore");
-    const byos = await restoreByos(adapter, slug);
-    steps.push(...byos.steps);
-    throwIfAborted(signal, uid);
-    markStep("mattermost");
-    const mm = await provisionMattermostIfMissing(adapter, uid, snapshot, ctx);
-    snapshot = mm.snapshot;
-    steps.push(...mm.steps);
-    throwIfAborted(signal, uid);
+    if (mm.mmUpdate) {
+        snapshot = (await adapter.loadUserSnapshot(uid)) ?? snapshot;
+    }
+    const { projectClones, byos } = workspace;
     markStep(CONFIG_PATCH);
-    const configPatchOptions = {
+    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, {
         byosActive: byos.present,
         signal,
         evictionBatch: opts.evictionBatch,
         currentEvictionBatch: opts.currentEvictionBatch,
-    };
-    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, mm.mmUpdate, {
-        ...configPatchOptions,
         withoutProjectIds: projectClones.pending,
+        ...(brokerProfilesReady ? { brokerProfilesReady } : {}),
     });
     steps.push(CONFIG_PATCH);
-    throwIfAborted(signal, uid);
-    markStep("reassert-converged");
-    steps.push(...(await reassertConvergedState(adapter, snapshot)));
-    throwIfAborted(signal, uid);
-    markStep("community-membership");
-    steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
     throwIfAborted(signal, uid);
     markStep(VERIFY_CHANNEL_READY);
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push(VERIFY_CHANNEL_READY);
     throwIfAborted(signal, uid);
-    markStep("blob-sync");
-    steps.push(...(await runBlobSync(adapter, slug)));
+    markStep("reassert-converged");
+    steps.push(...(await reassertConvergedState(adapter, snapshot)));
     throwIfAborted(signal, uid);
     markStep("finalize");
     adapter.log(`✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms — scheduling greeting next`);
     steps.push(...(await scheduleGreetingIfNeeded(adapter, uid, snapshot)));
     steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
+    markStep("community-membership");
+    steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
+    throwIfAborted(signal, uid);
+    markStep("blob-sync");
+    steps.push(...(await runBlobSync(adapter, slug)));
+    throwIfAborted(signal, uid);
     steps.push(...(await notifyOpsIfNew(adapter, ctx, newCustomer)));
     return {
         newCustomer,
@@ -342,6 +327,46 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
         pendingProjectClones: projectClones.pending,
         ...(appliedFingerprint ? { appliedFingerprint } : {}),
     };
+}
+async function settleBoth(adapter, slug, workspace, mattermost) {
+    const [workspaceResult, mattermostResult] = await Promise.allSettled([workspace, mattermost]);
+    if (workspaceResult.status === "rejected" && mattermostResult.status === "rejected") {
+        adapter.log(`[add:${slug}] ⚠ Mattermost provisioning also failed: ${String(mattermostResult.reason)}`);
+    }
+    if (workspaceResult.status === "rejected")
+        throw workspaceResult.reason;
+    if (mattermostResult.status === "rejected")
+        throw mattermostResult.reason;
+    return [workspaceResult.value, mattermostResult.value];
+}
+function startBrokerProfiles(adapter, slug) {
+    const materialize = adapter.materializeBrokerProfiles;
+    if (!materialize)
+        return undefined;
+    return (async () => {
+        try {
+            await materialize(slug);
+        }
+        catch (err) {
+            adapter.log(`[add:${slug}] ⚠ early broker profile materialization failed (the post-verify retry and the sweep cover it): ${String(err)}`);
+        }
+    })();
+}
+async function provisionWorkspace(adapter, uid, snapshot, ctx, markStep) {
+    const { slug } = snapshot;
+    const steps = [];
+    steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+    markStep("workspace-repo");
+    steps.push(...(await ensureWorkspaceRepo(adapter, uid, snapshot, ctx)));
+    markStep("project-clones");
+    const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
+        ? await cloneMissingProjects(adapter, slug)
+        : { steps: [], pending: [] };
+    steps.push(...projectClones.steps);
+    markStep("byos-restore");
+    const byos = await restoreByos(adapter, slug);
+    steps.push(...byos.steps);
+    return { steps, projectClones, byos };
 }
 async function loadAndPrepareForMount(adapter, uid, customersDir) {
     const snapshot = await adapter.loadUserSnapshot(uid);
@@ -604,16 +629,11 @@ export async function cloneMissingProjects(adapter, slug, options = {}) {
 }
 async function provisionMattermostIfMissing(adapter, uid, snapshot, ctx) {
     if (snapshot.mattermostUserId) {
-        return { snapshot, mmUpdate: null, steps: [] };
+        return { mmUpdate: null, steps: [] };
     }
     const mmUpdate = await adapter.provisionMattermostUser(ctx);
     await adapter.setMattermostFields(uid, mmUpdate);
-    const refreshed = await adapter.loadUserSnapshot(uid);
-    return {
-        snapshot: refreshed ?? snapshot,
-        mmUpdate,
-        steps: ["mattermost-provision"],
-    };
+    return { mmUpdate, steps: ["mattermost-provision"] };
 }
 async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, options) {
     const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
@@ -622,6 +642,7 @@ async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, options) {
         evictionBatch: options.evictionBatch,
         currentEvictionBatch: options.currentEvictionBatch,
         withoutProjectIds: options.withoutProjectIds,
+        ...(options.brokerProfilesReady ? { brokerProfilesReady: options.brokerProfilesReady } : {}),
     });
     adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
     if (adapter.onMounted)

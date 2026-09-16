@@ -192,6 +192,9 @@ export interface CustomerLifecycleAdapter {
         /** Projects whose pod checkout is absent. Their agents point at a workspace dir
          *  that does not exist, so they stay out of the config until the checkout lands. */
         withoutProjectIds?: readonly string[];
+        /** Broker profile materialization started at mount start; settles (never rejects)
+         *  before the runtime secrets reload that follows the config patch. */
+        brokerProfilesReady?: Promise<void>;
     }) => Promise<{
         elapsedMs: number;
         appliedFingerprint?: string;

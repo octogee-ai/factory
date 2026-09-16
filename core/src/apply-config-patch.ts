@@ -132,7 +132,7 @@ function isMergePatchObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function mergePatchValueAlreadyApplied(current: unknown, patch: unknown): boolean {
+export function mergePatchValueAlreadyApplied(current: unknown, patch: unknown): boolean {
   if (Array.isArray(patch)) {
     return Array.isArray(current) &&
       current.length === patch.length &&
