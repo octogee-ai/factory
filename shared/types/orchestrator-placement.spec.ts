@@ -19,6 +19,21 @@ describe("onboarding placement eligibility", () => {
     })).toEqual({ eligible: true, slug: "canonical" });
   });
 
+  it("rejects a suspended account so no automatic placement can mount it", () => {
+    expect(resolveOnboardingPlacementEligibility({
+      username: "alice",
+      onboardingStep: "complete",
+      provisioning: { status: "complete", openclaw: { slug: "alice" } },
+      accountLifecycle: { status: "deletion_scheduled", deletionId: "del-1" },
+    })).toEqual({ eligible: false, reason: "account-not-interactive" });
+    expect(resolveOnboardingPlacementEligibility({
+      username: "alice",
+      onboardingStep: "complete",
+      provisioning: { status: "complete", openclaw: { slug: "alice" } },
+      accountLifecycle: { status: "active" },
+    })).toEqual({ eligible: true, slug: "alice" });
+  });
+
   it("rejects incomplete identity, missing canonical identity, and arbitrary provisioning states", () => {
     expect(resolveOnboardingPlacementEligibility({ username: "alice" })).toEqual({
       eligible: false,

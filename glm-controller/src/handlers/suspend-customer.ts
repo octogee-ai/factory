@@ -33,6 +33,7 @@ export interface CustomerSuspensionDeps {
     gatewayId: string,
     slug: string,
   ) => Promise<UnmountOutcome>;
+  releasePlacement: (uid: string, capturedGatewayId: string | null) => Promise<void>;
   cancelStripeSubscription: (subscriptionId: string) => Promise<void>;
   listStripeCustomerIdsForUid: (uid: string) => Promise<string[]>;
   listLiveStripeSubscriptionIds: (customerId: string) => Promise<string[]>;
@@ -129,6 +130,8 @@ export function createSuspendCustomerHandler(
     } else {
       await skip("unmount-gateway");
     }
+    await run("release-placement", () =>
+      deps.releasePlacement(uid, cleanup.currentGatewayId ?? null));
     await run("retire-owned-gateways", async () => {
       const outcome = await deps.ensureOwnedGatewaysRetired(uid, deletionId);
       if (outcome === "retirement-pending") {

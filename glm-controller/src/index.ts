@@ -272,8 +272,8 @@ import {
 import { startHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
-  cancelStripeSubscription,
   cancelCustomerMigrationsForSuspension,
+  cancelStripeSubscription,
   deactivateCustomerVisibility,
   deleteStripeCustomer,
   disableCreditAutoTopUp,
@@ -282,6 +282,7 @@ import {
   listLiveStripeSubscriptionIds,
   listOpenStripeCheckoutSessionIds,
   listStripeCustomerIdsForUid,
+  releaseCustomerPlacement,
   revokeOwnerModelBrokerTokens,
 } from "./lib/customer-ops/customer-suspension-runtime.js";
 import {
@@ -3773,6 +3774,7 @@ function buildSuspendCustomerHandler(
     deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(db, uid),
     invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
     unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
+    releasePlacement: (uid, gatewayId) => releaseCustomerPlacement(db, uid, gatewayId),
     cancelStripeSubscription: (subscriptionId) =>
       cancelStripeSubscription(
         fetch,

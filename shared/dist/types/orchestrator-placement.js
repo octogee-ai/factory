@@ -44,6 +44,9 @@ export function resolveOnboardingPlacementEligibility(data) {
     if (data.onboardingStep !== "complete") {
         return { eligible: false, reason: "onboarding-incomplete" };
     }
+    if (!accountAllowsInteractiveAccess(data)) {
+        return { eligible: false, reason: "account-not-interactive" };
+    }
     const provisioning = data.provisioning;
     if (provisioning?.status !== "in_progress" && provisioning?.status !== "complete") {
         return { eligible: false, reason: "provisioning-not-started" };

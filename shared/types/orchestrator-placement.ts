@@ -78,7 +78,11 @@ export type OnboardingPlacementEligibility =
   | { eligible: true; slug: string }
   | {
       eligible: false;
-      reason: "onboarding-incomplete" | "provisioning-not-started" | "builder-slug-missing";
+      reason:
+        | "onboarding-incomplete"
+        | "provisioning-not-started"
+        | "builder-slug-missing"
+        | "account-not-interactive";
     };
 
 export function resolveOnboardingPlacementEligibility(
@@ -86,6 +90,9 @@ export function resolveOnboardingPlacementEligibility(
 ): OnboardingPlacementEligibility {
   if (data.onboardingStep !== "complete") {
     return { eligible: false, reason: "onboarding-incomplete" };
+  }
+  if (!accountAllowsInteractiveAccess(data)) {
+    return { eligible: false, reason: "account-not-interactive" };
   }
   const provisioning = data.provisioning as Record<string, unknown> | undefined;
   if (provisioning?.status !== "in_progress" && provisioning?.status !== "complete") {

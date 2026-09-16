@@ -10,8 +10,81 @@ import {
   listOpenStripeCheckoutSessionIds,
   listLiveStripeSubscriptionIds,
   listStripeCustomerIdsForUid,
+  releaseCustomerPlacement,
   revokeOwnerModelBrokerTokens,
 } from "../lib/customer-ops/customer-suspension-runtime.js";
+
+function placementDb(user: Record<string, unknown> | null) {
+  const writes: Array<{ op: string; path: string; data?: Record<string, unknown> }> = [];
+  const ref = (path: string) => ({
+    path,
+    collection: (name: string) => ({ doc: (id: string) => ref(`${path}/${name}/${id}`) }),
+  });
+  const db = {
+    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
+    runTransaction: async (run: (transaction: {
+      get: (target: { path: string }) => Promise<{ exists: boolean; data: () => Record<string, unknown> | undefined }>;
+      delete: (target: { path: string }) => void;
+      update: (target: { path: string }, data: Record<string, unknown>) => void;
+    }) => Promise<void>) => run({
+      get: async () => ({ exists: user !== null, data: () => user ?? undefined }),
+      delete: (target) => { writes.push({ op: "delete", path: target.path }); },
+      update: (target, data) => { writes.push({ op: "update", path: target.path, data }); },
+    }),
+  };
+  return { db, writes };
+}
+
+describe("releaseCustomerPlacement", () => {
+  it("deletes the assignment and clears the user mirror that still points at the gateway", async () => {
+    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-0", slug: "alice" } } });
+
+    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+
+    expect(writes).toEqual([
+      { op: "delete", path: "gateways/shared-0/assignments/uid-1" },
+      {
+        op: "update",
+        path: "users/uid-1",
+        data: expect.objectContaining({
+          "provisioning.openclaw.gatewayId": expect.anything(),
+          "provisioning.openclaw.gatewayAssignedAt": expect.anything(),
+        }),
+      },
+    ]);
+  });
+
+  it("releases the gateway the mirror names now as well as the one captured at suspension time", async () => {
+    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", slug: "alice" } } });
+
+    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+
+    expect(writes).toEqual([
+      { op: "delete", path: "gateways/shared-0/assignments/uid-1" },
+      { op: "delete", path: "gateways/shared-1/assignments/uid-1" },
+      { op: "update", path: "users/uid-1", data: expect.anything() },
+    ]);
+  });
+
+  it("releases the current placement when nothing was captured at suspension time", async () => {
+    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", slug: "alice" } } });
+
+    await releaseCustomerPlacement(db as never, "uid-1", null);
+
+    expect(writes).toEqual([
+      { op: "delete", path: "gateways/shared-1/assignments/uid-1" },
+      { op: "update", path: "users/uid-1", data: expect.anything() },
+    ]);
+  });
+
+  it("still deletes the captured assignment when the user document is gone", async () => {
+    const { db, writes } = placementDb(null);
+
+    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+
+    expect(writes).toEqual([{ op: "delete", path: "gateways/shared-0/assignments/uid-1" }]);
+  });
+});
 
 describe("cancelStripeSubscription", () => {
   it("cancels the subscription through Stripe's idempotent DELETE endpoint", async () => {
