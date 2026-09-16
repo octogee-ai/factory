@@ -3422,3 +3422,74 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
     expect(patch.channels.mattermost.accounts["alice-proj-old"]).toBeNull();
   });
 });
+
+describe("boot greeting scheduling", () => {
+  it("opens a greeting window on the reload gate before adding the cron job", async () => {
+    const order: string[] = [];
+    const window = { scheduled: vi.fn(() => { order.push("scheduled"); }), close: vi.fn() };
+    const reloadGate = {
+      withReload: vi.fn(async <T,>(run: () => Promise<T>) => run()),
+      openGreetingWindow: vi.fn(async () => { order.push("window"); return window; }),
+      greetingWindowCount: () => 0,
+    };
+    const rpc = mkGatewayRpc({
+      cronAdd: vi.fn(async () => { order.push("cron.add"); return { id: "job-1" }; }),
+    } as Partial<GatewayRpcClient>);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => aliceSnapshot({
+        channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
+      })) }),
+      rpc,
+      log: vi.fn(),
+      reloadGate,
+    });
+    await expect(adapter.scheduleBootGreetingCron({
+      slug: "alice",
+      agentId: "octogee-alice-coach",
+      accountId: "alice-coach",
+    })).resolves.toEqual({ jobId: "job-1" });
+    expect(reloadGate.openGreetingWindow).toHaveBeenCalledWith("alice");
+    expect(order).toEqual(["window", "cron.add", "scheduled"]);
+    expect(window.close).not.toHaveBeenCalled();
+  });
+
+  it("closes the greeting window when cron.add fails", async () => {
+    const window = { scheduled: vi.fn(), close: vi.fn() };
+    const reloadGate = {
+      withReload: vi.fn(async <T,>(run: () => Promise<T>) => run()),
+      openGreetingWindow: vi.fn(async () => window),
+      greetingWindowCount: () => 0,
+    };
+    const rpc = mkGatewayRpc({
+      cronAdd: vi.fn(async () => { throw new Error("cron.add rejected"); }),
+    } as Partial<GatewayRpcClient>);
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => aliceSnapshot({
+        channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
+      })) }),
+      rpc,
+      log: vi.fn(),
+      reloadGate,
+    });
+    await expect(adapter.scheduleBootGreetingCron({
+      slug: "alice",
+      agentId: "octogee-alice-coach",
+      accountId: "alice-coach",
+    })).rejects.toThrow("cron.add rejected");
+    expect(window.close).toHaveBeenCalledOnce();
+    expect(window.scheduled).not.toHaveBeenCalled();
+  });
+
+  it("routes the credential re-assert's secrets reload through the adapter rpc", async () => {
+    const rpc = mkGatewayRpc({
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as Partial<GatewayRpcClient>);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const captured = vi.mocked(modelCredentialMocks.syncModelCredentialsForCustomer);
+    captured.mockClear();
+    await adapter.reassertByotForCustomer({} as never);
+    const deps = captured.mock.calls[0]![1] as { triggerSecretsReload?: () => Promise<void> };
+    await deps.triggerSecretsReload!();
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+  });
+});

@@ -122,6 +122,7 @@ import {
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
+import { processRuntimeReloadGate, type RuntimeReloadGate } from "./runtime-reload-gate.js";
 import {
   customerMountConfigPatch,
   customerSecurityProjectionReplacePaths,
@@ -224,11 +225,13 @@ interface BuildBrokeredLifecycleAdapterOptions {
   log: (msg: string) => void;
   isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
+  reloadGate?: RuntimeReloadGate;
 }
 
 interface BrokerCtx {
   client: FleetBrokerClient;
   rpc: GatewayRpcClient;
+  reloadGate: RuntimeReloadGate;
   log: (msg: string) => void;
   isBuilderGateway: () => boolean;
   configCache: ConfigCache;
@@ -1169,10 +1172,18 @@ async function scheduleBootGreetingCron(
   if (!channelId) {
     throw new Error(`[cron.add:${params.slug}] fleet broker snapshot has no coach-dm channel`);
   }
-  return scheduleBootGreetingCronImpl(
-    { ...params, channelId },
-    { rpc: ctx.rpc, log: ctx.log },
-  );
+  const greetingWindow = await ctx.reloadGate.openGreetingWindow(params.slug);
+  try {
+    const scheduled = await scheduleBootGreetingCronImpl(
+      { ...params, channelId },
+      { rpc: ctx.rpc, log: ctx.log },
+    );
+    greetingWindow.scheduled();
+    return scheduled;
+  } catch (error) {
+    greetingWindow.close();
+    throw error;
+  }
 }
 
 async function quiesceCustomer(
@@ -1579,6 +1590,7 @@ export function buildBrokeredLifecycleAdapter(
   const ctx: BrokerCtx = {
     client: opts.client,
     rpc: opts.rpc,
+    reloadGate: opts.reloadGate ?? processRuntimeReloadGate,
     log: opts.log,
     isBuilderGateway: opts.isBuilderGateway ?? (() => false),
     configCache: { current: undefined, hash: "" },
@@ -1680,6 +1692,7 @@ export function buildBrokeredLifecycleAdapter(
           applyConfigPatch: (args, options) =>
             applyConfigPatch(args, { ...options, rpc: ctx.rpc, cache: ctx.configCache }),
           refreshCoachRuntimeSessions: refreshModelCredentialRuntimeSessions,
+          triggerSecretsReload: () => reloadRuntimeSecrets(ctx, "[byot-sync]"),
         },
       ),
     reassertConvergedContextFilesForCustomer: async (userData) => {
