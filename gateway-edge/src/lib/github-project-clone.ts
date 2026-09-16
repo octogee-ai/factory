@@ -7,6 +7,7 @@ import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutat
 
 import {
   isSafeSlug,
+  workspaceMutationLeaseGitDir,
   WORKSPACE_GIT_HARDENING_ENV,
   WORKSPACE_GIT_HARDENING_PINS,
 } from "./workspace-git.js";
@@ -132,7 +133,10 @@ async function installCheckout(
     throw new Error("GitHub project clone target is not a directory");
   }
 
-  const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: destination });
+  const lease = acquireWorkspaceMutationLeaseSync({
+    workspaceDir: destination,
+    gitDir: workspaceMutationLeaseGitDir(destination),
+  });
   if (!lease) throw new Error("workspace mutation lease unavailable");
   const quarantine = path.join(
     path.dirname(customersRoot),
