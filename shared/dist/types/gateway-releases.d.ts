@@ -84,6 +84,7 @@ export interface AssignmentDoc {
     source: AssignmentSource;
     state: AssignmentState;
     epoch: number;
+    createdAt: number;
     updatedAt: number;
     updatedByOperationId: string | null;
 }

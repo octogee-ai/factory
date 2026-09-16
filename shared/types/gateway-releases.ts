@@ -267,6 +267,8 @@ export interface AssignmentDoc {
   source: AssignmentSource;
   state: AssignmentState;
   epoch: number;
+  // When this Builder started serving on this gateway; a cutover restarts it.
+  createdAt: number;
   updatedAt: number;
   updatedByOperationId: string | null;
 }
@@ -737,6 +739,7 @@ export async function commitPlacementAtomic(
       source: params.source,
       state: "serving",
       epoch: 0,
+      createdAt: params.now,
       updatedAt: params.now,
       updatedByOperationId: params.updatedByOperationId ?? null,
     };

@@ -392,6 +392,7 @@ function updateAssignment(
     source: params.assignment.source,
     state: "serving" satisfies AssignmentState,
     epoch: priorEpoch + 1,
+    createdAt: nowMs,
     updatedAt: nowMs,
     updatedByOperationId: params.assignment.updatedByOperationId,
   });

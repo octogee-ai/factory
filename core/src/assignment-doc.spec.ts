@@ -60,6 +60,7 @@ const ASSIGNMENT = {
   source: "migrate-customer",
   state: "quiescing",
   epoch: 4,
+  createdAt: 90,
   updatedAt: 100,
   updatedByOperationId: "op-1",
 };
@@ -69,6 +70,13 @@ describe("readAssignmentDocsForGateway", () => {
     const { db } = mkAssignmentDb({ "default/uid-alice": ASSIGNMENT });
     const docs = await readAssignmentDocsForGateway(db as never, "default");
     expect(docs).toEqual([ASSIGNMENT]);
+  });
+
+  it("dates a legacy doc without createdAt from its updatedAt", async () => {
+    const { createdAt: _createdAt, ...legacy } = ASSIGNMENT;
+    const { db } = mkAssignmentDb({ "default/uid-alice": legacy });
+    const docs = await readAssignmentDocsForGateway(db as never, "default");
+    expect(docs).toEqual([{ ...ASSIGNMENT, createdAt: 100 }]);
   });
 
   it("returns [] for a gateway with no assignments", async () => {

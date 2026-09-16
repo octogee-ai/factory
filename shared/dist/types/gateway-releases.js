@@ -340,6 +340,7 @@ export async function commitPlacementAtomic(db, params) {
             source: params.source,
             state: "serving",
             epoch: 0,
+            createdAt: params.now,
             updatedAt: params.now,
             updatedByOperationId: params.updatedByOperationId ?? null,
         };

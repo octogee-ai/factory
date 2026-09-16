@@ -52,6 +52,12 @@ const ASSIGNMENT_SOURCES: ReadonlySet<AssignmentSource> = new Set<AssignmentSour
 // assignment — a partial/junk doc must never be resolved as a mount signal.
 // Revision-era fields (revisionId, release) on legacy docs are ignored; the
 // cutover script normalizes sources (e.g. retired "rollout") when it runs.
+// Legacy docs predate createdAt; their updatedAt is the closest serving-since we have.
+function assignmentCreatedAt(data: Record<string, unknown>): number {
+  if (typeof data.createdAt === "number") return data.createdAt;
+  return typeof data.updatedAt === "number" ? data.updatedAt : 0;
+}
+
 export function parseAssignmentDoc(
   uid: string,
   data: Record<string, unknown> | undefined,
@@ -75,6 +81,7 @@ export function parseAssignmentDoc(
     source: source as AssignmentSource,
     state: isAssignmentState(data.state) ? data.state : "serving",
     epoch: typeof data.epoch === "number" && data.epoch >= 0 ? data.epoch : 0,
+    createdAt: assignmentCreatedAt(data),
     updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
     updatedByOperationId:
       typeof data.updatedByOperationId === "string" ? data.updatedByOperationId : null,

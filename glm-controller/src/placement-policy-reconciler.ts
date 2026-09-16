@@ -189,6 +189,7 @@ export interface PlacementPolicyAssignment {
   gatewayId: string;
   state: string;
   epoch: number | null;
+  createdAt?: number | null;
   source?: string;
   updatedByOperationId?: string;
 }
@@ -2047,13 +2048,29 @@ async function reconcilePlacementUser(
   await reconcileEligibleBuilder(context, user, eligibility.slug);
 }
 
+function coachGreetingDelivered(data: Record<string, unknown>): boolean {
+  return record(record(record(data.provisioning)?.openclaw)?.greeting)?.ok === true;
+}
+
+// `greeting.ok` is the scheduling receipt, not delivery; the cron fires and retries
+// within about a minute, so a Builder is settled once the greeting was scheduled AND
+// its assignment has been serving for the stability window.
+function settledSharedAssignment(
+  assignment: PlacementPolicyAssignment,
+  now: number,
+): boolean {
+  return typeof assignment.createdAt === "number" &&
+    now - assignment.createdAt >= SHARED_GATEWAY_REBALANCE_STABILITY_MS;
+}
+
 function sharedRebalanceBuilder(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   fromGatewayId: string,
   scheduled: ReadonlySet<string>,
-): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
+): { uid: string; builderSlug: string; sourceAssignmentEpoch: number; settledAt: number } | null {
   if (scheduled.has(user.uid) || currentGatewayId(user.data) !== fromGatewayId) return null;
+  if (!coachGreetingDelivered(user.data)) return null;
   const lease = builderActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
   const eligibility = resolveOnboardingPlacementEligibility(user.data);
@@ -2062,9 +2079,32 @@ function sharedRebalanceBuilder(
     placementAssignmentKey(fromGatewayId, user.uid),
   );
   if (assignment?.state !== "serving") return null;
+  if (!settledSharedAssignment(assignment, context.deps.now())) return null;
   const sourceAssignmentEpoch = nonNegativeInteger(assignment.epoch);
   if (sourceAssignmentEpoch === null) return null;
-  return { uid: user.uid, builderSlug: eligibility.slug, sourceAssignmentEpoch };
+  return {
+    uid: user.uid,
+    builderSlug: eligibility.slug,
+    sourceAssignmentEpoch,
+    settledAt: assignment.createdAt!,
+  };
+}
+
+function longestSettledSharedRebalanceBuilder(
+  context: PlacementPolicyReconcileContext,
+  users: readonly PlacementPolicyUser[],
+  fromGatewayId: string,
+  scheduled: ReadonlySet<string>,
+): { uid: string; builderSlug: string; sourceAssignmentEpoch: number } | null {
+  let chosen: ReturnType<typeof sharedRebalanceBuilder> = null;
+  for (const user of users) {
+    const candidate = sharedRebalanceBuilder(context, user, fromGatewayId, scheduled);
+    if (!candidate) continue;
+    if (!chosen || candidate.settledAt < chosen.settledAt) chosen = candidate;
+  }
+  return chosen
+    ? { uid: chosen.uid, builderSlug: chosen.builderSlug, sourceAssignmentEpoch: chosen.sourceAssignmentEpoch }
+    : null;
 }
 
 function applyProjectedRebalance(
@@ -2094,9 +2134,7 @@ async function reconcileSharedGatewayRebalance(
   while (true) {
     const plan = planSharedGatewayRebalance({ config, candidates });
     if (!plan) return;
-    const builder = users
-      .map((user) => sharedRebalanceBuilder(context, user, plan.fromGatewayId, scheduled))
-      .find((candidate) => candidate !== null);
+    const builder = longestSettledSharedRebalanceBuilder(context, users, plan.fromGatewayId, scheduled);
     if (!builder) return;
     const operationId = continuousPlacementMigrationOperationId({
       ...builder,
@@ -2733,6 +2771,7 @@ function placementAssignmentFromDocument(
     gatewayId,
     state,
     epoch,
+    ...(millis(data.createdAt) !== null ? { createdAt: millis(data.createdAt) } : {}),
     ...(nonEmptyString(data.source) ? { source: nonEmptyString(data.source)! } : {}),
     ...(nonEmptyString(data.updatedByOperationId)
       ? { updatedByOperationId: nonEmptyString(data.updatedByOperationId)! }

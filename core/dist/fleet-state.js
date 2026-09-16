@@ -225,6 +225,7 @@ function updateAssignment(txn, db, params, priorEpoch, nowMs) {
         source: params.assignment.source,
         state: "serving",
         epoch: priorEpoch + 1,
+        createdAt: nowMs,
         updatedAt: nowMs,
         updatedByOperationId: params.assignment.updatedByOperationId,
     });
