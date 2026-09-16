@@ -355,6 +355,7 @@ export function upsertOpenRouterBrokerCatalog(
     providerId: OPENROUTER_BROKER_PROVIDER_ID,
     profileId: OPENROUTER_BROKER_PROFILE_ID,
     marker: OPENROUTER_PLATFORM_MARKER,
+    api: "openai-completions",
   });
 }
 
@@ -366,6 +367,7 @@ export function upsertOpenAiBrokerCatalog(
     providerId: OPENAI_BROKER_PROVIDER_ID,
     profileId: OPENAI_BROKER_PROFILE_ID,
     marker: OPENAI_PLATFORM_MARKER,
+    api: "openai-responses",
   });
 }
 
@@ -379,6 +381,7 @@ function upsertPlatformBrokerCatalog(
     providerId: string;
     profileId: string;
     marker: string;
+    api: "openai-completions" | "openai-responses";
   },
 ): boolean {
   const modelsPath = path.join(agentDir, "models.json");
@@ -386,7 +389,7 @@ function upsertPlatformBrokerCatalog(
   const current = readJsonFile(modelsPath);
   const currentProviders = asRecord(current.providers);
   const desired = {
-    api: "openai-completions" as const,
+    api: ids.api,
     baseUrl: input.baseUrl,
     apiKey: ids.profileId,
     models: input.models.map((model) =>

@@ -213,6 +213,7 @@ export function upsertOpenRouterBrokerCatalog(agentDir, input) {
         providerId: OPENROUTER_BROKER_PROVIDER_ID,
         profileId: OPENROUTER_BROKER_PROFILE_ID,
         marker: OPENROUTER_PLATFORM_MARKER,
+        api: "openai-completions",
     });
 }
 export function upsertOpenAiBrokerCatalog(agentDir, input) {
@@ -220,6 +221,7 @@ export function upsertOpenAiBrokerCatalog(agentDir, input) {
         providerId: OPENAI_BROKER_PROVIDER_ID,
         profileId: OPENAI_BROKER_PROFILE_ID,
         marker: OPENAI_PLATFORM_MARKER,
+        api: "openai-responses",
     });
 }
 /** The catalog is plain filesystem state and must land whatever the profile
@@ -231,7 +233,7 @@ function upsertPlatformBrokerCatalog(agentDir, input, ids) {
     const current = readJsonFile(modelsPath);
     const currentProviders = asRecord(current.providers);
     const desired = {
-        api: "openai-completions",
+        api: ids.api,
         baseUrl: input.baseUrl,
         apiKey: ids.profileId,
         models: input.models.map((model) => openRouterBrokerModelConfig(model)),

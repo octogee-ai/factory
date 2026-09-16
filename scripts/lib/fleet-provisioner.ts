@@ -1,4 +1,5 @@
 import express from "express";
+import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
@@ -942,6 +943,13 @@ function startBrokerTokenRefreshAfterGatewayReady(
     .then(() => scheduler.start())
     .catch((error) => log(`[agent-model-token] ⚠ refresh scheduler did not start: ${String(error)}`));
   return () => scheduler.stop();
+}
+
+export async function probeOpenClawRuntimeReady(
+  probeHealthz: () => Promise<boolean>,
+  identitiesReady: () => boolean = workspaceIdentityReady,
+): Promise<boolean> {
+  return await probeHealthz() && identitiesReady();
 }
 
 export async function waitForOpenClawHealthz(input: {
@@ -2450,7 +2458,9 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     }
   };
 
-  const probeHealthz = () => probeOpenClawHealth(`http://127.0.0.1:${gatewayPort}/healthz`);
+  const probeHealthz = () => probeOpenClawRuntimeReady(
+    () => probeOpenClawHealth(`http://127.0.0.1:${gatewayPort}/healthz`),
+  );
   const probeDashboardBridge = () => dashboardBridgeReady({
     required: dashboardBridgeRequired,
     openclawDir,
@@ -2497,7 +2507,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     if (runtime.status === "ready") return;
     runtime.status = "ready";
     opts.log(
-      `[fleet] OpenClaw healthz, broker profiles, and Dashboard bridge ready; ` +
+      `[fleet] OpenClaw healthz, workspace identities, broker profiles, and Dashboard bridge ready; ` +
         `transitioning gateways/${opts.gatewayId} to status=ready`,
     );
     await emitHeartbeat("ready");

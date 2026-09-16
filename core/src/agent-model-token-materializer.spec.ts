@@ -358,7 +358,7 @@ describe("model-readiness: openai catalog upsert", () => {
     expect(upsertOpenAiBrokerCatalog(agentDir, CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENAI_BROKER_PROVIDER_ID];
-    expect(provider.api).toBe("openai-completions");
+    expect(provider.api).toBe("openai-responses");
     expect(provider.apiKey).toBe(OPENAI_BROKER_PROFILE_ID);
     expect(provider.models.map((m: { id: string }) => m.id)).toEqual(["gpt-5.4-mini"]);
   });

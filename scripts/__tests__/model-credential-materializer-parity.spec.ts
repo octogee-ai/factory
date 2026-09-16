@@ -142,10 +142,14 @@ describe("buildModelCredentialConfigForProvider — canonical OpenAI-compatible 
 });
 
 describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing", () => {
-  it("pins agentRuntime:{id:codex} so a per-agent gpt-5.5 override routes through the codex harness, not direct OpenAI API", () => {
-    expect(codexRuntimeConfig()).toEqual({
+  it("pins subscription model overrides to the Codex runtime", () => {
+    expect(codexRuntimeConfig()).toMatchObject({
       model: "openai/gpt-5.5",
-      modelsDef: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+      modelsDef: {
+        "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+        "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+        "openai/gpt-6-astra": { agentRuntime: { id: "codex" } },
+      },
     });
   });
 });

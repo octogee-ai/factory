@@ -26,11 +26,15 @@ export function beginWorkspaceIdentityBoot(env = process.env) {
     atomicWrite(state.boot, randomUUID());
     fs.rmSync(state.ready, { force: true });
 }
-export function assertWorkspaceIdentityReady(env = process.env) {
+export function workspaceIdentityReady(env = process.env) {
     if (!enabled(env))
-        return;
+        return true;
     const state = files(env);
-    if (!fs.existsSync(state.boot) || !fs.existsSync(state.ready) || fs.readFileSync(state.boot, "utf8") !== fs.readFileSync(state.ready, "utf8")) {
+    return fs.existsSync(state.boot) && fs.existsSync(state.ready)
+        && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
+}
+export function assertWorkspaceIdentityReady(env = process.env) {
+    if (!workspaceIdentityReady(env)) {
         throw new Error("OpenClaw workspace identities are not initialized for this boot");
     }
 }
@@ -73,12 +77,12 @@ export async function bootstrapWorkspaceIdentities(args) {
     let journal;
     if (fs.existsSync(state.journal)) {
         journal = JSON.parse(fs.readFileSync(state.journal, "utf8"));
-        if (journal.gatewayId !== env.GATEWAY_ID || journal.ownerUid !== env.GATEWAY_OWNER_UID || !Array.isArray(journal.pending) || journal.pending.some(item => !identities.some(identity => identity.uid === item.uid && identity.role === item.role)))
-            throw new Error("Workspace identity initialization journal does not match this gateway");
+        if (journal.ownerUid !== env.GATEWAY_OWNER_UID || !Array.isArray(journal.pending) || journal.pending.some(item => !identities.some(identity => identity.uid === item.uid && identity.role === item.role)))
+            throw new Error("Workspace identity initialization journal does not match this owner");
     }
     else {
         const profiles = await list();
-        journal = { gatewayId: env.GATEWAY_ID, ownerUid: env.GATEWAY_OWNER_UID, pending: identities.filter(identity => !find(profiles, identity.uid)) };
+        journal = { ownerUid: env.GATEWAY_OWNER_UID, pending: identities.filter(identity => !find(profiles, identity.uid)) };
         atomicWrite(state.journal, JSON.stringify(journal));
     }
     while (journal.pending.length) {

@@ -8,7 +8,7 @@ import { sendWsRequest, startConnectChallengeTracker, waitForWsOpen } from "@oct
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
 
 interface BootstrapIdentity { uid: string; role: "admin" | "service" }
-interface BootstrapJournal { gatewayId: string; ownerUid: string; pending: BootstrapIdentity[] }
+interface BootstrapJournal { ownerUid: string; pending: BootstrapIdentity[] }
 interface NativeProfile { id: string; emails: string[]; role?: string | null }
 type NativeRequest = <T>(method: string, params: Record<string, unknown>, options: { scopes: string[] }) => Promise<T>;
 
@@ -34,10 +34,15 @@ export function beginWorkspaceIdentityBoot(env: NodeJS.ProcessEnv = process.env)
   fs.rmSync(state.ready, { force: true });
 }
 
-export function assertWorkspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): void {
-  if (!enabled(env)) return;
+export function workspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!enabled(env)) return true;
   const state = files(env);
-  if (!fs.existsSync(state.boot) || !fs.existsSync(state.ready) || fs.readFileSync(state.boot, "utf8") !== fs.readFileSync(state.ready, "utf8")) {
+  return fs.existsSync(state.boot) && fs.existsSync(state.ready)
+    && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
+}
+
+export function assertWorkspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): void {
+  if (!workspaceIdentityReady(env)) {
     throw new Error("OpenClaw workspace identities are not initialized for this boot");
   }
 }
@@ -79,10 +84,10 @@ export async function bootstrapWorkspaceIdentities(args: {
   let journal: BootstrapJournal;
   if (fs.existsSync(state.journal)) {
     journal = JSON.parse(fs.readFileSync(state.journal, "utf8"));
-    if (journal.gatewayId !== env.GATEWAY_ID || journal.ownerUid !== env.GATEWAY_OWNER_UID || !Array.isArray(journal.pending) || journal.pending.some(item => !identities.some(identity => identity.uid === item.uid && identity.role === item.role))) throw new Error("Workspace identity initialization journal does not match this gateway");
+    if (journal.ownerUid !== env.GATEWAY_OWNER_UID || !Array.isArray(journal.pending) || journal.pending.some(item => !identities.some(identity => identity.uid === item.uid && identity.role === item.role))) throw new Error("Workspace identity initialization journal does not match this owner");
   } else {
     const profiles = await list();
-    journal = { gatewayId: env.GATEWAY_ID!, ownerUid: env.GATEWAY_OWNER_UID!, pending: identities.filter(identity => !find(profiles, identity.uid)) };
+    journal = { ownerUid: env.GATEWAY_OWNER_UID!, pending: identities.filter(identity => !find(profiles, identity.uid)) };
     atomicWrite(state.journal, JSON.stringify(journal));
   }
   while (journal.pending.length) {

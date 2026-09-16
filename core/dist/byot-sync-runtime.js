@@ -1178,7 +1178,7 @@ function customerBrokerModelProviders() {
     if (openAiBaseUrl) {
         const input = openAiCatalogInputForBaseUrl(openAiBaseUrl);
         providers["platform-openai"] = {
-            api: "openai-completions",
+            api: "openai-responses",
             baseUrl: input.baseUrl,
             apiKey: OPENAI_BROKER_PROFILE_ID,
             models: input.models.map(openRouterBrokerModelConfig),

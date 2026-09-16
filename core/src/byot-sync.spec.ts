@@ -1,3 +1,4 @@
+import { codexRuntimeConfig } from "./model-credential-materializer.js";
 import { describe, it, test, expect, beforeEach, afterEach, vi } from "vitest";
 
 const { gatewayRestartRequestSpy, secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
@@ -746,7 +747,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
       agents: {
         list: [{ id, model: withFallback("openai/gpt-5.5") }],
         defaults: {
-          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } }, ...HOUSE_DEFAULTS },
+          models: { ...codexRuntimeConfig().modelsDef, ...HOUSE_DEFAULTS },
         },
       },
     });
@@ -1359,7 +1360,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: {
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } }, ...HOUSE_DEFAULTS },
+            models: { ...codexRuntimeConfig().modelsDef, ...HOUSE_DEFAULTS },
           },
         },
       },
@@ -1466,7 +1467,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              ...codexRuntimeConfig().modelsDef,
               ...claudeCliDefaultModels,
             },
           },
@@ -1511,7 +1512,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              ...codexRuntimeConfig().modelsDef,
             },
           },
         },
@@ -2847,7 +2848,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              ...codexRuntimeConfig().modelsDef,
             },
           },
         },
@@ -2875,7 +2876,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
           ],
           defaults: {
             models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              ...codexRuntimeConfig().modelsDef,
               ...HOUSE_DEFAULTS,
             },
           },

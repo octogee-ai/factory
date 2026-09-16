@@ -105,6 +105,7 @@ const ALLOWED_OPENROUTER_ENDPOINTS = new Set([
 const ALLOWED_OPENAI_MODEL_ENDPOINTS = new Set([
   "GET /v1/models",
   "POST /v1/chat/completions",
+  "POST /v1/responses",
 ]);
 
 const ALLOWED_OPENAI_EMBEDDING_ENDPOINTS = new Set([
@@ -258,7 +259,7 @@ function shouldMeter(
   return provider === "anthropic"
     ? url.pathname === "/v1/messages"
     : url.pathname === "/v1/chat/completions" ||
-        (provider === "openai" && url.pathname === "/v1/embeddings");
+        (provider === "openai" && ["/v1/embeddings", "/v1/responses"].includes(url.pathname));
 }
 
 function readRequestMetadata(body: unknown): {
@@ -408,10 +409,10 @@ const OPENAI_USAGE_FIELDS = [
   "total_tokens",
 ] as const;
 
-function invalidOpenAiUsageFields(value: unknown): string[] {
+function invalidOpenAiUsageFields(value: unknown, fields: readonly string[] = OPENAI_USAGE_FIELDS): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
   const data = value as Record<string, unknown>;
-  return OPENAI_USAGE_FIELDS.filter((field) => {
+  return fields.filter((field) => {
     if (!(field in data)) return false;
     const raw = data[field];
     return typeof raw !== "number" || !Number.isFinite(raw) || raw < 0;
@@ -459,7 +460,32 @@ function extractOpenRouterPayloadUsage(payload: unknown): AnthropicPayloadExtrac
   };
 }
 
-function usageExtractor(provider: ModelBrokerProvider): PayloadUsageExtractor {
+function extractOpenAiResponsesUsage(payload: unknown): AnthropicPayloadExtraction {
+  const data = objectRecord(payload);
+  const response = objectRecord(data?.response) ?? data;
+  const rawUsage = objectRecord(response?.usage);
+  const details = objectRecord(rawUsage?.input_tokens_details);
+  const chatUsage = rawUsage ? {
+    prompt_tokens: rawUsage.input_tokens,
+    completion_tokens: rawUsage.output_tokens,
+    total_tokens: rawUsage.total_tokens,
+    prompt_tokens_details: details,
+  } : null;
+  const invalidUsageFields = [
+    ...invalidOpenAiUsageFields(rawUsage, ["input_tokens", "output_tokens", "total_tokens"]),
+    ...invalidOpenAiUsageFields(details, ["cached_tokens"]).map((field) => `input_tokens_details.${field}`),
+  ];
+  return {
+    usage: normalizeOpenAiUsage(chatUsage),
+    model: nonEmptyString(response?.model),
+    messageId: nonEmptyString(response?.id),
+    invalidUsageFields,
+    reportedCostUsd: null,
+  };
+}
+
+function usageExtractor(provider: ModelBrokerProvider, pathname: string): PayloadUsageExtractor {
+  if (provider === "openai" && pathname === "/v1/responses") return extractOpenAiResponsesUsage;
   return provider === "anthropic"
     ? extractAnthropicPayloadUsage
     : extractOpenRouterPayloadUsage;
@@ -1062,7 +1088,7 @@ async function writeBufferedUpstreamResponse(
   res.end(text);
   if (metering && isJson(upstream)) {
     try {
-      const extracted = usageExtractor(metering.record.provider)(JSON.parse(text) as unknown);
+      const extracted = usageExtractor(metering.record.provider, metering.url.pathname)(JSON.parse(text) as unknown);
       if (extracted.invalidUsageFields.length) {
         metering.onMeteringError(
           new Error(`${providerLabel(metering.record.provider)} usage contained invalid fields: ${extracted.invalidUsageFields.join(",")}`),
@@ -1086,7 +1112,7 @@ async function writeStreamingUpstreamResponse(
     res.end();
     return;
   }
-  let collector = metering ? new SseUsageCollector(usageExtractor(metering.record.provider)) : null;
+  let collector = metering ? new SseUsageCollector(usageExtractor(metering.record.provider, metering.url.pathname)) : null;
   const reader = upstream.body.getReader();
   try {
     while (true) {

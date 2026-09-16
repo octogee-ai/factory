@@ -32,6 +32,7 @@ import {
   getEvictObservedSlugs,
   getMountObservedSlugs,
   probeSurgeReadiness,
+  probeOpenClawRuntimeReady,
   reconcileAddCustomerOptions,
   readMountedCustomersFromAssignedState,
   resolveFleetCapabilities,
@@ -2238,6 +2239,17 @@ describe("evictLocalCustomerIfStillUndesired", () => {
 });
 
 describe("in-pod gateway heartbeat", () => {
+  it("keeps a healthy HTTP server unready until workspace identities are initialized", async () => {
+    const identitiesReady = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const healthz = vi.fn(async () => true);
+    await expect(probeOpenClawRuntimeReady(healthz, identitiesReady)).resolves.toBe(false);
+    await expect(probeOpenClawRuntimeReady(healthz, identitiesReady)).resolves.toBe(true);
+  });
+
+  it("does not admit a stopped OpenClaw process with an existing identity marker", async () => {
+    await expect(probeOpenClawRuntimeReady(async () => false, () => true)).resolves.toBe(false);
+  });
+
   it("waits on the lightweight health endpoint instead of retrying authenticated RPC", async () => {
     const probeHealthz = vi.fn()
       .mockResolvedValueOnce(false)

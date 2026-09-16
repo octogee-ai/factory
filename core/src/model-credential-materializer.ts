@@ -4,6 +4,7 @@ import {
   type ModelCredentialActiveStaticProviderId,
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
+import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 
 export type ModelCredentialMaterializerProvider =
   | ModelCredentialActiveStaticProviderId
@@ -197,7 +198,17 @@ export function codexRuntimeConfig(): {
   modelsDef: Record<string, { agentRuntime: { id: "codex" } }>;
 } {
   const model = MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS["openai-codex"].defaultModel!;
-  return { model, modelsDef: { [model]: { agentRuntime: { id: "codex" } } } };
+  const refs = new Set([
+    model,
+    ...MODEL_CATALOG.filter((entry) => entry.provider === "openai")
+      .map((entry) => `openai/${entry.id}`),
+  ]);
+  return {
+    model,
+    modelsDef: Object.fromEntries(
+      [...refs].map((ref) => [ref, { agentRuntime: { id: "codex" as const } }]),
+    ),
+  };
 }
 
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [

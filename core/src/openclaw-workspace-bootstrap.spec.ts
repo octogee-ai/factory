@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities } from "./openclaw-workspace-bootstrap.js";
+import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities, workspaceIdentityReady } from "./openclaw-workspace-bootstrap.js";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -27,9 +27,11 @@ describe("native workspace identity initialization", () => {
   it("initializes an empty native profile store before admitting users or services", async () => {
     const { env, profiles, args } = fixture();
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
+    expect(workspaceIdentityReady(env)).toBe(false);
     await bootstrapWorkspaceIdentities(args);
     expect(profiles.map(profile => profile.role)).toEqual(["service", "service", "admin"]);
     expect(() => assertWorkspaceIdentityReady(env)).not.toThrow();
+    expect(workspaceIdentityReady(env)).toBe(true);
   });
 
   it("preserves native role edits, including default/null, on later boots", async () => {
@@ -56,6 +58,28 @@ describe("native workspace identity initialization", () => {
     await bootstrapWorkspaceIdentities(args);
     expect(profiles.map(profile => profile.role)).toEqual(["service", "service", "admin"]);
     expect(profiles[0].id).toBe("created-before-crash");
+  });
+
+  it("restores the same owner's identities on a replacement gateway without resetting roles", async () => {
+    const { env, profiles, args, request } = fixture();
+    await bootstrapWorkspaceIdentities(args);
+    profiles[2].role = "custom";
+    env.GATEWAY_ID = "b-alice-replacement";
+    beginWorkspaceIdentityBoot(env);
+    request.mockClear();
+    await bootstrapWorkspaceIdentities(args);
+    expect(() => assertWorkspaceIdentityReady(env)).not.toThrow();
+    expect(profiles[2].role).toBe("custom");
+    expect(request).not.toHaveBeenCalledWith("users.setRole", expect.anything(), expect.anything());
+  });
+
+  it("rejects an identity journal belonging to a different owner", async () => {
+    const { env, args } = fixture();
+    await bootstrapWorkspaceIdentities(args);
+    env.GATEWAY_OWNER_UID = "bob";
+    beginWorkspaceIdentityBoot(env);
+    await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow("does not match");
+    expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 
   it("never changes preexisting owner assignments and does nothing on shared gateways", async () => {

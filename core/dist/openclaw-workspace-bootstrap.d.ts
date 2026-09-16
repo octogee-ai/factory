@@ -2,6 +2,7 @@ type NativeRequest = <T>(method: string, params: Record<string, unknown>, option
     scopes: string[];
 }) => Promise<T>;
 export declare function beginWorkspaceIdentityBoot(env?: NodeJS.ProcessEnv): void;
+export declare function workspaceIdentityReady(env?: NodeJS.ProcessEnv): boolean;
 export declare function assertWorkspaceIdentityReady(env?: NodeJS.ProcessEnv): void;
 export declare function bootstrapWorkspaceIdentities(args: {
     request: NativeRequest;
