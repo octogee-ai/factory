@@ -2,10 +2,8 @@ import { logger } from "../middleware/logging.js";
 import { claimProjectDelivery, beginDeliveryPost, finishProjectDelivery, matchingDeliveryPost, type DeliveryClaim, type DeliveryKind, type OnboardingProject } from "./project-agent-delivery.js";
 import { FieldValue, db } from "./db.js";
 import { mmApi } from "./mattermost.js";
-import { giteaWriteFiles } from "./gitea.js";
-import { workspaceGiteaOrg, projectRepoName } from "./gitea-naming.js";
 import { projectAgentMmUsername } from "@octogee/shared/types/identity";
-import { projectAgentConfigured, type ProjectAgentIdentity } from "@octogee/shared/types/project";
+import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 
 export interface ProjectHandoff {
@@ -26,16 +24,6 @@ export function parseProjectHandoff(value: unknown): ProjectHandoff | null {
     result[key] = text.trim();
   }
   return result as unknown as ProjectHandoff;
-}
-
-export function projectAgentSeeds(identity: ProjectAgentIdentity, message: string, ownerName: string) {
-  return [
-    { path: "IDENTITY.md", content: `# Identity\n\nName: ${identity.name}\nEmoji: ${identity.emoji}\n` },
-    { path: "SOUL.md", content: `# Soul\n\n${identity.persona}\n` },
-    { path: "USER.md", content: `# Builder\n\n${ownerName}\n\nRelevant Builder context is in BRIEF.md.\n` },
-    { path: "BRIEF.md", content: `# Project handoff\n\n${message}\n` },
-    { path: "AGENTS.md", content: "# Project agent\n\nRead IDENTITY.md, SOUL.md, USER.md, BRIEF.md, and runbook/ before starting. Keep your own project memory and decisions here. Create an avatar suited to this project and set your chat identity with octogee_chat_set_identity.\n" },
-  ];
 }
 
 function initialPostStarted(state: { status?: string } | undefined, delivery: { postAttempted?: boolean } | undefined): boolean {
@@ -77,7 +65,7 @@ function deliveryMessage(project: OnboardingProject, kind: DeliveryKind, workspa
   const { agent } = project;
   if (kind === "handoff") {
     if (!agent.identity || !project.handoffMessage) throw new Error("Project handoff identity is missing");
-    return `@${projectAgentMmUsername(workspaceId, projectSlug)} ${project.handoffMessage}\n\nYou are ${agent.identity.name} ${agent.identity.emoji}. ${agent.identity.persona} Create a fitting avatar and set your chat identity with octogee_chat_set_identity.`;
+    return `@${projectAgentMmUsername(workspaceId, projectSlug)} ${project.handoffMessage}\n\nYou are ${agent.identity.name} ${agent.identity.emoji}. ${agent.identity.persona}\nBefore starting, save this handoff in BRIEF.md, update IDENTITY.md and SOUL.md with your assigned identity, and record relevant Builder context in USER.md in your project checkout. Preserve existing project instructions and decisions, read runbook/ and DECISIONS.md when present, and commit these files together with your work using octogee_project_commit. Create a fitting avatar and set your chat identity with octogee_chat_set_identity.`;
   }
   const identityHint = agent.requestedName ? `Your name is ${agent.requestedName}.` : "Choose your own fitting name.";
   const task = project.tagline?.trim()
@@ -86,11 +74,8 @@ function deliveryMessage(project: OnboardingProject, kind: DeliveryKind, workspa
   return `@${projectAgentMmUsername(workspaceId, projectSlug)} You are the new agent for “${project.name}”. ${identityHint} Choose a fitting personality, emoji, and avatar, and set your chat identity with octogee_chat_set_identity. Keep your chosen identity files in the project repo.\n${task}`;
 }
 
-async function prepareHandoff({ uid, workspaceId, projectSlug, project }: { uid: string; workspaceId: string; projectSlug: string; project: OnboardingProject }): Promise<void> {
+async function prepareHandoff({ uid, projectSlug, project }: { uid: string; projectSlug: string; project: OnboardingProject }): Promise<void> {
   if (!project.agent.identity || !project.handoffMessage) throw new Error("Project handoff identity is missing");
-  const owner = (await db.doc(`users/${uid}`).get()).data();
-  await giteaWriteFiles(workspaceGiteaOrg(workspaceId), projectRepoName(projectSlug),
-    projectAgentSeeds(project.agent.identity, project.handoffMessage, owner?.displayName || workspaceId), "Initialize project agent");
   const secret = (await db.doc(`users/${uid}/secrets/${projectAgentSecretDocId(projectSlug)}`).get()).data();
   if (!secret?.mmUserId) throw new Error("Project agent has no chat identity");
   await mmApi(`/bots/${secret.mmUserId}`, "PUT", { display_name: project.agent.identity.name });
@@ -122,7 +107,7 @@ async function postOnboarding(uid: string, workspaceId: string, projectSlug: str
   const token = coach?.personalToken;
   if (!channelId || !token || !coachId) throw new Error("Project handoff chat credentials are not ready");
   const receipt = `${workspaceId}/${projectSlug}/${kind}`;
-  if (kind === "handoff") await prepareHandoff({ uid, workspaceId, projectSlug, project });
+  if (kind === "handoff") await prepareHandoff({ uid, projectSlug, project });
   await ensureCoachMembership(channelId, coachId);
   const ref = db.doc(`workspaces/${workspaceId}/projects/${projectSlug}`);
   let postId = await matchingDeliveryPost(ref, claim, channelId, receipt, token);

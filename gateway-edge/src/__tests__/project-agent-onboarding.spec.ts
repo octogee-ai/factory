@@ -1,4 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 const h = vi.hoisted(() => ({ docs: new Map<string, any>(), mm: vi.fn(), seed: vi.fn(), avatar: vi.fn(), blob: vi.fn(), log: vi.fn() }));
 function ref(path: string) {
   return { path, set: async (value: unknown) => { h.docs.set(path, structuredClone(value)); }, get: async () => ({ data: () => structuredClone(h.docs.get(path)) }), update: async (patch: Record<string, unknown>) => {
@@ -56,13 +60,15 @@ it('rejects a handoff to another Builder’s project and malformed input', async
   expect(parseProjectHandoff({ ...handoff, emoji: '' })).toBeNull();
   expect(parseProjectHandoff(handoff)).toEqual(handoff);
 });
-it('waits for readiness, then seeds the repo and posts the coach handoff once in project general', async () => {
+it('waits for readiness, then delivers the complete handoff once without writing to the remote repo', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   h.docs.get(projectPath).agent.status = 'provisioning';
   await deliverProjectAgentOnboarding('u', 'alice', 'golf'); expect(h.mm).not.toHaveBeenCalled();
   h.docs.get(projectPath).agent.status = 'ready';
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
-  expect(h.seed.mock.calls[0][2]).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'BRIEF.md', content: expect.stringContaining(handoff.message) }), expect.objectContaining({ path: 'SOUL.md', content: expect.stringContaining(handoff.persona) })]));
+  expect(h.seed).not.toHaveBeenCalled();
+  const message = h.mm.mock.calls.find(call => call[0] === '/posts')[2].message;
+  for (const context of [handoff.message, handoff.persona, 'BRIEF.md', 'IDENTITY.md', 'SOUL.md', 'USER.md']) expect(message).toContain(context);
   expect(h.mm).toHaveBeenCalledWith('/posts', 'POST', expect.objectContaining({ channel_id: 'general', message: expect.stringContaining('@alice-proj-golf-coach') }), 'coach-token');
   expect(h.docs.get(projectPath).agent.handoff.status).toBe('sent');
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
@@ -77,10 +83,10 @@ it('recovers an acknowledged post after a lost delivery receipt without repostin
   expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
 });
 it('keeps a failed delivery pending and records the error for retry', async () => {
-  await queueProjectHandoff('u', 'alice', 'golf', handoff); h.seed.mockRejectedValueOnce(new Error('Gitea unavailable'));
-  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Gitea unavailable');
+  await queueProjectHandoff('u', 'alice', 'golf', handoff); h.mm.mockRejectedValueOnce(new Error('Mattermost unavailable'));
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Mattermost unavailable');
   expect(h.docs.get(projectPath).agent.handoff.status).toBe('pending');
-  expect(h.docs.get(projectPath).agent.lastError).toBe('Gitea unavailable');
+  expect(h.docs.get(projectPath).agent.lastError).toBe('Mattermost unavailable');
   expect(h.docs.get(projectPath).agent.deliveryLeaseUntil).toBeUndefined();
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.docs.get(projectPath).agent.handoff.status).toBe('sent');
@@ -152,15 +158,15 @@ it('continues bounded receipt recovery after 300 newer posts without repeating o
 it('skips receipt scans for an intent that failed before attempting a post', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   h.docs.set(`${projectPath}/agentState/handoffDelivery`, { startedAt: 1 });
-  h.seed.mockRejectedValueOnce(new Error('Gitea unavailable'));
-  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Gitea unavailable');
+  h.mm.mockRejectedValueOnce(new Error('Mattermost unavailable'));
+  await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('Mattermost unavailable');
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.mm.mock.calls.some(c => c[0].includes('/posts?'))).toBe(false);
   expect(h.docs.get(`${projectPath}/agentState/handoffDelivery`).startedAt).toBeGreaterThan(1);
 });
 it('does not post after preparation outlives its delivery lease', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
-  h.seed.mockImplementationOnce(async () => { h.docs.get(projectPath).agent.deliveryLeaseUntil = Date.now() - 1; });
+  h.mm.mockImplementationOnce(async () => { h.docs.get(projectPath).agent.deliveryLeaseUntil = Date.now() - 1; });
   await expect(deliverProjectAgentOnboarding('u', 'alice', 'golf')).rejects.toThrow('lease expired');
   expect(h.mm.mock.calls.some(c => c[0] === '/posts')).toBe(false);
 });
@@ -193,7 +199,7 @@ it('cannot rewrite a handoff whose post may have landed before an upstream timeo
 });
 it('does not release a lease acquired by another delivery after the first lease expires', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
-  h.seed.mockImplementationOnce(async () => {
+  h.mm.mockImplementationOnce(async () => {
     h.docs.get(projectPath).agent.deliveryLeaseId = 'replacement';
     h.docs.get(projectPath).agent.deliveryLeaseUntil = Date.now() + 120_000;
   });
@@ -225,4 +231,46 @@ it('does not seed a UI-created agent with a placeholder identity or instruction-
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.seed).not.toHaveBeenCalled();
   expect(h.mm.mock.calls.find(c => c[0] === '/posts')[2].message).toContain('identity files');
+});
+
+it('lets an already-cloned project checkpoint its first implementation after the coach handoff', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'project-handoff-'));
+  const remote = join(root, 'remote.git');
+  const server = join(root, 'server');
+  const agent = join(root, 'agent');
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    git(root, 'init', '--bare', '--initial-branch=main', remote);
+    git(root, 'clone', remote, server);
+    writeFileSync(join(server, 'index.html'), '<main>Starter</main>');
+    git(server, 'add', '.');
+    git(server, 'commit', '-m', 'Seed project starter');
+    git(server, 'push', 'origin', 'main');
+    git(root, 'clone', remote, agent);
+    for (const file of ['AGENTS.md', 'IDENTITY.md', 'SOUL.md', 'USER.md']) writeFileSync(join(agent, file), '# OpenClaw default\n');
+    h.seed.mockImplementation(async (_org, _repo, files) => {
+      for (const file of files) writeFileSync(join(server, file.path), file.content);
+      git(server, 'add', '.');
+      git(server, 'commit', '-m', 'Initialize project agent');
+      git(server, 'push', 'origin', 'main');
+    });
+    await queueProjectHandoff('u', 'alice', 'golf', handoff);
+    await deliverProjectAgentOnboarding('u', 'alice', 'golf');
+    writeFileSync(join(agent, 'IDENTITY.md'), `# Identity\n\nName: ${handoff.name}\n`);
+    writeFileSync(join(agent, 'BRIEF.md'), handoff.message);
+    writeFileSync(join(agent, 'index.html'), '<main>Completed clubhouse</main>');
+    git(agent, 'add', '.');
+    git(agent, 'commit', '-m', 'Build first project slice');
+    const push = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'push', 'origin', 'main'], { cwd: agent, encoding: 'utf8' });
+    expect({ status: push.status, error: push.stderr }).toMatchObject({ status: 0 });
+    expect(git(root, '--git-dir', remote, 'show', 'main:index.html')).toBe('<main>Completed clubhouse</main>');
+    expect(git(root, '--git-dir', remote, 'show', 'main:BRIEF.md')).toBe(handoff.message);
+    const message = h.mm.mock.calls.find(call => call[0] === '/posts')[2].message;
+    expect(message).toContain(handoff.persona);
+    expect(message).toContain(handoff.message);
+    expect(message).toContain('BRIEF.md');
+    expect(h.seed).not.toHaveBeenCalled();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
