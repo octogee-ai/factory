@@ -121,7 +121,7 @@ async function resolveMmUserId(mmToken: string): Promise<string | null> {
     evictMmUserIdCacheIfNeeded();
     return body.id;
   } catch (err) {
-    console.warn(`[mm-proxy] resolveMmUserId failed: ${(err as Error).message}`);
+    logger.warn(`[mm-proxy] resolveMmUserId failed: ${(err as Error).message}`);
     return null;
   }
 }
@@ -330,7 +330,7 @@ function watchBrokerGatewayIdChange(
           onChange(null);
           return;
         }
-        console.warn(
+        logger.warn(
           `[proxy] OC WS: broker gatewayId watch failed for uid=${uid}: ${
             err instanceof Error ? err.message : String(err)
           }`,
@@ -609,13 +609,13 @@ function acceptRotationRecovery(upstream: WebSocket): UpstreamOutcome {
 }
 
 function rejectUpstreamHandshake(code: string): UpstreamOutcome {
-  console.log(`[proxy] OC WS: upstream handshake failed — ${code}`);
+  logger.warn(`[proxy] OC WS: upstream handshake failed — ${code}`);
   ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
   return { ok: false, httpStatus: "502 Bad Gateway" };
 }
 
 function rejectRotationHandshake(code: string): UpstreamOutcome {
-  console.log(`[proxy] OC WS: upstream handshake failed after rotation retry — ${code}`);
+  logger.warn(`[proxy] OC WS: upstream handshake failed after rotation retry — ${code}`);
   ocWsHandshakeTotal.inc({ outcome: `fail:${code}` });
   return { ok: false, httpStatus: "502 Bad Gateway" };
 }
@@ -635,7 +635,7 @@ function handleOpenClawWsUpgrade(
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   if (!isAllowedWsOrigin(origin)) {
     ocWsHandshakeTotal.inc({ outcome: "fail:origin-rejected" });
-    console.warn(`[proxy] OC WS: rejected origin=${origin ?? "(none)"}`);
+    logger.warn(`[proxy] OC WS: rejected origin=${origin ?? "(none)"}`);
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
@@ -646,7 +646,7 @@ function handleOpenClawWsUpgrade(
   const ticket = pathMatch?.[1] || null;
 
   if (!ticket) {
-    console.log(`[proxy] OC WS: no ticket`);
+    logger.warn(`[proxy] OC WS: no ticket`);
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return;
@@ -666,7 +666,7 @@ function handleOpenClawWsUpgrade(
         // just-retired revision). Surface the SAME retryable roll-in-progress
         // signal as a roster refusal — never a generic 500 — so the client
         // reconnects once the roll settles instead of hard-failing.
-        console.warn(
+        logger.warn(
           `[proxy] OC WS: revision unavailable (${redeemOutcome.reason}) — refusing with retryable 503`,
         );
         socket.write(
@@ -739,7 +739,7 @@ function handleOpenClawWsUpgrade(
             const last = lastInboundDropLogByUid.get(uid) ?? 0;
             if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
               lastInboundDropLogByUid.set(uid, now);
-              console.warn(
+              logger.warn(
                 `[proxy] OC WS: dropped inbound frame uid=${uid} reason=${decision.reason}`,
               );
             }
@@ -896,12 +896,12 @@ export function attachChatProxyWsUpgrade(
     if (urlPath === "/api/v4/websocket") {
       const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
       if (!isAllowedWsOrigin(origin)) {
-        console.warn(`[mm-proxy/ws] rejected origin=${origin ?? "(none)"}`);
+        logger.warn(`[mm-proxy/ws] rejected origin=${origin ?? "(none)"}`);
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
       }
-      console.warn(`[mm-proxy/ws] upgrade accepted origin=${origin ?? "(none)"}`);
+      logger.info(`[mm-proxy/ws] upgrade accepted origin=${origin ?? "(none)"}`);
       mmWss.handleUpgrade(req, socket, head, (browserWs) => {
         attachMmWsBridge(
           {
@@ -933,7 +933,7 @@ export function attachChatProxyWsUpgrade(
     if (wsRouter.dispatch(req, socket, head)) return;
 
     const redactWsPath = (p: string) => p.replace(/[A-Za-z0-9_-]{16,}/g, "<redacted>");
-    console.warn(
+    logger.warn(
       `[ws-upgrade] no route matched — 404 strippedPath=${redactWsPath(urlPath)} originalUrl=${redactWsPath(originalUrl)}`,
     );
     socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -1010,7 +1010,7 @@ function startCoachFinalNotifications(
 }
 
 export async function startChatProxyBackground(): Promise<void> {
-  warnIfWsOriginsMisconfigured(console.warn);
+  warnIfWsOriginsMisconfigured(logger.warn);
   console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
   const gatewayId = process.env.GATEWAY_ID?.trim();
   if (!gatewayId) {

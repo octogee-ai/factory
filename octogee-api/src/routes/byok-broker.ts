@@ -128,7 +128,7 @@ function warnSkippedUserByosubProviders(input: {
   skipped: string[];
 }): void {
   if (input.skipped.length === 0) return;
-  console.warn("[byok-broker] skipped malformed user byosub provider", input);
+  logger.warn("[byok-broker] skipped malformed user byosub provider", { input });
 }
 
 
