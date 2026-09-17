@@ -261,6 +261,9 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
     return state;
   }
   const { bundle } = fetched;
+  if (!bundle.namespace) {
+    deps.log(`[vm-agent] bundle ${bundle.version} carries no namespace; VM logs stay unlabelled until the platform is upgraded`);
+  }
   const identity = await deps.metadata.instanceIdentity();
   const now = deps.now();
   let next = state;

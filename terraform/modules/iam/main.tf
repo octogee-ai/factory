@@ -76,15 +76,15 @@ resource "google_logging_project_sink" "ops_agent" {
   project                = var.cluster_project_id
   name                   = "ops-agent-${var.environment}"
   destination            = "logging.googleapis.com/${google_logging_project_bucket_config.ops_agent.id}"
-  filter                 = "resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\""
+  filter                 = "(resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\") OR (resource.type=\"gce_instance\" AND jsonPayload.container.metadata.\"ai.octogee.namespace\"=\"${var.namespace}\")"
   unique_writer_identity = true
 }
 
 resource "google_logging_log_view" "ops_agent" {
   name        = "ops-agent"
   bucket      = google_logging_project_bucket_config.ops_agent.id
-  description = "Read-only ${var.environment} namespace logs for the Octogee Ops Agent"
-  filter      = "resource.type=\"k8s_container\""
+  description = "Read-only ${var.environment} pod and Builder VM container logs for the Octogee Ops Agent"
+  filter      = "resource.type=\"k8s_container\" OR resource.type=\"gce_instance\""
 }
 
 resource "google_logging_log_view_iam_member" "ops_agent" {

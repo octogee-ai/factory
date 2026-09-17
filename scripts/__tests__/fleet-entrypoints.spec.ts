@@ -939,11 +939,13 @@ describe("fleet CLI args", () => {
   it("resolves Firestore and Kubernetes from the active deployment target", () => {
     expect(resolveFleetDeploymentTarget("test")).toEqual({
       projectId: "octogee-test",
+      clusterProjectId: "octogee",
       namespace: "octogee-test",
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
     });
     expect(resolveFleetDeploymentTarget("prod")).toEqual({
       projectId: "octogee",
+      clusterProjectId: "octogee",
       namespace: "octogee",
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
     });

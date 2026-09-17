@@ -264,6 +264,7 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
   volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" });
   const unversioned = {
     gatewayId: input.gatewayId,
+    namespace: input.namespace,
     imageRepository: input.imageRepository,
     imageTag: input.imageTag,
     init,

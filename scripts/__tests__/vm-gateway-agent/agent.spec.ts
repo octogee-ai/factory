@@ -137,6 +137,18 @@ const calls = (fetchImpl: typeof fetch, suffix: string) =>
   (fetchImpl as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls.filter(([url]) => String(url).endsWith(suffix));
 
 describe("convergeOnce", () => {
+  it("applies a bundle from a platform that predates the namespace field, and says so", async () => {
+    const clock = { now: 1_000 };
+    const h = deps(fakeDocker(), () => runtimeReply(homeBundle({ namespace: undefined })), clock);
+
+    const state = await convergeOnce(h.d, initialAgentState());
+
+    expect(state.appliedVersion).toBe("v1");
+    expect((h.d.log as unknown as { mock: { calls: string[][] } }).mock.calls.map(([line]) => line)).toContainEqual(
+      expect.stringContaining("carries no namespace"),
+    );
+  });
+
   it("reports the state root's disk usage with every bundle poll, and still polls when the measurement fails", async () => {
     const clock = { now: 1_000 };
     const reported = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock);

@@ -14,7 +14,14 @@ export const CONTAINER_SPEC_LABEL = "ai.octogee.container-spec";
 export const INIT_SPEC_LABEL = "ai.octogee.init-spec";
 export const NO_INIT_SPEC = "none";
 export const GATEWAY_ID_LABEL = "ai.octogee.gateway-id";
+export const NAMESPACE_LABEL = "ai.octogee.namespace";
+export const CONTAINER_NAME_LABEL = "ai.octogee.container";
 export const CONTAINER_ROLE_LABEL = "ai.octogee.role";
+export const LOGGED_LABELS = [GATEWAY_ID_LABEL, NAMESPACE_LABEL, CONTAINER_NAME_LABEL, CONTAINER_ROLE_LABEL] as const;
+
+export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace">): string[] {
+  return LOGGED_LABELS.filter((label) => label !== NAMESPACE_LABEL || Boolean(bundle.namespace));
+}
 export const RUNTIME_UID = "1000:1000";
 export const TOKEN_FILE = "token";
 export const CA_FILE = "ca.crt";
@@ -109,13 +116,15 @@ export function planContainer(
       } : {}),
       ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),
       RestartPolicy: { Name: role === "service" ? "unless-stopped" : "no" },
-      LogConfig: { Type: "json-file", Config: { "max-size": "50m", "max-file": "3" } },
+      LogConfig: { Type: "gcplogs", Config: { labels: loggedLabelsFor(bundle).join(",") } },
     },
   };
   config.Labels = {
     [BUNDLE_VERSION_LABEL]: bundle.version,
     [CONTAINER_SPEC_LABEL]: containerSpecVersion(config),
     [GATEWAY_ID_LABEL]: bundle.gatewayId,
+    ...(bundle.namespace ? { [NAMESPACE_LABEL]: bundle.namespace } : {}),
+    [CONTAINER_NAME_LABEL]: container.name,
     [CONTAINER_ROLE_LABEL]: role,
   };
   return { name: containerName(container), config };

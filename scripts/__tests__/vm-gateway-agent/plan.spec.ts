@@ -46,6 +46,8 @@ describe("planBundle", () => {
       "ai.octogee.container-spec": expect.stringMatching(/^[0-9a-f]{16}$/),
       "ai.octogee.init-spec": expect.stringMatching(/^[0-9a-f]{16}$/),
       "ai.octogee.gateway-id": "b-x",
+      "ai.octogee.namespace": "octogee-test",
+      "ai.octogee.container": "gateway",
       "ai.octogee.role": "service",
     });
     expect(gateway.config).not.toHaveProperty("Entrypoint");
@@ -57,6 +59,36 @@ describe("planBundle", () => {
     ]));
     expect((edge.config.HostConfig as { Binds: string[] }).Binds).toContain("/srv/octogee/tokens/k8s-api-token:/var/run/secrets/kubernetes.io/serviceaccount:ro");
     expect((edge.config.HostConfig as { RestartPolicy: { Name: string } }).RestartPolicy).toEqual({ Name: "unless-stopped" });
+  });
+
+  it("ships every container's logs to Cloud Logging tagged with its gateway and namespace", () => {
+    const plan = planBundle(bundleFixture(), ctx);
+
+    for (const spec of [plan.init, ...plan.services]) {
+      expect((spec!.config.HostConfig as { LogConfig: unknown }).LogConfig).toEqual({
+        Type: "gcplogs",
+        Config: { labels: "ai.octogee.gateway-id,ai.octogee.namespace,ai.octogee.container,ai.octogee.role" },
+      });
+      expect((spec!.config.Labels as Record<string, string>)["ai.octogee.namespace"]).toBe("octogee-test");
+    }
+
+    expect((plan.init!.config.Labels as Record<string, string>)["ai.octogee.container"]).toBe("fix-perms");
+    expect(plan.services.map((s) => (s.config.Labels as Record<string, string>)["ai.octogee.container"])).toEqual([
+      "gateway",
+      "gateway-edge",
+    ]);
+  });
+
+  it("keeps shipping logs when an older platform renders a bundle without a namespace", () => {
+    const plan = planBundle(bundleFixture({ namespace: undefined }), ctx);
+
+    for (const spec of [plan.init, ...plan.services]) {
+      expect((spec!.config.HostConfig as { LogConfig: unknown }).LogConfig).toEqual({
+        Type: "gcplogs",
+        Config: { labels: "ai.octogee.gateway-id,ai.octogee.container,ai.octogee.role" },
+      });
+      expect(spec!.config.Labels as Record<string, string>).not.toHaveProperty("ai.octogee.namespace");
+    }
   });
 
   it("gives a reused VM a fresh process identity without changing it on a release update", () => {

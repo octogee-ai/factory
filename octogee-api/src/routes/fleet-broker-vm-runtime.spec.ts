@@ -6,7 +6,7 @@ import type { BoundTenant } from "../lib/sa-to-tenant.js";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const bundle = {
-  version: "v1", gatewayId: "b-x", imageRepository: "r", imageTag: "t", init: null,
+  version: "v1", gatewayId: "b-x", namespace: "octogee-test", imageRepository: "r", imageTag: "t", init: null,
   containers: [{ name: "gateway", image: "r:t", env: { A: "1" }, command: null, args: null, mounts: [] }],
   volumes: [], hostAliases: {}, kubernetes: { apiHost: "10.128.0.2", apiPort: "443", caCert: "c" },
   renderedAt: 1,

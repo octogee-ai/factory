@@ -4,6 +4,7 @@ export function bundleFixture(overrides: Partial<GatewayVmRuntimeBundle> = {}): 
   return {
     version: "v1",
     gatewayId: "b-x",
+    namespace: "octogee-test",
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
     imageTag: "main.abc",
     init: {

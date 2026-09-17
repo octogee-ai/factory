@@ -130,6 +130,7 @@ export type GatewayVmRuntimeVolume = {
 export interface GatewayVmRuntimeBundle {
     version: string;
     gatewayId: string;
+    namespace?: string;
     imageRepository: string;
     imageTag: string;
     init: GatewayVmRuntimeContainer | null;
