@@ -1,3 +1,4 @@
+import type { AgentModelSelections } from "./agent-models.js";
 import type { ProjectAgentIdentity, ProjectAgentStatus } from "./project.js";
 import type { AssignmentState } from "./gateway-releases.js";
 import type { ProjectRepoSource } from "./project.js";
@@ -251,5 +252,8 @@ export interface FleetBrokerUserSnapshot {
   platformAdminMmUserId?: string;
   coachIdentity?: FleetBrokerCoachIdentity;
   byotActive?: boolean;
-  systemConfig?: { byot?: { provider?: string; baseUrl?: string; model?: string } };
+  systemConfig?: {
+    byot?: { provider?: string; baseUrl?: string; model?: string };
+    agentModels?: AgentModelSelections;
+  };
 }

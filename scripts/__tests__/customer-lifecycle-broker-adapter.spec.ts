@@ -2201,6 +2201,57 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ]));
   });
 
+  it("pins a subscription-only coach pick to the platform default when mounting on a shared gateway", async () => {
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-alice",
+      slug: "alice",
+      tier: "trial",
+      selectedTier: "personal",
+      gatewayId: "shared-0",
+      status: "provisioning",
+      agentIds: [],
+      repoUrl: "",
+      mattermostUserId: ALICE_OWNER_MM_ID,
+      customerMmUserId: ALICE_OWNER_MM_ID,
+      greetingPosted: false,
+      channels: [],
+      projects: [],
+      ownerName: "Alice",
+      email: "alice@example.com",
+      displayName: "Alice",
+      lastName: "",
+      photoURL: "",
+      onboardingVibe: null,
+      coachToken: "pat-1",
+      coachMmUserId: "mm-alice-coach",
+      byotActive: false,
+      builderAgentDefault: {
+        primary: "platform-openrouter/z-ai/glm-5.2",
+        fallbacks: [],
+      },
+      systemConfig: {
+        agentModels: { "octogee-alice-coach": { primary: "openai/gpt-5.6-luna", fallbacks: [] } },
+      },
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(),
+      log: vi.fn(),
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+      buildPatch: (current: unknown) => {
+        agents: { list: Array<{ id?: string; model?: unknown }> };
+      };
+    };
+    const patch = args.buildPatch({ agents: { list: [] }, bindings: [] });
+    const coach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach");
+
+    expect(coach?.model).toEqual({ primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] });
+  });
+
   it("puts a catalog Builder's final coach model and fallbacks in the initial mount patch", async () => {
     const snapshot: FleetBrokerUserSnapshot = {
       uid: "uid-alice",

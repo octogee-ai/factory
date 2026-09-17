@@ -21,7 +21,7 @@ import {
   MIGRATING_IN_PIN_TTL_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
-import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
+import { agentIdBelongsToSlug, catalogEntryForModelRef } from "../../shared/types/agent-models.js";
 import { projectCheckoutEnabled, projectRepoSourceFromDoc } from "../../shared/types/project.js";
 import {
   applyConfigPatch,
@@ -746,10 +746,14 @@ function projectMountPolicy(
   builderGateway: boolean,
 ): Record<string, unknown> {
   if (builderGateway || snapshot.byotActive === true) return patch;
-  return customerMountConfigPatch(
-    current, patch, snapshot.slug,
-    initialCoachModelSelection(snapshot)?.primary ?? DEFAULT_FREE_TIER_MODEL_REF,
-  );
+  return customerMountConfigPatch(current, patch, snapshot.slug, mountSafeModelRef(snapshot));
+}
+
+function mountSafeModelRef(snapshot: UserSnapshot): string {
+  const selected = initialCoachModelSelection(snapshot)?.primary;
+  if (selected && catalogEntryForModelRef(selected)) return selected;
+  return parseBuilderAgentModelDefault(snapshot.builderAgentDefault)?.primary
+    ?? DEFAULT_FREE_TIER_MODEL_REF;
 }
 
 function buildCustomerProjectAgents(
