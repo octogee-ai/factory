@@ -836,6 +836,7 @@ export async function cloneProjectRepo(
       }
       return replaceProjectRepoCheckout(slug, projectSlug, dest, giteaRepoName, opts);
     }
+    if (restoreEmptiedWorkspaceTree(dest, `${slug}/${projectSlug}`) === null) return false;
     setRepoSshCommand(dest, slug, {
       repoSource: opts.repoSource,
       giteaRepoName,
