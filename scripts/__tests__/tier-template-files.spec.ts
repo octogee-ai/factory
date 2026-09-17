@@ -34,12 +34,12 @@ async function load() {
 describe("listTierTemplateFiles", () => {
   it("returns only the files present in the tier directory", async () => {
     seedTier("trial", ["AGENTS.md", "BOOTSTRAP.md", "SOUL.md", "IDENTITY.md"]);
-    seedTier("hobby", ["AGENTS.md", "BOOTSTRAP.md", "SOUL.md", "MEMORY.md"]);
+    seedTier("paid", ["AGENTS.md", "BOOTSTRAP.md", "SOUL.md", "MEMORY.md"]);
     const { listTierTemplateFiles } = await load();
     expect(listTierTemplateFiles("trial").sort()).toEqual(
       ["AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md"],
     );
-    expect(listTierTemplateFiles("hobby").sort()).toEqual(
+    expect(listTierTemplateFiles("paid").sort()).toEqual(
       ["AGENTS.md", "BOOTSTRAP.md", "MEMORY.md", "SOUL.md"],
     );
   });
@@ -86,7 +86,7 @@ function customerDir(name = "alice"): string {
 
 describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => {
   it("regenerates a missing gitignored file without clobbering a present tracked one", async () => {
-    seedTier("hobby", ["AGENTS.md", "SOUL.md"]);
+    seedTier("paid", ["AGENTS.md", "SOUL.md"]);
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "SOUL.md"), "USER-EDITED SOUL\n", "utf-8");
 
@@ -100,7 +100,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
   });
 
   it("removes legacy AGENTS.md and TOOLS.md ignores so context files are customer-owned", async () => {
-    seedTier("hobby", ["AGENTS.md", "TOOLS.md"]);
+    seedTier("paid", ["AGENTS.md", "TOOLS.md"]);
     const dir = customerDir("owned");
     fs.writeFileSync(
       path.join(dir, ".gitignore"),
@@ -119,7 +119,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
   });
 
   it("writes every template file on a fresh dir", async () => {
-    seedTier("hobby", ["AGENTS.md", "SOUL.md", "TOOLS.md"]);
+    seedTier("paid", ["AGENTS.md", "SOUL.md", "TOOLS.md"]);
     const dir = customerDir("bob");
 
     const { writeTierTemplateFiles } = await load();
@@ -132,7 +132,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
   });
 
   it("does not copy retired context directories into customer workspaces", async () => {
-    seedTier("hobby", ["AGENTS.md"]);
+    seedTier("paid", ["AGENTS.md"]);
     const retiredContextDir = path.join(tmpRoot, ["br", "ain-context"].join(""));
     fs.mkdirSync(retiredContextDir, { recursive: true });
     fs.writeFileSync(path.join(retiredContextDir, "DEVELOPER.md"), "# Retired\n", "utf-8");
@@ -146,7 +146,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
   });
 
   it("is a no-op when every file already exists", async () => {
-    seedTier("hobby", ["AGENTS.md"]);
+    seedTier("paid", ["AGENTS.md"]);
     const dir = customerDir("carol");
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "EXISTING\n", "utf-8");
 
@@ -158,7 +158,7 @@ describe("writeTierTemplateFiles — write-if-missing (cattle recovery)", () => 
   });
 
   it("applies template placeholders in regenerated files", async () => {
-    const tierDir = path.join(tmpRoot, "tiers", "hobby");
+    const tierDir = path.join(tmpRoot, "tiers", "paid");
     fs.mkdirSync(tierDir, { recursive: true });
     fs.writeFileSync(path.join(tierDir, "AGENTS.md"), "Hello {{slug}}\n", "utf-8");
     const dir = customerDir("dave");

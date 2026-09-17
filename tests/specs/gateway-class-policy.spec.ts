@@ -593,7 +593,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     )).toEqual([]);
   });
 
-  it("builder class keeps the overlay at full power and applies only the tenant secret boundary", () => {
+  it("builder class keeps the overlay at full power, adding only the platform capability surface and the tenant secret boundary", () => {
     const out = runPolicy("builder", {
       auth: {
         profiles: {
@@ -739,7 +739,16 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       evaluateEnabled: true,
       executablePath: "/usr/bin/chromium",
     });
-    expect(out.plugins.allow).toEqual(["discord-bridge", "browser", "codex"]);
+    expect(out.plugins.allow).toEqual([
+      "discord-bridge",
+      "browser",
+      "codex",
+      "octogee-connector-tools",
+      "octogee-project-tools",
+      "octogee-board-tools",
+      "octogee-ops-tools",
+      "octogee-access-tools",
+    ]);
     expect(out.plugins.entries["discord-bridge"]).toEqual({
       enabled: true,
       config: {
@@ -787,7 +796,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.tools).toEqual({
       profile: "research",
       allow: ["read", "discord_send", "exec", "browser"],
-      alsoAllow: ["discord_admin", "exec", "browser"],
+      alsoAllow: ["discord_admin", "exec", "browser", ...workflowTools],
       deny: ["builder-tool"],
       exec: { mode: "unrestricted", keep: true },
       fs: { workspaceOnly: false },
@@ -811,6 +820,88 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         allowSymlinkTargetWrites: true,
       },
     });
+  });
+
+  it("converges the platform capability surface onto a legacy builder gateway", () => {
+    const out = runPolicy("builder", {
+      tools: {
+        profile: "research",
+        allow: ["read", "exec"],
+        alsoAllow: [
+          "octogee_project_create",
+          "octogee_project_commit",
+          "octogee_project_list",
+          "octogee_ask_ops",
+          "discord_admin",
+        ],
+        deny: ["builder-tool"],
+      },
+      plugins: {
+        allow: ["mattermost", "octogee-project-tools"],
+        entries: { "octogee-project-tools": { enabled: true, config: {} } },
+      },
+    });
+
+    expect(out.tools.alsoAllow).toEqual(expect.arrayContaining(workflowTools));
+    expect(out.tools.alsoAllow).toContain("discord_admin");
+    expect(out.tools.profile).toBe("research");
+    expect(out.tools.allow).toEqual(["read", "exec"]);
+    expect(out.tools.deny).toEqual(["builder-tool"]);
+    expect(out.plugins.allow).toEqual(expect.arrayContaining([
+      "octogee-board-tools",
+      "octogee-ops-tools",
+      "octogee-access-tools",
+      "octogee-connector-tools",
+    ]));
+    expect(out.plugins.entries["octogee-board-tools"].enabled).toBe(true);
+  });
+
+  it("does not narrow a permissive builder plugin allowlist while converging capabilities", () => {
+    const out = runPolicy("builder", { tools: { profile: "research" } });
+
+    expect(out.plugins.allow).toBeUndefined();
+    expect(out.plugins.entries["octogee-board-tools"].enabled).toBe(true);
+    expect(out.tools.alsoAllow).toEqual(expect.arrayContaining(workflowTools));
+  });
+
+  it("keeps the platform plugins allowed when per-user control identity materializes an allowlist", () => {
+    const out = runPolicyWithDir(
+      "builder",
+      { plugins: { allow: ["mattermost"] } },
+      undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_OWNER_UID: "uid-eggman" },
+    ).config;
+
+    expect(out.plugins.allow).toEqual(expect.arrayContaining([
+      "mattermost",
+      "octogee-identity-tools",
+      "octogee-project-tools",
+      "octogee-ops-tools",
+      "octogee-board-tools",
+      "octogee-access-tools",
+      "octogee-connector-tools",
+    ]));
+  });
+
+  it("does not invent a plugin allowlist under per-user control identity when the builder had none", () => {
+    const out = runPolicyWithDir(
+      "builder",
+      { tools: { profile: "research" } },
+      undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", OPENCLAW_OWNER_UID: "uid-eggman" },
+    ).config;
+
+    expect(out.plugins.allow).toBeUndefined();
+    expect(out.plugins.entries["octogee-project-tools"].enabled).toBe(true);
+  });
+
+  it("respects a builder's deliberate platform-plugin opt-out", () => {
+    const out = runPolicy("builder", {
+      plugins: { entries: { "octogee-board-tools": { enabled: false } } },
+    });
+
+    expect(out.plugins.entries["octogee-board-tools"].enabled).toBe(false);
+    expect(out.plugins.entries["octogee-ops-tools"].enabled).toBe(true);
   });
 
   it("builder class leaves user-owned runtime stores untouched", () => {

@@ -252,6 +252,22 @@ async function projectSenderAuthorized(
   return coach.data()?.mattermost?.userId === senderId;
 }
 
+// Agent support serves both lanes. Dispatch on the agent's own identity so a
+// project agent is verified as a project agent: the owner verifier refuses any
+// kind other than "coach", which would 403 every project-lane Ops question.
+export function createAgentSupportTurnVerifier(
+  db: Firestore,
+): OwnerWorkspaceTurnVerifier {
+  const verifyCoach = createOwnerWorkspaceTurnVerifier(db);
+  const verifyProject = createProjectWorkspaceTurnVerifier(db);
+  return async (turn) => {
+    const kind = parseAgentId(turn.agentId).kind;
+    if (kind === "project") return verifyProject(turn);
+    if (kind === "coach") return verifyCoach(turn);
+    return false;
+  };
+}
+
 export function createProjectWorkspaceTurnVerifier(
   db: Firestore,
 ): OwnerWorkspaceTurnVerifier {

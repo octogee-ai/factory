@@ -6,8 +6,19 @@ import { applyTemplatePlaceholders } from "./helpers.js";
 // the customer's, BOOTSTRAP.md is transient. These two carry no per-customer
 // personalization placeholders (unlike SOUL.md/USER.md's {{ownerName}}) — the
 // property that makes them safe for context-file-convergence.ts to re-assert
-// unconditionally for house_only plans.
+// unconditionally on every plan.
 export const PLATFORM_CONVERGED_CONTEXT_FILES = new Set(["AGENTS.md", "TOOLS.md"]);
+const TEMPLATE_TIER_BY_NAME = {
+    free: "free",
+    personal_free: "free",
+    trial: "trial",
+};
+// Total by construction: the free and trial tier names are enumerated and every
+// other tier — personal, personal_pro, personal_pro_max, hobby, pro, team,
+// enterprise, builder, operator — reads the paid templates.
+export function templateTierForName(tier) {
+    return TEMPLATE_TIER_BY_NAME[tier] ?? "paid";
+}
 function templatesRoot() {
     return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;
 }
@@ -47,11 +58,12 @@ function removeLegacyContextIgnores(customerDir) {
 // hook mkdirs the directory on demand and every native reader tolerates absence.
 export function writeTierTemplateFiles(customerDir, tier, templateVars) {
     const written = [];
-    for (const file of listTierTemplateFiles(tier)) {
+    const templateTier = templateTierForName(tier);
+    for (const file of listTierTemplateFiles(templateTier)) {
         const dest = path.join(customerDir, file);
         if (fs.existsSync(dest))
             continue;
-        fs.writeFileSync(dest, readTierTemplateFile(tier, file, templateVars), "utf-8");
+        fs.writeFileSync(dest, readTierTemplateFile(templateTier, file, templateVars), "utf-8");
         written.push(file);
     }
     if (removeLegacyContextIgnores(customerDir)) {

@@ -118,6 +118,7 @@ const PRODUCTIVITY_TOOL_NAMES = OCTOGEE_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 const PROJECT_AGENT_ALLOWED_TOOLS = [
   "octogee_chat_set_identity",
+  "octogee_ask_ops",
   "message",
   "read",
   "ls",
@@ -374,13 +375,6 @@ function removeSharedSubagentDefaults(config) {
   }
 }
 
-function allowOctogeeWorkflowTools(config) {
-  config.tools ??= {};
-  config.tools.profile = "coding";
-  delete config.tools.allow;
-  config.tools.alsoAllow = [...OCTOGEE_WORKFLOW_TOOLS];
-}
-
 function isPolicyCodexAuthProfile(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   return (
@@ -397,54 +391,60 @@ export function removePolicyCodexAuthPlaceholder(config) {
   }
 }
 
-function allowPlugin(config, id) {
-  config.plugins ??= {};
-  if (Array.isArray(config.plugins.allow)) {
-    if (!config.plugins.allow.includes(id)) config.plugins.allow.push(id);
-  } else {
-    config.plugins.allow = [id];
-  }
-  config.plugins.entries ??= {};
-}
-
-function enableConnectorTools(config) {
-  allowPlugin(config, CONNECTOR_TOOLS_PLUGIN);
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].enabled = true;
-  config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config ??= {};
+// Customers never approve connector writes per-call; the capability convergence
+// has already allowed and enabled the plugin by the time this runs.
+function clearConnectorWriteApproval(config) {
   delete config.plugins.entries[CONNECTOR_TOOLS_PLUGIN].config.requireWriteApproval;
 }
 
-// Preserved/restored configs predate the plugin; converge it at boot so both
-// shared and builder classes gain project CRUD without waiting for a fresh
-// template render. The client resolves brokerUrl/tokenPath from env when the
-// entry config is empty.
-function enableProjectTools(config) {
-  allowPlugin(config, PROJECT_TOOLS_PLUGIN);
-  config.plugins.entries[PROJECT_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[PROJECT_TOOLS_PLUGIN].enabled = true;
-  config.plugins.entries[PROJECT_TOOLS_PLUGIN].config ??= {};
+// Plugins the platform itself ships. A gateway that was materialized before one
+// of these existed must gain it at boot, or its agents never see the tools the
+// plugin registers even when the image carries them.
+const PLATFORM_CAPABILITY_PLUGINS = [
+  CONNECTOR_TOOLS_PLUGIN,
+  PROJECT_TOOLS_PLUGIN,
+  BOARD_TOOLS_PLUGIN,
+  OPS_TOOLS_PLUGIN,
+  ACCESS_TOOLS_PLUGIN,
+];
+
+// A builder gateway's config is persisted and restored across every VM
+// replacement, so an absent `plugins.allow` means "no allowlist" and must stay
+// absent — materializing one here would silently narrow the gateway to exactly
+// the platform's own plugins. An explicitly disabled entry is a Builder
+// decision and survives; only a missing entry is defaulted on.
+function enablePlatformPlugin(config, id, builder) {
+  config.plugins ??= {};
+  config.plugins.entries ??= {};
+  if (Array.isArray(config.plugins.allow)) {
+    if (!config.plugins.allow.includes(id)) config.plugins.allow.push(id);
+  } else if (!builder) {
+    config.plugins.allow = [id];
+  }
+  config.plugins.entries[id] ??= {};
+  config.plugins.entries[id].config ??= {};
+  if (builder) config.plugins.entries[id].enabled ??= true;
+  else config.plugins.entries[id].enabled = true;
 }
 
-function enableBoardTools(config) {
-  allowPlugin(config, BOARD_TOOLS_PLUGIN);
-  config.plugins.entries[BOARD_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[BOARD_TOOLS_PLUGIN].enabled = true;
-  config.plugins.entries[BOARD_TOOLS_PLUGIN].config ??= {};
-}
-
-function enableOpsTools(config) {
-  allowPlugin(config, OPS_TOOLS_PLUGIN);
-  config.plugins.entries[OPS_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[OPS_TOOLS_PLUGIN].enabled = true;
-  config.plugins.entries[OPS_TOOLS_PLUGIN].config ??= {};
-}
-
-function enableAccessTools(config) {
-  allowPlugin(config, ACCESS_TOOLS_PLUGIN);
-  config.plugins.entries[ACCESS_TOOLS_PLUGIN] ??= {};
-  config.plugins.entries[ACCESS_TOOLS_PLUGIN].enabled = true;
-  config.plugins.entries[ACCESS_TOOLS_PLUGIN].config ??= {};
+// The platform's capability surface: the tools Octogee ships and the plugins
+// that register them. Every gateway class converges onto it, because no gateway
+// owner chose these and none can be expected to maintain them by hand. The
+// restriction half of the class policy (deny lists, terminal, session
+// visibility, config-mutation locks) stays customer-only, which is why a
+// builder gateway converges additively: new platform capabilities arrive and
+// the Builder's own profile, allow, deny and extra tools survive untouched.
+function convergePlatformCapabilities(config, builder) {
+  config.tools ??= {};
+  if (builder) {
+    const owned = Array.isArray(config.tools.alsoAllow) ? config.tools.alsoAllow : [];
+    config.tools.alsoAllow = [...new Set([...owned, ...OCTOGEE_WORKFLOW_TOOLS])];
+  } else {
+    config.tools.profile = "coding";
+    delete config.tools.allow;
+    config.tools.alsoAllow = [...OCTOGEE_WORKFLOW_TOOLS];
+  }
+  for (const id of PLATFORM_CAPABILITY_PLUGINS) enablePlatformPlugin(config, id, builder);
 }
 
 function disableCodex(config) {
@@ -1399,12 +1399,8 @@ function applyCustomerPolicy(config) {
   disableCustomerAutomationsAndSkillWrites(config);
   forceCustomerMattermostProjection(config);
   forceCustomerWorkspaceOnly(config);
-  allowOctogeeWorkflowTools(config);
-  enableProjectTools(config);
-  enableBoardTools(config);
-  enableOpsTools(config);
-  enableAccessTools(config);
-  enableConnectorTools(config);
+  convergePlatformCapabilities(config, false);
+  clearConnectorWriteApproval(config);
   removePolicyCodexAuthPlaceholder(config);
   disableCodex(config);
 }
@@ -1504,6 +1500,7 @@ function applyBuilderPolicy(config, openclawDir, env) {
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};
   config.agents.defaults.modelPolicy.allow = [];
+  convergePlatformCapabilities(config, true);
   preserveBuilderPluginConfiguration(config);
   projectBuilderSecretProviders(config, openclawDir);
   applyControlIdentityPolicy(config, env);
@@ -1524,7 +1521,13 @@ function applyControlIdentityPolicy(config, env) {
     auth.identityScopes = openClawIdentityScopes(resolveOwnerUidFromEnv(env));
     config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
     config.gateway.roles ??= openClawOperatorRoles(env.GATEWAY_BUILDER_SLUG);
-    config.plugins.allow = [...new Set([...(config.plugins.allow ?? []), "octogee-identity-tools"])];
+    // Only extend an allowlist that already exists. An absent `plugins.allow`
+    // means "every plugin is allowed", so identity-tools is permitted already;
+    // materializing a list here would narrow the gateway to this single entry
+    // and drop the platform capability plugins convergence just enabled.
+    if (Array.isArray(config.plugins.allow)) {
+      config.plugins.allow = [...new Set([...config.plugins.allow, "octogee-identity-tools"])];
+    }
     return;
   }
   const gateway = config.gateway;

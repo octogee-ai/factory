@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { listTierTemplateFiles, writeTierTemplateFiles } from "./tier-template-files.js";
+import { listTierTemplateFiles, templateTierForName, writeTierTemplateFiles } from "./tier-template-files.js";
 
 let tmpRoot: string;
 let prevTemplatesDir: string | undefined;
@@ -34,6 +34,23 @@ function customerDir(name = "alice"): string {
   return dir;
 }
 
+describe("templateTierForName", () => {
+  it("maps the free tier names onto the free templates", () => {
+    expect(templateTierForName("free")).toBe("free");
+    expect(templateTierForName("personal_free")).toBe("free");
+  });
+
+  it("maps trial onto the trial templates", () => {
+    expect(templateTierForName("trial")).toBe("trial");
+  });
+
+  it("maps every paid tier in both namespaces onto the paid templates", () => {
+    for (const tier of ["personal", "personal_pro", "personal_pro_max", "hobby", "pro", "team", "enterprise", "builder", "operator"]) {
+      expect(templateTierForName(tier)).toBe("paid");
+    }
+  });
+});
+
 describe("listTierTemplateFiles", () => {
   it("returns sorted markdown files for the selected tier only", () => {
     seedTier("trial", {
@@ -54,7 +71,7 @@ describe("listTierTemplateFiles", () => {
 
 describe("writeTierTemplateFiles", () => {
   it("writes missing tier files without clobbering customer edits", () => {
-    seedTier("hobby", {
+    seedTier("paid", {
       "AGENTS.md": "Hello {{slug}}\n",
       "SOUL.md": "Template soul\n",
     });
@@ -69,7 +86,7 @@ describe("writeTierTemplateFiles", () => {
   });
 
   it("seeds NO memory note and NO memory directory — openclaw does memory, not Octogee", () => {
-    seedTier("hobby", { "AGENTS.md": "# Agents\n" });
+    seedTier("paid", { "AGENTS.md": "# Agents\n" });
     const dir = customerDir("memoryless");
 
     const written = writeTierTemplateFiles(dir, "hobby", {});
@@ -79,7 +96,7 @@ describe("writeTierTemplateFiles", () => {
   });
 
   it("removes retired context-file ignores while preserving unrelated ignore rules", () => {
-    seedTier("hobby", {
+    seedTier("paid", {
       "AGENTS.md": "# Agents\n",
       "TOOLS.md": "# Tools\n",
     });
@@ -112,7 +129,7 @@ describe("writeTierTemplateFiles", () => {
   });
 
   it("is a no-op when tier files and ignores are already current", () => {
-    seedTier("hobby", {
+    seedTier("paid", {
       "AGENTS.md": "# Agents\n",
     });
     const dir = customerDir("current");

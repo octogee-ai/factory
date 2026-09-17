@@ -2,6 +2,7 @@ import type { Request } from "express";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createAgentSupportTurnVerifier,
   createOwnerWorkspaceTurnVerifier,
   createProjectWorkspaceTurnVerifier,
 } from "./openclaw-owner-turn.js";
@@ -393,4 +394,52 @@ it('accepts only the assigned workspace Coach when it delegates in the canonical
   const check = (sender: string) => verify(input(context(`channel:${CHANNEL_ID}`, { accountId: 'eggman-proj-orbit', requesterSenderId: sender }), { agentId: 'octogee-eggman-proj-orbit-coach' }));
   await expect(check('b'.repeat(26))).resolves.toBe(true);
   await expect(check('x'.repeat(26))).resolves.toBe(false);
+});
+
+describe("createAgentSupportTurnVerifier", () => {
+  it("verifies a project agent through the project lane instead of refusing it as a non-coach", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/projects/orbit/channels/general" }],
+    });
+    const verify = createAgentSupportTurnVerifier(harness.db);
+
+    await expect(verify(input(
+      context(`channel:${CHANNEL_ID}`, { accountId: "eggman-proj-orbit" }),
+      { agentId: "octogee-eggman-proj-orbit-coach" },
+    ))).resolves.toBe(true);
+  });
+
+  it("still verifies a workspace coach through the owner lane", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/channels/coach-dm" }],
+    });
+    const verify = createAgentSupportTurnVerifier(harness.db);
+
+    await expect(verify(input(context(`user:${REQUESTER_ID}`)))).resolves.toBe(true);
+  });
+
+  it("refuses a project agent presenting its workspace coach account", async () => {
+    const harness = fakeDb({
+      workspaceOwner: "uid-eggman",
+      channels: [{ path: "workspaces/eggman/projects/orbit/channels/general" }],
+    });
+    const verify = createAgentSupportTurnVerifier(harness.db);
+
+    await expect(verify(input(
+      context(`channel:${CHANNEL_ID}`, { accountId: "eggman-coach" }),
+      { agentId: "octogee-eggman-proj-orbit-coach" },
+    ))).resolves.toBe(false);
+  });
+
+  it("refuses an identity that is neither a coach nor a project agent", async () => {
+    const harness = fakeDb({ workspaceOwner: "uid-eggman" });
+    const verify = createAgentSupportTurnVerifier(harness.db);
+
+    await expect(verify(input(
+      context(`channel:${CHANNEL_ID}`),
+      { agentId: "some-other-agent" },
+    ))).resolves.toBe(false);
+  });
 });

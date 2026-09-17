@@ -17,11 +17,13 @@ beforeEach(() => {
   prevTemplatesDir = process.env.OCTOGEE_TEMPLATES_DIR;
   process.env.OCTOGEE_TEMPLATES_DIR = tmpRoot;
 
-  const freeDir = path.join(tmpRoot, "tiers", "free");
-  fs.mkdirSync(freeDir, { recursive: true });
-  fs.writeFileSync(path.join(freeDir, "AGENTS.md"), "# Free AGENTS for {{slug}}\n", "utf-8");
-  fs.writeFileSync(path.join(freeDir, "TOOLS.md"), "# Free TOOLS\n", "utf-8");
-  fs.writeFileSync(path.join(freeDir, "SOUL.md"), "# Free SOUL {{ownerName}}\n", "utf-8");
+  for (const [tier, label] of [["free", "Free"], ["trial", "Trial"], ["paid", "Paid"]]) {
+    const tierDir = path.join(tmpRoot, "tiers", tier);
+    fs.mkdirSync(tierDir, { recursive: true });
+    fs.writeFileSync(path.join(tierDir, "AGENTS.md"), `# ${label} AGENTS for {{slug}}\n`, "utf-8");
+    fs.writeFileSync(path.join(tierDir, "TOOLS.md"), `# ${label} TOOLS\n`, "utf-8");
+    fs.writeFileSync(path.join(tierDir, "SOUL.md"), `# ${label} SOUL {{ownerName}}\n`, "utf-8");
+  }
 });
 
 afterEach(() => {
@@ -47,6 +49,29 @@ function liveSignupOffer(): Record<string, unknown> {
     configHash: "config-a",
     claimedAt,
     endsAt: new Date(claimedAt.getTime() + 7 * 24 * 60 * 60 * 1000),
+  };
+}
+
+// A Signup Offer whose Personal plan is personal_free: the offer is live and
+// grants a Builder tier, but model access still resolves house_only. The
+// combination that makes template-tier order load-bearing.
+function houseOnlySignupOffer(): Record<string, unknown> {
+  const claimedAt = Date.now() - 24 * 60 * 60 * 1000;
+  return {
+    schemaVersion: 4,
+    offerId: "builder-signup",
+    offerVersion: 3,
+    personalTier: "personal_free",
+    builderTier: "hobby",
+    configHash: "momentum-v3",
+    claimedAt: new Date(claimedAt),
+    endsAt: new Date(claimedAt + 7 * 24 * 60 * 60 * 1000),
+    budgetPolicy: {
+      schemaVersion: 1,
+      currency: "USD",
+      cumulativeUnlockUsd: [4.8, 5.6, 6.4, 6.8, 7.2, 7.6, 8],
+      hardCapUsd: 8,
+    },
   };
 }
 
@@ -99,41 +124,64 @@ describe("reassertConvergedContextFiles", () => {
     expect(fs.statSync(path.join(dir, "AGENTS.md")).mtimeMs).toBe(beforeMtime);
   });
 
-  it("does not converge a paid plan's context files, even if they differ from the free template", () => {
+  it("converges a paid plan onto the paid template, overwriting the customer's own edits", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "paid customer's own AGENTS.md\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" });
+    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
 
-    expect(changed).toEqual([]);
-    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe(
-      "paid customer's own AGENTS.md\n",
-    );
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Paid AGENTS for alice\n");
+    expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Paid TOOLS\n");
   });
 
-  it("does not converge a live Signup Offer (catalog access), even though the base tier is personal_free", () => {
+  it("converges a live Signup Offer onto the trial template, not the free one", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial customer's own AGENTS.md\n", "utf-8");
 
     const changed = reassertConvergedContextFiles("alice", dir, {
       tier: "personal_free",
       trialGrant: liveSignupOffer(),
-    });
+    }, { slug: "alice" });
 
-    expect(changed).toEqual([]);
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Trial AGENTS for alice\n");
   });
 
-  it("stops converging once a house-only customer upgrades — leaves their edits alone from then on", () => {
+  it("follows a house-only customer onto the paid template when they upgrade", () => {
     const dir = customerDir();
-    reassertConvergedContextFiles("alice", dir, { tier: "personal_free" });
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "now-paid customer's own edits\n", "utf-8");
+    reassertConvergedContextFiles("alice", dir, { tier: "personal_free" }, { slug: "alice" });
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Free AGENTS for alice\n");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" });
+    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
 
-    expect(changed).toEqual([]);
-    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe(
-      "now-paid customer's own edits\n",
-    );
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Paid AGENTS for alice\n");
+  });
+
+  it("prefers a live Signup Offer over house-only model access when picking the template", () => {
+    const dir = customerDir();
+
+    const changed = reassertConvergedContextFiles("alice", dir, {
+      tier: "personal_free",
+      trialGrant: houseOnlySignupOffer(),
+    }, { slug: "alice" });
+
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Trial AGENTS for alice\n");
+  });
+
+  it("keeps BOOTSTRAP.md for a live Signup Offer whose model access is still house-only", () => {
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "# first-run ritual\n", "utf-8");
+
+    const changed = reassertConvergedContextFiles("alice", dir, {
+      tier: "personal_free",
+      trialGrant: houseOnlySignupOffer(),
+    }, { slug: "alice" });
+
+    expect(changed).not.toContain("BOOTSTRAP.md");
+    expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
   });
 
   it("applies template placeholders using the vars passed in", () => {
@@ -164,17 +212,20 @@ describe("reassertConvergedContextFiles", () => {
     expect(changed).toEqual([]);
   });
 
-  it("leaves a paid plan's BOOTSTRAP.md alone", () => {
+  it("leaves a paid plan's BOOTSTRAP.md alone while still converging the owned context files", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "BOOTSTRAP.md"), "# paid tier first-run ritual\n", "utf-8");
 
-    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" });
+    const changed = reassertConvergedContextFiles("alice", dir, { tier: "pro" }, { slug: "alice" });
 
-    expect(changed).toEqual([]);
+    expect(changed).not.toContain("BOOTSTRAP.md");
     expect(fs.existsSync(path.join(dir, "BOOTSTRAP.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "BOOTSTRAP.md"), "utf-8")).toBe(
+      "# paid tier first-run ritual\n",
+    );
   });
 
-  it("does not converge a snapshot from the direct Firestore mapping when the user doc carries a live Signup Offer", () => {
+  it("converges a snapshot from the direct Firestore mapping carrying a live Signup Offer", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "trial customer's own AGENTS.md\n", "utf-8");
     const snapshot = mapUserDocToSnapshot(
@@ -183,17 +234,16 @@ describe("reassertConvergedContextFiles", () => {
       [],
     );
 
-    const changed = reassertConvergedContextFiles("alice", dir, snapshot);
+    const changed = reassertConvergedContextFiles("alice", dir, snapshot, { slug: "alice" });
 
-    expect(changed).toEqual([]);
-    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe(
-      "trial customer's own AGENTS.md\n",
-    );
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe("# Trial AGENTS for alice\n");
   });
 
-  it("does not converge a snapshot from the direct Firestore mapping when the user doc carries an active builder subscription", () => {
+  it("converges a paying Builder's workspace onto the paid template — the drift that froze a Builder's tool manual", () => {
     const dir = customerDir();
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "builder's own AGENTS.md\n", "utf-8");
+    fs.writeFileSync(path.join(dir, "TOOLS.md"), "# tool manual from signup day\n", "utf-8");
     const snapshot = mapUserDocToSnapshot(
       "u1",
       {
@@ -204,12 +254,10 @@ describe("reassertConvergedContextFiles", () => {
       [],
     );
 
-    const changed = reassertConvergedContextFiles("alice", dir, snapshot);
+    const changed = reassertConvergedContextFiles("alice", dir, snapshot, { slug: "alice" });
 
-    expect(changed).toEqual([]);
-    expect(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf-8")).toBe(
-      "builder's own AGENTS.md\n",
-    );
+    expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(fs.readFileSync(path.join(dir, "TOOLS.md"), "utf-8")).toBe("# Paid TOOLS\n");
   });
 });
 

@@ -2,23 +2,39 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { resolveBillingProfile, type TierResolvable } from "@octogee/shared/types/billing";
-import { PLATFORM_CONVERGED_CONTEXT_FILES, readTierTemplateFile } from "./tier-template-files.js";
+import {
+  PLATFORM_CONVERGED_CONTEXT_FILES,
+  readTierTemplateFile,
+  type TemplateTier,
+} from "./tier-template-files.js";
 import { CUSTOMERS_DIR, log } from "./config.js";
 
-// The tier dir whose AGENTS.md/TOOLS.md content is authoritative for every
-// house_only plan, regardless of which legacy tier dir seeded the customer's
-// workspace at signup (a trial-boosted signup seeds tiers/trial/, but if the
-// boost lapses into house_only the coach must converge onto tiers/free/ — the
-// seed tier and the converged tier are deliberately different concepts).
-const CONVERGED_CONTEXT_TEMPLATE_TIER = "free";
+// The seed tier and the converged tier are deliberately different concepts: a
+// workspace is seeded once from whatever tier the customer signed up on, and
+// converges from then on onto whatever their plan resolves to today. A
+// trial-boosted signup seeds tiers/trial/ and converges onto tiers/free/ when
+// the boost lapses, onto tiers/paid/ when they subscribe.
+// Trial state is checked before model access on purpose: a Signup Offer whose
+// Personal plan is personal_free still resolves modelAccess "house_only", and
+// that customer is mid-onboarding on a trial, not a lapsed free user.
+function convergedContextTemplateTier(plan: {
+  modelAccess: string;
+  rail: string;
+  trialDaysRemaining: number | null;
+}): TemplateTier {
+  if (plan.rail === "signup_offer" || plan.trialDaysRemaining !== null) return "trial";
+  if (plan.modelAccess === "house_only") return "free";
+  return "paid";
+}
 
-// Files the platform REMOVES for house_only plans: a free customer is already
+// Files the platform REMOVES for customers on the free template: they are already
 // bootstrapped by platform onboarding by the time the coach runs, so a seeded
-// BOOTSTRAP.md (pre-removal seeds, or a Gitea boot-sync resurrection — the
-// mount-time reassert re-deletes it and the periodic workspace git sync
-// commits the deletion) is dead context weight in exactly the tier where
-// context is the budget. Same drift-only semantics as the converged writes:
-// absent file, no-op, no churn.
+// BOOTSTRAP.md (pre-removal seeds, or a Gitea boot-sync resurrection) is dead
+// context weight in exactly the tier where context is the budget. The
+// mount-time reassert re-deletes it on the gateway's own disk, which is what
+// the agent reads; reaching Gitea needs a commit, and the only commit path is
+// the agent's own workspace_commit. Same drift-only semantics as the converged
+// writes: absent file, no-op, no churn.
 const CONVERGED_CONTEXT_REMOVED_FILES = ["BOOTSTRAP.md"] as const;
 
 function writeAtomic(target: string, content: string): void {
@@ -27,16 +43,19 @@ function writeAtomic(target: string, content: string): void {
   fs.renameSync(tmp, target);
 }
 
-// Re-asserts AGENTS.md/TOOLS.md to the platform's free-tier content for
-// house_only plans only — the same convergence semantics as the model pin
-// (idempotent, only-on-drift so a reconcile tick that finds no change makes
-// no write and no git history churn). Every other context file (SOUL.md,
-// USER.md, MEMORY.md, memory/*.md) stays customer-owned: PLATFORM_CONVERGED_CONTEXT_FILES
-// is the single list this function and the seed-once writer both honor, so the
-// two can never drift apart on which files are platform-owned. A plan that is not
-// house_only (paid, or a live Signup Offer) is a no-op — including for a
-// customer who WAS house_only and has since upgraded, which is how ownership
-// returns to the customer without deleting anything they wrote.
+// Re-asserts AGENTS.md/TOOLS.md to the platform's content for the customer's
+// current plan — the same convergence semantics as the model pin (idempotent,
+// only-on-drift so a reconcile tick that finds no change makes no write and no
+// git history churn). Every plan converges, including paid Builders: these two
+// files are the platform's own capability documentation, nobody chose their
+// contents, and a plan that never re-asserts them keeps whatever shipped the
+// day the workspace was seeded — which is how a Builder ends up reading a
+// months-old tool manual while the gateway image ships current tools.
+// Customer edits to these two files lose; SOUL.md, USER.md, MEMORY.md and
+// memory/*.md stay customer-owned and are where personalization belongs.
+// PLATFORM_CONVERGED_CONTEXT_FILES is the single list this function and the
+// seed-once writer both honor, so the two can never drift apart on which files
+// are platform-owned.
 export function reassertConvergedContextFiles(
   slug: string,
   customerDir: string,
@@ -44,11 +63,11 @@ export function reassertConvergedContextFiles(
   vars: Record<string, string> = {},
 ): string[] {
   const plan = resolveBillingProfile(userData);
-  if (plan.modelAccess !== "house_only") return [];
+  const templateTier = convergedContextTemplateTier(plan);
 
   const changed: string[] = [];
   for (const file of PLATFORM_CONVERGED_CONTEXT_FILES) {
-    const desired = readTierTemplateFile(CONVERGED_CONTEXT_TEMPLATE_TIER, file, vars);
+    const desired = readTierTemplateFile(templateTier, file, vars);
     const dest = path.join(customerDir, file);
     const existing = fs.existsSync(dest) ? fs.readFileSync(dest, "utf-8") : null;
     if (existing === desired) continue;
@@ -60,7 +79,8 @@ export function reassertConvergedContextFiles(
   }
 
   const removed: string[] = [];
-  for (const file of CONVERGED_CONTEXT_REMOVED_FILES) {
+  const removable = templateTier === "free" ? CONVERGED_CONTEXT_REMOVED_FILES : [];
+  for (const file of removable) {
     const dest = path.join(customerDir, file);
     if (!fs.existsSync(dest)) continue;
     fs.rmSync(dest);

@@ -176,6 +176,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
 export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) => tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
     "octogee_chat_set_identity",
+    "octogee_ask_ops",
     "message",
     "read",
     "ls",

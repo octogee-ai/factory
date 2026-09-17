@@ -85,6 +85,11 @@ describe("buildCustomerAgent", () => {
     expect(PROJECT_AGENT_DENIED_TOOLS).toEqual(expect.arrayContaining(["exec", "process"]));
   });
 
+  it("lets a project agent reach the Ops Agent on its own lane", () => {
+    expect(PROJECT_AGENT_ALLOWED_TOOLS).toContain("octogee_ask_ops");
+    expect(PROJECT_AGENT_DENIED_TOOLS).not.toContain("octogee_ask_ops");
+  });
+
   it("exposes capability and isolated runs only through customer project lanes", () => {
     const coach = buildCustomerAgent({
       uid: "uid-chris",

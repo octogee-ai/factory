@@ -260,6 +260,7 @@ export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "octogee_chat_set_identity",
+  "octogee_ask_ops",
   "message",
   "read",
   "ls",

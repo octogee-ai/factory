@@ -8,8 +8,27 @@ import { applyTemplatePlaceholders } from "./helpers.js";
 // the customer's, BOOTSTRAP.md is transient. These two carry no per-customer
 // personalization placeholders (unlike SOUL.md/USER.md's {{ownerName}}) — the
 // property that makes them safe for context-file-convergence.ts to re-assert
-// unconditionally for house_only plans.
+// unconditionally on every plan.
 export const PLATFORM_CONVERGED_CONTEXT_FILES = new Set(["AGENTS.md", "TOOLS.md"]);
+
+// Three template variants, one directory each. Billing has many tier names
+// across two namespaces (personal and builder); the context files only ever
+// varied three ways, and keeping a directory per tier name is what let five
+// near-identical copies drift apart between capability releases.
+export type TemplateTier = "free" | "trial" | "paid";
+
+const TEMPLATE_TIER_BY_NAME: Record<string, TemplateTier> = {
+  free: "free",
+  personal_free: "free",
+  trial: "trial",
+};
+
+// Total by construction: the free and trial tier names are enumerated and every
+// other tier — personal, personal_pro, personal_pro_max, hobby, pro, team,
+// enterprise, builder, operator — reads the paid templates.
+export function templateTierForName(tier: string): TemplateTier {
+  return TEMPLATE_TIER_BY_NAME[tier] ?? "paid";
+}
 
 function templatesRoot(): string {
   return process.env.OCTOGEE_TEMPLATES_DIR || TEMPLATES_DIR;
@@ -64,11 +83,12 @@ export function writeTierTemplateFiles(
   templateVars: Record<string, string>,
 ): string[] {
   const written: string[] = [];
+  const templateTier = templateTierForName(tier);
 
-  for (const file of listTierTemplateFiles(tier)) {
+  for (const file of listTierTemplateFiles(templateTier)) {
     const dest = path.join(customerDir, file);
     if (fs.existsSync(dest)) continue;
-    fs.writeFileSync(dest, readTierTemplateFile(tier, file, templateVars), "utf-8");
+    fs.writeFileSync(dest, readTierTemplateFile(templateTier, file, templateVars), "utf-8");
     written.push(file);
   }
 
