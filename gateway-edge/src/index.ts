@@ -330,7 +330,12 @@ if (process.env.NODE_ENV !== "test") {
     const routerLog = (message: string, meta?: Record<string, unknown>) => logger.error(message, meta);
     const vmRoutesFile = process.env.GATEWAY_VM_ROUTES_FILE;
     const resolveVmOrigin = vmRoutesFile
-      ? createVmRoutesResolver({ filePath: vmRoutesFile, edgePort: 3001, log: routerLog })
+      ? createVmRoutesResolver({
+          filePath: vmRoutesFile,
+          edgePort: 3001,
+          log: (message, meta) => logger.warn(message, meta),
+          logInfo: (message, meta) => logger.info(message, meta),
+        })
       : null;
     const server = createGatewayRouter({
       namespace,

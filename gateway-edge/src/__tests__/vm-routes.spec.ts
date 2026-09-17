@@ -14,6 +14,7 @@ describe("parseVmRoutes", () => {
 describe("createVmRoutesResolver", () => {
   function resolver(files: Record<string, { text: string; mtime: number } | undefined>) {
     const log = vi.fn();
+    const logInfo = vi.fn();
     const readFile = vi.fn((path: string) => {
       const file = files[path];
       if (!file) throw new Error("ENOENT");
@@ -25,8 +26,9 @@ describe("createVmRoutesResolver", () => {
       readFile,
       mtimeOf: (path) => files[path]?.mtime ?? null,
       log,
+      logInfo,
     });
-    return { resolve, readFile, log };
+    return { resolve, readFile, log, logInfo };
   }
 
   it("routes a listed gateway to its VM and leaves others to the default origin", () => {
@@ -58,5 +60,20 @@ describe("createVmRoutesResolver", () => {
 
     files["/routes.json"] = undefined;
     expect(resolve("b-x")).toBeUndefined();
+  });
+
+  it("reports a successful load as routine and only an unreadable table as a problem", () => {
+    const loaded = resolver({ "/routes.json": { text: '{"b-x":"172.20.0.9"}', mtime: 1 } });
+    loaded.resolve("b-x");
+    expect(loaded.logInfo).toHaveBeenCalledWith("[gateway-router] vm routes loaded", { count: 1 });
+    expect(loaded.log).not.toHaveBeenCalled();
+
+    const broken = resolver({ "/routes.json": { text: "{not json", mtime: 1 } });
+    broken.resolve("b-x");
+    expect(broken.log).toHaveBeenCalledOnce();
+    expect(broken.log.mock.calls[0][0]).toBe(
+      "[gateway-router] vm routes unreadable; keeping the previous table",
+    );
+    expect(broken.logInfo).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,7 @@ export interface VmRoutesResolverOptions {
   readFile?: (path: string) => string;
   mtimeOf?: (path: string) => number | null;
   log: (message: string, meta?: Record<string, unknown>) => void;
+  logInfo: (message: string, meta?: Record<string, unknown>) => void;
 }
 
 export function createVmRoutesResolver(opts: VmRoutesResolverOptions): (gatewayId: string) => string | undefined {
@@ -44,15 +45,18 @@ export function createVmRoutesResolver(opts: VmRoutesResolverOptions): (gatewayI
       routes = {};
       return routes;
     }
+    let loaded: VmRoutes;
     try {
-      routes = parseVmRoutes(readFile(opts.filePath));
-      loadedMtime = mtime;
-      opts.log("[gateway-router] vm routes loaded", { count: Object.keys(routes).length });
+      loaded = parseVmRoutes(readFile(opts.filePath));
     } catch (err) {
       opts.log("[gateway-router] vm routes unreadable; keeping the previous table", {
         error: err instanceof Error ? err.message : String(err),
       });
+      return routes;
     }
+    routes = loaded;
+    loadedMtime = mtime;
+    opts.logInfo("[gateway-router] vm routes loaded", { count: Object.keys(routes).length });
     return routes;
   };
   return (gatewayId) => {
