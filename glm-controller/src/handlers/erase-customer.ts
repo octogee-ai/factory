@@ -6,6 +6,7 @@ import type {
 } from "../operation-router.js";
 import type { CustomerCleanupContext } from "./deprovision-customer.js";
 import type { NukeCloudStepResult } from "../lib/customer-ops/nuke-cloud.js";
+import { PostHogMergedIdentityError } from "../lib/customer-ops/posthog-erasure.js";
 
 export interface ErasureDeletionJob {
   uid: string;
@@ -102,6 +103,15 @@ async function loadEraseCustomerContext(
   return { kind: "context", context: { deletionId, job, cleanup: job.cleanupContext } };
 }
 
+function deletionBlocked(deletionId: string, step: string, error: string): OperationResult {
+  return {
+    steps: [],
+    success: false,
+    error,
+    output: { deletionBlocked: { deletionId, step } },
+  };
+}
+
 function cleanupRetry(deletionId: string, error: string): OperationResult {
   return {
     steps: [],
@@ -163,6 +173,9 @@ async function erasePostHog(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     await report(ctx, deps, { name: "delete-posthog-person-data", status: "failed", error });
+    if (err instanceof PostHogMergedIdentityError) {
+      return deletionBlocked(context.deletionId, "delete-posthog-person-data", error);
+    }
     return cleanupRetry(context.deletionId, error);
   }
 }

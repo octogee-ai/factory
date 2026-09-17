@@ -176,6 +176,7 @@ function recordOutput(value: unknown): boolean {
 
 function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
   const { op, result } = input;
+  if (recordOutput(result.output?.deletionBlocked)) return false;
   return recordOutput(result.output?.retirementFencePending) ||
     recordOutput(result.output?.deletionFencePending) ||
     recordOutput(result.output?.deletionCleanupRetry) ||

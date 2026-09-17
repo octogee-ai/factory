@@ -3438,6 +3438,8 @@ async function ensureAnonymousDeletionArchive(
   return archiveRef.id;
 }
 
+const FIRESTORE_DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
 function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) {
   const cloudCleanup = buildCustomerCloudCleanupDeps(db, logFn);
   const postHogErasure = createPostHogErasureClient(
@@ -3445,6 +3447,9 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
     {
       fetch,
       wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+      isOtherCustomerUid: async (distinctId) =>
+        FIRESTORE_DOC_ID.test(distinctId) &&
+        (await db.collection("users").doc(distinctId).get()).exists,
     },
   );
   return createEraseCustomerHandler({

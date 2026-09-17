@@ -352,6 +352,26 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.output).toEqual({ deletionCleanupRetry });
   });
 
+  it("fails a blocked customer deletion terminally instead of level-triggered retry", () => {
+    const deletionBlocked = { deletionId: "delete-1", step: "delete-posthog-person-data" };
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "erase-customer", attempts: 0, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "PostHog person deletion refused: merged with another customer (uid-2)",
+        output: { deletionBlocked },
+      },
+      steps: [],
+      now,
+    });
+    expect(update.status).toBe("failed");
+    expect(update.output).toEqual({ deletionBlocked });
+    expect(update.attemptHistory).toEqual([
+      expect.objectContaining({ attempt: 1, classification: "terminal" }),
+    ]);
+  });
+
   it("terminalizes a definitive unsupported or wrong-owner cleanup even when the obligation is retained for audit", () => {
     for (const error of [
       "config cleanup terminal: /config-unfreeze/default: 501 not configured",
