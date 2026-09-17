@@ -7,7 +7,9 @@ import {
   checkpointAgentStoresForCarry,
   clearSqliteSidecars,
   findUnreadableStore,
+  isSqliteVolatileArtifactPath,
   listSqliteStores,
+  SQLITE_CARRY_EXCLUDE_ARGS,
   SQLITE_SIDECAR_EXCLUDE_ARGS,
 } from "../lib/agent-store-carry.js";
 
@@ -67,6 +69,22 @@ describe("listSqliteStores", () => {
     expect(await listSqliteStores(root)).toEqual([dbPath]);
   });
 
+  it("ignores openclaw's volatile reindex and generation artifacts beside a store", async () => {
+    const dbPath = seedStore("chris", ["a"]);
+    for (const name of [
+      "openclaw-agent.sqlite.reindex-lock.sqlite",
+      "openclaw-agent.sqlite.reindex-lock.sqlite-journal",
+      "openclaw-agent.sqlite.generation-lock.sqlite",
+      "openclaw-agent.sqlite.generation-writer.sqlite",
+      "openclaw-agent.sqlite.memory-reindex-611ae28b-1ffd-43f7-b70f-2b7682886f4d",
+      "openclaw-agent.sqlite.memory-reindex-611ae28b-1ffd-43f7-b70f-2b7682886f4d-wal",
+      "openclaw-agent.sqlite.backup-611ae28b-1ffd-43f7-b70f-2b7682886f4d",
+    ]) {
+      fs.writeFileSync(path.join(agentDir("chris"), name), Buffer.alloc(64));
+    }
+    expect(await listSqliteStores(root)).toEqual([dbPath]);
+  });
+
   it("returns nothing for a path that does not exist", async () => {
     expect(await listSqliteStores(path.join(root, "absent"))).toEqual([]);
   });
@@ -107,6 +125,26 @@ describe("checkpointAgentStoresForCarry", () => {
 
     expect(checkpointed).toEqual([dbPath]);
     expect(readRowCount(carried)).toBe(1);
+  });
+
+  it("carries the store while openclaw holds its reindex lock", async () => {
+    const dbPath = seedStore("chris", ["a"]);
+    appendRows(dbPath, ["b"]);
+    const lockPath = `${dbPath}.reindex-lock.sqlite`;
+    const holder = new DatabaseSync(lockPath);
+    holder.exec("CREATE TABLE lock(x)");
+    holder.exec("BEGIN EXCLUSIVE");
+    try {
+      await expect(
+        checkpointAgentStoresForCarry({ sources: [{ cwd: root, path: "agents" }] }),
+      ).resolves.toEqual([dbPath]);
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+    const carried = path.join(root, "carried.sqlite");
+    fs.copyFileSync(dbPath, carried);
+    expect(readRowCount(carried)).toBe(2);
   });
 
   it("rejects a store it cannot checkpoint instead of carrying it", async () => {
@@ -169,5 +207,31 @@ describe("SQLITE_SIDECAR_EXCLUDE_ARGS", () => {
       "--exclude=*.sqlite-wal",
       "--exclude=*.sqlite-shm",
     ]);
+  });
+});
+
+describe("SQLITE_CARRY_EXCLUDE_ARGS", () => {
+  it("excludes the sidecars and openclaw's exact volatile shapes from a copy set", () => {
+    const uuid = "????????-????-????-????-????????????";
+    expect(SQLITE_CARRY_EXCLUDE_ARGS).toEqual([
+      ...SQLITE_SIDECAR_EXCLUDE_ARGS,
+      "--exclude=*.sqlite.reindex-lock.sqlite*",
+      "--exclude=*.sqlite.generation-lock.sqlite*",
+      "--exclude=*.sqlite.generation-writer.sqlite*",
+      `--exclude=*.sqlite.memory-reindex-${uuid}*`,
+      `--exclude=*.sqlite.backup-${uuid}*`,
+      `--exclude=*.sqlite.tmp-${uuid}*`,
+    ]);
+  });
+});
+
+describe("isSqliteVolatileArtifactPath", () => {
+  it("matches only openclaw's uuid-stamped temp copies, never a workspace file that resembles one", () => {
+    expect(isSqliteVolatileArtifactPath("openclaw-agent.sqlite.backup-611ae28b-1ffd-43f7-b70f-2b7682886f4d")).toBe(true);
+    expect(isSqliteVolatileArtifactPath("openclaw-agent.sqlite.memory-reindex-611ae28b-1ffd-43f7-b70f-2b7682886f4d-wal")).toBe(true);
+    expect(isSqliteVolatileArtifactPath("openclaw-agent.sqlite.reindex-lock.sqlite-journal")).toBe(true);
+    expect(isSqliteVolatileArtifactPath("cache.sqlite.backup-2026")).toBe(false);
+    expect(isSqliteVolatileArtifactPath("notes.sqlite.tmp-draft")).toBe(false);
+    expect(isSqliteVolatileArtifactPath("openclaw-agent.sqlite")).toBe(false);
   });
 });

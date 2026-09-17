@@ -25,13 +25,47 @@ export const SQLITE_SIDECAR_EXCLUDE_ARGS = SQLITE_SIDECAR_SUFFIXES.map(
   (suffix) => `--exclude=*${SQLITE_SUFFIX}${suffix}`,
 );
 
+// openclaw's own backup filter (src/infra/backup-volatile-filter.ts) treats these
+// as volatile: lock databases it holds exclusively during a reindex or
+// generation swap, and temp copies it is still writing. They are recreated on
+// the destination and cannot be checkpointed while held.
+const SQLITE_VOLATILE_SIDECAR_SUFFIX = /(?:-wal|-shm|-journal)$/iu;
+const SQLITE_VOLATILE_LOCK_SHAPE = /\.sqlite\.(?:generation-lock|generation-writer|reindex-lock)\.sqlite$/iu;
+const SQLITE_VOLATILE_TEMP_SHAPE = /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f-]{36}$/iu;
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+// Glob twins of the pattern above for tar/rsync, which see the whole copy set
+// including the customer's workspace checkout: the uuid stamp keeps a workspace
+// file that merely resembles a temp copy in the transfer.
+const UUID_GLOB = "????????-????-????-????-????????????";
+
+export const SQLITE_VOLATILE_EXCLUDE_ARGS = [
+  `--exclude=*${SQLITE_SUFFIX}.reindex-lock${SQLITE_SUFFIX}*`,
+  `--exclude=*${SQLITE_SUFFIX}.generation-lock${SQLITE_SUFFIX}*`,
+  `--exclude=*${SQLITE_SUFFIX}.generation-writer${SQLITE_SUFFIX}*`,
+  `--exclude=*${SQLITE_SUFFIX}.memory-reindex-${UUID_GLOB}*`,
+  `--exclude=*${SQLITE_SUFFIX}.backup-${UUID_GLOB}*`,
+  `--exclude=*${SQLITE_SUFFIX}.tmp-${UUID_GLOB}*`,
+];
+
+export const SQLITE_CARRY_EXCLUDE_ARGS = [
+  ...SQLITE_SIDECAR_EXCLUDE_ARGS,
+  ...SQLITE_VOLATILE_EXCLUDE_ARGS,
+];
+
+export function isSqliteVolatileArtifactPath(candidate: string): boolean {
+  const base = candidate.replace(SQLITE_VOLATILE_SIDECAR_SUFFIX, "");
+  if (SQLITE_VOLATILE_LOCK_SHAPE.test(base)) return true;
+  return SQLITE_VOLATILE_TEMP_SHAPE.test(base) && UUID_SHAPE.test(base.slice(-36));
+}
+
 export interface UnreadableCarriedStore {
   path: string;
   message: string;
 }
 
 export function isSqliteStorePath(candidate: string): boolean {
-  return candidate.endsWith(SQLITE_SUFFIX);
+  return candidate.endsWith(SQLITE_SUFFIX) && !isSqliteVolatileArtifactPath(candidate);
 }
 
 export async function listSqliteStores(root: string): Promise<string[]> {

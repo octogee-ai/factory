@@ -54,7 +54,7 @@ import {
   findUnreadableStore,
   isSqliteStorePath,
   listSqliteStores,
-  SQLITE_SIDECAR_EXCLUDE_ARGS,
+  SQLITE_CARRY_EXCLUDE_ARGS,
 } from "./agent-store-carry.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
@@ -415,7 +415,7 @@ function tarArgsForSources(
 ): string[] {
   return [
     "-cf", "-",
-    ...SQLITE_SIDECAR_EXCLUDE_ARGS,
+    ...SQLITE_CARRY_EXCLUDE_ARGS,
     ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
   ];
 }
@@ -1767,7 +1767,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           "--relative",
           ...(mode === "final" ? ["--delete-delay"] : []),
           "--ignore-missing-args",
-          ...SQLITE_SIDECAR_EXCLUDE_ARGS,
+          ...SQLITE_CARRY_EXCLUDE_ARGS,
           "--password-file",
           passwordFile,
           ...sources.map((source) => rsyncSourceArg(source)),

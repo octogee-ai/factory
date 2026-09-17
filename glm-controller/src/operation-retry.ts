@@ -29,6 +29,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\btruncated\b/i,
   /\b14 UNAVAILABLE\b/i,
   /\bstatus (429|502|503|504)\b/,
+  /\bdatabase is locked\b/i,
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
   /source unmount cleanup pending/i,

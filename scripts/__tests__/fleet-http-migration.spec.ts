@@ -1,5 +1,6 @@
 
 
+import { SQLITE_CARRY_EXCLUDE_ARGS } from "../lib/agent-store-carry.js";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { pendingCloneAppliedFingerprint } from "../lib/pending-clone-fingerprint";
 import type { Request, Response } from "express";
@@ -1382,7 +1383,7 @@ const fakeChild = new EventEmitter() as EventEmitter & {
     
     expect(args).toEqual([
       "-cf", "-",
-      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
+      ...SQLITE_CARRY_EXCLUDE_ARGS,
       "-C", "/state", "agents/octogee-chris-coach",
       "-C", "/openclaw", "customer-keys/chris",
     ]);
@@ -3059,7 +3060,7 @@ describe("createPushStateHandler", () => {
     expect(spawnMock.mock.calls[0][0]).toBe("tar");
     expect(spawnMock.mock.calls[0][1]).toEqual([
       "-cf", "-",
-      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
+      ...SQLITE_CARRY_EXCLUDE_ARGS,
       "-C", "/state", "agents/octogee-chris-coach",
       "-C", "/openclaw", "customers/chris",
     ]);
@@ -3096,7 +3097,7 @@ describe("createPushStateHandler", () => {
       expect(getStatus()).toBe(200);
       expect(spawnMock.mock.calls[0][1]).toEqual([
         "-cf", "-",
-        "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
+        ...SQLITE_CARRY_EXCLUDE_ARGS,
         "-C", "/state", "agents/octogee-chris-coach",
         "-C", "/openclaw", "customers/chris",
       ]);
@@ -3131,7 +3132,7 @@ describe("createPushStateHandler", () => {
     expect(getStatus()).toBe(200);
     expect(spawnMock.mock.calls[0][1]).toEqual([
       "-cf", "-",
-      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
+      ...SQLITE_CARRY_EXCLUDE_ARGS,
       "-C", "/openclaw", "customers/chris",
     ]);
   });
@@ -3171,7 +3172,7 @@ describe("createPushStateHandler", () => {
     expect(getStatus()).toBe(200);
     expect(spawnMock.mock.calls[0][1]).toEqual([
       "-cf", "-",
-      "--exclude=*.sqlite-wal", "--exclude=*.sqlite-shm",
+      ...SQLITE_CARRY_EXCLUDE_ARGS,
       "-C", "/openclaw", "customer-keys/chris",
     ]);
     expect(adapter.exportOpenClawActivationManifest).not.toHaveBeenCalled();

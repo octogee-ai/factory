@@ -84,6 +84,11 @@ describe("classifyOperationFailure", () => {
       ),
     ).toBe("transient");
     expect(classifyOperationFailure("TypeError: fetch failed")).toBe("transient");
+    expect(
+      classifyOperationFailure(
+        "/push-rsync-state/shared-0: 500 agent store /home/node/.openclaw/agents/octogee-ceckert-coach/agent/openclaw-agent.sqlite could not be checkpointed for carry: database is locked",
+      ),
+    ).toBe("transient");
     expect(classifyOperationFailure("response body terminated before completion")).toBe("transient");
     expect(classifyOperationFailure("premature close while reading response body")).toBe("transient");
     expect(classifyOperationFailure("Unexpected end of JSON input")).toBe("transient");
