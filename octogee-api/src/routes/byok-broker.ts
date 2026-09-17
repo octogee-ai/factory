@@ -8,7 +8,7 @@ import {
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-import { readSecret } from "@octogee/core/secret-manager";
+import { readSecret, addSecretVersionKeepingLatest, type SubscriptionSecretVersionResult } from "@octogee/core/secret-manager";
 import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
 import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
@@ -424,11 +424,136 @@ async function handleByosubCred(input: {
   res.json({ credentials, ...(parsed.skipped.length > 0 ? { skipped: parsed.skipped } : {}) });
 }
 
+const CODEX_CREDENTIAL_MAX_BYTES = 64 * 1024;
+
+function codexLastRefreshMs(credential: string): number | null {
+  try {
+    const raw = (JSON.parse(credential) as { last_refresh?: unknown } | null)?.last_refresh;
+    if (typeof raw !== "string") return null;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
+// A replacement pod can restore version N, then push it after the original pod
+// already synced N+1. codex stamps last_refresh on every rotation, so an
+// incoming payload refreshed no later than the stored one is dropped.
+async function storedCodexCredentialIsNewer(
+  readCredentialSecret: (name: string, version?: string) => Promise<string>,
+  secretName: string,
+  incoming: string,
+): Promise<boolean> {
+  const incomingMs = codexLastRefreshMs(incoming);
+  if (incomingMs === null) return false;
+  let stored: string;
+  try {
+    stored = await readCredentialSecret(secretName);
+  } catch {
+    return false;
+  }
+  const storedMs = codexLastRefreshMs(stored);
+  return storedMs !== null && storedMs >= incomingMs;
+}
+
+function isCodexAuthJson(credential: unknown): credential is string {
+  if (typeof credential !== "string" || credential.length === 0 || credential.length > CODEX_CREDENTIAL_MAX_BYTES) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(credential);
+  } catch {
+    return false;
+  }
+  const tokens = (parsed as { tokens?: unknown } | null)?.tokens as
+    | { access_token?: unknown; refresh_token?: unknown }
+    | undefined;
+  return typeof tokens?.access_token === "string" && tokens.access_token.length > 0 &&
+    typeof tokens.refresh_token === "string" && tokens.refresh_token.length > 0;
+}
+
+// A Builder gateway pushes its rotated codex auth.json back so the durable copy
+// stays restorable after the VM is replaced. Roster-scoped like /byosub-cred:
+// the owner is derived from the assignment, the provider must already be
+// connected, and only the codex shape rotates (claude-cli tokens are static).
+async function handleByosubCredSyncback(input: {
+  db: Firestore;
+  readCredentialSecret: (name: string, version?: string) => Promise<string>;
+  writeByosubCredential: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>;
+  gatewayId: string;
+  podName: string | undefined;
+  body: { agentId?: unknown; provider?: unknown; credential?: unknown };
+  res: Response;
+}): Promise<void> {
+  const { db, readCredentialSecret, writeByosubCredential, gatewayId, podName, body, res } = input;
+  if (typeof body.agentId !== "string" || !isSafeAgentId(body.agentId)) {
+    res.status(400).json(VALID_AGENT_ID_REQUIRED);
+    return;
+  }
+  if (body.provider !== "openai") {
+    res.status(400).json({ error: "only the openai subscription credential rotates" });
+    return;
+  }
+  if (!isCodexAuthJson(body.credential)) {
+    res.status(400).json({ error: "credential must be a codex auth.json with access and refresh tokens" });
+    return;
+  }
+  const authorization = await readGatewayAuthorization(db, gatewayId);
+  if (authorization?.config.gatewayClass !== "builder") {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+  const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(
+    db,
+    gatewayId,
+    podName,
+    body.agentId,
+  );
+  if (!assigned) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+  const snap = await db.collection("users").doc(assigned.uid)
+    .collection("integrations").doc("byosub").get();
+  const ref = resolveUserByosubCredentialRefs(assigned.uid, snap.data()).refs
+    .find((candidate) => candidate.provider === "openai");
+  if (!ref) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (await storedCodexCredentialIsNewer(readCredentialSecret, ref.secretName, body.credential)) {
+    res.json({ changed: false, destroyed: 0 });
+    return;
+  }
+  const result = await writeByosubCredential(ref.secretName, body.credential);
+  if (!result.ok) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ changed: result.changed, destroyed: result.destroyed });
+}
+
 function registerCredentialMaterializationRoutes(
   router: Router,
   db: Firestore,
   readCredentialSecret: (name: string, version?: string) => Promise<string>,
+  writeByosubCredential: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>,
 ) {
+  router.post("/byosub-cred-syncback", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    await handleByosubCredSyncback({
+      db,
+      readCredentialSecret,
+      writeByosubCredential,
+      gatewayId: bound.gatewayId,
+      podName: bound.podName,
+      body: (req.body ?? {}) as { agentId?: unknown; provider?: unknown; credential?: unknown },
+      res,
+    });
+  });
   router.post("/byosub-cred", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -671,14 +796,16 @@ export function createByokBrokerRoutes(opts: {
   db: Firestore;
   now?: () => number;
   readSecret?: (name: string, version?: string) => Promise<string>;
+  writeByosubCredential?: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>;
   verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
 }): Router {
   const router = Router();
   const { db } = opts;
   const now = opts.now ?? Date.now;
   const readCredentialSecret = opts.readSecret ?? readSecret;
+  const writeByosubCredential = opts.writeByosubCredential ?? addSecretVersionKeepingLatest;
 
-  registerCredentialMaterializationRoutes(router, db, readCredentialSecret);
+  registerCredentialMaterializationRoutes(router, db, readCredentialSecret, writeByosubCredential);
   registerAgentModelTokenRoute(router, db, now);
 
   registerAgentUsageStatusRoute(

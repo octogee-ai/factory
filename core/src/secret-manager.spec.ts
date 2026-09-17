@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   getIamPolicy: vi.fn(),
   setIamPolicy: vi.fn(),
   deleteSecret: vi.fn(),
+  accessSecretVersion: vi.fn(),
+  listSecretVersions: vi.fn(),
+  destroySecretVersion: vi.fn(),
 }));
 
 vi.mock("@google-cloud/secret-manager", () => ({
@@ -18,11 +21,15 @@ vi.mock("@google-cloud/secret-manager", () => ({
       getIamPolicy: mocks.getIamPolicy,
       setIamPolicy: mocks.setIamPolicy,
       deleteSecret: mocks.deleteSecret,
+      accessSecretVersion: mocks.accessSecretVersion,
+      listSecretVersions: mocks.listSecretVersions,
+      destroySecretVersion: mocks.destroySecretVersion,
     };
   }),
 }));
 
 import {
+  addSecretVersionKeepingLatest,
   writeSecret,
   provisionGatewayAuthSecret,
   deleteSecret,
@@ -93,5 +100,68 @@ describe("secret-manager replication policy follows the exact deployment project
         secret: expect.objectContaining({ replication: secretReplicationPolicy("octogee") }),
       }),
     );
+  });
+});
+
+describe("addSecretVersionKeepingLatest — one live version per subscription secret", () => {
+  const SECRET = "projects/octogee/secrets/byosub-uid5-openai";
+  const v = (n: number, state = "ENABLED") => ({ name: `${SECRET}/versions/${n}`, state });
+
+  it("skips the add when the latest payload already matches, still sweeping superseded versions", async () => {
+    mocks.accessSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/5`, payload: { data: Buffer.from("same") } }]);
+    mocks.listSecretVersions.mockResolvedValue([[v(5), v(4), v(3, "DISABLED"), v(2, "DESTROYED")]]);
+    mocks.destroySecretVersion.mockResolvedValue([{}]);
+
+    const res = await addSecretVersionKeepingLatest("byosub-uid5-openai", "same");
+
+    expect(res).toEqual({ ok: true, changed: false, destroyed: 2 });
+    expect(mocks.addSecretVersion).not.toHaveBeenCalled();
+    expect(mocks.destroySecretVersion.mock.calls.map(([arg]) => arg.name).sort()).toEqual([
+      `${SECRET}/versions/3`,
+      `${SECRET}/versions/4`,
+    ]);
+  });
+
+  it("adds the rotated payload and destroys every superseded live version", async () => {
+    mocks.accessSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/5`, payload: { data: Buffer.from("old") } }]);
+    mocks.addSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/6` }]);
+    mocks.listSecretVersions.mockResolvedValue([[v(6), v(5), v(4, "DISABLED"), v(3, "DESTROYED")]]);
+    mocks.destroySecretVersion.mockResolvedValue([{}]);
+
+    const res = await addSecretVersionKeepingLatest("byosub-uid5-openai", "rotated");
+
+    expect(res).toEqual({ ok: true, changed: true, versionName: `${SECRET}/versions/6`, destroyed: 2 });
+    expect(mocks.addSecretVersion).toHaveBeenCalledWith({
+      parent: SECRET,
+      payload: { data: Buffer.from("rotated", "utf8") },
+    });
+    expect(mocks.destroySecretVersion.mock.calls.map(([arg]) => arg.name).sort()).toEqual([
+      `${SECRET}/versions/4`,
+      `${SECRET}/versions/5`,
+    ]);
+  });
+
+  it("keeps a version another writer added concurrently and destroys its own older one", async () => {
+    mocks.accessSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/5`, payload: { data: Buffer.from("old") } }]);
+    mocks.addSecretVersion.mockResolvedValue([{ name: `${SECRET}/versions/6` }]);
+    mocks.listSecretVersions.mockResolvedValue([[v(7), v(6), v(5)]]);
+    mocks.destroySecretVersion.mockResolvedValue([{}]);
+
+    const res = await addSecretVersionKeepingLatest("byosub-uid5-openai", "rotated");
+
+    expect(res).toEqual({ ok: true, changed: true, versionName: `${SECRET}/versions/6`, destroyed: 2 });
+    expect(mocks.destroySecretVersion.mock.calls.map(([arg]) => arg.name).sort()).toEqual([
+      `${SECRET}/versions/5`,
+      `${SECRET}/versions/6`,
+    ]);
+  });
+
+  it("reports a missing secret instead of creating one", async () => {
+    mocks.accessSecretVersion.mockRejectedValue(Object.assign(new Error("not found"), { code: 5 }));
+
+    const res = await addSecretVersionKeepingLatest("byosub-uid5-openai", "rotated");
+
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+    expect(mocks.addSecretVersion).not.toHaveBeenCalled();
   });
 });

@@ -50,6 +50,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/connectors/access-token",
   "/internal/byok/agent-usage-status",
   "/internal/byok/byosub-cred",
+  "/internal/byok/byosub-cred-syncback",
   "/internal/byok/api-key",
   "/internal/byok/agent-model-token",
   "/internal/byok/byosub-flow",

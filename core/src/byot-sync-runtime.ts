@@ -413,6 +413,27 @@ function byokBrokerBaseUrl(): string {
   return `http://octogee-api.${ns}.svc.cluster.local:3001`;
 }
 
+export async function brokerPushByosubCred(
+  agentId: string,
+  provider: ByosubProvider,
+  credential: string,
+): Promise<{ changed: boolean; destroyed: number }> {
+  const r = await internalFetch(`${byokBrokerBaseUrl()}/internal/byok/byosub-cred-syncback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentId, provider, credential }),
+  });
+  if (!r.ok) {
+    const body = (await r.text().catch(() => "")).slice(0, 200);
+    throw new Error(`byosub-cred-syncback ${r.status} ${body}`);
+  }
+  const data = (await r.json()) as { changed?: unknown; destroyed?: unknown };
+  if (typeof data.changed !== "boolean" || typeof data.destroyed !== "number") {
+    throw new Error("byosub-cred-syncback: malformed broker response");
+  }
+  return { changed: data.changed, destroyed: data.destroyed };
+}
+
 export async function brokerFetchByosubCreds(agentId: string): Promise<ByosubCred[] | null> {
   const r = await internalFetch(`${byokBrokerBaseUrl()}/internal/byok/byosub-cred`, {
     method: "POST",

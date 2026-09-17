@@ -114,6 +114,7 @@ function app(opts: {
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/byok/agent-usage-status", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
+  a.post("/internal/byok/byosub-cred-syncback", enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/profile", enforcement, handler);
@@ -580,6 +581,18 @@ describe("tenant enforcement middleware", () => {
         agentId: "octogee-alice-coach",
         provider: "anthropic",
       });
+
+    expect(ownedGateway.status).toBe(200);
+    expect(foreignGateway.status).toBe(403);
+  });
+
+  it("passes byosub credential syncback to route-level roster authorization", async () => {
+    const ownedGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/byok/byosub-cred-syncback")
+      .send({ agentId: "octogee-alice-coach", provider: "openai", credential: "{}" });
+    const foreignGateway = await request(app({ boundTenant: BENDER }))
+      .post("/internal/byok/byosub-cred-syncback")
+      .send({ gatewayId: "other", agentId: "octogee-alice-coach", provider: "openai", credential: "{}" });
 
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);

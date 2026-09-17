@@ -9,8 +9,10 @@ import {
 import {
   syncBackSweep,
   type AuthFingerprint,
+  type SyncBackResult,
   type SyncBackTarget,
 } from "../lib/byosub-syncback.js";
+import { brokerPushByosubCred } from "../lib/byot-sync-runtime.js";
 import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 
 const OPENCLAW_DIR = openClawDir();
@@ -36,16 +38,31 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
     .map((agentId) => ({ agentId, authPath: codexAuthJsonPath(OPENCLAW_DIR, agentId) }));
 }
 
+export async function sweepOnce(
+  prev: Map<string, AuthFingerprint | null>,
+): Promise<SyncBackResult> {
+  const targets = await loadTargets();
+  if (!targets.length) return { pushed: 0, observed: 0, failed: 0, prev };
+  return syncBackSweep({
+    targets,
+    prev,
+    mode: "active",
+    pushCredential: async (agentId, payload) => {
+      const r = await brokerPushByosubCred(agentId, "openai", payload);
+      if (r.changed) log(`pushed ${agentId}: destroyed ${r.destroyed} superseded version(s)`);
+    },
+    logFn: log,
+  });
+}
+
 async function main(): Promise<void> {
-  log(`starting (mode=observe interval=${INTERVAL_MS}ms)`);
+  log(`starting (mode=active interval=${INTERVAL_MS}ms)`);
   let prev = new Map<string, AuthFingerprint | null>();
   const tick = async (): Promise<void> => {
     try {
-      const targets = await loadTargets();
-      if (!targets.length) return;
-      const r = await syncBackSweep({ targets, prev, mode: "observe", logFn: log });
+      const r = await sweepOnce(prev);
       prev = r.prev;
-      if (r.observed) log(`sweep: observed ${r.observed} credential change(s)`);
+      if (r.failed) log(`sweep: ${r.failed} push(es) failed; retrying next tick`);
     } catch (e) {
       log(`WARN: sweep tick error — ${(e as Error).message}`);
     }

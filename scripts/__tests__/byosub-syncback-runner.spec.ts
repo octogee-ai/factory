@@ -82,3 +82,39 @@ describe("byosub-syncback-runner loadTargets", () => {
     expect(firebaseImport).not.toHaveBeenCalled();
   });
 });
+
+describe("byosub-syncback-runner sweepOnce", () => {
+  it("pushes a rotated codex credential through the broker on a Builder gateway", async () => {
+    const home = mkHome({ agents: { entries: { "octogee-tester19-coach": {} } } });
+    process.env.HOME = home;
+    process.env.GATEWAY_ID = "tester19-m-abc";
+    process.env.GATEWAY_CLASS = "builder";
+    const authPath = path.join(
+      home, ".openclaw", "agents", "octogee-tester19-coach", "agent", "codex-home", "auth.json",
+    );
+    fs.mkdirSync(path.dirname(authPath), { recursive: true });
+    fs.writeFileSync(authPath, '{"tokens":{"access_token":"a1","refresh_token":"r1"}}');
+    const push = vi.fn(async () => ({ changed: true, destroyed: 0 }));
+    vi.doMock("../lib/byot-sync-runtime.js", () => ({ brokerPushByosubCred: push }));
+
+    const { sweepOnce } = await import("../entrypoints/byosub-syncback-runner.js");
+    const first = await sweepOnce(new Map());
+    expect(push).toHaveBeenCalledWith(
+      "octogee-tester19-coach",
+      "openai",
+      '{"tokens":{"access_token":"a1","refresh_token":"r1"}}',
+    );
+
+    push.mockClear();
+    await sweepOnce(first.prev);
+    expect(push).not.toHaveBeenCalled();
+
+    fs.writeFileSync(authPath, '{"tokens":{"access_token":"a2","refresh_token":"r2"}}');
+    await sweepOnce(first.prev);
+    expect(push).toHaveBeenCalledWith(
+      "octogee-tester19-coach",
+      "openai",
+      '{"tokens":{"access_token":"a2","refresh_token":"r2"}}',
+    );
+  });
+});

@@ -38,6 +38,10 @@ export interface ByosubCred {
     secretName: string;
     credential: string;
 }
+export declare function brokerPushByosubCred(agentId: string, provider: ByosubProvider, credential: string): Promise<{
+    changed: boolean;
+    destroyed: number;
+}>;
 export declare function brokerFetchByosubCreds(agentId: string): Promise<ByosubCred[] | null>;
 export interface RuntimeRegistryPatchResult {
     patched: boolean;

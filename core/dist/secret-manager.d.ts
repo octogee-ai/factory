@@ -19,6 +19,20 @@ export declare function addSecretVersionIfExists(name: string, value: string): P
     ok: false;
     reason: "not_found";
 }>;
+export type SubscriptionSecretVersionResult = {
+    ok: true;
+    changed: false;
+    destroyed: number;
+} | {
+    ok: true;
+    changed: true;
+    versionName: string;
+    destroyed: number;
+} | {
+    ok: false;
+    reason: "not_found";
+};
+export declare function addSecretVersionKeepingLatest(name: string, value: string): Promise<SubscriptionSecretVersionResult>;
 export declare function readSecret(name: string, version?: string): Promise<string>;
 export declare function readSecretWithLabels(name: string, version?: string): Promise<{
     value: string;

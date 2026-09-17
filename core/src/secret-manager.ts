@@ -92,6 +92,78 @@ export async function addSecretVersionIfExists(
   }
 }
 
+export type SubscriptionSecretVersionResult =
+  | { ok: true; changed: false; destroyed: number }
+  | { ok: true; changed: true; versionName: string; destroyed: number }
+  | { ok: false; reason: "not_found" };
+
+function secretVersionNumber(versionName: string): number {
+  const match = /\/versions\/(\d+)$/.exec(versionName);
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+// Two gateway pods can sync the same credential during a surge, so the survivor
+// is chosen from the live list after the add, never assumed to be this call's
+// version: whichever version is numerically newest stays, everything else goes.
+async function destroySupersededSecretVersions(secretName: string): Promise<number> {
+  const [versions] = await client().listSecretVersions({ parent: secretName });
+  const live = versions.filter(
+    (candidate): candidate is typeof candidate & { name: string } =>
+      typeof candidate.name === "string" && candidate.state !== "DESTROYED",
+  );
+  const newest = live.reduce<string | null>(
+    (best, candidate) =>
+      best === null || secretVersionNumber(candidate.name) > secretVersionNumber(best)
+        ? candidate.name
+        : best,
+    null,
+  );
+  let destroyed = 0;
+  for (const superseded of live) {
+    if (superseded.name === newest) continue;
+    await client().destroySecretVersion({ name: superseded.name });
+    destroyed++;
+  }
+  return destroyed;
+}
+
+// Subscription credentials rotate on every refresh and only the newest copy can
+// ever be restored, so every superseded version is destroyed rather than left
+// billing as a live version. Callers that pin versions (byok api keys) must not
+// use this.
+export async function addSecretVersionKeepingLatest(
+  name: string,
+  value: string,
+): Promise<SubscriptionSecretVersionResult> {
+  const secretName = fqSecretName(name);
+  let latest: string | null = null;
+  try {
+    const [current] = await client().accessSecretVersion({ name: `${secretName}/versions/latest` });
+    latest = current.payload?.data ? Buffer.from(current.payload.data).toString("utf8") : null;
+  } catch (err) {
+    const code = (err as { code?: number } | null)?.code;
+    if (code === 5) return { ok: false, reason: "not_found" };
+    if (code !== 9) throw err;
+  }
+  if (latest === value) {
+    return { ok: true, changed: false, destroyed: await destroySupersededSecretVersions(secretName) };
+  }
+
+  const [version] = await client().addSecretVersion({
+    parent: secretName,
+    payload: { data: Buffer.from(value, "utf8") },
+  });
+  if (!version.name) {
+    throw new Error("Secret Manager returned an unnamed version");
+  }
+  return {
+    ok: true,
+    changed: true,
+    versionName: version.name,
+    destroyed: await destroySupersededSecretVersions(secretName),
+  };
+}
+
 export async function readSecret(
   name: string,
   version = "latest",
