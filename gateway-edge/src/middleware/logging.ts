@@ -76,7 +76,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     let level: "error" | "warn" | "debug" | "info";
     if (res.statusCode >= 500) level = "error";
     else if (res.statusCode >= 400 && ROUTINE_PATHS.has(requestPath)) level = "warn";
-    else if (res.statusCode === 404 && req.route === undefined) level = "debug";
+    else if (res.statusCode === 404 && req.route === undefined) {
+      level = requestPath.startsWith("/internal/") ? "warn" : "debug";
+    }
     else if (res.statusCode >= 400) level = "warn";
     else if (ROUTINE_PATHS.has(requestPath)) level = "debug";
     else level = "info";

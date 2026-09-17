@@ -140,6 +140,7 @@ env:
   openaiEmbeddingsEnabled: "true"
   openaiEmbeddingsModel: "text-embedding-3-small"
   openclawLogLevel: "info"
+  logLevel: "info"
   fleetControllerPort: "3003"
   migrationRsyncPort: "30873"
   builderNpmFallbackRegistry: "https://registry.npmjs.org/"

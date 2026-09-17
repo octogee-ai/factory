@@ -6,6 +6,7 @@ global:
   deploymentTargetId: ""
   deploymentProjectId: ""
   customerHostingProjectId: ""
+  logLevel: "info"
   computer:
     enabled: false
     projectId: ""

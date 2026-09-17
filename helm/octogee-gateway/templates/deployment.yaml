@@ -186,6 +186,8 @@ spec:
                     exit "$status"
           {{- end }}
           env:
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | default "info" | quote }}
             - name: HOME
               value: "/home/node"
             {{- if $builderControlUiEnabled }}
@@ -414,6 +416,8 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.gatewayEdge.port }}"
             - name: K8S_NAMESPACE

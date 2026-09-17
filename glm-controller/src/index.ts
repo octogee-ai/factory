@@ -294,7 +294,7 @@ import {
 } from "./metrics.js";
 import { applyVmDiskChanges, type VmDiskSample } from "./lib/vm-disk-usage.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
-import { createLogger } from "./lib/logger.js";
+import { createLogger, debugFromEnv } from "./lib/logger.js";
 import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import {
   assignedSlugsFromUserMirror,
@@ -330,7 +330,7 @@ import type {
 
 const logger = createLogger({
   color: process.env.NO_COLOR == null,
-  debug: process.env.DEBUG != null,
+  debug: debugFromEnv(),
 });
 const log = (msg: string) => logger.legacy(msg);
 const RECONCILE_DEBOUNCE_MS = 1_000;

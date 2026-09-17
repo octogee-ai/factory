@@ -45,6 +45,8 @@ spec:
             - name: http
               containerPort: {{ .Values.port }}
           env:
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
             - name: PORT
               value: {{ .Values.port | quote }}
             - name: NODE_EXTRA_CA_CERTS

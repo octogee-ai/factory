@@ -86,6 +86,10 @@ const LEGACY_PREFIX = /^\[glm-controller\]\s*/;
 const LEGACY_WARN_BARE = /^⚠\s*/;
 const LEGACY_WARN_PREFIXED = /^(\[[^\]]+\]\s*)⚠\s*/;
 
+export function debugFromEnv(): boolean {
+  return process.env.DEBUG != null || (process.env.LOG_LEVEL ?? "").toLowerCase() === "debug";
+}
+
 export function createLogger(opts: CreateLoggerOptions = {}): Logger {
   const debugEnabled = opts.debug ?? false;
   const formatOpts: FormatOptions = { color: opts.color, now: opts.now };

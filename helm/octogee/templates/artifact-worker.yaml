@@ -51,6 +51,8 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
             - name: OCTOGEE_API_URL
               value: "http://octogee-api.{{ .Release.Namespace }}.svc.cluster.local:3001"
             - name: ARTIFACT_WORKER_ID
@@ -79,6 +81,8 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            - name: LOG_LEVEL
+              value: {{ (.Values.global).logLevel | default "info" | quote }}
             - name: ARTIFACT_PARSER_SOCKET
               value: /ipc/parser.sock
             - name: ARTIFACT_WORK_ROOT

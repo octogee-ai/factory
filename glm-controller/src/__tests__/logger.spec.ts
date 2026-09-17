@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createLogger, formatLine, COWBOY } from "../lib/logger.js";
+import { createLogger, debugFromEnv, formatLine, COWBOY } from "../lib/logger.js";
 
 const NO_COLOR = { color: false } as const;
 
@@ -156,5 +156,45 @@ describe("COWBOY constant", () => {
   it("is the literal cowboy emoji + name (so other modules can reference it)", () => {
     expect(COWBOY).toContain("🤠");
     expect(COWBOY).toContain("cowboy");
+  });
+});
+
+describe("debugFromEnv", () => {
+  const original = { DEBUG: process.env.DEBUG, LOG_LEVEL: process.env.LOG_LEVEL };
+
+  beforeEach(() => {
+    delete process.env.DEBUG;
+    delete process.env.LOG_LEVEL;
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("stays off when neither knob is set", () => {
+    expect(debugFromEnv()).toBe(false);
+  });
+
+  it("honours the platform-wide LOG_LEVEL so a debug deploy reaches Cowboy", () => {
+    process.env.LOG_LEVEL = "DeBuG";
+    expect(debugFromEnv()).toBe(true);
+    const log = createLogger({ color: false, debug: debugFromEnv() });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    log.debug("reconcile tick");
+    expect(spy).toHaveBeenCalledOnce();
+    spy.mockRestore();
+  });
+
+  it("stays off at LOG_LEVEL=info", () => {
+    process.env.LOG_LEVEL = "info";
+    expect(debugFromEnv()).toBe(false);
+  });
+
+  it("keeps DEBUG working on its own for local runs", () => {
+    process.env.DEBUG = "";
+    expect(debugFromEnv()).toBe(true);
   });
 });

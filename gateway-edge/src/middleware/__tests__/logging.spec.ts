@@ -328,6 +328,19 @@ describe("middleware/logging — requestLogger probe-path noise gating", () => {
     });
   });
 
+  it("an unmatched /internal/ 404 logs at WARN — only our own services call those, so it is a wiring bug", () => {
+    delete process.env.LOG_LEVEL;
+    const { req, res, fire } = fakeReqRes("POST", "/internal/openclaw/project-publish", 404);
+    requestLogger(req, res, vi.fn());
+    fire("finish");
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(JSON.parse(warnSpy.mock.calls[0][0] as string)).toMatchObject({
+      severity: "WARNING",
+      path: "/internal/openclaw/project-publish",
+      status: 404,
+    });
+  });
+
   it("unmatched 404 scanner paths are silent at default LOG_LEVEL", () => {
     delete process.env.LOG_LEVEL;
     const { req, res, fire } = fakeReqRes("GET", "/wp-login.php", 404);
