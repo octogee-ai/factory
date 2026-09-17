@@ -33,6 +33,13 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed boot
   const shared = read("openclaw.template.json");
   const builder = read("openclaw.builder.template.json");
 
+  it("starts typing the moment a message arrives, on both gateway classes", () => {
+    for (const name of ["openclaw.template.json", "openclaw.builder.template.json"]) {
+      const template = read(name);
+      expect((template.agents as { defaults?: { typingMode?: string } }).defaults?.typingMode).toBe("instant");
+    }
+  });
+
   it("shares every platform wiring section byte-for-byte with the shared template", () => {
     for (const key of Object.keys(shared)) {
       if (BUILDER_OWNED_TOP_LEVEL.has(key)) continue;

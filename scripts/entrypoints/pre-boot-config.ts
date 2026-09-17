@@ -560,6 +560,27 @@ export function applyOpenClawBeta5CompatibilityPatch(
   return changed;
 }
 
+// OpenClaw starts typing at the first reply text for a group chat without a
+// mention, and the coach channel is a private channel, so a Builder saw nothing
+// while a turn prepared. Existing durable configs never re-read the template,
+// so the default converges here on every boot; an explicit choice stays.
+export function applyTypingModeDefault(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void,
+): boolean {
+  const agents = ensureNullishObjectProperty(config, "agents");
+  const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
+  if (!defaults) {
+    logFn("left agents.defaults.typingMode unset because agents.defaults is not an object");
+    return false;
+  }
+  const current = defaults.typingMode;
+  if (typeof current === "string" && current.length > 0) return false;
+  defaults.typingMode = "instant";
+  logFn('set agents.defaults.typingMode = "instant" (typing starts when the message arrives)');
+  return true;
+}
+
 export function applyPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -576,6 +597,7 @@ export function applyPreBootPatches(
     applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),
     applyMemorySearchSchemaPatch(config, logFn),
+    applyTypingModeDefault(config, logFn),
   ].some(Boolean);
 }
 

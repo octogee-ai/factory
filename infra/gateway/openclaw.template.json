@@ -68,6 +68,7 @@
         }
       },
       "verboseDefault": "on",
+      "typingMode": "instant",
       "toolProgressDetail": "raw",
       "workspace": "/home/node/.openclaw/workspace",
       "contextPruning": {

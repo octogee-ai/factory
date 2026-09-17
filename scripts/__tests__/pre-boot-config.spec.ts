@@ -8,6 +8,7 @@ import {
   applyOpenClawBeta5CompatibilityPatch,
   applyGatewayRootConfig,
   applyPreBootPatches,
+  applyTypingModeDefault,
   applyGatewayOverrides,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
@@ -1095,6 +1096,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
         defaults: {
           models: Object.fromEntries(modelCatalogForProvider("anthropic").map(({ id }) => [id, {}])),
           verboseDefault: "on",
+          typingMode: "instant",
           toolProgressDetail: "raw",
         },
       },
@@ -1569,5 +1571,36 @@ const emailLines = content
     
     expect(content).toMatch(/name = ceckert/);
     expect(content).toMatch(/email = c@e\.com/);
+  });
+});
+
+describe("applyTypingModeDefault — typing starts when the message arrives", () => {
+  it("sets agents.defaults.typingMode to instant on a config that never chose one", () => {
+    const config: any = { agents: { defaults: { verboseDefault: "on" } } };
+    const log = vi.fn();
+    expect(applyTypingModeDefault(config, log)).toBe(true);
+    expect(config.agents.defaults.typingMode).toBe("instant");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("agents.defaults.typingMode"));
+    expect(applyTypingModeDefault(config, vi.fn())).toBe(false);
+  });
+
+  it("creates agents.defaults when the config has none", () => {
+    const config: any = {};
+    expect(applyTypingModeDefault(config, vi.fn())).toBe(true);
+    expect(config.agents.defaults.typingMode).toBe("instant");
+  });
+
+  it("keeps a typing mode the config already chose", () => {
+    const config: any = { agents: { defaults: { typingMode: "never" } } };
+    expect(applyTypingModeDefault(config, vi.fn())).toBe(false);
+    expect(config.agents.defaults.typingMode).toBe("never");
+  });
+
+  it("runs as part of the pre-boot patch set on every gateway class", () => {
+    for (const env of [{}, { GATEWAY_CLASS: "builder" }]) {
+      const config: any = { agents: { defaults: {} } };
+      expect(applyPreBootPatches(config, env)).toBe(true);
+      expect(config.agents.defaults.typingMode).toBe("instant");
+    }
   });
 });
