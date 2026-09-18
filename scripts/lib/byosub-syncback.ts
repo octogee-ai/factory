@@ -1,4 +1,3 @@
-import * as fs from "fs";
 import { createHash } from "crypto";
 
 export interface AuthFingerprint {
@@ -6,23 +5,20 @@ export interface AuthFingerprint {
   size: number;
 }
 
-export function fingerprintFile(filePath: string): AuthFingerprint | null {
-  try {
-    const buf = fs.readFileSync(filePath);
-    return {
-      sha256: createHash("sha256").update(buf).digest("hex"),
-      size: buf.length,
-    };
-  } catch {
-    return null;
-  }
+export function fingerprintCredential(credential: string | null): AuthFingerprint | null {
+  if (credential === null) return null;
+  const buf = Buffer.from(credential, "utf-8");
+  return {
+    sha256: createHash("sha256").update(buf).digest("hex"),
+    size: buf.length,
+  };
 }
 
 export function decideSyncBack(
   prev: AuthFingerprint | null,
   cur: AuthFingerprint | null,
 ): { changed: boolean; reason: string } {
-  if (!cur) return { changed: false, reason: "credential file absent" };
+  if (!cur) return { changed: false, reason: "credential absent" };
   if (!prev) return { changed: true, reason: "first observation" };
   if (prev.sha256 !== cur.sha256) {
     return { changed: true, reason: "content changed (token rotated)" };
@@ -32,7 +28,7 @@ export function decideSyncBack(
 
 export interface SyncBackTarget {
   agentId: string;
-  authPath: string;
+  readCredential: () => string | null;
 }
 
 export interface SyncBackResult {
@@ -55,9 +51,10 @@ export async function syncBackSweep(opts: {
   let observed = 0;
   let failed = 0;
   for (const t of opts.targets) {
-    const cur = fingerprintFile(t.authPath);
+    const credential = t.readCredential();
+    const cur = fingerprintCredential(credential);
     const d = decideSyncBack(prev.get(t.agentId) ?? null, cur);
-    if (!d.changed || !cur) continue;
+    if (!d.changed || !cur || credential === null) continue;
     if (opts.mode === "observe") {
       observed++;
       prev.set(t.agentId, cur);
@@ -67,8 +64,7 @@ export async function syncBackSweep(opts: {
       continue;
     }
     try {
-      const payload = fs.readFileSync(t.authPath, "utf-8");
-      if (opts.pushCredential) await opts.pushCredential(t.agentId, payload);
+      if (opts.pushCredential) await opts.pushCredential(t.agentId, credential);
       pushed++;
       prev.set(t.agentId, cur); 
       log(`byosub-syncback[active]: pushed ${t.agentId} (${d.reason})`);

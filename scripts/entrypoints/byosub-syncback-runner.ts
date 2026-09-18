@@ -1,10 +1,13 @@
 
 
 import * as fs from "fs";
+import { parseAgentId } from "../../shared/types/identity.js";
+import { readAuthProfileStore, sharedAuthStoreUsable } from "../lib/auth-profile-sqlite.js";
 import {
   agentIdsFromConfig,
-  codexAuthJsonPath,
+  codexAgentDir,
   isSafeAgentId,
+  sharedAuthAgentDir,
 } from "../lib/byosub-restore.js";
 import {
   syncBackSweep,
@@ -13,6 +16,7 @@ import {
   type SyncBackTarget,
 } from "../lib/byosub-syncback.js";
 import { brokerPushByosubCred } from "../lib/byot-sync-runtime.js";
+import { buildCodexAuthJsonFromStore } from "../lib/model-credential-materializer.js";
 import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 
 const OPENCLAW_DIR = openClawDir();
@@ -33,9 +37,22 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
   } catch {
     return [];
   }
-  return agentIdsFromConfig(config)
-    .filter(isSafeAgentId)
-    .map((agentId) => ({ agentId, authPath: codexAuthJsonPath(OPENCLAW_DIR, agentId) }));
+  const agentIds = agentIdsFromConfig(config).filter(isSafeAgentId);
+  if (sharedAuthStoreUsable(OPENCLAW_DIR)) {
+    const sharedDir = sharedAuthAgentDir(OPENCLAW_DIR);
+    return agentIds
+      .filter((agentId) => parseAgentId(agentId).kind === "coach")
+      .map((agentId) => ({ agentId, readCredential: () => codexCredentialIn(sharedDir) }));
+  }
+  return agentIds.map((agentId) => ({
+    agentId,
+    readCredential: () => codexCredentialIn(codexAgentDir(OPENCLAW_DIR, agentId)),
+  }));
+}
+
+function codexCredentialIn(agentDir: string): string | null {
+  const store = readAuthProfileStore(agentDir);
+  return store === null ? null : buildCodexAuthJsonFromStore(JSON.stringify(store));
 }
 
 export async function sweepOnce(

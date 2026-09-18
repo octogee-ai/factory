@@ -318,6 +318,7 @@ export function buildCodexAuthJsonFromStore(authProfilesStoreText) {
         return null;
     const accountId = codexStr(p.accountId);
     const idToken = codexStr(p.idToken);
+    const lastRefresh = codexAccessIssuedAt(access);
     return JSON.stringify({
         auth_mode: "chatgpt",
         OPENAI_API_KEY: null,
@@ -327,5 +328,12 @@ export function buildCodexAuthJsonFromStore(authProfilesStoreText) {
             ...(accountId ? { account_id: accountId } : {}),
             ...(idToken ? { id_token: idToken } : {}),
         },
+        ...(lastRefresh ? { last_refresh: lastRefresh } : {}),
     });
+}
+function codexAccessIssuedAt(access) {
+    const iat = codexJwtClaims(access)?.iat;
+    return typeof iat === "number" && Number.isFinite(iat) && iat > 0
+        ? new Date(Math.floor(iat) * 1000).toISOString()
+        : undefined;
 }
