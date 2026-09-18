@@ -85,6 +85,7 @@ import {
   readLocalCustomerPubKey,
   setRepoSshCommand,
 } from "./git.js";
+import { seedDeferredProjectWorkspace } from "./deferred-project-workspace.js";
 import {
   ensureGiteaOrgForWorkspace,
   ensureSystemConfigRepo,
@@ -1706,6 +1707,9 @@ export function buildBrokeredLifecycleAdapter(
     },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo: cloneProjectRepoForTarget,
+    seedDeferredProjectWorkspace: async (slug, projectSlug) => {
+      seedDeferredProjectWorkspace(slug, projectSlug);
+    },
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
     scheduleBootGreetingCron: (params) => scheduleBootGreetingCron(ctx, params),

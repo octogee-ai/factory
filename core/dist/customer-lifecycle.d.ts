@@ -153,6 +153,7 @@ export interface CustomerLifecycleAdapter {
     reassertConvergedContextFilesForCustomer: (userData: Record<string, unknown>) => Promise<void>;
     listProjectsNeedingClone: (slug: string) => Promise<ProjectCloneTarget[]>;
     cloneProjectRepo: (customerSlug: string, projectSlug: string, giteaRepoName: string | null, opts?: ProjectCloneOptions) => Promise<boolean>;
+    seedDeferredProjectWorkspace: (customerSlug: string, projectSlug: string) => Promise<void>;
     provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
     /**
      * Idempotently ensure this Builder is a member of the shared Octogee Community

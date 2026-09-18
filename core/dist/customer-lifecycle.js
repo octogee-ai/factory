@@ -599,6 +599,7 @@ export async function cloneMissingProjects(adapter, slug, options = {}) {
         }
         if (githubRepoSourceOf(p) && !ownerRuntime) {
             deferred.add(p.projectSlug);
+            await adapter.seedDeferredProjectWorkspace(slug, p.projectSlug);
             adapter.log(options.githubCheckouts === "defer"
                 ? `[add:${slug}/${p.projectSlug}] GitHub checkout deferred until the customer is assigned here — the reconcile clones it after cutover`
                 : `[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`);

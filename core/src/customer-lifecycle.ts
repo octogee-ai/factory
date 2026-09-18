@@ -209,6 +209,8 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
     opts?: ProjectCloneOptions,
   ) => Promise<boolean>;
 
+  seedDeferredProjectWorkspace: (customerSlug: string, projectSlug: string) => Promise<void>;
+
   provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
 
   /**
@@ -1221,6 +1223,7 @@ export async function cloneMissingProjects(
     }
     if (githubRepoSourceOf(p) && !ownerRuntime) {
       deferred.add(p.projectSlug);
+      await adapter.seedDeferredProjectWorkspace(slug, p.projectSlug);
       adapter.log(
         options.githubCheckouts === "defer"
           ? `[add:${slug}/${p.projectSlug}] GitHub checkout deferred until the customer is assigned here — the reconcile clones it after cutover`

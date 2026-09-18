@@ -291,6 +291,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     projectCheckoutScope: vi.fn(() => "workspace-and-projects"),
     listProjectsNeedingClone: vi.fn(async () => []),
     cloneProjectRepo: vi.fn(async () => true),
+    seedDeferredProjectWorkspace: vi.fn(async () => undefined),
     reassertByotForCustomer: vi.fn(async () => undefined),
     writeMountMarker: vi.fn(),
     onMounted: vi.fn(),

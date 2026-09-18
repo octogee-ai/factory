@@ -2723,14 +2723,16 @@ describe("cloneMissingProjects — GitHub checkouts hydrate only on the owner's 
       cloned.add(projectSlug);
       return true;
     });
+    const seedDeferredProjectWorkspace = vi.fn(async () => undefined);
     const adapter = {
       log: vi.fn(),
       isBuilderGateway: () => ownerRuntime,
       isConfiguredBuilderCustomer: () => ownerRuntime,
       listProjectsNeedingClone: vi.fn(async () => targets.filter((t) => !cloned.has(t.projectSlug))),
       cloneProjectRepo,
+      seedDeferredProjectWorkspace,
     } as unknown as CustomerLifecycleAdapter;
-    return { adapter, cloneProjectRepo };
+    return { adapter, cloneProjectRepo, seedDeferredProjectWorkspace };
   }
 
   it("defers the GitHub project on a shared gateway and still clones the Gitea one", async () => {
@@ -2741,6 +2743,15 @@ describe("cloneMissingProjects — GitHub checkouts hydrate only on the owner's 
     expect(cloneProjectRepo).toHaveBeenCalledTimes(1);
     expect(cloneProjectRepo.mock.calls[0][1]).toBe("hedgeherd");
     expect(result).toEqual({ steps: ["project-clone"], pending: [], deferred: ["octogee"] });
+  });
+
+  it("leaves a deferred project a workspace OpenClaw will not call vanished", async () => {
+    const { adapter, seedDeferredProjectWorkspace } = adapterFor(false, new Set());
+
+    await cloneMissingProjects(adapter, "chris");
+
+    expect(seedDeferredProjectWorkspace).toHaveBeenCalledWith("chris", "octogee");
+    expect(seedDeferredProjectWorkspace).toHaveBeenCalledTimes(1);
   });
 
   it("defers the GitHub project even on the owner's runtime when a migration import asks it to", async () => {
