@@ -6,7 +6,8 @@ import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
 import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, } from "./model-credential-materializer.js";
-import { codexAuthJsonPath, purgeCustomerOauthRuntimeArtifacts, restoreByosubCredentials, } from "./byosub-restore.js";
+import { codexAgentDir, codexAuthJsonPath, purgeCustomerOauthRuntimeArtifacts, removeSubscriptionProfiles, restoreByosubCredentials, sharedAuthAgentDir, } from "./byosub-restore.js";
+import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-sqlite.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
 import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
@@ -327,37 +328,67 @@ export async function brokerFetchByosubCreds(agentId) {
         credential: cred.credential,
     }));
 }
+function subscriptionRestorePlan(creds, openclawDir, coachAgentId) {
+    return creds.map((cred) => ({
+        agentId: coachAgentId ?? SHARED_MAIN_AGENT_ID,
+        provider: cred.provider,
+        secretName: cred.secretName,
+        openclawDir,
+        ...(coachAgentId && cred.provider === "openai"
+            ? { targetPath: codexAuthJsonPath(openclawDir, coachAgentId) }
+            : {}),
+    }));
+}
+function credentialFromBrokerResponse(creds) {
+    return async (secretName) => {
+        const cred = creds.find((candidate) => candidate.secretName === secretName);
+        if (!cred)
+            throw new Error(`broker response omitted ${secretName}`);
+        return cred.credential;
+    };
+}
+const SUBSCRIPTION_PROVIDERS = ["openai", "anthropic"];
+function claudeCliHomeOption(explicit) {
+    const claudeCliNativeHomeDir = explicit ?? claudeCliNativeHomeDirForGateway();
+    return claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {};
+}
+function inheritSharedSubscription({ slug, openclawDir, agentIds, providers, restore, logFn, }) {
+    if (restore.failed > 0 || restore.restored + restore.skipped === 0)
+        return;
+    const disconnected = SUBSCRIPTION_PROVIDERS.filter((provider) => !providers.includes(provider));
+    if (removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), disconnected)) {
+        logFn(`[byot-sync] ${slug}: dropped disconnected subscription(s) ${disconnected.join(", ")} from the shared store`);
+    }
+    for (const agentId of agentIds ?? mountedAgentIdsForSlug(slug)) {
+        if (removeSubscriptionProfiles(codexAgentDir(openclawDir, agentId), providers)) {
+            logFn(`[byot-sync] ${slug}: ${agentId} now inherits the shared subscription credential`);
+        }
+    }
+}
 export async function restoreOauthStoreForSlug(slug, deps) {
-    const agentId = `octogee-${slug}-coach`;
+    const coachAgentId = `octogee-${slug}-coach`;
     const logFn = deps?.logFn ?? log;
     try {
         const fetchByosubCreds = deps?.fetchByosubCreds ?? brokerFetchByosubCreds;
         const ocDir = deps?.openclawDir ?? OPENCLAW_DIR;
-        const creds = await fetchByosubCreds(agentId);
+        const creds = await fetchByosubCreds(coachAgentId);
         if (!creds || creds.length === 0) {
             return { restored: false, present: false, providers: [] };
         }
         const providers = Array.from(new Set(creds.map((cred) => cred.provider)));
-        const plan = creds.map((cred) => ({
-            agentId,
-            provider: cred.provider,
-            secretName: cred.secretName,
-            openclawDir: ocDir,
-            ...(cred.provider === "openai" ? { targetPath: codexAuthJsonPath(ocDir, agentId) } : {}),
-        }));
-        const claudeCliNativeHomeDir = deps?.claudeCliNativeHomeDir ?? claudeCliNativeHomeDirForGateway();
+        const shared = sharedAuthStoreUsable(ocDir);
+        const plan = subscriptionRestorePlan(creds, ocDir, shared ? null : coachAgentId);
         const r = await restoreByosubCredentials({
             plan,
-            fetchSecret: async (secretName) => {
-                const cred = creds.find((candidate) => candidate.secretName === secretName);
-                if (!cred)
-                    throw new Error(`broker response omitted ${secretName}`);
-                return cred.credential;
-            },
+            fetchSecret: credentialFromBrokerResponse(creds),
             logFn,
-            ...(claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {}),
+            ...claudeCliHomeOption(deps?.claudeCliNativeHomeDir),
         });
-        return { restored: r.restored > 0, present: r.restored > 0 || r.skipped > 0, providers };
+        const present = r.restored > 0 || r.skipped > 0;
+        if (shared) {
+            inheritSharedSubscription({ slug, openclawDir: ocDir, agentIds: deps?.agentIds, providers, restore: r, logFn });
+        }
+        return { restored: r.restored > 0, present, providers };
     }
     catch (e) {
         logFn(`⚠ [byot-sync] oauth-store restore failed for ${slug}: ${e.message}`);
@@ -1072,8 +1103,11 @@ export async function purgeCustomerOauthRuntime(slug, safeModelRef, deps) {
     const agentIds = customerAgentIds(slug, config);
     const forceSafeAll = options.forceSafeAll === true;
     const initialConfigPlan = customerOauthRuntimeConfigPlan(config, slug, safeModelRef, forceSafeAll);
+    const openclawDir = options.openclawDir ?? OPENCLAW_DIR;
+    const sharedProfilesRemoved = sharedAuthStoreUsable(openclawDir) &&
+        removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), SUBSCRIPTION_PROVIDERS);
     const artifacts = purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: options.openclawDir ?? OPENCLAW_DIR,
+        openclawDir,
         homeDir: options.homeDir ?? os.homedir(),
         agentIds,
         resetSessionStores: false,
@@ -1089,7 +1123,12 @@ export async function purgeCustomerOauthRuntime(slug, safeModelRef, deps) {
     ]);
     const resetCount = await resetAffectedOauthSessions(affectedAgentIds, options.rpc);
     options.logFn?.(`[byot-sync] ${slug}: purged customer OAuth runtime artifacts for ${agentIds.length} agent(s); reset ${resetCount} session(s)`);
-    const changed = [oauthArtifactsChanged(artifacts), configResult.noop !== true, resetCount > 0]
+    const changed = [
+        sharedProfilesRemoved,
+        oauthArtifactsChanged(artifacts),
+        configResult.noop !== true,
+        resetCount > 0,
+    ]
         .some(Boolean);
     return { changed, resetCount };
 }

@@ -65,6 +65,60 @@ export function resolveAuthDbPath(agentDir: string): string {
   return path.join(agentDir, AUTH_DB_FILE);
 }
 
+export const SHARED_MAIN_AGENT_ID = "main";
+const SHARED_STORE_STATE_KEY = "authProfiles.store";
+const SHARED_STATE_STATE_KEY = "authProfiles.state";
+const SHARED_STORE_OWNERSHIP_KEY = "auth.sharedStore";
+
+function sharedStateDbPath(agentDir: string): string | null {
+  const resolved = path.resolve(agentDir);
+  const agentIdDir = path.dirname(resolved);
+  const agentsDir = path.dirname(agentIdDir);
+  if (
+    path.basename(resolved) !== "agent" ||
+    path.basename(agentIdDir) !== SHARED_MAIN_AGENT_ID ||
+    path.basename(agentsDir) !== "agents"
+  ) {
+    return null;
+  }
+  const dbPath = path.join(path.dirname(agentsDir), "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) return null;
+  const db = openHardenedDatabase(dbPath, { readOnly: true });
+  try {
+    const row = db
+      .prepare("SELECT value_json AS v FROM config_machine_state WHERE state_key = ?")
+      .get(SHARED_STORE_OWNERSHIP_KEY) as { v: string } | undefined;
+    const ownership = parseJsonCell(row?.v) as { location?: unknown } | null;
+    return ownership?.location === "state-db" ? dbPath : null;
+  } finally {
+    db.close();
+  }
+}
+
+export function sharedAuthStoreUsable(openclawDir: string): boolean {
+  const mainDir = path.join(openclawDir, "agents", SHARED_MAIN_AGENT_ID, "agent");
+  return sharedStateDbPath(mainDir) !== null || fs.existsSync(resolveAuthDbPath(mainDir));
+}
+
+function readSharedCell(dbPath: string, stateKey: string): unknown {
+  let db: DatabaseSync;
+  try {
+    db = openHardenedDatabase(dbPath, { readOnly: true });
+  } catch {
+    return null;
+  }
+  try {
+    const row = db
+      .prepare("SELECT value_json AS v FROM config_machine_state WHERE state_key = ?")
+      .get(stateKey) as { v: string } | undefined;
+    return parseJsonCell(row?.v);
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
 function parseJsonCell(raw: string | null | undefined): unknown {
   if (typeof raw !== "string" || raw.length === 0) return null;
   // Tolerant by contract — a corrupt cell on one agent must not abort the
@@ -150,11 +204,15 @@ function readJsonRow(
 
 /** Reads the raw persisted secrets-store payload, or null if absent. */
 export function readAuthProfileStore(agentDir: string): unknown | null {
+  const shared = sharedStateDbPath(agentDir);
+  if (shared) return readSharedCell(shared, SHARED_STORE_STATE_KEY);
   return readJsonRow(agentDir, "auth_profile_store", "store_json", "store_key");
 }
 
 /** Reads the raw persisted runtime-state payload, or null if absent. */
 export function readAuthProfileState(agentDir: string): unknown | null {
+  const shared = sharedStateDbPath(agentDir);
+  if (shared) return readSharedCell(shared, SHARED_STATE_STATE_KEY);
   return readJsonRow(agentDir, "auth_profile_state", "state_json", "state_key");
 }
 
@@ -199,6 +257,25 @@ function withWriteRetry(dbPath: string, op: WriteOp, label: string): void {
  * AgentDatabaseNotInitializedError when openclaw has not created the store yet.
  */
 export function writeAuthProfileStore(agentDir: string, payload: unknown): void {
+  const shared = sharedStateDbPath(agentDir);
+  if (shared) {
+    const json = JSON.stringify(payload);
+    withWriteRetry(
+      shared,
+      (db) => {
+        const now: SQLInputValue = Date.now();
+        db.prepare(
+          `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+           VALUES (?, ?, ?)
+           ON CONFLICT(state_key) DO UPDATE SET
+             value_json = excluded.value_json,
+             updated_at_ms = excluded.updated_at_ms`,
+        ).run(SHARED_STORE_STATE_KEY, json, now);
+      },
+      "writeAuthProfileStore shared BEGIN IMMEDIATE",
+    );
+    return;
+  }
   const dbPath = resolveAuthDbPath(agentDir);
   if (!fs.existsSync(dbPath)) {
     throw new AgentDatabaseNotInitializedError(agentDir);
@@ -230,6 +307,17 @@ export function writeAuthProfileStore(agentDir: string, payload: unknown): void 
  * intact (openclaw owns it). No-op when the database file does not exist.
  */
 export function deleteAuthProfileStore(agentDir: string): void {
+  const shared = sharedStateDbPath(agentDir);
+  if (shared) {
+    withWriteRetry(
+      shared,
+      (db) => {
+        db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run(SHARED_STORE_STATE_KEY);
+      },
+      "deleteAuthProfileStore shared BEGIN IMMEDIATE",
+    );
+    return;
+  }
   const dbPath = resolveAuthDbPath(agentDir);
   if (!fs.existsSync(dbPath)) return;
   withWriteRetry(

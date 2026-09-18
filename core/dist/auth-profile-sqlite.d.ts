@@ -12,6 +12,8 @@ export declare class AgentDatabaseNotInitializedError extends Error {
 }
 /** Resolves the SQLite database path that stores auth profiles for an agent dir. */
 export declare function resolveAuthDbPath(agentDir: string): string;
+export declare const SHARED_MAIN_AGENT_ID = "main";
+export declare function sharedAuthStoreUsable(openclawDir: string): boolean;
 /** Reads the raw persisted secrets-store payload, or null if absent. */
 export declare function readAuthProfileStore(agentDir: string): unknown | null;
 /** Reads the raw persisted runtime-state payload, or null if absent. */

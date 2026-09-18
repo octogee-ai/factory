@@ -46,6 +46,29 @@ describe("resolveUserGateway", () => {
     await expect(resolveUserGateway("u-1")).resolves.toEqual({
       slug: "mira",
       gatewayId: "gw-1",
+      agentIds: ["octogee-mira-coach"],
+    });
+  });
+
+  it("rosters the coach first plus this workspace's own safe agent ids", async () => {
+    h.users.set("u-2", {
+      provisioning: {
+        openclaw: {
+          slug: "mira",
+          gatewayId: "gw-1",
+          agentIds: [
+            "octogee-mira-proj-golf-coach",
+            "octogee-mira-coach",
+            "octogee-other-coach",
+            "octogee-mira-../etc",
+            42,
+          ],
+        },
+      },
+    });
+
+    await expect(resolveUserGateway("u-2")).resolves.toMatchObject({
+      agentIds: ["octogee-mira-coach", "octogee-mira-proj-golf-coach"],
     });
   });
 });

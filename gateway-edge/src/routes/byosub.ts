@@ -21,8 +21,7 @@ import {
   isSafeGatewayId,
   type ByosubProvider,
 } from "../lib/byosub.js";
-import { resolveUserGateway } from "../lib/user-gateway.js";
-import { workspaceCoachAgentId } from "@octogee/shared/types/identity";
+import { resolveUserGateway, rosteredAgentIdsForSlug } from "../lib/user-gateway.js";
 import {
   claudeCliNativeCredentialsPath,
   codexAgentDir,
@@ -318,10 +317,10 @@ async function flipUnifiedByosSignal(
   uid: string,
   signalProvider: ModelCredentialOAuthProviderId,
   secretName: string,
-  agentId?: string,
+  agentIds: readonly string[] = [],
 ): Promise<void> {
   const addedAt = FieldValue.serverTimestamp();
-  const subscriptionModel = agentId ? subscriptionDefaultModel(signalProvider) : null;
+  const subscriptionModel = agentIds.length > 0 ? subscriptionDefaultModel(signalProvider) : null;
   await db
     .collection("users")
     .doc(uid)
@@ -351,8 +350,8 @@ async function flipUnifiedByosSignal(
           baseUrl: FieldValue.delete(),
           model: FieldValue.delete(),
         },
-        ...(subscriptionModel && agentId
-          ? { agentModels: { [agentId]: { primary: subscriptionModel, fallbacks: [] } } }
+        ...(subscriptionModel
+          ? { agentModels: subscriptionModelPicks(agentIds, subscriptionModel) }
           : {}),
       },
       { merge: true },
@@ -452,6 +451,13 @@ async function writeByosubIntegration(args: {
     );
 }
 
+function subscriptionModelPicks(
+  agentIds: readonly string[],
+  model: string,
+): Record<string, { primary: string; fallbacks: string[] }> {
+  return Object.fromEntries(agentIds.map((agentId) => [agentId, { primary: model, fallbacks: [] }]));
+}
+
 function subscriptionDefaultModel(modelCredentialProvider: string): string | null {
   if (modelCredentialProvider === "openai-codex") return codexRuntimeConfig().model;
   if (modelCredentialProvider === "claude-cli") return claudeCliRuntimeConfig().model;
@@ -493,9 +499,11 @@ async function commitByosubCapture(args: {
       throw new Error("BYOS credential flow changed before commit");
     }
     const subscriptionModel = subscriptionDefaultModel(args.modelCredentialProvider);
+    const slug = slugFromCoachAgentId(args.flow.agentId);
+    const agentIds = slug ? rosteredAgentIdsForSlug(owner.data(), slug) : [args.flow.agentId];
     if (subscriptionModel) {
       tx.set(configRef, {
-        agentModels: { [args.flow.agentId]: { primary: subscriptionModel, fallbacks: [] } },
+        agentModels: subscriptionModelPicks(agentIds, subscriptionModel),
       }, { merge: true });
     }
     tx.set(configRef, {
@@ -584,6 +592,7 @@ async function claimByosubCapture(flowId: string, flow: FlowDoc): Promise<string
 interface ResolvedUserGateway {
   gatewayId: string;
   slug: string;
+  agentIds: string[];
 }
 
 interface RemainingByosubProvider {
@@ -727,7 +736,9 @@ router.post(
       const resolved = await resolveUserGateway(uid);
       const { clearUserSignal, remainingProvider } = await disconnectProviderFromUserIntegration(uid, provider);
       if (resolved) {
-        cleanupGeneratedByosubCredentialsBestEffort(provider, coachAgentId(resolved.slug));
+        for (const agentId of resolved.agentIds) {
+          cleanupGeneratedByosubCredentialsBestEffort(provider, agentId);
+        }
       }
       if (resolved && clearUserSignal) triggerUnifiedByosOffSync(req, resolved);
 
@@ -804,7 +815,7 @@ router.post(
         value: b.token.trim(),
         labels: { byosub: "true", provider: entry.oauth.secretProvider },
       });
-      await flipUnifiedByosSignal(uid, entry.id, secretName, workspaceCoachAgentId(resolved.slug));
+      await flipUnifiedByosSignal(uid, entry.id, secretName, resolved.agentIds);
       await writeByosubIntegration({
         uid,
         provider: entry.oauth.subscriptionProvider,

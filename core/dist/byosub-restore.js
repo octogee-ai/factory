@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { DatabaseSync } from "node:sqlite";
-import { buildCodexAuthJsonFromStore, buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
-import { readAuthProfileState, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
+import { buildCodexAuthJsonFromStore, buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, CLAUDE_CLI_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
+import { deleteAuthProfileStore, readAuthProfileState, readAuthProfileStore, SHARED_MAIN_AGENT_ID, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 import { agentModelTokenProfileEntry, openAiBrokerProfileEntry, openRouterBrokerProfileEntry, } from "./agent-model-token-materializer.js";
 /**
@@ -53,6 +53,37 @@ export function codexStagingAuthJsonPath(openclawDir, agentId) {
 }
 export function codexAgentDir(openclawDir, agentId) {
     return path.join(openclawDir, "agents", agentId, "agent");
+}
+export function sharedAuthAgentDir(openclawDir) {
+    return codexAgentDir(openclawDir, SHARED_MAIN_AGENT_ID);
+}
+const SUBSCRIPTION_PROFILE_IDS = {
+    openai: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    anthropic: CLAUDE_CLI_DEFAULT_PROFILE_ID,
+};
+export function removeSubscriptionProfiles(agentDir, providers) {
+    const store = readAuthProfileStore(agentDir);
+    const profiles = store?.profiles;
+    if (!profiles || typeof profiles !== "object" || Array.isArray(profiles))
+        return false;
+    const next = { ...profiles };
+    let removed = false;
+    for (const provider of providers) {
+        const profileId = SUBSCRIPTION_PROFILE_IDS[provider];
+        if (Object.prototype.hasOwnProperty.call(next, profileId)) {
+            delete next[profileId];
+            removed = true;
+        }
+    }
+    if (!removed)
+        return false;
+    if (Object.keys(next).length === 0) {
+        deleteAuthProfileStore(agentDir);
+    }
+    else {
+        writeAuthProfileStore(agentDir, { ...store, profiles: next });
+    }
+    return true;
 }
 export function codexAuthStatePath(openclawDir, agentId) {
     return path.join(codexAgentDir(openclawDir, agentId), "auth-state.json");
@@ -536,11 +567,15 @@ function restoreClaudeCliCredential(opts) {
     }
 }
 function restoreCodexCredential(item, payload, agentDir) {
+    const codexStore = buildCodexAuthProfilesStore(payload);
+    if (!item.targetPath) {
+        writeMergedAuthProfileStore(agentDir, codexStore);
+        return;
+    }
     const targetPath = item.targetPath;
     let tmp;
     try {
         tmp = `${targetPath}.tmp`;
-        const codexStore = buildCodexAuthProfilesStore(payload);
         ensurePrivateDir(path.dirname(targetPath));
         fs.writeFileSync(tmp, payload, { mode: 0o600 });
         fs.chmodSync(tmp, 0o600);
@@ -576,6 +611,21 @@ function materializeCodexAuthJson(targetPath, store) {
         throw err;
     }
 }
+function planCodexRestore(item, agentDir, log) {
+    const store = readAuthProfileStore(agentDir);
+    const usableCodexProfilePresent = hasUsableCodexDefaultProfile(store);
+    alignCodexProfileProvider(agentDir, store, () => {
+        log(`byosub: aligned ${item.agentId} ChatGPT credential with the OpenAI runtime provider`);
+    });
+    const action = shouldRestoreCodexCredential({
+        usableCodexProfilePresent,
+        authStateText: readCodexAuthStateText(item.openclawDir, item.agentId),
+        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        now: Date.now(),
+        ...(item.targetPath ? { targetPathPresent: fs.existsSync(item.targetPath) } : {}),
+    });
+    return { action, store };
+}
 export async function restoreByosubCredentials(opts) {
     const log = opts.logFn ?? (() => { });
     let restored = 0;
@@ -586,19 +636,7 @@ export async function restoreByosubCredentials(opts) {
         let codexAction;
         let codexStore;
         if (item.provider === "openai") {
-            codexStore = readAuthProfileStore(agentDir);
-            const usableCodexProfilePresent = hasUsableCodexDefaultProfile(codexStore);
-            alignCodexProfileProvider(agentDir, codexStore, () => {
-                log(`byosub: aligned ${item.agentId} ChatGPT credential with the OpenAI runtime provider`);
-            });
-            const authStateText = readCodexAuthStateText(item.openclawDir, item.agentId);
-            codexAction = shouldRestoreCodexCredential({
-                usableCodexProfilePresent,
-                authStateText,
-                profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-                now: Date.now(),
-                targetPathPresent: fs.existsSync(item.targetPath),
-            });
+            ({ action: codexAction, store: codexStore } = planCodexRestore(item, agentDir, log));
             if (codexAction === "skip") {
                 skipped++;
                 log(`byosub: ${item.agentId} healthy on-disk credential — conservative skip (openclaw owns it; not clobbering)`);
@@ -606,7 +644,7 @@ export async function restoreByosubCredentials(opts) {
             }
         }
         try {
-            if (codexAction === "materialize") {
+            if (codexAction === "materialize" && item.targetPath) {
                 materializeCodexAuthJson(item.targetPath, codexStore);
                 restored++;
                 log(`byosub: materialized ${item.provider} credential for ${item.agentId} from the healthy profile store`);

@@ -24,6 +24,8 @@ export declare function claudeCliNativeCredentialsPath(homeDir: string): string;
 export declare function codexStagingHomeDir(openclawDir: string, agentId: string): string;
 export declare function codexStagingAuthJsonPath(openclawDir: string, agentId: string): string;
 export declare function codexAgentDir(openclawDir: string, agentId: string): string;
+export declare function sharedAuthAgentDir(openclawDir: string): string;
+export declare function removeSubscriptionProfiles(agentDir: string, providers: readonly ByosubProvider[]): boolean;
 export declare function codexAuthStatePath(openclawDir: string, agentId: string): string;
 export interface CustomerOauthRuntimePurgeResult {
     removedFiles: number;

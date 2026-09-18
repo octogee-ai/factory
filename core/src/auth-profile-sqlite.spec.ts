@@ -10,6 +10,7 @@ import {
   deleteAuthProfileStore,
   readAuthProfileState,
   AgentDatabaseNotInitializedError,
+  sharedAuthStoreUsable,
 } from "./auth-profile-sqlite.js";
 import { seedOpenClawAgentDb } from "./fixtures/openclaw-agent-db.js";
 
@@ -345,5 +346,98 @@ describe("concurrent writers — last-writer-wins, no rows lost", () => {
       .all() as Array<{ c: number }>;
     db.close();
     expect(rows[0].c).toBe(1);
+  });
+});
+
+describe("the shared main store — OpenClaw's state-db ownership", () => {
+  function seedStateDb(openclawDir: string, ownership: string | null): DatabaseSync {
+    fs.mkdirSync(path.join(openclawDir, "state"), { recursive: true });
+    const db = new DatabaseSync(path.join(openclawDir, "state", "openclaw.sqlite"));
+    db.exec(
+      "CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL) STRICT",
+    );
+    if (ownership) {
+      db.prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)").run(ownership);
+    }
+    return db;
+  }
+  const mainDir = (openclawDir: string) => path.join(openclawDir, "agents", "main", "agent");
+  const cell = (db: DatabaseSync, key: string) =>
+    (db.prepare("SELECT value_json AS v FROM config_machine_state WHERE state_key = ?").get(key) as
+      | { v: string }
+      | undefined)?.v;
+
+  it("writes and reads the main agent's store through config_machine_state when OpenClaw owns it in the state db", () => {
+    const openclawDir = mk();
+    const db = seedStateDb(openclawDir, JSON.stringify({ location: "state-db" }));
+    const store = { version: 1, profiles: { "openai-codex:default": { type: "oauth", access: "a" } } };
+
+    writeAuthProfileStore(mainDir(openclawDir), store);
+
+    expect(JSON.parse(cell(db, "authProfiles.store")!)).toEqual(store);
+    expect(readAuthProfileStore(mainDir(openclawDir))).toEqual(store);
+    expect(fs.existsSync(mainDir(openclawDir))).toBe(false);
+    db.close();
+  });
+
+  it("reads the shared runtime state and deletes the shared store row", () => {
+    const openclawDir = mk();
+    const db = seedStateDb(openclawDir, JSON.stringify({ location: "state-db" }));
+    db.prepare("INSERT INTO config_machine_state VALUES ('authProfiles.state', ?, 1)").run(
+      JSON.stringify({ usageStats: {} }),
+    );
+    writeAuthProfileStore(mainDir(openclawDir), { version: 1, profiles: {} });
+
+    expect(readAuthProfileState(mainDir(openclawDir))).toEqual({ usageStats: {} });
+    deleteAuthProfileStore(mainDir(openclawDir));
+    expect(cell(db, "authProfiles.store")).toBeUndefined();
+    expect(readAuthProfileStore(mainDir(openclawDir))).toBeNull();
+    db.close();
+  });
+
+  it("keeps the legacy main agent database when OpenClaw has not moved the shared store", () => {
+    const openclawDir = mk();
+    const db = seedStateDb(openclawDir, null);
+
+    expect(() => writeAuthProfileStore(mainDir(openclawDir), { version: 1, profiles: {} })).toThrow(
+      AgentDatabaseNotInitializedError,
+    );
+    expect(cell(db, "authProfiles.store")).toBeUndefined();
+    db.close();
+  });
+
+  it("leaves every other agent on its own database", () => {
+    const openclawDir = mk();
+    const db = seedStateDb(openclawDir, JSON.stringify({ location: "state-db" }));
+    const coachDir = path.join(openclawDir, "agents", "octogee-x-coach", "agent");
+    seedOpenClawAgentDb(coachDir);
+
+    writeAuthProfileStore(coachDir, { version: 1, profiles: { p: {} } });
+
+    expect(cell(db, "authProfiles.store")).toBeUndefined();
+    expect(readAuthProfileStore(coachDir)).toEqual({ version: 1, profiles: { p: {} } });
+    db.close();
+  });
+});
+
+describe("sharedAuthStoreUsable", () => {
+  it("is usable when OpenClaw keeps the shared store in the state db", () => {
+    const openclawDir = mk();
+    fs.mkdirSync(path.join(openclawDir, "state"), { recursive: true });
+    const db = new DatabaseSync(path.join(openclawDir, "state", "openclaw.sqlite"));
+    db.exec("CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL) STRICT");
+    db.prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)").run(JSON.stringify({ location: "state-db" }));
+    db.close();
+    expect(sharedAuthStoreUsable(openclawDir)).toBe(true);
+  });
+
+  it("is usable when the legacy main agent database exists", () => {
+    const openclawDir = mk();
+    seedOpenClawAgentDb(path.join(openclawDir, "agents", "main", "agent"));
+    expect(sharedAuthStoreUsable(openclawDir)).toBe(true);
+  });
+
+  it("is not usable when neither exists", () => {
+    expect(sharedAuthStoreUsable(mk())).toBe(false);
   });
 });

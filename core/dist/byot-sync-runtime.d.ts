@@ -52,6 +52,7 @@ export declare function restoreOauthStoreForSlug(slug: string, deps?: {
     fetchByosubCreds?: (agentId: string) => Promise<ByosubCred[] | null>;
     openclawDir?: string;
     claudeCliNativeHomeDir?: string;
+    agentIds?: readonly string[];
     logFn?: (m: string) => void;
 }): Promise<OauthStoreRestoreResult>;
 export interface SyncByotForCustomerDeps {

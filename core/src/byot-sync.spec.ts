@@ -83,8 +83,9 @@ import {
   refreshCoachRuntimeSessions,
 } from "./byot-sync-runtime";
 import { internalFetch } from "./internal-fetch.js";
-import { codexAuthJsonPath, codexAgentDir } from "./byosub-restore.js";
-import { readAuthProfileStore } from "./auth-profile-sqlite.js";
+import { codexAuthJsonPath, codexAgentDir, sharedAuthAgentDir } from "./byosub-restore.js";
+import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
+import { DatabaseSync } from "node:sqlite";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -450,6 +451,78 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       expires: 0,
       copyToAgents: true,
     });
+  });
+
+  it("restores the subscription once into OpenClaw's shared store so every agent inherits one refresher", async () => {
+    const oc = mk();
+    fs.mkdirSync(path.join(oc, "state"), { recursive: true });
+    const stateDb = new DatabaseSync(path.join(oc, "state", "openclaw.sqlite"));
+    stateDb.exec(
+      "CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL) STRICT",
+    );
+    stateDb.prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)").run(
+      JSON.stringify({ location: "state-db" }),
+    );
+    stateDb.close();
+    const coach = "octogee-tester-70-coach";
+    const project = "octogee-tester-70-proj-golf-coach";
+    seedAgent(oc, coach);
+    seedAgent(oc, project);
+    writeAuthProfileStore(codexAgentDir(oc, coach), {
+      version: 1,
+      profiles: {
+        "openai-codex:default": { type: "oauth", provider: "openai", access: "stale" },
+        "platform-openrouter:default": { type: "api_key", provider: "platform-openrouter" },
+      },
+    });
+
+    const r = await restoreOauthStoreForSlug("tester-70", {
+      fetchByosubCreds: async () => [
+        { provider: "openai", secretName: "byosub-uid-openai", credential: codexBlob() },
+      ],
+      openclawDir: oc,
+      agentIds: [coach, project],
+    });
+
+    expect(r).toMatchObject({ restored: true, present: true });
+    const shared = readAuthProfileStore(sharedAuthAgentDir(oc)) as { profiles: Record<string, unknown> };
+    expect(shared.profiles["openai-codex:default"]).toMatchObject({ access: "acc-1", refresh: "ref-1" });
+    const coachStore = readAuthProfileStore(codexAgentDir(oc, coach)) as { profiles: Record<string, unknown> };
+    expect(coachStore.profiles["openai-codex:default"]).toBeUndefined();
+    expect(coachStore.profiles["platform-openrouter:default"]).toBeDefined();
+    expect(readAuthProfileStore(codexAgentDir(oc, project))).toBeNull();
+    expect(fs.existsSync(codexAuthJsonPath(oc, coach))).toBe(false);
+  });
+
+  it("drops a disconnected subscription from the shared store when another stays connected", async () => {
+    const oc = mk();
+    fs.mkdirSync(path.join(oc, "state"), { recursive: true });
+    const stateDb = new DatabaseSync(path.join(oc, "state", "openclaw.sqlite"));
+    stateDb.exec(
+      "CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL) STRICT",
+    );
+    stateDb.prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)").run(
+      JSON.stringify({ location: "state-db" }),
+    );
+    stateDb.close();
+    writeAuthProfileStore(sharedAuthAgentDir(oc), {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli", access: "disconnected" },
+      },
+    });
+
+    await restoreOauthStoreForSlug("tester-70", {
+      fetchByosubCreds: async () => [
+        { provider: "openai", secretName: "byosub-uid-openai", credential: codexBlob() },
+      ],
+      openclawDir: oc,
+      agentIds: [],
+    });
+
+    const shared = readAuthProfileStore(sharedAuthAgentDir(oc)) as { profiles: Record<string, unknown> };
+    expect(shared.profiles["anthropic:claude-cli"]).toBeUndefined();
+    expect(shared.profiles["openai-codex:default"]).toMatchObject({ access: "acc-1" });
   });
 
   it("materializes Claude and Codex from one hosted-agent broker response", async () => {
@@ -1751,6 +1824,51 @@ describe("customer OAuth runtime purge", () => {
       brokerUrl: "${FLEET_BROKER_URL}",
       tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
     });
+  });
+
+  it("clears the subscription credential from OpenClaw's shared store and keeps everything else there", async () => {
+    const oc = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-shared-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-home-"));
+    fs.mkdirSync(path.join(oc, "state"), { recursive: true });
+    const stateDb = new DatabaseSync(path.join(oc, "state", "openclaw.sqlite"));
+    stateDb.exec(
+      "CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL) STRICT",
+    );
+    stateDb.prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)").run(
+      JSON.stringify({ location: "state-db" }),
+    );
+    stateDb.close();
+    seedAgent(oc, "octogee-tester-70-coach");
+    writeAuthProfileStore(sharedAuthAgentDir(oc), {
+      version: 1,
+      profiles: {
+        "openai-codex:default": { type: "oauth", provider: "openai", access: "a" },
+        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli", access: "c" },
+        "operator:default": { type: "api_key", provider: "operator" },
+      },
+    });
+    const rpc = {
+      sessionsList: vi.fn(async () => ({ sessions: [] })),
+      sessionsReset: vi.fn(async () => ({ ok: true as const })),
+      close: vi.fn(async () => {}),
+    };
+    try {
+      const result = await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+        config: { agents: { list: [] } },
+        openclawDir: oc,
+        homeDir: home,
+        rpc,
+        applyConfigPatch: async () => ({ mode: "rpc", attempts: 1, noop: true }),
+      });
+      expect(result.changed).toBe(true);
+      expect(readAuthProfileStore(sharedAuthAgentDir(oc))).toEqual({
+        version: 1,
+        profiles: { "operator:default": { type: "api_key", provider: "operator" } },
+      });
+    } finally {
+      fs.rmSync(oc, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("purges owned disk artifacts, patches config, and resets coach plus project sessions", async () => {

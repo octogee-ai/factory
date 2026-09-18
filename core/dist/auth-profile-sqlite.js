@@ -54,6 +54,59 @@ const BUSY_RETRY_BACKOFF_MS = 50;
 export function resolveAuthDbPath(agentDir) {
     return path.join(agentDir, AUTH_DB_FILE);
 }
+export const SHARED_MAIN_AGENT_ID = "main";
+const SHARED_STORE_STATE_KEY = "authProfiles.store";
+const SHARED_STATE_STATE_KEY = "authProfiles.state";
+const SHARED_STORE_OWNERSHIP_KEY = "auth.sharedStore";
+function sharedStateDbPath(agentDir) {
+    const resolved = path.resolve(agentDir);
+    const agentIdDir = path.dirname(resolved);
+    const agentsDir = path.dirname(agentIdDir);
+    if (path.basename(resolved) !== "agent" ||
+        path.basename(agentIdDir) !== SHARED_MAIN_AGENT_ID ||
+        path.basename(agentsDir) !== "agents") {
+        return null;
+    }
+    const dbPath = path.join(path.dirname(agentsDir), "state", "openclaw.sqlite");
+    if (!fs.existsSync(dbPath))
+        return null;
+    const db = openHardenedDatabase(dbPath, { readOnly: true });
+    try {
+        const row = db
+            .prepare("SELECT value_json AS v FROM config_machine_state WHERE state_key = ?")
+            .get(SHARED_STORE_OWNERSHIP_KEY);
+        const ownership = parseJsonCell(row?.v);
+        return ownership?.location === "state-db" ? dbPath : null;
+    }
+    finally {
+        db.close();
+    }
+}
+export function sharedAuthStoreUsable(openclawDir) {
+    const mainDir = path.join(openclawDir, "agents", SHARED_MAIN_AGENT_ID, "agent");
+    return sharedStateDbPath(mainDir) !== null || fs.existsSync(resolveAuthDbPath(mainDir));
+}
+function readSharedCell(dbPath, stateKey) {
+    let db;
+    try {
+        db = openHardenedDatabase(dbPath, { readOnly: true });
+    }
+    catch {
+        return null;
+    }
+    try {
+        const row = db
+            .prepare("SELECT value_json AS v FROM config_machine_state WHERE state_key = ?")
+            .get(stateKey);
+        return parseJsonCell(row?.v);
+    }
+    catch {
+        return null;
+    }
+    finally {
+        db.close();
+    }
+}
 function parseJsonCell(raw) {
     if (typeof raw !== "string" || raw.length === 0)
         return null;
@@ -134,10 +187,16 @@ function readJsonRow(agentDir, table, column, keyColumn) {
 }
 /** Reads the raw persisted secrets-store payload, or null if absent. */
 export function readAuthProfileStore(agentDir) {
+    const shared = sharedStateDbPath(agentDir);
+    if (shared)
+        return readSharedCell(shared, SHARED_STORE_STATE_KEY);
     return readJsonRow(agentDir, "auth_profile_store", "store_json", "store_key");
 }
 /** Reads the raw persisted runtime-state payload, or null if absent. */
 export function readAuthProfileState(agentDir) {
+    const shared = sharedStateDbPath(agentDir);
+    if (shared)
+        return readSharedCell(shared, SHARED_STATE_STATE_KEY);
     return readJsonRow(agentDir, "auth_profile_state", "state_json", "state_key");
 }
 function withWriteRetry(dbPath, op, label) {
@@ -179,6 +238,19 @@ function withWriteRetry(dbPath, op, label) {
  * AgentDatabaseNotInitializedError when openclaw has not created the store yet.
  */
 export function writeAuthProfileStore(agentDir, payload) {
+    const shared = sharedStateDbPath(agentDir);
+    if (shared) {
+        const json = JSON.stringify(payload);
+        withWriteRetry(shared, (db) => {
+            const now = Date.now();
+            db.prepare(`INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+           VALUES (?, ?, ?)
+           ON CONFLICT(state_key) DO UPDATE SET
+             value_json = excluded.value_json,
+             updated_at_ms = excluded.updated_at_ms`).run(SHARED_STORE_STATE_KEY, json, now);
+        }, "writeAuthProfileStore shared BEGIN IMMEDIATE");
+        return;
+    }
     const dbPath = resolveAuthDbPath(agentDir);
     if (!fs.existsSync(dbPath)) {
         throw new AgentDatabaseNotInitializedError(agentDir);
@@ -203,6 +275,13 @@ export function writeAuthProfileStore(agentDir, payload) {
  * intact (openclaw owns it). No-op when the database file does not exist.
  */
 export function deleteAuthProfileStore(agentDir) {
+    const shared = sharedStateDbPath(agentDir);
+    if (shared) {
+        withWriteRetry(shared, (db) => {
+            db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run(SHARED_STORE_STATE_KEY);
+        }, "deleteAuthProfileStore shared BEGIN IMMEDIATE");
+        return;
+    }
     const dbPath = resolveAuthDbPath(agentDir);
     if (!fs.existsSync(dbPath))
         return;
