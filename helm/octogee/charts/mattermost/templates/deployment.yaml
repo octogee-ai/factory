@@ -48,6 +48,8 @@ spec:
           # BEFORE MM_SQLSETTINGS_DATASOURCE in the env list (K8s resolves
           # in order). The image's default entrypoint runs `mattermost`.
           env:
+            - name: MM_LOGSETTINGS_CONSOLELEVEL
+              value: {{ (.Values.global).logLevel | default "info" | upper | quote }}
             - name: MM_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
