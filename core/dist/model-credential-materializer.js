@@ -127,6 +127,8 @@ export function codexRuntimeConfig() {
     };
 }
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
+    "claude-cli/claude-opus-5",
+    "claude-cli/claude-sonnet-5",
     "claude-cli/claude-opus-4-8",
     "claude-cli/claude-opus-4-7",
     "claude-cli/claude-sonnet-4-6",

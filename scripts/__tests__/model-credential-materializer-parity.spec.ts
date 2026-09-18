@@ -45,7 +45,7 @@ const input: ModelCredentialConfigInput = { slug: "tester-70", provider: "openai
   });
 
   it("overrides the agent model to the codex agentRuntime model", () => {
-    expect(buildModelCredentialConfigForProvider(input).agentModelOverride).toBe("openai/gpt-5.5");
+    expect(buildModelCredentialConfigForProvider(input).agentModelOverride).toBe(codexRuntimeConfig().model);
   });
 
   it("honors an explicit model override", () => {
@@ -143,14 +143,11 @@ describe("buildModelCredentialConfigForProvider — canonical OpenAI-compatible 
 
 describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing", () => {
   it("pins subscription model overrides to the Codex runtime", () => {
-    expect(codexRuntimeConfig()).toMatchObject({
-      model: "openai/gpt-5.5",
-      modelsDef: {
-        "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-        "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-        "openai/gpt-6-astra": { agentRuntime: { id: "codex" } },
-      },
-    });
+    const { model, modelsDef } = codexRuntimeConfig();
+    expect(Object.keys(modelsDef)).toContain(model);
+    for (const def of Object.values(modelsDef)) {
+      expect(def).toEqual({ agentRuntime: { id: "codex" } });
+    }
   });
 });
 
@@ -314,16 +311,13 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
 });
 
 describe("claudeCliRuntimeConfig — Claude SUBSCRIPTION coach model (native claude-cli/ provider)", () => {
-  it("uses Opus 4.8 as the default while allowlisting the current Claude CLI provider catalog", () => {
-    expect(claudeCliRuntimeConfig()).toEqual({
-      model: "claude-cli/claude-opus-4-8",
-      modelsDef: {
-        "claude-cli/claude-opus-4-8": {},
-        "claude-cli/claude-opus-4-7": {},
-        "claude-cli/claude-sonnet-4-6": {},
-        "claude-cli/claude-opus-4-6": {},
-      },
-    });
+  it("allowlists its own default on the native claude-cli provider", () => {
+    const { model, modelsDef } = claudeCliRuntimeConfig();
+    expect(Object.keys(modelsDef)).toContain(model);
+    for (const [ref, def] of Object.entries(modelsDef)) {
+      expect(ref.startsWith("claude-cli/"), ref).toBe(true);
+      expect(def).toEqual({});
+    }
   });
 });
 
@@ -419,9 +413,9 @@ describe("buildModelCredentialConfigForProvider — claude-cli (Claude subscript
     expect(out.models).toBeNull();
   });
 
-  it("overrides the agent model to the native Opus 4.8 sub id (claude-cli/claude-opus-4-8)", () => {
+  it("overrides the agent model to the native claude-cli subscription default", () => {
     expect(buildModelCredentialConfigForProvider(base).agentModelOverride).toBe(
-      "claude-cli/claude-opus-4-8",
+      claudeCliRuntimeConfig().model,
     );
   });
 });

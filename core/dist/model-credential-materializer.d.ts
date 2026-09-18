@@ -60,7 +60,7 @@ export declare function codexRuntimeConfig(): {
         };
     }>;
 };
-export declare const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS: readonly ["claude-cli/claude-opus-4-8", "claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6", "claude-cli/claude-opus-4-6"];
+export declare const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS: readonly ["claude-cli/claude-opus-5", "claude-cli/claude-sonnet-5", "claude-cli/claude-opus-4-8", "claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6", "claude-cli/claude-opus-4-6"];
 export declare function claudeCliRuntimeConfig(): {
     model: string;
     modelsDef: Record<string, Record<string, never>>;

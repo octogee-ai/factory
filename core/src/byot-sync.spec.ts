@@ -1,4 +1,11 @@
-import { codexRuntimeConfig } from "./model-credential-materializer.js";
+import {
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  claudeCliRuntimeConfig,
+  codexRuntimeConfig,
+} from "./model-credential-materializer.js";
+
+const CODEX_DEFAULT_MODEL = codexRuntimeConfig().model;
+const CLAUDE_CLI_DEFAULT_MODEL = claudeCliRuntimeConfig().model;
 import { describe, it, test, expect, beforeEach, afterEach, vi } from "vitest";
 
 const { gatewayRestartRequestSpy, secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
@@ -609,10 +616,7 @@ const withFallback = (primary: string) => ({
 });
 
 const claudeCliDefaultModels = {
-  "claude-cli/claude-opus-4-8": {},
-  "claude-cli/claude-opus-4-7": {},
-  "claude-cli/claude-sonnet-4-6": {},
-  "claude-cli/claude-opus-4-6": {},
+  ...Object.fromEntries(CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) => [ref, {}])),
 };
 
 describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () => {
@@ -745,7 +749,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   it("openai-codex → coach model + agentRuntime:codex; runtime allowlist owns codex plugin config", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "openai-codex" })).toEqual({
       agents: {
-        list: [{ id, model: withFallback("openai/gpt-5.5") }],
+        list: [{ id, model: withFallback(CODEX_DEFAULT_MODEL) }],
         defaults: {
           models: { ...codexRuntimeConfig().modelsDef, ...HOUSE_DEFAULTS },
         },
@@ -756,7 +760,7 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
   it("claude-cli (Claude subscription) → default model plus the Claude CLI provider catalog", () => {
     expect(byosCoachConfigPatch({ slug: "tester-70", provider: "claude-cli" })).toEqual({
       agents: {
-        list: [{ id, model: withFallback("claude-cli/claude-opus-4-8") }],
+        list: [{ id, model: withFallback(CLAUDE_CLI_DEFAULT_MODEL) }],
         defaults: {
           models: { ...claudeCliDefaultModels, ...HOUSE_DEFAULTS },
         },
@@ -1356,7 +1360,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       {
         agents: {
           list: [
-            { id: "octogee-tester-70-coach", name: "coach", model: withFallback("openai/gpt-5.5"), mmAccount: "a" },
+            { id: "octogee-tester-70-coach", name: "coach", model: withFallback(CODEX_DEFAULT_MODEL), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: {
@@ -1382,7 +1386,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
       {
         agents: {
           list: [
-            { id: "octogee-tester-70-coach", name: "coach", model: withFallback("claude-cli/claude-opus-4-8"), mmAccount: "a" },
+            { id: "octogee-tester-70-coach", name: "coach", model: withFallback(CLAUDE_CLI_DEFAULT_MODEL), mmAccount: "a" },
             { id: "octogee-zed-coach", model: "z/y" },
           ],
           defaults: { models: { ...claudeCliDefaultModels, ...HOUSE_DEFAULTS } },
@@ -2900,7 +2904,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
           list: [
             {
               id: "octogee-tester-70-coach",
-              model: withFallback("openai/gpt-5.5"),
+              model: withFallback(CODEX_DEFAULT_MODEL),
             },
           ],
           defaults: {

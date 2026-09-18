@@ -22,6 +22,7 @@ import {
   type ByosubProvider,
 } from "../lib/byosub.js";
 import { resolveUserGateway } from "../lib/user-gateway.js";
+import { workspaceCoachAgentId } from "@octogee/shared/types/identity";
 import {
   claudeCliNativeCredentialsPath,
   codexAgentDir,
@@ -38,6 +39,10 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "@octogee/core/model-credential-materializer";
 import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
+import {
+  claudeCliRuntimeConfig,
+  codexRuntimeConfig,
+} from "@octogee/core/model-credential-materializer";
 import { logger } from "../middleware/logging.js";
 import {
   modelCredentialOAuthState,
@@ -313,8 +318,10 @@ async function flipUnifiedByosSignal(
   uid: string,
   signalProvider: ModelCredentialOAuthProviderId,
   secretName: string,
+  agentId?: string,
 ): Promise<void> {
   const addedAt = FieldValue.serverTimestamp();
+  const subscriptionModel = agentId ? subscriptionDefaultModel(signalProvider) : null;
   await db
     .collection("users")
     .doc(uid)
@@ -344,6 +351,9 @@ async function flipUnifiedByosSignal(
           baseUrl: FieldValue.delete(),
           model: FieldValue.delete(),
         },
+        ...(subscriptionModel && agentId
+          ? { agentModels: { [agentId]: { primary: subscriptionModel, fallbacks: [] } } }
+          : {}),
       },
       { merge: true },
     );
@@ -442,6 +452,12 @@ async function writeByosubIntegration(args: {
     );
 }
 
+function subscriptionDefaultModel(modelCredentialProvider: string): string | null {
+  if (modelCredentialProvider === "openai-codex") return codexRuntimeConfig().model;
+  if (modelCredentialProvider === "claude-cli") return claudeCliRuntimeConfig().model;
+  return null;
+}
+
 async function commitByosubCapture(args: {
   flowId: string;
   flow: FlowDoc;
@@ -475,6 +491,12 @@ async function commitByosubCapture(args: {
         : !currentFlow.consumedAt)
     ) {
       throw new Error("BYOS credential flow changed before commit");
+    }
+    const subscriptionModel = subscriptionDefaultModel(args.modelCredentialProvider);
+    if (subscriptionModel) {
+      tx.set(configRef, {
+        agentModels: { [args.flow.agentId]: { primary: subscriptionModel, fallbacks: [] } },
+      }, { merge: true });
     }
     tx.set(configRef, {
       byot: {
@@ -602,6 +624,27 @@ async function clearUserByosubSignal(uid: string): Promise<void> {
     );
 }
 
+async function retargetSubscriptionModelPicks(
+  uid: string,
+  from: ModelCredentialOAuthProviderId,
+  to: ModelCredentialOAuthProviderId | null,
+): Promise<void> {
+  const fromModel = subscriptionDefaultModel(from);
+  if (!fromModel) return;
+  const toModel = to ? subscriptionDefaultModel(to) : null;
+  const configRef = db.collection("users").doc(uid).collection("system").doc("config");
+  const agentModels = (await configRef.get()).data()?.agentModels as
+    | Record<string, { primary?: unknown } | undefined>
+    | undefined;
+  const updates: Record<string, unknown> = {};
+  for (const [agentId, selection] of Object.entries(agentModels ?? {})) {
+    if (selection?.primary !== fromModel) continue;
+    updates[agentId] = toModel ? { primary: toModel, fallbacks: [] } : FieldValue.delete();
+  }
+  if (Object.keys(updates).length === 0) return;
+  await configRef.set({ agentModels: updates }, { merge: true });
+}
+
 async function applyRemainingByosubSignal(
   uid: string,
   resolved: ResolvedUserGateway,
@@ -693,6 +736,7 @@ router.post(
       } else if (remainingProvider && resolved) {
         await applyRemainingByosubSignal(uid, resolved, remainingProvider);
       }
+      await retargetSubscriptionModelPicks(uid, entry.id, remainingProvider?.entry.id ?? null);
       await writeByosubIntegration({
         uid,
         provider,
@@ -715,7 +759,7 @@ router.post(
 // store it owner-scoped in Secret Manager, write the user integration, and flip the
 // unified BYOS signal to claude-cli. The pod's byot-sync watcher reacts to the
 // signal: materializes the per-agent claude-cli store from SM and patches the
-// coach model to Opus 4.8 on the customer's own subscription. User-authed (the
+// coach model to the subscription's default on the customer's own plan. User-authed (the
 // token is provided directly), unlike codex's internal /capture callback.
 router.post(
   "/token",
@@ -760,7 +804,7 @@ router.post(
         value: b.token.trim(),
         labels: { byosub: "true", provider: entry.oauth.secretProvider },
       });
-      await flipUnifiedByosSignal(uid, entry.id, secretName);
+      await flipUnifiedByosSignal(uid, entry.id, secretName, workspaceCoachAgentId(resolved.slug));
       await writeByosubIntegration({
         uid,
         provider: entry.oauth.subscriptionProvider,

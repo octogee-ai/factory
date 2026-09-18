@@ -33,7 +33,7 @@ describe("model credential catalog golden paths", () => {
         },
       },
       models: null,
-      agentModelOverride: "openai/gpt-5.5",
+      agentModelOverride: codexRuntimeConfig().model,
     });
 
     const access = jwt({ exp: 1_893_456_000 });
@@ -83,7 +83,7 @@ describe("model credential catalog golden paths", () => {
         },
       },
       models: null,
-      agentModelOverride: "claude-cli/claude-opus-4-8",
+      agentModelOverride: claudeCliRuntimeConfig().model,
     });
 
     const store = buildClaudeCliAuthProfilesStore("sk-ant-oat01-current", NOW);

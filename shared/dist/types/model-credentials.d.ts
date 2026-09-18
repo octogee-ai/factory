@@ -199,7 +199,7 @@ export declare const MODEL_CREDENTIAL_CATALOG: readonly [{
         readonly secretRefAllowed: false;
     };
     readonly defaults: {
-        readonly model: 'openai/gpt-5.5';
+        readonly model: 'openai/gpt-5.6-luna';
     };
 }, {
     readonly id: 'anthropic';
@@ -264,7 +264,7 @@ export declare const MODEL_CREDENTIAL_CATALOG: readonly [{
         readonly secretRefAllowed: false;
     };
     readonly defaults: {
-        readonly model: 'claude-cli/claude-opus-4-8';
+        readonly model: 'claude-cli/claude-opus-5';
     };
 }, {
     readonly id: 'openrouter';

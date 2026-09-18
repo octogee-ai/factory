@@ -271,7 +271,7 @@ export const MODEL_CREDENTIAL_CATALOG = [
       storeProfileId: 'openai-codex:default',
       secretRefAllowed: false,
     },
-    defaults: { model: 'openai/gpt-5.5' },
+    defaults: { model: 'openai/gpt-5.6-luna' },
   },
   {
     id: 'anthropic',
@@ -314,7 +314,7 @@ export const MODEL_CREDENTIAL_CATALOG = [
       storeProfileId: 'anthropic:claude-cli',
       secretRefAllowed: false,
     },
-    defaults: { model: 'claude-cli/claude-opus-4-8' },
+    defaults: { model: 'claude-cli/claude-opus-5' },
   },
   {
     id: 'openrouter',
