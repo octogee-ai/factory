@@ -22,6 +22,7 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   modelBrokerCredits: { customerKey: "uid" },
   workspaces: { customerKey: "slug" },
   emailSuppressions: { customerKey: "email" },
+  opsSupportQuestions: { uidFields: ["ownerUid"] },
   modelBrokerUsageEvents: { uidFields: ["ownerUid"] },
   modelBrokerUsageRollups: { uidFields: ["ownerUid"] },
   modelBrokerUsageWindows: { uidFields: ["ownerUid"] },
