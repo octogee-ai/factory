@@ -115,7 +115,6 @@ describe("model credential materializer consumers", () => {
 
   test.each([
     "scripts/lib/byosub-restore.ts",
-    "scripts/lib/codex-sync-back.ts",
     "scripts/lib/codex-auth-health-io.ts",
   ])("%s consumes the model credential materializer facade", (relativePath) => {
     const src = readSrc(relativePath);

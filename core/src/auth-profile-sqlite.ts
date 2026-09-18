@@ -8,7 +8,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
  * Upstream moved auth-profiles.json / auth-state.json into a single
  * {agentDir}/openclaw-agent.sqlite database with two singleton-row KV tables
  * (auth_profile_store, auth_profile_state). Our BYOS injection model writes
- * the store row directly; our codex-sync-back cron reads it. The runtime
+ * the store row directly; our BYOS health checks read it. The runtime
  * stays outside the gateway pod, so we use node:sqlite (same driver upstream
  * uses) rather than depending on openclaw's exported TypeScript API.
  *
