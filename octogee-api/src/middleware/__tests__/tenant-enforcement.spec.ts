@@ -145,6 +145,8 @@ function app(opts: {
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
+  a.post("/internal/fleet/assigned-users", enforcement, handler);
+  a.post("/internal/fleet/system-config-status", enforcement, handler);
   a.post("/internal/fleet/user-snapshot", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/download-url", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/snapshot-urls", enforcement, handler);
@@ -233,6 +235,82 @@ describe("tenant enforcement middleware", () => {
       .post(path)
       .send({});
     expect(res.status).toBe(200);
+  });
+
+function disposableClaim(uid: string, extra: Record<string, unknown> = {}) {
+  return {
+    gatewayId: "ceckert-s-072b95aa",
+    gatewayClass: "builder",
+    desiredStatus: "running",
+    ownerUid: uid,
+    builderSlug: "ceckert",
+    allocation: {
+      kind: "disposable-builder",
+      schemaVersion: 1,
+      leaseId: "lease-1",
+      generation: 41,
+      claimedByUid: uid,
+    },
+    ...extra,
+  };
+}
+
+const CLAIMING_GATEWAY = {
+  kind: "gateway",
+  gatewayId: "ceckert-s-072b95aa",
+  ownerUid: "uid-ceckert",
+} as const;
+
+// The user mirror still names the shared slot until activation completes, so a
+// booting disposable builder cannot bootstrap unless its own claim counts.
+const STILL_ON_SHARED = {
+  "uid-ceckert": {
+    username: "ceckert",
+    provisioning: { openclaw: { slug: "ceckert", gatewayId: "shared-0" } },
+  },
+};
+
+  it("lets a booting disposable builder bootstrap the user it has claimed", async () => {
+    const res = await request(app({
+      boundTenant: CLAIMING_GATEWAY,
+      users: STILL_ON_SHARED,
+      gateways: { "ceckert-s-072b95aa": disposableClaim("uid-ceckert") },
+    }))
+      .post("/internal/fleet/system-config-status")
+      .send({ uid: "uid-ceckert" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a disposable builder naming a user it has not claimed", async () => {
+    const res = await request(app({
+      boundTenant: CLAIMING_GATEWAY,
+      users: {
+        "uid-other": {
+          username: "other",
+          provisioning: { openclaw: { slug: "other", gatewayId: "shared-0" } },
+        },
+      },
+      gateways: { "ceckert-s-072b95aa": disposableClaim("uid-ceckert") },
+    }))
+      .post("/internal/fleet/system-config-status")
+      .send({ uid: "uid-other" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a retired gateway still carrying a stale claim", async () => {
+    const res = await request(app({
+      boundTenant: CLAIMING_GATEWAY,
+      users: STILL_ON_SHARED,
+      gateways: {
+        "ceckert-s-072b95aa": disposableClaim("uid-ceckert", { desiredStatus: "retired" }),
+      },
+    }))
+      .post("/internal/fleet/system-config-status")
+      .send({ uid: "uid-ceckert" });
+
+    expect(res.status).toBe(403);
   });
 
   it("forbids a platform-bound caller on any non-cron internal route (no skeleton key)", async () => {

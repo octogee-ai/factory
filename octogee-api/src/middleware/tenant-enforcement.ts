@@ -187,11 +187,36 @@ async function uidBelongsToGateway(
   gatewayId: string,
 ): Promise<boolean> {
   const snap = await db.collection("users").doc(uid).get();
+  if (snap.exists) {
+    const data = snap.data() as Record<string, unknown> | undefined;
+    const provisioning = data?.provisioning as Record<string, unknown> | undefined;
+    const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
+    if (openclaw?.gatewayId === gatewayId) return true;
+  }
+  return uidHoldsDisposableClaim(db, uid, gatewayId);
+}
+
+// The user mirror only names a disposable builder once activation finishes, and
+// activation cannot finish without the bootstrap calls this check guards. The
+// gateway's own allocation is the platform-written record of that pending
+// binding, so an active claim binds the uid for exactly as long as it stands.
+// Both the claim and the owner must name the uid, and a retired gateway's
+// leftover claim binds nothing.
+async function uidHoldsDisposableClaim(
+  db: Pick<Firestore, "collection">,
+  uid: string,
+  gatewayId: string,
+): Promise<boolean> {
+  const snap = await db.collection("gateways").doc(gatewayId).get();
   if (!snap.exists) return false;
-  const data = snap.data() as Record<string, unknown> | undefined;
-  const provisioning = data?.provisioning as Record<string, unknown> | undefined;
-  const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
-  return openclaw?.gatewayId === gatewayId;
+  const gateway = snap.data() as Record<string, unknown> | undefined;
+  if (!gateway || gateway.desiredStatus === "retired") return false;
+  const allocation = gateway.allocation as Record<string, unknown> | undefined;
+  return (
+    allocation?.kind === "disposable-builder" &&
+    allocation.claimedByUid === uid &&
+    gateway.ownerUid === uid
+  );
 }
 
 async function flowBelongsToGateway(
