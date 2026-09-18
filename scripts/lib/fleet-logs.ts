@@ -34,6 +34,25 @@ const MESSAGE_FIELD_INDEX = FLEET_LOGS_FIELDS.indexOf("textPayload");
 
 export const FLEET_LOGS_FORMAT = `value(${FLEET_LOGS_FIELDS.join(",")})`;
 
+export const FLEET_LOGS_TAIL_ENV = { PYTHONUNBUFFERED: "1" } as const;
+
+const SEVERITY_BY_CODE: Record<string, string> = {
+  "0": "DEFAULT",
+  "100": "DEBUG",
+  "200": "INFO",
+  "300": "NOTICE",
+  "400": "WARNING",
+  "500": "ERROR",
+  "600": "CRITICAL",
+  "700": "ALERT",
+  "800": "EMERGENCY",
+};
+
+export function severityName(raw: string): string {
+  if (!raw) return "DEFAULT";
+  return SEVERITY_BY_CODE[raw] ?? raw.toUpperCase();
+}
+
 export interface FleetLogsQuery {
   namespace: string;
   gatewayId?: string;
@@ -125,7 +144,7 @@ export function parseFleetLogsLine(line: string): FleetLogLine | null {
   const container = podContainer || vmContainer.replace(/^\//, "");
   return {
     timestamp,
-    severity: severity || "DEFAULT",
+    severity: severityName(severity),
     source: [host, container].filter(Boolean).join("/"),
     message,
   };

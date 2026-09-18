@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FLEET_LOGS_FORMAT,
+  FLEET_LOGS_TAIL_ENV,
   SOURCE_COLORS,
   buildFleetLogsFilter,
   fleetLogsTailArgs,
@@ -61,6 +62,12 @@ describe("fleetLogsTailArgs", () => {
   });
 });
 
+describe("FLEET_LOGS_TAIL_ENV", () => {
+  it("unbuffers gcloud's python so a piped tail streams instead of stalling", () => {
+    expect(FLEET_LOGS_TAIL_ENV).toEqual({ PYTHONUNBUFFERED: "1" });
+  });
+});
+
 describe("parseFleetLogsLine", () => {
   const fields = (...v: string[]) => v.join("\t");
 
@@ -103,9 +110,23 @@ describe("parseFleetLogsLine", () => {
     expect(parseFleetLogsLine(at(8, "a\tb"))?.message).toBe("a\tb");
   });
 
+  it("names the numeric severity that tail emits, and passes through read's string form", () => {
+    const withSeverity = (value: string) =>
+      parseFleetLogsLine(fields("t", value, "p", "c", "", "", "line", "", ""))?.severity;
+
+    expect(withSeverity("200")).toBe("INFO");
+    expect(withSeverity("100")).toBe("DEBUG");
+    expect(withSeverity("400")).toBe("WARNING");
+    expect(withSeverity("500")).toBe("ERROR");
+    expect(withSeverity("800")).toBe("EMERGENCY");
+    expect(withSeverity("ERROR")).toBe("ERROR");
+    expect(withSeverity("")).toBe("DEFAULT");
+  });
+
   it("skips gcloud's progress chatter rather than rendering it as a log line", () => {
     expect(parseFleetLogsLine("")).toBeNull();
     expect(parseFleetLogsLine("Waiting for log entries...")).toBeNull();
+    expect(parseFleetLogsLine("Initializing tail session.")).toBeNull();
   });
 });
 

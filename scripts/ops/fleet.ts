@@ -56,6 +56,7 @@ import {
 
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
 import {
+  FLEET_LOGS_TAIL_ENV,
   buildFleetLogsFilter,
   fleetLogsTailArgs,
   parseFleetLogsLine,
@@ -1549,7 +1550,7 @@ async function runFleetLogs(): Promise<void> {
     // eslint-disable-next-line sonarjs/no-os-command-from-path
     "gcloud",
     gcloudArgs,
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...FLEET_LOGS_TAIL_ENV } },
   );
   const stderr: string[] = [];
   child.stderr.setEncoding("utf8");
