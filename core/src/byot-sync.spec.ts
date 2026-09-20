@@ -1677,6 +1677,44 @@ describe("customer OAuth runtime purge", () => {
     expect(patch).not.toHaveProperty("security");
   });
 
+  it("disables DMs on already-mounted platform-agent accounts and leaves other accounts alone", () => {
+    const botToken = (accountId: string) => ({
+      source: "file",
+      provider: "octogee-mattermost",
+      id: `/${accountId}`,
+    });
+    const patch = customerOauthRuntimeConfigPatch(
+      {
+        agents: {
+          list: [{ id: "octogee-tester-70-coach" }, { id: "octogee-tester-70-proj-golf-coach" }],
+        },
+        channels: {
+          mattermost: {
+            accounts: {
+              "tester-70-coach": {
+                botToken: botToken("tester-70-coach"),
+                dmPolicy: "allowlist",
+                allowFrom: ["aaaaaaaaaaaaaaaaaaaaaaaaaa"],
+              },
+              "tester-70-proj-golf": { botToken: botToken("tester-70-proj-golf"), dmPolicy: "disabled" },
+              "someone-else-coach": { botToken: botToken("someone-else-coach"), dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      "tester-70",
+      "platform-openrouter/deepseek/deepseek-v4-pro",
+    ) as any;
+
+    expect(patch.channels).toEqual({
+      mattermost: {
+        accounts: {
+          "tester-70-coach": { dmPolicy: "disabled" },
+        },
+      },
+    });
+  });
+
   it("preserves the env-materialized plugin projection on a running gateway", () => {
     vi.stubEnv("MM_SITE_URL", "https://mattermost-test.octogee.com");
     vi.stubEnv("FLEET_BROKER_URL", "http://127.0.0.1:3003");

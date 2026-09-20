@@ -1,4 +1,5 @@
 import * as path from "path";
+import { mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import * as os from "os";
 import * as fs from "fs";
 import { applyByotState, byosCoachConfigPatch, coachAgentExists, coachAgentPatch, coachAgentPatchReplacePaths, deriveDesiredByotState, FREE_TIER_COACH_TOOLS, isPlatformProviderRef, platformCoachModelInputForUser, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
@@ -791,6 +792,33 @@ function customerSecretRefsPatch(config) {
         return isRecord(patch) && Object.keys(patch).length > 0 ? [[key, patch]] : [];
     }));
 }
+function platformAgentAccountIds(config) {
+    const agents = recordChild(config, "agents");
+    const ids = new Set();
+    const add = (agentId) => {
+        const accountId = typeof agentId === "string" ? mattermostAccountIdForAgentId(agentId) : null;
+        if (accountId)
+            ids.add(accountId);
+    };
+    if (Array.isArray(agents.list)) {
+        for (const entry of agents.list)
+            add(isRecord(entry) ? entry.id : undefined);
+    }
+    for (const agentId of Object.keys(recordChild(agents, "entries")))
+        add(agentId);
+    return ids;
+}
+function platformAgentDirectMessagePatch(config) {
+    const accounts = recordChild(recordChild(recordChild(config, "channels"), "mattermost"), "accounts");
+    const managed = platformAgentAccountIds(config);
+    const patch = {};
+    for (const [accountId, entry] of Object.entries(accounts)) {
+        if (!managed.has(accountId) || !isRecord(entry) || entry.dmPolicy === "disabled")
+            continue;
+        patch[accountId] = { dmPolicy: "disabled" };
+    }
+    return Object.keys(patch).length > 0 ? { channels: { mattermost: { accounts: patch } } } : {};
+}
 function customerToolsProjectionPatch(config) {
     const patch = {};
     const mediaModels = toolModelList(config, "media");
@@ -843,7 +871,7 @@ function customerSecurityProjectionPatch(current) {
     const providerEntries = recordChild(recordChild(config, "models"), "providers");
     const modelProviders = customerModelProvidersPlan(providerEntries);
     const hookMappings = safeHookMappings(config);
-    return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), {
+    return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), platformAgentDirectMessagePatch(config), {
         plugins: {
             enabled: true,
             allow: [...CUSTOMER_APPROVED_PLUGINS],

@@ -2554,7 +2554,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       "fresh-coach": expect.any(Object),
       "stale-coach": null,
     });
-    expect(patch.channels.mattermost.accounts).not.toHaveProperty("readmitted-coach");
+    expect(patch.channels.mattermost.accounts["readmitted-coach"]).toEqual({ dmPolicy: "disabled" });
     expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({

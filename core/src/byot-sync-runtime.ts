@@ -1,4 +1,5 @@
 import * as path from "path";
+import { mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import * as os from "os";
 import * as fs from "fs";
 import {
@@ -1064,6 +1065,31 @@ function customerSecretRefsPatch(config: Record<string, unknown>): Record<string
   );
 }
 
+function platformAgentAccountIds(config: Record<string, unknown>): Set<string> {
+  const agents = recordChild(config, "agents");
+  const ids = new Set<string>();
+  const add = (agentId: unknown) => {
+    const accountId = typeof agentId === "string" ? mattermostAccountIdForAgentId(agentId) : null;
+    if (accountId) ids.add(accountId);
+  };
+  if (Array.isArray(agents.list)) {
+    for (const entry of agents.list) add(isRecord(entry) ? entry.id : undefined);
+  }
+  for (const agentId of Object.keys(recordChild(agents, "entries"))) add(agentId);
+  return ids;
+}
+
+function platformAgentDirectMessagePatch(config: Record<string, unknown>): Record<string, unknown> {
+  const accounts = recordChild(recordChild(recordChild(config, "channels"), "mattermost"), "accounts");
+  const managed = platformAgentAccountIds(config);
+  const patch: Record<string, unknown> = {};
+  for (const [accountId, entry] of Object.entries(accounts)) {
+    if (!managed.has(accountId) || !isRecord(entry) || entry.dmPolicy === "disabled") continue;
+    patch[accountId] = { dmPolicy: "disabled" };
+  }
+  return Object.keys(patch).length > 0 ? { channels: { mattermost: { accounts: patch } } } : {};
+}
+
 function customerToolsProjectionPatch(config: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   const mediaModels = toolModelList(config, "media");
@@ -1128,7 +1154,7 @@ function customerSecurityProjectionPatch(current: unknown): Record<string, unkno
   const modelProviders = customerModelProvidersPlan(providerEntries);
   const hookMappings = safeHookMappings(config);
 
-  return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), {
+  return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), platformAgentDirectMessagePatch(config), {
     plugins: {
       enabled: true,
       allow: [...CUSTOMER_APPROVED_PLUGINS],
