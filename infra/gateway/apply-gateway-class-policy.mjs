@@ -545,14 +545,6 @@ function customerToolsBySender(_config, agentId) {
     : {};
 }
 
-const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
-
-function trustedOwnerAllowFrom(value) {
-  if (Array.isArray(value) && value.length === 1 &&
-      typeof value[0] === "string" && MATTERMOST_ID_RE.test(value[0])) return [value[0]];
-  return [];
-}
-
 function managedMattermostAccounts(config) {
   const accounts = new Map();
   const addAgent = (agentId) => {
@@ -606,24 +598,33 @@ function forceCustomerMattermostProjection(config) {
     callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
     allowedSourceIps: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
   };
+  projectPlatformAgentMattermostAccounts(config, { platformOwned: true });
+}
+
+function projectPlatformAgentMattermostAccounts(config, { platformOwned }) {
+  config.channels ??= {};
+  config.channels.mattermost ??= {};
+  const mattermost = config.channels.mattermost;
   const managed = managedMattermostAccounts(config);
   const accounts = objectValue(mattermost.accounts) ?? {};
   mattermost.accounts = accounts;
   for (const [accountId, rawAccount] of Object.entries(accounts)) {
     const account = objectValue(rawAccount);
     const accountKind = managed.get(accountId);
+    if (!platformOwned) {
+      if (accountKind && account) {
+        account.dmPolicy = "disabled";
+        delete account.allowFrom;
+      }
+      continue;
+    }
     if (!accountKind || !account) {
       delete accounts[accountId];
       continue;
     }
     account.botToken = mattermostAccountSecretRef(accountId);
-    if (accountKind === "project") {
-      account.dmPolicy = "disabled";
-      delete account.allowFrom;
-    } else {
-      account.dmPolicy = "allowlist";
-      account.allowFrom = trustedOwnerAllowFrom(account.allowFrom) ?? [];
-    }
+    account.dmPolicy = "disabled";
+    delete account.allowFrom;
     delete account.baseUrl;
     delete account.network;
     delete account.interactions;
@@ -1496,6 +1497,7 @@ function projectBuilderSecretProviders(config, openclawDir) {
 // and the codex BYOSUB plugin stay at the Builder's discretion; the platform
 // keeps only its plugin configuration boundary and tenant-scoped secret providers.
 function applyBuilderPolicy(config, openclawDir, env) {
+  projectPlatformAgentMattermostAccounts(config, { platformOwned: false });
   config.agents ??= {};
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};

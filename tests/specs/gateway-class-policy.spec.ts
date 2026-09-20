@@ -482,7 +482,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     });
   });
 
-  it("forces shared account DMs to an allowlist while preserving Builder-owned DM settings", () => {
+  it("disables platform-agent DMs on shared and Builder gateways alike", () => {
     const accountId = "alice-coach";
     const projectAccountId = "alice-proj-orbit";
     const shared = runPolicy("shared", {
@@ -505,10 +505,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         },
       },
     });
-    expect(shared.channels.mattermost.accounts[accountId]).toMatchObject({
-      dmPolicy: "allowlist",
-      allowFrom: ["a".repeat(26)],
-    });
+    expect(shared.channels.mattermost.accounts[accountId].dmPolicy).toBe("disabled");
+    expect(shared.channels.mattermost.accounts[accountId].allowFrom).toBeUndefined();
     expect(shared.commands.ownerAllowFrom).toBeUndefined();
     expect(shared.channels.mattermost.accounts[projectAccountId].dmPolicy).toBe("disabled");
     expect(shared.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
@@ -533,15 +531,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         },
       },
     });
-    expect(builder.channels.mattermost.accounts[accountId]).toMatchObject({
-      dmPolicy: "open",
-      allowFrom: ["*", "a".repeat(26)],
-    });
+    expect(builder.channels.mattermost.accounts[accountId].dmPolicy).toBe("disabled");
+    expect(builder.channels.mattermost.accounts[accountId].allowFrom).toBeUndefined();
     expect(builder.commands.ownerAllowFrom).toEqual(["a".repeat(26)]);
-    expect(builder.channels.mattermost.accounts[projectAccountId]).toMatchObject({
-      dmPolicy: "open",
-      allowFrom: ["*", "a".repeat(26)],
-    });
+    expect(builder.channels.mattermost.accounts[projectAccountId].dmPolicy).toBe("disabled");
+    expect(builder.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
   });
 
   it("shared class retains the durable disabled Codex invariant", () => {

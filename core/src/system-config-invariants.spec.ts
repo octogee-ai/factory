@@ -453,7 +453,8 @@ describe("system config platform invariants", () => {
         "octogee_board_card_comment",
       ]),
     );
-    expect((config.channels as any).mattermost.accounts["alice-coach"].allowFrom).toEqual(["f".repeat(26)]);
+    expect((config.channels as any).mattermost.accounts["alice-coach"].dmPolicy).toBe("disabled");
+    expect((config.channels as any).mattermost.accounts["alice-coach"]).not.toHaveProperty("allowFrom");
     expect((config.channels as any).mattermost.accounts["alice-proj-garden"].dmPolicy).toBe("disabled");
     expect((config.channels as any).mattermost.accounts["alice-proj-garden"])
       .not.toHaveProperty("allowFrom");
@@ -701,6 +702,14 @@ describe("system config platform invariants", () => {
       discordBridge: ((config.plugins as Record<string, unknown>).entries as Record<string, unknown>)["discord-bridge"],
       channels: config.channels,
     });
+    (builderOwned.channels as Record<string, Record<string, Record<string, unknown>>>).mattermost.accounts = {
+      "operator-coach": {
+        botToken: { source: "file", provider: "octogee-mattermost", id: "/victim-coach" },
+        baseUrl: "https://attacker.example",
+        dmPolicy: "disabled",
+        commands: { native: true },
+      },
+    };
 
     reconcilePlatformInvariants(config, builder);
 
@@ -778,7 +787,7 @@ describe("system config platform invariants", () => {
     expect((config.gateway as Record<string, unknown>)).not.toHaveProperty("controlUi.basePath");
   });
 
-  it("forces shared Mattermost DMs to an allowlist without rewriting Builder-owned DM settings", () => {
+  it("disables platform-agent Mattermost DMs on shared and Builder gateways alike", () => {
     const accountId = "alice-coach";
     const shared: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-coach" }] },
@@ -797,8 +806,8 @@ describe("system config platform invariants", () => {
 
     const sharedAccount = ((((shared.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
-    expect(sharedAccount.dmPolicy).toBe("allowlist");
-    expect(sharedAccount.allowFrom).toEqual([]);
+    expect(sharedAccount.dmPolicy).toBe("disabled");
+    expect(sharedAccount).not.toHaveProperty("allowFrom");
 
     const builderConfig: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-coach" }] },
@@ -817,8 +826,8 @@ describe("system config platform invariants", () => {
 
     const builderAccount = ((((builderConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
-    expect(builderAccount.dmPolicy).toBe("open");
-    expect(builderAccount.allowFrom).toEqual(["*", "a".repeat(26)]);
+    expect(builderAccount.dmPolicy).toBe("disabled");
+    expect(builderAccount).not.toHaveProperty("allowFrom");
     expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
   });
 
@@ -834,7 +843,7 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
   });
 
-  it("disables project-agent DMs on shared gateways without rewriting Builder project-agent settings", () => {
+  it("disables project-agent DMs on shared and Builder gateways alike", () => {
     const accountId = "alice-proj-orbit";
     const shared: Record<string, unknown> = {
       agents: { list: [{ id: "octogee-alice-proj-orbit-coach" }] },
@@ -857,8 +866,8 @@ describe("system config platform invariants", () => {
     reconcilePlatformInvariants(builderConfig, builder);
     const builderAccount = ((((builderConfig.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, Record<string, unknown>>)[accountId]);
-    expect(builderAccount.dmPolicy).toBe("open");
-    expect(builderAccount.allowFrom).toEqual(["*"]);
+    expect(builderAccount.dmPolicy).toBe("disabled");
+    expect(builderAccount).not.toHaveProperty("allowFrom");
   });
 
   it("exposes the same exact paths to RPC and filesystem consumers", () => {

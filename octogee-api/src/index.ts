@@ -677,10 +677,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   }));
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
-  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({
-    db,
-    opsMattermostUserId: process.env.MM_ADMIN_USER_ID,
-  }));
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
   // octogee-api-only: voice relay. gateway-edge Talk engines stream microphone
   // audio and fetch speech here so provider keys never reach a gateway pod.
   app.use("/internal/voice", createVoiceRelayRoutes({ config: voiceRelayConfig, log: voiceRelayLog }));

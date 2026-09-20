@@ -1930,7 +1930,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         patch.agents.list.find((agent) => agent.id === "octogee-alice-proj-orbit-coach"),
       ).not.toHaveProperty("tools");
       expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-        dmPolicy: "allowlist",
+        dmPolicy: "disabled",
         allowFrom: [ALICE_OWNER_MM_ID],
         groupPolicy: "open",
         groups: null,
@@ -2014,7 +2014,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       };
 
       expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-        dmPolicy: "allowlist",
+        dmPolicy: "disabled",
         allowFrom: [builderMmUserId],
         groupPolicy: "open",
       });
@@ -3524,7 +3524,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       allowFrom: [ALICE_OWNER_MM_ID],
     });
     expect(patch.channels.mattermost.accounts["alice-coach"]).toMatchObject({
-      dmPolicy: "allowlist",
+      dmPolicy: "disabled",
       allowFrom: [ALICE_OWNER_MM_ID],
       groupPolicy: "open",
       groups: null,

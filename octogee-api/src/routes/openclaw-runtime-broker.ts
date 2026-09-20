@@ -461,53 +461,6 @@ async function resolveAuthorizedConversationTarget(
   };
 }
 
-async function resolveAuthorizedDirectConversationTarget(
-  db: Firestore,
-  gatewayId: string,
-  agentId: string,
-  conversationId: string,
-  ownerUserId: string,
-): Promise<AuthorizedConversationTarget | null | "forbidden"> {
-  if (!MATTERMOST_ID_RE.test(conversationId) || !MATTERMOST_ID_RE.test(ownerUserId)) {
-    return "forbidden";
-  }
-  const parsed = parseAgentId(agentId);
-  if (parsed.kind !== "coach") return "forbidden";
-  const identity = await resolveAgentIdentity(db, gatewayId, agentId);
-  if (identity === "forbidden") return identity;
-  if (!identity || !MATTERMOST_ID_RE.test(identity.coachMmUserId)) return null;
-  if (identity.coachMmUserId === ownerUserId) return "forbidden";
-
-  const [owner, ledger] = await Promise.all([
-    db.doc(`users/${identity.uid}`).get(),
-    db.doc(`workspaces/${identity.workspaceSlug}/channels/coach-dm`).get(),
-  ]);
-  if (
-    !owner.exists
-    || readPath(owner.data() ?? {}, "mattermost.userId") !== ownerUserId
-  ) return "forbidden";
-  const ledgerData = ledger.data() ?? {};
-  if (
-    !ledger.exists
-    || !authorizedChannelContext(ledgerData, {
-      workspaceSlug: identity.workspaceSlug,
-      ownerPath: `workspaces/${identity.workspaceSlug}`,
-      channelName: "coach-dm",
-      lane: "workspace",
-    })
-  ) return null;
-
-  const expectedMemberIds = [identity.coachMmUserId, ownerUserId].sort();
-  return {
-    primaryChannelId: conversationId,
-    channelDocPath: `workspaces/${identity.workspaceSlug}/channels/coach-dm`,
-    expectedChannelTeamId: null,
-    expectedChannelName: null,
-    expectedChannelType: "D",
-    expectedMemberIds,
-  };
-}
-
 interface ResolveSessionContextInput {
   gatewayId: string;
   agentId: string;
@@ -515,7 +468,6 @@ interface ResolveSessionContextInput {
   channelId: string;
   senderId: string;
   sessionKey: string;
-  opsMattermostUserId: string | null;
 }
 
 async function resolveRawDirectSessionContext(
@@ -524,20 +476,7 @@ async function resolveRawDirectSessionContext(
 ): Promise<SessionContextLookup | undefined> {
   if (!input.senderId && !input.sessionKey) return undefined;
   if (!input.senderId || !input.sessionKey) return "forbidden";
-  const route = dispatchSessionRoute(input.sessionKey, input.agentId);
-  if (!route || route.kind !== "direct" || route.peerId !== input.senderId) {
-    return "forbidden";
-  }
-  return resolveDispatchContext({
-    db,
-    gatewayId: input.gatewayId,
-    agentId: input.agentId,
-    accountId: input.accountId,
-    conversationId: input.senderId,
-    senderId: input.senderId,
-    sessionKey: input.sessionKey,
-    opsMattermostUserId: input.opsMattermostUserId,
-  });
+  return "forbidden";
 }
 
 async function resolveSessionContext(
@@ -579,11 +518,6 @@ interface DispatchContextInput {
   conversationId: string;
   senderId: string;
   sessionKey: string;
-  opsMattermostUserId: string | null;
-}
-
-function validMattermostUserId(value: unknown): value is string {
-  return typeof value === "string" && MATTERMOST_ID_RE.test(value);
 }
 
 function mattermostAccountId(parsed: ParsedAgentId): string | null {
@@ -640,23 +574,6 @@ async function resolveCoachOwnerDispatchContext(
   return "forbidden";
 }
 
-async function resolveDirectDispatchContext(
-  input: DispatchContextInput,
-  identity: AgentScope,
-  parsed: KnownAgentId,
-): Promise<DispatchContextLookup> {
-  if (parsed.kind !== "coach") return "forbidden";
-
-  const gateway = await input.db.doc(`gateways/${input.gatewayId}`).get();
-  const isBuilderGateway = gateway.exists && gateway.data()?.gatewayClass === "builder";
-  if (
-    input.opsMattermostUserId !== null &&
-    input.senderId === input.opsMattermostUserId
-  ) return { authorized: true };
-  if (!isBuilderGateway) return "forbidden";
-  return resolveCoachOwnerDispatchContext(input, identity, parsed);
-}
-
 function isExactDispatchLane(
   binding: BoundChannelPath,
   parsed: KnownAgentId,
@@ -710,9 +627,7 @@ async function resolveDispatchContext(
   if (identity === "forbidden") return identity;
   if (!identity) return null;
 
-  if (route.kind === "direct") {
-    return resolveDirectDispatchContext(input, identity, parsed);
-  }
+  if (route.kind === "direct") return "forbidden";
   return resolveGroupDispatchContext(input, identity, parsed);
 }
 
@@ -1020,7 +935,6 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
 function mountSessionContextRoute(
   router: Router,
   db: Firestore,
-  opsMattermostUserId: string | null,
 ): void {
   router.post("/activity/dispatch-context", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -1033,7 +947,6 @@ function mountSessionContextRoute(
       conversationId: stringBody(req, "conversationId"),
       senderId: stringBody(req, "senderId"),
       sessionKey: stringBody(req, "sessionKey"),
-      opsMattermostUserId,
     });
     if (context === "forbidden") {
       forbidden(res);
@@ -1056,7 +969,6 @@ function mountSessionContextRoute(
       channelId: stringBody(req, "channelId"),
       senderId: stringBody(req, "senderId"),
       sessionKey: stringBody(req, "sessionKey"),
-      opsMattermostUserId,
     });
     if (context === "forbidden") {
       forbidden(res);
@@ -1073,7 +985,6 @@ function mountSessionContextRoute(
 function mountActivityRoutes(
   router: Router,
   db: Firestore,
-  opsMattermostUserId: string | null,
 ): void {
   router.post("/activity/agent-identity", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -1131,28 +1042,12 @@ function mountActivityRoutes(
     res.json({ target });
   });
 
-  router.post("/activity/direct-conversation-target", async (req, res) => {
-    const bound = boundGateway(req, res);
-    if (!bound) return;
-    const target = await resolveAuthorizedDirectConversationTarget(
-      db,
-      bound.gatewayId,
-      stringBody(req, "agentId"),
-      stringBody(req, "conversationId"),
-      stringBody(req, "ownerUserId"),
-    );
-    if (target === "forbidden") {
-      forbidden(res);
-      return;
-    }
-    if (!target) {
-      res.status(404).json({ error: "not_found" });
-      return;
-    }
-    res.json({ target });
+  router.post("/activity/direct-conversation-target", (req, res) => {
+    if (!boundGateway(req, res)) return;
+    forbidden(res);
   });
 
-  mountSessionContextRoute(router, db, opsMattermostUserId);
+  mountSessionContextRoute(router, db);
 
   mountActivityReceiptRoutes(router, db);
 
@@ -1293,14 +1188,10 @@ function mountActivityReceiptRoutes(router: Router, db: Firestore): void {
 
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
-  opsMattermostUserId?: string;
 }): Router {
   const router = Router();
   const { db } = opts;
-  const opsMattermostUserId = validMattermostUserId(opts.opsMattermostUserId)
-    ? opts.opsMattermostUserId
-    : null;
   mountUserAndWsRoutes(router, db);
-  mountActivityRoutes(router, db, opsMattermostUserId);
+  mountActivityRoutes(router, db);
   return router;
 }

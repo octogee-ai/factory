@@ -434,7 +434,7 @@ describe("buildMattermostAccounts", () => {
     expect(accounts.admin).toBeUndefined();
   });
 
-  it("lets channel members trigger ordinary work while reserving approvals and DMs for each owner", () => {
+  it("lets channel members trigger ordinary work, reserves approvals for each owner, and accepts no DMs", () => {
     const accounts = buildMattermostAccounts(
       [
         { uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID },
@@ -447,7 +447,7 @@ describe("buildMattermostAccounts", () => {
     );
     expect(accounts["chris-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
-      dmPolicy: "allowlist",
+      dmPolicy: "disabled",
       allowFrom: [CHRIS_MM_ID],
       groupPolicy: "open",
       groups: null,
@@ -455,7 +455,7 @@ describe("buildMattermostAccounts", () => {
     });
     expect(accounts["sam-coach"]).toEqual({
       botToken: { source: "file", provider: "octogee-mattermost", id: "/sam-coach" },
-      dmPolicy: "allowlist",
+      dmPolicy: "disabled",
       allowFrom: [SAM_MM_ID],
       groupPolicy: "open",
       groups: null,

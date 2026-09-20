@@ -34,6 +34,7 @@ type CustomerAgentWorkspaceInvariant = {
 type MattermostAccountProjectionInvariant = {
     kind: "mattermost-account-projection";
     path: "channels.mattermost.accounts";
+    platformOwned: boolean;
 };
 type CustomerAgentToolPolicyInvariant = {
     kind: "customer-agent-tool-policy";

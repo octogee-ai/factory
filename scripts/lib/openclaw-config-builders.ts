@@ -303,7 +303,7 @@ export function buildMattermostAccounts(
     const accountId = `${c.slug}-coach`;
     accounts[accountId] = {
       botToken: mattermostAccountSecretRef(accountId),
-      dmPolicy: "allowlist",
+      dmPolicy: "disabled",
       allowFrom: [ownerMmUserId],
       groupPolicy: "open",
       groups: null,

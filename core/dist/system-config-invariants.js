@@ -374,7 +374,7 @@ export function platformInvariantTable(context) {
             value: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
         },
         { kind: "exact", path: "channels.mattermost.commands.native", value: false },
-        { kind: "mattermost-account-projection", path: "channels.mattermost.accounts" },
+        { kind: "mattermost-account-projection", path: "channels.mattermost.accounts", platformOwned: !isolated },
         { kind: "exact", path: "plugins.enabled", value: true },
         { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
         { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: RETIRED_PLUGINS },
@@ -402,9 +402,7 @@ export function platformInvariantTable(context) {
     if (!isolated) {
         base.push({ kind: "exact", path: "commands.ownerAllowFrom", value: ABSENT });
     }
-    const platformProjection = context.gatewayClass === "builder"
-        ? base.filter((invariant) => invariant.kind !== "mattermost-account-projection")
-        : base;
+    const platformProjection = base;
     // A Builder gateway is the Builder's own OpenClaw: no platform credential lives
     // in the pod, so host code, terminals, MCP servers, cron, skills, sub-agents,
     // and the codex BYOSUB plugin stay at the Builder's discretion. The platform
@@ -602,17 +600,6 @@ function customerToolsBySenderPolicy(_config, agentId) {
         ? { "*": { deny: structuredClone(PRODUCTIVITY_TOOL_NAMES) } }
         : {};
 }
-const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
-function trustedOwnerAllowFrom(value) {
-    if (!Array.isArray(value))
-        return null;
-    if (value.length === 0)
-        return [];
-    return value.length === 1 &&
-        typeof value[0] === "string" && MATTERMOST_ID_RE.test(value[0])
-        ? [value[0]]
-        : null;
-}
 function managedMattermostAccounts(config) {
     const result = new Map();
     const agents = asObject(config.agents);
@@ -652,29 +639,39 @@ function mattermostAccounts(config) {
     const value = readPath(config, "channels.mattermost.accounts");
     return value === ABSENT ? ABSENT : asObject(value);
 }
-function accountProjectionSatisfied(config) {
+function platformAgentDirectMessagesDisabled(account) {
+    return account.dmPolicy === "disabled"
+        && !Object.prototype.hasOwnProperty.call(account, "allowFrom");
+}
+function accountProjectionSatisfied(config, platformOwned) {
     const accounts = mattermostAccounts(config);
     if (accounts === ABSENT)
         return true;
     if (!accounts)
         return false;
     const managed = managedMattermostAccounts(config);
+    if (!platformOwned) {
+        return Object.entries(accounts).every(([accountId, rawAccount]) => {
+            if (!managed.has(accountId))
+                return true;
+            const account = asObject(rawAccount);
+            return account !== null && platformAgentDirectMessagesDisabled(account);
+        });
+    }
     return Object.entries(accounts).every(([accountId, rawAccount]) => {
         const account = asObject(rawAccount);
         const accountKind = managed.get(accountId);
         return accountKind !== undefined
             && account !== null
             && equal(account.botToken, mattermostAccountSecretRef(accountId))
-            && (accountKind === "project"
-                ? account.dmPolicy === "disabled" && !Object.prototype.hasOwnProperty.call(account, "allowFrom")
-                : account.dmPolicy === "allowlist" && trustedOwnerAllowFrom(account.allowFrom) !== null)
+            && platformAgentDirectMessagesDisabled(account)
             && !Object.prototype.hasOwnProperty.call(account, "baseUrl")
             && !Object.prototype.hasOwnProperty.call(account, "network")
             && !Object.prototype.hasOwnProperty.call(account, "interactions")
             && !Object.prototype.hasOwnProperty.call(account, "callbackBaseUrl");
     });
 }
-function reconcileMattermostAccounts(config) {
+function reconcileMattermostAccounts(config, platformOwned) {
     const current = mattermostAccounts(config);
     if (current === ABSENT)
         return;
@@ -687,19 +684,20 @@ function reconcileMattermostAccounts(config) {
     for (const [accountId, rawAccount] of Object.entries(current)) {
         const account = asObject(rawAccount);
         const accountKind = managed.get(accountId);
+        if (!platformOwned) {
+            if (accountKind !== undefined && account) {
+                account.dmPolicy = "disabled";
+                delete account.allowFrom;
+            }
+            continue;
+        }
         if (accountKind === undefined || !account) {
             delete current[accountId];
             continue;
         }
         account.botToken = mattermostAccountSecretRef(accountId);
-        if (accountKind === "project") {
-            account.dmPolicy = "disabled";
-            delete account.allowFrom;
-        }
-        else {
-            account.dmPolicy = "allowlist";
-            account.allowFrom = trustedOwnerAllowFrom(account.allowFrom) ?? [];
-        }
+        account.dmPolicy = "disabled";
+        delete account.allowFrom;
         delete account.baseUrl;
         delete account.network;
         delete account.interactions;
@@ -719,7 +717,7 @@ function invariantSatisfied(config, invariant) {
             .every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
     }
     if (invariant.kind === "mattermost-account-projection") {
-        return accountProjectionSatisfied(config);
+        return accountProjectionSatisfied(config, invariant.platformOwned);
     }
     const actual = readPath(config, invariant.path);
     if (invariant.kind === "exact")
@@ -748,7 +746,7 @@ function applyInvariant(config, invariant) {
         return;
     }
     if (invariant.kind === "mattermost-account-projection") {
-        reconcileMattermostAccounts(config);
+        reconcileMattermostAccounts(config, invariant.platformOwned);
         return;
     }
     const [parent, leaf] = parentForPath(config, invariant.path);
