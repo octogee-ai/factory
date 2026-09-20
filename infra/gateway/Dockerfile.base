@@ -62,7 +62,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
 
 FROM rust:1.98.0-slim-bookworm AS cua-driver-builder
 
-ARG CUA_SOURCE_SHA=2721eda5f2801d9d0695759c39c0ed9c812c82c9
+ARG CUA_SOURCE_SHA=5af343ee8886e10663ebc3a6040fe9b3eab80fa9
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git pkg-config libx11-dev libxi-dev libxtst-dev \
       libxkbcommon-dev libssl-dev libwayland-dev libxdo-dev libgtk-3-dev \
@@ -80,7 +80,7 @@ RUN cargo test --locked -p platform-linux --lib wayland::tests --features portal
     && cargo build --locked --release -p cua-driver-sdk --features portal-input \
     && mkdir /out \
     && install -m 755 target/release/libcua_driver_sdk.so /out/ \
-    && printf '{"version":"0.23.2","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659"}\n' "$CUA_SOURCE_SHA" > /out/octogee-patch.json
+    && printf '{"version":"0.24.0","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659"}\n' "$CUA_SOURCE_SHA" > /out/octogee-patch.json
 
 FROM gateway-core-system AS openclaw-installer
 
