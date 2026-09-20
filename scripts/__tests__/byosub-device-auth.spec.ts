@@ -47,14 +47,12 @@ function harness(over: Partial<Parameters<typeof createDeviceAuthManager>[0]> = 
   });
   const readAuthJson = vi.fn(async (_agentId: string) => GOOD_AUTH as string | null);
   const postCapture = vi.fn(async (_flowId: string, _cred: string) => ({ ok: true }));
-  const promoteStagedAuth = vi.fn(async (_agentId: string) => ({ ok: true }));
   const discardStaged = vi.fn(async (_agentId: string) => {});
   let t = 1_000_000;
   const manager = createDeviceAuthManager({
     spawnDeviceAuth,
     readAuthJson,
     postCapture,
-    promoteStagedAuth,
     discardStaged,
     now: () => t,
     spawnTimeoutMs: 50,
@@ -67,7 +65,6 @@ function harness(over: Partial<Parameters<typeof createDeviceAuthManager>[0]> = 
     spawnDeviceAuth,
     readAuthJson,
     postCapture,
-    promoteStagedAuth,
     discardStaged,
     advance: (ms: number) => {
       t += ms;
@@ -230,17 +227,17 @@ describe("createDeviceAuthManager — lifecycle invariants", () => {
     expect(h.child.killed).toBe(true);
   });
 
-  it("promotes staged auth to live ONLY on successful capture", async () => {
+  it("a successful capture never writes a live codex-home auth.json — the staging home is discarded", async () => {
     const h = harness();
     const r = await h.manager.start("octogee-a-coach");
     h.child.fireExit(0);
     await vi.waitFor(() =>
       expect(h.manager.status(r.flowId)?.state).toBe("connected"),
     );
-    expect(h.promoteStagedAuth).toHaveBeenCalledWith("octogee-a-coach");
+    expect(h.discardStaged).toHaveBeenCalledWith("octogee-a-coach");
   });
 
-  it("never promotes (live home untouched) on capture failure — only discards staging", async () => {
+  it("discards staging on capture failure", async () => {
     const h = harness({
       postCapture: vi.fn(async () => ({ ok: false, reason: "writeSecret 500" })),
     });
@@ -249,31 +246,15 @@ describe("createDeviceAuthManager — lifecycle invariants", () => {
     await vi.waitFor(() =>
       expect(h.manager.status(r.flowId)?.state).toBe("failed"),
     );
-    expect(h.promoteStagedAuth).not.toHaveBeenCalled();
     expect(h.discardStaged).toHaveBeenCalledWith("octogee-a-coach");
   });
 
-  it("never promotes on expiry — live home untouched, staging discarded", async () => {
+  it("discards staging on expiry", async () => {
     const h = harness();
     const r = await h.manager.start("octogee-a-coach");
     h.advance(16 * 60_000);
     expect(h.manager.status(r.flowId)?.state).toBe("expired");
-    expect(h.promoteStagedAuth).not.toHaveBeenCalled();
     expect(h.discardStaged).toHaveBeenCalledWith("octogee-a-coach");
-  });
-
-  it("a promote failure stays connected (Secret Manager is source of truth) and warns", async () => {
-    const logs: string[] = [];
-    const h = harness({
-      log: (m: string) => logs.push(m),
-      promoteStagedAuth: vi.fn(async () => ({ ok: false, reason: "rename EXDEV" })),
-    });
-    const r = await h.manager.start("octogee-a-coach");
-    h.child.fireExit(0);
-    await vi.waitFor(() =>
-      expect(h.manager.status(r.flowId)?.state).toBe("connected"),
-    );
-    expect(logs.some((m) => /promote failed/.test(m))).toBe(true);
   });
 
   it("surfaces a post-terminal codex success instead of dropping it silently", async () => {

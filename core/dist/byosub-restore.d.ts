@@ -3,7 +3,6 @@ export interface ByosubRestorePlanItem {
     agentId: string;
     provider: ByosubProvider;
     secretName: string;
-    targetPath?: string;
     openclawDir: string;
 }
 /**
@@ -61,8 +60,8 @@ export declare function shouldRestoreCodexCredential(opts: {
     authStateText: string | null;
     profileId: string;
     now: number;
-    targetPathPresent?: boolean;
-}): "write" | "skip" | "materialize";
+}): "write" | "skip";
+export declare function removeStaleCodexAuthJson(openclawDir: string, agentId: string): boolean;
 export declare function restoreByosubCredentials(opts: {
     plan: ByosubRestorePlanItem[];
     fetchSecret: (secretName: string) => Promise<string>;

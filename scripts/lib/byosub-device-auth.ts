@@ -25,10 +25,6 @@ export interface DeviceAuthDeps {
     credential: string,
   ) => Promise<{ ok: boolean; reason?: string }>;
 
-promoteStagedAuth: (
-    agentId: string,
-  ) => Promise<{ ok: boolean; reason?: string }>;
-  
   discardStaged: (agentId: string) => Promise<void>;
   now: () => number;
   spawnTimeoutMs?: number;
@@ -170,15 +166,6 @@ if (code === 0 && auth !== null && rec.state.phase !== "capturing") {
         ok: result.ok,
         reason: result.reason,
       });
-
-if (rec.state.phase === "connected") {
-        const promoted = await deps.promoteStagedAuth(rec.agentId);
-        if (!promoted.ok) {
-          log(
-            `byosub device-auth: WARN ${rec.agentId} flow=${rec.flowId} captured to Secret Manager but local promote failed (${promoted.reason ?? "unknown"}) — live home unchanged until next restore`,
-          );
-        }
-      }
     }
     log(
       `byosub device-auth: ${rec.agentId} flow=${rec.flowId} → ${rec.state.phase}`,

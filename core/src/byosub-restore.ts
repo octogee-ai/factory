@@ -2,7 +2,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  buildCodexAuthJsonFromStore,
   buildCodexAuthProfilesStore,
   buildClaudeCliAuthProfilesStore,
   buildClaudeCliNativeCredentialsJson,
@@ -29,9 +28,6 @@ export interface ByosubRestorePlanItem {
   agentId: string;
   provider: ByosubProvider;
   secretName: string;
-  // codex writes a codex-home auth.json here. claude-cli uses a separate
-  // native Claude credential path when enabled for single-builder gateways.
-  targetPath?: string;
   openclawDir: string;
 }
 
@@ -632,8 +628,7 @@ export function shouldRestoreCodexCredential(opts: {
   authStateText: string | null;
   profileId: string;
   now: number;
-  targetPathPresent?: boolean;
-}): "write" | "skip" | "materialize" {
+}): "write" | "skip" {
   if (!opts.usableCodexProfilePresent) return "write";
   if (
     deriveCodexAuthHealth(opts.authStateText, opts.profileId, opts.now) ===
@@ -641,7 +636,6 @@ export function shouldRestoreCodexCredential(opts: {
   ) {
     return "write";
   }
-  if (opts.targetPathPresent === false) return "materialize";
   return "skip";
 }
 
@@ -741,56 +735,17 @@ function restoreClaudeCliCredential(opts: {
   }
 }
 
-function restoreCodexCredential(
-  item: ByosubRestorePlanItem,
-  payload: string,
-  agentDir: string,
-): void {
-  const codexStore = buildCodexAuthProfilesStore(payload);
-  if (!item.targetPath) {
-    writeMergedAuthProfileStore(agentDir, codexStore);
-    return;
-  }
-  const targetPath = item.targetPath;
-  let tmp: string | undefined;
-  try {
-    tmp = `${targetPath}.tmp`;
-    ensurePrivateDir(path.dirname(targetPath));
-    fs.writeFileSync(tmp, payload, { mode: 0o600 });
-    fs.chmodSync(tmp, 0o600);
-    // Write SQLite BEFORE promoting codex-home — preserves cross-pair
-    // atomicity (the Copilot #989 invariant): if the auth-profiles store
-    // can't be written, codex-home stays unpromoted, so we never half-flip
-    // routing.
-    writeMergedAuthProfileStore(agentDir, codexStore);
-    fs.renameSync(tmp, targetPath);
-    tmp = undefined;
-  } catch (err) {
-    removeTempFile(tmp);
-    throw err;
-  }
+function restoreCodexCredential(payload: string, agentDir: string): void {
+  writeMergedAuthProfileStore(agentDir, buildCodexAuthProfilesStore(payload));
 }
 
-function materializeCodexAuthJson(targetPath: string, store: unknown): void {
-  const payload = buildCodexAuthJsonFromStore(JSON.stringify(store));
-  if (payload === null) {
-    throw new Error(
-      "usable openai-codex:default profile could not be materialized",
-    );
+export function removeStaleCodexAuthJson(openclawDir: string, agentId: string): boolean {
+  const authJson = codexAuthJsonPath(openclawDir, agentId);
+  let removed = false;
+  for (const candidate of [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]) {
+    removed = removeIfPresent(candidate) || removed;
   }
-
-  let tmp: string | undefined;
-  try {
-    ensurePrivateDir(path.dirname(targetPath));
-    tmp = `${targetPath}.tmp`;
-    fs.writeFileSync(tmp, payload, { mode: 0o600 });
-    fs.chmodSync(tmp, 0o600);
-    fs.renameSync(tmp, targetPath);
-    tmp = undefined;
-  } catch (err) {
-    removeTempFile(tmp);
-    throw err;
-  }
+  return removed;
 }
 
 function planCodexRestore(
@@ -808,7 +763,6 @@ function planCodexRestore(
     authStateText: readCodexAuthStateText(item.openclawDir, item.agentId),
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     now: Date.now(),
-    ...(item.targetPath ? { targetPathPresent: fs.existsSync(item.targetPath) } : {}),
   });
   return { action, store };
 }
@@ -826,10 +780,12 @@ export async function restoreByosubCredentials(opts: {
   for (const item of opts.plan) {
     const agentDir = codexAgentDir(item.openclawDir, item.agentId);
     let codexAction: ReturnType<typeof shouldRestoreCodexCredential> | undefined;
-    let codexStore: unknown;
 
     if (item.provider === "openai") {
-      ({ action: codexAction, store: codexStore } = planCodexRestore(item, agentDir, log));
+      if (removeStaleCodexAuthJson(item.openclawDir, item.agentId)) {
+        log(`byosub: removed the stale codex-home auth.json for ${item.agentId} (OpenClaw reads only its auth store)`);
+      }
+      ({ action: codexAction } = planCodexRestore(item, agentDir, log));
       if (codexAction === "skip") {
         skipped++;
         log(
@@ -839,15 +795,6 @@ export async function restoreByosubCredentials(opts: {
       }
     }
     try {
-      if (codexAction === "materialize" && item.targetPath) {
-        materializeCodexAuthJson(item.targetPath, codexStore);
-        restored++;
-        log(
-          `byosub: materialized ${item.provider} credential for ${item.agentId} from the healthy profile store`,
-        );
-        continue;
-      }
-
       const payload = await opts.fetchSecret(item.secretName);
 
       if (item.provider === "anthropic") {
@@ -867,7 +814,7 @@ export async function restoreByosubCredentials(opts: {
         continue;
       }
 
-      restoreCodexCredential(item, payload, agentDir);
+      restoreCodexCredential(payload, agentDir);
       restored++;
       log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
     } catch (e) {

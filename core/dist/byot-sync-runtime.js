@@ -6,7 +6,7 @@ import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
 import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, } from "./model-credential-materializer.js";
-import { codexAgentDir, codexAuthJsonPath, purgeCustomerOauthRuntimeArtifacts, removeSubscriptionProfiles, restoreByosubCredentials, sharedAuthAgentDir, } from "./byosub-restore.js";
+import { codexAgentDir, purgeCustomerOauthRuntimeArtifacts, removeStaleCodexAuthJson, removeSubscriptionProfiles, restoreByosubCredentials, sharedAuthAgentDir, } from "./byosub-restore.js";
 import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-sqlite.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
@@ -334,9 +334,6 @@ function subscriptionRestorePlan(creds, openclawDir, coachAgentId) {
         provider: cred.provider,
         secretName: cred.secretName,
         openclawDir,
-        ...(coachAgentId && cred.provider === "openai"
-            ? { targetPath: codexAuthJsonPath(openclawDir, coachAgentId) }
-            : {}),
     }));
 }
 function credentialFromBrokerResponse(creds) {
@@ -362,6 +359,9 @@ function inheritSharedSubscription({ slug, openclawDir, agentIds, providers, res
     for (const agentId of agentIds ?? mountedAgentIdsForSlug(slug)) {
         if (removeSubscriptionProfiles(codexAgentDir(openclawDir, agentId), providers)) {
             logFn(`[byot-sync] ${slug}: ${agentId} now inherits the shared subscription credential`);
+        }
+        if (removeStaleCodexAuthJson(openclawDir, agentId)) {
+            logFn(`[byot-sync] ${slug}: removed the stale codex-home auth.json for ${agentId} (OpenClaw reads only its auth store)`);
         }
     }
 }

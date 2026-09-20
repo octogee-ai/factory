@@ -511,18 +511,6 @@ describe("shouldRestoreCodexCredential — conservative-restore keystone", () =>
     ).toBe("skip");
   });
 
-  it("healthy SQLite credential with missing CODEX_HOME → materialize without replacing the rotated token", () => {
-    expect(
-      shouldRestoreCodexCredential({
-        usableCodexProfilePresent: true,
-        authStateText: null,
-        profileId: P,
-        now: NOW,
-        targetPathPresent: false,
-      }),
-    ).toBe("materialize");
-  });
-
   it("recovery (on-disk cred present but openclaw flagged auth_permanent) → write — replace the dead cred", () => {
     expect(
       shouldRestoreCodexCredential({
@@ -671,26 +659,30 @@ describe("restoreByosubCredentials", () => {
     expect(store.profiles["anthropic:claude-cli"].access).toBe("sk-ant-oat01-livetoken");
   });
 
-  it("atomically writes auth.json (0600) into the agent codex-home, creating dirs", async () => {
+  it("restores the Codex profile into the auth store only and removes a stale codex-home/auth.json", async () => {
     const oc = mkTmp();
     seedAgent(oc, "octogee-a-coach");
-    const item = {
-      agentId: "octogee-a-coach",
-      provider: "openai" as const,
-      secretName: "byosub-a-openai",
-      targetPath: path.join(oc, "agents", "octogee-a-coach", "agent", "codex-home", "auth.json"),
-      openclawDir: oc,
-    };
+    const stale = codexAuthJsonPath(oc, "octogee-a-coach");
+    fs.mkdirSync(path.dirname(stale), { recursive: true });
+    fs.writeFileSync(stale, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "stale" } }));
+    fs.writeFileSync(`${stale}.promote.tmp`, "half-promoted");
+    const logs: string[] = [];
     const r = await restoreByosubCredentials({
-      plan: [item],
+      plan: [
+        {
+          agentId: "octogee-a-coach",
+          provider: "openai" as const,
+          secretName: "byosub-a-openai",
+          openclawDir: oc,
+        },
+      ],
       fetchSecret: async () => codexBlob(),
+      logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
-    expect(fs.existsSync(item.targetPath)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(item.targetPath, "utf-8")).auth_mode).toBe("chatgpt");
-    expect(fs.statSync(path.dirname(item.targetPath)).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(item.targetPath).mode & 0o777).toBe(0o600);
-    expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(`${stale}.promote.tmp`)).toBe(false);
+    expect(logs.join("\n")).toMatch(/stale codex-home auth\.json/);
 
     const store = apReadFor(oc, "octogee-a-coach") as {
       version: number;
@@ -717,7 +709,6 @@ describe("restoreByosubCredentials", () => {
       agentId: "octogee-a-coach",
       provider: "openai" as const,
       secretName: "byosub-a-openai",
-      targetPath: path.join(oc, "agents", "octogee-a-coach", "agent", "codex-home", "auth.json"),
       openclawDir: oc,
     };
     const logs: string[] = [];
@@ -728,27 +719,21 @@ describe("restoreByosubCredentials", () => {
       logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
-    expect(fs.existsSync(item.targetPath)).toBe(false);
-    expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
+    expect(fs.existsSync(codexAuthJsonPath(oc, "octogee-a-coach"))).toBe(false);
     expect(apReadFor(oc, "octogee-a-coach")).toBeNull();
     expect(logs.join("\n")).toMatch(/octogee-a-coach|access_token/);
   });
 
-  it("cross-pair atomicity (Copilot #989): a SQLite write failure on auth-profiles aborts BEFORE codex-home is promoted — no half-promoted pair", async () => {
+  it("a SQLite write failure fails the item and leaves neither a store nor a codex-home auth.json", async () => {
     const oc = mkTmp();
     const agentId = "octogee-a-coach";
     const item = {
       agentId,
       provider: "openai" as const,
       secretName: "byosub-a-openai",
-      targetPath: path.join(oc, "agents", agentId, "agent", "codex-home", "auth.json"),
       openclawDir: oc,
     };
 
-    // Spy on the SQLite write so it throws — isolates the failure to
-    // step 3 of the restore (after secret fetch + codex-home tmp write,
-    // before codex-home rename). Replicates the Copilot #989 invariant:
-    // a write-step failure must not leave codex-home half-promoted.
     const writeSpy = vi
       .spyOn(authProfileSqlite, "writeAuthProfileStore")
       .mockImplementation(() => {
@@ -764,8 +749,7 @@ describe("restoreByosubCredentials", () => {
     expect(r).toEqual({ restored: 0, failed: 1, skipped: 0 });
 
     expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(fs.existsSync(item.targetPath)).toBe(false);
-    expect(fs.existsSync(item.targetPath + ".tmp")).toBe(false);
+    expect(fs.existsSync(codexAuthJsonPath(oc, agentId))).toBe(false);
 
     const agentDir = codexAgentDir(oc, agentId);
     expect(fs.existsSync(resolveAuthDbPath(agentDir))).toBe(false);
@@ -781,7 +765,6 @@ describe("restoreByosubCredentials", () => {
       agentId: a,
       provider: "openai" as const,
       secretName: s,
-      targetPath: path.join(oc, "agents", a, "agent", "codex-home", "auth.json"),
       openclawDir: oc,
     });
     const logs: string[] = [];
@@ -794,8 +777,10 @@ describe("restoreByosubCredentials", () => {
       logFn: (m) => logs.push(m),
     });
     expect(r).toEqual({ restored: 1, failed: 1, skipped: 0 });
-    expect(fs.existsSync(mk("octogee-a-coach", "ok").targetPath)).toBe(true);
-    expect(fs.existsSync(mk("octogee-b-coach", "boom").targetPath)).toBe(false);
+    const profileOf = (a: string) =>
+      (apReadFor(oc, a) as { profiles?: Record<string, unknown> } | null)?.profiles?.["openai-codex:default"];
+    expect(profileOf("octogee-a-coach")).toBeDefined();
+    expect(profileOf("octogee-b-coach")).toBeUndefined();
     expect(logs.join("\n")).toMatch(/octogee-b-coach|secret access denied/);
   });
 
@@ -852,7 +837,6 @@ describe("restoreByosubCredentials", () => {
           agentId,
           provider: "openai",
           secretName: "byosub-a-openai",
-          targetPath,
           openclawDir: oc,
         },
       ],
@@ -864,7 +848,7 @@ describe("restoreByosubCredentials", () => {
 
     expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
     expect(fetched).toBe(true);
-    expect(JSON.parse(fs.readFileSync(targetPath, "utf8")).tokens.access_token).toBe("acc-1");
+    expect(fs.existsSync(targetPath)).toBe(false);
     const store = readAuthProfileStore(agentDir) as {
       profiles: Record<string, unknown>;
     };
@@ -910,7 +894,6 @@ describe("restoreByosubCredentials", () => {
           agentId,
           provider: "openai" as const,
           secretName: "byosub-a-openai",
-          targetPath,
           openclawDir: oc,
         },
       ],
@@ -928,72 +911,8 @@ describe("restoreByosubCredentials", () => {
         ...liveCred.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID], provider: "openai",
       } },
     });
-    expect(JSON.parse(fs.readFileSync(targetPath, "utf-8")).tokens.access_token).toBe("live");
+    expect(fs.existsSync(targetPath)).toBe(false);
     expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
-  });
-
-  it("materializes missing Codex auth.json from the healthy SQLite credential without fetching or replacing it", async () => {
-    const oc = mkTmp();
-    seedAgent(oc, "octogee-a-coach");
-    const agentId = "octogee-a-coach";
-    const agentDir = path.join(oc, "agents", agentId, "agent");
-    fs.mkdirSync(agentDir, { recursive: true });
-    const liveCred = {
-      version: 1,
-      profiles: {
-        "platform-openai:default": {
-          type: "api_key",
-          provider: "platform-openai",
-          keyRef: {
-            source: "exec",
-            provider: "gcp-secret-manager",
-            id: `agent-model-token-openai-${agentId}`,
-          },
-        },
-        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
-          type: "oauth",
-          provider: "incorrect-route",
-          access: "live",
-          refresh: "rotated-refresh",
-          expires: Date.now() + 3_600_000,
-          copyToAgents: true,
-        },
-      },
-    };
-    writeAuthProfileStore(agentDir, liveCred);
-
-    const targetPath = path.join(agentDir, "codex-home", "auth.json");
-    let fetched = false;
-    const r = await restoreByosubCredentials({
-      plan: [
-        {
-          agentId,
-          provider: "openai" as const,
-          secretName: "byosub-a-openai",
-          targetPath,
-          openclawDir: oc,
-        },
-      ],
-      fetchSecret: async () => {
-        fetched = true;
-        return codexBlob();
-      },
-    });
-
-    expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
-    expect(fetched).toBe(false);
-    expect(JSON.parse(fs.readFileSync(targetPath, "utf-8"))).toMatchObject({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "live",
-        refresh_token: "rotated-refresh",
-      },
-    });
-    expect(readAuthProfileStore(agentDir)).toEqual({
-      ...liveCred, profiles: { ...liveCred.profiles, [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
-        ...liveCred.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID], provider: "openai",
-      } },
-    });
   });
 
   it("restores Codex from Secret Manager when only unrelated profiles exist and CODEX_HOME is missing", async () => {
@@ -1011,7 +930,6 @@ describe("restoreByosubCredentials", () => {
           agentId,
           provider: "openai" as const,
           secretName: "byosub-a-openai",
-          targetPath,
           openclawDir: oc,
         },
       ],
@@ -1019,7 +937,7 @@ describe("restoreByosubCredentials", () => {
     });
 
     expect(r).toEqual({ restored: 1, failed: 0, skipped: 0 });
-    expect(JSON.parse(fs.readFileSync(targetPath, "utf-8")).auth_mode).toBe("chatgpt");
+    expect(fs.existsSync(targetPath)).toBe(false);
     const store = readAuthProfileStore(agentDir) as {
       profiles: Record<string, { access?: string }>;
     };
@@ -1051,7 +969,6 @@ describe("restoreByosubCredentials", () => {
           agentId,
           provider: "openai" as const,
           secretName: "byosub-a-openai",
-          targetPath: path.join(agentDir, "codex-home", "auth.json"),
           openclawDir: oc,
         },
       ],
@@ -1146,7 +1063,6 @@ describe("restoreByosubCredentials — honors SQLite auth_profile_state (the P1 
           agentId,
           provider: "openai" as const,
           secretName: "byosub-a-openai",
-          targetPath: path.join(agentDir, "codex-home", "auth.json"),
           openclawDir: oc,
         },
       ],

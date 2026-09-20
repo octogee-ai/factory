@@ -70,6 +70,7 @@ const patchMocks = vi.hoisted(() => ({
 }));
 const modelCredentialMocks = vi.hoisted(() => ({
   syncModelCredentialsForCustomer: vi.fn(async () => undefined),
+  restoreModelCredentialOauthStoreForSlug: vi.fn(async () => ({ restored: true, present: true, providers: ["openai"] })),
 }));
 const brokerCatalogMocks = vi.hoisted(() => ({
   materializeBrokerProfilesForAgents: vi.fn(() => ({ materialized: 1, deferred: [] })),
@@ -140,6 +141,7 @@ vi.mock("../lib/model-credential-sync-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     syncModelCredentialsForCustomer: modelCredentialMocks.syncModelCredentialsForCustomer,
+    restoreModelCredentialOauthStoreForSlug: modelCredentialMocks.restoreModelCredentialOauthStoreForSlug,
   };
 });
 vi.mock("../lib/agent-model-token-materializer.js", async (importOriginal) => {
@@ -516,6 +518,63 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
     expect(deleted).toBe(false);
     expect(rpc.agentsDelete).not.toHaveBeenCalled();
+  });
+
+  it("restores the subscription store after the transferred state lands on a Builder gateway", async () => {
+    modelCredentialMocks.restoreModelCredentialOauthStoreForSlug.mockClear();
+    const rpc = {
+      gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
+      isGatewayUp: vi.fn(async () => true),
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => configSnapshot({
+        agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] },
+      })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc,
+      log: vi.fn(),
+      isBuilderGateway: () => true,
+    });
+
+    await adapter.activateImportedCustomer("tester10");
+
+    expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).toHaveBeenCalledWith(
+      "tester10",
+      expect.objectContaining({ logFn: expect.any(Function) }),
+    );
+    expect(
+      modelCredentialMocks.restoreModelCredentialOauthStoreForSlug.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]!);
+  });
+
+  it("does not restore the subscription store when importing onto a shared gateway", async () => {
+    modelCredentialMocks.restoreModelCredentialOauthStoreForSlug.mockClear();
+    const rpc = {
+      gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
+      isGatewayUp: vi.fn(async () => true),
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        },
+      })),
+      configGet: vi.fn(async () => configSnapshot({
+        agents: { list: [{ id: "octogee-tester10-coach", model: "house" }] },
+      })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.activateImportedCustomer("tester10");
+
+    expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).not.toHaveBeenCalled();
   });
 
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
@@ -3542,5 +3601,36 @@ describe("boot greeting scheduling", () => {
     const deps = captured.mock.calls[0]![1] as { triggerSecretsReload?: () => Promise<void> };
     await deps.triggerSecretsReload!();
     expect(rpc.secretsReload).toHaveBeenCalledOnce();
+  });
+});
+
+describe("restoreByosubForAgent", () => {
+  beforeEach(() => modelCredentialMocks.restoreModelCredentialOauthStoreForSlug.mockClear());
+
+  it("restores the subscription store from the broker on a Builder gateway", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: rosterRpc() as unknown as GatewayRpcClient,
+      log: vi.fn(),
+      isBuilderGateway: () => true,
+    });
+    await expect(adapter.restoreByosubForAgent("tester10")).resolves.toMatchObject({
+      restored: true,
+      present: true,
+    });
+    expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).toHaveBeenCalledWith("tester10");
+  });
+
+  it("leaves the store alone on a shared gateway, where the customer sync owns the subscription", async () => {
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(),
+      rpc: rosterRpc() as unknown as GatewayRpcClient,
+      log: vi.fn(),
+    });
+    await expect(adapter.restoreByosubForAgent("tester10")).resolves.toEqual({
+      restored: false,
+      present: false,
+    });
+    expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).not.toHaveBeenCalled();
   });
 });

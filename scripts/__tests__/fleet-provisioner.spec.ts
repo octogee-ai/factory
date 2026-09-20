@@ -658,6 +658,10 @@ function configuredBuilderLifecycleAdapter(input: {
     hasCustomerSshKey: () => true,
     readLocalCustomerPubKey: () => "ssh-pubkey",
     readGiteaCustomerPubKeys: async () => ["ssh-pubkey"],
+    restoreByosubForAgent: async () => {
+      calls.push("restore-byosub");
+      return { restored: false, present: false };
+    },
     createGiteaUser: async () => {
       calls.push("claim-gitea-key");
       await input.createGiteaUser?.();
@@ -1193,6 +1197,7 @@ describe("configured Builder surge release", () => {
         "clone-workspace",
         "ensure-customer-directories",
         "write-customer-template-files",
+        "restore-byosub",
         "mount-marker",
       ]);
       expect(events).toEqual([

@@ -417,7 +417,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     for (const d of tmps.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  it("materializes the per-agent codex-home for a mounted oauth customer (restored + present)", async () => {
+  it("restores the per-agent Codex profile for a mounted oauth customer without writing a codex-home auth.json", async () => {
     const oc = mk();
     seedAgent(oc, "octogee-tester-70-coach");
     const r = await restoreOauthStoreForSlug("tester-70", {
@@ -432,10 +432,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     });
     expect(r.restored).toBe(true);
     expect(r.present).toBe(true);
-    expect(
-      JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
-        .auth_mode,
-    ).toBe("chatgpt");
+    expect(fs.existsSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"))).toBe(false);
 
     const agentDir = codexAgentDir(oc, "octogee-tester-70-coach");
     const prof = readAuthProfileStore(agentDir) as {
@@ -475,6 +472,11 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
         "platform-openrouter:default": { type: "api_key", provider: "platform-openrouter" },
       },
     });
+    for (const agentId of [coach, project]) {
+      const stale = codexAuthJsonPath(oc, agentId);
+      fs.mkdirSync(path.dirname(stale), { recursive: true });
+      fs.writeFileSync(stale, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "stale" } }));
+    }
 
     const r = await restoreOauthStoreForSlug("tester-70", {
       fetchByosubCreds: async () => [
@@ -492,6 +494,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     expect(coachStore.profiles["platform-openrouter:default"]).toBeDefined();
     expect(readAuthProfileStore(codexAgentDir(oc, project))).toBeNull();
     expect(fs.existsSync(codexAuthJsonPath(oc, coach))).toBe(false);
+    expect(fs.existsSync(codexAuthJsonPath(oc, project))).toBe(false);
   });
 
   it("drops a disconnected subscription from the shared store when another stays connected", async () => {
@@ -553,10 +556,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     });
 
     expect(r).toEqual({ restored: true, present: true, providers: ["openai", "anthropic"] });
-    expect(
-      JSON.parse(fs.readFileSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"), "utf-8"))
-        .auth_mode,
-    ).toBe("chatgpt");
+    expect(fs.existsSync(codexAuthJsonPath(oc, "octogee-tester-70-coach"))).toBe(false);
     expect(fs.existsSync(path.join(home, ".claude", ".credentials.json"))).toBe(true);
     const prof = readAuthProfileStore(codexAgentDir(oc, "octogee-tester-70-coach")) as {
       profiles: Record<string, { provider?: string; access?: string }>;

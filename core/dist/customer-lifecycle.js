@@ -212,6 +212,9 @@ async function attachConfiguredBuilderOverlay(adapter, snapshot, opts) {
     opts.markStep("workspace-repo");
     steps.push(...(await convergeWorkspaceCheckout(adapter, uid, snapshot, ctx)));
     throwIfAborted(opts.signal, uid);
+    opts.markStep("byos-restore");
+    steps.push(...(await restoreByos(adapter, slug)).steps);
+    throwIfAborted(opts.signal, uid);
     opts.markStep("project-clones");
     const projectClones = opts.convergeContent && rehydratesProjectCheckouts(adapter, snapshot)
         ? await cloneMissingProjects(adapter, slug)

@@ -1136,7 +1136,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     expect(state.calls).not.toContain("ensureGiteaOrg");
     expect(state.calls).not.toContain("createGiteaUser");
     expect(state.calls).not.toContain("blobSyncForSlug");
-    expect(state.calls).not.toContain("restoreByosubForAgent");
+    expect(state.calls).toContain("restoreByosubForAgent");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
     // The fast-attach path must keep MM-side liveness verification.
     expect(state.calls).toContain("waitForAccountHealthy");
@@ -1176,6 +1176,40 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     expect(result.steps).not.toContain("verify-channel-ready");
     expect(state.calls).not.toContain("waitForAccountHealthy");
     expect(state.calls).toContain("onMounted");
+    expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
+  });
+
+  it("restores the subscription store for a configured Builder overlay before OpenClaw starts", async () => {
+    const state = makeState(
+      snap({
+        status: "complete",
+        agentIds: ["octogee-test-coach"],
+        repoUrl: "http://gitea/octogee/test-workspace",
+        mattermostUserId: "mm-user-existing",
+        greetingPosted: true,
+      }),
+      {
+        customerDir: true,
+        workspaceGitDir: true,
+        gitRemote: true,
+        sshKey: true,
+        templatesWritten: true,
+        repoHasCommits: true,
+      },
+    );
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    state.byosub = { restored: true, present: true };
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+
+    const result = await addCustomerToGateway(adapter, "uid-test", {
+      deferRuntimeVerification: true,
+    });
+
+    expect(state.calls).toContain("restoreByosubForAgent");
+    expect(state.calls.indexOf("restoreByosubForAgent")).toBeLessThan(state.calls.indexOf("onMounted"));
+    expect(result.steps).toContain("byosub-restore");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 

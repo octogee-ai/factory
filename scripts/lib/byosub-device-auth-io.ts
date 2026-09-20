@@ -2,10 +2,8 @@
 
 import { spawn } from "child_process";
 import { mkdirSync } from "fs";
-import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
-import { dirname } from "path";
+import { readFile, rm } from "fs/promises";
 import {
-  codexAuthJsonPath,
   codexStagingAuthJsonPath,
   codexStagingHomeDir,
   isSafeAgentId,
@@ -99,25 +97,6 @@ onExit: (cb) => {
         );
       } catch {
         return null;
-      }
-    },
-    promoteStagedAuth: async (agentId: string) => {
-      if (!isSafeAgentId(agentId)) {
-        return { ok: false, reason: "unsafe agentId" };
-      }
-      const staged = codexStagingAuthJsonPath(cfg.openclawDir, agentId);
-      const live = codexAuthJsonPath(cfg.openclawDir, agentId);
-      const tmp = `${live}.promote.tmp`;
-      try {
-
-        const payload = await readFile(staged, "utf8");
-        await mkdir(dirname(live), { recursive: true });
-        await writeFile(tmp, payload, { mode: 0o600 });
-        await rename(tmp, live);
-        return { ok: true };
-      } catch (e) {
-        await rm(tmp, { force: true }).catch(() => {});
-        return { ok: false, reason: (e as Error).message };
       }
     },
     discardStaged: async (agentId: string) => {

@@ -128,6 +128,7 @@ import {
   customerMountConfigPatch,
   customerSecurityProjectionReplacePaths,
   refreshModelCredentialRuntimeSessions,
+  restoreModelCredentialOauthStoreForSlug,
   syncModelCredentialsForCustomer,
 } from "./model-credential-sync-runtime.js";
 import {
@@ -1372,6 +1373,11 @@ async function activateImportedCustomer(
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
   ], `[import:${slug}]`, opts?.signal);
+  if (ctx.isBuilderGateway()) {
+    await restoreModelCredentialOauthStoreForSlug(slug, {
+      logFn: (message) => ctx.log(`[import:${slug}] ${message}`),
+    });
+  }
   const accountIds = [
     safeManifest.accountId,
     ...safeManifest.projectAgents.map((agent) => agent.accountId),
@@ -1689,7 +1695,10 @@ export function buildBrokeredLifecycleAdapter(
     blobSyncForSlug: async (slug) => {
       await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });
     },
-    restoreByosubForAgent: async () => ({ restored: false, present: false }),
+    restoreByosubForAgent: async (slug) =>
+      ctx.isBuilderGateway()
+        ? restoreModelCredentialOauthStoreForSlug(slug)
+        : { restored: false, present: false },
     reassertByotForCustomer: (userData) =>
       syncModelCredentialsForCustomer(
         userData as Parameters<typeof syncModelCredentialsForCustomer>[0],

@@ -27,8 +27,8 @@ import {
 } from "./model-credential-materializer.js";
 import {
   codexAgentDir,
-  codexAuthJsonPath,
   purgeCustomerOauthRuntimeArtifacts,
+  removeStaleCodexAuthJson,
   removeSubscriptionProfiles,
   restoreByosubCredentials,
   sharedAuthAgentDir,
@@ -489,9 +489,6 @@ function subscriptionRestorePlan(
     provider: cred.provider,
     secretName: cred.secretName,
     openclawDir,
-    ...(coachAgentId && cred.provider === "openai"
-      ? { targetPath: codexAuthJsonPath(openclawDir, coachAgentId) }
-      : {}),
   }));
 }
 
@@ -535,6 +532,9 @@ function inheritSharedSubscription({
   for (const agentId of agentIds ?? mountedAgentIdsForSlug(slug)) {
     if (removeSubscriptionProfiles(codexAgentDir(openclawDir, agentId), providers)) {
       logFn(`[byot-sync] ${slug}: ${agentId} now inherits the shared subscription credential`);
+    }
+    if (removeStaleCodexAuthJson(openclawDir, agentId)) {
+      logFn(`[byot-sync] ${slug}: removed the stale codex-home auth.json for ${agentId} (OpenClaw reads only its auth store)`);
     }
   }
 }
