@@ -638,8 +638,21 @@ function objectValue(value) {
 
 const INSTALLED_PLUGIN_INDEX_STATE_KEY = "plugins.installedIndex";
 const RETIRED_MATTERMOST_FILE_SPEC_PREFIX = "@openclaw/mattermost@file:";
+const STALE_CODEX_ARCHIVE_SPEC_PREFIX = "@openclaw/codex@file:";
 
 function removeRetiredMattermostInstallRecord(openclawDir) {
+  return removeStaleFileInstallRecord(openclawDir, "mattermost", RETIRED_MATTERMOST_FILE_SPEC_PREFIX);
+}
+
+// A restored Builder state still carries the archive-installed Codex record, which
+// OpenClaw 2026.9.5 refuses as provenance-invalid. Dropping it lets OpenClaw recover
+// the record from the image's managed npm project, whose dependency now names the
+// official registry package.
+function removeStaleCodexInstallRecord(openclawDir) {
+  return removeStaleFileInstallRecord(openclawDir, "codex", STALE_CODEX_ARCHIVE_SPEC_PREFIX);
+}
+
+function removeStaleFileInstallRecord(openclawDir, pluginId, fileSpecPrefix) {
   const dbPath = path.join(openclawDir, "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) return false;
   const db = new DatabaseSync(dbPath);
@@ -656,15 +669,15 @@ function removeRetiredMattermostInstallRecord(openclawDir) {
     const value = JSON.parse(row.value_json);
     const index = objectValue(value?.index);
     const installRecords = objectValue(index?.installRecords);
-    const record = objectValue(installRecords?.mattermost);
+    const record = objectValue(installRecords?.[pluginId]);
     if (
       record?.source !== "npm" ||
       typeof record.spec !== "string" ||
-      !record.spec.startsWith(RETIRED_MATTERMOST_FILE_SPEC_PREFIX)
+      !record.spec.startsWith(fileSpecPrefix)
     ) {
       return false;
     }
-    delete installRecords.mattermost;
+    delete installRecords[pluginId];
     const revision = Math.max(
       Date.now(),
       Number.isSafeInteger(value.revision) ? value.revision + 1 : 1,
@@ -1589,6 +1602,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
   const openclawDir = env.OPENCLAW_DIR ?? path.dirname(configPath);
   const retiredMattermostInstallRecordRemoved =
     removeRetiredMattermostInstallRecord(openclawDir);
+  const staleCodexInstallRecordRemoved = removeStaleCodexInstallRecord(openclawDir);
   const before = JSON.stringify(config);
   if (gatewayClass === "shared") {
     projectCustomerPlugins(config);
@@ -1610,10 +1624,14 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
     applyBuilderPolicy(config, openclawDir, env);
   }
   if (JSON.stringify(config) === before) {
+    const installRecordRemoved = retiredMattermostInstallRecordRemoved || staleCodexInstallRecordRemoved;
+    let reason = "already-set";
+    if (retiredMattermostInstallRecordRemoved) reason = "retired-mattermost-install";
+    else if (staleCodexInstallRecordRemoved) reason = "stale-codex-archive-install";
     return {
-      applied: retiredMattermostInstallRecordRemoved,
-      reason: retiredMattermostInstallRecordRemoved ? "retired-mattermost-install" : "already-set",
-      ...(retiredMattermostInstallRecordRemoved ? { path: configPath } : {}),
+      applied: installRecordRemoved,
+      reason,
+      ...(installRecordRemoved ? { path: configPath } : {}),
       gatewayClass,
     };
   }

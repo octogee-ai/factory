@@ -1050,6 +1050,109 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(row.updated_at_ms).toBe(value.revision);
   });
 
+  it("removes the archive-installed Codex record from restored runtime state so OpenClaw recovers the registry record", () => {
+    const result = runPolicyWithDir(
+      "builder",
+      { plugins: { allow: ["codex"], entries: { codex: { enabled: true } } } },
+      (dir) => {
+        const stateDir = path.join(dir, "state");
+        mkdirSync(stateDir, { recursive: true });
+        const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
+        db.exec(`
+          CREATE TABLE config_machine_state (
+            state_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+          );
+        `);
+        db.prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        ).run(
+          "plugins.installedIndex",
+          JSON.stringify({
+            revision: 21,
+            index: {
+              installRecords: {
+                codex: {
+                  source: "npm",
+                  spec: "@openclaw/codex@file:./_openclaw-pack-archives/@openclaw__codex-2026.9.5-abc.tgz",
+                  installPath: "/restored/codex",
+                  artifactKind: "npm-pack",
+                },
+                "parallel-plugin": {
+                  source: "npm",
+                  spec: "@openclaw/parallel-plugin@file:./_openclaw-pack-archives/parallel.tgz",
+                  installPath: "/restored/parallel",
+                },
+              },
+              plugins: [],
+            },
+          }),
+          21,
+        );
+        db.close();
+      },
+    );
+
+    const db = new DatabaseSync(path.join(result.dir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    const row = db.prepare(
+      "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?",
+    ).get("plugins.installedIndex") as { value_json: string; updated_at_ms: number };
+    db.close();
+    const value = JSON.parse(row.value_json);
+    expect(value.index.installRecords).not.toHaveProperty("codex");
+    expect(value.index.installRecords["parallel-plugin"]).toMatchObject({ installPath: "/restored/parallel" });
+    expect(value.revision).toBeGreaterThan(21);
+    expect(row.updated_at_ms).toBe(value.revision);
+  });
+
+  it("leaves a registry-installed Codex record in restored runtime state alone", () => {
+    const result = runPolicyWithDir(
+      "builder",
+      { plugins: { allow: ["codex"], entries: { codex: { enabled: true } } } },
+      (dir) => {
+        const stateDir = path.join(dir, "state");
+        mkdirSync(stateDir, { recursive: true });
+        const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
+        db.exec(`
+          CREATE TABLE config_machine_state (
+            state_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+          );
+        `);
+        db.prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        ).run(
+          "plugins.installedIndex",
+          JSON.stringify({
+            revision: 5,
+            index: {
+              installRecords: {
+                codex: { source: "npm", spec: "@openclaw/codex@2026.9.5", installPath: "/restored/codex" },
+              },
+              plugins: [],
+            },
+          }),
+          5,
+        );
+        db.close();
+      },
+    );
+
+    const db = new DatabaseSync(path.join(result.dir, "state", "openclaw.sqlite"), { readOnly: true });
+    const row = db.prepare(
+      "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+    ).get("plugins.installedIndex") as { value_json: string };
+    db.close();
+    expect(JSON.parse(row.value_json)).toMatchObject({
+      revision: 5,
+      index: { installRecords: { codex: { spec: "@openclaw/codex@2026.9.5" } } },
+    });
+  });
+
   it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {
     const coachId = "octogee-acme-coach";
     const projectId = "octogee-acme-proj-garden-coach";

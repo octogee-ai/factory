@@ -364,27 +364,24 @@ describe("gateway base image", () => {
     }
   });
 
-  it("uses the installed OpenClaw core version when staging Codex", () => {
+  it("installs Codex from the official registry at the core version and proves it matches the source-matched archive", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
 
     expect(dockerfile).toContain('OPENCLAW_CORE_VERSION="$(node -e');
     expect(dockerfile).toContain('"$OPENCLAW_ROOT/package.json"');
     expect(dockerfile).toContain('test -f "$OC_VENDOR/openclaw-codex.tgz"');
-    expect(dockerfile).toContain('CODEX_REPACK="$(mktemp -d)"');
-    expect(dockerfile).toContain('pkg.name !== "@openclaw/codex"');
-    expect(dockerfile).toContain('pkg.version = version');
+    expect(dockerfile).toContain('CODEX_SPEC="@openclaw/codex@$OPENCLAW_CORE_VERSION"');
+    expect(dockerfile).toContain('npm view "$CODEX_SPEC" version');
+    expect(dockerfile).toContain('openclaw plugins install "$CODEX_SPEC" --accept-capabilities');
+    expect(dockerfile).not.toContain("npm-pack:$VENDORED_CODEX");
+    expect(dockerfile).not.toContain("CODEX_REPACK");
     expect(dockerfile).toContain(
-      '"$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"',
+      'node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$CODEX_INSTALLED"',
     );
-    expect(dockerfile).toContain('openclaw plugins install "npm-pack:$VENDORED_CODEX" --force');
-    expect(dockerfile).not.toContain(
-      'openclaw plugins install "@openclaw/codex@${OPENCLAW_CORE_VERSION}"',
-    );
+    expect(dockerfile).toContain("openclaw plugins inspect codex --json");
+    expect(dockerfile).toContain('reason !== "trusted-official"');
     expect(dockerfile).toContain('INSTALLED_CODEX="$(node -e');
     expect(dockerfile).toContain('test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"');
-    expect(dockerfile).not.toContain(
-      '"$CODEX_REPACK/package/package.json" "$OPENCLAW_VERSION"',
-    );
     expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 

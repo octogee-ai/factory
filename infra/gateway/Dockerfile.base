@@ -143,21 +143,27 @@ COPY --from=openclaw-core-plugin-installer --chown=node:node /opt/openclaw-runti
 FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer
 
 COPY infra/gateway/verify-codex-native-hook-runtime.mjs /tmp/verify-codex-native-hook-runtime.mjs
+COPY infra/gateway/verify-codex-source-match.mjs /tmp/verify-codex-source-match.mjs
 RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
     test -f "$OC_VENDOR/openclaw-codex.tgz"; \
-    CODEX_REPACK="$(mktemp -d)"; \
-    tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_REPACK"; \
-    node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const pkg = JSON.parse(fs.readFileSync(file, "utf8")); if (pkg.name !== "@openclaw/codex") throw new Error("unexpected vendored package"); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$CODEX_REPACK/package/package.json" "$OPENCLAW_CORE_VERSION"; \
-    (cd "$CODEX_REPACK/package" && npm pack --ignore-scripts --pack-destination "$CODEX_REPACK" > /tmp/oc-plugin.log 2>&1); \
-    VENDORED_CODEX="$(find "$CODEX_REPACK" -maxdepth 1 -type f -name '*.tgz' -print -quit)"; \
-    test -n "$VENDORED_CODEX"; \
-    openclaw plugins install "npm-pack:$VENDORED_CODEX" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-      || { echo "FATAL: @openclaw/codex install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    rm -rf "$CODEX_REPACK"; \
-    rm -f /tmp/oc-plugin.log; \
+    CODEX_SPEC="@openclaw/codex@$OPENCLAW_CORE_VERSION"; \
+    npm view "$CODEX_SPEC" version > /tmp/oc-codex-view.log 2>&1 \
+      || { echo "FATAL: $CODEX_SPEC is not published on the npm registry; OpenClaw trusts only the official package (plugin trust since 2026.9.5), so the current build must be a GA tag"; tail -n 20 /tmp/oc-codex-view.log; exit 1; }; \
+    openclaw plugins install "$CODEX_SPEC" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: $CODEX_SPEC install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    CODEX_VENDORED="$(mktemp -d)"; \
+    tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_VENDORED"; \
+    CODEX_INSTALLED="$(dirname "$(find /home/node/.openclaw/npm -type f -path '*/node_modules/@openclaw/codex/package.json' -print -quit)")"; \
+    test -n "$CODEX_INSTALLED"; \
+    node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$CODEX_INSTALLED"; \
+    rm -rf "$CODEX_VENDORED"; \
+    openclaw plugins inspect codex --json > /tmp/oc-codex-inspect.json 2>/tmp/oc-plugin.log \
+      || { echo "FATAL: openclaw plugins inspect codex failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    node -e 'const fs = require("node:fs"); const raw = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const plugin = raw.plugin ?? raw; const reason = plugin.trust && plugin.trust.reason; if (reason !== "trusted-official") { console.error("FATAL: Codex plugin trust is " + JSON.stringify(plugin.trust) + ", expected trusted-official"); process.exit(1); } console.log("Codex plugin trust: " + reason);' /tmp/oc-codex-inspect.json; \
+    rm -f /tmp/oc-plugin.log /tmp/oc-codex-view.log /tmp/oc-codex-inspect.json; \
     find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
     rm -rf /opt/openclaw-runtime-deps; \
     mkdir -p /opt/openclaw-runtime-deps; \

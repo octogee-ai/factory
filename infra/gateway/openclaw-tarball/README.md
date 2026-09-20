@@ -92,7 +92,18 @@ rebased from the September 16 main snapshot.
 The packer keeps that exact core source and rebuilds Codex and Parallel from
 the same checkout. Upstream published `openclaw`, `@openclaw/codex`,
 `@openclaw/mattermost`, and `@openclaw/ai` at `2026.9.5`; `@openclaw/parallel`
-is not on npm at all. Source-matched companions remain the only accepted input.
+is not on npm at all. Source-matched companions remain the only accepted input,
+but since 2026.9.5 OpenClaw grants keyed stores only to plugins whose install
+record names the official npm or ClawHub package, and a `npm-pack:` archive can
+never satisfy that (`resolvePluginTrust` reads `artifactKind: "npm-pack"` as
+`provenance-invalid`). The image therefore installs `@openclaw/codex` from the
+registry at the core version and proves at build time that its `dist` modules
+are byte-identical to the source-matched archive
+(`infra/gateway/verify-codex-source-match.mjs`), then asserts
+`openclaw plugins inspect codex` reports `trusted-official`. A main snapshot has
+no registry package at its version, so the image build fails loudly there;
+Codex-trusting builds are GA tags. Parallel is not on npm and uses no
+trust-gated API, so it stays a vendored archive.
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
