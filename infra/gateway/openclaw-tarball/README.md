@@ -85,9 +85,11 @@ start of the recut. That run had 67 successful jobs and 18 conditional skips;
 the CI gate and build artifacts passed. This is a main snapshot with package
 version `2026.9.5`, not another GA release. The overlay branch is
 `ceckert/openclaw:codex/octogee-reload-race-20260921`, with exact runtime source
-[`bda31c6204a4df7a1b98b36ce2bd205b1f076c99`](https://github.com/ceckert/openclaw/commit/bda31c6204a4df7a1b98b36ce2bd205b1f076c99).
-This repair adds one commit to the original September 21 overlay without
-changing the selected upstream snapshot.
+[`2d25edb6172d06bf7516f21f1e67d66b418e35ea`](https://github.com/ceckert/openclaw/commit/2d25edb6172d06bf7516f21f1e67d66b418e35ea):
+the reload-race repair
+[`bda31c6204a4df7a1b98b36ce2bd205b1f076c99`](https://github.com/ceckert/openclaw/commit/bda31c6204a4df7a1b98b36ce2bd205b1f076c99)
+plus one blank-selector fix to the computer tool. These two commits sit on the
+original September 21 overlay without changing the selected upstream snapshot.
 
 The packer keeps that exact core source and rebuilds Codex and Parallel from
 the same checkout. The full image includes Codex inside the running OpenClaw
@@ -131,6 +133,7 @@ verifies the exact patched files and required license/runtime assets.
 | Published plugin runtime reuse | Detached Skill Workshop reviews reuse the current published generation while retaining their exact model and admission owner. | Reproduced downstream; no matching upstream PR found. Do not claim a performance gain without before/after preparation measurements. |
 | Native session and dialog recovery | Preserve readable Mattermost titles, resolve participant names within exact transcript identity namespaces, and keep plugin-dialog Cancel/X usable offline. | Reproduced downstream; no upstream PR filed. |
 | Computer approval authority | Allow a plugin to constrain native approval reviewers using live server facts; preserve requester identity and revalidate authority, cancellation, and admission through execution. | Required by Octogee's gateway-owner policy; two type-only SDK exports, no new RPC or approval store. |
+| Computer blank selectors | The computer tool treats a blank `target`, `node`, or `environmentId` as unset, so a model that fills every optional field with `""` still reaches the sole paired node. Pinned by the node-resolution regression. | Reproduced on TEST (`gpt-5.6-luna` failed every computer call). Filed as [upstream issue #155061](https://github.com/openclaw/openclaw/issues/155061) with [PR #155072](https://github.com/openclaw/openclaw/pull/155072); drop the patch once it lands in the selected base. |
 
 The original audit covers 2,044 commits reachable from this main snapshot but not
 the previous GA tag. Its eight retained patch areas still have downstream callers
@@ -184,10 +187,13 @@ patch. The PWA picker is refreshed from the exact overlay source using the
 existing Lit-to-React adapter, without adopting another framework or widening
 the reuse boundary to the composer.
 
-The root artifact is `openclaw-fork-48387021.tgz`
+The root artifact is `openclaw-fork-c114b769.tgz`
+(SHA-256 `c114b769e2b33db5ed407af040ea57ae49e360ac2ca2b4f457a7a8861ac4b2d1`,
+GCS generation `1790015163334863`), repacked from the blank-selector commit on
+the same overlay branch; it supersedes `openclaw-fork-48387021.tgz`
 (SHA-256 `48387021174d28a62e0ae429ef1a2c52f4e79aa3f3eb87f1ca077c552787b3b0`,
-GCS generation `1790013715318901`).
-Mattermost is `openclaw-mattermost-8de90600.tgz`
+GCS generation `1790013715318901`), which is untouched.
+Mattermost is unchanged at `openclaw-mattermost-8de90600.tgz`
 (SHA-256 `8de90600af307e69d8c7b50101985ed48c5a5f2e14f6336ad83aa9ff2c0cae9d`,
 GCS generation `1790003452514310`).
 The new root upload used the generation-zero precondition. Mattermost was
@@ -195,7 +201,7 @@ rebuilt from the same exact source and is byte-identical to its existing object,
 so its generation is reused without an upload. Both remote objects match the
 local artifacts by size and GCS MD5. The packed root passed upstream's
 tarball-integrity checker. Both packages installed into a clean npm prefix with
-install scripts disabled; the CLI reports `OpenClaw 2026.9.5 (bda31c6)` and
+install scripts disabled; the CLI reports `OpenClaw 2026.9.5 (2d25edb)` and
 the installed build metadata matches the full overlay commit. The root retains
 the vendored `@openclaw/ai` dependency and source-matched Codex and Parallel
 archives; Mattermost ships its compiled runtime. All prior objects are untouched.
@@ -217,6 +223,10 @@ provider turn or deployed Linux image.
 
 The reload-race full build leaves a clean source checkout and embeds
 `bda31c6204a4df7a1b98b36ce2bd205b1f076c99` in `dist/build-info.json` and the CLI.
+The blank-selector repack embeds `2d25edb6172d06bf7516f21f1e67d66b418e35ea`; it
+reran the three computer-tool test files (89 tests) and upstream's tarball
+integrity checker on the new artifact, not the full check suite, because the
+change is one function in `computer-tool-node.ts` plus its regression.
 Its 103 focused tests across eight files and all 31 native changed-scope gates
 pass, including production and core-test types, type-aware lint, and policy
 guards. The deterministic native composition fails before the fix and verifies

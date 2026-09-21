@@ -11,10 +11,13 @@ export type TenantDenialTenant =
   | { kind: "platform"; actor: string }
   | { kind: "unbound" };
 
+export type TenantDenialCause = "placement" | "policy";
+
 export interface TenantDenial {
   method: string;
   path: string;
   reason: string;
+  cause: TenantDenialCause;
   tenant: TenantDenialTenant;
   agentId: string | null;
 }
@@ -92,11 +95,12 @@ export function createTenantDenialReporter(opts: TenantDenialReporterOptions = {
       method: denial.method,
       path: denial.path,
       reason: denial.reason,
+      cause: denial.cause,
       tenant: denial.tenant,
       agentId: denial.agentId,
     };
     logger.warn("[tenant-enforcement] denied", fields);
-    if (denial.tenant.kind !== "gateway") return;
+    if (denial.tenant.kind !== "gateway" || denial.cause === "placement") return;
     const gatewayDenial = denial as TenantDenial & { tenant: { kind: "gateway"; gatewayId: string } };
 
     try {

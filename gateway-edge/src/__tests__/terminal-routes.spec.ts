@@ -162,6 +162,9 @@ describe("terminalTicketFromPath", () => {
   });
 });
 
+const COACH = "octogee-alice-coach";
+const decide = (raw: string, defaultAgentId: string | null = null) => decideTerminalRequest(raw, { defaultAgentId });
+
 describe("decideTerminalRequest — the browser may only speak OpenClaw's terminal family", () => {
   const req = (method: string, params?: unknown, id = "r1") => JSON.stringify({ type: "req", id, method, params });
 
@@ -176,7 +179,7 @@ describe("decideTerminalRequest — the browser may only speak OpenClaw's termin
     ["terminal.list", {}],
     ["terminal.list", undefined],
   ])("forwards %s with %j", (method, params) => {
-    const decision = decideTerminalRequest(req(method, params));
+    const decision = decide(req(method, params));
     expect(decision).toMatchObject({ allowed: true });
     expect(JSON.parse((decision as { outbound: string }).outbound)).toEqual({ type: "req", id: "r1", method, params: params ?? {} });
   });
@@ -187,7 +190,7 @@ describe("decideTerminalRequest — the browser may only speak OpenClaw's termin
     ["chat.send", { message: "hi" }],
     ["sessions.catalog.startTerminal", {}],
   ])("refuses %s as method-unavailable", (method, params) => {
-    expect(decideTerminalRequest(req(method, params))).toEqual({ allowed: false, id: "r1", reason: "method-unavailable" });
+    expect(decide(req(method, params))).toEqual({ allowed: false, id: "r1", reason: "method-unavailable" });
   });
 
   it.each([
@@ -201,15 +204,24 @@ describe("decideTerminalRequest — the browser may only speak OpenClaw's termin
     ["terminal.attach", { sessionId: "s1", extra: true }],
     ["terminal.list", { verbose: true }],
   ])("refuses %s with %j as params-invalid", (method, params) => {
-    expect(decideTerminalRequest(req(method, params))).toEqual({ allowed: false, id: "r1", reason: "params-invalid" });
+    expect(decide(req(method, params))).toEqual({ allowed: false, id: "r1", reason: "params-invalid" });
+  });
+
+  it("binds a shell to the Builder's coach when the browser names no agent, and keeps an explicit choice", () => {
+    const bound = decide(req("terminal.open", { cols: 80, rows: 24 }), COACH);
+    expect(JSON.parse((bound as { outbound: string }).outbound).params).toEqual({ cols: 80, rows: 24, agentId: COACH });
+    const explicit = decide(req("terminal.open", { cols: 80, rows: 24, agentId: "octogee-alice-p-rocket-coach" }), COACH);
+    expect(JSON.parse((explicit as { outbound: string }).outbound).params.agentId).toBe("octogee-alice-p-rocket-coach");
+    const attach = decide(req("terminal.attach", { sessionId: "s1" }), COACH);
+    expect(JSON.parse((attach as { outbound: string }).outbound).params).toEqual({ sessionId: "s1" });
   });
 
   it("refuses frames that are not well-formed requests", () => {
-    expect(decideTerminalRequest("not json")).toEqual({ allowed: false, id: null, reason: "invalid-frame" });
-    expect(decideTerminalRequest(JSON.stringify({ type: "event", event: "terminal.data" }))).toEqual({ allowed: false, id: null, reason: "invalid-frame" });
-    expect(decideTerminalRequest(JSON.stringify({ type: "req", method: "terminal.list" }))).toEqual({ allowed: false, id: null, reason: "invalid-frame" });
-    expect(decideTerminalRequest(JSON.stringify({ type: "req", id: "r1", method: "terminal.list", params: [] }))).toEqual({ allowed: false, id: "r1", reason: "invalid-frame" });
-    expect(decideTerminalRequest(JSON.stringify({ type: "req", id: "r1", method: "__proto__" }))).toEqual({ allowed: false, id: "r1", reason: "method-unavailable" });
+    expect(decide("not json")).toEqual({ allowed: false, id: null, reason: "invalid-frame" });
+    expect(decide(JSON.stringify({ type: "event", event: "terminal.data" }))).toEqual({ allowed: false, id: null, reason: "invalid-frame" });
+    expect(decide(JSON.stringify({ type: "req", method: "terminal.list" }))).toEqual({ allowed: false, id: null, reason: "invalid-frame" });
+    expect(decide(JSON.stringify({ type: "req", id: "r1", method: "terminal.list", params: [] }))).toEqual({ allowed: false, id: "r1", reason: "invalid-frame" });
+    expect(decide(JSON.stringify({ type: "req", id: "r1", method: "__proto__" }))).toEqual({ allowed: false, id: "r1", reason: "method-unavailable" });
   });
 });
 
@@ -273,6 +285,7 @@ describe("terminal websocket relay", () => {
     attachTerminalWsRoute({
       router,
       tickets,
+      defaultAgentId: COACH,
       openUpstream,
       isAllowedOrigin: (origin) => origin === "https://app.example",
       log: (message) => { logged.push(message); },
@@ -349,7 +362,7 @@ describe("terminal websocket relay", () => {
     ws.send(JSON.stringify({ type: "req", id: "open-1", method: "terminal.open", params: { cols: 100, rows: 30 } }));
     await vi.waitFor(() => expect(frames).toHaveLength(2));
     expect(openUpstream).toHaveBeenCalledWith(expect.objectContaining({ uid: OWNER, gatewayId: GATEWAY }));
-    expect(upstreamReceived).toEqual([{ type: "req", id: "open-1", method: "terminal.open", params: { cols: 100, rows: 30 } }]);
+    expect(upstreamReceived).toEqual([{ type: "req", id: "open-1", method: "terminal.open", params: { cols: 100, rows: 30, agentId: COACH } }]);
     expect(frames).toEqual([
       { type: "res", id: "open-1", ok: true, payload: { echo: "terminal.open" } },
       { type: "event", event: "terminal.data", payload: { sessionId: "s1", seq: 5, data: "hello" } },

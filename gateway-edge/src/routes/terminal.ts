@@ -154,7 +154,11 @@ export type TerminalRequestDecision =
   | { allowed: true; outbound: string }
   | { allowed: false; id: string | null; reason: "invalid-frame" | "method-unavailable" | "params-invalid" };
 
-export function decideTerminalRequest(raw: string): TerminalRequestDecision {
+export interface TerminalRequestPolicy {
+  defaultAgentId: string | null;
+}
+
+export function decideTerminalRequest(raw: string, policy: TerminalRequestPolicy): TerminalRequestDecision {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -171,7 +175,17 @@ export function decideTerminalRequest(raw: string): TerminalRequestDecision {
   if (!validate) return { allowed: false, id, reason: "method-unavailable" };
   const params = record(frame.params) ?? {};
   if (!validate(params)) return { allowed: false, id, reason: "params-invalid" };
-  return { allowed: true, outbound: JSON.stringify({ type: "req", id, method: frame.method, params }) };
+  const outbound = withDefaultOwner(frame.method, params, policy);
+  return { allowed: true, outbound: JSON.stringify({ type: "req", id, method: frame.method, params: outbound }) };
+}
+
+function withDefaultOwner(
+  method: string,
+  params: Record<string, unknown>,
+  policy: TerminalRequestPolicy,
+): Record<string, unknown> {
+  if (method !== "terminal.open" || params.agentId !== undefined || !policy.defaultAgentId) return params;
+  return { ...params, agentId: policy.defaultAgentId };
 }
 
 export function terminalPolicyError(id: string | null, reason: string): string {
@@ -204,6 +218,7 @@ export interface TerminalUpstream {
 export interface AttachTerminalWsRouteOptions {
   router: WsUpgradeRouter;
   tickets: WsTicketStore<TerminalSession>;
+  defaultAgentId: string | null;
   openUpstream: (session: TerminalSession) => Promise<TerminalUpstream>;
   isAllowedOrigin: (origin: string | undefined) => boolean;
   log: (message: string, meta?: Record<string, unknown>) => void;
@@ -294,7 +309,7 @@ function bridgeTerminal(
       closeBoth(1008, "text frames only");
       return;
     }
-    const decision = decideTerminalRequest(raw);
+    const decision = decideTerminalRequest(raw, { defaultAgentId: options.defaultAgentId });
     if (!decision.allowed) {
       if (decision.reason === "invalid-frame" && decision.id === null) {
         closeBoth(1008, "invalid frame");

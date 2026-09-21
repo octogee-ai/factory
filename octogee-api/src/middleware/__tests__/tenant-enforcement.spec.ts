@@ -421,9 +421,31 @@ const STILL_ON_SHARED = {
         method: "POST",
         path: "/internal/probe",
         reason: "route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow",
+        cause: "policy",
         tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
         agentId: "octogee-alice-coach",
       }]);
+    });
+
+    it("marks assignment-skew denials as placement so they stay out of the Builder's inbox", async () => {
+      const { denials, onDenied } = denialCapture();
+      await request(app({ boundTenant: BENDER, onDenied }))
+        .post("/internal/agent-projects/list")
+        .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
+        .expect(403);
+      await request(app({ boundTenant: BENDER, onDenied }))
+        .post("/internal/probe")
+        .send({ workspaceSlug: "stranger" })
+        .expect(403);
+      await request(app({ boundTenant: BENDER, onDenied }))
+        .post("/internal/probe")
+        .send({ agentId: "octogee-alice-coach" })
+        .expect(403);
+      expect(denials.map((d) => [d.reason, d.cause])).toEqual([
+        ["request names a gatewayId other than the bound gateway", "placement"],
+        ["request names a workspace slug not assigned to the bound gateway", "placement"],
+        ["route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow", "policy"],
+      ]);
     });
 
     it("reports a foreign-gateway deny and a platform-actor deny with their own reasons", async () => {
@@ -454,6 +476,7 @@ const STILL_ON_SHARED = {
         method: "POST",
         path: "/internal/probe",
         reason: "request carries no gateway tenant binding",
+        cause: "policy",
         tenant: { kind: "unbound" },
         agentId: null,
       }]);

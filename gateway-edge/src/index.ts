@@ -77,6 +77,7 @@ import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
 import { openNativeUserSocket } from "./openclaw-control/native-user-client.js";
 import { createWsTicketStore } from "./lib/ws-ticket-store.js";
+import { workspaceCoachAgentId } from "@octogee/shared/types/identity";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
@@ -453,6 +454,7 @@ if (process.env.NODE_ENV !== "test") {
       attachTerminalWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         tickets: terminalTickets,
+        defaultAgentId: process.env.GATEWAY_BUILDER_SLUG ? workspaceCoachAgentId(process.env.GATEWAY_BUILDER_SLUG) : null,
         openUpstream: (session) => openNativeUserSocket(session.uid, session.gatewayId),
         isAllowedOrigin: isAllowedWsOrigin,
         log: (message, meta) => logger.warn(message, meta),

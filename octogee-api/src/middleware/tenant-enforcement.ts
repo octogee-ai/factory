@@ -10,7 +10,13 @@ import {
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
-import { createTenantDenialReporter, type TenantDenial, type TenantDenialReporter, type TenantDenialTenant } from "./tenant-denial.js";
+import {
+  createTenantDenialReporter,
+  type TenantDenial,
+  type TenantDenialCause,
+  type TenantDenialReporter,
+  type TenantDenialTenant,
+} from "./tenant-denial.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type PlatformBinding = Extract<Express.Request["boundTenant"], { kind: "platform" }>;
@@ -357,6 +363,17 @@ async function targetedDenialReason(
     : "route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow";
 }
 
+const PLACEMENT_DENIAL_REASONS: ReadonlySet<string> = new Set([
+  "request names a gatewayId other than the bound gateway",
+  "request names a user not assigned to the bound gateway",
+  "request names a workspace slug not assigned to the bound gateway",
+  "retired computer bindings may only reach final-checkpoint routes",
+]);
+
+export function tenantDenialCause(reason: string): TenantDenialCause {
+  return PLACEMENT_DENIAL_REASONS.has(reason) ? "placement" : "policy";
+}
+
 function denialTenant(bound: Express.Request["boundTenant"]): TenantDenialTenant {
   if (bound?.kind === "gateway") {
     return { kind: "gateway", gatewayId: bound.gatewayId, ...(bound.ownerUid ? { ownerUid: bound.ownerUid } : {}) };
@@ -379,6 +396,7 @@ export function createTenantEnforcementMiddleware(
       method: req.method,
       path: req.path,
       reason,
+      cause: tenantDenialCause(reason),
       tenant: denialTenant(req.boundTenant),
       agentId: requestedAgentId(req),
     };

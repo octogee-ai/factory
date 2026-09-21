@@ -56,8 +56,18 @@ const DELEGATE_DENIAL: TenantDenial = {
   method: "POST",
   path: "/internal/agent-projects/delegate",
   reason: "route is not admitted for gateway tenants and the request names no owned user, slug, gateway, or flow",
+  cause: "policy",
   tenant: { kind: "gateway", gatewayId: "shared-0" },
   agentId: "octogee-alice-coach",
+};
+
+const PLACEMENT_DENIAL: TenantDenial = {
+  method: "POST",
+  path: "/internal/fleet/npm-registry-credentials",
+  reason: "request names a workspace slug not assigned to the bound gateway",
+  cause: "placement",
+  tenant: { kind: "gateway", gatewayId: "alice-s-73080b5c", ownerUid: "uid-alice" },
+  agentId: null,
 };
 
 describe("tenant denial reporter", () => {
@@ -68,10 +78,20 @@ describe("tenant denial reporter", () => {
       method: "POST",
       path: "/internal/agent-projects/delegate",
       reason: DELEGATE_DENIAL.reason,
+      cause: "policy",
       tenant: { kind: "gateway", gatewayId: "shared-0" },
       agentId: "octogee-alice-coach",
     });
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("logs but never notifies a placement denial, so a Builder moving between gateways sees no inbox noise", async () => {
+    const { report, fanOut, logger } = harness();
+    await report(PLACEMENT_DENIAL);
+    await report({ ...PLACEMENT_DENIAL, path: "/internal/fleet/configured-builder-bootstrap", reason: "request names a gatewayId other than the bound gateway" });
+    expect(fanOut).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledWith("[tenant-enforcement] denied", expect.objectContaining({ cause: "placement", tenant: PLACEMENT_DENIAL.tenant }));
   });
 
   it("notifies the Builder whose agent was denied, deduplicated per gateway, route, and hour", async () => {
