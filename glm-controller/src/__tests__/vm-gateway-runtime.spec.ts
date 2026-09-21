@@ -242,11 +242,32 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       describe: vi.fn(async () => old),
       setServiceAccount: vi.fn(async () => {}),
     });
-    await expect(h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" })).rejects.toThrow(/identity.*park|park.*identity/i);
+    await expect(h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" })).rejects.toThrow(/pause and resume/i);
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.bind).not.toHaveBeenCalled();
     expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
+  });
+
+  it("repairs stale scopes through pause and resume while retaining the same Builder computer", async () => {
+    let description: GatewayVmDescription = { ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: ["https://www.googleapis.com/auth/cloud-platform"] }] };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } }, {
+      describe: vi.fn(async () => description),
+      stop: vi.fn(async () => { description = { ...description, status: "TERMINATED" }; }),
+      setServiceAccount: vi.fn(async () => { description = { ...description, serviceAccounts: running.serviceAccounts }; }),
+      start: vi.fn(async () => { description = { ...description, status: "RUNNING" }; return { fellBackToStandard: false }; }),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceId: "4242", status: "TERMINATED", stopReason: "operator" });
+    expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
+    expect(h.vm.start).not.toHaveBeenCalled();
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, spec.zone, spec.serviceAccountEmail);
+    expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.setServiceAccount.mock.invocationCallOrder[0]);
+    expect(h.vm.setServiceAccount.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceId: "4242", status: "RUNNING", stopReason: null });
+    expect(h.vm.delete).not.toHaveBeenCalled();
+    expect(h.vm.create).not.toHaveBeenCalled();
   });
 
   it("updates the bootstrap image on an existing gateway without restarting its computer", async () => {

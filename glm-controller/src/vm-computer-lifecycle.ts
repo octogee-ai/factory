@@ -299,7 +299,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   async function reconcileComputerIdentity(description: GatewayVmDescription, email: string): Promise<void> {
     if (hasComputerIdentity(description, email)) return;
     if (!STOPPED_STATUSES.has(description.status)) {
-      throw new Error(`computer ${description.name}: identity scopes are outdated; return and park the Builder before activation`);
+      throw new Error(`computer ${description.name}: identity scopes are outdated; pause and resume the gateway through Admin to repair them`);
     }
     await deps.vm.setServiceAccount(description.name, description.zone, email);
     deps.log(`[vm-gateway-runtime] ${description.name}: reconciled parked computer identity before activation`);
