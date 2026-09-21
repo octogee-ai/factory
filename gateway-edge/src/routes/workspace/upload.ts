@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
-import { db, storage } from "../../lib/db.js";
+import { storage } from "../../lib/db.js";
+import { readPlatformFreeConfig } from "../../lib/platform-free-config.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
 import {
@@ -10,9 +11,6 @@ import {
 import { freeWorkspaceStorageLimitBytes } from "../../lib/free-storage.js";
 import {
   DEFAULT_PLATFORM_FREE_CONFIG,
-  PLATFORM_CONFIG_COLLECTION,
-  PLATFORM_FREE_CONFIG_DOC,
-  parsePlatformFreeConfig,
 } from "@octogee/shared/types/platform-config";
 import { logger } from "../../middleware/logging.js";
 import {
@@ -35,19 +33,7 @@ async function uploadStorageLimitBytes(
     DEFAULT_PLATFORM_FREE_CONFIG,
   );
   if (compiledLimit === undefined) return undefined;
-  const snap = await db
-    .collection(PLATFORM_CONFIG_COLLECTION)
-    .doc(PLATFORM_FREE_CONFIG_DOC)
-    .get();
-  const config = parsePlatformFreeConfig(snap.data());
-  if (!config) {
-    logger.warn("platformConfig/free missing or invalid; using compiled Free storage allowance");
-  }
-  return freeWorkspaceStorageLimitBytes(
-    userData ?? {},
-    false,
-    config ?? DEFAULT_PLATFORM_FREE_CONFIG,
-  );
+  return freeWorkspaceStorageLimitBytes(userData ?? {}, false, await readPlatformFreeConfig());
 }
 
 router.post("/upload", withGiteaTarget(async (req, res, _next, target) => {

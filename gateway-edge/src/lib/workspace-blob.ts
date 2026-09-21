@@ -1,4 +1,5 @@
 import { db, storage } from "./db.js";
+import { readPlatformFreeConfig } from "./platform-free-config.js";
 import { logger } from "../middleware/logging.js";
 import {
   getManifestForQuota,
@@ -28,8 +29,6 @@ import {
 import { invalidateWorkspaceFileResponseCache } from "../routes/workspace/file-response-cache.js";
 import { freeWorkspaceStorageLimitBytes } from "./free-storage.js";
 import {
-  DEFAULT_PLATFORM_FREE_CONFIG,
-  parsePlatformFreeConfig,
 } from "@octogee/shared/types/platform-config";
 import {
   finalizeWorkspaceStorageReservation,
@@ -69,20 +68,12 @@ async function configuredWorkspaceStorageLimitBytes(
   if (typeof ownerUid !== "string" || !ownerUid) {
     throw new Error(`workspace ${target.slug} has no storage owner`);
   }
-  const [owner, configSnapshot] = await Promise.all([
+  const [owner, config] = await Promise.all([
     db.doc(`users/${ownerUid}`).get(),
-    db.doc("platformConfig/free").get(),
+    readPlatformFreeConfig(),
   ]);
   if (!owner.exists) throw new Error(`workspace storage owner ${ownerUid} was not found`);
-  const config = parsePlatformFreeConfig(configSnapshot.data());
-  if (!config) {
-    logger.warn("platformConfig/free missing or invalid; using compiled Free storage allowance");
-  }
-  return freeWorkspaceStorageLimitBytes(
-    owner.data() ?? {},
-    false,
-    config ?? DEFAULT_PLATFORM_FREE_CONFIG,
-  );
+  return freeWorkspaceStorageLimitBytes(owner.data() ?? {}, false, config);
 }
 
 async function reserveBlobStorage(
