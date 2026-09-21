@@ -489,6 +489,33 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("users/u1")).toMatchObject({ "provisioning.openclaw.gatewayId": "default" });
   });
 
+  it("refuses to place an account that is no longer interactive and leaves the mirror untouched", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { tier: "trial", accountLifecycle: { status: "deletion_scheduled" } },
+      "gateways/default": backfilled(),
+      "glmGateways/default": runtimeDoc(),
+    });
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "repair", now: 100, mirrorPatch: mirror, automatic: true,
+    });
+    expect(res).toEqual({ kind: "rejected", reason: "account-not-interactive" });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+    expect(store.get("users/u1")).not.toHaveProperty("provisioning.openclaw.gatewayId");
+  });
+
+  it("refuses a suspended account on the operator repair path too", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { tier: "trial", accountLifecycle: { status: "suspended" } },
+      "gateways/default": backfilled(),
+      "glmGateways/default": runtimeDoc(),
+    });
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "repair", now: 100, mirrorPatch: mirror,
+    });
+    expect(res).toEqual({ kind: "rejected", reason: "account-not-interactive" });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
   it("creates a guarded user field and its side document in the placement transaction", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },

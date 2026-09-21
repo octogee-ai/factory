@@ -204,7 +204,7 @@ export interface CommitPlacementParams {
     automatic?: boolean;
     validateTarget?: (context: PlacementTargetValidationContext) => Promise<PlacementRejectReason | null>;
 }
-export type PlacementRejectReason = "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
+export type PlacementRejectReason = "account-not-interactive" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {

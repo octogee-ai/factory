@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import { projectGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
@@ -257,10 +258,8 @@ function placementGatewayRejectReason(gatewayData, params) {
     return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
 }
 async function placementUserWriteContext(db, txn, userRef, params) {
-    const userSnap = params.automatic || params.atomicCreate
-        ? await txn.get(userRef)
-        : null;
-    const userData = userSnap?.exists ? userSnap.data() : undefined;
+    const userSnap = await txn.get(userRef);
+    const userData = userSnap.exists ? userSnap.data() : undefined;
     const atomicCreate = params.atomicCreate;
     const shouldCreate = Boolean(atomicCreate &&
         !Object.prototype.hasOwnProperty.call(userData ?? {}, atomicCreate.userField));
@@ -302,7 +301,10 @@ export async function commitPlacementAtomic(db, params) {
         .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
         .doc(params.uid);
     return db.runTransaction(async (txn) => {
-        const { mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
+        const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
+        if (!accountAllowsInteractiveAccess(userData)) {
+            return { kind: "rejected", reason: "account-not-interactive" };
+        }
         const gatewaySnap = await txn.get(gatewayRef);
         const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
         if (!gatewaySnap.exists) {

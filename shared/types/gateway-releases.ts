@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import type {
   GatewayPodPlacement,
@@ -571,6 +572,7 @@ export interface CommitPlacementParams {
 }
 
 export type PlacementRejectReason =
+  | "account-not-interactive"
   | "gateway-root-invalid"
   | "gateway-not-running"
   | "gateway-not-serving"
@@ -633,10 +635,8 @@ async function placementUserWriteContext(
   mirrorPatch: Record<string, unknown>;
   applyAtomicWrites(): void;
 }> {
-  const userSnap = params.automatic || params.atomicCreate
-    ? await txn.get(userRef)
-    : null;
-  const userData = userSnap?.exists ? userSnap.data() : undefined;
+  const userSnap = await txn.get(userRef);
+  const userData = userSnap.exists ? userSnap.data() : undefined;
   const atomicCreate = params.atomicCreate;
   const shouldCreate = Boolean(
     atomicCreate &&
@@ -694,12 +694,15 @@ export async function commitPlacementAtomic(
     .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
     .doc(params.uid);
   return db.runTransaction<CommitPlacementResult>(async (txn) => {
-    const { mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(
+    const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(
       db,
       txn,
       userRef,
       params,
     );
+    if (!accountAllowsInteractiveAccess(userData)) {
+      return { kind: "rejected", reason: "account-not-interactive" };
+    }
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
     if (!gatewaySnap.exists) {
