@@ -408,10 +408,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       .toBeLessThan(rpc.agentsCreate.mock.invocationCallOrder[0]);
   });
 
-  it("waits for a newly rostered agent's active config before applying the import patch", async () => {
+  it.each([false, true])("waits for the final import revision and only gates intermediate roster revisions on Builder gateways (builder=%s)", async (isBuilderGateway) => {
     let created = false;
-    let releaseRead!: () => void;
-    const pending = new Promise<void>((resolve) => { releaseRead = resolve; });
+    let applied = false;
     const base = rosterRpc();
     const rpc = {
       ...base,
@@ -421,8 +420,14 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         return result;
       }),
       configGet: vi.fn(async () => {
-        if (created) await pending;
-        return configSnapshot({});
+        const revision = mocks.applyOpenClawActivationManifest.mock.calls.length > 0
+          ? "revision-import"
+          : "revision-roster";
+        return {
+          ...configSnapshot({}),
+          configRevisionHash: revision,
+          appliedConfigHash: !created || applied ? revision : "revision-before",
+        };
       }),
       channelsStatus: vi.fn(async () => ({ channelAccounts: {
         mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
@@ -430,16 +435,56 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     };
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(), rpc: rpc as unknown as GatewayRpcClient, log: vi.fn(),
+      isBuilderGateway: () => isBuilderGateway,
     });
     const activation = adapter.activateImportedCustomer("tester10");
     try {
       await vi.waitFor(() => expect(rpc.agentsCreate).toHaveBeenCalledOnce());
-      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+      if (isBuilderGateway) {
+        expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+      } else {
+        await vi.waitFor(() => expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce());
+      }
+      expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect(rpc.channelsStatus).not.toHaveBeenCalled();
     } finally {
-      releaseRead();
+      applied = true;
       await activation;
     }
     expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+    expect(mocks.removeActivationManifest).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a shared import pending when its final revision fails to apply", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const rpc = {
+      ...rosterRpc(),
+      configGet: vi.fn(async () => {
+        if (mocks.applyOpenClawActivationManifest.mock.calls.length === 0) return configSnapshot({});
+        now += 60_001;
+        return {
+          ...configSnapshot({}),
+          configRevisionHash: "revision-import",
+          appliedConfigHash: "revision-roster",
+        };
+      }),
+      channelsStatus: vi.fn(),
+    };
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient(), rpc: rpc as unknown as GatewayRpcClient, log: vi.fn(),
+      isBuilderGateway: () => false,
+    });
+    try {
+      await expect(adapter.activateImportedCustomer("tester10")).resolves.toMatchObject({
+        verificationPending: expect.stringContaining("active config did not reach revision revision-import"),
+      });
+      expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect(rpc.secretsReload).not.toHaveBeenCalled();
+      expect(rpc.channelsStatus).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("deletes target roster residue the manifest does not carry before activating", async () => {
@@ -682,7 +727,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   it("waits for the imported config to apply before reloading its secret runtime", async () => {
     const configGet = vi.fn()
       .mockResolvedValueOnce(configSnapshot({ agents: { list: [] } }))
-      .mockResolvedValueOnce(configSnapshot({ agents: { list: [] } }))
       .mockResolvedValueOnce({
         ...configSnapshot({ agents: { list: [] } }),
         configRevisionHash: "revision-new",
@@ -708,8 +752,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
     await adapter.activateImportedCustomer("tester10");
 
-    expect(configGet).toHaveBeenCalledTimes(4);
-    expect(configGet.mock.invocationCallOrder[3]).toBeLessThan(
+    expect(configGet).toHaveBeenCalledTimes(3);
+    expect(configGet.mock.invocationCallOrder[2]).toBeLessThan(
       rpc.secretsReload.mock.invocationCallOrder[0]!,
     );
     expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
@@ -878,7 +922,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     }
   });
 
-  it.each([["info", 3], ["debug", 4]] as const)("keeps activation diagnostics at %s with %i config reads", async (level, reads) => {
+  it.each([["info", 2], ["debug", 3]] as const)("keeps activation diagnostics at %s with %i config reads", async (level, reads) => {
     process.env.LOG_LEVEL = level;
     const client = mkClient();
     const log = vi.fn();

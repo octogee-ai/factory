@@ -338,19 +338,20 @@ async function ensureCustomerRosterAgents(
   ctx: BrokerCtx,
   agentEntries: readonly unknown[],
   logPrefix: string,
-  signal?: AbortSignal,
+  opts: { signal?: AbortSignal; waitForAppliedRevision?: boolean } = {},
 ): Promise<void> {
   const specs = rosterAgentSpecsFromEntries(agentEntries);
   if (specs.length === 0) return;
   await Promise.all(specs.map((spec) => fsp.mkdir(spec.workspace, { recursive: true })));
   try {
     for (const spec of specs) {
+      throwIfConfigApplicationWaitAborted(opts.signal);
       const [created] = await createRosterAgents([spec], { rpc: ctx.rpc, log: ctx.log, logPrefix });
-      if (created.status === "created") {
+      if (created.status === "created" && opts.waitForAppliedRevision !== false) {
         await waitForAppliedConfigRevision(ctx.rpc, spec.agentId, {
           timeoutMs: 60_000,
           logPrefix,
-          signal,
+          signal: opts.signal,
           acceptSupersedingRevision: true,
         });
       }
@@ -1373,7 +1374,10 @@ async function activateImportedCustomer(
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
-  ], `[import:${slug}]`, opts?.signal);
+  ], `[import:${slug}]`, {
+    signal: opts?.signal,
+    waitForAppliedRevision: ctx.isBuilderGateway(),
+  });
   if (ctx.isBuilderGateway()) {
     await restoreModelCredentialOauthStoreForSlug(slug, {
       logFn: (message) => ctx.log(`[import:${slug}] ${message}`),
