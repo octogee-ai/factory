@@ -382,11 +382,13 @@ describe("gateway base image", () => {
     const omitDev = dockerfile.indexOf('delete pkg.devDependencies;');
     const install = dockerfile.indexOf('npm install --prefix "$CODEX_BUNDLED_DIR" --omit=dev --include=optional --ignore-scripts --package-lock=false');
     const restore = dockerfile.indexOf('cp "$CODEX_VENDORED/package/package.json" "$CODEX_BUNDLED_DIR/package.json"');
+    const refresh = dockerfile.indexOf('openclaw plugins registry --refresh');
     const inspect = dockerfile.indexOf('openclaw plugins inspect codex --json');
     expect(omitDev).toBeGreaterThan(-1);
     expect(install).toBeGreaterThan(omitDev);
     expect(restore).toBeGreaterThan(install);
-    expect(inspect).toBeGreaterThan(restore);
+    expect(refresh).toBeGreaterThan(restore);
+    expect(inspect).toBeGreaterThan(refresh);
     expect(dockerfile).toContain('test ! -e "$CODEX_BUNDLED_DIR/node_modules/openclaw"');
     expect(dockerfile).toContain(
       'node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$OPENCLAW_ROOT" /tmp/oc-codex-inspect.json',

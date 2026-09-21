@@ -158,8 +158,10 @@ RUN set -e; \
       || { echo "FATAL: source-matched Codex dependencies failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     cp "$CODEX_VENDORED/package/package.json" "$CODEX_BUNDLED_DIR/package.json"; \
     test ! -e "$CODEX_BUNDLED_DIR/node_modules/openclaw"; \
+    openclaw plugins registry --refresh > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: bundled plugin registry refresh failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     openclaw plugins inspect codex --json > /tmp/oc-codex-inspect.json 2>/tmp/oc-plugin.log \
-      || { echo "FATAL: openclaw plugins inspect codex failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+      || { echo "FATAL: openclaw plugins inspect codex failed"; tail -n 20 /tmp/oc-plugin.log /tmp/oc-codex-inspect.json; exit 1; }; \
     node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$OPENCLAW_ROOT" /tmp/oc-codex-inspect.json; \
     node /tmp/verify-codex-native-hook-runtime.mjs "$CODEX_BUNDLED_DIR/package.json"; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .; \

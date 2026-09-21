@@ -97,7 +97,11 @@ installed-plugin trust rule is relaxed. Untrusted archives remain untrusted.
 The disposable image stage omits development-only workspace metadata from npm's
 input, installs production/optional dependencies with lifecycle scripts disabled,
 then restores the original vendored manifest bytes before inspection and source
-verification. An install failure aborts the stage.
+verification. After materializing the bundle, the stage uses native
+`openclaw plugins registry --refresh` to include it in the registry created by
+the preceding Parallel installation. Inspection still verifies native bundled
+trust and exact bytes; failures print both stderr and the JSON error response.
+An install or registry-refresh failure aborts the stage.
 
 The build verifies the physical bundled location, native bundled trust, package
 identity/version, and byte equality of the manifest and all `dist` payloads
