@@ -305,12 +305,16 @@ describe("gateway base image", () => {
     expect(runtimeStage).toContain(
       "COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps",
     );
+    expect(runtimeStage).toContain(
+      "COPY --from=openclaw-full-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/codex",
+    );
     expect(runtimeStage).not.toContain("openclaw-tarball/");
     expect(runtimeStage).not.toContain("/home/node/.openclaw");
     expect(cloudbuild).toContain('test -d /opt/openclaw-runtime-deps/npm');
     expect(cloudbuild).toContain('openclaw/dist/extensions/mattermost/package.json');
     expect(cloudbuild).toContain('node_modules/@openclaw/parallel-plugin');
-    expect(cloudbuild).toContain('node_modules/@openclaw/codex');
+    expect(cloudbuild).toContain('openclaw/dist/extensions/codex/package.json');
+    expect(cloudbuild).toContain('! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"');
   });
 
   it("does not retain package-manager caches in runtime install layers", () => {
@@ -364,24 +368,35 @@ describe("gateway base image", () => {
     }
   });
 
-  it("installs Codex from the official registry at the core version and proves it matches the source-matched archive", () => {
+  it("bundles exact-source Codex with plugin-local dependencies and verifies native bundled trust", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
+    const coreStage = dockerfile.slice(
+      dockerfile.indexOf("FROM gateway-core-system AS gateway-core-runtime"),
+      dockerfile.indexOf("FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer"),
+    );
 
-    expect(dockerfile).toContain('OPENCLAW_CORE_VERSION="$(node -e');
     expect(dockerfile).toContain('"$OPENCLAW_ROOT/package.json"');
     expect(dockerfile).toContain('test -f "$OC_VENDOR/openclaw-codex.tgz"');
-    expect(dockerfile).toContain('CODEX_SPEC="@openclaw/codex@$OPENCLAW_CORE_VERSION"');
-    expect(dockerfile).toContain('npm view "$CODEX_SPEC" version');
-    expect(dockerfile).toContain('openclaw plugins install "$CODEX_SPEC" --accept-capabilities');
-    expect(dockerfile).not.toContain("npm-pack:$VENDORED_CODEX");
-    expect(dockerfile).not.toContain("CODEX_REPACK");
+    expect(dockerfile).toContain('CODEX_BUNDLED_DIR="$OPENCLAW_ROOT/dist/extensions/codex"');
+    expect(dockerfile).toContain('cp -a "$CODEX_VENDORED/package" "$CODEX_BUNDLED_DIR"');
+    const omitDev = dockerfile.indexOf('delete pkg.devDependencies;');
+    const install = dockerfile.indexOf('npm install --prefix "$CODEX_BUNDLED_DIR" --omit=dev --include=optional --ignore-scripts --package-lock=false');
+    const restore = dockerfile.indexOf('cp "$CODEX_VENDORED/package/package.json" "$CODEX_BUNDLED_DIR/package.json"');
+    const inspect = dockerfile.indexOf('openclaw plugins inspect codex --json');
+    expect(omitDev).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(omitDev);
+    expect(restore).toBeGreaterThan(install);
+    expect(inspect).toBeGreaterThan(restore);
+    expect(dockerfile).toContain('test ! -e "$CODEX_BUNDLED_DIR/node_modules/openclaw"');
     expect(dockerfile).toContain(
-      'node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$CODEX_INSTALLED"',
+      'node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$OPENCLAW_ROOT" /tmp/oc-codex-inspect.json',
     );
     expect(dockerfile).toContain("openclaw plugins inspect codex --json");
-    expect(dockerfile).toContain('reason !== "trusted-official"');
-    expect(dockerfile).toContain('INSTALLED_CODEX="$(node -e');
-    expect(dockerfile).toContain('test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"');
+    expect(dockerfile).toContain('node /tmp/verify-codex-native-hook-runtime.mjs "$CODEX_BUNDLED_DIR/package.json"');
+    expect(dockerfile).not.toContain('CODEX_SPEC=');
+    expect(dockerfile).not.toContain('npm view');
+    expect(dockerfile).not.toContain('npm-pack:$VENDORED_CODEX');
+    expect(coreStage).not.toContain('dist/extensions/codex');
     expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 
@@ -392,8 +407,9 @@ describe("gateway base image", () => {
 
     expect(cloudbuild).toContain("--build-arg=IMAGE_PROFILE=builder");
     expect(dockerfile).toContain('RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE"');
-    expect(gate).toContain("staged_plugin \"$plugin\" || fail \"@openclaw/$plugin is absent");
-    expect(gate).toContain("for plugin in parallel-plugin codex; do");
+    expect(gate).toContain('staged_plugin parallel-plugin || fail "@openclaw/parallel-plugin is absent');
+    expect(gate).toContain('"$global_root/openclaw/dist/extensions/codex/package.json"');
+    expect(gate).toContain('! staged_plugin codex');
     expect(gate).toContain("! staged_plugin mattermost");
     expect(gate).toContain('"$global_root/@anthropic-ai/claude-code"');
     expect(gate).toContain('"$global_root/@openai/codex"');
@@ -405,10 +421,8 @@ describe("gateway base image", () => {
     expect(gate).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
 
     const extraCloudbuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
+    expect(extraCloudbuild).toContain('openclaw/dist/extensions/codex/package.json');
     expect(extraCloudbuild).toContain(
-      'find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
-    );
-    expect(extraCloudbuild).not.toContain(
       '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
     );
     expect(extraCloudbuild).toContain('test -e "$$(npm root -g)/@anthropic-ai/claude-code"');

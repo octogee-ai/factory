@@ -644,10 +644,6 @@ function removeRetiredMattermostInstallRecord(openclawDir) {
   return removeStaleFileInstallRecord(openclawDir, "mattermost", RETIRED_MATTERMOST_FILE_SPEC_PREFIX);
 }
 
-// A restored Builder state still carries the archive-installed Codex record, which
-// OpenClaw 2026.9.5 refuses as provenance-invalid. Dropping it lets OpenClaw recover
-// the record from the image's managed npm project, whose dependency now names the
-// official registry package.
 function removeStaleCodexInstallRecord(openclawDir) {
   return removeStaleFileInstallRecord(openclawDir, "codex", STALE_CODEX_ARCHIVE_SPEC_PREFIX);
 }

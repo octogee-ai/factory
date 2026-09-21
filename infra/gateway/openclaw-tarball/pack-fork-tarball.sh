@@ -12,12 +12,13 @@
 #    everything else (incl. its transitive deps and the shipped
 #    npm-shrinkwrap.json's pinned tree) normally from the registry.
 #
-#    Do NOT use `bundleDependencies` for this: on a pnpm workspace it makes npm
-#    bundle the dep's ENTIRE transitive closure out of the pnpm node_modules
+#    Do not add workspace deps to `bundleDependencies`: that makes npm bundle
+#    the dep's ENTIRE transitive closure out of the pnpm node_modules
 #    symlink farm, producing an inconsistent tree (an empty
 #    @modelcontextprotocol/sdk → the CLI can't load its MCP runtime; installs
 #    "green", crash-loops at the codex-plugin install step). The `file:` vendor
-#    touches only the one unpublished package.
+#    touches only the one unpublished package. Preserve upstream's explicit
+#    bundles, which may contain patched runtime bytes unavailable on npm.
 #
 # 2. Compile Codex and Parallel from the same checkout as core and include
 #    them as vendor/<pkg>.tgz, including when that version exists on npm.
@@ -107,7 +108,6 @@ for name in $WS_DEPS; do
     if (p.dependencies && p.dependencies['$name']) p.dependencies['$name'] = 'file:$vend';
     if (p.optionalDependencies && p.optionalDependencies['$name']) p.optionalDependencies['$name'] = 'file:$vend';
     if (!p.files.includes('vendor/')) p.files.push('vendor/');
-    delete p.bundleDependencies;
     fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
   "
   echo "  vendored workspace dep: $name@$ver -> file:$vend" >&2

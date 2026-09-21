@@ -10,6 +10,7 @@ const roots: string[] = [];
 
 type ImageShape = {
   bundledMattermost?: boolean;
+  bundledCodex?: boolean;
   stagedPlugins?: string[];
   globalPackages?: string[];
   tools?: string[];
@@ -27,7 +28,8 @@ function executable(path: string) {
 
 function fakeImage({
   bundledMattermost = true,
-  stagedPlugins = ["parallel-plugin", "codex"],
+  bundledCodex = true,
+  stagedPlugins = ["parallel-plugin"],
   globalPackages = ["@anthropic-ai/claude-code", "@openai/codex"],
   tools = ["claude", "codex"],
   chromium = true,
@@ -44,6 +46,11 @@ function fakeImage({
     const bundled = join(globalRoot, "openclaw", "dist", "extensions", "mattermost");
     mkdirSync(bundled, { recursive: true });
     writeFileSync(join(bundled, "package.json"), JSON.stringify({ name: "@openclaw/mattermost" }));
+  }
+  if (bundledCodex) {
+    const bundled = join(globalRoot, "openclaw", "dist", "extensions", "codex");
+    mkdirSync(bundled, { recursive: true });
+    writeFileSync(join(bundled, "package.json"), JSON.stringify({ name: "@openclaw/codex" }));
   }
   for (const plugin of stagedPlugins) {
     mkdirSync(join(runtimeRoot, "projects", plugin, "node_modules", "@openclaw", plugin), { recursive: true });
@@ -122,15 +129,27 @@ describe("gateway runtime image gate", () => {
     expect(result.stderr).toContain("Mattermost is not bundled");
   });
 
-  it.each(["parallel-plugin", "codex"])("rejects a staged tree missing @openclaw/%s", (missing) => {
-    const image = fakeImage({
-      stagedPlugins: ["parallel-plugin", "codex"].filter((name) => name !== missing),
-    });
+  it("rejects a missing staged Parallel plugin", () => {
+    const image = fakeImage({ stagedPlugins: [] });
 
     const result = verify("gateway", image.env);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`@openclaw/${missing} is absent`);
+    expect(result.stderr).toContain("@openclaw/parallel-plugin is absent");
+  });
+
+  it("rejects a missing bundled Codex companion", () => {
+    const result = verify("gateway", fakeImage({ bundledCodex: false }).env);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Codex is not bundled");
+  });
+
+  it("rejects managed Codex that could shadow the image-owned companion", () => {
+    const result = verify("gateway", fakeImage({ stagedPlugins: ["parallel-plugin", "codex"] }).env);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("@openclaw/codex must not be staged");
   });
 
   it.each(["@anthropic-ai/claude-code", "@openai/codex"])("rejects a missing global %s", (missing) => {

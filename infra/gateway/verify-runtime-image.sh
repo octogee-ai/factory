@@ -25,9 +25,10 @@ test -d "$runtime_root" || fail "OpenClaw runtime dependency root is absent: $ru
 test -f "$global_root/openclaw/dist/extensions/mattermost/package.json" \
   || fail "Mattermost is not bundled under $global_root/openclaw/dist/extensions"
 ! staged_plugin mattermost || fail "@openclaw/mattermost must not be staged under $runtime_root"
-for plugin in parallel-plugin codex; do
-  staged_plugin "$plugin" || fail "@openclaw/$plugin is absent from $runtime_root"
-done
+test -f "$global_root/openclaw/dist/extensions/codex/package.json" \
+  || fail "Codex is not bundled under $global_root/openclaw/dist/extensions"
+! staged_plugin codex || fail "@openclaw/codex must not be staged under $runtime_root"
+staged_plugin parallel-plugin || fail "@openclaw/parallel-plugin is absent from $runtime_root"
 test -e "$global_root/@anthropic-ai/claude-code" || fail "@anthropic-ai/claude-code is absent from $global_root"
 test -e "$global_root/@openai/codex" || fail "@openai/codex is absent from $global_root"
 test -x "$tool_bin/claude" || fail "$tool_bin/claude is not executable"

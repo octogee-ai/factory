@@ -62,7 +62,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
 
 FROM rust:1.98.0-slim-bookworm AS cua-driver-builder
 
-ARG CUA_SOURCE_SHA=5af343ee8886e10663ebc3a6040fe9b3eab80fa9
+ARG CUA_SOURCE_SHA=ebc42f2ce00401adf750bcbdb083cc69e973c83c
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git pkg-config libx11-dev libxi-dev libxtst-dev \
       libxkbcommon-dev libssl-dev libwayland-dev libxdo-dev libgtk-3-dev \
@@ -80,7 +80,7 @@ RUN cargo test --locked -p platform-linux --lib wayland::tests --features portal
     && cargo build --locked --release -p cua-driver-sdk --features portal-input \
     && mkdir /out \
     && install -m 755 target/release/libcua_driver_sdk.so /out/ \
-    && printf '{"version":"0.24.0","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659"}\n' "$CUA_SOURCE_SHA" > /out/octogee-patch.json
+    && printf '{"version":"0.28.2","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659"}\n' "$CUA_SOURCE_SHA" > /out/octogee-patch.json
 
 FROM gateway-core-system AS openclaw-installer
 
@@ -146,41 +146,32 @@ COPY infra/gateway/verify-codex-native-hook-runtime.mjs /tmp/verify-codex-native
 COPY infra/gateway/verify-codex-source-match.mjs /tmp/verify-codex-source-match.mjs
 RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
-    OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
     test -f "$OC_VENDOR/openclaw-codex.tgz"; \
-    CODEX_SPEC="@openclaw/codex@$OPENCLAW_CORE_VERSION"; \
-    npm view "$CODEX_SPEC" version > /tmp/oc-codex-view.log 2>&1 \
-      || { echo "FATAL: $CODEX_SPEC is not published on the npm registry; OpenClaw trusts only the official package (plugin trust since 2026.9.5), so the current build must be a GA tag"; tail -n 20 /tmp/oc-codex-view.log; exit 1; }; \
-    openclaw plugins install "$CODEX_SPEC" --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-      || { echo "FATAL: $CODEX_SPEC install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     CODEX_VENDORED="$(mktemp -d)"; \
     tar -xzf "$OC_VENDOR/openclaw-codex.tgz" -C "$CODEX_VENDORED"; \
-    CODEX_INSTALLED="$(dirname "$(find /home/node/.openclaw/npm -type f -path '*/node_modules/@openclaw/codex/package.json' -print -quit)")"; \
-    test -n "$CODEX_INSTALLED"; \
-    node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$CODEX_INSTALLED"; \
-    rm -rf "$CODEX_VENDORED"; \
+    CODEX_BUNDLED_DIR="$OPENCLAW_ROOT/dist/extensions/codex"; \
+    test ! -e "$CODEX_BUNDLED_DIR"; \
+    cp -a "$CODEX_VENDORED/package" "$CODEX_BUNDLED_DIR"; \
+    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const pkg = JSON.parse(fs.readFileSync(file, "utf8")); delete pkg.devDependencies; fs.writeFileSync(file, JSON.stringify(pkg) + "\n");' "$CODEX_BUNDLED_DIR/package.json"; \
+    npm install --prefix "$CODEX_BUNDLED_DIR" --omit=dev --include=optional --ignore-scripts --package-lock=false --no-audit --no-fund > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: source-matched Codex dependencies failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    cp "$CODEX_VENDORED/package/package.json" "$CODEX_BUNDLED_DIR/package.json"; \
+    test ! -e "$CODEX_BUNDLED_DIR/node_modules/openclaw"; \
     openclaw plugins inspect codex --json > /tmp/oc-codex-inspect.json 2>/tmp/oc-plugin.log \
       || { echo "FATAL: openclaw plugins inspect codex failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
-    node -e 'const fs = require("node:fs"); const raw = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const plugin = raw.plugin ?? raw; const reason = plugin.trust && plugin.trust.reason; if (reason !== "trusted-official") { console.error("FATAL: Codex plugin trust is " + JSON.stringify(plugin.trust) + ", expected trusted-official"); process.exit(1); } console.log("Codex plugin trust: " + reason);' /tmp/oc-codex-inspect.json; \
-    rm -f /tmp/oc-plugin.log /tmp/oc-codex-view.log /tmp/oc-codex-inspect.json; \
-    find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
-    rm -rf /opt/openclaw-runtime-deps; \
-    mkdir -p /opt/openclaw-runtime-deps; \
-    cp -a /home/node/.openclaw/npm /opt/openclaw-runtime-deps/npm; \
-    chown -R node:node /opt/openclaw-runtime-deps; \
-    CODEX_PACKAGE="$(find /opt/openclaw-runtime-deps/npm -type f -path '*/node_modules/@openclaw/codex/package.json' -print -quit)"; \
-    test -n "$CODEX_PACKAGE"; \
-    INSTALLED_CODEX="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$CODEX_PACKAGE")"; \
-    test "$INSTALLED_CODEX" = "$OPENCLAW_CORE_VERSION"; \
-    node /tmp/verify-codex-native-hook-runtime.mjs "$CODEX_PACKAGE"; \
-    ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
-    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .
+    node /tmp/verify-codex-source-match.mjs "$CODEX_VENDORED/package" "$OPENCLAW_ROOT" /tmp/oc-codex-inspect.json; \
+    node /tmp/verify-codex-native-hook-runtime.mjs "$CODEX_BUNDLED_DIR/package.json"; \
+    ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .; \
+    rm -rf "$CODEX_VENDORED"; \
+    rm -f /tmp/oc-plugin.log /tmp/oc-codex-inspect.json; \
+    npm cache clean --force
 
 FROM gateway-system AS gateway-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
 COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
+COPY --from=openclaw-full-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/codex /usr/local/lib/node_modules/openclaw/dist/extensions/codex
 RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
     && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
     && openclaw --version

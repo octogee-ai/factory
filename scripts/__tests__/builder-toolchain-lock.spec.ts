@@ -295,7 +295,7 @@ describe("Builder npm toolchain lock", () => {
       ),
     });
     await expect(fs.realpath(path.join(objectPath, "bin", "firebase"))).resolves.toBe(
-      path.join(objectPath, "node_modules", ".bin", "firebase"),
+      path.join(await fs.realpath(objectPath), "node_modules", ".bin", "firebase"),
     );
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "ready" });
   });

@@ -1050,7 +1050,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(row.updated_at_ms).toBe(value.revision);
   });
 
-  it("removes the archive-installed Codex record from restored runtime state so OpenClaw recovers the registry record", () => {
+  it("removes only the archive-installed Codex record from restored runtime state", () => {
     const result = runPolicyWithDir(
       "builder",
       { plugins: { allow: ["codex"], entries: { codex: { enabled: true } } } },

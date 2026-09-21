@@ -77,127 +77,159 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The selected build is the upstream GA tag
-[`v2026.9.5`](https://github.com/openclaw/openclaw/releases/tag/v2026.9.5), an
-annotated tag whose peeled commit is
-[`ec9c1a13db8938e5a3eaa51fca2e981cde2395a9`](https://github.com/openclaw/openclaw/commit/ec9c1a13db8938e5a3eaa51fca2e981cde2395a9)
-with package version `2026.9.5`. The tag branches from main at `309e85fe` and
-adds four release commits: the release preparation, two changelog refreshes, and
-[#151977](https://github.com/openclaw/openclaw/pull/151977), which stops older
-updaters from rolling back while inspecting candidate dependencies.
-[Runtime source `d144eb36efb8e2297058e52b45f5890b4a4d5f79`](https://github.com/ceckert/openclaw/commit/d144eb36efb8e2297058e52b45f5890b4a4d5f79)
-on `ceckert/openclaw:codex/octogee-v2026.9.5` carries the overlay as one commit
-rebased from the September 16 main snapshot.
+The September 21 recut selects upstream `main` at
+[`efefa508a8adbe461597b3ab968880d1e6af7af3`](https://github.com/openclaw/openclaw/commit/efefa508a8adbe461597b3ab968880d1e6af7af3),
+locked from the newest completed successful push
+[CI run](https://github.com/openclaw/openclaw/actions/runs/35601102699) at the
+start of the recut. That run had 67 successful jobs and 18 conditional skips;
+the CI gate and build artifacts passed. This is a main snapshot with package
+version `2026.9.5`, not another GA release. The overlay branch is
+`ceckert/openclaw:codex/octogee-main-20260921`, with exact runtime source
+[`af5266fc70b45d9672b510d961ddb562c9fb8bb1`](https://github.com/ceckert/openclaw/commit/af5266fc70b45d9672b510d961ddb562c9fb8bb1).
 
 The packer keeps that exact core source and rebuilds Codex and Parallel from
-the same checkout. Upstream published `openclaw`, `@openclaw/codex`,
-`@openclaw/mattermost`, and `@openclaw/ai` at `2026.9.5`; `@openclaw/parallel`
-is not on npm at all. Source-matched companions remain the only accepted input,
-but since 2026.9.5 OpenClaw grants keyed stores only to plugins whose install
-record names the official npm or ClawHub package, and a `npm-pack:` archive can
-never satisfy that (`resolvePluginTrust` reads `artifactKind: "npm-pack"` as
-`provenance-invalid`). The image therefore installs `@openclaw/codex` from the
-registry at the core version and proves at build time that its `dist` modules
-are byte-identical to the source-matched archive
-(`infra/gateway/verify-codex-source-match.mjs`), then asserts
-`openclaw plugins inspect codex` reports `trusted-official`. A main snapshot has
-no registry package at its version, so the image build fails loudly there;
-Codex-trusting builds are GA tags. Parallel is not on npm and uses no
-trust-gated API, so it stays a vendored archive.
+the same checkout. The full image includes Codex inside the running OpenClaw
+package at `dist/extensions/codex`, with its declared production dependencies
+installed locally to that plugin. This uses upstream's supported source-image
+bundling route: native discovery reports `origin: "bundled"` and grants bundled
+plugins the keyed-store APIs. No registry provenance is fabricated and no
+installed-plugin trust rule is relaxed. Untrusted archives remain untrusted.
+The disposable image stage omits development-only workspace metadata from npm's
+input, installs production/optional dependencies with lifecycle scripts disabled,
+then restores the original vendored manifest bytes before inspection and source
+verification. An install failure aborts the stage.
+
+The build verifies the physical bundled location, native bundled trust, package
+identity/version, and byte equality of the manifest and all `dist` payloads
+against the source-matched archive (`infra/gateway/verify-codex-source-match.mjs`).
+It also exercises the paired native-hook runtime and rejects a duplicate Codex
+in the image's managed npm tree. A main snapshot can share a version number
+with a GA release, so version equality alone is not evidence of matching bytes.
+The lightweight core image does not include Codex. Parallel uses no trust-gated
+API and remains a vendored archive in the managed npm tree.
+
+The root packer preserves upstream's explicit bundled dependencies while
+vendoring private workspace packages. In this snapshot, `chrome-devtools-mcp`
+carries upstream's browser snapshot-identity repair; replacing it with the
+same-version registry package would lose that repair. Upstream's tarball check
+verifies the exact patched files and required license/runtime assets.
 
 | Fix | Behavior pinned by its regressions | Upstream disposition |
 | --- | --- | --- |
 | Native channel membership | Materialize canonical channel sessions through an admin-only sync RPC; permit native features for explicit members, revoke only service-authored grants, and preserve explicit human grants in either grant order. | Still needed; contributing to the existing [upstream policy discussion #135631](https://github.com/openclaw/openclaw/issues/135631#issuecomment-5657833033), not silently redefining upstream's `none` policy. |
-| Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures. The overlay responds to upstream browser sign-in recovery by invalidating rejected icon requests even when the bearer token stays the same, without evicting successful or missing-image caches. | Still needed; [upstream PR #147930](https://github.com/openclaw/openclaw/pull/147930) is closed unmerged. A future submission needs the actual multi-agent Gateway reproduction, not only resolver tests. |
+| Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures. Rejected icon requests are invalidated even when a recovered bearer token stays the same; successful and missing-image caches are preserved. | Still needed. [PR #147930](https://github.com/openclaw/openclaw/pull/147930) is reopened on this base with a real paired Control UI WebSocket reproduction, non-admin scopes, native preferences storage, and own/foreign-session authorization controls. Maintainer review is ready; CI is separate from local proof. |
 | Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; existing [upstream proposal #132759](https://github.com/openclaw/openclaw/issues/132759) awaits the shared-room policy/configuration decision. |
-| Deferred cron monitor convergence | A committed hot reload whose system cron monitor reconcile answers retry-scheduled stays live and logs the deferral instead of forcing a gateway restart; the cron service's own retry finishes the monitors. Pinned by the reload model-state and partial-monitor-write regressions. | Needed by Octogee's multi-customer surge imports; [upstream PR #148592](https://github.com/openclaw/openclaw/pull/148592) is still open and is not in the tag. Remove after it lands in the selected base; do not duplicate the PR or carry its unrelated restart-audit changes. |
+| Deferred cron monitor convergence | A committed hot reload whose system cron monitor reconcile answers retry-scheduled stays live and logs the deferral instead of forcing a gateway restart; the cron service's own retry finishes the monitors. Pinned by the reload model-state and partial-monitor-write regressions. | Needed by Octogee's multi-customer surge imports. [PR #148592](https://github.com/openclaw/openclaw/pull/148592) belongs to another contributor and remains open, conflicting, and absent from this base. Supply corroborating proof; do not rewrite their branch, duplicate the PR, or carry its unrelated restart-audit changes. |
 | External desktop reconnect | Reread rotated VNC credentials on each external attach-mode observation; preserve managed ephemeral credentials, cancellation, and desktop lifetime. | Needed by Octogee external desktops; no matching upstream PR found. A focused submission still needs real VNC rotation/reconnect proof. |
 | Published plugin runtime reuse | Detached Skill Workshop reviews reuse the current published generation while retaining their exact model and admission owner. | Reproduced downstream; no matching upstream PR found. Do not claim a performance gain without before/after preparation measurements. |
 | Native session and dialog recovery | Preserve readable Mattermost titles, resolve participant names within exact transcript identity namespaces, and keep plugin-dialog Cancel/X usable offline. | Reproduced downstream; no upstream PR filed. |
 | Computer approval authority | Allow a plugin to constrain native approval reviewers using live server facts; preserve requester identity and revalidate authority, cancellation, and admission through execution. | Required by Octogee's gateway-owner policy; two type-only SDK exports, no new RPC or approval store. |
 
-The September 20 audit covers 680 upstream commits between the September 16
-snapshot and the tag. No patch is dropped this cycle and no retained patch has an
-upstream replacement in the tag. Only the channel-membership patch needed a
-real re-derivation; the other seven auto-applied onto files upstream did not touch,
-or touched only adjacently.
+The audit covers 2,044 commits reachable from this main snapshot but not the
+previous GA tag. All eight retained patch areas still have downstream callers
+or behavior regressions; none has a complete upstream replacement in the selected
+base. The port follows the new native owners instead of restoring old wiring.
 
-Upstream [#150196](https://github.com/openclaw/openclaw/pull/150196) now serves
-session lists, descriptions, and live row events from a resident in-memory
-projection that carries each row's `membership` set, and
-[#151036](https://github.com/openclaw/openclaw/pull/151036) moves full member
-reads into the session-transcript worker. The membership port adopts that shape:
-the prepared sharing facts pass upstream's `isMember` lookup into the list entry
-filter, live-event admission reuses the prepared target and role instead of a
-second store read, and the projected `sessions.describe` read admits explicit
-channel members through the same role resolution. Member writes emit upstream's
-keyed session-change publication so the resident projection refreshes after a
-sync. Unprepared readers still resolve membership from SQLite exactly as before,
-and the sync RPC keeps upstream's synchronous compatibility facade. Upstream's
-`authorizeSessionSharingTarget` now takes prepared caps and roles; the overlay
-keeps hiding only `viewer` roles under the `none` policy so explicit members
-remain visible.
+Upstream now materializes archived sessions on demand
+([#151574](https://github.com/openclaw/openclaw/pull/151574)) and prepares placement
+facts asynchronously ([#150270](https://github.com/openclaw/openclaw/pull/150270)).
+Membership must remain available without warming those archived rows. The port
+keeps membership on the native projection row, reads it through the existing
+session-transcript worker, and clears grants immediately on invalidation. Bounded
+worker replies are admitted only while the same projection epoch, session
+generation, and physical store remain current. Exact reads prepare membership
+before entering the native synchronous consumer. No new membership cache, store,
+or background owner is introduced. Cold, warm, demoted, revoked, and replaced
+session regressions trap accidental Gateway-thread membership SQL and stale grants.
 
-Upstream [#150644](https://github.com/openclaw/openclaw/pull/150644) recovers
-bounded Mattermost thread history after a restart or reset, keyed by the pending
-history key of the message's session. Under Octogee's channel scope that key is
-the channel session, so recovery seeds the shared room session from the thread
-the message arrived in; flat DMs keep native behavior. No adapter change was
-needed. Upstream [#150801](https://github.com/openclaw/openclaw/pull/150801)
-appends desktop viewer-slot recovery beside the overlay's protocol additions;
-the generated Kotlin and Swift bindings, the advertised method order, the plugin
-SDK surface budget (upstream 4482 plus the overlay's two reviewer types), the
-bundled channel config metadata, the workboard Control UI asset hash, and the
-docs config baseline (channel surface 3740 to 3742 for `threadSessionScope`) are
-regenerated from the tag.
+Channel sync uses upstream's mutation authority and rechecks it after waits.
+Computer approval adopts the native requester/admission path from
+[#151863](https://github.com/openclaw/openclaw/pull/151863); the live reviewer guard
+also crosses the deferred Codex relay and runs after final file revalidation.
+Native rejection and cancellation semantics are preserved. External desktop
+observation rereads VNC credentials and revalidates owner/configuration/lifetime
+before admitting a reconnect. Focused TCP RFB tests are not a substitute for
+live browser authentication with a rotated password.
 
-The tag also lifts `@trycua/cua-driver` from 0.23.2 to 0.24.0; see the native
-driver section below for the rebased backport. The app's vendored OpenClaw model
-picker is regenerated from the same `d144eb36` checkout per
-`app/openclaw-model-picker/README.md`; its Lit and Web Awesome dependency
-versions are unchanged from the prior snapshot.
+Useful upstream changes include restricted session search and member-picker
+indexes, reuse of session-list candidates across viewers, unchanged-plugin
+retention during reload, reduced model-catalog worker heap growth, and portable
+browser upload staging. These are reasons to qualify the snapshot, not evidence
+that Octogee's prior live OOM or CPU stalls are resolved. Mattermost recovery
+remains bounded thread-context recovery, not reconstruction of an entire channel
+or replacement of native SQLite state.
 
-The main reasons to take this tag are upstream's safer upgrade path (Doctor
-preserves session history and repeated-repair state, and finishes upgrades with
-invalid retained histories), the resident session projection that keeps large
-session lists off SQLite on the request path, worker-backed member and
-conversation-list reads, live plugin install and reload without a Gateway
-restart, Mattermost thread-context recovery after restart, structured Mattermost
-option answers, and the [#151977](https://github.com/openclaw/openclaw/pull/151977)
-updater fix. These are not evidence that Octogee's prior live OOM or CPU stalls
-are resolved.
+Per-agent SQLite advances from schema 21 to 22; shared state remains schema 17.
+The native container-replacement startup path takes a migration lease and saves
+verified pre-migration agent and shared-state snapshots before migration. The
+FTS ownership migration preserves existing transcript/index bytes and marks a
+lazy rebuild; injected commit failure rolls back both schema markers and changes.
+TEST qualification must verify every mounted agent is admitted and conversations
+survive restart. After advancement, rollback requires coherent pre-upgrade state
+and its matching old image, not an image-only downgrade.
 
-The root artifact is `openclaw-fork-0038b3c7.tgz`
-(SHA-256 `0038b3c7616a5d2985c877c63b483dacfde28cb06e6c3fa53afe2fce9cda0800`,
-GCS generation `1789928967091534`).
-Mattermost is `openclaw-mattermost-72f8286f.tgz`
-(SHA-256 `72f8286fd3d4da8148fa2980f41c995a6b156883db62f241b752ef7c540b1762`,
-GCS generation `1789928970133436`).
+Generated protocol bindings, method inventory, channel metadata, docs baselines,
+and the workboard asset hash are regenerated from the selected source. The SDK
+surface is upstream's 4,530 exports plus the two reviewer types. The CUA backport
+moves to the required 0.28.2 release, retaining the same 40-line modifier mapping
+patch. The PWA picker is refreshed from the exact overlay source using the
+existing Lit-to-React adapter, without adopting another framework or widening
+the reuse boundary to the composer.
+
+The root artifact is `openclaw-fork-a281f4f1.tgz`
+(SHA-256 `a281f4f11ca5e4bbb0fc7031652fdedf9c9a3cbbc7f27bb991d11d12daf1e560`,
+GCS generation `1790003449383758`).
+Mattermost is `openclaw-mattermost-8de90600.tgz`
+(SHA-256 `8de90600af307e69d8c7b50101985ed48c5a5f2e14f6336ad83aa9ff2c0cae9d`,
+GCS generation `1790003452514310`).
 Both uploads used the generation-zero precondition against previously absent
 object names, and both remote objects were verified against the local artifacts
 by size and GCS MD5. The packed root passed upstream's tarball-integrity checker,
 installed into a clean npm prefix with install scripts disabled, reported
-`OpenClaw 2026.9.5 (d144eb3)`, carries the vendored `@openclaw/ai` workspace
+`OpenClaw 2026.9.5 (af5266f)`, carries the vendored `@openclaw/ai` workspace
 dependency and the source-matched Codex and Parallel archives, and the Mattermost
-artifact ships its compiled runtime. The prior `openclaw-fork-1d44a605.tgz` and
-`openclaw-mattermost-97eb0b89.tgz` objects are untouched.
+artifact ships its compiled runtime. The prior `openclaw-fork-0038b3c7.tgz` and
+`openclaw-mattermost-72f8286f.tgz` objects are untouched.
 
-The September 20 overlay passed a full exact-commit build whose `dist/build-info.json`
-identifies `d144eb36efb8e2297058e52b45f5890b4a4d5f79`, all twenty-one `pnpm check`
-steps, `pnpm tsgo:core`, `pnpm check:test-types`, and both generated-config
-checks. The first `pnpm check` run caught one real port defect: the auto-merge
-left an unused `listSessionMembers` import after upstream moved that read to the
-worker; it is removed. The 43 focused core test files across every retained patch
-area and the nearby upstream sharing-store, session-projection, prepared-read,
-reload, and cron tests passed with 1,188 tests, run one file at a time because
-the shard runner expands multi-file targets to whole shards. The three UI unit
-files passed, and the seven Chromium cases for automatic and interactive access
-renewal, offline dialog dismissal, and active-install ownership passed under the
-UI e2e config. Native mobile builds were not run. No Codex or other independent
-review was run on this recut; the rebased diff against the tag was inspected by
-hand only. Automated checks do not constitute a live TEST or PROD rollout.
+The isolated installed-package smoke verifies all 144 Codex runtime files and
+three native-hook imports. The actual registered bundled harness can read its
+binding store; an identical archive installed through the native CLI is denied
+with `PLUGIN_TRUST_REFUSED`. Leaving that archive's native install record unchanged
+while removing only its disposable managed copy still selects the genuine bundle
+and permits the registered harness read. This is local package proof, not a live
+provider turn or deployed Linux image.
 
-This tag follows the [v2026.9.5 testing priorities](https://pagedrop.ai/g/jalehman/917106e69312c5b603d2e0ef3f48cf21):
+The September 21 full build leaves a clean source checkout and embeds
+`af5266fc70b45d9672b510d961ddb562c9fb8bb1` in `dist/build-info.json` and the CLI.
+Focused runs include 486 Gateway tests, 414 authority/configuration/queue tests,
+115 Mattermost tests, and final reruns of 31 projection/membership and 128 native
+Codex approval/fingerprint tests. These runs overlap; they are not a unique-test
+total. Desktop observation has 34 focused tests. The four native container-upgrade
+and two exact 21-to-22 FTS migration tests pass. Three UI unit files pass 33 tests;
+seven Chromium cases cover access renewal and offline plugin-dialog dismissal.
+Generated channel/config checks and extension production/test type checks pass.
+The aggregate check passed its preflights and production, script, and test-root
+type checks. It caught one misplaced type import during core lint; the corrected
+file passes the same type-aware runner. Extension/script lint, whole-tree format,
+UI styles, and the remaining policy guards pass, with zero runtime import cycles.
+The corrected exact-commit full build passes in 4m38s. The picker has 23 passing
+React tests, app typecheck, scoped ESLint, and Chromium desktop/mobile checks.
+
+Fresh independent review caught the Gateway-thread membership read and the
+missing deferred approval recheck. Existing regressions then caught a readiness
+wrapper hiding async consumers from the native synchronous-read guard. The port
+fixes those owners; it does not weaken tests, budgets, or guards. The preferences
+PR adds actual multi-agent paired-WebSocket proof. Its upstream review reports
+ready for maintainer review, and the hosted proof passes in a successful
+[151-test shard](https://github.com/openclaw/openclaw/actions/runs/35609687706/job/106366463808).
+Five other shards fail: one in database-worker teardown after 177 passing
+assertions, three in approval/event delivery, and one in session recovery.
+The failing cases do not exercise the changed preferences guard, but without a
+base reproduction they are not claimed pre-existing or flaky. That PR is not CI-green.
+Native mobile builds and a full upstream test-suite run are not local deployment
+claims. Automated checks do not constitute a live TEST or PROD rollout.
+
+This recut follows the [v2026.9.5 testing priorities](https://pagedrop.ai/g/jalehman/917106e69312c5b603d2e0ef3f48cf21):
 storage integrity first, then plugin/reload lifecycle, shared messaging, and the
 Control UI. Before wider adoption, a separately authorized TEST rollout must prove
 existing conversation continuity across restart, overlapping two-human Mattermost
@@ -247,30 +279,30 @@ rewrite is removed because the released Mattermost package resolves it natively.
 
 ## Temporary native CUA driver patch
 
-`Dockerfile.base` builds the CUA SDK from the 0.24.0 backport commit
-[`5af343ee8886e10663ebc3a6040fe9b3eab80fa9`](https://github.com/ceckert/cua/commit/5af343ee8886e10663ebc3a6040fe9b3eab80fa9)
-on `ceckert/cua:octogee/cua-driver-0.24.0-modifier-keys` and installs its Linux
+`Dockerfile.base` builds the CUA SDK from the 0.28.2 backport commit
+[`ebc42f2ce00401adf750bcbdb083cc69e973c83c`](https://github.com/ceckert/cua/commit/ebc42f2ce00401adf750bcbdb083cc69e973c83c)
+on `ceckert/cua:octogee/cua-driver-0.28.2-modifier-keys` and installs its Linux
 library into OpenClaw's native driver package. The backport carries
 [CUA PR #3659](https://github.com/trycua/cua/pull/3659): standalone modifier
 aliases need native keysym and evdev translations. No Omarchy keybindings or
 OpenClaw tool semantics change.
 
 The build runs the focused Wayland tests, requires native package version
-0.24.0, and records the source commit in `octogee-patch.json` beside the
+0.28.2, and records the source commit in `octogee-patch.json` beside the
 library. The Dockerfile is already part of the immutable base fingerprint;
 changing the source pin produces a new base identity. The npm Node runtime and
-generated bindings remain from the same 0.24.0 release.
+generated bindings remain from the same 0.28.2 release.
 
-OpenClaw 2026.9.5 moves the driver dependency from 0.23.2 to 0.24.0, so the
-September 20 recut rebases the same 40-line patch onto the upstream
-`cua-driver-rs 0.24.0` release commit
-[`4b3396d9fe4bd3cf723b0eb8db83c18a8764b520`](https://github.com/trycua/cua/commit/4b3396d9fe4bd3cf723b0eb8db83c18a8764b520).
-The patch applies unchanged. PR #3659 remains open, and CUA main (driver 0.28.2)
-still lacks the standalone mappings. A local Docker run of the builder stage on
-the rebased source passed the focused Wayland tests (28 passed, the native
-surface test ignored as before) and built `libcua_driver_sdk.so`; that run was
-a native arm64 build, while Build main produces the amd64 library. The four
-installer regressions pass with the 0.24.0 pins.
+The September 21 main snapshot requires 0.28.2. The same 40-line patch applies
+unchanged to its native release commit
+[`fc188250b4ca8549b8e61f937fdb1fb560770e86`](https://github.com/trycua/cua/commit/fc188250b4ca8549b8e61f937fdb1fb560770e86).
+Local Docker builds of the exact builder stage pass on native arm64 and emulated
+amd64. Each architecture passes 28 focused Wayland tests and 453 Linux tests;
+one focused and six full-suite GUI tests remain ignored because these builders
+have no live desktop. Release compilation, dynamic loading, and library
+architecture checks pass on both. The six installer regressions pass. PR #3659
+has the refreshed evidence; it remains draft pending its canonical desktop
+validation, and the published driver still lacks the standalone mappings.
 
 Remove the native builder stage and installer overlay when the selected
 OpenClaw package uses a published CUA version containing the fix and passes
