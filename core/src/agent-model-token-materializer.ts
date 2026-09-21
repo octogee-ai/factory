@@ -475,7 +475,7 @@ interface PreparedAgentMaterializations {
 }
 
 interface AppliedAgentMaterializations {
-  profilesApplied: boolean;
+  appliedAgentIds: ReadonlySet<string>;
   deferred: string[];
   deferralReason?: string;
 }
@@ -534,28 +534,67 @@ function prepareAgentMaterializations(
   return { agents, deferred, ...(deferralReason ? { deferralReason } : {}) };
 }
 
+async function applySecretsTargets(
+  targets: AgentMaterializeOutcome["missingProfiles"],
+  opts: BrokerProfileSweepOptions,
+): Promise<void> {
+  await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), {
+    ...opts.secretsApply,
+    log: opts.secretsApply?.log ?? opts.logFn,
+  });
+}
+
+function errorReason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function applyAgentMaterializationsIndividually(
+  agents: AgentMaterializeOutcome[],
+  opts: BrokerProfileSweepOptions,
+): Promise<AppliedAgentMaterializations> {
+  const appliedAgentIds = new Set<string>();
+  const deferred: string[] = [];
+  let deferralReason: string | undefined;
+  for (const agent of agents) {
+    try {
+      await applySecretsTargets(agent.missingProfiles, opts);
+      appliedAgentIds.add(agent.agentId);
+    } catch (error) {
+      const reason = errorReason(error);
+      opts.logFn?.(
+        `⚠ [agent-model-token] broker profile deferred for ${agent.agentId} — openclaw refused its secrets apply: ${reason}`,
+      );
+      deferred.push(agent.agentId);
+      deferralReason ??= reason;
+    }
+  }
+  return {
+    appliedAgentIds,
+    deferred,
+    ...(deferralReason ? { deferralReason } : {}),
+  };
+}
+
 async function applyAgentMaterializations(
   agents: AgentMaterializeOutcome[],
   opts: BrokerProfileSweepOptions,
 ): Promise<AppliedAgentMaterializations> {
-  const targets = agents.flatMap((agent) => agent.missingProfiles);
-  if (targets.length === 0) return { profilesApplied: false, deferred: [] };
+  const pending = agents.filter((agent) => agent.missingProfiles.length > 0);
+  if (pending.length === 0) return { appliedAgentIds: new Set(), deferred: [] };
   try {
-    await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), {
-      ...opts.secretsApply,
-      log: opts.secretsApply?.log ?? opts.logFn,
-    });
-    return { profilesApplied: true, deferred: [] };
+    await applySecretsTargets(pending.flatMap((agent) => agent.missingProfiles), opts);
+    return { appliedAgentIds: new Set(pending.map((agent) => agent.agentId)), deferred: [] };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    if (error instanceof OpenClawSecretsApplyError && pending.length > 1) {
+      return applyAgentMaterializationsIndividually(pending, opts);
+    }
+    const reason = errorReason(error);
     if (!(error instanceof OpenClawSecretsApplyError)) {
       opts.logFn?.(`⚠ [agent-model-token] model-ready secrets apply failed: ${reason}`);
     }
     return {
-      profilesApplied: false,
-      deferred: agents
-        .filter((agent) => agent.missingProfiles.length > 0)
-        .map((agent) => agent.agentId),
+      appliedAgentIds: new Set(),
+      deferred: pending.map((agent) => agent.agentId),
       deferralReason: reason,
     };
   }
@@ -571,11 +610,12 @@ function profileMaterializationState(
 
 function reportAgentMaterializations(
   agents: AgentMaterializeOutcome[],
-  profilesApplied: boolean,
+  appliedAgentIds: ReadonlySet<string>,
   opts: BrokerProfileSweepOptions,
 ): number {
   let materialized = 0;
   for (const agent of agents) {
+    const profilesApplied = appliedAgentIds.has(agent.agentId);
     const profileWrote = profilesApplied && agent.missingProfiles.length > 0;
     if (!profileWrote && !agent.catalogWrote && !agent.openAiWrote) continue;
     materialized++;
@@ -605,7 +645,7 @@ export async function materializeBrokerProfilesForAgents(
   const applied = await applyAgentMaterializations(prepared.agents, opts);
   const materialized = reportAgentMaterializations(
     prepared.agents,
-    applied.profilesApplied,
+    applied.appliedAgentIds,
     opts,
   );
   const deferralReason = prepared.deferralReason ?? applied.deferralReason;

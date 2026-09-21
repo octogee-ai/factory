@@ -458,6 +458,73 @@ describe("materializeBrokerProfilesForAgents (model-ready sweep)", () => {
     expect(result).toEqual({ materialized: agentIds.length, deferred: [] });
   }, 30_000);
 
+  it("defers only the refused agent when openclaw rejects the batched apply", async () => {
+    const agentIds = ["octogee-alice-coach", "octogee-bob-coach", "octogee-carol-coach"];
+    for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
+    const good = fakeSecretsApply(agentsDir);
+    const secretsApply = {
+      apply: vi.fn(async (plan: OpenClawSecretsPlan) => {
+        if (plan.targets.some((target) => target.agentId === "octogee-bob-coach")) {
+          throw new OpenClawSecretsApplyError(
+            'Exec provider "gcp-secret-manager" failed for id "agent-model-token-octogee-bob-coach".',
+            1,
+          );
+        }
+        return good.apply(plan);
+      }),
+    };
+    const logs: string[] = [];
+
+    const result = await materializeBrokerProfilesForAgents(agentIds, {
+      agentsDir,
+      openRouter,
+      secretsApply,
+      logFn: (message) => logs.push(message),
+    });
+
+    expect(result.deferred).toEqual(["octogee-bob-coach"]);
+    expect(result.deferralReason).toContain("agent-model-token-octogee-bob-coach");
+    expect(secretsApply.apply).toHaveBeenCalledTimes(1 + agentIds.length);
+    const reported = Object.fromEntries(logs
+      .map((line) => /model-ready: (\S+) \(profiles (\w+)/.exec(line))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => [match[1], match[2]]));
+    expect(reported).toEqual({
+      "octogee-alice-coach": "applied",
+      "octogee-bob-coach": "deferred",
+      "octogee-carol-coach": "applied",
+    });
+    for (const agentId of ["octogee-alice-coach", "octogee-carol-coach"]) {
+      const store = readAuthProfileStore(path.join(agentsDir, agentId, "agent")) as {
+        profiles?: Record<string, unknown>;
+      };
+      expect(Object.keys(store.profiles ?? {}).length).toBeGreaterThan(0);
+    }
+    expect(logs.some((line) => line.includes("octogee-bob-coach") && line.includes("deferred"))).toBe(true);
+  });
+
+  it("counts only the agents whose own apply landed when no catalog is configured", async () => {
+    const agentIds = ["octogee-alice-coach", "octogee-bob-coach"];
+    for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
+    const good = fakeSecretsApply(agentsDir);
+    const secretsApply = {
+      apply: vi.fn(async (plan: OpenClawSecretsPlan) => {
+        if (plan.targets.some((target) => target.agentId === "octogee-bob-coach")) {
+          throw new OpenClawSecretsApplyError("refused bob", 1);
+        }
+        return good.apply(plan);
+      }),
+    };
+
+    const result = await materializeBrokerProfilesForAgents(agentIds, { agentsDir, secretsApply });
+
+    expect(result).toEqual({
+      materialized: 1,
+      deferred: ["octogee-bob-coach"],
+      deferralReason: "refused bob",
+    });
+  });
+
   it("defers every affected agent when the batched apply fails unexpectedly", async () => {
     const agentIds = ["octogee-alice-coach", "octogee-bob-coach"];
     for (const agentId of agentIds) seedOpenClawAgentDbForId(agentsDir, agentId);
