@@ -439,7 +439,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 describe("applyPreBootPatches — Mattermost runtime", () => {
   it.each([undefined, "steer", "collect", "followup"])("queues Mattermost turns separately from other channel policy (%s)", (mattermostMode) => {
     const config: any = {
-      channels: { mattermost: { threadSessionScope: "channel", replyToMode: "all", commands: { native: false } } },
+      channels: { mattermost: { threadSessionScope: "channel", replyToMode: "all", streaming: { mode: "block", preview: { toolProgress: true } }, commands: { native: false } } },
       messages: { queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
     };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "followup");
@@ -465,12 +465,12 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.agents.defaults.verboseDefault).toBe("off");
   });
 
-  it("defaults room replies to threads without introducing streaming or direct-message overrides", () => {
+  it("defaults room replies to threads and block previews without direct-message overrides", () => {
     const config: any = { channels: { mattermost: {} } };
     applyPreBootPatches(config, {});
     expect(config.channels.mattermost.replyToMode).toBe("all");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
-    expect(config.channels.mattermost).not.toHaveProperty("streaming");
+    expect(config.channels.mattermost.streaming).toEqual({ mode: "block", preview: { toolProgress: true } });
     expect(config.channels.mattermost.threadSessionScope).toBe("channel");
   });
 
@@ -488,6 +488,31 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost.accounts.first.replyToMode).toBe("first");
     expect(log).toHaveBeenCalledWith("set channels.mattermost.replyToMode=all");
     expect(applyMattermostPreBootPatches(config, {}, log)).toBe(false);
+  });
+
+  it.each(["shared", "builder"])("fills missing streaming preferences on %s gateways without pinning account overrides", (gatewayClass) => {
+    const config: any = { channels: { mattermost: {
+      streaming: { chunkMode: "newline", preview: { commandText: "status" } },
+      accounts: { inherited: {}, custom: { streaming: { mode: "off", preview: { toolProgress: false } } } },
+    } } };
+    const log = vi.fn();
+    expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(true);
+    expect(config.channels.mattermost.streaming).toEqual({
+      mode: "block", chunkMode: "newline", preview: { toolProgress: true, commandText: "status" },
+    });
+    expect(config.channels.mattermost.accounts.inherited).not.toHaveProperty("streaming");
+    expect(config.channels.mattermost.accounts.custom.streaming).toEqual({ mode: "off", preview: { toolProgress: false } });
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.mode=block");
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.preview.toolProgress=true");
+    expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(false);
+  });
+
+  it.each(["off", "partial", "progress", "block"])("preserves Builder streaming mode %s and disabled tool progress after override merging", (mode) => {
+    const config: any = { channels: { mattermost: { streaming: { mode: "block", preview: { toolProgress: true } } } } };
+    applyGatewayOverrides(config, { channels: { mattermost: { streaming: { mode, preview: { toolProgress: false } } } } });
+    applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "builder" }, vi.fn());
+    expect(config.channels.mattermost.streaming).toEqual({ mode, preview: { toolProgress: false } });
+    expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: "builder" }, vi.fn())).toBe(false);
   });
 
   it("removes unsupported fork settings while retaining native account policy and SecretRefs", () => {
@@ -980,6 +1005,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           baseUrl: "${MM_URL}",
+          streaming: { mode: "block", preview: { toolProgress: true } },
           commands: "legacy-commands",
           accounts: {
             default: "legacy-default",

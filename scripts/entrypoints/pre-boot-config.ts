@@ -137,6 +137,27 @@ function applyMattermostQueuePolicy(
   return true;
 }
 
+function applyMattermostStreamingDefaults(
+  mattermost: Record<string, unknown>,
+  logFn: (msg: string) => void,
+): boolean {
+  let changed = false;
+  const streaming = ensureNullishObjectProperty(mattermost, "streaming");
+  if (streaming && streaming.mode === undefined) {
+    streaming.mode = "block";
+    changed = true;
+    logFn("set channels.mattermost.streaming.mode=block");
+  }
+  const preview = streaming ? ensureNullishObjectProperty(streaming, "preview") : null;
+  if (preview && preview.toolProgress === undefined) {
+    preview.toolProgress = true;
+    changed = true;
+    logFn("set channels.mattermost.streaming.preview.toolProgress=true");
+  }
+
+  return changed;
+}
+
 export function applyMattermostPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -151,6 +172,8 @@ export function applyMattermostPreBootPatches(
     changed = true;
     logFn("set channels.mattermost.replyToMode=all");
   }
+
+  changed = applyMattermostStreamingDefaults(mattermost, logFn) || changed;
 
   if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
     mattermost.baseUrl = MM_URL_PLACEHOLDER;

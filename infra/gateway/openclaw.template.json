@@ -234,6 +234,10 @@
     "mattermost": {
       "threadSessionScope": "channel",
       "replyToMode": "all",
+      "streaming": {
+        "mode": "block",
+        "preview": { "toolProgress": true }
+      },
       "enabled": true,
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",

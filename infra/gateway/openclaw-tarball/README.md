@@ -284,6 +284,17 @@ Activity publication, or transcript reconstruction. Sessions and tool history
 remain in native OpenClaw SQLite state. Existing thread sessions are not deleted
 or merged by this change.
 
+Mattermost defaults to `streaming.mode: "block"` with
+`streaming.preview.toolProgress: true`: completed text and tool-activity blocks
+remain visible, and final text follows the tool activity. Both gateway templates
+seed these preferences. The pre-boot fix-up fills only missing channel-level
+fields after gateway overrides are merged, so existing gateways gain the defaults
+on their next boot. Builders can set another mode (`off`, `partial`, or `progress`)
+or disable preview tool progress; those explicit values survive subsequent boots.
+Accounts without a `streaming` override inherit the channel preferences. An explicit
+`channels.mattermost.accounts.<accountId>.streaming` object remains untouched and
+replaces the channel's streaming object under native OpenClaw account resolution.
+
 Octogee sets the native `messages.queue.byChannel.mattermost` policy to `followup`.
 This keeps an overlapping second message queued with its own reply destination;
 the native default `steer` can instead redirect the running answer into its first
