@@ -35,17 +35,10 @@ ilb:
   enabled: true
   staticIp: ""  # Set via terraform output mattermost_ilb_ip
 
-# MM's published minimum is 1 vCPU / 2 GiB for real load. Memory stays 2Gi on
-# both sides — Autopilot requires limits.memory == requests.memory for
-# non-bursty pods, and a 512Mi request OOMed once a few users joined. CPU is
-# bursty, though: the request is the billed floor, not the ceiling. Pre-customer
-# load is ~5m, so request 500m (bursts to the 2000m limit, into the general
-# pool's ample spare) instead of reserving a full idle vCPU Autopilot bills for.
-# Bump back toward 1 vCPU when real customer load arrives.
 resources:
   requests:
     cpu: "500m"
-    memory: "2Gi"
+    memory: "1Gi"
     ephemeral-storage: "1Gi"
   limits:
     cpu: "2000m"
