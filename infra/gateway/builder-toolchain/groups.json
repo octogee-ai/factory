@@ -20,7 +20,7 @@
       "enabled": true,
       "delivery": "npm",
       "npmPackages": {
-        "@anthropic-ai/claude-code": "2.1.270",
+        "@anthropic-ai/claude-code": "2.1.271",
         "@openai/codex": "0.154.0"
       },
       "commands": ["claude", "codex"]
