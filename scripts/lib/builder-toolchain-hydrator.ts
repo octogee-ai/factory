@@ -89,6 +89,7 @@ export interface RunBuilderToolchainHydrationLoopOptions {
   hydrate: (attempt: number) => Promise<BuilderToolchainStatus>;
   ensureReadyPublished?: (status: BuilderToolchainStatus) => Promise<void>;
   writeStatus: (status: DeveloperToolchainStatus) => Promise<void>;
+  log?: (message: string) => void;
   sleep?: (ms: number) => Promise<void>;
   waitAfterReady?: () => Promise<void>;
   initialBackoffMs?: number;
@@ -99,8 +100,8 @@ export interface RunBuilderToolchainHydrationLoopOptions {
 export class BuilderToolchainHydrationError extends Error {
   readonly reasonCode: string;
 
-  constructor(reasonCode: string) {
-    super(`Builder toolchain hydration failed: ${reasonCode}`);
+  constructor(reasonCode: string, options?: { cause?: unknown }) {
+    super(`Builder toolchain hydration failed: ${reasonCode}`, options);
     this.name = "BuilderToolchainHydrationError";
     this.reasonCode = reasonCode;
   }
@@ -132,8 +133,8 @@ const ALLOWED_INSTALL_SCRIPTS = {
   "re2@1.26.1": true,
 };
 
-function hydrationError(reasonCode: string): BuilderToolchainHydrationError {
-  return new BuilderToolchainHydrationError(reasonCode);
+function hydrationError(reasonCode: string, cause?: unknown): BuilderToolchainHydrationError {
+  return new BuilderToolchainHydrationError(reasonCode, cause === undefined ? undefined : { cause });
 }
 
 function isNodeError(error: unknown, code: string): boolean {
@@ -783,8 +784,8 @@ async function installWithRegistryFallback(input: {
   }
   try {
     await run("direct", input.fallbackRegistryUrl);
-  } catch {
-    throw hydrationError("npm-install-failed");
+  } catch (error) {
+    throw hydrationError("npm-install-failed", error);
   }
 }
 
@@ -816,7 +817,7 @@ async function persistHydrationFailure(input: {
     reasonCode,
   }));
   if (knownError) throw error;
-  throw hydrationError(reasonCode);
+  throw hydrationError(reasonCode, error);
 }
 
 export async function hydrateBuilderToolchain(
@@ -981,10 +982,43 @@ async function waitForInteractiveReadiness(
   return false;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function hydrationFailureReason(error: unknown): string {
+  if (!(error instanceof BuilderToolchainHydrationError)) {
+    return `reason=internal-error error=${errorMessage(error)}`;
+  }
+  if (error.cause === undefined) return `reason=${error.reasonCode}`;
+  return `reason=${error.reasonCode} error=${errorMessage(error.cause)}`;
+}
+
+function describeHydrationFailure(attempt: number, error: unknown): string {
+  return `[builder-toolchain] hydration attempt ${attempt} failed ${hydrationFailureReason(error)}; retrying`;
+}
+
+function resolveHydrationLoopRuntime(options: RunBuilderToolchainHydrationLoopOptions): {
+  sleep: HydrationLoopSleep;
+  initialBackoffMs: number;
+  maxBackoffMs: number;
+  shouldStop: () => boolean;
+  log: (message: string) => void;
+} {
+  return {
+    sleep: options.sleep ?? defaultSleep,
+    initialBackoffMs: options.initialBackoffMs ?? 5_000,
+    maxBackoffMs: options.maxBackoffMs ?? 5 * 60_000,
+    shouldStop: options.shouldStop ?? (() => false),
+    log: options.log ?? console.error,
+  };
+}
+
 async function runHydrationAttempt(
   hydrate: RunBuilderToolchainHydrationLoopOptions["hydrate"],
   attempt: number,
   shouldStop: () => boolean,
+  log: (message: string) => void,
 ): Promise<HydrationAttemptResult> {
   try {
     return {
@@ -993,8 +1027,10 @@ async function runHydrationAttempt(
       waitingForAssignment: false,
     };
   } catch (error) {
+    const stopped = shouldStop();
+    if (!stopped) log(describeHydrationFailure(attempt, error));
     return {
-      stopped: shouldStop(),
+      stopped,
       waitingForAssignment: error instanceof BuilderToolchainHydrationError &&
         error.reasonCode === "npm-proxy-credentials-unavailable",
     };
@@ -1023,17 +1059,14 @@ async function publishReadyUntilAccepted(
 export async function runBuilderToolchainHydrationLoop(
   options: RunBuilderToolchainHydrationLoopOptions,
 ): Promise<void> {
-  const sleep = options.sleep ?? defaultSleep;
-  const initialBackoffMs = options.initialBackoffMs ?? 5_000;
-  const maxBackoffMs = options.maxBackoffMs ?? 5 * 60_000;
-  const shouldStop = options.shouldStop ?? (() => false);
+  const { sleep, initialBackoffMs, maxBackoffMs, shouldStop, log } = resolveHydrationLoopRuntime(options);
   if (!(await waitForInteractiveReadiness(options, sleep, shouldStop)) || shouldStop()) return;
 
   let attempt = 0;
   let backoffMs = initialBackoffMs;
   while (!shouldStop()) {
     attempt += 1;
-    const result = await runHydrationAttempt(options.hydrate, attempt, shouldStop);
+    const result = await runHydrationAttempt(options.hydrate, attempt, shouldStop, log);
     if (result.stopped) return;
     if (result.status?.status === "ready") {
       const published = await publishReadyUntilAccepted(

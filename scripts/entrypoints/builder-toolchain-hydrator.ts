@@ -198,6 +198,7 @@ export async function runBuilderToolchainHydrator(input: {
       }
     },
     writeStatus,
+    log,
     sleep: abortableSleep(signal),
     waitAfterReady: () => new Promise((resolve) => {
       if (signal.aborted) resolve();

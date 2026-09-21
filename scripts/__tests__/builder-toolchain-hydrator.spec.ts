@@ -51,6 +51,38 @@ describe("Builder toolchain hydration loop", () => {
     expect(sleeps).toEqual([1_000, 1_000, 1_000]);
   });
 
+  it("logs every failed hydration attempt with its reason before retrying", async () => {
+    const hydrate = vi.fn()
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError("invalid-command-version"))
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError(
+        "internal-error",
+        { cause: new Error("ENOSPC: no space left on device") },
+      ))
+      .mockResolvedValue({
+        schemaVersion: 1,
+        status: "ready",
+        updatedAt: "2026-08-30T00:00:00.000Z",
+      });
+    const logs: string[] = [];
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      writeStatus: async () => {},
+      log: (message) => { logs.push(message); },
+      sleep: async () => {},
+      waitAfterReady: async () => {},
+      initialBackoffMs: 1_000,
+      maxBackoffMs: 8_000,
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(3);
+    expect(logs).toEqual([
+      "[builder-toolchain] hydration attempt 1 failed reason=invalid-command-version; retrying",
+      "[builder-toolchain] hydration attempt 2 failed reason=internal-error error=ENOSPC: no space left on device; retrying",
+    ]);
+  });
+
   it("keeps assignment-gated credential retries on the initial cadence", async () => {
     const hydrate = vi.fn()
       .mockRejectedValueOnce(new BuilderToolchainHydrationError(

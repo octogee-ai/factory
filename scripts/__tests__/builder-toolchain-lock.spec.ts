@@ -317,6 +317,42 @@ describe("Builder npm toolchain lock", () => {
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
   });
 
+  it("keeps the npm error as the cause of an npm-install-failed rejection", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const disk = new Error("ENOSPC: no space left on device");
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: async () => { throw disk; },
+    })).rejects.toMatchObject({ reasonCode: "npm-install-failed", cause: disk });
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
+  });
+
+  it("keeps an unexpected error as the cause of the internal-error wrapper", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const clock = new Error("clock unavailable");
+    let ticks = 0;
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: fakeInstall,
+      now: () => {
+        ticks += 1;
+        if (ticks === 1) throw clock;
+        return new Date("2026-09-20T00:00:00.000Z");
+      },
+    })).rejects.toMatchObject({ reasonCode: "internal-error", cause: clock });
+    await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
+  });
+
   it("rejects lock drift before invoking npm", async () => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");
