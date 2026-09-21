@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   isPublicIp,
   assertPublicHttpUrl,
+  fetchIconDataUri,
   parseLinkMetadata,
   unfurl,
   UnsafeUrlError,
@@ -131,8 +132,85 @@ describe('parseLinkMetadata', () => {
   });
 });
 
+describe('fetchIconDataUri', () => {
+  const resolver = async () => ['93.184.216.34'];
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const imageResponse = (body: BodyInit, contentType: string, status = 200) =>
+    new Response(body, { status, headers: { 'content-type': contentType } });
+
+  it('inlines the icon as a data: URI so the app CSP img-src allowlist can render it', async () => {
+    const fetchImpl = vi.fn(async () => imageResponse(pngBytes, 'image/png')) as unknown as typeof fetch;
+    expect(await fetchIconDataUri('https://example.com/favicon.png', { resolver, fetchImpl })).toBe(
+      `data:image/png;base64,${Buffer.from(pngBytes).toString('base64')}`,
+    );
+  });
+
+  it('strips content-type parameters when building the data: URI', async () => {
+    const fetchImpl = vi.fn(async () =>
+      imageResponse('<svg/>', 'image/svg+xml; charset=utf-8'),
+    ) as unknown as typeof fetch;
+    const uri = await fetchIconDataUri('https://example.com/icon.svg', { resolver, fetchImpl });
+    expect(uri?.startsWith('data:image/svg+xml;base64,')).toBe(true);
+  });
+
+  it('returns null for a non-image content-type (an HTML 404 page is not an icon)', async () => {
+    const fetchImpl = vi.fn(async () =>
+      imageResponse('<html>not found</html>', 'text/html'),
+    ) as unknown as typeof fetch;
+    expect(await fetchIconDataUri('https://example.com/favicon.ico', { resolver, fetchImpl })).toBeNull();
+  });
+
+  it('returns null for a missing icon rather than failing the preview', async () => {
+    const fetchImpl = vi.fn(async () => imageResponse('', 'image/png', 404)) as unknown as typeof fetch;
+    expect(await fetchIconDataUri('https://example.com/favicon.ico', { resolver, fetchImpl })).toBeNull();
+  });
+
+  it('rejects an oversized icon instead of inlining a truncated image', async () => {
+    const fetchImpl = vi.fn(async () =>
+      imageResponse(new Uint8Array(64 * 1024), 'image/png'),
+    ) as unknown as typeof fetch;
+    expect(await fetchIconDataUri('https://example.com/big.png', { resolver, fetchImpl })).toBeNull();
+  });
+
+  it('drops an icon that redirects to a private address without throwing', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/' } }),
+    ) as unknown as typeof fetch;
+    await expect(
+      fetchIconDataUri('https://example.com/favicon.ico', { resolver, fetchImpl }),
+    ).resolves.toBeNull();
+  });
+});
+
 describe('unfurl', () => {
   const resolver = async () => ['93.184.216.34'];
+
+  it('returns the favicon inlined as a data: URI', async () => {
+    const icon = new Uint8Array([1, 2, 3, 4]);
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/favicon.ico')
+        ? new Response(icon, { status: 200, headers: { 'content-type': 'image/x-icon' } })
+        : new Response('<head><title>Hello</title></head>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          }),
+    ) as unknown as typeof fetch;
+    const preview = await unfurl('https://example.com', { resolver, fetchImpl });
+    expect(preview?.favicon).toBe(`data:image/x-icon;base64,${Buffer.from(icon).toString('base64')}`);
+  });
+
+  it('returns a preview with no favicon when the icon is unfetchable', async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/favicon.ico')
+        ? new Response('', { status: 404 })
+        : new Response('<head><title>Hello</title></head>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          }),
+    ) as unknown as typeof fetch;
+    const preview = await unfurl('https://example.com', { resolver, fetchImpl });
+    expect(preview).toMatchObject({ title: 'Hello', favicon: null });
+  });
 
   it('fetches, parses, and returns a preview', async () => {
     const fetchImpl = vi.fn(async () =>

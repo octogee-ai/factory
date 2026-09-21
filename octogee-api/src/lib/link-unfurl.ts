@@ -22,6 +22,22 @@ export interface LinkPreview {
 const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 4000;
 const MAX_BYTES = 512 * 1024; // 512KB of HTML is plenty for <head> metadata.
+const ICON_TIMEOUT_MS = 3000;
+const ICON_MAX_BYTES = 32 * 1024;
+
+// Types a browser renders in an <img>. SVG is safe here: an SVG loaded as an
+// image never runs script.
+const ICON_TYPES = new Set([
+  'image/png',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+  'image/ico',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/svg+xml',
+]);
 
 export class UnsafeUrlError extends Error {
   constructor(reason: string) {
@@ -340,9 +356,103 @@ export async function unfurl(
       current = result.next; // re-validated + re-pinned at the loop top
       continue;
     }
-    return result.kind === 'done' ? result.preview : null;
+    if (result.kind !== 'done') return null;
+    const { preview } = result;
+    return {
+      ...preview,
+      favicon: preview.favicon ? await fetchIconDataUri(preview.favicon, deps) : null,
+    };
   }
   return null;
+}
+
+/**
+ * Inline a site's icon as a `data:` URI. The app pins CSP img-src to a fixed
+ * allowlist while unfurl targets are arbitrary, so a remote icon URL can never
+ * load there; `data:` can. Never throws: an unsafe, missing, oversized, or
+ * non-image icon yields null and the card renders without one.
+ */
+export async function fetchIconDataUri(
+  raw: string,
+  deps: { resolver?: (host: string) => Promise<string[]>; fetchImpl?: typeof fetch } = {},
+): Promise<string | null> {
+  const resolver = deps.resolver ?? defaultResolve;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+
+  let current = raw;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    let target: ValidatedTarget;
+    try {
+      target = await assertPublicHttpUrl(current, resolver);
+    } catch {
+      return null; // an unsafe icon URL drops the icon, it never fails the preview
+    }
+    const result = await fetchIconHop(target, fetchImpl);
+    if (result.kind === 'redirect') {
+      current = result.next;
+      continue;
+    }
+    return result.kind === 'done' ? result.dataUri : null;
+  }
+  return null;
+}
+
+type IconHopResult =
+  | { kind: 'redirect'; next: string }
+  | { kind: 'done'; dataUri: string }
+  | { kind: 'fail' };
+
+async function fetchIconHop(target: ValidatedTarget, fetchImpl: typeof fetch): Promise<IconHopResult> {
+  const { url, address } = target;
+  const dispatcher = pinnedDispatcher(address);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ICON_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(url.toString(), {
+      method: 'GET',
+      redirect: 'manual',
+      signal: controller.signal,
+      dispatcher,
+      headers: { accept: 'image/*', 'user-agent': 'OctogeeLinkPreview/1.0' },
+    } as RequestInit);
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) return { kind: 'fail' };
+      return { kind: 'redirect', next: new URL(location, url).toString() };
+    }
+    if (!res.ok) return { kind: 'fail' };
+    const mime = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    if (!ICON_TYPES.has(mime)) return { kind: 'fail' };
+    const bytes = await readWholeCapped(res, ICON_MAX_BYTES);
+    if (!bytes || bytes.length === 0) return { kind: 'fail' };
+    return { kind: 'done', dataUri: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}` };
+  } catch {
+    return { kind: 'fail' };
+  } finally {
+    clearTimeout(timer);
+    await destroyQuietly(dispatcher);
+  }
+}
+
+// Read the whole body, or null once it exceeds `max` — unlike HTML, a truncated
+// image is useless, so the cap rejects rather than slices.
+async function readWholeCapped(res: Response, max: number): Promise<Uint8Array | null> {
+  const reader = res.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return concat(chunks);
 }
 
 type HopResult =
