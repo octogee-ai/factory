@@ -63,12 +63,20 @@ import { installGatewayEdgeUnhandledRejectionPolicy } from "./process-rejection-
 import {
   attachComputerVncWsRoute,
   createComputerRouter,
-  createComputerTicketStore,
   resolveComputerEndpoints,
+  type ComputerSession,
 } from "./routes/computer.js";
+import {
+  attachTerminalWsRoute,
+  createTerminalRouter,
+  terminalAvailable,
+  type TerminalSession,
+} from "./routes/terminal.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
 import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
-import { resolveComputerAccess } from "./lib/computer-access-broker.js";
+import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
+import { openNativeUserSocket } from "./openclaw-control/native-user-client.js";
+import { createWsTicketStore } from "./lib/ws-ticket-store.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 type ChatProxyModule = typeof import("./chat-proxy/proxy.js");
@@ -85,7 +93,8 @@ let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
 let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
-const computerTickets = createComputerTicketStore();
+const computerTickets = createWsTicketStore<ComputerSession>();
+const terminalTickets = createWsTicketStore<TerminalSession>();
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -267,9 +276,15 @@ function mountSidecarLocalitySurface(app: Express, options: {
   const computer = resolveComputerEndpoints(process.env);
   mountApi(app, "/computer", createComputerRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
-    resolveAccess: resolveComputerAccess,
+    resolveAccess: resolveNativeAdminAccess,
     computer,
     tickets: computerTickets,
+  }));
+  mountApi(app, "/terminal", createTerminalRouter({
+    localGatewayId: () => process.env.GATEWAY_ID ?? null,
+    available: terminalAvailable(process.env),
+    resolveAccess: resolveNativeAdminAccess,
+    tickets: terminalTickets,
   }));
   if (computer) {
     startDesktopNodePairing({
@@ -430,6 +445,15 @@ if (process.env.NODE_ENV !== "test") {
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         tickets: computerTickets,
         vncUrl: computer.vncUrl,
+        isAllowedOrigin: isAllowedWsOrigin,
+        log: (message, meta) => logger.warn(message, meta),
+      });
+    }
+    if (terminalAvailable(process.env)) {
+      attachTerminalWsRoute({
+        router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
+        tickets: terminalTickets,
+        openUpstream: (session) => openNativeUserSocket(session.uid, session.gatewayId),
         isAllowedOrigin: isAllowedWsOrigin,
         log: (message, meta) => logger.warn(message, meta),
       });
