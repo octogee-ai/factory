@@ -84,8 +84,10 @@ locked from the newest completed successful push
 start of the recut. That run had 67 successful jobs and 18 conditional skips;
 the CI gate and build artifacts passed. This is a main snapshot with package
 version `2026.9.5`, not another GA release. The overlay branch is
-`ceckert/openclaw:codex/octogee-main-20260921`, with exact runtime source
-[`af5266fc70b45d9672b510d961ddb562c9fb8bb1`](https://github.com/ceckert/openclaw/commit/af5266fc70b45d9672b510d961ddb562c9fb8bb1).
+`ceckert/openclaw:codex/octogee-reload-race-20260921`, with exact runtime source
+[`bda31c6204a4df7a1b98b36ce2bd205b1f076c99`](https://github.com/ceckert/openclaw/commit/bda31c6204a4df7a1b98b36ce2bd205b1f076c99).
+This repair adds one commit to the original September 21 overlay without
+changing the selected upstream snapshot.
 
 The packer keeps that exact core source and rebuilds Codex and Parallel from
 the same checkout. The full image includes Codex inside the running OpenClaw
@@ -124,15 +126,17 @@ verifies the exact patched files and required license/runtime assets.
 | Preferences and workspace icons | Resolve preferences without a session target, authorize icons through current native profile roles and session visibility, and bound repeated credential failures. Rejected icon requests are invalidated even when a recovered bearer token stays the same; successful and missing-image caches are preserved. | Still needed. [PR #147930](https://github.com/openclaw/openclaw/pull/147930) is reopened on this base with a real paired Control UI WebSocket reproduction, non-admin scopes, native preferences storage, and own/foreign-session authorization controls. Maintainer review is ready; CI is separate from local proof. |
 | Channel session scope | Keep room messages in one channel session while retaining each message's Mattermost reply root. DMs retain native behavior. | Still needed; existing [upstream proposal #132759](https://github.com/openclaw/openclaw/issues/132759) awaits the shared-room policy/configuration decision. |
 | Deferred cron monitor convergence | A committed hot reload whose system cron monitor reconcile answers retry-scheduled stays live and logs the deferral instead of forcing a gateway restart; the cron service's own retry finishes the monitors. Pinned by the reload model-state and partial-monitor-write regressions. | Needed by Octogee's multi-customer surge imports. [PR #148592](https://github.com/openclaw/openclaw/pull/148592) belongs to another contributor and remains open, conflicting, and absent from this base. Supply corroborating proof; do not rewrite their branch, duplicate the PR, or carry its unrelated restart-audit changes. |
+| Overlapping config and secrets reload | A committed config hot reload joins the current replacement model publication when secrets refresh supersedes it, instead of requesting a false recovery restart. Real replacement failure, lost authority, invalidation, and shutdown still fail. | Reproduced during TEST surge imports and through a deterministic native config/secrets composition. The fix stays in the existing publication-queue owner; an upstream-only contribution is prepared and independently validated. Remove when the selected upstream source contains the fix and its regressions pass. |
 | External desktop reconnect | Reread rotated VNC credentials on each external attach-mode observation; preserve managed ephemeral credentials, cancellation, and desktop lifetime. | Needed by Octogee external desktops; no matching upstream PR found. A focused submission still needs real VNC rotation/reconnect proof. |
 | Published plugin runtime reuse | Detached Skill Workshop reviews reuse the current published generation while retaining their exact model and admission owner. | Reproduced downstream; no matching upstream PR found. Do not claim a performance gain without before/after preparation measurements. |
 | Native session and dialog recovery | Preserve readable Mattermost titles, resolve participant names within exact transcript identity namespaces, and keep plugin-dialog Cancel/X usable offline. | Reproduced downstream; no upstream PR filed. |
 | Computer approval authority | Allow a plugin to constrain native approval reviewers using live server facts; preserve requester identity and revalidate authority, cancellation, and admission through execution. | Required by Octogee's gateway-owner policy; two type-only SDK exports, no new RPC or approval store. |
 
-The audit covers 2,044 commits reachable from this main snapshot but not the
-previous GA tag. All eight retained patch areas still have downstream callers
+The original audit covers 2,044 commits reachable from this main snapshot but not
+the previous GA tag. Its eight retained patch areas still have downstream callers
 or behavior regressions; none has a complete upstream replacement in the selected
-base. The port follows the new native owners instead of restoring old wiring.
+base. The reload-race repair adds the ninth area after TEST reproduced the native
+overlap. The port follows the new native owners instead of restoring old wiring.
 
 Upstream now materializes archived sessions on demand
 ([#151574](https://github.com/openclaw/openclaw/pull/151574)) and prepares placement
@@ -180,22 +184,30 @@ patch. The PWA picker is refreshed from the exact overlay source using the
 existing Lit-to-React adapter, without adopting another framework or widening
 the reuse boundary to the composer.
 
-The root artifact is `openclaw-fork-a281f4f1.tgz`
-(SHA-256 `a281f4f11ca5e4bbb0fc7031652fdedf9c9a3cbbc7f27bb991d11d12daf1e560`,
-GCS generation `1790003449383758`).
+The root artifact is `openclaw-fork-48387021.tgz`
+(SHA-256 `48387021174d28a62e0ae429ef1a2c52f4e79aa3f3eb87f1ca077c552787b3b0`,
+GCS generation `1790013715318901`).
 Mattermost is `openclaw-mattermost-8de90600.tgz`
 (SHA-256 `8de90600af307e69d8c7b50101985ed48c5a5f2e14f6336ad83aa9ff2c0cae9d`,
 GCS generation `1790003452514310`).
-Both uploads used the generation-zero precondition against previously absent
-object names, and both remote objects were verified against the local artifacts
-by size and GCS MD5. The packed root passed upstream's tarball-integrity checker,
-installed into a clean npm prefix with install scripts disabled, reported
-`OpenClaw 2026.9.5 (af5266f)`, carries the vendored `@openclaw/ai` workspace
-dependency and the source-matched Codex and Parallel archives, and the Mattermost
-artifact ships its compiled runtime. The prior `openclaw-fork-0038b3c7.tgz` and
-`openclaw-mattermost-72f8286f.tgz` objects are untouched.
+The new root upload used the generation-zero precondition. Mattermost was
+rebuilt from the same exact source and is byte-identical to its existing object,
+so its generation is reused without an upload. Both remote objects match the
+local artifacts by size and GCS MD5. The packed root passed upstream's
+tarball-integrity checker. Both packages installed into a clean npm prefix with
+install scripts disabled; the CLI reports `OpenClaw 2026.9.5 (bda31c6)` and
+the installed build metadata matches the full overlay commit. The root retains
+the vendored `@openclaw/ai` dependency and source-matched Codex and Parallel
+archives; Mattermost ships its compiled runtime. All prior objects are untouched.
 
-The isolated installed-package smoke verifies all 144 Codex runtime files and
+The unchanged Linux arm64 `openclaw-full-plugin-installer` recipe passes with
+these exact artifacts, including native bundled discovery, all 144 byte-identical
+Codex runtime files, and three native-hook imports. Its local image is
+`sha256:fe2240e98f78f9b2049ee72a2331be3d705ad14812b5135ea22be3f8673b3176`;
+an offline container read verifies the exact `bda31c6` build metadata. This is
+image proof, not a claim that TEST has received the repair.
+
+The original recut's isolated installed-package smoke verified all 144 Codex runtime files and
 three native-hook imports. The actual registered bundled harness can read its
 binding store; an identical archive installed through the native CLI is denied
 with `PLUGIN_TRUST_REFUSED`. Leaving that archive's native install record unchanged
@@ -203,9 +215,18 @@ while removing only its disposable managed copy still selects the genuine bundle
 and permits the registered harness read. This is local package proof, not a live
 provider turn or deployed Linux image.
 
-The September 21 full build leaves a clean source checkout and embeds
-`af5266fc70b45d9672b510d961ddb562c9fb8bb1` in `dist/build-info.json` and the CLI.
-Focused runs include 486 Gateway tests, 414 authority/configuration/queue tests,
+The reload-race full build leaves a clean source checkout and embeds
+`bda31c6204a4df7a1b98b36ce2bd205b1f076c99` in `dist/build-info.json` and the CLI.
+Its 103 focused tests across eight files and all 31 native changed-scope gates
+pass, including production and core-test types, type-aware lint, and policy
+guards. The deterministic native composition fails before the fix and verifies
+delayed successful replacement, genuine failure, credential invalidation,
+multiple successors, lost claims, invalidation, and shutdown. The exact-commit
+build passes in 5m53s. The changed artifact inputs pass 114 Octogee package/image
+regressions and 19 gateway-base recipe tests. Fresh independent review found no
+actionable issue after correcting bounded-startup-wait and successor-claim cases.
+
+The original September 21 recut's focused runs include 486 Gateway tests, 414 authority/configuration/queue tests,
 115 Mattermost tests, and final reruns of 31 projection/membership and 128 native
 Codex approval/fingerprint tests. These runs overlap; they are not a unique-test
 total. Desktop observation has 34 focused tests. The four native container-upgrade
