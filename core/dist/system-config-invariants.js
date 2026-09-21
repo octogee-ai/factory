@@ -2,6 +2,9 @@ import { parseAgentId, mattermostAccountIdForAgentId } from "@octogee/shared/typ
 import { openClawOperatorRoles, OPENCLAW_TRUSTED_PROXIES, OPENCLAW_TRUSTED_PROXY_AUTH, openClawIdentityScopes, } from "@octogee/shared/types/openclaw-proxy-identity";
 const ABSENT = Symbol("absent");
 const REQUIRED_ARRAY = "required-array";
+const CUSTOMER_AGENT_WORKSPACE = "customer-agent-workspace";
+const CUSTOMER_AGENT_TOOL_POLICY = "customer-agent-tool-policy";
+const PROJECT_AGENT_TOOL_POLICY = "project-agent-tool-policy";
 const FORBIDDEN_ARRAY = "forbidden-array";
 const REQUIRED_PLUGINS = [
     "mattermost",
@@ -288,15 +291,15 @@ function customerToolInvariants() {
             },
         },
         {
-            kind: "customer-agent-workspace",
+            kind: CUSTOMER_AGENT_WORKSPACE,
             path: "agents.list[].tools.fs.workspaceOnly",
         },
         {
-            kind: "customer-agent-workspace",
+            kind: CUSTOMER_AGENT_WORKSPACE,
             path: "agents.entries.*.tools.fs.workspaceOnly",
         },
-        { kind: "customer-agent-tool-policy", path: "agents.list[].tools" },
-        { kind: "customer-agent-tool-policy", path: "agents.entries.*.tools" },
+        { kind: CUSTOMER_AGENT_TOOL_POLICY, path: "agents.list[].tools" },
+        { kind: CUSTOMER_AGENT_TOOL_POLICY, path: "agents.entries.*.tools" },
     ];
 }
 function controlIdentityInvariants(perUser, ownerUid) {
@@ -705,13 +708,13 @@ function reconcileMattermostAccounts(config, platformOwned) {
     }
 }
 function invariantSatisfied(config, invariant) {
-    if (invariant.kind === "customer-agent-workspace") {
+    if (invariant.kind === CUSTOMER_AGENT_WORKSPACE) {
         return customerAgentRecords(config, invariant.path).every(agentWorkspaceOnly);
     }
-    if (invariant.kind === "customer-agent-tool-policy") {
+    if (invariant.kind === CUSTOMER_AGENT_TOOL_POLICY) {
         return customerAgentEntries(config, invariant.path).every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
     }
-    if (invariant.kind === "project-agent-tool-policy") {
+    if (invariant.kind === PROJECT_AGENT_TOOL_POLICY) {
         return customerAgentEntries(config, invariant.path)
             .filter(({ agentId }) => parseAgentId(agentId).kind === "project")
             .every(({ agent, agentId }) => agentToolPolicySatisfied(config, agent, agentId));
@@ -728,17 +731,17 @@ function invariantSatisfied(config, invariant) {
     return !Array.isArray(actual) || invariant.values.every((value) => !actual.includes(value));
 }
 function applyInvariant(config, invariant) {
-    if (invariant.kind === "customer-agent-workspace") {
+    if (invariant.kind === CUSTOMER_AGENT_WORKSPACE) {
         customerAgentRecords(config, invariant.path).forEach(forceAgentWorkspaceOnly);
         return;
     }
-    if (invariant.kind === "customer-agent-tool-policy") {
+    if (invariant.kind === CUSTOMER_AGENT_TOOL_POLICY) {
         for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
             forceAgentToolPolicy(config, agent, agentId);
         }
         return;
     }
-    if (invariant.kind === "project-agent-tool-policy") {
+    if (invariant.kind === PROJECT_AGENT_TOOL_POLICY) {
         for (const { agent, agentId } of customerAgentEntries(config, invariant.path)) {
             if (parseAgentId(agentId).kind === "project")
                 forceAgentToolPolicy(config, agent, agentId);
@@ -782,6 +785,25 @@ export function assertPlatformInvariants(config, context) {
     const paths = platformInvariantViolations(config, context);
     if (paths.length > 0)
         throw new PlatformInvariantPolicyError(paths);
+}
+const PLATFORM_PROJECTION_KINDS = new Set([
+    "mattermost-account-projection",
+    CUSTOMER_AGENT_WORKSPACE,
+    CUSTOMER_AGENT_TOOL_POLICY,
+    PROJECT_AGENT_TOOL_POLICY,
+]);
+export function reconcilePlatformProjections(config, context) {
+    const changedPaths = [];
+    for (const invariant of platformInvariantTable(context)) {
+        if (!PLATFORM_PROJECTION_KINDS.has(invariant.kind))
+            continue;
+        if (invariantSatisfied(config, invariant))
+            continue;
+        applyInvariant(config, invariant);
+        if (!changedPaths.includes(invariant.path))
+            changedPaths.push(invariant.path);
+    }
+    return { changedPaths };
 }
 export function reconcilePlatformInvariants(config, context) {
     const table = platformInvariantTable(context);

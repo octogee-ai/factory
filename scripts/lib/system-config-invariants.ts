@@ -4,6 +4,7 @@ import {
   platformInvariantTable as corePlatformInvariantTable,
   platformInvariantViolations as corePlatformInvariantViolations,
   reconcilePlatformInvariants as reconcileCorePlatformInvariants,
+  reconcilePlatformProjections as reconcileCorePlatformProjections,
   type GatewayConfigClass,
   type PlatformInvariant,
   type SystemConfigInvariantContext,
@@ -59,4 +60,11 @@ export function reconcilePlatformInvariants(
   env: NodeJS.ProcessEnv = process.env,
 ): { changedPaths: string[] } {
   return reconcileCorePlatformInvariants(config, systemConfigInvariantContextFromEnv(env));
+}
+
+export function reconcilePlatformProjections(
+  config: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): { changedPaths: string[] } {
+  return reconcileCorePlatformProjections(config, systemConfigInvariantContextFromEnv(env));
 }

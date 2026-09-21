@@ -9,6 +9,7 @@ import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.j
 import { readSystemConfigStatus } from "../lib/system-config-status.js";
 import {
   auditSystemConfigForSlug,
+  reconcilePlatformProjectionsAtPath,
   syncSystemConfigForSlug,
 } from "../lib/system-config.js";
 
@@ -21,13 +22,16 @@ const env = {
   OPENCLAW_VERSION: "2026.7.1",
 };
 
-function fixture(mutator?: (config: Record<string, unknown>) => void) {
+function fixture(
+  mutator?: (config: Record<string, unknown>) => void,
+  fixtureEnv: Record<string, string> = env,
+) {
   const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-config-sync-"));
   dirs.push(openclawDir);
   const repoDir = path.join(openclawDir, "system_config");
   fs.mkdirSync(path.join(repoDir, ".git"), { recursive: true });
   const config: Record<string, unknown> = { customerSetting: true };
-  reconcilePlatformInvariants(config, env);
+  reconcilePlatformInvariants(config, fixtureEnv);
   mutator?.(config);
   fs.writeFileSync(path.join(repoDir, "openclaw.json"), `${JSON.stringify(config, null, 2)}\n`);
   fs.writeFileSync(path.join(repoDir, ".octogee.json"), '{"schemaVersion":1}\n');
@@ -40,6 +44,101 @@ afterEach(() => {
 });
 
 describe("system config sync hardening", () => {
+  const builderEnv = { ...env, GATEWAY_CLASS: "builder", GATEWAY_ID: "ceckert-s-1", GATEWAY_BUILDER_SLUG: "ceckert" };
+  const driftedPlatformAccount = (config: Record<string, unknown>) => {
+    config.agents = { list: [{ id: "octogee-ceckert-coach" }] };
+    const channels = (config.channels ??= {}) as Record<string, unknown>;
+    const mattermost = (channels.mattermost ??= {}) as Record<string, unknown>;
+    mattermost.accounts = { "ceckert-coach": { dmPolicy: "allowlist", allowFrom: ["a".repeat(26)] } };
+  };
+  const acceptedGit = (repoDir: string, acceptedBytes: string, committed: string[]) =>
+    vi.fn((_cwd: string, commandArgv: string[]) => {
+      const command = commandArgv.join(" ");
+      if (command.startsWith("status --porcelain")) return " M openclaw.json";
+      if (command === "rev-parse HEAD") return "a".repeat(40);
+      if (command.startsWith("ls-remote")) return `${"a".repeat(40)}\trefs/heads/main`;
+      if (command === "show HEAD:openclaw.json") return acceptedBytes;
+      if (command.startsWith("commit")) committed.push(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+      return "";
+    });
+
+  it("reconciles platform-owned projection drift at a migration checkpoint instead of rejecting it", () => {
+    const h = fixture(driftedPlatformAccount, builderEnv);
+    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, builderEnv).repoDir, "openclaw.json"), "utf8");
+    const committed: string[] = [];
+    const logs: string[] = [];
+
+    const result = syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env: builderEnv,
+      durablePolicy: true,
+      source: "migration-checkpoint",
+      gitExec: acceptedGit(h.repoDir, acceptedBytes, committed),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob: () => Buffer.from(acceptedBytes),
+      log: (message: string) => logs.push(message),
+    });
+
+    expect(result).not.toMatchObject({ rejected: true });
+    const written = JSON.parse(fs.readFileSync(path.join(h.repoDir, "openclaw.json"), "utf8")) as {
+      channels: { mattermost: { accounts: Record<string, Record<string, unknown>> } };
+    };
+    expect(written.channels.mattermost.accounts["ceckert-coach"]).toEqual({ dmPolicy: "disabled" });
+    expect(committed.length).toBeGreaterThan(0);
+    expect(logs.some((line) =>
+      line.includes("reconciled platform-owned projections before checkpoint (channels.mattermost.accounts)"))).toBe(true);
+  });
+
+  it("leaves a config edit that races the projection reconcile for the ordinary candidate path", () => {
+    const h = fixture(driftedPlatformAccount, builderEnv);
+    const configPath = path.join(h.repoDir, "openclaw.json");
+    const drifted = fs.readFileSync(configPath, "utf8");
+    const racedEdit = drifted.replace('"customerSetting": true', '"customerSetting": false');
+    const reads: string[] = [];
+    const logs: string[] = [];
+
+    reconcilePlatformProjectionsAtPath(
+      { repoConfigPath: configPath, env: builderEnv, slug: "ceckert", log: (message) => logs.push(message) },
+      new Set(["openclaw.json"]),
+      (file) => {
+        reads.push(file);
+        if (reads.length === 2) fs.writeFileSync(file, racedEdit);
+        return fs.readFileSync(file, "utf8");
+      },
+    );
+
+    expect(reads).toHaveLength(2);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(racedEdit);
+    expect(logs).toEqual([
+      "[system_config] ceckert: skipped projection reconcile — config changed while reconciling (channels.mattermost.accounts)",
+    ]);
+  });
+
+  it("still rejects the same projection drift when it arrives as a watched edit", () => {
+    const h = fixture(driftedPlatformAccount, builderEnv);
+    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, builderEnv).repoDir, "openclaw.json"), "utf8");
+
+    const result = syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env: builderEnv,
+      durablePolicy: true,
+      gitExec: acceptedGit(h.repoDir, acceptedBytes, []),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob: () => Buffer.from(acceptedBytes),
+    });
+
+    expect(result).toMatchObject({
+      rejected: true,
+      errorCode: "platform-invariant-violation",
+      policyPaths: ["channels.mattermost.accounts"],
+    });
+    expect(fs.readFileSync(path.join(h.repoDir, "openclaw.json"), "utf8")).toBe(acceptedBytes);
+  });
+
   it("rejects a platform-invariant edit with typed paths and restores accepted bytes", () => {
     const h = fixture((config) => {
       (config.gateway as Record<string, unknown>).port = 9000;

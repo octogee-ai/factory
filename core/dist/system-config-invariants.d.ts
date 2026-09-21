@@ -1,6 +1,9 @@
 type JsonObject = Record<string, unknown>;
 declare const ABSENT: unique symbol;
 declare const REQUIRED_ARRAY: "required-array";
+declare const CUSTOMER_AGENT_WORKSPACE: "customer-agent-workspace";
+declare const CUSTOMER_AGENT_TOOL_POLICY: "customer-agent-tool-policy";
+declare const PROJECT_AGENT_TOOL_POLICY: "project-agent-tool-policy";
 declare const FORBIDDEN_ARRAY: "forbidden-array";
 export type GatewayConfigClass = "shared" | "builder";
 export type GatewayControlIdentityMode = "shared-operator" | "per-user";
@@ -28,7 +31,7 @@ type ForbiddenArrayInvariant = {
     values: readonly string[];
 };
 type CustomerAgentWorkspaceInvariant = {
-    kind: "customer-agent-workspace";
+    kind: typeof CUSTOMER_AGENT_WORKSPACE;
     path: "agents.list[].tools.fs.workspaceOnly" | "agents.entries.*.tools.fs.workspaceOnly";
 };
 type MattermostAccountProjectionInvariant = {
@@ -37,11 +40,11 @@ type MattermostAccountProjectionInvariant = {
     platformOwned: boolean;
 };
 type CustomerAgentToolPolicyInvariant = {
-    kind: "customer-agent-tool-policy";
+    kind: typeof CUSTOMER_AGENT_TOOL_POLICY;
     path: "agents.list[].tools" | "agents.entries.*.tools";
 };
 type ProjectAgentToolPolicyInvariant = {
-    kind: "project-agent-tool-policy";
+    kind: typeof PROJECT_AGENT_TOOL_POLICY;
     path: "agents.list[].tools" | "agents.entries.*.tools";
 };
 export type PlatformInvariant = ExactInvariant | RequiredArrayInvariant | ForbiddenArrayInvariant | CustomerAgentWorkspaceInvariant | CustomerAgentToolPolicyInvariant | ProjectAgentToolPolicyInvariant | MattermostAccountProjectionInvariant;
@@ -60,6 +63,9 @@ export declare class PlatformInvariantPolicyError extends Error {
 }
 export declare function platformInvariantViolations(config: JsonObject, context: SystemConfigInvariantContext): string[];
 export declare function assertPlatformInvariants(config: JsonObject, context: SystemConfigInvariantContext): void;
+export declare function reconcilePlatformProjections(config: JsonObject, context: SystemConfigInvariantContext): {
+    changedPaths: string[];
+};
 export declare function reconcilePlatformInvariants(config: JsonObject, context: SystemConfigInvariantContext): {
     changedPaths: string[];
 };

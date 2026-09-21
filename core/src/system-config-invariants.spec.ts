@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CUSTOMER_WORKFLOW_TOOLS,
+  reconcilePlatformProjections,
   PROJECT_AGENT_ALLOWED_TOOLS,
   PlatformInvariantPolicyError,
   assertPlatformInvariants,
@@ -785,6 +786,33 @@ describe("system config platform invariants", () => {
       },
     });
     expect((config.gateway as Record<string, unknown>)).not.toHaveProperty("controlUi.basePath");
+  });
+
+  it("reconciles only platform-owned projections and leaves exact-value drift for the policy assert", () => {
+    const config: Record<string, unknown> = {
+      agents: { list: [{ id: "octogee-alice-coach" }] },
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": { dmPolicy: "open", allowFrom: ["a".repeat(26)] },
+          },
+        },
+      },
+    };
+    reconcilePlatformInvariants(config, builder);
+    (config.gateway as Record<string, unknown>).port = 9000;
+    const account = ((((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>)["alice-coach"]);
+    account.dmPolicy = "allowlist";
+    account.allowFrom = ["a".repeat(26)];
+
+    const { changedPaths } = reconcilePlatformProjections(config, builder);
+
+    expect(changedPaths).toEqual(["channels.mattermost.accounts"]);
+    expect(account.dmPolicy).toBe("disabled");
+    expect(account).not.toHaveProperty("allowFrom");
+    expect((config.gateway as Record<string, unknown>).port).toBe(9000);
+    expect(platformInvariantViolations(config, builder)).toEqual(["gateway.port"]);
   });
 
   it("disables platform-agent Mattermost DMs on shared and Builder gateways alike", () => {

@@ -42,6 +42,7 @@ import {
   PlatformInvariantPolicyError,
   assertPlatformInvariants,
   reconcilePlatformInvariants,
+  reconcilePlatformProjections,
 } from "./system-config-invariants.js";
 import {
   CUSTOMER_CODE_DENIED_TOOLS,
@@ -840,6 +841,47 @@ function ensureBuilderRosterAtPath(configPath: string, slug: string, log: (msg: 
   log(`[system_config] Builder roster now leads with ${workspaceCoachAgentId(slug)} and keeps ${SAFE_DEFAULT_AGENT_ID} last`);
 }
 
+const PLATFORM_DRIVEN_CHECKPOINT_SOURCES: ReadonlySet<SystemConfigCommitSource> = new Set([
+  "migration-checkpoint",
+  "migration-restore",
+  "boot-migration",
+  "recovery",
+]);
+
+function platformDrivenCheckpoint(context: Pick<SystemConfigSyncContext, "opts">): boolean {
+  return context.opts.durablePolicy === true &&
+    PLATFORM_DRIVEN_CHECKPOINT_SOURCES.has(context.opts.source ?? "auto-watch");
+}
+
+export function reconcilePlatformProjectionsAtPath(
+  context: Pick<SystemConfigSyncContext, "repoConfigPath" | "env" | "slug" | "log">,
+  dirtyPaths: ReadonlySet<string>,
+  readConfig: (configPath: string) => string = (configPath) => fs.readFileSync(configPath, "utf8"),
+): void {
+  if (!dirtyPaths.has(OPENCLAW_CONFIG_FILENAME)) return;
+  let contents: string;
+  let value: unknown;
+  try {
+    contents = readConfig(context.repoConfigPath);
+    value = JSON.parse(contents);
+  } catch {
+    return;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const { changedPaths } = reconcilePlatformProjections(value as UnknownRecord, context.env);
+  if (changedPaths.length === 0) return;
+  if (readConfig(context.repoConfigPath) !== contents) {
+    context.log(
+      `[system_config] ${context.slug}: skipped projection reconcile — config changed while reconciling (${changedPaths.join(", ")})`,
+    );
+    return;
+  }
+  atomicWrite(context.repoConfigPath, `${JSON.stringify(value, null, 2)}\n`);
+  context.log(
+    `[system_config] ${context.slug}: reconciled platform-owned projections before checkpoint (${changedPaths.join(", ")})`,
+  );
+}
+
 function reconcilePlatformInvariantsAtPath(configPath: string, env: NodeJS.ProcessEnv): void {
   const contents = fs.readFileSync(configPath, "utf8");
   let value: unknown;
@@ -1464,6 +1506,7 @@ function validateCandidate(
   context: SystemConfigSyncContext,
   dirtyPaths: ReadonlySet<string>,
 ): CandidateValidationResult {
+  if (platformDrivenCheckpoint(context)) reconcilePlatformProjectionsAtPath(context, dirtyPaths);
   const candidateContents = fs.readFileSync(context.repoConfigPath);
   const candidateFingerprint = fingerprintContents(candidateContents);
   const candidateDurableFingerprint = durableFilesFingerprint(context.repoDir);
