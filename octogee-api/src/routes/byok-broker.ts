@@ -730,6 +730,17 @@ function registerAgentModelTokenRoute(
             agentId,
           ));
         if (!assigned || !accountAllowsInteractiveAccess(assigned.data)) {
+          const lifecycle = assigned?.data.accountLifecycle as { status?: unknown } | undefined;
+          logger.warn("[byok-broker] refused agent model token", {
+            gatewayId: bound.gatewayId,
+            agentId,
+            provider,
+            purpose,
+            reason: assigned ? "account-not-interactive" : "agent-not-assigned",
+            ...(assigned
+              ? { uid: assigned.uid, accountLifecycleStatus: lifecycle?.status ?? null }
+              : {}),
+          });
           throw new AgentModelTokenForbiddenError();
         }
         const grant =
