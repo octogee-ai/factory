@@ -83,10 +83,10 @@ ingress:
 
 resources:
   requests:
-    cpu: "100m"
+    cpu: "250m"
     memory: "256Mi"
   limits:
-    cpu: "500m"
+    cpu: "1"
     memory: "512Mi"
 
 # Cowboy HTTP — admin / fleet API surface served from the control
