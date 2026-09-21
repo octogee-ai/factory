@@ -645,9 +645,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@google-cloud/secret-manager": "^7.0.0",
+    "@google-cloud/secret-manager": "^7.1.0",
     "express": "^5.2.1",
-    "firebase-admin": "^14.3.0",
+    "firebase-admin": "^14.4.0",
     "google-auth-library": "^11.0.2",
     "unique-names-generator": "^4.7.1",
     "ws": "^8.21.3"
