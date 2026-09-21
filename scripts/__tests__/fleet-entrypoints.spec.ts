@@ -294,6 +294,32 @@ describe("fleet-controller entrypoint config", () => {
     expect(flushFiles).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])("native return flushes files and blobs without exporting Builder config (file failure=%s)", async (fail) => {
+    const flushFiles = vi.fn(async () => { if (fail) throw new Error("sync failed"); });
+    const syncBlobs = vi.fn(async () => {});
+    const syncSystemConfig = vi.fn(() => { throw new Error("platform-invariant-violation"); });
+    const flush = createFleetControllerRequestedFlush({
+      gatewayId: "builder-alice", gatewayClass: "builder", builderSlug: "alice", builder: true,
+      flushFiles, syncBlobs, syncSystemConfig, log: () => {},
+    });
+    const result = await flush({ slug: "alice", reason: "native-return" });
+    expect(result.ok).toBe(!fail);
+    expect(flushFiles).toHaveBeenCalledOnce();
+    expect(syncBlobs).toHaveBeenCalledOnce();
+    expect(syncSystemConfig).not.toHaveBeenCalled();
+    expect(result.steps).toContainEqual(expect.objectContaining({ name: "system-config", status: "skipped" }));
+  });
+
+  it.each(["bob", ""])("rejects native-return flush outside its configured Builder (%s)", async (builderSlug) => {
+    const flushFiles = vi.fn(async () => {});
+    const flush = createFleetControllerRequestedFlush({
+      gatewayId: "builder-alice", gatewayClass: "builder", builderSlug, builder: true,
+      flushFiles, log: () => {},
+    });
+    await expect(flush({ slug: "alice", reason: "native-return" })).rejects.toThrow(/configured Builder/);
+    expect(flushFiles).not.toHaveBeenCalled();
+  });
+
   it("rejects an unpinned migration convergence request before it can sync", async () => {
     const flushFiles = vi.fn(async () => undefined);
     const syncSystemConfig = vi.fn(() => ({

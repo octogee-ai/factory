@@ -58,6 +58,13 @@ describe("shouldPersistClaimedOperationCompletion", () => {
 });
 
 describe("operationNeedsDurableRestartResume", () => {
+  it("resumes an interrupted automatic Builder return rather than reaping its coordinated handoff", () => {
+    const op = { id: "builder-return-native", kind: "migrate-customer", origin: "automatic", input: {
+      source: "builder-activation-lease", fromGatewayId: "native", toGatewayId: "shared-0",
+    } };
+    expect(operationNeedsDurableRestartResume(op)).toBe(true);
+    expect(operationNeedsDurableRestartResume({ ...op, id: "manual-move" })).toBe(false);
+  });
   it.each(["suspend-customer", "erase-customer"])(
     "keeps an interrupted %s operation available for restart re-drive",
     (kind) => {

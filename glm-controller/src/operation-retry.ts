@@ -89,11 +89,15 @@ export function operationNeedsDurableCustomerMigrationV2Resume(op: {
 }
 
 export function operationNeedsDurableRestartResume(op: {
+  id?: string;
   kind?: string;
+  origin?: string;
+  input?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
 }): boolean {
   return op.kind === "suspend-customer" ||
     op.kind === "erase-customer" ||
+    isLevelTriggeredBuilderReturn(op) ||
     operationNeedsDurableCustomerMigrationV2Resume(op);
 }
 

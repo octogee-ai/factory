@@ -42,6 +42,7 @@ export interface GatewayVmDescription {
   metadata: Record<string, string>;
   metadataFingerprint: string | null;
   creationTimestamp: string | null;
+  serviceAccounts: Array<{ email: string; scopes: string[] }>;
 }
 
 export interface ListGatewayVmsInput {
@@ -74,6 +75,7 @@ export interface GatewayVmClient {
   findByLabels(labels: Record<string, string>): Promise<GatewayVmDescription | null>;
   list(input: ListGatewayVmsInput): Promise<GatewayVmDescription[]>;
   bind(instanceName: string, zone: string, input: BindGatewayVmInput): Promise<void>;
+  setServiceAccount(instanceName: string, zone: string, email: string): Promise<void>;
   setMetadata(instanceName: string, zone: string, input: { fingerprint: string; items: Record<string, string> }): Promise<GuardedWriteOutcome>;
   setLabels(instanceName: string, zone: string, input: { fingerprint: string; labels: Record<string, string> }): Promise<GuardedWriteOutcome>;
   stop(instanceName: string, zone: string): Promise<void>;
@@ -123,6 +125,7 @@ interface ComputeInstance {
   labels?: Record<string, string>;
   labelFingerprint?: string;
   metadata?: { fingerprint?: string; items?: ComputeMetadataItem[] };
+  serviceAccounts?: Array<{ email?: string; scopes?: string[] }>;
 }
 
 interface ComputeInstanceList {
@@ -208,6 +211,9 @@ function describeInstance(instance: ComputeInstance, instanceName: string, zone:
     metadata,
     metadataFingerprint: nonEmpty(instance.metadata?.fingerprint),
     creationTimestamp: nonEmpty(instance.creationTimestamp),
+    serviceAccounts: (instance.serviceAccounts ?? []).map((account) => ({
+      email: account.email ?? "", scopes: account.scopes ?? [],
+    })),
   };
 }
 
@@ -252,6 +258,12 @@ export const GATEWAY_VM_ACCESS_SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
 ] as const;
+
+export function hasComputerIdentity(description: GatewayVmDescription, email: string): boolean {
+  return description.serviceAccounts.some((account) =>
+    account.email === email && GATEWAY_VM_ACCESS_SCOPES.every((scope) => account.scopes.includes(scope)),
+  );
+}
 
 export function instanceInsertBody(projectId: string, input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
   return {
@@ -439,6 +451,15 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `${action} ${instanceName}`);
   }
 
+  async function setServiceAccount(instanceName: string, zone: string, email: string): Promise<void> {
+    const res = await deps.request({
+      url: `${base}/zones/${zone}/instances/${instanceName}/setServiceAccount`,
+      method: "POST",
+      body: { email, scopes: [...GATEWAY_VM_ACCESS_SCOPES] },
+    });
+    await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setServiceAccount ${instanceName}`);
+  }
+
   async function start(instanceName: string, zone: string): Promise<StartGatewayVmResult> {
     try {
       await lifecycle("start", instanceName, zone);
@@ -479,6 +500,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     findByLabels,
     list,
     bind,
+    setServiceAccount,
     setMetadata: (name, zone, input) => guardedWrite(name, zone, "setMetadata", { fingerprint: input.fingerprint, items: metadataItems(input.items) }),
     setLabels: (name, zone, input) => guardedWrite(name, zone, "setLabels", { labelFingerprint: input.fingerprint, labels: input.labels }),
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),

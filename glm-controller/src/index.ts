@@ -2949,7 +2949,8 @@ async function buildHandlers(
       await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);
     },
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
-      db, now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      db, vm: createGatewayComputeClient(logFn),
+      now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
     readUser: async (uid) => {
       const doc = await db.collection("users").doc(uid).get();

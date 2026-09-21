@@ -124,6 +124,7 @@ import {
 } from "./openclaw-config-builders.js";
 import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
 import { processRuntimeReloadGate, type RuntimeReloadGate } from "./runtime-reload-gate.js";
+import { createSurgeOpenClawProcessSupervisorClient } from "./surge-openclaw-process-gate.js";
 import {
   customerMountConfigPatch,
   customerSecurityProjectionReplacePaths,
@@ -1523,10 +1524,6 @@ export function projectCheckoutScopeForRuntime(
     : WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE;
 }
 
-// The retained overlay keeps the Builder's config, but a customer that just
-// moved out must stop answering chat here: two coaches on one bot account is
-// what an unmount prevents. A held pod has no OpenClaw to stop, so an
-// unreachable gateway is a logged skip, not a failed cleanup.
 async function stopRetainedConfiguredBuilderAccounts(ctx: BrokerCtx, slug: string): Promise<void> {
   try {
     await stopStaleMattermostRoutingAccounts(ctx.rpc, {
@@ -1535,10 +1532,13 @@ async function stopRetainedConfiguredBuilderAccounts(ctx: BrokerCtx, slug: strin
       evictionSlugs: [],
     }, dlog);
   } catch (error) {
-    ctx.log(
-      `[remove:${slug}] configured Builder chat accounts were not stopped ` +
-      `(OpenClaw held or unreachable): ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const status = await createSurgeOpenClawProcessSupervisorClient(OPENCLAW_DIR).status().catch((statusError) => {
+      ctx.log(`[remove:${slug}] cannot verify held OpenClaw: ${String(statusError)}`);
+      return null;
+    });
+    if (!process.env.POD_UID || status?.podUid !== process.env.POD_UID ||
+      status.mode !== "held" || status.phase !== "held") throw error;
+    ctx.log(`[remove:${slug}] OpenClaw supervisor confirms this pod has no running chat accounts`);
   }
 }
 
@@ -1553,10 +1553,10 @@ async function removeImportedCustomerBySlug(
     listLocalCoachWiredSlugs(CUSTOMERS_DIR, (s) => s === slug).includes(slug);
   if (!wasMounted) return { wasMounted: false, steps: [] };
   if (isConfiguredGatewayBuilder(slug)) {
+    await stopRetainedConfiguredBuilderAccounts(ctx, slug);
     clearMountedMarker(CUSTOMERS_DIR, slug);
     clearMigratingInPin(CUSTOMERS_DIR, slug);
     ctx.configRemovedForEviction.delete(slug);
-    await stopRetainedConfiguredBuilderAccounts(ctx, slug);
     dlog(`[remove:${slug}] retained configured Builder overlay during imported cleanup`);
     return { wasMounted: true, steps: [], retained: true };
   }

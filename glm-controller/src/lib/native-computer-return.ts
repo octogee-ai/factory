@@ -2,6 +2,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { awaitHomeCheckpoint, readHomeCheckpointCompletedAt, readVmHome } from "./home-checkpoint.js";
+import type { GatewayVmClient } from "./compute-vm.js";
 
 export interface NativeComputerReturnInput {
   fromGatewayId: string;
@@ -15,11 +16,13 @@ export interface NativeComputerReturn {
   checkpointRequested: boolean;
   checkpoint: () => Promise<void>;
   release: () => Promise<void>;
+  isSourceFencedOff: () => Promise<boolean>;
 }
 
 type NativeReturnDb = Pick<Firestore, "collection" | "runTransaction">;
 type NativeReturnDeps = {
   db: NativeReturnDb;
+  vm: Pick<GatewayVmClient, "describe">;
   now: () => number;
   wait: (ms: number) => Promise<void>;
   timeoutMs?: number;
@@ -82,6 +85,20 @@ async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerRe
   });
 }
 
+async function isSourceFencedOff(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
+  const [source, root] = await Promise.all([
+    deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
+    deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
+  ]);
+  const desired = root.data();
+  assertOwner(desired, input);
+  if (desired?.desiredStatus !== "paused" && desired?.desiredStatus !== "retired") return false;
+  const vm = source.data()?.vm;
+  if (!vm?.instanceName || !vm.zone) return false;
+  const current = await deps.vm.describe(vm.instanceName, vm.zone);
+  return current === null || current.status === "TERMINATED" || current.status === "STOPPED";
+}
+
 export async function prepareNativeComputerReturn(
   deps: NativeReturnDeps,
   input: NativeComputerReturnInput,
@@ -104,5 +121,6 @@ export async function prepareNativeComputerReturn(
       if (result.outcome !== "completed") throw new Error(`native computer checkpoint ${result.outcome}; source retained`);
     },
     release: () => releaseCheckpoint(deps, input),
+    isSourceFencedOff: () => isSourceFencedOff(deps, input),
   };
 }

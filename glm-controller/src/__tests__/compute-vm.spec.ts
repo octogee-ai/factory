@@ -140,6 +140,7 @@ describe("createGatewayVmClient.create", () => {
       metadata: {},
       metadataFingerprint: null,
       creationTimestamp: null,
+      serviceAccounts: [],
     });
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
@@ -219,6 +220,27 @@ describe("createGatewayVmClient.create", () => {
 });
 
 describe("createGatewayVmClient lifecycle", () => {
+  it("reads the attached service account and scopes for reuse", async () => {
+    const serviceAccounts = [{ email: input.serviceAccountEmail, scopes: ["old-scope"] }];
+    const { request } = fakeCompute(() => instance({ serviceAccounts }));
+    expect((await clientWith(request).client.describe(input.instanceName, input.zone))?.serviceAccounts).toEqual(serviceAccounts);
+  });
+
+  it("sets the computer identity and waits for Compute to finish before returning", async () => {
+    const { request, calls } = fakeCompute((call) => {
+      if (call.method === "POST") return { status: 200, data: { name: "identity", status: "RUNNING" } };
+      return { status: 200, data: { name: "identity", status: "DONE" } };
+    });
+    await clientWith(request).client.setServiceAccount(input.instanceName, input.zone, input.serviceAccountEmail);
+    expect(calls).toEqual([
+      { url: `${BASE}/zones/${input.zone}/instances/${input.instanceName}/setServiceAccount`, method: "POST", body: {
+        email: input.serviceAccountEmail,
+        scopes: ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email"],
+      } },
+      { url: `${BASE}/zones/${input.zone}/operations/identity`, method: "GET" },
+    ]);
+  });
+
   it("describe returns null for a missing instance", async () => {
     const { request } = fakeCompute(() => http(404));
     const { client } = clientWith(request);
@@ -392,6 +414,7 @@ describe("createGatewayVmClient pool primitives", () => {
       metadata: { "octogee-environment": "test" },
       metadataFingerprint: "mf-1",
       creationTimestamp: "2026-09-05T10:00:00.000-07:00",
+      serviceAccounts: [],
     });
   });
 

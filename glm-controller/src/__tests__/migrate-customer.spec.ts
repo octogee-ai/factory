@@ -194,12 +194,81 @@ function mkDeps(options: HarnessOptions = {}) {
 }
 
 describe("native computer return", () => {
+  function nativeReturn(h: ReturnType<typeof mkDeps>) {
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    return native;
+  }
+
+  it("joins Shared channel readiness after source cleanup without starting a competing restore", async () => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    const order: string[] = [];
+    native.checkpoint.mockImplementation(async () => { order.push("checkpoint"); });
+    const verify = h.client.verifyTarget;
+    h.client.verifyTarget = vi.fn(async (input) => {
+      order.push("verify");
+      expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+      return verify(input);
+    });
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
+    native.release.mockImplementation(async () => { order.push("release"); });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    expect(order).toEqual(["checkpoint", "cutover", "release", "verify"]);
+    expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.deps.readGatewayOpenclawVersion).not.toHaveBeenCalled();
+    expect(h.deps.readGatewayReleaseArtifact).not.toHaveBeenCalled();
+  });
+
+  it("retries forward when Shared is still mounting without rolling back or declaring success", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("status 409: coach not ready"));
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false, rolledBack: false, error: expect.stringContaining("status 503"),
+    });
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+    expect(h.client.unmount).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+  });
+
+  it("keeps the return incomplete when source cleanup fails", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    vi.mocked(h.client.unmount).mockRejectedValue(new Error("source unreachable"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("source unreachable");
+    expect(result.rolledBack).toBe(false);
+    expect(h.client.verifyTarget).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+  });
+
+  it("finishes a cutover after Compute proves the lost source is stopped", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    const native = { ...nativeReturn(h), isSourceFencedOff: vi.fn(async () => true) };
+    h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async (id) => {
+      if (id === "gw-blue") throw new Error("source VM disappeared");
+      return `http://${id}:18789`;
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ input: {
+      uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+    } }), h.ctx);
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(native.isSourceFencedOff).toHaveBeenCalledOnce();
+    expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])("checkpoints native state before Shared cutover (resumed=%s)", async (requested) => {
     const { deps, ctx, client, events } = mkDeps();
     const native = {
       checkpointRequested: requested,
       checkpoint: vi.fn(async () => { events.push("native-checkpoint"); }),
       release: vi.fn(async () => {}),
+      isSourceFencedOff: vi.fn(async () => false),
     };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
@@ -214,7 +283,7 @@ describe("native computer return", () => {
 
   it("finishes source cleanup when a retry finds the native return already cut over", async () => {
     const { deps, ctx, client } = mkDeps({ sourceGatewayId: "gw-green" });
-    const native = { checkpointRequested: true, checkpoint: vi.fn(), release: vi.fn(async () => {}) };
+    const native = { checkpointRequested: true, checkpoint: vi.fn(), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({ input: {
       uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
@@ -224,11 +293,22 @@ describe("native computer return", () => {
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).not.toHaveBeenCalled();
     expect(native.checkpoint).not.toHaveBeenCalled();
+    expect(client.verifyTarget).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
+  });
+
+  it("does not report a recovered cutover complete while the destination is unavailable", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    nativeReturn(h);
+    vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("not connected"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ input: {
+      uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+    } }), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("not connected") });
   });
 
   it("rolls forward after an uncertain cutover response when Shared already owns the Builder", async () => {
     const { deps, ctx, client } = mkDeps();
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     vi.mocked(deps.commitCutover).mockImplementation(async () => {
       vi.mocked(deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
@@ -247,6 +327,7 @@ describe("native computer return", () => {
       checkpointRequested: false,
       checkpoint: vi.fn(async () => { throw new Error("checkpoint timed out"); }),
       release: vi.fn(async () => {}),
+      isSourceFencedOff: vi.fn(async () => false),
     };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);

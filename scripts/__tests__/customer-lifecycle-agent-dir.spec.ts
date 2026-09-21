@@ -9,6 +9,11 @@ import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import type { UserSnapshot } from "../lib/customer-lifecycle.js";
 
+const supervisorStatus = vi.hoisted(() => vi.fn());
+vi.mock("../lib/surge-openclaw-process-gate.js", () => ({
+  createSurgeOpenClawProcessSupervisorClient: () => ({ status: supervisorStatus }),
+}));
+
 vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/mattermost-account-secrets.js")>();
   return { ...actual, updateMattermostAccountSecrets: vi.fn(async () => undefined) };
@@ -401,10 +406,17 @@ describe("customer lifecycle config patch agent directories", () => {
     },
   );
 
-  it("retains a configured Builder overlay during imported cleanup, stopping only its chat accounts", async () => {
+  it.each(["stopped", "held", "running", "stopping", "other-pod", "unknown"])("retains a configured Builder overlay with proven chat shutdown (%s)", async (state) => {
     await withRuntimeMock(async ({ tempRoot, agentsDir, applyConfigPatch }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
       vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+      vi.stubEnv("POD_UID", "pod-current");
+      supervisorStatus.mockImplementation(async () => {
+        if (state === "unknown") throw new Error("supervisor unreachable");
+        return { podUid: state === "other-pod" ? "other" : "pod-current",
+          mode: state === "running" ? "permitted" : "held",
+          phase: state === "stopping" ? "stopping" : state === "running" ? "running" : "held" };
+      });
       const customerDir = path.join(tempRoot, "customers", "alice");
       const customerKey = path.join(tempRoot, "customer-keys", "alice", "id_ed25519");
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
@@ -423,7 +435,10 @@ describe("customer lifecycle config patch agent directories", () => {
         agentId,
         removedBindings: 0,
       }));
-      const channelsStop = vi.fn(async () => ({ ok: true as const }));
+      const channelsStop = vi.fn(async () => {
+        if (state !== "stopped") throw new Error("channel stop unavailable");
+        return { ok: true as const };
+      });
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
         rpc: {
@@ -442,6 +457,12 @@ describe("customer lifecycle config patch agent directories", () => {
         log: vi.fn(),
       });
 
+      if (!["stopped", "held"].includes(state)) {
+        await expect(adapter.removeImportedCustomerBySlug("alice")).rejects.toThrow("Stale Mattermost account stop failed");
+        expect(fsSync.existsSync(path.join(customerDir, ".system", ".mounted"))).toBe(true);
+        expect(fsSync.existsSync(path.join(customerDir, ".system", ".migrating-in"))).toBe(true);
+        return;
+      }
       await expect(adapter.removeImportedCustomerBySlug("alice")).resolves.toMatchObject({
         wasMounted: true,
         retained: true,

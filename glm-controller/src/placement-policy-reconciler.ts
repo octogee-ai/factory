@@ -1781,6 +1781,11 @@ async function completeReturnedLease(
 ): Promise<void> {
   const { context, user, builderSlug, lease, target } = input;
   const targetGatewayId = lease.targetGatewayId!;
+  const operation = context.operations.get(`builder-return-${targetGatewayId}`);
+  if (operation?.status === "pending" || operation?.status === "running") {
+    context.result.adopted += 1;
+    return;
+  }
   if (target.desiredStatus === "retired") {
     await context.deps.completeActivationLease({
       uid: user.uid,

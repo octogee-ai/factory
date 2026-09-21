@@ -268,13 +268,13 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         sizingTier: opts.sizingTier,
         replicas: opts.replicas,
       });
-      await deps.db.doc(gatewayVmRuntimeDocPath(gatewayId)).set(bundle);
-      deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime bundle ${bundle.version} rendered (${opts.imageTag})`);
       if (opts.replicas === 0) {
         await computers.pauseComputer(gatewayId);
       } else {
         await computers.ensureVm(gatewayId, `${opts.imageRepository}:${opts.imageTag}`, opts.ownerUid, bridge);
       }
+      await deps.db.doc(gatewayVmRuntimeDocPath(gatewayId)).set(bundle);
+      deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime bundle ${bundle.version} rendered (${opts.imageTag})`);
       await reconcileRoutes();
       await glm(gatewayId).set({ vmInstance: instance }, { merge: true });
     },

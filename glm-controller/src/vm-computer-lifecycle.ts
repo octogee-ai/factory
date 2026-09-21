@@ -12,6 +12,7 @@ import {
   type GatewayVmStopReason,
 } from "@octogee/shared/types/glm";
 import type { BindGatewayVmInput, CreateGatewayVmInput, GatewayVmClient, GatewayVmDescription } from "./lib/compute-vm.js";
+import { hasComputerIdentity } from "./lib/compute-vm.js";
 import {
   HOME_CHECKPOINT_POLL_MS,
   HOME_CHECKPOINT_TIMEOUT_MS,
@@ -277,17 +278,31 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       await assertComputerUnbound(gatewayId, description);
       if (!STOPPED_STATUSES.has(description.status)) {
         await deps.vm.stop(description.name, description.zone);
+        description = (await deps.vm.describe(description.name, description.zone)) ?? description;
         deps.log(`[vm-gateway-runtime] ${gatewayId}: stopped ${description.name} to rebind it from ${description.gatewayId ?? "no gateway"}`);
       }
+      await reconcileComputerIdentity(description, input.serviceAccountEmail);
       await deps.vm.bind(description.name, description.zone, bindingOf(input));
       deps.log(`[vm-gateway-runtime] ${gatewayId}: bound ${description.name} to ${gatewayId} (was ${description.gatewayId ?? "unbound"})`);
       await releaseParkedComputer(deps.db, ownerUid);
       description = (await deps.vm.describe(description.name, description.zone)) ?? description;
-    } else if (["gateway-image", "octogee-api-url"].some((key) => description.metadata[key] !== input.metadata[key])) {
-      await deps.vm.bind(description.name, description.zone, bindingOf(input));
-      deps.log(`[vm-gateway-runtime] ${gatewayId}: refreshed bootstrap metadata for ${description.name}`);
+    } else {
+      await reconcileComputerIdentity(description, input.serviceAccountEmail);
+      if (["gateway-image", "octogee-api-url"].some((key) => description.metadata[key] !== input.metadata[key])) {
+        await deps.vm.bind(description.name, description.zone, bindingOf(input));
+        deps.log(`[vm-gateway-runtime] ${gatewayId}: refreshed bootstrap metadata for ${description.name}`);
+      }
     }
     return description;
+  }
+
+  async function reconcileComputerIdentity(description: GatewayVmDescription, email: string): Promise<void> {
+    if (hasComputerIdentity(description, email)) return;
+    if (!STOPPED_STATUSES.has(description.status)) {
+      throw new Error(`computer ${description.name}: identity scopes are outdated; return and park the Builder before activation`);
+    }
+    await deps.vm.setServiceAccount(description.name, description.zone, email);
+    deps.log(`[vm-gateway-runtime] ${description.name}: reconciled parked computer identity before activation`);
   }
 
   async function ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState> {

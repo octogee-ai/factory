@@ -113,7 +113,7 @@ async function reapLegacyMigrationWithGateRecovery(input: {
       txn.get(userRef),
     ]);
     if (!operationSnap.exists) return { reaped: false };
-    const current = operationSnap.data() as Operation;
+    const current = { ...operationSnap.data(), id: input.doc.id } as Operation;
     if (!operationIsStillStale(current, input.now, input.deps.stalenessMs)) {
       return { reaped: false };
     }
@@ -171,7 +171,7 @@ export async function runStuckOpReaperTick(
   for (const doc of snap.docs) {
     const data = doc.data() as unknown;
     if (!data || isOperationAuditRow(data)) continue;
-    const operation = data as Operation;
+    const operation = { ...data as Operation, id: doc.id };
     if (operationNeedsDurableRestartResume(operation)) continue;
 
     // Liveness = the most recent of (last step progress, claim, creation). A long or

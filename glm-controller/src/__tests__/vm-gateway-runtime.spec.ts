@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { GatewayVmSpec, HelmInstancesMap } from "@octogee/shared/types/glm";
 import type { GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
+import { GATEWAY_VM_ACCESS_SCOPES } from "../lib/compute-vm";
 import type { HelmRunner } from "../helm-runner";
 import {
   createRuntimeDispatchingHelmRunner,
@@ -80,6 +81,7 @@ const COMPUTER = "octogee-computer-test-uida";
 const OWNER_LABELS = { "octogee-owner-uid": "uida", "octogee-environment": "test", purpose: "octogee-computer" };
 const POOL_LABELS = { "octogee-pool": "warm", "octogee-environment": "test" };
 const running: GatewayVmDescription = {
+  serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [...GATEWAY_VM_ACCESS_SCOPES] }],
   name: COMPUTER, zone: "us-west1-b", status: "RUNNING", instanceId: "4242", internalIp: "172.20.0.9", provisioningModel: "SPOT", gatewayId: "b-x",
   labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" }, labelFingerprint: "lf-gw", metadata: { "gateway-id": "b-x", "gateway-image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123", "octogee-api-url": "http://172.20.7.7:3001" }, metadataFingerprint: "mf-gw", creationTimestamp: null,
 };
@@ -88,6 +90,7 @@ const recorded = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242
 
 function warmMember(name: string, overrides: Partial<GatewayVmDescription> = {}): GatewayVmDescription {
   return {
+    serviceAccounts: running.serviceAccounts,
     name, zone: "us-west1-b", status: "RUNNING", instanceId: `id-${name}`, internalIp: `10.9.0.${name.length}`, provisioningModel: "SPOT", gatewayId: null,
     labels: { ...POOL_LABELS, purpose: "octogee-computer" }, labelFingerprint: `lf-${name}`,
     metadata: { "octogee-environment": "test" }, metadataFingerprint: `mf-${name}`, creationTimestamp: "2026-09-05T10:00:00Z",
@@ -122,6 +125,7 @@ function harness(
     findByLabels: vi.fn(async () => null),
     list: vi.fn(async () => []),
     bind: vi.fn(async () => {}),
+    setServiceAccount: vi.fn(async () => {}),
     setMetadata: vi.fn(async () => "applied" as const),
     setLabels: vi.fn(async () => "applied" as const),
     stop: vi.fn(async () => {}),
@@ -219,6 +223,32 @@ describe("builderComputerInstanceInput", () => {
 });
 
 describe("createVmGatewayRuntime.upsertInstance", () => {
+  it("repairs a parked computer's identity scopes before starting it without replacing its disk", async () => {
+    const old = { ...stopped, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: ["https://www.googleapis.com/auth/cloud-platform"] }] };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } }, {
+      describe: vi.fn(async () => running).mockResolvedValueOnce(old),
+      setServiceAccount: vi.fn(async () => {}),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, spec.zone, spec.serviceAccountEmail);
+    expect(h.vm.setServiceAccount.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
+    expect(h.vm.delete).not.toHaveBeenCalled();
+    expect(h.vm.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a running computer with stale scopes before publishing a new gateway image", async () => {
+    const old = { ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [] }] };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } }, {
+      describe: vi.fn(async () => old),
+      setServiceAccount: vi.fn(async () => {}),
+    });
+    await expect(h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" })).rejects.toThrow(/identity.*park|park.*identity/i);
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.vm.bind).not.toHaveBeenCalled();
+    expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
+    expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
+  });
+
   it("updates the bootstrap image on an existing gateway without restarting its computer", async () => {
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded } });
     await h.runtime.upsertInstance({ ...upsertOpts, imageTag: "main.new-agent" });
@@ -289,7 +319,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const h = harness({ "glmGateways/b-x": { ...gatewayDoc } }, { create });
 
     await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/ZONE_RESOURCE_POOL_EXHAUSTED/);
-    expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeDefined();
+    expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vm).toBeUndefined();
     expect(await h.runtime.readDeployedInstance({ namespace: "octogee-test", gatewayId: "b-x" })).toBeNull();
@@ -532,7 +562,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const runningElsewhere = { ...running, gatewayId: "b-old" };
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
       findByLabels: vi.fn(async () => runningElsewhere),
-      describe: vi.fn(async () => running).mockResolvedValueOnce(stopped),
+      describe: vi.fn(async () => running).mockResolvedValueOnce(stopped).mockResolvedValueOnce(stopped),
     });
 
     await h.runtime.upsertInstance(upsertOpts);

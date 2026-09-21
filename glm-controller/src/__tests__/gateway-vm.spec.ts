@@ -4,6 +4,7 @@ import { createGatewayVmHandler, type GatewayVmRecord } from "../handlers/gatewa
 import type { GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
 
 const description: GatewayVmDescription = {
+  serviceAccounts: [],
   name: "octogee-computer-test-uida",
   zone: "us-west1-b",
   status: "RUNNING",
@@ -45,6 +46,7 @@ function harness(
     findByLabels: vi.fn(async () => null),
     list: vi.fn(async () => []),
     bind: vi.fn(async () => {}),
+    setServiceAccount: vi.fn(async () => {}),
     setMetadata: vi.fn(async () => "applied" as const),
     setLabels: vi.fn(async () => "applied" as const),
     stop: vi.fn(async () => {}),

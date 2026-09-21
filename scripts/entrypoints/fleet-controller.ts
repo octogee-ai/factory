@@ -172,7 +172,11 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
     if (reason === "migration-converge" && !expectedSystemConfigCommit) {
       throw new Error(`migration converge is missing expected system config commit for ${slug}`);
     }
-    const syncSystemConfig = createFleetFlushSystemConfigSync({
+    const nativeReturn = reason === "native-return";
+    if (nativeReturn && (!input.builder || input.gatewayClass !== "builder" || input.builderSlug !== slug || expectedSystemConfigCommit)) {
+      throw new Error("native return requires the configured Builder and a full-home checkpoint, not a config transfer");
+    }
+    const syncSystemConfig = nativeReturn ? undefined : createFleetFlushSystemConfigSync({
       slug,
       builderSlug: input.builderSlug,
       builder: input.builder,

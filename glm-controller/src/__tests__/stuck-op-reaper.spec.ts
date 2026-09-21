@@ -6,6 +6,7 @@ interface FakeOpDoc {
   data: {
     status?: string;
     kind?: string;
+    origin?: string;
     startedAt?: number;
     createdAt?: number;
     lastProgressAt?: number;
@@ -104,6 +105,22 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it("preserves an ID-less persisted automatic Builder return for restart recovery", async () => {
+    const ops: FakeOpDoc[] = [{
+      id: "builder-return-builder-alice",
+      data: {
+        kind: "migrate-customer", origin: "automatic", status: "running",
+        startedAt: NOW - 60 * 60_000,
+        input: { uid: "alice", source: "builder-activation-lease", fromGatewayId: "builder-alice" },
+      },
+    }];
+    const result = await runStuckOpReaperTick({
+      db: makeFakeDb(ops) as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000,
+    });
+    expect(result).toEqual({ scanned: 1, reaped: 0 });
+    expect(ops[0].updated).toBeUndefined();
+  });
+
   it("does not reap a stale running audit record", async () => {
     const ops: FakeOpDoc[] = [
       {
