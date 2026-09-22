@@ -23,7 +23,7 @@ describe("findRunningRolloutParentOperationId", () => {
 });
 
 describe("isSeriallyExclusiveKind", () => {
-  it("treats rollout as globally serial — one blue/green plane at a time", () => {
+  it("treats rollout as subject to scheduling locks", () => {
     expect(isSeriallyExclusiveKind("rollout")).toBe(true);
   });
 
@@ -40,7 +40,7 @@ describe("isSeriallyExclusiveKind", () => {
   });
 });
 
-describe("findSerialConflict — rollout (global scope)", () => {
+describe("findSerialConflict — rollout", () => {
   it("returns null when the candidate's kind isn't serially exclusive", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "retire-gateway" },
@@ -84,7 +84,7 @@ describe("findSerialConflict — rollout (global scope)", () => {
     });
   });
 
-  it("two rollout ops for DIFFERENT gateways still conflict — the plane is global, not per-gateway", () => {
+  it("unclassified rollout ops for different gateways stay globally exclusive", () => {
     const conflict = findSerialConflict(
       { id: "op-2", kind: "rollout", input: { gatewayId: "default-green" } },
       [{ id: "op-1", kind: "rollout", input: { gatewayId: "bender-blue" } }],

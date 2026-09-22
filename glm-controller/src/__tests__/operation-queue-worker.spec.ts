@@ -55,6 +55,7 @@ function createFakeGlmOperationsDb(
     orderByThrows?: boolean;
     gateways?: Record<string, Record<string, unknown>>;
     users?: Record<string, Record<string, unknown>>;
+    runtimes?: Record<string, Record<string, unknown>>;
     snapshotChangeIds?: string[];
   } = {},
 ) {
@@ -141,8 +142,9 @@ function createFakeGlmOperationsDb(
 
   const db = {
     collection: (name: string) => {
-      if (name === "gateways" || name === "users") {
-        const docs = name === "gateways" ? opts.gateways ?? {} : opts.users ?? {};
+      if (name === "gateways" || name === "users" || name === "glmGateways") {
+        const docs = name === "gateways" ? opts.gateways ?? {}
+          : name === "glmGateways" ? opts.runtimes ?? {} : opts.users ?? {};
         return {
           doc: (id: string) => ({
             id,
@@ -322,6 +324,106 @@ describe("gateway operation queue — enqueue instead of reject (glmOperations w
     await drainPendingOperationsOnce(deps);
     expect(store.get("op-default")?.status).toBe("succeeded");
     expect(store.get("op-default")?.waitingOn).toBeUndefined();
+  });
+
+  it("runs a Shared rollout while an unrelated Builder VM rollout is blocked", async () => {
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "sep092" } }),
+      "shared-roll": baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-0" } }),
+    }, {
+      gateways: {
+        sep092: { gatewayId: "sep092", gatewayClass: "builder" },
+        "shared-0": { gatewayId: "shared-0", gatewayClass: "shared" },
+      },
+      runtimes: { sep092: { runtime: "gce-vm" }, "shared-0": { runtime: "cluster" } },
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
+
+    expect(store.get("vm-roll")?.status).toBe("running");
+    expect(store.get("shared-roll")?.status).toBe("succeeded");
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["another Shared", "shared-1", "shared", "cluster", "roll shared-0"],
+    ["another Builder VM", "builder-2", "builder", "gce-vm", "roll builder-1"],
+    ["a Builder on Kubernetes", "builder-2", "builder", "cluster", "roll shared-0"],
+  ] as const)("queues %s rollout when both rollout lanes are occupied", async (_name, gatewayId, gatewayClass, runtime, waitingOn) => {
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder-1" } }),
+      "shared-roll": baseOp({ id: "shared-roll", status: "running", input: { gatewayId: "shared-0" } }),
+      "next-roll": baseOp({ id: "next-roll", createdAt: 2, input: { gatewayId } }),
+    }, {
+      gateways: {
+        "builder-1": { gatewayId: "builder-1", gatewayClass: "builder" },
+        "shared-0": { gatewayId: "shared-0", gatewayClass: "shared" },
+        [gatewayId]: { gatewayId, gatewayClass },
+      },
+      runtimes: {
+        "builder-1": { runtime: "gce-vm" }, "shared-0": { runtime: "cluster" }, [gatewayId]: { runtime },
+      },
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
+
+    expect(store.get("next-roll")?.status).toBe("pending");
+    expect(store.get("next-roll")?.waitingOn).toBe(waitingOn);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing root", undefined, { runtime: "gce-vm" }],
+    ["wrong root identity", { gatewayId: "other", gatewayClass: "builder" }, { runtime: "gce-vm" }],
+    ["missing runtime", { gatewayId: "builder", gatewayClass: "builder" }, undefined],
+    ["unstamped runtime", { gatewayId: "builder", gatewayClass: "builder" }, {}],
+    ["unknown class", { gatewayId: "builder", gatewayClass: "other" }, { runtime: "gce-vm" }],
+    ["Shared VM mismatch", { gatewayId: "builder", gatewayClass: "shared" }, { runtime: "gce-vm" }],
+  ] as const)("keeps an unclassified %s rollout globally exclusive", async (_name, root, runtime) => {
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "vm-roll": {
+        ...baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder", rolloutLane: "builder-vm" } }),
+        rolloutLane: "builder-vm",
+      },
+      "shared-roll": baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-0" } }),
+    }, {
+      gateways: { "shared-0": { gatewayId: "shared-0", gatewayClass: "shared" }, ...(root ? { builder: root } : {}) },
+      runtimes: { "shared-0": { runtime: "cluster" }, ...(runtime ? { builder: runtime } : {}) },
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
+
+    expect(store.get("shared-roll")?.status).toBe("pending");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves an older return reservation while allowing a disjoint rollout", async () => {
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      "vm-roll": baseOp({ id: "vm-roll", status: "running", input: { gatewayId: "builder" } }),
+      "return": baseOp({
+        id: "return", kind: "migrate-customer", createdAt: 1, nextAttemptAt: Date.now() + 60_000,
+        input: { fromGatewayId: "builder", toGatewayId: "shared-0" },
+      }),
+      "shared-roll": baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-0" } }),
+      "other-shared-roll": baseOp({ id: "other-shared-roll", createdAt: 0, input: { gatewayId: "shared-1" } }),
+    }, {
+      gateways: {
+        builder: { gatewayId: "builder", gatewayClass: "builder" },
+        "shared-0": { gatewayId: "shared-0", gatewayClass: "shared" },
+        "shared-1": { gatewayId: "shared-1", gatewayClass: "shared" },
+      },
+      runtimes: { builder: { runtime: "gce-vm" }, "shared-0": { runtime: "cluster" }, "shared-1": { runtime: "cluster" } },
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
+
+    expect(store.get("shared-roll")?.status).toBe("pending");
+    expect(store.get("shared-roll")?.waitingOn).toBe("migration builder → shared-0");
+    expect(store.get("other-shared-roll")?.status).toBe("succeeded");
   });
 
   it("never marks a queued op failed — it stays pending the whole time it waits", async () => {

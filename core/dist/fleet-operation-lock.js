@@ -30,14 +30,13 @@ export function fleetOperationLockResources(operation) {
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))
         return false;
-    if (candidate.kind === "rollout" && other.kind === "rollout")
-        return true;
     const candidateResources = fleetOperationLockResources(candidate);
     for (const resource of fleetOperationLockResources(other)) {
         if (candidateResources.has(resource))
             return true;
     }
-    return false;
+    return candidate.kind === "rollout" && other.kind === "rollout" && (candidate.rolloutLane === undefined || other.rolloutLane === undefined ||
+        candidate.rolloutLane === other.rolloutLane);
 }
 export function findActiveGatewayMigration(gatewayId, operations) {
     return operations.find((operation) => operation.kind === "migrate-customer" &&

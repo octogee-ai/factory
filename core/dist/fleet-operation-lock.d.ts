@@ -1,9 +1,11 @@
+export type RolloutLane = "cluster" | "builder-vm";
 export interface FleetOperationLockRef {
     id: string;
     kind: string;
     status?: string;
     input?: unknown;
     customerMigrationV2?: unknown;
+    rolloutLane?: RolloutLane;
 }
 export declare function fleetOperationLockResources(operation: FleetOperationLockRef): ReadonlySet<string>;
 export declare function serialFleetOperationsConflict(candidate: FleetOperationLockRef, other: FleetOperationLockRef): boolean;

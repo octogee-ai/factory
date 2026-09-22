@@ -7,6 +7,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   root,
   test: {
+    env: { K8S_NAMESPACE: "octogee-test" },
     include: ["src/__tests__/**/*.emulator.spec.ts"],
     fileParallelism: false,
     testTimeout: 15_000,

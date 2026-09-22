@@ -133,6 +133,7 @@ import {
   type OperationRef,
   type PendingOperationRef,
 } from "./operation-queue.js";
+import { readOperationRolloutLanes, withOperationRolloutLane } from "./operation-rollout-lanes.js";
 import {
   buildOperationCompletionUpdate,
   operationNeedsDurableRestartResume,
@@ -1735,13 +1736,6 @@ function operationIsRestartResumable(op: Operation): boolean {
   return operationNeedsDurableRestartResume(op);
 }
 
-// Claim, queue, or skip a pending op in one transaction: reads the OTHER
-// running AND pending ops of the same serially-exclusive kind alongside the
-// candidate doc so the queue decision (operation-queue.ts) and the write it
-// produces are atomic — two rollout ops evaluated back-to-back can never both
-// see "no conflict". The pending read is what keeps the onSnapshot fast path
-// FIFO per scope: a newly created op queues behind an older already-queued one
-// instead of jumping ahead of it.
 async function attemptClaimOrQueueOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
@@ -1790,8 +1784,13 @@ async function attemptClaimOrQueueOperation(
         });
       }
 
+      const rolloutLanes = await readOperationRolloutLanes(
+        deps.db,
+        txn,
+        [{ id: op.id, kind: freshOperation.kind, input: freshOperation.input }, ...runningOpsSameKind, ...pendingOpsSameKind],
+      );
       const decision = decideOperationClaim({
-        op: {
+        op: withOperationRolloutLane({
           id: op.id,
           kind: op.kind,
           status: freshOperation.status,
@@ -1799,10 +1798,10 @@ async function attemptClaimOrQueueOperation(
           nextAttemptAt: freshOperation.nextAttemptAt,
           input: freshOperation.input,
           customerMigrationV2: freshOperation.customerMigrationV2,
-        },
+        }, rolloutLanes),
         now: Date.now(),
-        runningOpsSameKind,
-        pendingOpsSameKind,
+        runningOpsSameKind: runningOpsSameKind.map((operation) => withOperationRolloutLane(operation, rolloutLanes)),
+        pendingOpsSameKind: pendingOpsSameKind.map((operation) => withOperationRolloutLane(operation, rolloutLanes)),
       });
 
       if (decision.outcome === "skip") return { outcome: "skipped" as const };

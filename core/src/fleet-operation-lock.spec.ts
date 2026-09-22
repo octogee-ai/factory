@@ -107,10 +107,39 @@ describe("serialFleetOperationsConflict", () => {
     )).toBe(false);
   });
 
-  it("keeps rollout operations globally serial", () => {
+  it("keeps unclassified rollout operations globally serial", () => {
     expect(serialFleetOperationsConflict(
       { id: "a", kind: "rollout", input: { gatewayId: "blue" } },
       { id: "b", kind: "rollout", input: { gatewayId: "green" } },
     )).toBe(true);
   });
+
+  it("allows independent cluster and Builder VM rollouts together", () => {
+    const cluster = { id: "shared-roll", kind: "rollout", rolloutLane: "cluster" as const, input: { gatewayId: "shared-0" } };
+    const vm = { id: "builder-roll", kind: "rollout", rolloutLane: "builder-vm" as const, input: { gatewayId: "sep092" } };
+    expect(serialFleetOperationsConflict(cluster, vm)).toBe(false);
+    expect(serialFleetOperationsConflict(vm, cluster)).toBe(false);
+  });
+
+  it.each(["cluster", "builder-vm"] as const)("allows only one rollout in the %s lane", (rolloutLane) => {
+    expect(serialFleetOperationsConflict(
+      { id: "first", kind: "rollout", rolloutLane, input: { gatewayId: "first" } },
+      { id: "second", kind: "rollout", rolloutLane, input: { gatewayId: "second" } },
+    )).toBe(true);
+  });
+
+  it("keeps overlapping resources locked even if rollout lanes differ", () => {
+    expect(serialFleetOperationsConflict(
+      { id: "first", kind: "rollout", rolloutLane: "cluster", input: { gatewayId: "same" } },
+      { id: "second", kind: "rollout", rolloutLane: "builder-vm", input: { gatewayId: "same" } },
+    )).toBe(true);
+  });
+
+  it("does not let an unclassified rollout bypass a classified rollout", () => {
+    expect(serialFleetOperationsConflict(
+      { id: "first", kind: "rollout", input: { gatewayId: "first" } },
+      { id: "second", kind: "rollout", rolloutLane: "builder-vm", input: { gatewayId: "second" } },
+    )).toBe(true);
+  });
+
 });

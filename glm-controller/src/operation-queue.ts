@@ -1,7 +1,5 @@
-import { serialFleetOperationsConflict } from "@octogee/core/fleet-operation-lock";
+import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
 
-// Op kinds with a serial invariant: overlapping migration/release resources
-// cannot run together, and rollout operations remain globally serial.
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",
   "migrate-customer",
@@ -14,6 +12,7 @@ export function isSeriallyExclusiveKind(kind: string): boolean {
 export interface OperationRef {
   id: string;
   kind: string;
+  rolloutLane?: RolloutLane;
   input?: Record<string, unknown>;
   customerMigrationV2?: {
     sourceGatewayId?: string;
@@ -87,6 +86,7 @@ export interface PendingOperationRef extends OperationRef {
 }
 
 export interface OperationClaimCandidate {
+  rolloutLane?: RolloutLane;
   id: string;
   kind: string;
   status: string;

@@ -1,9 +1,12 @@
+export type RolloutLane = "cluster" | "builder-vm";
+
 export interface FleetOperationLockRef {
   id: string;
   kind: string;
   status?: string;
   input?: unknown;
   customerMigrationV2?: unknown;
+  rolloutLane?: RolloutLane;
 }
 
 const SERIAL_KINDS: ReadonlySet<string> = new Set([
@@ -46,12 +49,14 @@ export function serialFleetOperationsConflict(
   other: FleetOperationLockRef,
 ): boolean {
   if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind)) return false;
-  if (candidate.kind === "rollout" && other.kind === "rollout") return true;
   const candidateResources = fleetOperationLockResources(candidate);
   for (const resource of fleetOperationLockResources(other)) {
     if (candidateResources.has(resource)) return true;
   }
-  return false;
+  return candidate.kind === "rollout" && other.kind === "rollout" && (
+    candidate.rolloutLane === undefined || other.rolloutLane === undefined ||
+    candidate.rolloutLane === other.rolloutLane
+  );
 }
 
 export function findActiveGatewayMigration<T extends FleetOperationLockRef>(
