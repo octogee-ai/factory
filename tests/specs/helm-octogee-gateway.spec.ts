@@ -574,7 +574,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(edge).not.toMatch(/name:\s*OCTOGEE_API_URL\b/);
   });
 
-  it("Builder profile wires durable-control signing on gateway-edge without legacy approval or admin secrets", () => {
+  it("Builder profile wires callback verification on gateway-edge without legacy approval or admin secrets", () => {
     const dep =
       findDoc(
         helmTemplate("octogee-gw-bender", {
@@ -586,20 +586,20 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       ) ?? "";
     const edge = containerBlock(dep, "gateway-edge");
     expect(edge).toMatch(
-      /name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*agent-control-signing\s*\n\s*key:\s*secret/,
+      /name:\s*AGENT_CONTROL_ROUTER_PUBLIC_KEY\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*agent-control-router\s*\n\s*key:\s*public-key/,
     );
     expect(edge).not.toMatch(/name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET/);
     // The platform admin PAT is not rendered into gateway pods.
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
   });
 
-  it("standard profile omits legacy approval and admin secrets while wiring durable-control signing", () => {
+  it("standard profile omits legacy approval and admin secrets while wiring callback verification", () => {
     const edge = containerBlock(
       findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "",
       "gateway-edge",
     );
     expect(edge).not.toMatch(/name:\s*MM_ADMIN_PAT/);
-    expect(edge).toMatch(/name:\s*OCTOGEE_AGENT_CONTROL_SIGNING_SECRET/);
+    expect(edge).toMatch(/name:\s*AGENT_CONTROL_ROUTER_PUBLIC_KEY/);
     expect(edge).not.toMatch(/name:\s*OCTOGEE_APPROVAL_SIGNING_SECRET/);
   });
 
@@ -860,13 +860,13 @@ describe("helm/octogee-gateway/ — gateway-edge sidecar (chat-proxy folded in)"
     // from per-customer client secrets, not from a shared K8s secret.
   });
 
-  it("gateway-edge sidecar mounts the dedicated BYOT sync signing secret", () => {
+  it("gateway-edge sidecar mounts the model sync public verification key", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     const wsBlock = containerBlock(dep, "gateway-edge");
 
     expect(wsBlock).toMatch(
-      /name:\s*BYOT_SYNC_INTERNAL_SIGNING_SECRET\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*byot-sync-internal\s*\n\s*key:\s*secret/,
+      /name:\s*BYOT_SYNC_INTERNAL_PUBLIC_KEY\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name:\s*byot-sync-internal\s*\n\s*key:\s*public-key/,
     );
   });
 

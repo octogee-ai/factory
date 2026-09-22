@@ -1,3 +1,4 @@
+import { signingKey } from "../test-setup/signature-keys.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as crypto from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -54,10 +55,7 @@ function canonicalJson(value: unknown): string {
 }
 
 function expectedSignature(body: unknown, timestamp: string, secret: string): string {
-  return crypto
-    .createHmac("sha256", secret)
-    .update(`${timestamp}.${canonicalJson(body)}`)
-    .digest("hex");
+  return crypto.sign(null, Buffer.from(`v1\nbender\n${timestamp}\n${canonicalJson(body)}`), secret).toString("hex");
 }
 
 describe("model credential sync trigger", () => {
@@ -91,7 +89,7 @@ describe("model credential sync trigger", () => {
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
     await postGatewayModelCredentialSync({
       gatewayId: "builder-1", userData,
-      env: { K8S_NAMESPACE: "octogee", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { K8S_NAMESPACE: "octogee", BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
     });
     expect(internalFetchSpy.mock.calls[0][0]).toBe(
       "http://10.128.0.49:3001/api/g/builder-1/internal/model-credential-sync",
@@ -106,7 +104,7 @@ describe("model credential sync trigger", () => {
     gatewayRuntimeDoc = { runtime: "gce-vm", vm };
     await expect(postGatewayModelCredentialSync({
       gatewayId: "builder-1", userData,
-      env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
     })).rejects.toThrow("Builder VM is not reachable");
     expect(internalFetchSpy).not.toHaveBeenCalled();
   });
@@ -117,12 +115,12 @@ describe("model credential sync trigger", () => {
     expect("triggerGatewayByotSync" in modelCredentialSyncTrigger).toBe(false);
   });
 
-  it("POSTs the userData through internalFetch with a model credential sync HMAC, enriched with the free-tier dial", async () => {
+  it("POSTs the userData through internalFetch with a model credential sync signature, enriched with the free-tier dial", async () => {
     internalFetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
-      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
     });
     // No dial doc → the compiled defaults ride along; the pod-side derive must
     // never fall back to its constant on a push while the fleet is dialed away.
@@ -140,14 +138,14 @@ describe("model credential sync trigger", () => {
         method: "POST",
         body: JSON.stringify(enriched),
       }),
-      expect.objectContaining({ internalServiceKey: "" }),
+      expect.objectContaining({ fetchImpl: undefined }),
     );
     const headers = new Headers(internalFetchSpy.mock.calls[0][1].headers);
     expect(headers.get("content-type")).toBe("application/json");
     const timestamp = headers.get("x-byot-sync-timestamp");
     expect(timestamp).toMatch(/^\d+$/);
     expect(headers.get("x-byot-sync-signature")).toBe(
-      expectedSignature(enriched, timestamp!, "sync-secret"),
+      expectedSignature(enriched, timestamp!, signingKey),
     );
     expect(headers.get("x-k8s-sa-token")).toBeNull();
   });
@@ -158,7 +156,7 @@ describe("model credential sync trigger", () => {
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
-      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
     });
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
     expect(body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
@@ -174,7 +172,7 @@ describe("model credential sync trigger", () => {
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
-      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
     });
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
     expect(body.builderAgentDefault).toEqual({
@@ -192,7 +190,7 @@ describe("model credential sync trigger", () => {
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
-      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
     });
 
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
@@ -206,7 +204,7 @@ describe("model credential sync trigger", () => {
     await postGatewayModelCredentialSync({
       gatewayId: "bender",
       userData,
-      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+      env: { K8S_NAMESPACE: "octogee-test", BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
       logWarn: (m) => warns.push(m),
     });
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
@@ -218,7 +216,7 @@ describe("model credential sync trigger", () => {
     expect(warns.join("\n")).toContain("platform model dial");
   });
 
-  it("fails before network I/O when no BYOT sync signing secret or legacy service key is configured", async () => {
+  it("fails before network I/O when no BYOT sync signing secret is configured", async () => {
     await expect(
       postGatewayModelCredentialSync({
         gatewayId: "bender",
@@ -235,7 +233,7 @@ describe("model credential sync trigger", () => {
       postGatewayModelCredentialSync({
         gatewayId: "bender",
         userData,
-        env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+        env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
       }),
     ).rejects.toThrow(/503 nope/);
   });
@@ -247,7 +245,7 @@ describe("model credential sync trigger", () => {
       triggerGatewayModelCredentialSync({
         gatewayId: "bender",
         userData,
-        env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: "sync-secret" },
+        env: { BYOT_SYNC_INTERNAL_SIGNING_SECRET: signingKey },
         logWarn: warn,
       }),
     ).not.toThrow();

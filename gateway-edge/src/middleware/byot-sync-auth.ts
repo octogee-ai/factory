@@ -1,13 +1,11 @@
-import * as crypto from "node:crypto";
 import { Request, Response, NextFunction } from "express";
 import {
   MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER,
   MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER,
   isValidModelCredentialSyncSignature,
+  validModelCredentialSyncPublicKey,
 } from "../lib/byot-sync-internal-auth.js";
 import { logger } from "./logging.js";
-
-const INTERNAL_KEY_HEADER = "x-internal-service-key";
 
 function readHeader(req: Request, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -20,39 +18,23 @@ function nonBlank(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function timingSafeStringEqual(provided: string | undefined, expected: string): boolean {
-  if (!provided) return false;
-  try {
-    return (
-      provided.length === expected.length &&
-      crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expected, "utf8"))
-    );
-  } catch {
-    return false;
-  }
-}
-
 async function handleModelCredentialSyncInternalAuth(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const platformKey = nonBlank(process.env.INTERNAL_SERVICE_KEY);
-  if (platformKey && timingSafeStringEqual(readHeader(req, INTERNAL_KEY_HEADER), platformKey)) {
-    next();
-    return;
-  }
-
-  const signingSecret = nonBlank(process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET);
-  if (!signingSecret) {
-    logger.error("model credential sync internal signing secret is not configured");
+  const publicKey = nonBlank(process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY);
+  const gatewayId = nonBlank(process.env.GATEWAY_ID);
+  if (!publicKey || !validModelCredentialSyncPublicKey(publicKey) || !gatewayId) {
+    logger.error("model credential sync public key or gateway identity is not configured");
     res.status(503).json({ error: "Internal auth unavailable" });
     return;
   }
 
   if (isValidModelCredentialSyncSignature({
     body: req.body,
-    secret: signingSecret,
+    publicKey,
+    gatewayId,
     timestamp: readHeader(req, MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER),
     signature: readHeader(req, MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER),
   })) {

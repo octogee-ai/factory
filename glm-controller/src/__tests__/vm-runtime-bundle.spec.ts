@@ -15,9 +15,8 @@ const manifests = JSON.parse(
 const secrets: Record<string, string> = {
   "gateway-auth-token-b-x/token": "gwtoken",
   "octogee-fleet-controller/public-key": "fleetpub",
-  "agent-control-signing/secret": "acs",
-  "agent-control-router/secret": "acr",
-  "byot-sync-internal/secret": "byot",
+  "agent-control-router/public-key": "acr",
+  "byot-sync-internal/public-key": "byot",
 };
 
 function render(overrides: Partial<Parameters<typeof renderVmRuntimeBundle>[0]> = {}) {
@@ -59,6 +58,20 @@ describe("helmTemplateArgsFromUpgradeArgs", () => {
 });
 
 describe("renderVmRuntimeBundle", () => {
+  it.each([
+    ["agent-control-router", "secret"],
+    ["byot-sync-internal", "secret"],
+    ["agent-control-signing", "secret"],
+    ["gateway-auth-token-b-other", "token"],
+  ])("refuses to materialize %s/%s inside the tenant VM", async (name, key) => {
+    const unsafe = structuredClone(manifests) as Array<{ kind: string; spec?: { template: { spec: { containers: Array<{ env: unknown[] }> } } } }>;
+    const deployment = unsafe.find((item) => item.kind === "Deployment")!;
+    deployment.spec!.template.spec.containers[1].env.push({ name: "UNSAFE", valueFrom: { secretKeyRef: { name, key } } });
+    const readSecret = vi.fn(async () => "secret-value");
+    await expect(render({ manifests: unsafe, readSecret })).rejects.toThrow("is not permitted in a tenant VM");
+    expect(readSecret).not.toHaveBeenCalledWith(name, key);
+  });
+
   it("renders the chart's pod into containers, resolved secrets, token volumes, and mounts", async () => {
     const bundle = await render();
     expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);
@@ -87,11 +100,13 @@ describe("renderVmRuntimeBundle", () => {
 
     const edge = bundle.containers[1];
     expect(edge.env).toMatchObject({
-      OCTOGEE_AGENT_CONTROL_SIGNING_SECRET: "acs",
-      AGENT_CONTROL_ROUTER_KEY: "acr",
-      BYOT_SYNC_INTERNAL_SIGNING_SECRET: "byot",
+      AGENT_CONTROL_ROUTER_PUBLIC_KEY: "acr",
+      BYOT_SYNC_INTERNAL_PUBLIC_KEY: "byot",
       GATEWAY_ID: "b-x",
     });
+    expect(edge.env).not.toHaveProperty("AGENT_CONTROL_ROUTER_KEY");
+    expect(edge.env).not.toHaveProperty("BYOT_SYNC_INTERNAL_SIGNING_SECRET");
+    expect(edge.env).not.toHaveProperty("OCTOGEE_AGENT_CONTROL_SIGNING_SECRET");
     expect(edge.mounts.find((m) => m.volume === "k8s-api-token")?.mountPath).toBe("/var/run/secrets/kubernetes.io/serviceaccount");
 
     expect(bundle.volumes).toEqual(expect.arrayContaining([

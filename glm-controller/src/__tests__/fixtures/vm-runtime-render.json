@@ -723,28 +723,19 @@
          "value": "https://git-test.octogee.com"
         },
         {
-         "name": "OCTOGEE_AGENT_CONTROL_SIGNING_SECRET",
+         "name": "AGENT_CONTROL_ROUTER_PUBLIC_KEY",
          "valueFrom": {
           "secretKeyRef": {
-           "key": "secret",
-           "name": "agent-control-signing"
-          }
-         }
-        },
-        {
-         "name": "AGENT_CONTROL_ROUTER_KEY",
-         "valueFrom": {
-          "secretKeyRef": {
-           "key": "secret",
+           "key": "public-key",
            "name": "agent-control-router"
           }
          }
         },
         {
-         "name": "BYOT_SYNC_INTERNAL_SIGNING_SECRET",
+         "name": "BYOT_SYNC_INTERNAL_PUBLIC_KEY",
          "valueFrom": {
           "secretKeyRef": {
-           "key": "secret",
+           "key": "public-key",
            "name": "byot-sync-internal"
           }
          }

@@ -1,7 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
-import { verifyAgentControlRouterRequest } from "../../agent-control-callback-router.js";
-import { containsAsciiControlCharacter } from "../../lib/text-validation.js";
+import { validAgentControlRouterPublicKey, verifyAgentControlRouterRequest } from "../../agent-control-callback-router.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -104,7 +103,7 @@ function writeJson(res: ServerResponse, status: number, body: Record<string, unk
 
 interface MattermostInteractionProxyInput {
   gatewayId: string;
-  routerKey: string;
+  routerPublicKey: string;
   targetOrigin?: string;
   upstreamTimeoutMs?: number;
   maxResponseBytes?: number;
@@ -114,7 +113,7 @@ interface MattermostInteractionProxyInput {
 
 interface MattermostInteractionProxyConfig {
   gatewayId: string;
-  routerKey: string;
+  routerPublicKey: string;
   target: URL;
   upstreamTimeoutMs: number;
   maxResponseBytes: number;
@@ -139,8 +138,8 @@ function validateTargetOrigin(targetOrigin: string | undefined): URL {
 }
 
 function interactionProxyConfig(input: MattermostInteractionProxyInput): MattermostInteractionProxyConfig {
-  if (Buffer.byteLength(input.routerKey) < 32 || containsAsciiControlCharacter(input.routerKey)) {
-    throw new Error("AGENT_CONTROL_ROUTER_KEY must be at least 32 bytes");
+  if (!validAgentControlRouterPublicKey(input.routerPublicKey)) {
+    throw new Error("AGENT_CONTROL_ROUTER_PUBLIC_KEY must be an Ed25519 public key");
   }
   const upstreamTimeoutMs = input.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const maxResponseBytes = input.maxResponseBytes ?? MAX_RESPONSE_BYTES;
@@ -152,7 +151,7 @@ function interactionProxyConfig(input: MattermostInteractionProxyInput): Matterm
   }
   return {
     gatewayId: input.gatewayId,
-    routerKey: input.routerKey,
+    routerPublicKey: input.routerPublicKey,
     target: validateTargetOrigin(input.targetOrigin),
     upstreamTimeoutMs,
     maxResponseBytes,
@@ -193,7 +192,7 @@ function createInteractionRequestHandler(
     };
     if (
       proof.gatewayId !== config.gatewayId ||
-      !verifyAgentControlRouterRequest(body, proof, config.routerKey, config.now())
+      !verifyAgentControlRouterRequest(body, proof, config.routerPublicKey, config.now())
     ) {
       writeJson(res, 401, { error: "unauthorized" });
       return;

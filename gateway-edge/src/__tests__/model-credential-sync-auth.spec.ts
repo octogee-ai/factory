@@ -1,3 +1,4 @@
+import { signingKey, verificationKey } from "../test-setup/signature-keys.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,14 +33,16 @@ describe("model credential sync internal auth", () => {
     };
     const headers = createModelCredentialSyncAuthHeaders({
       body,
-      secret: "sync-secret",
+      secret: signingKey,
+      gatewayId: "bender",
       nowMs: 42,
     });
 
     expect(
       isValidModelCredentialSyncSignature({
         body,
-        secret: "sync-secret",
+        publicKey: verificationKey,
+        gatewayId: "bender",
         timestamp: headers[MODEL_CREDENTIAL_SYNC_TIMESTAMP_HEADER],
         signature: headers[MODEL_CREDENTIAL_SYNC_SIGNATURE_HEADER],
         nowMs: 42,
@@ -49,7 +52,7 @@ describe("model credential sync internal auth", () => {
 
   it("uses model credential wording for missing signing secret errors", () => {
     expect(() =>
-      createModelCredentialSyncAuthHeaders({ body: {}, secret: " " }),
+      createModelCredentialSyncAuthHeaders({ body: {}, gatewayId: "bender", secret: " " }),
     ).toThrow(/model credential sync/);
   });
 
@@ -58,7 +61,7 @@ describe("model credential sync internal auth", () => {
       join(import.meta.dirname, "..", "middleware", "byot-sync-auth.ts"),
       "utf8",
     );
-    expect(src).toContain("model credential sync internal signing secret is not configured");
+    expect(src).toContain("model credential sync public key or gateway identity is not configured");
     expect(src).toContain("model credential sync internal auth rejected");
     expect(src).not.toContain("BYOT sync internal");
   });

@@ -331,7 +331,7 @@ if (process.env.NODE_ENV !== "test") {
     const namespace = process.env.K8S_NAMESPACE || "default";
     const router = createAgentControlCallbackRouter({
       namespace,
-      hmacKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? "",
+      signingKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? "",
       log: (message, meta) => logger.error(message, meta),
     });
     router.listen(PORT, () => {

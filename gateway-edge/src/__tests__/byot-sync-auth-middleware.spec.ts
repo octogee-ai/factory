@@ -1,3 +1,4 @@
+import { signingKey, verificationKey } from "../test-setup/signature-keys.js";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ vi.mock("../middleware/logging.js", () => ({ logger: h.logger }));
 
 const { requireByotSyncInternalAuth } = await import("../middleware/byot-sync-auth.js");
 
-const ENV_KEYS = ["INTERNAL_SERVICE_KEY", "BYOT_SYNC_INTERNAL_SIGNING_SECRET"] as const;
+const ENV_KEYS = ["INTERNAL_SERVICE_KEY", "BYOT_SYNC_INTERNAL_PUBLIC_KEY", "GATEWAY_ID"] as const;
 const originalEnv = Object.fromEntries(
   ENV_KEYS.map((key) => [key, process.env[key]]),
 ) as Record<(typeof ENV_KEYS)[number], string | undefined>;
@@ -42,6 +43,7 @@ function app(): express.Express {
 describe("requireByotSyncInternalAuth", () => {
   beforeEach(() => {
     restoreEnv();
+    process.env.GATEWAY_ID = "bender";
     h.logger.error.mockClear();
     h.logger.warn.mockClear();
     h.logger.info.mockClear();
@@ -51,33 +53,33 @@ describe("requireByotSyncInternalAuth", () => {
     restoreEnv();
   });
 
-  it("accepts the platform internal service key without a signing secret", async () => {
+  it("refuses retired shared-secret auth even when the environment contains its key", async () => {
     process.env.INTERNAL_SERVICE_KEY = "platform-secret";
-    delete process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET;
+    delete process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY;
 
     const res = await request(app())
       .post("/sync")
       .set("X-Internal-Service-Key", "platform-secret")
       .send({ username: "mira" })
-      .expect(200, { ok: true });
+      .expect(503, { error: "Internal auth unavailable" });
 
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body).toEqual({ error: "Internal auth unavailable" });
   });
 
   it("returns 503 when no model credential sync signing secret is configured", async () => {
     delete process.env.INTERNAL_SERVICE_KEY;
-    delete process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET;
+    delete process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY;
 
     await request(app()).post("/sync").send({ username: "mira" }).expect(503, {
       error: "Internal auth unavailable",
     });
     expect(h.logger.error).toHaveBeenCalledWith(
-      "model credential sync internal signing secret is not configured",
+      "model credential sync public key or gateway identity is not configured",
     );
   });
 
   it("accepts a valid model credential sync signature", async () => {
-    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "sync-secret";
+    process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY = verificationKey;
     const body = {
       username: "mira",
       provisioning: { openclaw: { status: "complete" } },
@@ -85,7 +87,7 @@ describe("requireByotSyncInternalAuth", () => {
 
     const res = await request(app())
       .post("/sync")
-      .set(createModelCredentialSyncAuthHeaders({ body, secret: "sync-secret", nowMs: Date.now() }))
+      .set(createModelCredentialSyncAuthHeaders({ body, secret: signingKey, gatewayId: "bender", nowMs: Date.now() }))
       .send(body)
       .expect(200, { ok: true });
 
@@ -93,7 +95,7 @@ describe("requireByotSyncInternalAuth", () => {
   });
 
   it("rejects invalid signatures and logs the caller", async () => {
-    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "sync-secret";
+    process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY = verificationKey;
 
     await request(app())
       .post("/sync")
@@ -108,7 +110,7 @@ describe("requireByotSyncInternalAuth", () => {
   });
 
   it("logs the socket peer, never spoofable XFF, even on a trust-proxy app", async () => {
-    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "sync-secret";
+    process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY = verificationKey;
     const instance = app();
     instance.set("trust proxy", 2);
 

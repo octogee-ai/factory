@@ -1,3 +1,4 @@
+import { signingKey, verificationKey } from "../test-setup/signature-keys.js";
 import request from "supertest";
 import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -75,13 +76,10 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function byotSyncHeaders(body: unknown, secret = "byot-sync-secret", timestamp = `${Date.now()}`): Record<string, string> {
+function byotSyncHeaders(body: unknown, secret = signingKey, timestamp = `${Date.now()}`): Record<string, string> {
   return {
     "X-Byot-Sync-Timestamp": timestamp,
-    "X-Byot-Sync-Signature": crypto
-      .createHmac("sha256", secret)
-      .update(`${timestamp}.${canonicalJson(body)}`)
-      .digest("hex"),
+    "X-Byot-Sync-Signature": crypto.sign(null, Buffer.from(`v1\nbender\n${timestamp}\n${canonicalJson(body)}`), secret).toString("hex"),
   };
 }
 
@@ -93,7 +91,8 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
     releaseLeaseSpy.mockClear();
     acquireLeaseSpy.mockClear();
     delete process.env.INTERNAL_SERVICE_KEY;
-    process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET = "byot-sync-secret";
+    process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY = verificationKey;
+    process.env.GATEWAY_ID = "bender";
     delete process.env.GATEWAY_PROFILE;
     process.env.K8S_NAMESPACE = "octogee-test";
     process.env.OPENCLAW_DIR = "/home/node/.openclaw";
@@ -101,7 +100,8 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
 
   afterEach(() => {
     delete process.env.INTERNAL_SERVICE_KEY;
-    delete process.env.BYOT_SYNC_INTERNAL_SIGNING_SECRET;
+    delete process.env.BYOT_SYNC_INTERNAL_PUBLIC_KEY;
+    delete process.env.GATEWAY_ID;
     delete process.env.K8S_NAMESPACE;
     delete process.env.GATEWAY_PROFILE;
     delete process.env.OPENCLAW_DIR;
@@ -251,7 +251,7 @@ describe("POST /api/g/:gatewayId/internal/byot-sync", () => {
     const staleTimestamp = `${Date.now() - 10 * 60 * 1000}`;
     const res = await request(createApp({ surface: "sidecar" }))
       .post(PRIMARY_SYNC_PATH)
-      .set(byotSyncHeaders(userData, "byot-sync-secret", staleTimestamp))
+      .set(byotSyncHeaders(userData, signingKey, staleTimestamp))
       .send(userData);
 
     expect(res.status).toBe(401);

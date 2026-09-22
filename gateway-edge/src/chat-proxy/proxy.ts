@@ -1020,7 +1020,7 @@ export async function startChatProxyBackground(): Promise<void> {
   const runtimeBroker = getOpenClawRuntimeBroker();
   mattermostInteractionProxyHandler = createMattermostInteractionProxyHandler({
     gatewayId,
-    routerKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? "",
+    routerPublicKey: process.env.AGENT_CONTROL_ROUTER_PUBLIC_KEY ?? "",
     log: (message, meta) => logger.error(message, meta),
   });
   startCoachFinalNotifications(gatewayId, runtimeBroker);

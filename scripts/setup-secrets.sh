@@ -40,6 +40,7 @@ source "$SCRIPT_DIR/lib/deployment-target.sh"
 source "$SCRIPT_DIR/lib/github-oauth-redirect.sh"
 # shellcheck source=scripts/lib/openai-key-validation.sh
 source "$SCRIPT_DIR/lib/openai-key-validation.sh"
+source "$SCRIPT_DIR/lib/signature-key-validation.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -415,48 +416,39 @@ if [[ -z "$MM_ADMIN_PAT" || -z "$MM_ADMIN_PAT_ID" || -z "$MM_ADMIN_PAT_FINGERPRI
   warn "mattermost-gateway contains blank bootstrap values. Run ./scripts/setup-mattermost.sh --env=$ENV$TARGET_ARG before trusting this environment."
 fi
 
-# ── 2b. OpenClaw agent-control signing secret ────────────────────────────
-# HMAC secret for durable control context binding. Must NOT rotate during
-# the lifetime of any pending control — rotating mid-flight invalidates
-# buttons users haven't clicked yet. First install:
-# generate. Re-run: reuse what's already in Secret Manager.
-info "agent-control-signing"
-AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-${INTERNAL_SECRET_SUFFIX}"
-[[ "$ENV" == "custom" ]] && AGENT_CONTROL_SIGNING_SM_KEY="agent-control-signing-custom-${CUSTOM_NS}"
-AGENT_CONTROL_SIGNING_SECRET=$(sm_get "$AGENT_CONTROL_SIGNING_SM_KEY" octogee 2>/dev/null || echo "")
-if [[ -z "$AGENT_CONTROL_SIGNING_SECRET" ]]; then
-  AGENT_CONTROL_SIGNING_SECRET=$(openssl rand -hex 32)
-  info "  Generated new agent-control-signing secret — saving to Secret Manager..."
-  secret_manager_persist_value "$AGENT_CONTROL_SIGNING_SM_KEY" "$AGENT_CONTROL_SIGNING_SECRET" octogee \
-    || fail "Could not persist agent-control-signing secret to Secret Manager (key=${AGENT_CONTROL_SIGNING_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
-fi
-ksecret agent-control-signing --from-literal=secret="$AGENT_CONTROL_SIGNING_SECRET"
-
 # ── 2c. Mattermost callback router signing secret ─────────────────────────
 info "agent-control-router"
-AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-${INTERNAL_SECRET_SUFFIX}"
-[[ "$ENV" == "custom" ]] && AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-custom-${CUSTOM_NS}"
+AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-ed25519-${INTERNAL_SECRET_SUFFIX}"
+[[ "$ENV" == "custom" ]] && AGENT_CONTROL_ROUTER_SM_KEY="agent-control-router-ed25519-custom-${CUSTOM_NS}"
 AGENT_CONTROL_ROUTER_SECRET=$(sm_get "$AGENT_CONTROL_ROUTER_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$AGENT_CONTROL_ROUTER_SECRET" ]]; then
-  AGENT_CONTROL_ROUTER_SECRET=$(openssl rand -hex 32)
+  AGENT_CONTROL_ROUTER_SECRET=$(openssl genpkey -algorithm ED25519)
   info "  Generated new agent-control-router secret — saving to Secret Manager..."
   secret_manager_persist_value "$AGENT_CONTROL_ROUTER_SM_KEY" "$AGENT_CONTROL_ROUTER_SECRET" octogee \
     || fail "Could not persist agent-control-router secret to Secret Manager (key=${AGENT_CONTROL_ROUTER_SM_KEY})."
 fi
-ksecret agent-control-router --from-literal=secret="$AGENT_CONTROL_ROUTER_SECRET"
+AGENT_CONTROL_ROUTER_PUBLIC_KEY=$(printf '%s\n' "$AGENT_CONTROL_ROUTER_SECRET" | openssl pkey -pubout) \
+  || fail "Could not derive the Mattermost callback Ed25519 public key"
+validate_ed25519_keypair "$AGENT_CONTROL_ROUTER_SECRET" "$AGENT_CONTROL_ROUTER_PUBLIC_KEY" \
+  || fail "Mattermost callback signing keys must be a matching Ed25519 keypair"
+ksecret agent-control-router --from-literal=secret="$AGENT_CONTROL_ROUTER_SECRET" --from-literal=public-key="$AGENT_CONTROL_ROUTER_PUBLIC_KEY"
 
 # ── 2d. BYOT sync internal signing secret ─────────────────────────────────
 info "byot-sync-internal"
-BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-${INTERNAL_SECRET_SUFFIX}"
-[[ "$ENV" == "custom" ]] && BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-custom-${CUSTOM_NS}"
+BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-ed25519-${INTERNAL_SECRET_SUFFIX}"
+[[ "$ENV" == "custom" ]] && BYOT_SYNC_INTERNAL_SM_KEY="byot-sync-internal-ed25519-custom-${CUSTOM_NS}"
 BYOT_SYNC_INTERNAL_SECRET=$(sm_get "$BYOT_SYNC_INTERNAL_SM_KEY" octogee 2>/dev/null || echo "")
 if [[ -z "$BYOT_SYNC_INTERNAL_SECRET" ]]; then
-  BYOT_SYNC_INTERNAL_SECRET=$(openssl rand -hex 32)
+  BYOT_SYNC_INTERNAL_SECRET=$(openssl genpkey -algorithm ED25519)
   info "  Generated new BYOT sync signing secret — saving to Secret Manager..."
   secret_manager_persist_value "$BYOT_SYNC_INTERNAL_SM_KEY" "$BYOT_SYNC_INTERNAL_SECRET" octogee \
     || fail "Could not persist BYOT sync signing secret to Secret Manager (key=${BYOT_SYNC_INTERNAL_SM_KEY}). Refusing to materialize a K8s secret that exists nowhere else."
 fi
-ksecret byot-sync-internal --from-literal=secret="$BYOT_SYNC_INTERNAL_SECRET"
+BYOT_SYNC_INTERNAL_PUBLIC_KEY=$(printf '%s\n' "$BYOT_SYNC_INTERNAL_SECRET" | openssl pkey -pubout) \
+  || fail "Could not derive the model sync Ed25519 public key"
+validate_ed25519_keypair "$BYOT_SYNC_INTERNAL_SECRET" "$BYOT_SYNC_INTERNAL_PUBLIC_KEY" \
+  || fail "Model sync signing keys must be a matching Ed25519 keypair"
+ksecret byot-sync-internal --from-literal=secret="$BYOT_SYNC_INTERNAL_SECRET" --from-literal=public-key="$BYOT_SYNC_INTERNAL_PUBLIC_KEY"
 
 # ── 3. Gitea admin ────────────────────────────────────────────────────────
 info "gitea-admin"

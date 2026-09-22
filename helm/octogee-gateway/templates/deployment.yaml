@@ -494,24 +494,16 @@ spec:
             - name: GITEA_PUBLIC_BASE_URL
               value: {{ .Values.env.giteaPublicBaseUrl | quote }}
             {{- end }}
-            # Every gateway needs this for durable agent-control HMAC. It is
-            # not a Mattermost admin token; keep it
-            # explicit even though gateway pods no longer render MM_ADMIN_PAT.
-            - name: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: agent-control-signing
-                  key: secret
-            - name: AGENT_CONTROL_ROUTER_KEY
+            - name: AGENT_CONTROL_ROUTER_PUBLIC_KEY
               valueFrom:
                 secretKeyRef:
                   name: agent-control-router
-                  key: secret
-            - name: BYOT_SYNC_INTERNAL_SIGNING_SECRET
+                  key: public-key
+            - name: BYOT_SYNC_INTERNAL_PUBLIC_KEY
               valueFrom:
                 secretKeyRef:
                   name: byot-sync-internal
-                  key: secret
+                  key: public-key
             # Same per-gateway K8s secret as init + gateway container (see
             # init container env block for the rationale). chat-proxy is
             # folded into this container and needs the same token openclaw

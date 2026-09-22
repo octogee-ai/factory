@@ -1,8 +1,7 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import { containsAsciiControlCharacter } from "./lib/text-validation.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const BODY_TIMEOUT_MS = 10_000;
@@ -16,8 +15,22 @@ export interface AgentControlRouterProof {
   signature: string;
 }
 
-function validRouterKey(key: string): boolean {
-  return Buffer.byteLength(key) >= 32 && !containsAsciiControlCharacter(key);
+export function validAgentControlRouterPublicKey(key: string): boolean {
+  try {
+    return createPublicKey(key).asymmetricKeyType === "ed25519" && key.includes("BEGIN PUBLIC KEY");
+  } catch {
+    return false;
+  }
+}
+
+function routerSigningKey(key: string) {
+  try {
+    const parsed = createPrivateKey(key);
+    if (parsed.asymmetricKeyType === "ed25519") return parsed;
+  } catch {
+    throw new Error("AGENT_CONTROL_ROUTER_KEY must be an Ed25519 private key");
+  }
+  throw new Error("AGENT_CONTROL_ROUTER_KEY must be an Ed25519 private key");
 }
 
 function bodySha256(body: Buffer): string {
@@ -34,8 +47,7 @@ export function signAgentControlRouterRequest(
   timestamp: string,
   key: string,
 ): string {
-  if (!validRouterKey(key)) throw new Error("AGENT_CONTROL_ROUTER_KEY must be at least 32 bytes");
-  return createHmac("sha256", key).update(proofPayload(body, gatewayId, timestamp)).digest("hex");
+  return sign(null, Buffer.from(proofPayload(body, gatewayId, timestamp)), routerSigningKey(key)).toString("hex");
 }
 
 export function verifyAgentControlRouterRequest(
@@ -44,13 +56,12 @@ export function verifyAgentControlRouterRequest(
   key: string,
   now: number,
 ): boolean {
-  if (!validRouterKey(key)) return false;
+  if (!validAgentControlRouterPublicKey(key)) return false;
   if (!isValidGatewayId(proof.gatewayId) || !/^\d+$/.test(proof.timestamp)) return false;
   const timestamp = Number(proof.timestamp);
   if (!Number.isSafeInteger(timestamp) || Math.abs(now - timestamp) > PROOF_WINDOW_MS) return false;
-  if (!/^[a-f0-9]{64}$/i.test(proof.signature)) return false;
-  const expected = signAgentControlRouterRequest(body, proof.gatewayId, proof.timestamp, key);
-  return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(proof.signature, "hex"));
+  if (!/^[a-f0-9]{128}$/i.test(proof.signature)) return false;
+  return verify(null, Buffer.from(proofPayload(body, proof.gatewayId, proof.timestamp)), key, Buffer.from(proof.signature, "hex"));
 }
 
 type CallbackRoute = { gatewayId: string; accountId: string };
@@ -199,16 +210,14 @@ function writeJson(res: ServerResponse, status: number, body: Record<string, unk
 
 export function createAgentControlCallbackRouter(input: {
   namespace: string;
-  hmacKey: string;
+  signingKey: string;
   now?: () => number;
   targetOrigin?: (gatewayId: string) => string;
   upstreamTimeoutMs?: number;
   maxResponseBytes?: number;
   log: (message: string, meta?: Record<string, unknown>) => void;
 }): http.Server {
-  if (!validRouterKey(input.hmacKey)) {
-    throw new Error("AGENT_CONTROL_ROUTER_KEY must be at least 32 bytes");
-  }
+  routerSigningKey(input.signingKey);
   const now = input.now ?? Date.now;
   const targetOrigin = input.targetOrigin ?? ((gatewayId: string) =>
     `http://gateway-edge-${gatewayId}.${input.namespace}.svc.cluster.local:3001`);
@@ -249,7 +258,7 @@ export function createAgentControlCallbackRouter(input: {
     const proof = {
       gatewayId: route.gatewayId,
       timestamp,
-      signature: signAgentControlRouterRequest(body, route.gatewayId, timestamp, input.hmacKey),
+      signature: signAgentControlRouterRequest(body, route.gatewayId, timestamp, input.signingKey),
     };
     const origin = new URL(targetOrigin(route.gatewayId));
     let responded = false;

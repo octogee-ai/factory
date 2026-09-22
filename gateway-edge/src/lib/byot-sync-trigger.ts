@@ -53,7 +53,6 @@ export interface ModelCredentialSyncUserData {
 export interface GatewayModelCredentialSyncEnv {
   K8S_NAMESPACE?: string;
   GATEWAY_EDGE_INTERNAL_URL_TEMPLATE?: string;
-  INTERNAL_SERVICE_KEY?: string;
   BYOT_SYNC_INTERNAL_SIGNING_SECRET?: string;
 }
 
@@ -123,9 +122,8 @@ export async function postGatewayModelCredentialSync(args: {
   logWarn?: (msg: string) => void;
 }): Promise<void> {
   const env = args.env ?? process.env;
-  const internalServiceKey = env.INTERNAL_SERVICE_KEY ?? "";
   const signingSecret = env.BYOT_SYNC_INTERNAL_SIGNING_SECRET ?? "";
-  if (!internalServiceKey && !signingSecret.trim()) {
+  if (!signingSecret.trim()) {
     throw new Error("BYOT_SYNC_INTERNAL_SIGNING_SECRET is required for model credential sync");
   }
   const logWarn = args.logWarn ?? ((m: string) => logger.warn(m));
@@ -141,9 +139,7 @@ export async function postGatewayModelCredentialSync(args: {
     ...args.userData,
   };
   const body = JSON.stringify(userData);
-  const authHeaders = signingSecret.trim()
-    ? createModelCredentialSyncAuthHeaders({ body: userData, secret: signingSecret })
-    : {};
+  const authHeaders = createModelCredentialSyncAuthHeaders({ body: userData, gatewayId: args.gatewayId, secret: signingSecret });
   const res = await internalFetch(
     gatewayModelCredentialSyncUrl(args.gatewayId, env, runtime),
     {
@@ -152,7 +148,6 @@ export async function postGatewayModelCredentialSync(args: {
       body,
     },
     {
-      internalServiceKey,
       fetchImpl: args.fetchImpl,
     },
   );

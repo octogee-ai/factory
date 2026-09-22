@@ -5,9 +5,8 @@ set -euo pipefail
 # Pre-deploy secret verification
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Checks that all required K8s secrets exist AND that critical keys within
-# them are non-empty. Run this in CI before deploy, or locally before manual
-# helm commands.
+# Checks required K8s secrets, critical values, and platform signing keypairs.
+# Run this in CI before deploy, or locally before manual helm commands.
 #
 # Required secrets include Helm startup dependencies and product integrations
 # that must fail closed before a release is considered operational:
@@ -22,8 +21,8 @@ set -euo pipefail
 #   ./scripts/verify-secrets.sh --env=custom --namespace=feat-alice
 #
 # Exit codes:
-#   0 — all required secrets present with non-empty critical keys
-#   1 — missing secrets or empty required keys
+#   0 — required secrets, values and signing keypairs verified
+#   1 — missing secrets or invalid required values/keypairs
 # ═══════════════════════════════════════════════════════════════════════════
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -34,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/shell-env.sh"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+source "$SCRIPT_DIR/lib/signature-key-validation.sh"
 
 ENV=""
 KUBE_CTX=""
@@ -95,9 +95,8 @@ REQUIRED_SECRETS=(
   "google-oauth"             # octogee-api: Google OAuth + Drive picker
   "connect-state-secret"     # octogee-api: OAuth state HMAC
   "gitea-token"             # octogee-api + glm-controller
-  "agent-control-signing"        # gateway-edge: OCTOGEE_AGENT_CONTROL_SIGNING_SECRET (HMAC for controls)
-  "agent-control-router"    # private Mattermost callback-router → gateway-edge HMAC
-  "byot-sync-internal"      # octogee-api → gateway-edge BYOT sync HMAC
+  "agent-control-router"    # private Mattermost callback-router → gateway-edge Ed25519
+  "byot-sync-internal"      # octogee-api → gateway-edge model sync Ed25519
 )
 
 # ── Critical keys within secrets ────────────────────────────────────────────
@@ -120,9 +119,10 @@ REQUIRED_KEYS=(
   "social-notification-bearer:bearer-token:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-anthropic:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "octogee-openrouter:api_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
-  "agent-control-signing:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "agent-control-router:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "agent-control-router:public-key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "byot-sync-internal:secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "byot-sync-internal:public-key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "stripe-secrets:secret_key:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "stripe-secrets:webhook_secret:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "stripe-secrets:price_ids:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
@@ -200,6 +200,21 @@ for entry in "${REQUIRED_KEYS[@]}"; do
     echo -e "  ${GREEN}✓${NC} ${secret}/${key}"
   fi
 done
+
+for secret in agent-control-router byot-sync-internal; do
+  if ! SIGNING_PRIVATE_KEY="$(kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" \
+      -o jsonpath='{.data.secret}' 2>/dev/null | base64 -d 2>/dev/null)" \
+    || ! SIGNING_PUBLIC_KEY="$(kubectl get secret "$secret" -n "$NS" --context "$KUBE_CTX" \
+      -o jsonpath='{.data.public-key}' 2>/dev/null | base64 -d 2>/dev/null)" \
+    || ! validate_ed25519_keypair "$SIGNING_PRIVATE_KEY" "$SIGNING_PUBLIC_KEY"; then
+    echo -e "  ${RED}✗${NC} ${secret} — INVALID Ed25519 keypair (missing, unreadable, mismatched or wrong algorithm)"
+    echo -e "    Fix: ./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+    FAILURES=$((FAILURES + 1))
+  else
+    echo -e "  ${GREEN}✓${NC} ${secret} — matching Ed25519 keypair"
+  fi
+done
+unset SIGNING_PRIVATE_KEY SIGNING_PUBLIC_KEY
 
 MM_K8S_PASSWORD_FILE=$(mktemp)
 MM_SM_PASSWORD_FILE=$(mktemp)
@@ -279,7 +294,7 @@ if [[ "$FAILURES" -gt 0 ]]; then
   echo ""
   exit 1
 else
-  echo -e "${GREEN}${BOLD}✅ All required secrets and keys present — safe to deploy${NC}"
+  echo -e "${GREEN}${BOLD}✅ Required secrets, values and signing keypairs verified${NC}"
   echo ""
   exit 0
 fi

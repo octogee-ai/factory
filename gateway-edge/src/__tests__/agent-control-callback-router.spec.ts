@@ -1,3 +1,4 @@
+import { signingKey as ROUTER_KEY, verificationKey } from "../test-setup/signature-keys.js";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -6,7 +7,6 @@ import {
 } from "../agent-control-callback-router.js";
 
 const servers: Array<ReturnType<typeof createServer>> = [];
-const ROUTER_KEY = "r".repeat(32);
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
@@ -32,7 +32,7 @@ describe("private Mattermost callback router", () => {
 
     const router = createAgentControlCallbackRouter({
       namespace: "octogee-test",
-      hmacKey: ROUTER_KEY,
+      signingKey: ROUTER_KEY,
       now: () => 1_000,
       targetOrigin: () => `http://127.0.0.1:${address.port}`,
       log: () => undefined,
@@ -66,7 +66,7 @@ describe("private Mattermost callback router", () => {
     if (!oversizedAddress || typeof oversizedAddress === "string") throw new Error("missing address");
     const router = createAgentControlCallbackRouter({
       namespace: "octogee-test",
-      hmacKey: ROUTER_KEY,
+      signingKey: ROUTER_KEY,
       targetOrigin: () => `http://127.0.0.1:${oversizedAddress.port}`,
       upstreamTimeoutMs: 50,
       maxResponseBytes: 64 * 1024,
@@ -89,7 +89,7 @@ describe("private Mattermost callback router", () => {
     if (!hangingAddress || typeof hangingAddress === "string") throw new Error("missing address");
     const timeoutRouter = createAgentControlCallbackRouter({
       namespace: "octogee-test",
-      hmacKey: ROUTER_KEY,
+      signingKey: ROUTER_KEY,
       targetOrigin: () => `http://127.0.0.1:${hangingAddress.port}`,
       upstreamTimeoutMs: 20,
       log: () => undefined,
@@ -108,7 +108,7 @@ describe("private Mattermost callback router", () => {
   it("rejects unknown/public paths and verifies the router proof within 30 seconds", async () => {
     const router = createAgentControlCallbackRouter({
       namespace: "octogee-test",
-      hmacKey: ROUTER_KEY,
+      signingKey: ROUTER_KEY,
       now: () => 1_000,
       targetOrigin: () => "http://127.0.0.1:1",
       log: () => undefined,
@@ -126,11 +126,11 @@ describe("private Mattermost callback router", () => {
       timestamp: "1000",
       signature: "invalid",
     };
-    expect(verifyAgentControlRouterRequest(body, proof, ROUTER_KEY, 1_000)).toBe(false);
-    expect(verifyAgentControlRouterRequest(body, { ...proof, timestamp: "969" }, ROUTER_KEY, 1_000)).toBe(false);
+    expect(verifyAgentControlRouterRequest(body, proof, verificationKey, 1_000)).toBe(false);
+    expect(verifyAgentControlRouterRequest(body, { ...proof, timestamp: "969" }, verificationKey, 1_000)).toBe(false);
     expect(() => createAgentControlCallbackRouter({
       namespace: "octogee-test",
-      hmacKey: "short",
+      signingKey: "short",
       log: () => undefined,
     })).toThrow("AGENT_CONTROL_ROUTER_KEY");
   });
