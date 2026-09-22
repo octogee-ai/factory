@@ -113,7 +113,7 @@ describe("parsePlatformTrialConfig", () => {
     expect(parsePlatformTrialConfig({
       ...DEFAULT_PLATFORM_TRIAL_CONFIG,
       budgetPolicy: undefined,
-    })).toMatchObject({ offerVersion: 3 });
+    })).toBeNull();
   });
 
   it("hashes only the canonical grant-shaping fields", () => {

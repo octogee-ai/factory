@@ -79,7 +79,7 @@ export interface PlatformTrialConfig {
   durationDays: number;
   defaultPersonalTier: PersonalTierName;
   defaultBuilderTier: TrialBuilderTier | null;
-  budgetPolicy?: SignupOfferBudgetPolicy;
+  budgetPolicy: SignupOfferBudgetPolicy;
   updatedAt?: unknown;
   updatedBy?: string;
 }
@@ -129,14 +129,12 @@ function validConfigEditor(value: unknown): boolean {
 export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  const budgetPolicy = raw.budgetPolicy === undefined
-    ? null
-    : parseSignupOfferBudgetPolicy(raw.budgetPolicy);
+  const budgetPolicy = parseSignupOfferBudgetPolicy(raw.budgetPolicy);
   if (
     !validTrialOfferIdentity(raw) ||
     !validTrialOfferTerms(raw) ||
     !validConfigEditor(raw.updatedBy) ||
-    (raw.budgetPolicy !== undefined && budgetPolicy === null)
+    budgetPolicy === null
   ) {
     return null;
   }
@@ -147,7 +145,7 @@ export function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | 
     durationDays: raw.durationDays as number,
     defaultPersonalTier: raw.defaultPersonalTier as PersonalTierName,
     defaultBuilderTier: raw.defaultBuilderTier as TrialBuilderTier | null,
-    ...(budgetPolicy ? { budgetPolicy } : {}),
+    budgetPolicy,
     ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
     ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy as string } : {}),
   };
@@ -172,7 +170,7 @@ export function trialConfigHash(config: PlatformTrialConfig): string {
     durationDays: config.durationDays,
     defaultPersonalTier: config.defaultPersonalTier,
     defaultBuilderTier: config.defaultBuilderTier,
-    budgetPolicy: config.budgetPolicy ?? null,
+    budgetPolicy: config.budgetPolicy,
   }));
 }
 

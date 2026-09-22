@@ -29,7 +29,7 @@ export interface PlatformTrialConfig {
     durationDays: number;
     defaultPersonalTier: PersonalTierName;
     defaultBuilderTier: TrialBuilderTier | null;
-    budgetPolicy?: SignupOfferBudgetPolicy;
+    budgetPolicy: SignupOfferBudgetPolicy;
     updatedAt?: unknown;
     updatedBy?: string;
 }

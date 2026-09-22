@@ -376,7 +376,7 @@ router.put("/platform-trial-config", async (req, res) => {
       durationDays: config.durationDays,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
-      ...(config.budgetPolicy ? { budgetPolicy: config.budgetPolicy } : {}),
+      budgetPolicy: config.budgetPolicy,
       updatedAt: FieldValue.serverTimestamp(),
       updatedBy: req.uid ?? null,
     });
@@ -386,7 +386,7 @@ router.put("/platform-trial-config", async (req, res) => {
       durationDays: config.durationDays,
       defaultPersonalTier: config.defaultPersonalTier,
       defaultBuilderTier: config.defaultBuilderTier,
-      budgetPolicy: config.budgetPolicy ?? null,
+      budgetPolicy: config.budgetPolicy,
       updatedBy: req.uid,
     });
     res.json({ ok: true });

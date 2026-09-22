@@ -1,3 +1,4 @@
+import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/platform-config";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -378,6 +379,7 @@ describe("admin platform-trial-config", () => {
       durationDays: 7,
       defaultPersonalTier: "personal",
       defaultBuilderTier: "hobby",
+      budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
     };
     const res = await request(app).get("/api/admin/platform-trial-config");
 
@@ -389,6 +391,7 @@ describe("admin platform-trial-config", () => {
       durationDays: 7,
       defaultPersonalTier: "personal",
       defaultBuilderTier: "hobby",
+      budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
     });
     expect(res.body.personalPlans).toContainEqual({ name: "personal_pro", displayName: "Personal Pro" });
     expect(res.body.builderPlans).toContainEqual({
@@ -412,6 +415,19 @@ describe("admin platform-trial-config", () => {
     expect(res.body.error).toBe("trial_config_invalid");
   });
 
+  it("GET rejects stored configuration without a budget policy", async () => {
+    platformDocs["platformConfig/trial"] = { ...DEFAULT_PLATFORM_TRIAL_CONFIG, budgetPolicy: undefined };
+    await request(app).get("/api/admin/platform-trial-config")
+      .expect(409, { error: "trial_config_invalid" });
+  });
+
+  it("PUT rejects configuration without a budget policy without writing", async () => {
+    await request(app).put("/api/admin/platform-trial-config")
+      .send({ ...DEFAULT_PLATFORM_TRIAL_CONFIG, budgetPolicy: undefined })
+      .expect(400, { error: "invalid_trial_config" });
+    expect(setCalls).toHaveLength(0);
+  });
+
   it("PUT writes validated defaults with audit fields", async () => {
     const res = await request(app)
       .put("/api/admin/platform-trial-config")
@@ -422,6 +438,7 @@ describe("admin platform-trial-config", () => {
         durationDays: 14,
         defaultPersonalTier: "personal_pro_max",
         defaultBuilderTier: "team",
+        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
       });
 
     expect(res.status).toBe(200);
@@ -435,6 +452,7 @@ describe("admin platform-trial-config", () => {
         durationDays: 14,
         defaultPersonalTier: "personal_pro_max",
         defaultBuilderTier: "team",
+        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
         updatedAt: "server-now",
         updatedBy: "admin-user",
       },
@@ -451,6 +469,7 @@ describe("admin platform-trial-config", () => {
         durationDays: 7,
         defaultPersonalTier: "personal",
         defaultBuilderTier: null,
+        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
       });
 
     expect(res.status).toBe(200);
@@ -470,6 +489,7 @@ describe("admin platform-trial-config", () => {
         durationDays: 7,
         defaultPersonalTier: "personal_pro",
         defaultBuilderTier: "enterprise",
+        budgetPolicy: DEFAULT_PLATFORM_TRIAL_CONFIG.budgetPolicy,
       });
     expect(enterprise.status).toBe(400);
     expect(enterprise.body.error).toBe("invalid_trial_config");

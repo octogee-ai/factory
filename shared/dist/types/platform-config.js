@@ -74,13 +74,11 @@ export function parsePlatformTrialConfig(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return null;
     const raw = value;
-    const budgetPolicy = raw.budgetPolicy === undefined
-        ? null
-        : parseSignupOfferBudgetPolicy(raw.budgetPolicy);
+    const budgetPolicy = parseSignupOfferBudgetPolicy(raw.budgetPolicy);
     if (!validTrialOfferIdentity(raw) ||
         !validTrialOfferTerms(raw) ||
         !validConfigEditor(raw.updatedBy) ||
-        (raw.budgetPolicy !== undefined && budgetPolicy === null)) {
+        budgetPolicy === null) {
         return null;
     }
     return {
@@ -90,7 +88,7 @@ export function parsePlatformTrialConfig(value) {
         durationDays: raw.durationDays,
         defaultPersonalTier: raw.defaultPersonalTier,
         defaultBuilderTier: raw.defaultBuilderTier,
-        ...(budgetPolicy ? { budgetPolicy } : {}),
+        budgetPolicy,
         ...(raw.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
         ...(raw.updatedBy !== undefined ? { updatedBy: raw.updatedBy } : {}),
     };
@@ -113,7 +111,7 @@ export function trialConfigHash(config) {
         durationDays: config.durationDays,
         defaultPersonalTier: config.defaultPersonalTier,
         defaultBuilderTier: config.defaultBuilderTier,
-        budgetPolicy: config.budgetPolicy ?? null,
+        budgetPolicy: config.budgetPolicy,
     }));
 }
 export const DEFAULT_PLATFORM_CONNECT_CONFIG = {
