@@ -453,9 +453,18 @@ export function externalizeCustomerGitDir(
   }
   fs.rmSync(customerGitRefreshMarker(target), { force: true });
   const pointer = `gitdir: ${target}\n`;
-  const pointerTmp = `${localGit}.octogee.tmp`;
-  fs.writeFileSync(pointerTmp, pointer, { encoding: "utf8", mode: 0o444 });
-  fs.renameSync(pointerTmp, localGit);
+  const pointerTmp = `${localGit}.octogee-${randomUUID()}.tmp`;
+  const pointerFd = fs.openSync(pointerTmp, "wx", 0o444);
+  try {
+    try {
+      fs.writeFileSync(pointerFd, pointer, "utf8");
+    } finally {
+      fs.closeSync(pointerFd);
+    }
+    fs.renameSync(pointerTmp, localGit);
+  } finally {
+    fs.rmSync(pointerTmp, { force: true });
+  }
   return target;
 }
 
