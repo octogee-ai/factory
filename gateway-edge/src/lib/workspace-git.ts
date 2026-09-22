@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, promises as fs, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 5_000;
@@ -856,32 +857,17 @@ const MALFORMED_REPOSITORY = "<malformed>";
 async function validateTrustedMetadata(
   gitDir: string,
   metadataDir: string,
+  metadataRoot: string,
 ): Promise<{ error: string | null; receiptContents: string }> {
   const receipt = `${metadataDir}.octogee-trusted-v3`;
   try {
+    const unsafeEntry = findUnsafeGitMetadataEntry(gitDir, metadataRoot);
+    if (unsafeEntry) return { error: `<unsafe-metadata:${unsafeEntry}>`, receiptContents: "" };
     const receiptStat = await fs.lstat(receipt);
     if (!receiptStat.isFile() || receiptStat.isSymbolicLink()) {
       return { error: "<untrusted-metadata>", receiptContents: "" };
     }
     const receiptContents = await fs.readFile(receipt, "utf8");
-    const forbiddenEntries = [
-      "commondir",
-      path.join("objects", "info", "alternates"),
-      path.join("info", "grafts"),
-      path.join("refs", "replace"),
-      "worktrees",
-      "modules",
-    ];
-    for (const entry of forbiddenEntries) {
-      try {
-        await fs.lstat(path.join(gitDir, entry));
-        return { error: `<unsafe-metadata:${entry}>`, receiptContents };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          return { error: MALFORMED_REPOSITORY, receiptContents };
-        }
-      }
-    }
     const objects = await fs.lstat(path.join(gitDir, "objects"));
     return {
       error: objects.isDirectory() && !objects.isSymbolicLink()
@@ -955,7 +941,9 @@ async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | nul
   const identity = customerGitIdentity(cwd);
   let receiptContents = "";
   if (identity) {
-    const validation = await validateTrustedMetadata(gitDir, identity.metadataDir);
+    const validation = await validateTrustedMetadata(
+      gitDir, identity.metadataDir, path.join(path.dirname(identity.customersRoot), "git-metadata"),
+    );
     if (validation.error) return validation.error;
     receiptContents = validation.receiptContents;
     if (expectedCustomerRemoteUrl(cwd, receiptContents) === null) return "<untrusted-metadata>";

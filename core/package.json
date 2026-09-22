@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    "./git-metadata": {
+      "types": "./dist/git-metadata.d.ts",
+      "default": "./dist/git-metadata.js"
+    },
     "./admin-customer-router": {
       "types": "./dist/admin-customer-router.d.ts",
       "default": "./dist/admin-customer-router.js"

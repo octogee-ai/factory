@@ -1,6 +1,7 @@
 
 
 import type { Request, Response, RequestHandler } from "express";
+import { findUnsafeCustomerGitMetadataEntry } from "@octogee/core/git-metadata";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { createWriteStream } from "node:fs";
@@ -1795,6 +1796,24 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
   };
 }
 
+async function validateStagedGitMetadata(stageDir: string, slug: string): Promise<string | null> {
+  const metadataPath = path.join("git-metadata", slug);
+  for (const relative of ["", "git-metadata", metadataPath]) {
+    let stat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      stat = await fs.lstat(path.join(stageDir, relative));
+    } catch (error) {
+      if (relative && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return `unsafe Git metadata: ${relative || "."} is not a real directory`;
+    }
+  }
+  const unsafeEntry = findUnsafeCustomerGitMetadataEntry(path.join(stageDir, metadataPath));
+  return unsafeEntry === null ? null : `unsafe Git metadata: ${path.join(metadataPath, unsafeEntry)}`;
+}
+
 async function validateStagedRsyncImport(
   session: RSyncImportSession,
   slug: string,
@@ -1802,6 +1821,8 @@ async function validateStagedRsyncImport(
   configTransferMode: MigrationConfigTransferMode,
   log: (message: string) => void,
 ): Promise<string | null> {
+  const unsafeGitMetadata = await validateStagedGitMetadata(session.stageDir, slug);
+  if (unsafeGitMetadata !== null) return unsafeGitMetadata;
   if (mode !== "keys") {
     const omitted = await omitSafeDefaultAgentStateFromStage(session.stageDir);
     if (omitted.length > 0) {
@@ -2328,6 +2349,8 @@ async function extractValidatedImport(input: {
   const stageDir = path.join(path.dirname(input.tarPath), "stage");
   await fs.mkdir(stageDir, { recursive: true });
   await extractTarToDir(input.tarPath, stageDir);
+  const unsafeGitMetadata = await validateStagedGitMetadata(stageDir, input.slug);
+  if (unsafeGitMetadata !== null) return unsafeGitMetadata;
   const delivered = entries
     .filter((entry) => isSqliteStorePath(entry))
     .map((entry) => path.join(stageDir, entry));

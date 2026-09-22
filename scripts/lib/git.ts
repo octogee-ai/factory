@@ -14,6 +14,7 @@ import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
 
 export function errMessage(err: unknown): string {
@@ -402,6 +403,7 @@ export function customerRepositoryHasCanonicalRemote(repoDir: string): boolean {
   const localGit = path.join(repoDir, ".git");
   const configPath = path.join(identity.metadataDir, "config");
   try {
+    if (findUnsafeGitMetadataEntry(identity.metadataDir, CUSTOMER_GIT_METADATA_ROOT)) return false;
     const localGitStat = fs.lstatSync(localGit);
     const configStat = fs.lstatSync(configPath);
     if (!localGitStat.isFile() || localGitStat.isSymbolicLink()
@@ -440,6 +442,10 @@ export function externalizeCustomerGitDir(
   const localGit = path.join(repoDir, ".git");
   const expectedSource = canonicalCustomerGitSource(identity, deps);
   const trustedSource = trustedCustomerGitSource(identity);
+  if (trustedSource) {
+    const unsafeEntry = findUnsafeGitMetadataEntry(target, CUSTOMER_GIT_METADATA_ROOT);
+    if (unsafeEntry) throw new Error(`[git] unsafe customer Git metadata: ${unsafeEntry}`);
+  }
   if (!trustedSource || sourceReceiptValue(trustedSource) !== sourceReceiptValue(expectedSource)) {
     const refreshMarker = customerGitRefreshMarker(target);
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -709,8 +715,12 @@ function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
   const gitDir = trustedGitDir(cwd);
   if (!gitDir) return null;
   const configPath = path.join(gitDir, "config");
-  if (!fs.existsSync(configPath)) return null;
   try {
+    if (customerGitIdentity(cwd)) {
+      const unsafeEntry = findUnsafeGitMetadataEntry(gitDir, CUSTOMER_GIT_METADATA_ROOT);
+      if (unsafeEntry) return `<unsafe-metadata:${unsafeEntry}>`;
+    }
+    if (!fs.existsSync(configPath)) return null;
     const output = execFileSync(
       GIT_BINARY,
       ["config", "--file", configPath, "--null", "--name-only", "--list"],

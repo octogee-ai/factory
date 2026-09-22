@@ -3778,6 +3778,145 @@ await activateStarted;
   });
 });
 
+describe("Git metadata across migration imports", () => {
+  async function tempRoot(): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-metadata-import-"));
+    migrationTempRoots.push(root);
+    return root;
+  }
+
+  async function importMetadata(transport: "rsync" | "tar", sourceDir: string, importDir: string) {
+    const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => importDir) });
+    const deps = mkDeps({ adapter, waitForRsyncReady: vi.fn(async () => undefined) });
+    const migrationId = `mig-git-${transport}`;
+    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    if (transport === "tar") {
+      spawnMock.mockReturnValueOnce(mkFakeChild({
+        stdout: ["customers/chris/draft.txt\ngit-metadata/chris/workspace.git/HEAD\n"],
+        exitCode: 0,
+      })).mockImplementationOnce((_command: string, args: string[]) => {
+        const stageDir = args[args.indexOf("-C") + 1]!;
+        fsSync.cpSync(sourceDir, stageDir, { recursive: true, dereference: false });
+        return mkFakeChild({ exitCode: 0 });
+      }).mockImplementation(real.spawn);
+      const response = mkResponse();
+      await createImportHandler(deps)(mkImportRequest({
+        migrationId, slug: "chris", mode: "final", signature: signForPod(migrationId, "chris"),
+      }), response.res, vi.fn());
+      return { ...response, adapter };
+    }
+    spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(real.spawn);
+    const prepare: PrepareRsyncImportRequestBody = {
+      migrationId, slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
+      transferUser: "migration", transferKey: "c".repeat(64),
+    };
+    const prepared = mkResponse();
+    await createPrepareRsyncImportHandler(deps)(mkRequest(prepare, {
+      signature: signForPod(migrationId, JSON.stringify(prepare)),
+    }), prepared.res, vi.fn());
+    expect(prepared.getStatus()).toBe(200);
+    const args = spawnMock.mock.calls[0][1] as string[];
+    const configPath = args.find((arg) => arg.startsWith("--config="))!.slice(9);
+    const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
+    await fs.cp(sourceDir, stageDir, { recursive: true, dereference: false });
+    const finish: FinishRsyncImportRequestBody = {
+      migrationId, slug: "chris", mode: "final", rpcPhase: "finish-rsync-import",
+    };
+    const response = mkResponse();
+    await createFinishRsyncImportHandler(deps)(mkRequest(finish, {
+      signature: signForPod(migrationId, JSON.stringify(finish)),
+    }), response.res, vi.fn());
+    return { ...response, adapter };
+  }
+
+  describe.each(["rsync", "tar"] as const)("%s", (transport) => {
+    it.each([
+      ["git-metadata", "symlink"],
+      ["git-metadata/chris", "symlink"],
+      ["git-metadata/chris/workspace.git/objects", "symlink"],
+      ["git-metadata/chris/workspace.git/objects/info/alternates", "indirection"],
+      ["git-metadata/chris/workspace.git/commondir", "indirection"],
+      ["git-metadata/chris/projects/demo.git/objects/info/alternates", "indirection"],
+      ["git-metadata/chris/workspace.git", "gitfile"],
+      ["git-metadata/chris/projects/demo.git", "gitfile"],
+    ])("rejects unsafe Git metadata at %s before copying or activating", async (relative, kind) => {
+      const sourceDir = await tempRoot();
+      const importDir = await tempRoot();
+      const outsideDir = await tempRoot();
+      const customerFile = "customers/chris/draft.txt";
+      for (const [root, content] of [[sourceDir, "source draft"], [importDir, "destination draft"]]) {
+        await fs.mkdir(path.dirname(path.join(root, customerFile)), { recursive: true });
+        await fs.writeFile(path.join(root, customerFile), content);
+      }
+      await fs.writeFile(path.join(outsideDir, "sentinel"), "outside metadata");
+      const unsafePath = path.join(sourceDir, relative);
+      await fs.mkdir(path.dirname(unsafePath), { recursive: true });
+      const unsafeContent = `${kind === "gitfile" ? "gitdir: " : ""}${outsideDir}\n`;
+      if (kind === "symlink") await fs.symlink(outsideDir, unsafePath);
+      else await fs.writeFile(unsafePath, unsafeContent);
+
+      const result = await importMetadata(transport, sourceDir, importDir);
+
+      expect(result.getStatus()).toBe(400);
+      expect(result.getBody()).toMatchObject({
+        error: transport === "rsync" ? "rsync import failed validation" : "tarball failed validation",
+        message: expect.stringContaining("unsafe Git metadata"),
+      });
+      expect(spawnMock.mock.calls).toHaveLength(transport === "rsync" ? 1 : 2);
+      expect(upgradeStoresMock).not.toHaveBeenCalled();
+      expect(result.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+      expect(result.adapter.writeMountMarker).not.toHaveBeenCalled();
+      expect(result.adapter.onMounted).not.toHaveBeenCalled();
+      expect(result.adapter.deleteCustomerDir).not.toHaveBeenCalled();
+      expect(result.adapter.onUnmounted).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(importDir, customerFile), "utf8")).toBe("destination draft");
+      expect(await fs.readFile(path.join(sourceDir, customerFile), "utf8")).toBe("source draft");
+      expect(await fs.readFile(path.join(outsideDir, "sentinel"), "utf8")).toBe("outside metadata");
+      if (kind === "symlink") expect(await fs.readlink(unsafePath)).toBe(outsideDir);
+      else expect(await fs.readFile(unsafePath, "utf8")).toBe(unsafeContent);
+    });
+
+    it("imports customer files without Git metadata", async () => {
+      const sourceDir = await tempRoot();
+      const importDir = await tempRoot();
+      await fs.mkdir(path.join(sourceDir, "customers/chris"), { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "customers/chris/draft.txt"), "source draft");
+
+      const result = await importMetadata(transport, sourceDir, importDir);
+
+      expect(result.getStatus()).toBe(200);
+      expect(await fs.readFile(path.join(importDir, "customers/chris/draft.txt"), "utf8")).toBe("source draft");
+      expect(result.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    });
+
+    it("copies normal Git metadata unchanged and activates", async () => {
+      const sourceDir = await tempRoot();
+      const importDir = await tempRoot();
+      const files = [
+        ["git-metadata/chris/workspace.git/HEAD", "ref: refs/heads/work\n"],
+        ["git-metadata/chris/workspace.git/config", "[core]\n\tbare = false\n"],
+        ["git-metadata/chris/workspace.git/refs/heads/work", `${"1".repeat(40)}\n`],
+        ["git-metadata/chris/workspace.git/objects/ab/cdef", "object contents"],
+        ["git-metadata/chris/projects/demo.git/HEAD", "ref: refs/heads/commondir\n"],
+        ["git-metadata/chris/projects/demo.git/refs/heads/commondir", `${"2".repeat(40)}\n`],
+        ["customers/chris/draft.txt", "source draft"],
+      ];
+      for (const [relative, content] of files) {
+        await fs.mkdir(path.dirname(path.join(sourceDir, relative)), { recursive: true });
+        await fs.writeFile(path.join(sourceDir, relative), content);
+      }
+
+      const result = await importMetadata(transport, sourceDir, importDir);
+
+      expect(result.getStatus()).toBe(200);
+      for (const [relative, content] of files) {
+        expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe(content);
+      }
+      expect(result.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    });
+  });
+});
+
 describe("findPathTraversalViolation — no permanent operator lane", () => {
   it("rejects every legacy operator agent directory", () => {
     expect(
