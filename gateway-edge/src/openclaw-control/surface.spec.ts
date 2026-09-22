@@ -26,7 +26,7 @@ import {
 import { OpenClawControlSessionManager } from "./session.js";
 const OPENCLAW_TEST_METHODS = ["health", "status", "config.get", "config.schema", "config.patch", "config.set", "config.apply", "agents.list", "models.list", "channels.status", "tools.catalog", "skills.status", "tools.invoke", "approval.history", "approval.get", "approval.resolve"];
 import { OpenClawControlResourceLimiter } from "./limits.js";
-import { globalRateLimit } from "../middleware/security.js";
+import { dashboardAssetRateLimit } from "../middleware/security.js";
 import {
   createOpenClawControlAuthorizationCache,
   OpenClawControlBrokerError,
@@ -236,7 +236,7 @@ describe("OpenClaw Dashboard HTTP surface", () => {
 
   it("returns a branded relaunch document only to an unauthenticated Dashboard navigation", async () => {
     const manager = sessions();
-    const application = express().use(globalRateLimit).use(appWith({ env: env(), sessions: manager }));
+    const application = express().use(dashboardAssetRateLimit).use(appWith({ env: env(), sessions: manager }));
 
     const navigation = await request(application)
       .get("/api/g/bender/openclaw/")

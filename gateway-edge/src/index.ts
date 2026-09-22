@@ -5,7 +5,7 @@ import { corsMiddleware } from "./middleware/cors.js";
 import { requestLogger } from "./middleware/logging.js";
 import { errorHandler } from "./middleware/errors.js";
 import { logger } from "./middleware/logging.js";
-import { helmetMiddleware, globalRateLimit, internalRateLimit } from "./middleware/security.js";
+import { helmetMiddleware, dashboardAssetRateLimit } from "./middleware/security.js";
 import { requireAuthenticatedUid } from "./middleware/auth.js";
 import { installBodyParsers } from "./middleware/body-parsers.js";
 import { createEmailMetrics, setEmailMetrics } from "./lib/email-metrics.js";
@@ -156,9 +156,6 @@ setNotificationMetrics(createNotificationMetrics(metricsRegistry));
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
 
-app.use(globalRateLimit);
-app.use(internalRateLimit);
-
 app.use((req, res, next) => {
   if (req.path === '/metrics') return next();
   const end = httpRequestDuration.startTimer();
@@ -173,6 +170,7 @@ const route = req.route?.path || 'unmatched';
 });
 
 app.use(requestLogger);
+app.use(dashboardAssetRateLimit);
 
 installBodyParsers(app);
 

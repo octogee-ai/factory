@@ -107,6 +107,24 @@ describe('gateway-edge middleware stack', () => {
     expect(res.text).toContain('http_requests_total');
   });
 
+  it('records Dashboard asset throttling in request metrics', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    try {
+      const app = createSidecarApp();
+      for (let index = 0; index < 180; index++) {
+        await request(app).get('/api/g/bender/openclaw/assets/app.js')
+          .set('X-Forwarded-For', '198.51.100.26, 203.0.113.1').expect(404);
+      }
+      await request(app).get('/api/g/bender/openclaw/assets/app.js')
+        .set('X-Forwarded-For', '198.51.100.26, 203.0.113.1').expect(429);
+
+      const metrics = await request(app).get('/metrics').expect(200);
+      expect(metrics.text).toContain('http_requests_total{method="GET",route="unmatched",status="429"} 1');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('keeps health endpoint working without auth', async () => {
     const app = createSidecarApp();
     const res = await request(app).get('/api/health');
@@ -207,11 +225,11 @@ describe('gateway-edge middleware stack', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
-  it('non-exempt endpoints include RateLimit response headers', async () => {
+  it('ordinary endpoints do not add an application IP quota', async () => {
     const app = createSidecarApp();
     const res = await request(app).get('/api/leads');
 
-    expect(res.headers['ratelimit-limit'] ?? res.headers['ratelimit']).toBeDefined();
+    expect(res.headers['ratelimit-limit'] ?? res.headers['ratelimit']).toBeUndefined();
   });
 
   // Stripe-webhook raw-body middleware contract: tested in

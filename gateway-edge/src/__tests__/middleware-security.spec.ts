@@ -1,15 +1,12 @@
 import express from "express";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
-  globalRateLimit,
+  dashboardAssetRateLimit,
   helmetMiddleware,
-  internalRateLimit,
   isWellFormedServiceAccountJwt,
 } from "../middleware/security.js";
-
-const ORIGINAL_INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;
 
 const WELL_FORMED_SA_TOKEN = [
   "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LWlkIn0",
@@ -19,8 +16,7 @@ const WELL_FORMED_SA_TOKEN = [
 
 function limiterApp() {
   const app = express();
-  app.use(globalRateLimit);
-  app.use(internalRateLimit);
+  app.use(dashboardAssetRateLimit);
   app.get("/health", (_req, res) => res.json({ ok: true }));
   app.get("/internal/gitea/user-pubkey", (_req, res) => res.json({ ok: true }));
   app.get("/api/probe", (_req, res) => res.json({ ok: true }));
@@ -29,14 +25,6 @@ function limiterApp() {
 }
 
 describe("security middleware", () => {
-  afterEach(() => {
-    if (ORIGINAL_INTERNAL_SERVICE_KEY === undefined) {
-      delete process.env.INTERNAL_SERVICE_KEY;
-      return;
-    }
-    process.env.INTERNAL_SERVICE_KEY = ORIGINAL_INTERNAL_SERVICE_KEY;
-  });
-
   it("sets the locked-down content security policy", async () => {
     const app = express();
     app.use(helmetMiddleware);
@@ -48,68 +36,13 @@ describe("security middleware", () => {
     expect(res.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
   });
 
-  it("skips all rate-limit buckets for health and validated platform-key internal requests", async () => {
-    process.env.INTERNAL_SERVICE_KEY = "configured-platform-key";
+  it("only applies the asset budget to dashboard assets", async () => {
     const app = limiterApp();
-
-    const health = await request(app).get("/health").expect(200);
-    const platformInternal = await request(app)
-      .get("/internal/gitea/user-pubkey")
-      .set("x-internal-service-key", "configured-platform-key")
-      .expect(200);
-
-    expect(health.headers.ratelimit).toBeUndefined();
-    expect(platformInternal.headers.ratelimit).toBeUndefined();
-  });
-
-  it("moves well-formed token-bearing internal requests to the internal bucket instead of exempting them", async () => {
-    const app = limiterApp();
-
-    const internal = await request(app)
-      .get("/internal/gitea/user-pubkey")
-      .set("x-k8s-sa-token", WELL_FORMED_SA_TOKEN)
-      .expect(200);
-
-    expect(internal.headers.ratelimit).toContain("limit=1200");
-  });
-
-  it("keeps the global cap on internal requests whose token is malformed or whose key is forged", async () => {
-    process.env.INTERNAL_SERVICE_KEY = "configured-platform-key";
-    const app = limiterApp();
-
-    const junkToken = await request(app)
-      .get("/internal/gitea/user-pubkey")
-      .set("x-k8s-sa-token", "junk")
-      .expect(200);
-    const forgedKey = await request(app)
-      .get("/internal/gitea/user-pubkey")
-      .set("x-internal-service-key", "wrong-platform-key")
-      .expect(200);
-    const unauthenticated = await request(app).get("/internal/gitea/user-pubkey").expect(200);
-
-    expect(junkToken.headers.ratelimit).toContain("limit=300");
-    expect(forgedKey.headers.ratelimit).toContain("limit=300");
-    expect(unauthenticated.headers.ratelimit).toContain("limit=300");
-  });
-
-  it("keeps ordinary API traffic on the global bucket and off the internal bucket", async () => {
-    const app = limiterApp();
-
-    const probe = await request(app)
-      .get("/api/probe")
-      .set("x-k8s-sa-token", WELL_FORMED_SA_TOKEN)
-      .expect(200);
-
-    expect(probe.headers.ratelimit).toContain("limit=300");
-  });
-
-  it("does not spend the ordinary API budget on dashboard assets", async () => {
-    const app = limiterApp();
-    const before = await request(app).get("/api/probe").expect(200);
+    for (const path of ["/health", "/internal/gitea/user-pubkey", "/api/probe"]) {
+      const response = await request(app).get(path).expect(200);
+      expect(response.headers.ratelimit).toBeUndefined();
+    }
     await request(app).get("/api/g/bender/openclaw/assets/app.js").expect(200);
-    const after = await request(app).get("/api/probe").expect(200);
-    const remaining = (header: string) => Number(/remaining=(\d+)/u.exec(header)![1]);
-    expect(remaining(after.headers.ratelimit)).toBe(remaining(before.headers.ratelimit) - 1);
   });
 });
 
