@@ -354,6 +354,7 @@ fi
 # entrypoint must not gate the auxiliary runners on OpenClaw health — the fleet
 # controller is what hydrates and releases a held pod.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  supervise_runner github-cli-auth 5000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
   log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
   supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts

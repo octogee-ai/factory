@@ -45,7 +45,6 @@ router.get(
     const connectorId = paramString(req.params.connector);
     if (
       !connectorId
-      || connectorId === "github"
       || !isConnectorAgentRuntimeTokenMaterializable(connectorId)
     ) {
       res.status(403).json({ error: "forbidden", code: "connector_not_materializable" });

@@ -100,11 +100,18 @@ describe("internal connector materialize route", () => {
     });
   });
 
-  it.each([
-    ["github", "GitHub"],
-    ["google", "productivity OAuth"],
-  ])("rejects %s before a %s bearer can enter the agent runtime", async (connectorId) => {
-    const res = await request(app()).get(`/internal/connectors/${connectorId}/materialize`);
+  it("materializes the connected Builder owner's GitHub token", async () => {
+    vi.mocked(readOwnerRuntimeConnectorAccessToken).mockResolvedValue("gho_owner");
+
+    const res = await request(app()).get("/internal/connectors/github/materialize");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: "connected", connectorId: "github", accessToken: "gho_owner" });
+    expect(readOwnerRuntimeConnectorAccessToken).toHaveBeenCalledWith("github");
+  });
+
+  it("rejects productivity OAuth before a bearer can enter the agent runtime", async () => {
+    const res = await request(app()).get("/internal/connectors/google/materialize");
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "forbidden", code: "connector_not_materializable" });
@@ -121,11 +128,11 @@ describe("internal connector materialize route", () => {
     expect(res.status).toBe(200);
   });
 
-  it("rejects shared gateways before reading a token", async () => {
+  it.each(["cloudflare", "github"])("rejects shared gateways before reading a %s token", async (connectorId) => {
     process.env.GATEWAY_CLASS = "shared";
     process.env.GATEWAY_PROFILE = "standard";
 
-    const res = await request(app()).get("/internal/connectors/cloudflare/materialize");
+    const res = await request(app()).get(`/internal/connectors/${connectorId}/materialize`);
 
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "forbidden", code: "owner_runtime_gateway_required" });
