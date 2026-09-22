@@ -1,10 +1,11 @@
 import { signingKey as ROUTER_KEY, verificationKey } from "../test-setup/signature-keys.js";
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAgentControlCallbackRouter,
   verifyAgentControlRouterRequest,
 } from "../agent-control-callback-router.js";
+import { createVmRoutesResolver } from "../vm-routes.js";
 
 const servers: Array<ReturnType<typeof createServer>> = [];
 
@@ -13,6 +14,69 @@ afterEach(async () => {
 });
 
 describe("private Mattermost callback router", () => {
+  it("routes signed callbacks to current VM entries and falls back to shared services after removal", async () => {
+    const deliveries: string[] = [];
+    const vm = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      expect(verifyAgentControlRouterRequest(Buffer.concat(chunks), {
+        gatewayId: String(req.headers["x-octogee-agent-control-gateway"]),
+        timestamp: String(req.headers["x-octogee-agent-control-timestamp"]),
+        signature: String(req.headers["x-octogee-agent-control-signature"]),
+      }, verificationKey, 1_000)).toBe(true);
+      deliveries.push(req.url ?? "");
+      res.end("vm");
+    });
+    const shared = createServer((_req, res) => res.end("shared"));
+    servers.push(vm, shared);
+    await Promise.all([vm, shared].map((server) => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))));
+    const vmAddress = vm.address();
+    const sharedAddress = shared.address();
+    if (!vmAddress || typeof vmAddress === "string" || !sharedAddress || typeof sharedAddress === "string") {
+      throw new Error("missing upstream address");
+    }
+    let routes = '{"bender":"127.0.0.1"}';
+    let mtime = 1;
+    const resolveVmOrigin = createVmRoutesResolver({
+      filePath: "/routes.json",
+      edgePort: vmAddress.port,
+      readFile: () => routes,
+      mtimeOf: () => mtime,
+      log: () => undefined,
+      logInfo: () => undefined,
+    });
+    const sharedOrigin = vi.fn(() => `http://127.0.0.1:${sharedAddress.port}`);
+    const router = createAgentControlCallbackRouter({
+      namespace: "octogee-test",
+      signingKey: ROUTER_KEY,
+      now: () => 1_000,
+      resolveVmOrigin,
+      targetOrigin: sharedOrigin,
+      log: () => undefined,
+    });
+    servers.push(router);
+    await new Promise<void>((resolve) => router.listen(0, "127.0.0.1", resolve));
+    const address = router.address();
+    if (!address || typeof address === "string") throw new Error("missing router address");
+    const send = async (gatewayId: string) => {
+      const response = await fetch(`http://127.0.0.1:${address.port}/internal/openclaw/mattermost/${gatewayId}/mattermost/interactions/default`, {
+        method: "POST", body: '{"context":{"action":"approve"}}',
+      });
+      expect(response.status).toBe(200);
+      return response.text();
+    };
+    expect(await send("bender")).toBe("vm");
+    expect(sharedOrigin).not.toHaveBeenCalled();
+    expect(deliveries).toEqual(["/api/g/bender/internal/openclaw/mattermost/interactions/default"]);
+    expect(await send("shared-0")).toBe("shared");
+    expect(sharedOrigin).toHaveBeenLastCalledWith("shared-0");
+    routes = "{}";
+    mtime += 1;
+    expect(await send("bender")).toBe("shared");
+    expect(sharedOrigin).toHaveBeenLastCalledWith("bender");
+    expect(deliveries).toHaveLength(1);
+  });
+
   it("forwards only explicit bounded routes to the stable gateway service and strips forged headers", async () => {
     const upstream = createServer((req, res) => {
       expect(req.url).toBe("/api/g/bender/internal/openclaw/mattermost/interactions/default");

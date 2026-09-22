@@ -324,12 +324,22 @@ export function dispatchGatewayEdgeRequest(
 }
 
 if (process.env.NODE_ENV !== "test") {
+  const vmRoutesFile = process.env.GATEWAY_VM_ROUTES_FILE;
+  const resolveVmOrigin = vmRoutesFile
+    ? createVmRoutesResolver({
+        filePath: vmRoutesFile,
+        edgePort: 3001,
+        log: (message, meta) => logger.warn(message, meta),
+        logInfo: (message, meta) => logger.info(message, meta),
+      })
+    : undefined;
   if (process.env.GATEWAY_EDGE_MODE === "agent-control-router") {
     const { createAgentControlCallbackRouter } = await import("./agent-control-callback-router.js");
     const namespace = process.env.K8S_NAMESPACE || "default";
     const router = createAgentControlCallbackRouter({
       namespace,
       signingKey: process.env.AGENT_CONTROL_ROUTER_KEY ?? "",
+      resolveVmOrigin,
       log: (message, meta) => logger.error(message, meta),
     });
     router.listen(PORT, () => {
@@ -342,15 +352,6 @@ if (process.env.NODE_ENV !== "test") {
   } else if (process.env.GATEWAY_EDGE_MODE === "router") {
     const namespace = process.env.K8S_NAMESPACE || "default";
     const routerLog = (message: string, meta?: Record<string, unknown>) => logger.error(message, meta);
-    const vmRoutesFile = process.env.GATEWAY_VM_ROUTES_FILE;
-    const resolveVmOrigin = vmRoutesFile
-      ? createVmRoutesResolver({
-          filePath: vmRoutesFile,
-          edgePort: 3001,
-          log: (message, meta) => logger.warn(message, meta),
-          logInfo: (message, meta) => logger.info(message, meta),
-        })
-      : null;
     const server = createGatewayRouter({
       namespace,
       log: routerLog,

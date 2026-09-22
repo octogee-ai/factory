@@ -1,4 +1,5 @@
 {{- $gatewayEdge := index .Values "gateway-edge" -}}
+{{- $computer := (.Values.global).computer | default dict -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -54,6 +55,16 @@ spec:
                 secretKeyRef:
                   name: agent-control-router
                   key: secret
+            {{- if $computer.enabled }}
+            - name: GATEWAY_VM_ROUTES_FILE
+              value: /etc/octogee/vm-routes/routes.json
+            {{- end }}
+          {{- if $computer.enabled }}
+          volumeMounts:
+            - name: vm-routes
+              mountPath: /etc/octogee/vm-routes
+              readOnly: true
+          {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -85,6 +96,13 @@ spec:
             limits:
               cpu: 250m
               memory: 256Mi
+      {{- if $computer.enabled }}
+      volumes:
+        - name: vm-routes
+          configMap:
+            name: octogee-vm-routes
+            optional: true
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -144,7 +162,6 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
-    {{- $computer := (.Values.global).computer | default dict }}
     {{- if $computer.enabled }}
     - to:
         - ipBlock:

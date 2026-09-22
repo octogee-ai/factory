@@ -212,6 +212,7 @@ export function createAgentControlCallbackRouter(input: {
   namespace: string;
   signingKey: string;
   now?: () => number;
+  resolveVmOrigin?: (gatewayId: string) => string | undefined;
   targetOrigin?: (gatewayId: string) => string;
   upstreamTimeoutMs?: number;
   maxResponseBytes?: number;
@@ -260,7 +261,7 @@ export function createAgentControlCallbackRouter(input: {
       timestamp,
       signature: signAgentControlRouterRequest(body, route.gatewayId, timestamp, input.signingKey),
     };
-    const origin = new URL(targetOrigin(route.gatewayId));
+    const origin = new URL(input.resolveVmOrigin?.(route.gatewayId) ?? targetOrigin(route.gatewayId));
     let responded = false;
     const fail = (error: Error): void => {
       input.log("[agent-control-router] upstream request failed", {
