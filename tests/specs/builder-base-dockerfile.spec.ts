@@ -62,6 +62,7 @@ describe("Builder base build authority", () => {
       "infra/gateway/builder-toolchain/package.json",
       "infra/gateway/builder-toolchain/package-lock.json",
       "infra/gateway/builder-toolchain/groups.json",
+      "infra/gateway/builder-toolchain/base-inputs.mjs",
       "infra/gateway/stamp-claude-first-run.mjs",
     ]) {
       expect(workflow).toContain(input);

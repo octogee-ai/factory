@@ -1,4 +1,11 @@
 ARG GATEWAY_BASE_IMAGE
+FROM ${GATEWAY_BASE_IMAGE} AS builder-base-inputs
+
+USER node
+COPY --chown=node:node infra/gateway/builder-toolchain/groups.json /tmp/builder-tool-groups.json
+COPY --chown=node:node infra/gateway/builder-toolchain/base-inputs.mjs /tmp/builder-base-inputs.mjs
+RUN node /tmp/builder-base-inputs.mjs < /tmp/builder-tool-groups.json > /tmp/builder-base-inputs.json
+
 FROM ${GATEWAY_BASE_IMAGE} AS builder-toolchain-validation
 
 ARG BUILDER_TOOLCHAIN_LOCK_SHA256
@@ -42,27 +49,14 @@ RUN set -eu; \
     fi; \
     printf '%s\n' "$BUILDER_TOOLCHAIN_LOCK_SHA256" > /tmp/builder-toolchain-verified
 
-FROM ${GATEWAY_BASE_IMAGE}
-
-ARG BUILDER_TOOLCHAIN_LOCK_SHA256
-ARG BUILDER_TOOL_GROUPS_SHA256
+FROM ${GATEWAY_BASE_IMAGE} AS builder-base-system
 
 USER root
-
-COPY --chown=node:node infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json
-COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json
-COPY --chown=node:node infra/gateway/builder-toolchain/groups.json /octogee/toolchain/groups.json
-COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
-COPY --from=builder-toolchain-validation --chown=node:node /tmp/builder-toolchain-verified /octogee/toolchain/.install-verified
-
-RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \
-    && test -n "$BUILDER_TOOL_GROUPS_SHA256" \
-    && echo "$BUILDER_TOOLCHAIN_LOCK_SHA256  /octogee/toolchain/package-lock.json" | sha256sum -c -
-RUN echo "$BUILDER_TOOL_GROUPS_SHA256  /octogee/toolchain/groups.json" | sha256sum -c -
+COPY --from=builder-base-inputs --chown=node:node /tmp/builder-base-inputs.json /octogee/toolchain/base-inputs.json
 
 RUN set -eu; \
-    DEBIAN_PACKAGES="$(node -e 'const m=require("/octogee/toolchain/groups.json"); process.stdout.write(m.groups.filter((g)=>g.enabled&&g.delivery==="base").flatMap((g)=>g.debianPackages||[]).join(" "))')"; \
-    PYTHON_PACKAGES="$(node -e 'const m=require("/octogee/toolchain/groups.json"); process.stdout.write(m.pythonPackages.join(" "))')"; \
+    DEBIAN_PACKAGES="$(node -e 'const m=require("/octogee/toolchain/base-inputs.json"); process.stdout.write(m.groups.filter((g)=>g.enabled&&g.delivery==="base").flatMap((g)=>g.debianPackages||[]).join(" "))')"; \
+    PYTHON_PACKAGES="$(node -e 'const m=require("/octogee/toolchain/base-inputs.json"); process.stdout.write(m.pythonPackages.join(" "))')"; \
     test -n "$DEBIAN_PACKAGES"; \
     test -n "$PYTHON_PACKAGES"; \
     apt-get update; \
@@ -74,12 +68,12 @@ RUN set -eu; \
 
 RUN set -eu; \
     test "$(dpkg --print-architecture)" = amd64; \
-    GCLOUD_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/groups.json").standaloneTools.gcloud.version)')"; \
-    GCLOUD_SHA256="$(node -e 'process.stdout.write(require("/octogee/toolchain/groups.json").standaloneTools.gcloud.sha256)')"; \
-    GH_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/groups.json").standaloneTools.gh.version)')"; \
-    HELM_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/groups.json").standaloneTools.helm.version)')"; \
-    TERRAFORM_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/groups.json").standaloneTools.terraform.version)')"; \
-    YQ_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/groups.json").standaloneTools.yq.version)')"; \
+    GCLOUD_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/base-inputs.json").standaloneTools.gcloud.version)')"; \
+    GCLOUD_SHA256="$(node -e 'process.stdout.write(require("/octogee/toolchain/base-inputs.json").standaloneTools.gcloud.sha256)')"; \
+    GH_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/base-inputs.json").standaloneTools.gh.version)')"; \
+    HELM_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/base-inputs.json").standaloneTools.helm.version)')"; \
+    TERRAFORM_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/base-inputs.json").standaloneTools.terraform.version)')"; \
+    YQ_VERSION="$(node -e 'process.stdout.write(require("/octogee/toolchain/base-inputs.json").standaloneTools.yq.version)')"; \
     curl -fsSL --retry 3 --retry-all-errors \
       "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-x86_64.tar.gz" \
       -o /tmp/gcloud.tgz; \
@@ -122,13 +116,31 @@ RUN set -eu; \
       /tmp/helm-sha256 "/tmp/${HELM_FILE}" /tmp/linux-amd64 \
       /tmp/terraform-sha256 "/tmp/${TERRAFORM_FILE}" /tmp/terraform \
       /tmp/yq /tmp/yq-checksums /tmp/yq-order; \
-    BASE_COMMANDS="$(node -e 'const m=require("/octogee/toolchain/groups.json"); process.stdout.write(m.groups.filter((g)=>g.enabled&&g.delivery==="base").flatMap((g)=>g.commands||[]).join(" "))')"; \
+    BASE_COMMANDS="$(node -e 'const m=require("/octogee/toolchain/base-inputs.json"); process.stdout.write(m.groups.filter((g)=>g.enabled&&g.delivery==="base").flatMap((g)=>g.commands||[]).join(" "))')"; \
     for command in $BASE_COMMANDS; do command -v "$command" >/dev/null; done; \
     gcloud --version | grep -F "Google Cloud SDK ${GCLOUD_VERSION}"; \
     gh --version | grep -F "gh version ${GH_VERSION}"; \
     helm version --short | grep -F "v${HELM_VERSION}"; \
     terraform version | grep -F "Terraform v${TERRAFORM_VERSION}"; \
     yq --version | grep -F "version v${YQ_VERSION}"
+
+FROM builder-base-system
+
+ARG BUILDER_TOOLCHAIN_LOCK_SHA256
+ARG BUILDER_TOOL_GROUPS_SHA256
+
+USER root
+
+COPY --chown=node:node infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json
+COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json
+COPY --chown=node:node infra/gateway/builder-toolchain/groups.json /octogee/toolchain/groups.json
+COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
+COPY --from=builder-toolchain-validation --chown=node:node /tmp/builder-toolchain-verified /octogee/toolchain/.install-verified
+
+RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \
+    && test -n "$BUILDER_TOOL_GROUPS_SHA256" \
+    && echo "$BUILDER_TOOLCHAIN_LOCK_SHA256  /octogee/toolchain/package-lock.json" | sha256sum -c -
+RUN echo "$BUILDER_TOOL_GROUPS_SHA256  /octogee/toolchain/groups.json" | sha256sum -c -
 
 ENV OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH=/octogee/toolchain/package.json
 ENV OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH=/octogee/toolchain/package-lock.json
