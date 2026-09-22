@@ -40,6 +40,27 @@ async function markRetryFailed(projectRef: FirebaseFirestore.DocumentReference, 
   });
 }
 
+async function claimProjectRetry(ctx: ProjectCtx): Promise<boolean> {
+  return db.runTransaction(async (transaction) => {
+    const project = (await transaction.get(ctx.projectRef)).data();
+    if (!project || project.ownerUid !== ctx.uid || project.provisioningCleanup?.status === "in_progress") {
+      return false;
+    }
+    if (project.provisioningState !== "failed") {
+      if (project.provisioningState !== "active") return false;
+      const channel = await transaction.get(ctx.projectRef.collection("channels").doc("general"));
+      if (channel.exists) return false;
+    }
+    transaction.update(ctx.projectRef, {
+      provisioningState: "provisioning",
+      provisioningError: null,
+      provisioningCleanup: null,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
+}
+
 async function retryMattermostContext(ctx: ProjectCtx, res: Response): Promise<RetryMattermostContext | null> {
   const userDoc = await db.doc(`users/${ctx.uid}`).get();
   const callerCtx = await getWorkspaceMmContext(ctx.uid, ctx.wid, userDoc.data());
@@ -211,6 +232,7 @@ async function reconcileRetryRepoOrFail(ctx: ProjectCtx, res: Response, visibili
     tagline: typeof ctx.project.tagline === "string" ? ctx.project.tagline : "",
     projectType,
     visibility,
+    githubBacked: ctx.project.repoSource?.provider === "github",
     recipe: isProjectRecipeId(ctx.project.recipe)
       ? ctx.project.recipe
       : defaultProjectRecipe(projectType),
@@ -276,7 +298,18 @@ router.post("/:wid/:pid/retry-provisioning", strictRateLimit, async (req: Reques
     ownerErrorMessage: "Only the project owner can retry provisioning",
     logTag: "[projects] Retry provisioning crashed for",
     errorMessage: "Retry provisioning failed",
-  }, async (ctx) => retryProjectProvisioning(ctx, res));
+  }, async (ctx) => {
+    if (!(await claimProjectRetry(ctx))) {
+      res.status(409).json({ error: "Project setup is already running or no longer needs retrying." });
+      return;
+    }
+    try {
+      await retryProjectProvisioning(ctx, res);
+    } catch (error) {
+      await markRetryFailed(ctx.projectRef, errorMessage(error));
+      throw error;
+    }
+  });
 });
 
 export default router;

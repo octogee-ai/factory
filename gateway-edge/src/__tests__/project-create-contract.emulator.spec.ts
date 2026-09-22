@@ -318,6 +318,44 @@ describe("project create ↔ SSR project page read contract", () => {
   });
 });
 
+describe("project provisioning recovery", () => {
+  async function createFailedProject() {
+    mockMmContextOk();
+    mockMmApi.mockRejectedValue(new Error("Mattermost temporarily unavailable"));
+    const app = createApp();
+    await request(app).post("/api/projects").set("Authorization", `Bearer ${token}`)
+      .send({ name: "Recoverable", slug: "recover", visibility: "public", recipe: "astro-static" })
+      .expect(502);
+    const project = (await db.doc(`workspaces/${USERNAME}/projects/recover`).get()).data();
+    expect(project).toMatchObject({ provisioningState: "failed", visibility: "private", recipe: "astro-static" });
+    mockMmContextOk();
+    mockInternalFetch.mockClear();
+    return app;
+  }
+
+  it("recovers a failed create through the authenticated owner retry route", async () => {
+    const app = await createFailedProject();
+    await request(app).post(`/api/projects/${USERNAME}/recover/retry-provisioning`)
+      .set("Authorization", `Bearer ${token}`).expect(200);
+    const project = (await db.doc(`workspaces/${USERNAME}/projects/recover`).get()).data();
+    expect(project).toMatchObject({ provisioningState: "active", visibility: "public", pendingVisibility: null, provisioningCleanup: null });
+    const member = (await db.doc(`workspaces/${USERNAME}/projects/recover/members/${CALLER_UID}`).get()).data();
+    expect(member).toMatchObject({ id: CALLER_UID, role: "owner" });
+    expect(await ssrReadProject(USERNAME, "recover")).toMatchObject({ found: true, provisioningState: "active" });
+  });
+
+  it("allows only one concurrent retry to provision the failed project", async () => {
+    const app = await createFailedProject();
+    const attempt = () => request(app).post(`/api/projects/${USERNAME}/recover/retry-provisioning`)
+      .set("Authorization", `Bearer ${token}`);
+    const results = await Promise.all([attempt(), attempt()]);
+    expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+    const repoCalls = mockInternalFetch.mock.calls.filter(([url]) => String(url).endsWith("/internal/gitea/provision-project-repo"));
+    expect(repoCalls).toHaveLength(1);
+    expect(JSON.parse(repoCalls[0][1].body)).toMatchObject({ recipe: "astro-static", visibility: "public" });
+  });
+});
+
 describe("github-backed project create", () => {
   const GH_REPO_SOURCE = { provider: "github", owner: "octogee-ai", repo: "octogee" };
 

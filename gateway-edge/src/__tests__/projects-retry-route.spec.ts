@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({
 function projectRef() {
   return {
     path: `workspaces/${h.wid}/projects/${h.pid}`,
+    get: async () => ({ exists: true, data: () => h.project }),
     update: async (data: ProjectUpdate) => {
       h.projectUpdates.push(data);
     },
@@ -83,6 +84,13 @@ vi.mock("../lib/withProject.js", () => ({
 
 vi.mock("../lib/db.js", () => ({
   db: {
+    runTransaction: async (handler: (transaction: unknown) => Promise<unknown>) => handler({
+      get: (ref: { get(): Promise<unknown> }) => ref.get(),
+      update: (_ref: unknown, data: ProjectUpdate) => {
+        h.projectUpdates.push(data);
+        Object.assign(h.project, data);
+      },
+    }),
     doc: (path: string) => {
       if (path !== `users/${h.uid}`) throw new Error(`unexpected doc ${path}`);
       return {
@@ -189,6 +197,7 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
       tagline: "Ship it",
       projectType: "web",
       visibility: "public",
+      githubBacked: false,
       recipe: "static-site",
     });
     expect(h.channelWrites).toEqual([
@@ -216,6 +225,57 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
     });
   });
 
+  it.each([
+    { provisioningState: "provisioning" },
+    { provisioningState: "failed", provisioningCleanup: { status: "in_progress" } },
+  ])("rejects a retry while setup or cleanup is running: %j", async (state) => {
+    Object.assign(h.project, state);
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(409);
+
+    expect(h.projectUpdates).toEqual([]);
+    expect(h.mmApi).not.toHaveBeenCalled();
+    expect(h.provisionProjectRepo).not.toHaveBeenCalled();
+  });
+
+  it("rejects retrying an active project with its primary channel already recorded", async () => {
+    h.project.provisioningState = "active";
+    h.generalChannel = { mattermost: { channelId: "channel-1" } };
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(409);
+
+    expect(h.projectUpdates).toEqual([]);
+    expect(h.mmApi).not.toHaveBeenCalled();
+  });
+
+  it("retains repair of an active project whose primary channel document is missing", async () => {
+    h.project.provisioningState = "active";
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(200);
+
+    expect(h.projectUpdates[0]).toMatchObject({ provisioningState: "provisioning" });
+    expect(h.projectUpdates.at(-1)).toMatchObject({ provisioningState: "active" });
+    expect(h.generalChannel).toMatchObject({ mattermost: { channelId: "channel-1" } });
+  });
+
+  it("preserves GitHub-backed provisioning so retry does not seed the wrong Board", async () => {
+    h.project.repoSource = { provider: "github", owner: "octogee-ai", repo: "demo" };
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(200);
+
+    expect(h.provisionProjectRepo).toHaveBeenCalledWith(expect.objectContaining({ githubBacked: true }));
+  });
+
+  it("returns an unexpectedly interrupted retry to failed so the owner can try again", async () => {
+    h.provisionProjectRepo.mockRejectedValueOnce(new Error("broker connection reset"));
+
+    await request(app()).post("/api/projects/mira/orbit/retry-provisioning").expect(500);
+
+    expect(h.projectUpdates.at(-1)).toMatchObject({
+      provisioningState: "failed", provisioningError: "broker connection reset",
+    });
+  });
+
   it("marks retry failed when the workspace has no Mattermost team context", async () => {
     h.mmContext = null;
 
@@ -225,6 +285,12 @@ describe("POST /api/projects/:wid/:pid/retry-provisioning", () => {
 
     expect(h.mmApi).not.toHaveBeenCalled();
     expect(h.projectUpdates).toEqual([
+      {
+        provisioningState: "provisioning",
+        provisioningError: null,
+        provisioningCleanup: null,
+        updatedAt: "SERVER_TS",
+      },
       {
         provisioningState: "failed",
         provisioningError: "Workspace has no Mattermost team context",
