@@ -1044,3 +1044,87 @@ describe("createRuntimeDispatchingHelmRunner", () => {
     expect(cluster.calls).toEqual(["readAll", "upsert:shared-1", "pending"]);
   });
 });
+
+
+describe("readDeploymentPrerequisiteError", () => {
+  it("reports the running computer's missing email scope without mutating it", async () => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, {
+      describe: vi.fn(async () => ({ ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [GATEWAY_VM_ACCESS_SCOPES[0]] }] })),
+    });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toContain("pause and resume");
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.vm.bind).not.toHaveBeenCalled();
+    expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
+    expect(h.writes).toEqual([]);
+  });
+
+  it.each(["TERMINATED", "STOPPED", "STOPPING"])("allows a %s computer to complete normal identity repair", async (status) => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, {
+      describe: vi.fn(async () => ({ ...running, status, serviceAccounts: [] })),
+    });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
+    expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("uses the gateway's recorded VM spec for its expected identity", async () => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded, vmSpec: { ...spec, serviceAccountEmail: "another@example.com" } } });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toContain("identity scopes are outdated");
+  });
+
+  it("allows a computer with the expected identity", async () => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
+  });
+
+  it("allows first deployment or replacement when no computer exists", async () => {
+    const empty = harness({ "gateways/b-x": { ownerUid: "UidA" } });
+    expect(await empty.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
+    expect(empty.vm.describe).not.toHaveBeenCalled();
+    const missing = harness({ "gateways/b-x": { ownerUid: "UidA" }, "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, { describe: vi.fn(async () => null) });
+    expect(await missing.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
+  });
+
+  it.each([false, true])("checks the authoritative owner's computer when the recorded VM is absent (stale reference: %s)", async (staleReference) => {
+    const h = harness({
+      "gateways/b-x": { ownerUid: "UidA" },
+      "glmGateways/b-x": { runtime: "gce-vm", ...(staleReference ? { vm: recorded } : {}), vmInstance: { ownerUid: "stale-owner" } },
+    }, {
+      describe: vi.fn(async () => null),
+      findByLabels: vi.fn(async () => ({ ...running, serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [GATEWAY_VM_ACCESS_SCOPES[0]] }] })),
+    });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toContain("pause and resume");
+    expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
+    expect(h.vm.create).not.toHaveBeenCalled();
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.vm.bind).not.toHaveBeenCalled();
+    expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
+    expect(h.writes).toEqual([]);
+  });
+
+  it("allows the owner-labeled stopped computer to use normal identity repair", async () => {
+    const h = harness({ "gateways/b-x": { ownerUid: "UidA" } }, {
+      findByLabels: vi.fn(async () => ({ ...stopped, serviceAccounts: [] })),
+    });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toBeNull();
+    expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
+    expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("fails before discovery when there is no authoritative Builder owner", async () => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vmInstance: { ownerUid: "stale-owner" } } });
+    expect(await h.runtime.readDeploymentPrerequisiteError("b-x")).toContain("needs an owner");
+    expect(h.vm.findByLabels).not.toHaveBeenCalled();
+  });
+
+  it("propagates owner-label discovery failures for the rollout retry policy", async () => {
+    const h = harness({ "gateways/b-x": { ownerUid: "UidA" } }, {
+      findByLabels: vi.fn(async () => { throw new Error("ECONNRESET"); }),
+    });
+    await expect(h.runtime.readDeploymentPrerequisiteError("b-x")).rejects.toThrow("ECONNRESET");
+  });
+
+  it("propagates Compute failures for the rollout retry policy", async () => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, { describe: vi.fn(async () => { throw new Error("ECONNRESET"); }) });
+    await expect(h.runtime.readDeploymentPrerequisiteError("b-x")).rejects.toThrow("ECONNRESET");
+  });
+});

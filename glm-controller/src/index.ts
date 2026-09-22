@@ -3214,6 +3214,12 @@ async function buildHandlers(
       readReleasePayloadFromFirestore(db, gatewayId, release),
     readGatewayOpenclawVersion: (gatewayId) =>
       readGatewayOpenclawVersionFromFirestore(db, gatewayId),
+    readDeploymentPrerequisiteError: async (gatewayId) => {
+      if (!(await isVmGateway(db, gatewayId))) return null;
+      const vmRuntime = vmGatewayRuntimeRef.current;
+      if (!vmRuntime) return `gateway ${gatewayId}: gce-vm deployment requires configured VM runtime`;
+      return vmRuntime.readDeploymentPrerequisiteError(gatewayId);
+    },
     activateDesiredRelease: async ({ gatewayId, targetRelease, operationId }) =>
       db.runTransaction(async (transaction) => {
         const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);

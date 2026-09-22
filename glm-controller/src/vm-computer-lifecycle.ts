@@ -1,4 +1,5 @@
 import type { Firestore } from "firebase-admin/firestore";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
   builderComputerInstanceName,
@@ -46,6 +47,7 @@ export interface ParkComputerOptions {
 }
 
 export interface ComputerLifecycle {
+  readDeploymentPrerequisiteError(gatewayId: string): Promise<string | null>;
   ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState>;
   parkComputer(gatewayId: string, opts?: ParkComputerOptions): Promise<GatewayVmState | null>;
   pauseComputer(gatewayId: string): Promise<void>;
@@ -101,6 +103,11 @@ export function ownerComputerLabels(environment: string, ownerUid: string): Reco
 
 function boundElsewhere(description: GatewayVmDescription, gatewayId: string): boolean {
   return description.gatewayId !== null && description.gatewayId !== gatewayId;
+}
+
+function computerIdentityPrerequisiteError(description: GatewayVmDescription, email: string): string | null {
+  if (hasComputerIdentity(description, email) || STOPPED_STATUSES.has(description.status)) return null;
+  return `computer ${description.name}: identity scopes are outdated; pause and resume the gateway through Admin to repair them`;
 }
 
 function needsStop(description: GatewayVmDescription): boolean {
@@ -227,15 +234,29 @@ function bindingOf(input: CreateGatewayVmInput): BindGatewayVmInput {
   return { labels: input.labels, metadata: input.metadata };
 }
 
+async function readVmRecord(db: Firestore, gatewayId: string): Promise<{ data: Record<string, unknown> | undefined; vm: GatewayVmState | null }> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const data = (snap.exists ? snap.data() : undefined) as Record<string, unknown> | undefined;
+  const vm = data?.vm as GatewayVmState | null | undefined;
+  return { data, vm: vm ?? null };
+}
+
+async function readComputerDeploymentPrerequisiteError(deps: ComputerLifecycleDeps, gatewayId: string): Promise<string | null> {
+  const { data, vm } = await readVmRecord(deps.db, gatewayId);
+  let description = vm ? await deps.vm.describe(vm.instanceName, vm.zone) : null;
+  if (!description) {
+    const gateway = await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+    const ownerUid = nonEmptyString(gateway.data()?.ownerUid);
+    if (!ownerUid) return `gateway ${gatewayId}: a gce-vm Builder gateway needs an owner`;
+    description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
+  }
+  if (!description || description.status === "STOPPING") return null;
+  const spec = (data?.vmSpec as GatewayVmSpec | undefined) ?? deps.vmSpec;
+  return computerIdentityPrerequisiteError(description, spec.serviceAccountEmail);
+}
+
 export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLifecycle {
   const glm = (gatewayId: string) => deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-
-  async function readVmRecord(gatewayId: string): Promise<{ data: Record<string, unknown> | undefined; vm: GatewayVmState | null }> {
-    const snap = await glm(gatewayId).get();
-    const data = (snap.exists ? snap.data() : undefined) as Record<string, unknown> | undefined;
-    const vm = data?.vm as GatewayVmState | null | undefined;
-    return { data, vm: vm ?? null };
-  }
 
   async function recordVm(gatewayId: string, vm: GatewayVmState | null, what: string): Promise<boolean> {
     return recordVmObservation(deps, gatewayId, { vm }, what);
@@ -298,16 +319,15 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
 
   async function reconcileComputerIdentity(description: GatewayVmDescription, email: string): Promise<void> {
     if (hasComputerIdentity(description, email)) return;
-    if (!STOPPED_STATUSES.has(description.status)) {
-      throw new Error(`computer ${description.name}: identity scopes are outdated; pause and resume the gateway through Admin to repair them`);
-    }
+    const error = computerIdentityPrerequisiteError(description, email);
+    if (error) throw new Error(error);
     await deps.vm.setServiceAccount(description.name, description.zone, email);
     deps.log(`[vm-gateway-runtime] ${description.name}: reconciled parked computer identity before activation`);
   }
 
   async function ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState> {
     if (!ownerUid) throw new Error(`gateway ${gatewayId}: a gce-vm Builder gateway needs an owner`);
-    const { data, vm: existing } = await readVmRecord(gatewayId);
+    const { data, vm: existing } = await readVmRecord(deps.db, gatewayId);
     const spec = (data?.vmSpec as GatewayVmSpec | undefined) ?? deps.vmSpec;
     const input = builderComputerInstanceInput({ gatewayId, ownerUid, spec, environment: deps.environment, image, bridgeIp: bridge });
     let origin = existing?.origin;
@@ -327,7 +347,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function parkComputer(gatewayId: string, opts: ParkComputerOptions = {}): Promise<GatewayVmState | null> {
-    const { data, vm } = await readVmRecord(gatewayId);
+    const { data, vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return null;
     const description = await stoppableComputer(gatewayId, vm);
     if (!description) return null;
@@ -337,7 +357,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function pauseComputer(gatewayId: string): Promise<void> {
-    const { vm } = await readVmRecord(gatewayId);
+    const { vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
     await recordVm(gatewayId, description ? await stopComputer(gatewayId, description, vm.origin, "operator") : null, "pause");
@@ -387,7 +407,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function recoverUnreachable(gatewayId: string): Promise<void> {
-    const { data, vm } = await readVmRecord(gatewayId);
+    const { data, vm } = await readVmRecord(deps.db, gatewayId);
     if (resolveGatewayRuntime(data?.runtime) !== "gce-vm" || !vm) return;
     if (vm.stopReason && COWBOY_STOP_REASONS.has(vm.stopReason)) return;
     if ((await deps.readDesiredStatus(gatewayId)) !== "running") return;
@@ -443,5 +463,8 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     return true;
   }
 
-  return { ensureVm, parkComputer, pauseComputer, recoverUnreachable, deleteComputer };
+  return {
+    readDeploymentPrerequisiteError: (gatewayId) => readComputerDeploymentPrerequisiteError(deps, gatewayId),
+    ensureVm, parkComputer, pauseComputer, recoverUnreachable, deleteComputer,
+  };
 }

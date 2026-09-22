@@ -22,6 +22,7 @@ import { buildUpgradeArgs, type HelmRunner, type HelmSubprocess } from "./helm-r
 const VM_ROUTES_CONFIGMAP_KEY = "routes.json";
 
 export interface VmGatewayRuntime extends HelmRunner {
+  readDeploymentPrerequisiteError(gatewayId: string): Promise<string | null>;
   recoverUnreachable(gatewayId: string): Promise<void>;
   deleteComputer(ownerUid: string): Promise<boolean>;
 }
@@ -294,6 +295,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
       return `${gatewayId}: VM runtime has no Helm release to recover`;
     },
 
+    readDeploymentPrerequisiteError: computers.readDeploymentPrerequisiteError,
     recoverUnreachable: computers.recoverUnreachable,
     deleteComputer: computers.deleteComputer,
   };

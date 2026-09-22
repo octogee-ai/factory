@@ -1,6 +1,7 @@
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
+import { classifyOperationFailure } from "../operation-retry.js";
 import {
   decideRollStateMigration,
   openclawVersionFromGatewayImageTag,
@@ -10,6 +11,7 @@ import {
 export interface RolloutDeps {
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
+  readDeploymentPrerequisiteError: (gatewayId: string) => Promise<string | null>;
   /** The OpenClaw version and source build the live pod reports through its heartbeat. */
   readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
   activateDesiredRelease: (input: {
@@ -170,6 +172,8 @@ async function runReleaseRoll(
     `[rollout] ${target.gatewayId} → release ${target.targetRelease}: ` +
     `${stateMigration.strategy} (${stateMigration.reason})`,
   );
+  const prerequisites = await awaitDeploymentPrerequisites(deps, target, progress);
+  if (!prerequisites.success) return { ...prerequisites, stateMigration };
   const activationWindow = await awaitActivationWindow(deps, target);
   if (!activationWindow.success) return { ...activationWindow, stateMigration };
   const activation = await deps.activateDesiredRelease({
@@ -180,6 +184,51 @@ async function runReleaseRoll(
   if (!activation.success) return { ...activation, stateMigration };
   deps.requestReconcileTick?.(target.gatewayId);
   return { ...await awaitConvergence(deps, target, progress), stateMigration };
+}
+
+type DeploymentPrerequisite =
+  | { status: "ready" }
+  | { status: "terminal" | "transient"; error: string };
+
+async function readDeploymentPrerequisite(
+  deps: RolloutDeps,
+  gateway: GatewayDoc,
+): Promise<DeploymentPrerequisite> {
+  if (gateway.desiredStatus === "paused") return { status: "ready" };
+  try {
+    const error = await deps.readDeploymentPrerequisiteError(gateway.gatewayId);
+    return error === null ? { status: "ready" } : { status: "terminal", error };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: classifyOperationFailure(error), error };
+  }
+}
+
+async function awaitDeploymentPrerequisites(
+  deps: RolloutDeps,
+  target: RollTarget,
+  progress: RollProgress,
+): Promise<{ success: boolean; error?: string }> {
+  let lastError: string | null = null;
+  for (;;) {
+    const activationWindow = await awaitActivationWindow(deps, target);
+    if (!activationWindow.success) return activationWindow;
+    const gateway = await deps.readGatewayDoc(target.gatewayId);
+    if (!gateway) return { success: false, error: `gateway ${target.gatewayId} disappeared during deployment prerequisite validation` };
+    if (converged(gateway, target.targetRelease)) return { success: true };
+    const prerequisite = await readDeploymentPrerequisite(deps, gateway);
+    if (prerequisite.status === "ready") return { success: true };
+    if (prerequisite.status === "terminal") return { success: false, error: prerequisite.error };
+    if (lastError !== prerequisite.error) {
+      lastError = prerequisite.error;
+      deps.log(`[rollout] ${target.gatewayId}: deployment prerequisite read will retry: ${lastError}`);
+    }
+    if (deps.now() - progress.startedAt >= deps.convergeTimeoutMs) {
+      return { success: false, error: `deployment prerequisites for ${target.gatewayId} did not validate within ${deps.convergeTimeoutMs}ms — ${lastError}` };
+    }
+    await deps.wait(deps.pollIntervalMs);
+    await progress.refreshLiveness();
+  }
 }
 
 interface RollNarration {
@@ -270,6 +319,13 @@ async function awaitConvergence(
       ...target,
     });
     if (outcome) return outcome;
+    const prerequisite = await readDeploymentPrerequisite(deps, gw);
+    if (prerequisite.status === "terminal") return { success: false, error: prerequisite.error };
+    if (prerequisite.status === "transient" && prerequisite.error !== narration.lastError) {
+      narration.lastError = prerequisite.error;
+      deps.log(`[rollout] ${target.gatewayId}: deployment prerequisite read will retry: ${prerequisite.error}`);
+    }
+    if (prerequisite.status === "ready") narration.lastError = null;
 
     narrateRollProgress(deps, target.gatewayId, gw, narration);
     if (elapsed >= deps.convergeTimeoutMs) {

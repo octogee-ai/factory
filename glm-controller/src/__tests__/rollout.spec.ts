@@ -76,6 +76,7 @@ function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: str
     readGatewayDoc: async () => mkGateway(),
     readReleasePayload: async () => mkPayload(),
     readGatewayOpenclawVersion: async () => "beta2",
+    readDeploymentPrerequisiteError: vi.fn(async () => null),
     activateDesiredRelease: vi.fn(async () => ({ success: true as const })),
     requestReconcileTick: vi.fn(),
     releaseRecordTimeoutMs: 10_000,
@@ -551,11 +552,102 @@ describe("rollout op — awaits the roll arm's convergence", () => {
   it("no-op rollout (already live on the requested release, no roll) succeeds immediately", async () => {
     const deps = mkDeps({
       readGatewayDoc: async () => mkGateway({ liveRelease: 2, liveRevisionId: "default-r2" }),
+      readDeploymentPrerequisiteError: vi.fn(async () => "existing identity needs repair"),
     });
     const res = await createRolloutHandler(deps)(
       mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }),
       ctx,
     );
     expect(res.success).toBe(true);
+    expect(deps.readDeploymentPrerequisiteError).not.toHaveBeenCalled();
   });
+});
+
+describe("rollout deployment prerequisites", () => {
+  const input = { gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" };
+  const scopeError = "computer sep092: identity scopes are outdated; pause and resume the gateway through Admin to repair them";
+
+  it("fails a known prerequisite before activating desired release or waiting for readiness", async () => {
+    const gateway = mkGateway({ desiredRelease: 1 });
+    const deps = mkDeps({
+      readGatewayDoc: async () => gateway,
+      readDeploymentPrerequisiteError: vi.fn(async () => scopeError),
+    });
+    const steps = { reportStep: vi.fn(async () => undefined) };
+    const result = await createRolloutHandler(deps)(mkOp(input), steps);
+
+    expect(result).toMatchObject({ success: false, error: scopeError });
+    expect(deps.activateDesiredRelease).not.toHaveBeenCalled();
+    expect(deps.requestReconcileTick).not.toHaveBeenCalled();
+    expect(gateway.desiredRelease).toBe(1);
+    expect(deps.now()).toBe(0);
+    expect(steps.reportStep).toHaveBeenLastCalledWith(expect.objectContaining({ status: "failed", error: scopeError }));
+  });
+
+  it("stops waiting when a prerequisite becomes terminal after desired release activation", async () => {
+    const deps = mkDeps({
+      readDeploymentPrerequisiteError: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(scopeError),
+    });
+    const result = await createRolloutHandler(deps)(mkOp(input), ctx);
+
+    expect(result).toMatchObject({ success: false, error: scopeError });
+    expect(deps.activateDesiredRelease).toHaveBeenCalledOnce();
+    expect(deps.now()).toBe(0);
+  });
+
+  it("retries a transient prerequisite read before activation and then permits convergence", async () => {
+    let activated = false;
+    const readDeploymentPrerequisiteError = vi.fn().mockRejectedValueOnce(new Error("ECONNRESET")).mockResolvedValue(null);
+    const deps = mkDeps({
+      readGatewayDoc: async () => mkGateway({ desiredRelease: activated ? 2 : 1, liveRelease: activated ? 2 : 1 }),
+      readDeploymentPrerequisiteError,
+      activateDesiredRelease: vi.fn(async () => { activated = true; return { success: true }; }),
+    });
+    const result = await createRolloutHandler(deps)(mkOp(input), ctx);
+
+    expect(result.success).toBe(true);
+    expect(deps.now()).toBe(1_000);
+    expect(readDeploymentPrerequisiteError).toHaveBeenCalledTimes(2);
+    expect(deps.activateDesiredRelease).toHaveBeenCalledOnce();
+  });
+
+  it("fails non-transient prerequisite validation errors without hiding them behind the readiness deadline", async () => {
+    const deps = mkDeps({
+      readDeploymentPrerequisiteError: vi.fn(async () => { throw new Error("invalid VM service account configuration"); }),
+    });
+    const result = await createRolloutHandler(deps)(mkOp(input), ctx);
+
+    expect(result).toMatchObject({ success: false, error: "invalid VM service account configuration" });
+    expect(deps.activateDesiredRelease).not.toHaveBeenCalled();
+    expect(deps.now()).toBe(0);
+  });
+
+  it("retains the convergence deadline and last transient prerequisite error when Compute stays unavailable", async () => {
+    const deps = mkDeps({
+      convergeTimeoutMs: 2_000,
+      readDeploymentPrerequisiteError: vi.fn(async () => { throw new Error("status 503"); }),
+    });
+    const result = await createRolloutHandler(deps)(mkOp(input), ctx);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("status 503");
+    expect(result.error).toContain("2000ms");
+    expect(deps.activateDesiredRelease).not.toHaveBeenCalled();
+    expect(deps.now()).toBe(2_000);
+  });
+});
+
+
+it("permits a paused rollout without requiring the running computer's identity to be repaired first", async () => {
+  const deps = mkDeps({
+    readGatewayDoc: async () => mkGateway({ desiredStatus: "paused" }),
+    readDeploymentPrerequisiteError: vi.fn(async () => "identity scopes are outdated"),
+    activateDesiredRelease: vi.fn(async () => {
+      deps.readGatewayDoc = async () => mkGateway({ desiredStatus: "paused", liveRelease: 2 });
+      return { success: true };
+    }),
+  });
+  const result = await createRolloutHandler(deps)(mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }), ctx);
+  expect(result.success).toBe(true);
+  expect(deps.readDeploymentPrerequisiteError).not.toHaveBeenCalled();
 });

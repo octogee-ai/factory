@@ -577,6 +577,26 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     expect(store.get("op-bad")?.attempts).toBe(1);
   });
 
+  it("releases a scope-blocked rollout immediately so the next Shared rollout can run", async () => {
+    vi.setSystemTime(1_000_000);
+    const error = "computer sep092: identity scopes are outdated; pause and resume the gateway through Admin to repair them";
+    const handler: OperationHandler = vi.fn(async (op) => op.id === "op-builder"
+      ? { steps: [], success: false, error }
+      : { steps: [], success: true });
+    const { db, store } = createFakeGlmOperationsDb({
+      "op-builder": baseOp({ id: "op-builder", kind: "rollout", createdAt: 1, input: { gatewayId: "sep092" } }),
+      "op-shared": baseOp({ id: "op-shared", kind: "rollout", createdAt: 2, input: { gatewayId: "shared-0" } }),
+    });
+
+    await drainPendingOperationsOnce(buildDeps(db, { rollout: handler }));
+
+    expect(store.get("op-builder")).toMatchObject({ status: "failed", attempts: 1, completedAt: 1_000_000, error });
+    expect(store.get("op-builder")?.nextAttemptAt).toBeUndefined();
+    expect(store.get("op-shared")?.status).toBe("succeeded");
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(Date.now()).toBe(1_000_000);
+  });
+
   it("stops retrying and fails terminally once the attempt cap is reached, even for a transient cause", async () => {
     vi.setSystemTime(1_000_000);
     const handler: OperationHandler = vi.fn(async () => ({
