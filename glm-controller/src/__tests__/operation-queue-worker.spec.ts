@@ -4,6 +4,7 @@ import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types
 import {
   drainPendingOperationsOnce,
   processOperation,
+  reAdoptAndRunOperation,
   startOperationWorker,
   startOperationQueueDrain,
   OPERATION_QUEUE_DRAIN_MS_DEFAULT,
@@ -644,6 +645,8 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(store.get("op-migrate")?.status).toBe("pending");
     expect(store.get("op-migrate")?.attempts).toBe(1);
+    expect(store.get("op-migrate")?.firstStartedAt).toBe(1_000_000);
+    expect(store.get("op-migrate")?.startedAt).toBeNull();
     expect(store.get("op-migrate")?.nextAttemptAt).toBe(1_000_000 + 30_000);
 
     // Backoff hasn't elapsed — the drain must not re-invoke the handler yet.
@@ -657,6 +660,8 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     expect(handler).toHaveBeenCalledTimes(2);
     expect(store.get("op-migrate")?.status).toBe("succeeded");
     expect(store.get("op-migrate")?.attempts).toBe(2);
+    expect(store.get("op-migrate")?.firstStartedAt).toBe(1_000_000);
+    expect(store.get("op-migrate")?.startedAt).toBe(1_031_000);
   });
 
   it("fails a terminal (validation) error immediately with no retry", async () => {
@@ -805,6 +810,87 @@ describe("queue drain — composite-index-free FIFO", () => {
 });
 
 describe("completion bookkeeping reads the fresh doc, not the caller's snapshot", () => {
+  it("preserves an explicit first start when claiming a pre-started pending operation", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_100_000);
+    const { db, store } = createFakeGlmOperationsDb({
+      "op-prestarted": baseOp({
+        id: "op-prestarted", createdAt: 1_000_000,
+        startedAt: 1_000_000, firstStartedAt: 1_000_000,
+      }),
+    });
+    await drainPendingOperationsOnce(buildDeps(db, {
+      rollout: vi.fn(async () => ({ steps: [], success: true })),
+    }));
+    expect(store.get("op-prestarted")).toMatchObject({
+      status: "succeeded", startedAt: 1_100_000, firstStartedAt: 1_000_000,
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("discards the original worker's completion after a controller resume", async () => {
+    let finishOriginal!: () => void;
+    let claimed!: () => void;
+    const blocked = new Promise<void>((resolve) => { finishOriginal = resolve; });
+    const claimObserved = new Promise<void>((resolve) => { claimed = resolve; });
+    const handler: OperationHandler = vi.fn()
+      .mockImplementationOnce(async () => {
+        claimed();
+        await blocked;
+        return { steps: [], success: false, error: "old worker failed" };
+      })
+      .mockResolvedValueOnce({ steps: [], success: true });
+    const initial = baseOp({ id: "op-fenced", createdAt: 1 });
+    const { db, store } = createFakeGlmOperationsDb({ "op-fenced": initial });
+    const deps = buildDeps(db, { rollout: handler });
+    const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc("op-fenced");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const original = processOperation(initial as unknown as Operation, ref as never, deps);
+    await claimObserved;
+    clock.mockReturnValue(1_100_000);
+    await reAdoptAndRunOperation(store.get("op-fenced") as unknown as Operation, ref as never, deps);
+    finishOriginal();
+    await original;
+    expect(store.get("op-fenced")).toMatchObject({
+      status: "succeeded", firstStartedAt: 1_000_000, startedAt: 1_100_000,
+      lastResumedAt: 1_100_000, resumeCount: 1, attempts: 1,
+    });
+    expect(store.get("op-fenced")?.error).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it("preserves the first start on resume while fencing the old handler", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_100_000);
+    const original = baseOp({
+      id: "op-resume", status: "running", startedAt: 1_000_000,
+      firstStartedAt: 900_000, resumeCount: 1,
+    });
+    const { db, store } = createFakeGlmOperationsDb({ "op-resume": original });
+    const handler: OperationHandler = vi.fn(async (op) => {
+      expect(op.startedAt).toBe(1_100_000);
+      expect(op.firstStartedAt).toBe(900_000);
+      expect(op.resumeCount).toBe(2);
+      expect(store.get(op.id)?.startedAt).not.toBe(original.startedAt);
+      return { steps: [], success: true };
+    });
+    const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc("op-resume");
+    await reAdoptAndRunOperation(original as unknown as Operation, ref as never, buildDeps(db, { rollout: handler }));
+    expect(handler).toHaveBeenCalledOnce();
+    expect(store.get("op-resume")).toMatchObject({
+      status: "succeeded", firstStartedAt: 900_000, startedAt: 1_100_000,
+      lastResumedAt: 1_100_000, resumeCount: 2,
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("does not invent a first start for an operation whose earlier history was not recorded", async () => {
+    const original = baseOp({ id: "old-retry", attempts: 2 });
+    const { db, store } = createFakeGlmOperationsDb({ "old-retry": original });
+    await drainPendingOperationsOnce(buildDeps(db, {
+      rollout: vi.fn(async () => ({ steps: [], success: true })),
+    }));
+    expect(store.get("old-retry")?.firstStartedAt).toBeNull();
+  });
+
   it("a stale worker snapshot cannot reset attempts or drop attemptHistory", async () => {
     const priorAttempts = [
       { attempt: 1, startedAt: 1, completedAt: 2, error: "e1", classification: "transient", steps: [] },

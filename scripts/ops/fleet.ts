@@ -45,7 +45,7 @@ import {
   awaitOperation,
   type OperationsDb,
 } from "../lib/glm-operations.js";
-import { readReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
+import { readReleaseStatus, summarizeReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
 import {
   createAdminFleetClient,
   exchangeAdminFleetCustomToken,
@@ -1519,6 +1519,7 @@ export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<s
 
 async function releaseStatus(): Promise<void> {
   const status = await readReleaseStatus(db);
+  const summary = summarizeReleaseStatus(status);
   const defaultLabel = status.defaultGatewayId || (
     status.defaultSelection === "invalid" ? "(invalid)" : "(unconfigured)"
   );
@@ -1527,6 +1528,9 @@ async function releaseStatus(): Promise<void> {
       `  default=${defaultLabel} (${status.defaultSelection})`,
     ),
   );
+  console.log(`Gateway release convergence: ${summary.status} — ${summary.converged}/${summary.serving} serving gateways at their own desired release; ${summary.excluded} paused/retired excluded.`);
+  console.log(dim("Platform workflow success is separate. This snapshot does not verify Builder migration completion or a fleet-wide SHA."));
+  if (summary.blockers.length > 0) console.log(`Outstanding: ${summary.blockers.join("; ")}`);
   console.log(table(releaseStatusRows(status)));
 }
 

@@ -136,6 +136,7 @@ import {
 import { readOperationRolloutLanes, withOperationRolloutLane } from "./operation-rollout-lanes.js";
 import {
   buildOperationCompletionUpdate,
+  operationFirstStartedAt,
   operationNeedsDurableRestartResume,
   shouldPersistClaimedOperationCompletion,
   verifiedDeletionCompletion,
@@ -1812,9 +1813,11 @@ async function attemptClaimOrQueueOperation(
         return { outcome: "queued" as const };
       }
       const now = Date.now();
+      const firstStartedAt = operationFirstStartedAt(freshOperation, now);
       txn.update(ref, {
         status: "running",
         startedAt: now,
+        firstStartedAt,
         lastProgressAt: now,
         waitingOn: FieldValue.delete(),
         nextAttemptAt: FieldValue.delete(),
@@ -1822,7 +1825,7 @@ async function attemptClaimOrQueueOperation(
       // The completion write derives attempts/attemptHistory from the op the
       // handler ran with — hand back the transaction's fresh read so a stale
       // worker snapshot can't reset the retry cap or drop history.
-      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, startedAt: now } };
+      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, startedAt: now, firstStartedAt } };
     });
   } catch (err) {
     deps.log(
@@ -1897,7 +1900,7 @@ export function startOperationQueueDrain(
 // stuck-op reaper gives the resumed run a fresh budget, and records resumeCount.
 // The op stays `running` throughout — a resumed rollout still holds the serial
 // lock other pending rollout ops queue behind.
-async function reAdoptAndRunOperation(
+export async function reAdoptAndRunOperation(
   op: Operation,
   ref: FirebaseFirestore.DocumentReference,
   deps: ControllerDeps,
@@ -1912,12 +1915,15 @@ async function reAdoptAndRunOperation(
       const freshOperation = data as Operation;
       if (freshOperation.status !== "running") return null;
       const now = Date.now();
-      txn.update(ref, {
+      const timing = {
         startedAt: now,
+        firstStartedAt: operationFirstStartedAt(freshOperation, now),
+        lastResumedAt: now,
         lastProgressAt: now,
         resumeCount: (typeof freshOperation.resumeCount === "number" ? freshOperation.resumeCount : 0) + 1,
-      });
-      return { ...freshOperation, id: op.id, startedAt: now };
+      };
+      txn.update(ref, timing);
+      return { ...freshOperation, id: op.id, ...timing };
     });
   } catch (err) {
     deps.log(

@@ -3237,13 +3237,15 @@ async function recoverUnreachableDisposableGatewayFirestore(
         );
       }
     } else {
+      const startedAt = input.now();
       transaction.create(operationRef, {
         kind: "recover-unreachable-disposable",
         status: "pending",
         origin: "automatic",
         createdBy: PLACEMENT_POLICY_ACTOR,
-        createdAt: input.now(),
-        startedAt: input.now(),
+        createdAt: startedAt,
+        startedAt,
+        firstStartedAt: startedAt,
         completedAt: null,
         input: {
           uid: request.uid,

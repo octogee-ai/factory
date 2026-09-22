@@ -329,6 +329,8 @@ export interface Operation {
     origin?: OperationOrigin;
     createdAt: number;
     startedAt: number | null;
+    firstStartedAt?: number | null;
+    lastResumedAt?: number;
     completedAt: number | null;
     input: Record<string, unknown>;
     steps: OperationStep[];

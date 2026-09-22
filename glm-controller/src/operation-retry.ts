@@ -2,6 +2,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import type {
   CustomerMigrationV2State,
   OperationAttemptRecord,
+  Operation,
   OperationStep,
 } from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
@@ -79,6 +80,15 @@ export function shouldPersistClaimedOperationCompletion(input: {
   claimedStartedAt: unknown;
 }): boolean {
   return input.status === "running" && input.startedAt === input.claimedStartedAt;
+}
+
+export function operationFirstStartedAt(op: Pick<Operation,
+  "status" | "firstStartedAt" | "startedAt" | "attempts" | "resumeCount" | "attemptHistory"
+>, now: number): number | null {
+  if (op.firstStartedAt !== undefined) return op.firstStartedAt;
+  const neverClaimed = op.status === "pending" && op.startedAt === null &&
+    !op.attempts && !op.resumeCount && !op.attemptHistory?.length;
+  return neverClaimed ? now : null;
 }
 
 export function operationNeedsDurableCustomerMigrationV2Resume(op: {

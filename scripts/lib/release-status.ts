@@ -9,8 +9,8 @@ import {
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
 } from "@octogee/shared/types/gateway-releases";
-import { isBareGatewayId } from "@octogee/shared/types/gateway-mutable-config";
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
+import { deriveSharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { imageTagMatchesArtifact } from "./release-convergence.js";
 
 export type ReleaseStatusObservation =
@@ -68,8 +68,42 @@ export interface ReleaseStatusSnapshot {
 export type ReleaseStatusDefaultSelection =
   | "selected"
   | "unconfigured"
-  | "invalid"
-  | "dangling";
+  | "invalid";
+
+export function summarizeReleaseStatus(snapshot: ReleaseStatusSnapshot): {
+  status: "converged" | "incomplete";
+  serving: number;
+  converged: number;
+  excluded: number;
+  blockers: string[];
+} {
+  const blockers: string[] = [];
+  if (snapshot.defaultSelection !== "selected") {
+    blockers.push(`default gateway: ${snapshot.defaultSelection}`);
+  } else {
+    const selected = snapshot.gateways.find((gateway) => gateway.gatewayId === snapshot.defaultGatewayId);
+    if (!selected || selected.observation === "paused" || selected.observation === "retired") {
+      blockers.push(`default gateway: ${selected?.observation ?? "missing"}`);
+    }
+  }
+  let serving = 0;
+  let converged = 0;
+  let excluded = 0;
+  for (const gateway of snapshot.gateways) {
+    if (gateway.observation === "paused" || gateway.observation === "retired") {
+      excluded += 1;
+      continue;
+    }
+    if (gateway.observation !== "invalid-root") serving += 1;
+    if (gateway.observation === "converged") {
+      converged += 1;
+    } else {
+      blockers.push(`${gateway.gatewayId}: ${gateway.observation}`);
+    }
+  }
+  if (serving === 0) blockers.push("no serving gateways");
+  return { status: blockers.length === 0 ? "converged" : "incomplete", serving, converged, excluded, blockers };
+}
 
 export function observeGatewayRelease(
   input: ReleaseStatusGatewayInput,
@@ -157,39 +191,25 @@ function invalidRoot(gatewayId: string, defaultGatewayId: string | null): Releas
   };
 }
 
-function observeDefaultSelection(
-  defaultGatewayValue: unknown,
-  validGatewayIds: ReadonlySet<string>,
-): ReleaseStatusDefaultSelection {
-  if (
-    defaultGatewayValue === undefined ||
-    defaultGatewayValue === null ||
-    defaultGatewayValue === ""
-  ) {
-    return "unconfigured";
-  }
-  if (typeof defaultGatewayValue !== "string" || !isBareGatewayId(defaultGatewayValue)) {
-    return "invalid";
-  }
-  return validGatewayIds.has(defaultGatewayValue) ? "selected" : "dangling";
-}
-
 export async function readReleaseStatus(
-  db: Pick<Firestore, "collection" | "doc">,
+  db: Pick<Firestore, "collection">,
   now = Date.now(),
 ): Promise<ReleaseStatusSnapshot> {
-  const [defaultGatewayDocument, gatewayDocuments] = await Promise.all([
-    db.doc("config/orchestrator").get(),
-    db.collection(GATEWAYS_COLLECTION).get(),
-  ]);
-  const defaultGatewayValue = defaultGatewayDocument.data()?.defaultGatewayId;
-  const defaultGatewayId = typeof defaultGatewayValue === "string" ? defaultGatewayValue : null;
+  const gatewayDocuments = await db.collection(GATEWAYS_COLLECTION).get();
+  const pool = deriveSharedGatewayPoolConfig(gatewayDocuments.docs.map((document) => {
+    const data = document.data();
+    return { gatewayId: document.id, gatewayClass: data.gatewayClass, desiredStatus: data.desiredStatus };
+  }));
+  const defaultGatewayId = pool?.defaultGatewayId ?? null;
   const validRoots = gatewayDocuments.docs.flatMap((document) => {
     const root = projectGatewayDesiredRootForGateway(document.data(), document.id);
     return root ? [{ gatewayId: document.id, root }] : [];
   });
   const validGatewayIds = new Set(validRoots.map(({ gatewayId }) => gatewayId));
-  const defaultSelection = observeDefaultSelection(defaultGatewayValue, validGatewayIds);
+  let defaultSelection: ReleaseStatusDefaultSelection = "unconfigured";
+  if (defaultGatewayId !== null) {
+    defaultSelection = validGatewayIds.has(defaultGatewayId) ? "selected" : "invalid";
+  }
   const selectedDefaultGatewayId = defaultSelection === "selected" ? defaultGatewayId : null;
   const observed = await Promise.all(validRoots.map(async ({ gatewayId, root }) => {
     const [releaseDocument, runtimeDocument] = await Promise.all([

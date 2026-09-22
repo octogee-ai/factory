@@ -4,6 +4,7 @@ import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-contro
 import {
   observeGatewayRelease,
   readReleaseStatus,
+  summarizeReleaseStatus,
   type ReleaseStatusGatewayInput,
 } from "../lib/release-status.js";
 
@@ -151,6 +152,76 @@ function database(
 }
 
 describe("release status", () => {
+  it("derives the current Shared default from durable roots instead of a retired legacy default", async () => {
+    const readPaths: string[] = [];
+    const db = database({
+      "config/orchestrator": { defaultGatewayId: "shared-a" },
+      "gateways/shared-a": gatewayRoot("shared-a", { desiredStatus: "retired" }),
+      "gateways/shared-0": gatewayRoot("shared-0"),
+      "gateways/shared-0/releases/4": release("shared-0", 4),
+      "glmGateways/shared-0": runtime("shared-0"),
+    }, ["shared-a", "shared-0"], readPaths);
+    const status = await readReleaseStatus(db as never, NOW);
+    expect(status).toMatchObject({ defaultGatewayId: "shared-0", defaultSelection: "selected" });
+    expect(summarizeReleaseStatus(status)).toEqual({
+      status: "converged", serving: 1, converged: 1, excluded: 1, blockers: [],
+    });
+    expect(readPaths).not.toContain("config/orchestrator");
+  });
+
+  it("reports release convergence separately from platform success and excludes paused and retired gateways", async () => {
+    const db = database({
+      "config/orchestrator": { defaultGatewayId: "shared-0" },
+      "gateways/shared-0": gatewayRoot("shared-0"),
+      "gateways/shared-0/releases/4": release("shared-0", 4),
+      "glmGateways/shared-0": runtime("shared-0"),
+      "gateways/builder": gatewayRoot("builder"),
+      "gateways/builder/releases/4": release("builder", 4),
+      "glmGateways/builder": runtime("builder", {
+        heartbeat: { status: "ready", version: "abc1234-oc2026.7.1", lastHeartbeatAt: NOW - GATEWAY_UNREACHABLE_AFTER_MS - 1 },
+      }),
+      "gateways/paused": gatewayRoot("paused", { desiredStatus: "paused" }),
+      "gateways/retired": gatewayRoot("retired", { desiredStatus: "retired" }),
+    }, ["shared-0", "builder", "paused", "retired"]);
+    const status = await readReleaseStatus(db as never, NOW);
+    expect(summarizeReleaseStatus(status)).toEqual({
+      status: "incomplete", serving: 2, converged: 1, excluded: 2,
+      blockers: ["builder: heartbeat-stale"],
+    });
+    status.gateways.find((gateway) => gateway.gatewayId === "builder")!.observation = "converged";
+    expect(summarizeReleaseStatus(status)).toMatchObject({ status: "converged", converged: 2 });
+  });
+
+  it.each(["unconfigured", "invalid"] as const)("does not report an empty fleet with %s default as converged", (defaultSelection) => {
+    expect(summarizeReleaseStatus({ defaultGatewayId: null, defaultSelection, gateways: [] })).toMatchObject({ status: "incomplete", serving: 0, converged: 0 });
+  });
+
+  it("keeps invalid roots visible even when every readable running gateway converged", async () => {
+    const db = database({
+      "config/orchestrator": { defaultGatewayId: "missing" },
+      "gateways/shared-0": gatewayRoot("shared-0"),
+      "gateways/shared-0/releases/4": release("shared-0", 4),
+      "glmGateways/shared-0": runtime("shared-0"),
+      "gateways/invalid": {},
+    }, ["shared-0", "invalid"]);
+    expect(summarizeReleaseStatus(await readReleaseStatus(db as never, NOW))).toEqual({
+      status: "incomplete", serving: 1, converged: 1, excluded: 0,
+      blockers: ["invalid: invalid-root"],
+    });
+  });
+
+  it("blocks convergence on invalid roots or a non-serving default", async () => {
+    const db = database({
+      "config/orchestrator": { defaultGatewayId: "default" },
+      "gateways/default": gatewayRoot("default", { desiredStatus: "paused" }),
+      "gateways/invalid": {},
+    }, ["default", "invalid"]);
+    expect(summarizeReleaseStatus(await readReleaseStatus(db as never, NOW))).toEqual({
+      status: "incomplete", serving: 0, converged: 0, excluded: 1,
+      blockers: ["default gateway: paused", "invalid: invalid-root", "no serving gateways"],
+    });
+  });
+
   it("observes a converged release in one Firestore read pass", async () => {
     const readPaths: string[] = [];
     const db = database({
@@ -185,7 +256,6 @@ describe("release status", () => {
       }],
     });
     expect(readPaths.sort()).toEqual([
-      "config/orchestrator",
       "gateways",
       "gateways/default/releases/4",
       "glmGateways/default",
@@ -193,42 +263,12 @@ describe("release status", () => {
   });
 
   it.each([
-    [
-      "unconfigured",
-      {},
-      null,
-      "unconfigured",
-    ],
-    [
-      "empty",
-      { defaultGatewayId: "" },
-      "",
-      "unconfigured",
-    ],
-    [
-      "non-string",
-      { defaultGatewayId: 4 },
-      null,
-      "invalid",
-    ],
-    [
-      "invalid",
-      { defaultGatewayId: "default-r4" },
-      "default-r4",
-      "invalid",
-    ],
-    [
-      "dangling",
-      { defaultGatewayId: "missing" },
-      "missing",
-      "dangling",
-    ],
-  ] as const)("reports a %s default selection without masking healthy gateway observations", async (
-    _caseName,
-    orchestrator,
-    defaultGatewayId,
-    defaultSelection,
-  ) => {
+    {},
+    { defaultGatewayId: "" },
+    { defaultGatewayId: 4 },
+    { defaultGatewayId: "default-r4" },
+    { defaultGatewayId: "missing" },
+  ])("ignores legacy orchestrator selection %j when deriving the Shared default", async (orchestrator) => {
     const db = database({
       "config/orchestrator": orchestrator,
       "gateways/default": gatewayRoot("default"),
@@ -237,14 +277,24 @@ describe("release status", () => {
     }, ["default"]);
 
     await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
-      defaultGatewayId,
-      defaultSelection,
+      defaultGatewayId: "default",
+      defaultSelection: "selected",
       gateways: [{
         gatewayId: "default",
-        isDefault: false,
+        isDefault: true,
         observation: "converged",
       }],
     });
+  });
+
+  it.each([
+    { roots: {}, ids: [], defaultGatewayId: null, defaultSelection: "unconfigured" },
+    { roots: { "gateways/shared-0": { gatewayClass: "shared", desiredStatus: "running" } }, ids: ["shared-0"], defaultGatewayId: "shared-0", defaultSelection: "invalid" },
+  ])("blocks convergence with incomplete authoritative roots: $defaultSelection", async ({ roots, ids, defaultGatewayId, defaultSelection }) => {
+    const db = database({ "config/orchestrator": { defaultGatewayId: "legacy" }, ...roots }, ids);
+    const status = await readReleaseStatus(db as never, NOW);
+    expect(status).toMatchObject({ defaultGatewayId, defaultSelection });
+    expect(summarizeReleaseStatus(status)).toMatchObject({ status: "incomplete", serving: 0, converged: 0 });
   });
 
   it("reports rollout drift without waiting for Cowboy to reconcile", () => {
@@ -413,8 +463,8 @@ describe("release status", () => {
     }, ["default"]);
 
     await expect(readReleaseStatus(db as never, NOW)).resolves.toEqual({
-      defaultGatewayId: "default",
-      defaultSelection: "dangling",
+      defaultGatewayId: null,
+      defaultSelection: "unconfigured",
       gateways: [{
         gatewayId: "default",
         isDefault: false,
