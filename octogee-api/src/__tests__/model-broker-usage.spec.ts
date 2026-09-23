@@ -117,8 +117,8 @@ describe("model broker usage helpers", () => {
 
     expect(cost.pricingModel).toBe("openrouter:z-ai/glm-5.2");
     expect(isUnknownOpenRouterPricingModel(cost.pricingModel)).toBe(false);
-    expect(cost.input).toBe(1.4);
-    expect(cost.output).toBe(4.4);
+    expect(cost.input).toBeCloseTo(0.6496, 8);
+    expect(cost.output).toBeCloseTo(2.0416, 8);
   });
 
   it("keeps rollup keys and usage windows stable", () => {
@@ -144,10 +144,10 @@ describe("OpenRouter cost estimation", () => {
 
   it("bills OpenRouter cache reads at the discounted rate, not full input price", () => {
     const cost = estimateModelBrokerCost("openrouter", "z-ai/glm-5.2", MILLION_EACH);
-    expect(cost.input).toBeCloseTo(1.4);
-    expect(cost.output).toBeCloseTo(4.4);
-    expect(cost.cacheRead).toBeCloseTo(0.14);
-    expect(cost.total).toBeCloseTo(5.94);
+    expect(cost.input).toBeCloseTo(0.6496, 8);
+    expect(cost.output).toBeCloseTo(2.0416, 8);
+    expect(cost.cacheRead).toBeCloseTo(0.12064, 8);
+    expect(cost.total).toBeCloseTo(2.81184, 8);
     expect(cost.pricingModel).toBe("openrouter:z-ai/glm-5.2");
   });
 
@@ -159,12 +159,27 @@ describe("OpenRouter cost estimation", () => {
     expect(cost.cacheRead).toBeCloseTo(0.1);
   });
 
-  it("prices DeepSeek V4 Pro (the free-tier default) from the table, not the fallback", () => {
+  it("prices DeepSeek V4 Pro from the catalog snapshot, not the fallback", () => {
     const cost = estimateModelBrokerCost("openrouter", "deepseek/deepseek-v4-pro", MILLION_EACH);
     expect(cost.pricingModel).toBe("openrouter:deepseek/deepseek-v4-pro");
-    expect(cost.input).toBeCloseTo(1.6);
-    expect(cost.output).toBeCloseTo(3.2);
-    expect(cost.cacheRead).toBeCloseTo(0.135);
+    expect(cost.input).toBeCloseTo(0.95526, 8);
+    expect(cost.output).toBeCloseTo(1.91052, 8);
+    expect(cost.cacheRead).toBeCloseTo(0.079605, 8);
+  });
+
+  it("estimates GPT-6 Luna from the OpenRouter snapshot with its cache and long-context tiers", () => {
+    const usage = { inputTokens: 200_000, cacheReadInputTokens: 70_000, cacheCreationInputTokens: 2_000, outputTokens: 1_000 };
+    const short = estimateModelBrokerCost("openrouter", "openai/gpt-6-luna", usage);
+    expect(short.pricingModel).toBe("openrouter:openai/gpt-6-luna");
+    expect(short.input).toBeCloseTo(0.01, 8);
+    expect(short.output).toBeCloseTo(0.00025, 8);
+    expect(short.cacheRead).toBeCloseTo(0.00035, 8);
+    expect(short.cacheWrite).toBeCloseTo(0.000125, 8);
+    const long = estimateModelBrokerCost("openrouter", "openai/gpt-6-luna", { ...usage, inputTokens: 200_001 });
+    expect(long.input).toBeCloseTo(0.0200001, 8);
+    expect(long.output).toBeCloseTo(0.000375, 8);
+    expect(long.cacheRead).toBeCloseTo(0.0007, 8);
+    expect(long.cacheWrite).toBeCloseTo(0.00025, 8);
   });
 
   it("prices GPT-5.6 Luna at OpenRouter's promotional rate", () => {

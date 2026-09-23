@@ -753,5 +753,14 @@ describe("openRouterCatalogInputForBaseUrl", () => {
       contextTokens: 1_050_000,
       input: ["text", "image"],
     }));
+    for (const model of ["luna", "sol", "astra"]) {
+      expect(input.models).toContainEqual(expect.objectContaining({
+        model: `openai/gpt-6-${model}`,
+        contextTokens: 1_050_000,
+        maxOutputTokens: 128_000,
+        input: ["text", "image"],
+        reasoning: true,
+      }));
+    }
   });
 });

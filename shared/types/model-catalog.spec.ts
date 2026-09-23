@@ -46,6 +46,27 @@ describe("MODEL_CATALOG", () => {
     });
   });
 
+  it.each(["luna", "sol", "astra"].flatMap((model) => [model, `${model}-pro`]))(
+    "exposes GPT-6 %s through OpenRouter with reasoning, images, and long-context pricing",
+    (model) => {
+      const entry = modelCatalogEntryFor("openrouter", `openai/gpt-6-${model}`);
+      expect(entry).toMatchObject({
+        provider: "openrouter",
+        source: "openrouter",
+        contextTokens: 1_050_000,
+        maxOutputTokens: 128_000,
+        input: ["text", "image"],
+        reasoning: true,
+        reasoningEfforts: ["high", "xhigh"],
+      });
+      expect(entry?.pricing?.inputPerMTok).toBeGreaterThan(0);
+      expect(entry?.pricing?.outputPerMTok).toBeGreaterThan(0);
+      expect(entry?.pricingOverrides).toEqual([
+        expect.objectContaining({ aboveInputTokens: 272_000 }),
+      ]);
+    },
+  );
+
   it("marks the GPT models as image-capable and leaves the others text-only", () => {
     expect(modelCatalogEntryFor("openrouter", "openai/gpt-5.6-luna")?.input).toEqual(["text", "image"]);
     expect(modelCatalogEntryFor("openai", "gpt-5.4-mini")?.input).toEqual(["text", "image"]);

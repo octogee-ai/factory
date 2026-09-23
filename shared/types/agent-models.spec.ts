@@ -11,6 +11,20 @@ import {
 import { MODEL_CATALOG, modelCatalogEntryFor } from "./model-catalog";
 
 describe("model refs", () => {
+  it.each(["luna", "sol", "astra"].flatMap((model) => [model, `${model}-pro`]))(
+    "keeps GPT-6 %s on the OpenRouter route rather than direct OpenAI",
+    (model) => {
+      const id = `openai/gpt-6-${model}`;
+      const entry = modelCatalogEntryFor("openrouter", id)!;
+      const ref = `platform-openrouter/${id}`;
+      expect(entry).toBeTruthy();
+      expect(modelRefForCatalogEntry(entry)).toBe(ref);
+      expect(catalogEntryForModelRef(ref)).toBe(entry);
+      expect(platformModelRefs()).toContain(ref);
+      expect(parseAgentModelSelection({ primary: ref })).toEqual({ primary: ref, fallbacks: [] });
+    },
+  );
+
   it("anthropic entries ride their catalog id; openrouter/openai ride their platform provider ids", () => {
     expect(
       modelRefForCatalogEntry(modelCatalogEntryFor("anthropic", "anthropic/claude-sonnet-4-6")!),
