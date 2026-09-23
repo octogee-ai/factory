@@ -922,6 +922,7 @@ describe("connect — google platform capability flow", () => {
   it("incremental consent preserves the durable refresh token and Drive picked-file registry", async () => {
     await setGoogleStage("on");
     await connectGoogle("drive", `${DRIVE} ${EMAIL}`);
+    const originalConnectedAt = (await readStatus(UID, "google"))?.connectedAt;
     await db
       .collection("users")
       .doc(UID)
@@ -951,6 +952,7 @@ describe("connect — google platform capability flow", () => {
     expect(res.headers.location).toContain("google_connected=true");
 
     const tokens = (await readSecret(UID, "google"))?.tokens as Record<string, unknown>;
+    expect((await readStatus(UID, "google"))?.connectedAt).toEqual(originalConnectedAt);
     expect(tokens.encryptedAccessToken).toBe(encOf("new-google-access"));
     expect(tokens.encryptedRefreshToken).toBe(encOf(PLAINTEXT_GOOGLE_REFRESH));
     expect((await readStatus(UID, "google"))?.pickedFiles).toEqual([

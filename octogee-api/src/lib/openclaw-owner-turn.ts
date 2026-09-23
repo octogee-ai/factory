@@ -100,7 +100,7 @@ function parseRoute(to: string): { routeKind: "user" | "channel"; routeId: strin
   return { routeKind, routeId };
 }
 
-function requestContext(req: Request): OwnerWorkspaceRequestContext | null {
+export function ownerWorkspaceRequestContext(req: Request): OwnerWorkspaceRequestContext | null {
   const body = record(req.body);
   const queryValue = req.query?.requestContext;
   const bodyHasContext = body && Object.hasOwn(body, "requestContext");
@@ -212,7 +212,7 @@ export function createOwnerWorkspaceTurnVerifier(
 ): OwnerWorkspaceTurnVerifier {
   return async ({ req, agentId, ownerUid, assignedData }) => {
     const parsed = parseAgentId(agentId);
-    const context = requestContext(req);
+    const context = ownerWorkspaceRequestContext(req);
     if (
       parsed.kind !== "coach"
       || !context
@@ -273,7 +273,7 @@ export function createProjectWorkspaceTurnVerifier(
 ): OwnerWorkspaceTurnVerifier {
   return async ({ req, agentId, ownerUid, assignedData }) => {
     const parsed = parseAgentId(agentId);
-    const context = requestContext(req);
+    const context = ownerWorkspaceRequestContext(req);
     if (
       parsed.kind !== "project"
       || !context

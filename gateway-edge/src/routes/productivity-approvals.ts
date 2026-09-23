@@ -1,7 +1,8 @@
 /* eslint-disable sonarjs/no-duplicate-string */
+import { applyGoogleGrantApproval, parseGoogleGrantApproval } from "../lib/google-grant-approval.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { timestampMillis } from "@octogee/core/timestamps";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -22,6 +23,7 @@ interface Deps {
 type ApprovalState = "pending" | "approved" | "denied" | "executing" | "succeeded" | "failed" | "unknown";
 
 type ProductivityActionKind =
+  | "google-access"
   | "gmail-triage"
   | "gmail-draft-create"
   | "gmail-send"
@@ -42,6 +44,7 @@ const APPROVAL_STATES = new Set<ApprovalState>([
   "pending", "approved", "denied", "executing", "succeeded", "failed", "unknown",
 ]);
 const PRODUCTIVITY_ACTION_KINDS = new Set<ProductivityActionKind>([
+  "google-access",
   "gmail-triage",
   "gmail-draft-create",
   "gmail-send",
@@ -502,6 +505,11 @@ function projectPublishPreview(preview: Record<string, unknown>): Record<string,
 
 // eslint-disable-next-line complexity
 function projectActionPreview(kind: ProductivityActionKind, value: unknown): Record<string, unknown> {
+  if (kind === "google-access") {
+    const request = parseGoogleGrantApproval(value);
+    return { memberName: request.memberName, workspaceId: request.workspaceId, accountLabel: request.accountLabel,
+      operationLabel: request.operationLabel, channelName: request.channelName, resourceIds: request.permissions[0].resourceIds };
+  }
   const preview = record(value);
   if (!preview) throw new Error("canonical productivity approval preview is malformed");
   if (kind === "gmail-triage") return projectTriagePreview(preview);
@@ -602,6 +610,11 @@ function resolvedDecision(
     : { kind: "expired" };
 }
 
+async function applyStandingGrantDecision(deps: Deps, tx: Transaction, uid: string, data: Record<string, unknown>, targetState: "approved" | "denied"): Promise<boolean> {
+  if (targetState !== "approved" || record(data.action)?.kind !== "google-access") return true;
+  return applyGoogleGrantApproval(deps.db, tx, uid, data.preview);
+}
+
 async function resolveApproval(
   deps: Deps,
   approvalId: string,
@@ -627,6 +640,7 @@ async function resolveApproval(
 
     if (data.state === "approved") return { kind: "resolved", data };
 
+    if (!(await applyStandingGrantDecision(deps, tx, uid, data, targetState))) return { kind: "expired" };
     tx.update(ref, { state: targetState, updatedAt: FieldValue.serverTimestamp() });
     return { kind: "resolved", data: { ...data, state: targetState } };
   });

@@ -34,7 +34,10 @@ import {
   type ConnectorClientCreds,
 } from "../lib/connector-tokens.js";
 
+import { createGoogleGrantRoutes } from "./google-grants.js";
+
 const router = Router();
+router.use("/google/grants", requireAuth, createGoogleGrantRoutes(db));
 const APP_URL = process.env.APP_URL || "https://octogee.com";
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 
@@ -224,10 +227,14 @@ async function storeConnectorTokens(args: {
     if (!owner.exists || !accountAllowsInteractiveAccess(owner.data())) {
       throw new InactiveConnectorOwnerError();
     }
+    const priorGoogle = def.meta.id === "google" ? (await tx.get(integrationRef)).data() : undefined;
+    const continuingGoogleConnection = priorGoogle?.status === "connected"
+      && priorGoogle.accountLabel === accountLabel && priorGoogle.connectedAt;
     tx.set(secretRef, secret, { merge: true });
     if (def.meta.id === "google") {
       tx.set(integrationRef, {
         ...integration,
+        connectedAt: continuingGoogleConnection ? priorGoogle.connectedAt : integration.connectedAt,
         error: FieldValue.delete(),
         verifiedAt: FieldValue.delete(),
       }, { merge: true });
