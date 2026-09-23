@@ -6,7 +6,6 @@ import {
 const permission = {
   operation: "/google/drive/read",
   resourceIds: ["file-a"],
-  channelIds: ["channel-a"],
 };
 const grant = {
   schemaVersion: 1,
@@ -26,7 +25,6 @@ const request = {
   membershipEpoch: "membership-1",
   operation: "/google/drive/read",
   resourceId: "file-a" as string | null,
-  channelId: "channel-a",
 };
 describe("persistent Google collaborator grants", () => {
   it("allows repeated use of a scoped standing grant", () => {
@@ -41,9 +39,8 @@ describe("persistent Google collaborator grants", () => {
     { membershipEpoch: "reinvited" },
     { operation: "/google/gmail/send" },
     { resourceId: "file-b" },
-    { channelId: "private-dm" },
   ])(
-    "rejects requests outside the approved identity, resource or audience: %j",
+    "rejects requests outside the approved identity or resource: %j",
     (change) => {
       expect(googleGrantAllows(grant, { ...request, ...change })).toBe(false);
     },
@@ -67,7 +64,7 @@ describe("persistent Google collaborator grants", () => {
       ),
     ).toBe(true);
   });
-  it("rejects unknown operations, empty audiences and unexpected input fields", () => {
+  it("rejects unknown operations and unexpected input fields", () => {
     expect(
       parseGoogleGrantPermissions([
         { ...permission, operation: "/google/raw" },

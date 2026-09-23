@@ -74,7 +74,6 @@ function harness() {
   const permission = {
     operation: "/google/drive/read",
     resourceIds: ["file-a"],
-    channelIds: ["general"],
   };
   return { app, documents, permission };
 }
@@ -113,7 +112,7 @@ describe("owner-managed Google grants", () => {
     );
   });
   it.each(["private", "old", "foreign"])(
-    "rejects private, archived or foreign audiences: %s",
+    "rejects obsolete channel-scoped permissions: %s",
     async (channel) => {
       const h = harness();
       expect(
@@ -137,16 +136,14 @@ describe("owner-managed Google grants", () => {
     ).toBe(403);
     expect(h.documents["users/owner/googleGrants/member"]).toBeUndefined();
   });
-  it("lists recognizable member names and excludes archived/private channels", async () => {
+  it("lists recognizable member names without channel-specific grant controls", async () => {
     const h = harness();
     const response = await request(h.app).get("/");
     expect(response.status).toBe(200);
     expect(response.body.members).toEqual([
       { uid: "member", name: "collaborator" },
     ]);
-    expect(response.body.channels).toEqual([
-      { id: "general", name: "general" },
-    ]);
+    expect(response.body.channels).toBeUndefined();
   });
   it("reports old grants as inactive after connection changes", async () => {
     const h = harness();

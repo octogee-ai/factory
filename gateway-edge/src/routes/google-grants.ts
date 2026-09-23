@@ -13,23 +13,6 @@ import {
   parseGoogleGrantPermissions,
 } from "../lib/google-collaborator-grants.js";
 
-function audienceChannel(doc: {
-  id: string;
-  data(): {
-    archivedAt?: unknown;
-    status?: unknown;
-    commercialLifecycle?: { status?: unknown };
-  };
-}): boolean {
-  const data = doc.data();
-  return (
-    !["coach-dm", "admin"].includes(doc.id) &&
-    !data.archivedAt &&
-    data.status !== "archived" &&
-    data.commercialLifecycle?.status !== "archived"
-  );
-}
-
 const identifier = /^[a-zA-Z0-9_-]{1,128}$/;
 
 async function ownerContext(db: Firestore, uid: string) {
@@ -61,19 +44,15 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
         res.status(403).json({ error: "forbidden" });
         return;
       }
-      const [members, channels, grants, connection] = await Promise.all([
+      const [members, grants, connection] = await Promise.all([
         db
           .collection(`workspaces/${context.workspaceId}/members`)
-          .limit(101)
-          .get(),
-        db
-          .collection(`workspaces/${context.workspaceId}/channels`)
           .limit(101)
           .get(),
         db.collection(`users/${uid}/googleGrants`).limit(101).get(),
         db.doc(`users/${uid}/integrations/google`).get(),
       ]);
-      if (members.size > 100 || channels.size > 100 || grants.size > 100) {
+      if (members.size > 100 || grants.size > 100) {
         res.status(422).json({ error: "grant_directory_limit" });
         return;
       }
@@ -91,13 +70,6 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
         connected: connection.data()?.status === "connected",
         accountLabel: connection.data()?.accountLabel ?? null,
         members: memberNames,
-        channels: channels.docs
-          .filter(audienceChannel)
-          .map((doc) => ({
-            id: doc.data().mattermost?.channelId,
-            name: doc.id,
-          }))
-          .filter((channel) => typeof channel.id === "string"),
         pickedFiles: parseGooglePickedFiles(connection.data()?.pickedFiles).map(
           (file: { id: string; name: string }) => ({
             id: file.id,
@@ -149,22 +121,6 @@ export function createGoogleGrantRoutes(db: Firestore): Router {
         const context = await ownerContext(db, uid);
         if (!context) {
           res.status(403).json({ error: "forbidden" });
-          return;
-        }
-        const channels = await db
-          .collection(`workspaces/${context.workspaceId}/channels`)
-          .get();
-        const audiences = new Set(
-          channels.docs
-            .filter(audienceChannel)
-            .map((doc) => doc.data().mattermost?.channelId),
-        );
-        if (
-          permissions.some((permission) =>
-            permission.channelIds.some((id) => !audiences.has(id)),
-          )
-        ) {
-          res.status(400).json({ error: "invalid_audience" });
           return;
         }
         const outcome = await db.runTransaction(async (tx) => {

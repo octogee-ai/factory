@@ -6,7 +6,6 @@ function harness() {
   const permission = {
     operation: "/google/drive/read",
     resourceIds: ["file-a"],
-    channelIds: ["general"],
   };
   const preview = {
     memberUid: "member",

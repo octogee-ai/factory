@@ -26,7 +26,6 @@ export const GOOGLE_GRANT_OPERATIONS: Readonly<Record<string, string | null>> =
 export interface GoogleGrantPermission {
   operation: string;
   resourceIds: "all" | string[];
-  channelIds: string[];
 }
 
 export interface GoogleGrantRequest {
@@ -37,7 +36,6 @@ export interface GoogleGrantRequest {
   membershipEpoch: string;
   operation: string;
   resourceId: string | null;
-  channelId: string;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -67,11 +65,10 @@ export function parseGoogleGrantPermissions(
     const item = record(candidate);
     if (
       !item ||
-      Object.keys(item).length !== 3 ||
+      Object.keys(item).length !== 2 ||
       typeof item.operation !== "string" ||
       !Object.hasOwn(GOOGLE_GRANT_OPERATIONS, item.operation) ||
-      (item.resourceIds !== "all" && !ids(item.resourceIds)) ||
-      !ids(item.channelIds)
+      (item.resourceIds !== "all" && !ids(item.resourceIds))
     )
       return null;
     if (
@@ -82,7 +79,6 @@ export function parseGoogleGrantPermissions(
     permissions.push({
       operation: item.operation,
       resourceIds: item.resourceIds,
-      channelIds: item.channelIds,
     });
   }
   return permissions;
@@ -110,7 +106,6 @@ export function googleGrantAllows(
     permissions.some(
       (permission) =>
         permission.operation === request.operation &&
-        permission.channelIds.includes(request.channelId) &&
         (permission.resourceIds === "all" ||
           (request.resourceId !== null &&
             permission.resourceIds.includes(request.resourceId))),

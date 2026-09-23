@@ -41,7 +41,6 @@ export function parseGoogleGrantApproval(value: unknown): GoogleGrantApproval {
   if (
     !permissions ||
     permissions.length !== 1 ||
-    permissions[0].channelIds.length !== 1 ||
     fields.some(
       (key) =>
         typeof input[key] !== "string" ||
