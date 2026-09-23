@@ -15,6 +15,12 @@ export interface MigrationClientDeps {
     timeouts?: MigrationClientTimeouts;
 }
 export interface MigrationClient {
+    resume(opts: {
+        migrationId: string;
+        gatewayId: string;
+        transportId?: string;
+        slug: string;
+    }): Promise<void>;
     quiesce(opts: {
         migrationId: string;
         gatewayId: string;

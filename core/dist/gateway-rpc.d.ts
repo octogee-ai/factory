@@ -207,6 +207,7 @@ export interface GatewayRpcClient {
         agentId: string;
         includePlugins: true;
     }, timeoutMs?: number): Promise<GatewayToolsCatalogResult>;
+    cronJobCount(agentId: string): Promise<number>;
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
     agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
     agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;

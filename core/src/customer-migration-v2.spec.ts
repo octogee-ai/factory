@@ -61,6 +61,7 @@ function deps(): CustomerMigrationV2Deps {
   const client = {
     transferState: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: true })),
     restoreTarget: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", restored: true })),
+    resume: vi.fn(async () => undefined),
     quiesce: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", drained: true, runningCount: 0 })),
     flushGateway: vi.fn(async () => ({
       migrationId: "mig-op-1",
@@ -317,6 +318,7 @@ describe("advanceCustomerMigrationV2", () => {
     let current = state("abortIntent");
     current = await advanceCustomerMigrationV2(current, d);
     expect(current.phase).toBe("abortTargetUnmounted");
+    expect(d.client.resume).toHaveBeenCalledWith({ migrationId: "mig-op-1", gatewayId: "source", slug: "alice" });
     const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(client.unmount).toHaveBeenCalledWith(expect.objectContaining({
       gatewayId: "target",

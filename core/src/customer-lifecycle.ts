@@ -279,9 +279,12 @@ opts?: {
 
 uidForSlug: (slug: string) => Promise<string | null>;
 
+resumeCustomer: (slug: string) => Promise<void>;
+
 quiesceCustomer: (
     slug: string,
     timeoutMs: number,
+    opts?: { stopMattermost: boolean },
   ) => Promise<{ drained: boolean; runningCount: number }>;
 
 listExportPaths: (slug: string) => Promise<Array<{ cwd: string; path: string }>>;

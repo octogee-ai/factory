@@ -805,3 +805,15 @@ it("signs destination progress for its target gateway and preserves HTTP failure
   const failed = captureFetch(() => new Response("offline", { status: 503 }));
   await expect(reportMigrationProgress({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://gw-new", fetch: failed.fakeFetch }, "gw-new", event)).rejects.toThrow();
 });
+
+describe("MigrationClient.resume", () => {
+  it.each([true, false])("requires an acknowledged restart (resumed=%s)", async (resumed) => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({ resumed }), { status: 200 }));
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://source.example.com", fetch: fakeFetch });
+    const result = client.resume({ migrationId: "m1", gatewayId: "source", slug: "alice" });
+    if (resumed) await expect(result).resolves.toBeUndefined();
+    else await expect(result).rejects.toThrow("did not resume");
+    expect(calls[0].url).toBe("https://source.example.com/resume/source");
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBeTruthy();
+  });
+});

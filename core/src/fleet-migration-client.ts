@@ -45,6 +45,7 @@ export interface MigrationClientDeps {
 // gatewayId; simple-roll has one stable Service per gateway, so tenant and
 // transport are the same name (GATEWAY-SIMPLE-ROLL-SPEC).
 export interface MigrationClient {
+  resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   quiesce(opts: {
     migrationId: string;
     gatewayId: string;
@@ -244,6 +245,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         `[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`,
       );
       return res;
+    },
+
+    async resume({ migrationId, gatewayId, transportId, slug }) {
+      const response = await postSignedJson<{ resumed: boolean }>({
+        transportId: transportId ?? gatewayId, path: `/resume/${gatewayId}`,
+        gatewayId, migrationId, body: { migrationId, slug }, timeoutMs: quiesceMs,
+      });
+      if (response.resumed !== true) throw new Error(`source ingress did not resume for ${slug}`);
     },
 
     async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs }) {

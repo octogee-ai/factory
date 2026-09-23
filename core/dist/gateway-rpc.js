@@ -512,6 +512,16 @@ export function createGatewayRpc(opts = {}) {
             return payload;
         },
         toolsCatalog: (params, timeoutMs) => fetchToolsCatalog(call, params, timeoutMs),
+        async cronJobCount(agentId) {
+            const payload = await call("cron.list", {
+                agentId, enabled: "enabled", compact: true, limit: 1,
+            });
+            const total = payload?.total;
+            if (!Number.isSafeInteger(total) || total < 0) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "cron.list payload missing nonnegative total");
+            }
+            return total;
+        },
         async cronAdd(spec) {
             const payload = await call("cron.add", spec);
             if (!payload || typeof payload !== "object") {

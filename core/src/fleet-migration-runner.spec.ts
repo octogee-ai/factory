@@ -5,6 +5,7 @@ import type { MigrationClient } from "./fleet-migration-client";
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    resume: vi.fn(async () => undefined),
     restoreTarget: vi.fn(async ({ slug }) => {
       calls.push(`restore:${slug}`);
       return { migrationId: "m1", slug, restored: true, steps: ["clone-workspace-repo"] };
@@ -296,4 +297,23 @@ describe("runMigration — gated quiesce", () => {
     expect(result).toMatchObject({ success: false });
     expect(result.errorAt?.error).toMatch(/setAssignmentState/u);
   });
+});
+
+it("resumes source ingress after final copy fails, and never on successful cutover", async () => {
+  const failed = harness({ gateAssignment: true });
+  const transfer = vi.mocked(failed.client.transferState).getMockImplementation()!;
+  vi.mocked(failed.client.transferState).mockImplementationOnce(transfer).mockImplementationOnce(transfer).mockRejectedValueOnce(new Error("copy failed"));
+  await runMigration(failed.input, failed.deps);
+  expect(failed.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
+  const success = harness({ gateAssignment: true });
+  await runMigration(success.input, success.deps);
+  expect(success.client.resume).not.toHaveBeenCalled();
+});
+
+it("keeps channels stopped when source assignment restoration fails", async () => {
+  const h = harness({ gateAssignment: true });
+  vi.mocked(h.client.quiesce).mockRejectedValueOnce(new Error("drain failed"));
+  vi.mocked(h.deps.setAssignmentState!).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("restore failed"));
+  await expect(runMigration(h.input, h.deps)).rejects.toThrow("restore failed");
+  expect(h.client.resume).not.toHaveBeenCalled();
 });

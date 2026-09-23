@@ -27,6 +27,7 @@ import {
   createPushRsyncStateHandler,
   createPushStateHandler,
   createQuiesceHandler,
+  createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
@@ -279,6 +280,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     ...everythingElseThrows,
     log: vi.fn(),
     uidForSlug: vi.fn(async () => "uid-chris"),
+    resumeCustomer: vi.fn(async () => undefined),
     quiesceCustomer: vi.fn(async () => ({ drained: true, runningCount: 0 })),
     listExportPaths: vi.fn(async () => [
       { cwd: "/tmp/state", path: "agents/octogee-chris-coach" },
@@ -433,6 +435,15 @@ async function readRequestBody(body: unknown): Promise<string> {
 }
 
 describe("createQuiesceHandler", () => {
+  it("passes the whole-process rollout's ingress ownership through", async () => {
+    const adapter = mkAdapter();
+    const body = { ...SAMPLE_QUIESCE, stopMattermost: false };
+    const response = mkResponse();
+    await createQuiesceHandler(mkDeps({ adapter }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: false });
+  });
   it("rejects bad signature with 401", async () => {
     const handler = createQuiesceHandler(mkDeps());
     const req = mkRequest(SAMPLE_QUIESCE, { signature: "deadbeef" });
@@ -2737,7 +2748,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     await fs.mkdir(path.dirname(dbPath), { recursive: true });
     const db = new DatabaseSync(dbPath);
     db.exec("PRAGMA journal_mode=WAL");
-    db.exec("CREATE TABLE transcript_events(body TEXT)");
+    db.exec("CREATE TABLE transcript_events(body TEXT); CREATE TABLE session_nodes(status TEXT)");
     seed(db);
     db.close();
     return dbPath;
@@ -2964,6 +2975,18 @@ describe("agent sqlite stores across an rsync carry", () => {
     });
     expect(spawnMock.mock.calls).toHaveLength(1);
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a final running claim before overwriting or activating the target", async () => {
+    const importDir = await mkTempRoot();
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-running", importDir, daemon: mkFakeChild() });
+    await writeStore(stageDir, CARRIED_STORE, (db) => db.exec("INSERT INTO session_nodes VALUES ('running')"));
+    const response = await finishImport(deps, "mig-running");
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toMatchObject({ message: expect.stringContaining("running sessions") });
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
   });
 
   it("clears the destination sidecars that would replay over the carried store", async () => {
@@ -4131,5 +4154,25 @@ describe("destination migration progress", () => {
     const { res, getStatus } = mkResponse();
     await createMigrationProgressHandler(mkDeps())(mkRequest({ migrationId: "mig-1", slug: "chris" }), res, vi.fn());
     expect(getStatus()).toBe(401);
+  });
+});
+
+describe("createResumeHandler", () => {
+  it("resumes only the signed customer's channels", async () => {
+    const adapter = mkAdapter();
+    const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
+    const response = mkResponse();
+    await createResumeHandler(mkDeps({ adapter }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(200);
+    expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris");
+  });
+  it("does not resume channels without a valid signature", async () => {
+    const adapter = mkAdapter();
+    const response = mkResponse();
+    await createResumeHandler(mkDeps({ adapter }))(mkRequest(SAMPLE_QUIESCE, { signature: "bad" }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(401);
+    expect(adapter.resumeCustomer).not.toHaveBeenCalled();
   });
 });

@@ -170,3 +170,18 @@ export async function findUnreadableStore(input: {
   }
   return null;
 }
+
+export async function assertCarriedAgentSessionsDrained(root: string): Promise<void> {
+  for (const store of await listSqliteStores(path.join(root, "agents"))) {
+    if (path.basename(store) !== "openclaw-agent.sqlite") continue;
+    const db = new DatabaseSync(store, { readOnly: true });
+    try {
+      const row = db.prepare("SELECT count(*) AS count FROM session_nodes WHERE status = 'running'").get();
+      if (Number(row?.count) > 0) {
+        throw new Error(`final migration contains running sessions: ${path.relative(root, store)}`);
+      }
+    } finally {
+      db.close();
+    }
+  }
+}

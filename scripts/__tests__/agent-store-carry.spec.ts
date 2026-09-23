@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  assertCarriedAgentSessionsDrained,
   checkpointAgentStoresForCarry,
   clearSqliteSidecars,
   findUnreadableStore,
@@ -233,5 +234,20 @@ describe("isSqliteVolatileArtifactPath", () => {
     expect(isSqliteVolatileArtifactPath("cache.sqlite.backup-2026")).toBe(false);
     expect(isSqliteVolatileArtifactPath("notes.sqlite.tmp-draft")).toBe(false);
     expect(isSqliteVolatileArtifactPath("openclaw-agent.sqlite")).toBe(false);
+  });
+});
+
+describe("final migration admission", () => {
+  it("rejects a turn admitted after the initial drain without changing its state", async () => {
+    const file = seedStore("alice", ["retained history"]);
+    const db = new DatabaseSync(file);
+    db.exec("CREATE TABLE session_nodes(status TEXT); INSERT INTO session_nodes VALUES ('running')");
+    db.close();
+    await expect(assertCarriedAgentSessionsDrained(root)).rejects.toThrow("running session");
+    expect(readRowCount(file)).toBe(1);
+    const settled = new DatabaseSync(file);
+    settled.exec("UPDATE session_nodes SET status='done'");
+    settled.close();
+    await expect(assertCarriedAgentSessionsDrained(root)).resolves.toBeUndefined();
   });
 });

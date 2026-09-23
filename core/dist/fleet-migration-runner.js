@@ -223,6 +223,9 @@ async function tryRollback(state, deps, migrationId, transports) {
         }
     }
     await restoreSourceServing(deps, transports.restoreServing);
+    if (state.phase !== "keys-synced") {
+        await deps.client.resume({ migrationId, gatewayId: state.fromGatewayId, slug: state.slug });
+    }
     return true;
 }
 // Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving
@@ -239,6 +242,7 @@ async function restoreSourceServing(deps, target) {
         const msg = err instanceof Error ? err.message : String(err);
         deps.log(`[migration-runner] ❌ FAILED to restore assignment serving for uid=${target.uid} on ${target.gatewayId}: ${msg} — ` +
             `the customer stays quiescing (edge answers 503) until the next retry or an operator repair`);
+        throw err;
     }
 }
 async function report(deps, step) {

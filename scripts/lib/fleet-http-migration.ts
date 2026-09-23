@@ -50,6 +50,7 @@ import {
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
 import {
+  assertCarriedAgentSessionsDrained,
   checkpointAgentStoresForCarry,
   clearSqliteSidecars,
   findUnreadableStore,
@@ -483,6 +484,22 @@ export function createMigrationProgressHandler(deps: MigrationHandlerDeps): Requ
   };
 }
 
+export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? console.log;
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
+    if (!body) return;
+    try {
+      await deps.adapter.resumeCustomer(body.slug);
+      res.status(200).json({ migrationId: body.migrationId, slug: body.slug, resumed: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] resume failed slug=${body.slug}: ${message}`);
+      res.status(500).json({ error: "resume failed", message });
+    }
+  };
+}
+
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -490,7 +507,9 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
-      const result = await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000);
+      const result = body.stopMattermost === false
+        ? await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000, { stopMattermost: false })
+        : await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000);
       const response: QuiesceResponse = {
         migrationId: body.migrationId,
         slug: body.slug,
@@ -1991,6 +2010,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       if (mode !== "keys") {
         await upgradeStagedAgentStores(session.stageDir, { signal: controller.signal, log });
       }
+      if (mode === "final") await assertCarriedAgentSessionsDrained(session.stageDir);
       await clearSqliteSidecars(
         (await listSqliteStores(session.stageDir)).map((store) =>
           path.join(session.importDir, path.relative(session.stageDir, store))),
@@ -2359,6 +2379,7 @@ async function extractValidatedImport(input: {
   if (input.mode !== "keys") {
     await upgradeStagedAgentStores(stageDir, { signal: input.signal, log: input.log });
   }
+  if (input.mode === "final") await assertCarriedAgentSessionsDrained(stageDir);
   await clearSqliteSidecars(delivered.map((store) => path.join(input.importDir, path.relative(stageDir, store))));
   await copyStageToOpenClaw(stageDir, input.importDir, input.slug);
   return null;

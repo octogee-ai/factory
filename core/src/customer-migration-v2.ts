@@ -279,6 +279,7 @@ async function advanceAbort(
   switch (state.phase) {
     case "abortIntent":
       await deps.setSourceAssignmentState("serving");
+      await deps.client.resume({ migrationId: state.migrationId, gatewayId: state.sourceGatewayId, slug: state.slug });
       await deps.client.unmount({
         migrationId: state.migrationId,
         gatewayId: state.targetGatewayId,

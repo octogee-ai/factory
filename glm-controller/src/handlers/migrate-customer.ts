@@ -658,6 +658,7 @@ async function provisionCustomerOnTarget(input: {
       state: "serving",
       createIfMissing: false,
     });
+    await client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug });
     return { steps: [], success: false, error: errorMessage(error), rolledBack: true };
   }
   if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, migrationId, slug });
@@ -758,6 +759,7 @@ async function restoreSourceServing(
       `[migrate-customer] ❌ FAILED to restore assignment serving for uid=${assignment.uid} ` +
       `on ${assignment.gatewayId}: ${errorMessage(error)} — the customer stays quiescing`,
     );
+    throw error;
   }
 }
 

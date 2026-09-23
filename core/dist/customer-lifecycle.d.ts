@@ -218,7 +218,10 @@ export interface CustomerLifecycleAdapter {
     onMounted?: (slug: string) => void;
     onUnmounted?: (slug: string) => void;
     uidForSlug: (slug: string) => Promise<string | null>;
-    quiesceCustomer: (slug: string, timeoutMs: number) => Promise<{
+    resumeCustomer: (slug: string) => Promise<void>;
+    quiesceCustomer: (slug: string, timeoutMs: number, opts?: {
+        stopMattermost: boolean;
+    }) => Promise<{
         drained: boolean;
         runningCount: number;
     }>;

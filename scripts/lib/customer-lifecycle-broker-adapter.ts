@@ -1,3 +1,4 @@
+import { assertCustomerHasNoScheduledJobs, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
 import { customerFileStatePaths } from "./customer-file-state.js";
 import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
@@ -1195,21 +1196,32 @@ async function scheduleBootGreetingCron(
 }
 
 async function quiesceCustomer(
+  ctx: BrokerCtx,
   slug: string,
   timeoutMs: number,
+  opts = { stopMattermost: true },
 ): Promise<{ drained: boolean; runningCount: number }> {
+  if (opts.stopMattermost) {
+    await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
+    await setCustomerChannelsRunning(ctx.rpc, slug, false);
+  }
   const deadline = Date.now() + timeoutMs;
   let runningCount = 0;
-  while (Date.now() < deadline) {
+  do {
     runningCount = 0;
     for (const sessionsPath of sessionPathsForMigration(slug)) {
       const sessions = await readAgentSessionsAtPath(sessionsPath);
       runningCount += sessions.filter((s) => s.status === "running").length;
     }
-    if (runningCount === 0) return { drained: true, runningCount: 0 };
+    if (runningCount === 0) {
+      if (opts.stopMattermost) await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
+      return { drained: true, runningCount: 0 };
+    }
     dlog(`[quiesce:${slug}] ${runningCount} running session(s); waiting`);
-    await new Promise<void>((r) => setTimeout(r, 1_000));
-  }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise<void>((r) => setTimeout(r, Math.min(1_000, remainingMs)));
+  } while (Date.now() < deadline);
   return { drained: false, runningCount };
 }
 
@@ -1736,7 +1748,8 @@ export function buildBrokeredLifecycleAdapter(
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
-    quiesceCustomer,
+    quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
+    resumeCustomer: (slug) => setCustomerChannelsRunning(ctx.rpc, slug, true),
     listExportPaths,
     prepareImportDir,
     prepareKeyImportDir,

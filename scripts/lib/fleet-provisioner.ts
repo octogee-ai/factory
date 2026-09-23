@@ -38,6 +38,7 @@ import {
   createPushStateHandler,
   createMigrationProgressHandler,
   createQuiesceHandler,
+  createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
   createVerifyHandler,
@@ -1913,6 +1914,7 @@ function registerMigrationRoutes(
 ): void {
   app.post("/restore/:gatewayId", createRestoreHandler(migrationDeps));
   app.post("/migration-progress/:gatewayId", createMigrationProgressHandler(migrationDeps));
+  app.post("/resume/:gatewayId", createResumeHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));

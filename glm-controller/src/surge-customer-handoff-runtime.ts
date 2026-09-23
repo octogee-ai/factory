@@ -817,6 +817,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
           migrationId: operationId,
           slug,
           timeoutMs: MIGRATION_QUIESCE_TIMEOUT_MS,
+          stopMattermost: false,
         },
       });
     },

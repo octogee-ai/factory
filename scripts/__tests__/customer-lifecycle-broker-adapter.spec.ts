@@ -219,6 +219,7 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
   return {
     gatewayRestartRequest: vi.fn(async () => ({ status: "requested" })),
     isGatewayUp: vi.fn(async () => true),
+    cronJobCount: vi.fn(async () => 0),
     channelsStop: vi.fn(async ({ channel, accountId }) => ({
       channel,
       accountId,
@@ -1311,10 +1312,41 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(paths).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ path: expect.stringMatching(/\.sqlite-(wal|shm)$/u) }),
     ]));
-    await expect(adapter.quiesceCustomer("tester10", 1)).resolves.toEqual({
+    await expect(adapter.quiesceCustomer("tester10", 0)).resolves.toEqual({
       drained: false,
       runningCount: 2,
     });
+  });
+});
+
+describe("broker migration admission", () => {
+  it("refuses migration while a customer has scheduled work without stopping chat", async () => {
+    const rpc = mkGatewayRpc({ cronJobCount: vi.fn(async () => 1) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await expect(adapter.quiesceCustomer("migrationqa", 0)).rejects.toThrow("scheduled jobs");
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+  });
+  it("refuses cutover when a draining turn creates a scheduled job", async () => {
+    const rpc = mkGatewayRpc({ cronJobCount: vi.fn().mockResolvedValueOnce(0).mockResolvedValue(1) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await expect(adapter.quiesceCustomer("migrationqa", 0)).rejects.toThrow("scheduled jobs");
+    expect(rpc.cronJobCount).toHaveBeenCalledTimes(2);
+  });
+  it("leaves ingress to the whole-process rollout owner when requested", async () => {
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await adapter.quiesceCustomer("migrationqa", 100, { stopMattermost: false });
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+  });
+  it("stops incoming coach turns before reporting an idle customer drained", async () => {
+    const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot({
+      channels: { mattermost: { accounts: { "migrationqa-coach": {} } } },
+    })) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await expect(adapter.quiesceCustomer("migrationqa", 100)).resolves.toEqual({ drained: true, runningCount: 0 });
+    expect(rpc.channelsStop).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId: "migrationqa-coach" });
+    await adapter.resumeCustomer("migrationqa");
+    expect(rpc.channelsStart).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId: "migrationqa-coach" });
   });
 });
 

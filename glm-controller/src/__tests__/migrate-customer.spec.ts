@@ -71,6 +71,7 @@ function happyClient(): MigrationClient & { calls: string[] } {
       calls.push(`restore:${gatewayId}`);
       return { migrationId: "mig-op-1", slug, restored: true, steps: [] };
     }) as MigrationClient["restoreTarget"],
+    resume: vi.fn(async () => undefined),
     quiesce: vi.fn(async ({ gatewayId, slug }) => {
       calls.push(`quiesce:${gatewayId}`);
       return { migrationId: "mig-op-1", slug, drained: true, runningCount: 0 };

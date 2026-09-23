@@ -251,6 +251,7 @@ export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
 }
 
 export interface QuiesceRequestBody extends MigrationRequestBody {
+  stopMattermost?: boolean;
 
 timeoutMs?: number;
 }

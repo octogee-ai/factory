@@ -488,6 +488,20 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("scheduled migration eligibility", () => {
+    it("counts enabled jobs for the exact agent without fetching prompts", async () => {
+      server.setHandler("cron.list", (params) => {
+        expect(params).toEqual({ agentId: "octogee-alice-coach", enabled: "enabled", compact: true, limit: 1 });
+        return { ok: true, payload: { total: 2, jobs: [{ id: "job" }] } };
+      });
+      await expect(client.cronJobCount("octogee-alice-coach")).resolves.toBe(2);
+    });
+    it.each([{}, { total: -1 }, { total: "0" }])("rejects unverified cron counts: %j", async (payload) => {
+      server.setHandler("cron.list", () => ({ ok: true, payload }));
+      await expect(client.cronJobCount("octogee-alice-coach")).rejects.toMatchObject({ code: "invalid-response" });
+    });
+  });
+
   describe("channels lifecycle", () => {
     it("stops and starts one Mattermost account through the channel RPC", async () => {
       const calls: Array<{ method: string; params: unknown }> = [];
