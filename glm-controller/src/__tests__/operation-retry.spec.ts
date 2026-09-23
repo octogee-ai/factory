@@ -195,6 +195,31 @@ describe("MAX_OPERATION_ATTEMPTS", () => {
 describe("buildOperationCompletionUpdate", () => {
   const now = 2_000_000;
 
+  it.each([
+    { attempts: 0, status: "pending", delay: 30_000 },
+    { attempts: 1, status: "pending", delay: 120_000 },
+    { attempts: 2, status: "failed", delay: null },
+  ])("handles Compute stop timeout after $attempts prior retirement attempts as $status", ({ attempts, status, delay }) => {
+    const error = "helm uninstall failed: stop octogee-pool-44847785: operation operation-1789782653823-65bcc3f4e6af7-3edab86e-7a35a62e did not finish within 300000ms";
+    const steps = [{ name: "helm-uninstall", status: "failed" as const, error }];
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "retire-gateway", origin: "automatic", attempts, attemptHistory: [] },
+      result: { steps, success: false, error },
+      steps,
+      now,
+    });
+
+    expect(update.status).toBe(status);
+    expect(update.attempts).toBe(attempts + 1);
+    expect(update.attemptHistory).toEqual([
+      expect.objectContaining({ classification: "transient", error, steps }),
+    ]);
+    if (delay !== null) {
+      expect(update.nextAttemptAt).toBe(now + delay);
+      expect(update.expireAt).toEqual(FieldValue.delete());
+    }
+  });
+
   it("builds a succeeded update, clearing queue/retry bookkeeping", () => {
     const update = buildOperationCompletionUpdate({
       op: { attempts: 0, attemptHistory: [] },

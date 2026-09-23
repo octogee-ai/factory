@@ -15,6 +15,7 @@ export type OperationFailureClassification = "transient" | "terminal";
 // get an automatic retry.
 const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\btime[d ]?out\b/i,
+  /\boperation \S+ did not finish within \d+ms\b/i,
   /did not (warm|become ready|render|publish)/i,
   /durable desired revision did not materialize/i,
   /never published a heartbeat/i,
