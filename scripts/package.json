@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "provision": "tsx entrypoints/fleet-controller.ts",
+    "prefleet": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "fleet": "tsx ops/fleet.ts",
     "backfill-gateway-field": "tsx ops/backfill-gateway-field.ts",
     "backfill-gateway-mutable-config": "tsx ops/backfill-gateway-mutable-config.ts",
