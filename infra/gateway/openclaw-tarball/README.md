@@ -77,22 +77,21 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The September 23 recut selects upstream `main` at
-[`b6b45244ab750c00eb249a75f9e6dbb872d3787e`](https://github.com/openclaw/openclaw/commit/b6b45244ab750c00eb249a75f9e6dbb872d3787e),
-locked from the newest completed successful push
-[CI run](https://github.com/openclaw/openclaw/actions/runs/35864008097) at selection:
-98 successful jobs and 16 conditional skips. The additional audit spans 440
-commits and 4,088 changed paths since the initially selected `f3327bde` base.
-This is a selected main
-snapshot with package version `2026.9.5`, not another GA release.
+The September 23 final recut selects annotated tag
+[`v2026.9.6`](https://github.com/openclaw/openclaw/releases/tag/v2026.9.6),
+locked to tag object `ce5bbdc244ee937246cc1700d1b224d020c3b599` and peeled
+source `eb377ac59e6c9fd6c7705028034812becf00271b`. Its release branch differs
+from the previous `b6b45244` main snapshot: 394 commits are main-only and 33
+release-only. This is a release port, not a claim that the tag includes every
+newer main change. Package version is `2026.9.6`.
 
-The overlay branch is `ceckert/openclaw:codex/octogee-main-20260923`; its exact
-source is `bba5fc79072fd54ded81f8589be2d9a3cdca8acb`.
+The overlay branch is `ceckert/openclaw:codex/octogee-v2026.9.6-20260923`; its
+exact built source is `a2cd214a1e1fa6c13e5a82ef13b47e6b85397bbb`.
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-3a97c24d.tgz` | `3a97c24df50402a544fb962c6f47d5488f13e71eca0f2cb8c328c44b616a86bf` | `1790174157924677` |
-| `openclaw-mattermost-93acf4da.tgz` | `93acf4dacf67d11170296d4d32faeee05f8a91de47fa3378c2bba288ad54e6f0` | `1790174161062288` |
+| `openclaw-fork-3b8ff7d8.tgz` | `3b8ff7d8116b0f2a9649e3102ef5abeef43475cb09dc9cb932047767718093ae` | `1790185319383840` |
+| `openclaw-mattermost-36f69bd0.tgz` | `36f69bd01a05c374e9932d4bf190756b4f0c3a6bd08533f256543a2f890cb86f` | `1790185323677970` |
 
 Upstream adoption removes these downstream patches:
 
@@ -117,7 +116,11 @@ Upstream adoption removes these downstream patches:
 | Cron retry deferral | Keep a committed reload live when monitor reconciliation schedules its native retry; partial-write retry convergence has regression coverage. This is narrower than the other contributor's [PR #148592](https://github.com/openclaw/openclaw/pull/148592), whose branch is not rewritten or duplicated. |
 | Computer blank selectors | Treat blank `target`, `node`, and `environmentId` as unset so sole-paired-node discovery works. [PR #155072](https://github.com/openclaw/openclaw/pull/155072) remains carried until its fix is in the selected base. |
 
-The port follows upstream's worker and lifetime owners. Native channel ensure
+The port follows the release's worker and lifetime owners. Reviewer authority
+is rechecked through native transaction admission and commit callbacks, including
+post-error revalidation; it does not import main-only persistence machinery.
+A red/green regression proves that revoking operator scopes while reviewer
+preparation is pending prevents resolution. Native channel ensure
 publishes actual committed creates so the existing projection observes them;
 profile-catalog reads skip a redundant host-thread PRAGMA instead of creating a
 second cache. Collected replies clear live sender authority when verified people
@@ -125,8 +128,16 @@ differ, and queued authority remains bound to the admitted requester. Native
 cancellation, reviewer roles, and worker transaction fences remain intact.
 
 Per-agent SQLite advances from schema 22 to 23 and shared state from 17 to 18.
-Native migration/backup tests pass. The container startup path retains its
-migration lease and verified pre-migration backups; TEST validation must still
+The release retains the deletion-journal prerequisite, so PR #3999's private
+native-state initialization remains required. A populated TEST online backup
+with 76 transcript events passed isolated native Doctor bootstrap (14.296s),
+schema 22→23 migration (19.697s), and exact schema-23 preflight with no issues.
+All decoded transcript rows, IDs, ordering, timestamps, ownership metadata,
+and auth-table hashes were unchanged. Private diagnostic reads created WAL
+sidecars; native online backup consolidated the proof copy before preflight.
+No live database was modified and no private records left TEST. Disposable
+proof copies were removed afterward. The container startup path retains its
+migration lease and verified pre-migration backups; the final rollout must still
 check admission for every mounted agent and continuity of existing conversations.
 This rollout is forward-only. An image-only downgrade after schema advancement
 is unsafe.
@@ -153,32 +164,31 @@ substituting the same-version registry `chrome-devtools-mcp` would discard its
 upstream browser snapshot-identity repair. Native tarball-integrity checks cover
 the patched files and required license/runtime assets.
 
-Focused runs pass 321 approval/admission tests, 203 requester tests, 518 runtime
-tests, 176 channel/sharing/icon/node tests, 121 Mattermost tests, 33 UI tests,
-84 native storage/migration/model tests, and six doctor tests. These suites
-overlap and are not a unique-test total. Four native browser sign-in recovery
-cases pass. The Mattermost reaction regressions cover public/private channels
-and thread-lookup success/failure while retaining native default behavior.
-Astra autoreview found no P0/P1 issue in the scoped overlay review.
+Release-port focused runs pass the nine-file channel/icon/computer/Mattermost
+suite and thirteen-file requester/reviewer/runtime/session-sharing/UI suite.
+Additional reviewer and native admission regressions pass 19 and 13 cases;
+the manager suite passes 61. These suites overlap, not a unique-test total.
+The release routes reactions through native channel context; four reaction
+cases cover public/private channels without importing newer main thread lookup.
+Independent code/security review found no actionable findings. The worker-race
+fixture revokes before mutation; source review, not a separate dynamic race,
+verifies the same composed authority guard at both admission and commit.
 Upstream PR #155072 maintenance is outside this recut; its downstream fix remains.
 
-Core production types, all 25 core-test type graphs, non-core types/lint,
-SDK/config/plugin boundaries, formatting, changed-file lint, growth limits,
-and native unused-export checks pass. Whole-tree local `lint:core` reports one
-inherited max-lines failure in `src/cron/service/timer.test.ts` (1,022 lines).
-That file is byte-identical to the locked upstream base; upstream CI makes this
-size limit advisory. No rule was weakened and no unrelated cron patch was added.
-Native main CI also moved 40 slow integration tours into Full Release Validation;
-green main CI is not proof those tours ran.
+Core production types, all 25 core-test type graphs, UI/extension production
+types, extension-test and script types, SDK/config/plugin boundaries,
+formatting, growth limits, and native unused-export checks pass. Final native
+lint qualification is still pending; no aggregate `check:changed` success is
+claimed until it finishes. No rule was weakened.
 
 The final exact-commit build, native tarball-integrity check, and isolated pair
 installation pass. The actual Linux arm64 `openclaw-full-plugin-installer`
 target passes at local image digest
-`sha256:76ea0c4bae80b412800484bd7247e7480de2b3fed3d9032e33041c759610c1ef`:
-143 Codex runtime files are byte-identical and all three native-hook imports pass.
+`sha256:f7eb8d4f9d42313df3d12c7c7e018a37e59bb4453ea4a4750e85b41f10669f56`:
+144 Codex runtime files are byte-identical and all three native-hook imports pass.
 Final-input Octogee checks pass 114 artifact tests and 19 base-image tests.
-Picker refresh passes 23 integration tests; all four desktop/mobile, light/dark
-before-and-after browser screenshots are byte-identical. Native Android/macOS
+The earlier main recut's picker screenshots are not new release-port browser
+proof. Native Android/macOS
 application builds are outside this gateway qualification. No hosted Octogee
 build or deployment result is claimed by these local proofs.
 

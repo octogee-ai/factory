@@ -1,5 +1,5 @@
 {
-  "upstreamRef": "main",
-  "openclawObject": "openclaw-fork-3a97c24d.tgz",
-  "mattermostObject": "openclaw-mattermost-93acf4da.tgz"
+  "upstreamRef": "v2026.9.6",
+  "openclawObject": "openclaw-fork-3b8ff7d8.tgz",
+  "mattermostObject": "openclaw-mattermost-36f69bd0.tgz"
 }
