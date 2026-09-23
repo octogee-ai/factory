@@ -572,6 +572,8 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     parallel: { enabled: true },
 };
 function materializeCustomerPluginValue(value) {
+    if (value === BROKER_TOKEN_PATH_PLACEHOLDER)
+        return value;
     if (typeof value === "string") {
         const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(value);
         return match ? process.env[match[1]] ?? value : value;

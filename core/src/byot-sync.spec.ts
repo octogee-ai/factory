@@ -1715,7 +1715,7 @@ describe("customer OAuth runtime purge", () => {
     });
   });
 
-  it("preserves the env-materialized plugin projection on a running gateway", () => {
+  it("keeps gateway token references when synchronization runs in the sidecar", () => {
     vi.stubEnv("MM_SITE_URL", "https://mattermost-test.octogee.com");
     vi.stubEnv("FLEET_BROKER_URL", "http://127.0.0.1:3003");
     vi.stubEnv("OCTOGEE_API_SA_TOKEN_PATH", "/var/run/secrets/octogee-api/token");
@@ -1733,9 +1733,24 @@ describe("customer OAuth runtime purge", () => {
       expect(patch.plugins.entries["octogee-chat-tools"].config).toEqual({
         siteUrl: "https://mattermost-test.octogee.com",
         brokerUrl: "http://127.0.0.1:3003",
-        tokenPath: "/var/run/secrets/octogee-api/token",
+        tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}",
         customersRoot: "/home/node/customers",
       });
+      for (const entry of Object.values(patch.plugins.entries) as Array<{ config?: { tokenPath?: string } }>) {
+        if (entry.config?.tokenPath) {
+          expect(entry.config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
+        }
+      }
+      const repaired = customerOauthRuntimeConfigPatch(
+        { plugins: { entries: { "octogee-chat-tools": { config: {
+          tokenPath: "/var/run/secrets/octogee-api/token",
+        } } } } },
+        "tester-70",
+        "platform-openrouter/deepseek/deepseek-v4-pro",
+      ) as any;
+      expect(repaired.plugins.entries["octogee-chat-tools"].config.tokenPath).toBe(
+        "${OCTOGEE_API_SA_TOKEN_PATH}",
+      );
       expect(patch.plugins.entries["octogee-status-tools"].config.gatewayClass).toBe("shared");
       expect(patch.plugins.entries["octogee-web-tools"].config.gatewayId).toBe("shared-b");
     } finally {

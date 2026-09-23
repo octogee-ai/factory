@@ -817,6 +817,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
 } as const;
 
 function materializeCustomerPluginValue(value: unknown): unknown {
+  if (value === BROKER_TOKEN_PATH_PLACEHOLDER) return value;
   if (typeof value === "string") {
     const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(value);
     return match ? process.env[match[1]!] ?? value : value;
