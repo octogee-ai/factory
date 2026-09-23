@@ -158,7 +158,7 @@ sizingTier: ""
 
 # Class → default tier mapping. Used when sizingTier is unset.
 classDefaults:
-  shared: "l"
+  shared: "m"
   builder: "s"
 
 # Legacy image-profile → default tier mapping. Used when classDefaults is

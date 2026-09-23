@@ -68,7 +68,7 @@ describe('sizing-tier SSOT', () => {
 
   it('builder class defaults to s and the Barn defaults to l', () => {
     expect(GATEWAY_CLASS_DEFAULT_TIER.builder).toBe('s');
-    expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('l');
+    expect(GATEWAY_CLASS_DEFAULT_TIER.shared).toBe('m');
   });
 
   it('provisions the entry Builder entitlement with browser headroom', () => {

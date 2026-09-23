@@ -55,7 +55,7 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
     capacity: { targetActiveBuilders: 1, typicalBuilders: 2 },
   },
   m: {
-    description: 'F&F floor — light shared use',
+    description: 'Shared default — light shared use',
     resources: {
       requests: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '5Gi' },
       limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '5Gi' },
@@ -64,7 +64,7 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
     capacity: { targetActiveBuilders: 2, typicalBuilders: 3 },
   },
   l: {
-    description: 'Default and ceiling — small teams and shared F&F',
+    description: 'Ceiling — small teams and heavier shared use',
     resources: {
       requests: { cpu: '4000m', memory: '16Gi', 'ephemeral-storage': '5Gi' },
       limits: { cpu: '4000m', memory: '16Gi', 'ephemeral-storage': '5Gi' },
@@ -80,7 +80,7 @@ export const PROFILE_DEFAULT_TIER: Record<GatewayProfile, SizingTier> = {
 };
 
 export const GATEWAY_CLASS_DEFAULT_TIER: Record<GatewayClass, SizingTier> = {
-  shared: 'l',
+  shared: 'm',
   builder: 's',
 };
 

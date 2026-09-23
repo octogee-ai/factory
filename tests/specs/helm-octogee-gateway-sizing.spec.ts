@@ -121,14 +121,14 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
     expectResourcesMatchTier(out, "s");
   });
 
-  it("standard profile without sizingTier renders small resources", () => {
+  it("standard profile without sizingTier renders the shared class default", () => {
     const out = helmTemplate({ profile: "standard" });
-    expectResourcesMatchTier(out, "l");
+    expectResourcesMatchTier(out, "m");
   });
 
-  it("empty profile without sizingTier falls back to small", () => {
+  it("empty profile without sizingTier falls back to the shared class default", () => {
     const out = helmTemplate({});
-    expectResourcesMatchTier(out, "l");
+    expectResourcesMatchTier(out, "m");
   });
 
   it("Builder-profile pod label is the resolved tier, not the bare profile string", () => {
@@ -137,10 +137,10 @@ describe("helm/octogee-gateway/ — sizing tier profile-default fallback", () =>
     expect(c.podLabels.tier).toBe("s");
   });
 
-  it("standard-profile pod label resolves to small", () => {
+  it("standard-profile pod label resolves to the shared class default", () => {
     const out = helmTemplate({ profile: "standard" });
     const c = gatewayContainer(out);
-    expect(c.podLabels.tier).toBe("l");
+    expect(c.podLabels.tier).toBe("m");
   });
 });
 
