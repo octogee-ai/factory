@@ -7,6 +7,9 @@ interface RetirementOperation {
     input?: unknown;
     [key: string]: unknown;
 }
+type RetirableGateway = GatewayDoc & {
+    desiredStatus: "running" | "draining" | "paused";
+};
 interface ClaimGatewayRetirementInput {
     db: Firestore;
     gatewayId: string;
@@ -17,9 +20,7 @@ interface ClaimGatewayRetirementInput {
     telemetryObservedAfter?: number;
     claimGuard?: (input: {
         transaction: Transaction;
-        root: GatewayDoc & {
-            desiredStatus: "running" | "paused";
-        };
+        root: RetirableGateway;
     }) => Promise<void> | void;
 }
 interface VerifyGatewayRetirementClaimInput {

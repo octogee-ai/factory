@@ -1,5 +1,5 @@
 import { isValidGatewayId, } from "./glm.js";
-export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-(0|[1-9]\d*)$/;
+export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-[a-z0-9]+$/;
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 const SHARED_POOL_MEMBER_STATUSES = new Set(["running", "draining", "paused"]);
@@ -12,27 +12,8 @@ function isNonNegativeInteger(value) {
 export function isSharedPoolSlotId(id) {
     return typeof id === "string" && SHARED_POOL_SLOT_ID_PATTERN.test(id);
 }
-export function sharedPoolSlotOrdinal(id) {
-    const match = SHARED_POOL_SLOT_ID_PATTERN.exec(id);
-    return match ? Number(match[1]) : null;
-}
 export function compareSharedGatewayIds(left, right) {
-    const leftOrdinal = sharedPoolSlotOrdinal(left);
-    const rightOrdinal = sharedPoolSlotOrdinal(right);
-    if (leftOrdinal !== null && rightOrdinal !== null)
-        return leftOrdinal - rightOrdinal;
-    if (leftOrdinal !== null)
-        return -1;
-    if (rightOrdinal !== null)
-        return 1;
     return left.localeCompare(right);
-}
-export function nextSharedPoolSlotId(existingGatewayIds) {
-    const taken = new Set(existingGatewayIds.map(sharedPoolSlotOrdinal).filter((ordinal) => ordinal !== null));
-    let ordinal = 0;
-    while (taken.has(ordinal))
-        ordinal += 1;
-    return `shared-${ordinal}`;
 }
 export function isSharedPoolMemberRoot(root) {
     return isValidGatewayId(root.gatewayId) &&

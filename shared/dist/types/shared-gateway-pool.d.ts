@@ -34,7 +34,6 @@ export type SharedPoolScalingDecision = {
     reason: "minimum-replicas" | "scale-out" | "cancel-drain";
 } | {
     kind: "mint-slot";
-    gatewayId: string;
     reason: "minimum-replicas" | "scale-out";
 } | {
     kind: "follow-platform-release";
@@ -43,7 +42,7 @@ export type SharedPoolScalingDecision = {
     kind: "begin-drain";
     gatewayId: string;
 } | {
-    kind: "pause-drained-member";
+    kind: "retire-member";
     gatewayId: string;
 } | {
     kind: "max-capacity";
@@ -86,9 +85,7 @@ export interface SharedPoolMemberRoot {
     desiredStatus: unknown;
 }
 export declare function isSharedPoolSlotId(id: unknown): id is string;
-export declare function sharedPoolSlotOrdinal(id: string): number | null;
 export declare function compareSharedGatewayIds(left: string, right: string): number;
-export declare function nextSharedPoolSlotId(existingGatewayIds: readonly string[]): string;
 export declare function isSharedPoolMemberRoot(root: SharedPoolMemberRoot): boolean;
 export declare function sharedPoolMemberIds(roots: readonly SharedPoolMemberRoot[]): string[];
 export declare function deriveSharedGatewayPoolConfig(roots: readonly SharedPoolMemberRoot[], sharedGatewayAutoscaling?: SharedGatewayAutoscalingConfig): SharedGatewayPoolConfig | null;

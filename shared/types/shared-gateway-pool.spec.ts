@@ -7,13 +7,11 @@ import {
   isAcceptingSharedGateway,
   isSettledSharedGateway,
   isSharedPoolSlotId,
-  nextSharedPoolSlotId,
   parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
   parseSharedPoolReplicaBounds,
   planSharedGatewayRebalance,
   selectSharedGateway,
-  sharedPoolSlotOrdinal,
 } from "./shared-gateway-pool.js";
 
 const config = {
@@ -48,25 +46,18 @@ function root(
 }
 
 describe("shared pool slot ids", () => {
-  it("recognises unnamed ordinal slots and their ordinals", () => {
-    expect(isSharedPoolSlotId("shared-0")).toBe(true);
-    expect(isSharedPoolSlotId("shared-12")).toBe(true);
-    expect(sharedPoolSlotOrdinal("shared-12")).toBe(12);
-    for (const id of ["shared-a", "shared-01", "shared-", "shared", "builder-0", 7, null]) {
+  it("recognises shared gateway identities without interpreting their suffix", () => {
+    for (const id of ["shared-0", "shared-12", "shared-a", "shared-abc012345678"]) {
+      expect(isSharedPoolSlotId(id)).toBe(true);
+    }
+    for (const id of ["shared-", "shared", "builder-0", 7, null]) {
       expect(isSharedPoolSlotId(id)).toBe(false);
     }
-    expect(sharedPoolSlotOrdinal("shared-a")).toBeNull();
   });
 
-  it("orders slots numerically, with any other id after them", () => {
+  it("orders gateway identities deterministically", () => {
     expect(["shared-b", "shared-10", "shared-2", "shared-a", "shared-0"].sort(compareSharedGatewayIds))
-      .toEqual(["shared-0", "shared-2", "shared-10", "shared-a", "shared-b"]);
-  });
-
-  it("mints the lowest unused ordinal", () => {
-    expect(nextSharedPoolSlotId([])).toBe("shared-0");
-    expect(nextSharedPoolSlotId(["shared-0", "shared-1"])).toBe("shared-2");
-    expect(nextSharedPoolSlotId(["shared-0", "shared-2", "shared-a"])).toBe("shared-1");
+      .toEqual(["shared-0", "shared-10", "shared-2", "shared-a", "shared-b"]);
   });
 });
 

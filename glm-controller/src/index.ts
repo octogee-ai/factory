@@ -2665,8 +2665,6 @@ async function main(): Promise<void> {
       db,
       bounds: sharedPoolBounds,
       platformArtifact,
-      ensureGatewayAuthSecret: ({ gatewayId }) =>
-        deps.ensureGatewayAuthSecret({ namespace: NAMESPACE, gatewayId }),
       log,
       now: () => Date.now(),
       recordMaxCapacity: recordSharedGatewayMaxCapacity,

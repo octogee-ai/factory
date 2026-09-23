@@ -123,7 +123,7 @@ function readClaim(value) {
         value.version > 0,
         typeof value.claimedAt === "number",
         Number.isFinite(value.claimedAt),
-        value.previousDesiredStatus === "running" || value.previousDesiredStatus === "paused",
+        value.previousDesiredStatus === "running" || value.previousDesiredStatus === "draining" || value.previousDesiredStatus === "paused",
         value.phase === "claimed",
     ].every(Boolean);
     if (!valid)
@@ -191,7 +191,7 @@ export async function claimGatewayRetirementAtomic(input) {
             throw new GatewayRetirementConflictError(`customer migration is in flight for gateway ${input.gatewayId}`);
         }
         let liveRuntimeIdentity = null;
-        if (rootData.desiredStatus === "running" && rootData.liveRelease != null) {
+        if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
             const runtimeSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId));
             const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now, rootData.liveRelease, input.telemetryObservedAfter);
             if (inspection.error)

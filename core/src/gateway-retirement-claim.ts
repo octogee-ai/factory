@@ -34,6 +34,8 @@ interface RetirementOperation {
   [key: string]: unknown;
 }
 
+type RetirableGateway = GatewayDoc & { desiredStatus: "running" | "draining" | "paused" };
+
 interface ClaimGatewayRetirementInput {
   db: Firestore;
   gatewayId: string;
@@ -44,7 +46,7 @@ interface ClaimGatewayRetirementInput {
   telemetryObservedAfter?: number;
   claimGuard?: (input: {
     transaction: Transaction;
-    root: GatewayDoc & { desiredStatus: "running" | "paused" };
+    root: RetirableGateway;
   }) => Promise<void> | void;
 }
 
@@ -194,7 +196,7 @@ function readClaim(value: unknown): RetirementClaim | null {
     (value.version as number) > 0,
     typeof value.claimedAt === "number",
     Number.isFinite(value.claimedAt),
-    value.previousDesiredStatus === "running" || value.previousDesiredStatus === "paused",
+    value.previousDesiredStatus === "running" || value.previousDesiredStatus === "draining" || value.previousDesiredStatus === "paused",
     value.phase === "claimed",
   ].every(Boolean);
   if (!valid) return null;
@@ -220,7 +222,7 @@ function claimableGatewayRetirementRoot(
   gatewayId: string,
   value: unknown,
 ): {
-  rootData: GatewayDoc & { desiredStatus: "running" | "paused" };
+  rootData: RetirableGateway;
   root: Record<string, unknown>;
 } {
   const projected = projectGatewayDesiredRootForGateway(value, gatewayId);
@@ -242,7 +244,7 @@ function claimableGatewayRetirementRoot(
     );
   }
   return {
-    rootData: projected as GatewayDoc & { desiredStatus: "running" | "paused" },
+    rootData: projected as RetirableGateway,
     root,
   };
 }
@@ -288,7 +290,7 @@ export async function claimGatewayRetirementAtomic(
     }
 
     let liveRuntimeIdentity: LiveRuntimeIdentity = null;
-    if (rootData.desiredStatus === "running" && rootData.liveRelease != null) {
+    if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
       const runtimeSnap = await transaction.get(
         input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId),
       );

@@ -291,14 +291,12 @@ export {
   isSettledSharedGateway,
   isSharedPoolMemberRoot,
   isSharedPoolSlotId,
-  nextSharedPoolSlotId,
   parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
   parseSharedPoolReplicaBounds,
   planSharedGatewayRebalance,
   selectSharedGateway,
   sharedPoolMemberIds,
-  sharedPoolSlotOrdinal,
   stableGatewayUidHash,
 } from './shared-gateway-pool.js';
 export type {
