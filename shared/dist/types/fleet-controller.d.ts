@@ -148,6 +148,7 @@ export interface PrepareRsyncImportResponse {
     host: string;
     port: number;
     module: string;
+    certificatePem: string;
 }
 export interface PushRsyncStateRequestBody extends MigrationRequestBody {
     rpcPhase: "push-rsync-state";
@@ -155,6 +156,7 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
     configTransferMode?: MigrationConfigTransferMode;
     targetHost: string;
     targetPort: number;
+    targetCertificatePem: string;
     transferUser: string;
     transferKey: string;
     includeActivationManifest?: boolean;

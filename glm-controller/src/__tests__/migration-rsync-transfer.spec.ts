@@ -84,6 +84,8 @@ function readyPod(name: string): Response {
   return runningPod(name);
 }
 
+const TARGET_CERTIFICATE_PEM = "-----BEGIN CERTIFICATE-----\nTUlHUkFUSU9O\n-----END CERTIFICATE-----\n";
+
 function makeFetch(
   calls: string[],
   targetPodIP = TARGET_POD_IP,
@@ -104,12 +106,14 @@ function makeFetch(
         host: "0.0.0.0",
         port: 30873,
         module: "state",
+        certificatePem: TARGET_CERTIFICATE_PEM,
       });
     }
     if (url.includes("/push-rsync-state/")) {
       expect(body).toMatchObject({
         targetHost: targetPodIP,
         targetPort: 30873,
+        targetCertificatePem: TARGET_CERTIFICATE_PEM,
         transferUser: "migration",
       });
       return jsonResponse({ migrationId: body.migrationId, slug: body.slug, imported: true });
@@ -581,6 +585,42 @@ describe("createRsyncMigrationTransfer", () => {
     failPush = false;
     await transfer(input);
     expect(store["mig-2__final"]).toMatchObject({ status: "succeeded", attempt: 2 });
+  });
+
+  it("never asks the source to push when the target offers no pinned TLS certificate", async () => {
+    const store: Store = {};
+    const fetchCalls: string[] = [];
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      fetchCalls.push(url);
+      if (url.includes("/prepare-rsync-import/")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { migrationId: string; slug: string };
+        return jsonResponse({ migrationId: body.migrationId, slug: body.slug, imported: true, host: "0.0.0.0", port: 30873, module: "state" });
+      }
+      return makeFetch([])(input, init);
+    }) as typeof globalThis.fetch;
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store),
+      namespace: "octogee-test",
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch,
+      runCommand: makeCommandRunner([]),
+      now: () => Date.now(),
+      workerId: "worker-1",
+    });
+
+    await expect(transfer({
+      migrationId: "mig-no-pin",
+      fromGatewayId: "gw-from",
+      toGatewayId: "gw-to",
+      slug: "alice",
+      mode: "final",
+      includeActivationManifest: false,
+    })).rejects.toThrow("did not return a migration TLS certificate");
+    expect(fetchCalls.some((url) => url.includes("/push-rsync-state/"))).toBe(false);
+    expect(fetchCalls).toContain(`http://${TARGET_POD_IP}:3003/abort-rsync-import/gw-to`);
   });
 });
 

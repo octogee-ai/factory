@@ -1767,6 +1767,7 @@ export function buildBrokeredLifecycleAdapter(
       exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
       removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch),
+    releaseAgent: (agentId) => deleteAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`),
   };
   return adapter;
 }

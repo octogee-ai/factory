@@ -663,10 +663,13 @@ async function transferMode(
         ...(mode === "final" ? { configTransferMode } : {}),
       },
     }) as unknown as PrepareRsyncImportResponse;
+    prepared = true;
     if (!Number.isInteger(prepare.port) || prepare.port <= 0) {
       throw new Error(`target pod ${targetPod.name} returned invalid rsync port`);
     }
-    prepared = true;
+    if (typeof prepare.certificatePem !== "string" || prepare.certificatePem.length === 0) {
+      throw new Error(`target pod ${targetPod.name} did not return a migration TLS certificate`);
+    }
     await runtime.control(sourcePod, gatewayId, "push-rsync-state", {
       operationId,
       body: {
@@ -676,6 +679,7 @@ async function transferMode(
         mode,
         targetHost: targetPod.podIP,
         targetPort: prepare.port,
+        targetCertificatePem: prepare.certificatePem,
         transferUser: "migration",
         transferKey,
         ...(mode === "final"

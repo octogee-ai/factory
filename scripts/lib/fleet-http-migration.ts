@@ -59,6 +59,23 @@ import {
   listSqliteStores,
   SQLITE_CARRY_EXCLUDE_ARGS,
 } from "./agent-store-carry.js";
+import {
+  exportAgentStoreSnapshots,
+  findStagedLiveAgentStores,
+  installPreparedAgentStores,
+  isAgentSnapshotArtifact,
+  LIVE_AGENT_STORE_EXCLUDE_ARGS,
+  prepareAgentStoreSnapshots,
+} from "./agent-store-snapshot.js";
+import {
+  isMigrationCertificatePem,
+  openMigrationTlsEndpoint,
+  reserveLoopbackPort,
+  rsyncTlsConnectProgram,
+  type MigrationTlsEndpoint,
+  type OpenMigrationTlsEndpoint,
+} from "./migration-rsync-tls.js";
+import type { OpenClawCommand } from "./openclaw-cli.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
 import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
@@ -138,6 +155,19 @@ resumeSystemConfigWatch?: (
   slug: string,
   expectedGeneration?: string | null,
 ) => Promise<boolean | void>;
+runOpenClaw?: OpenClawCommand;
+openMigrationTlsEndpoint?: OpenMigrationTlsEndpoint;
+reserveLoopbackPort?: () => Promise<number>;
+procRoot?: string;
+}
+
+const PROC_ROOT = "/proc";
+
+async function releaseAgentForImport(deps: MigrationHandlerDeps, agentId: string): Promise<void> {
+  if (!deps.adapter.releaseAgent) {
+    throw new Error(`cannot replace agent ${agentId}'s database: this gateway cannot release agents`);
+  }
+  await deps.adapter.releaseAgent(agentId);
 }
 
 async function pauseSystemConfigWatchForBuilder(
@@ -1180,6 +1210,7 @@ interface RSyncImportSession {
   configPath: string;
   secretsPath: string;
   child: ReturnType<typeof spawn>;
+  transport: MigrationTlsEndpoint;
 }
 
 const rsyncImportSessions = new Map<string, RSyncImportSession>();
@@ -1417,9 +1448,14 @@ async function stopRsyncDaemon(child: ReturnType<typeof spawn>): Promise<void> {
   throw new Error("rsync daemon did not exit after SIGTERM and SIGKILL");
 }
 
+async function stopRsyncTransfer(session: RSyncImportSession): Promise<void> {
+  await session.transport.close();
+  await stopRsyncDaemon(session.child);
+}
+
 async function stopRsyncSession(session: RSyncImportSession | undefined): Promise<void> {
   if (!session) return;
-  await stopRsyncDaemon(session.child);
+  await stopRsyncTransfer(session);
   rsyncImportSessions.delete(session.key);
   await fs.rm(session.stageDir, { recursive: true, force: true }).catch(() => undefined);
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true }).catch(() => undefined);
@@ -1501,16 +1537,12 @@ async function writeRsyncDaemonConfig(params: {
   stageDir: string;
   transferUser: string;
   transferKey: string;
-  sourcePodIp?: string;
 }): Promise<{ configPath: string; secretsPath: string }> {
   const secretsPath = path.join(params.dir, "rsyncd.secrets");
   await fs.writeFile(secretsPath, `${params.transferUser}:${params.transferKey}\n`, {
     encoding: "utf-8",
     mode: 0o600,
   });
-  const hostsAllow = params.sourcePodIp
-    ? [`  hosts allow = ${params.sourcePodIp}`]
-    : [];
   const configPath = path.join(params.dir, "rsyncd.conf");
   const pidPath = path.join(params.dir, "rsyncd.pid");
   const lockPath = path.join(params.dir, "rsyncd.lock");
@@ -1518,6 +1550,7 @@ async function writeRsyncDaemonConfig(params: {
     configPath,
     [
       "use chroot = no",
+      "address = 127.0.0.1",
       "max connections = 1",
       "log file = /dev/stdout",
       `pid file = ${pidPath}`,
@@ -1529,7 +1562,7 @@ async function writeRsyncDaemonConfig(params: {
       "  list = false",
       `  auth users = ${params.transferUser}`,
       `  secrets file = ${secretsPath}`,
-      ...hostsAllow,
+      "  hosts allow = 127.0.0.1",
       "",
     ].join("\n"),
     "utf-8",
@@ -1659,6 +1692,38 @@ function validateRsyncTransferCredentials(
   return { transferUser, transferKey };
 }
 
+async function startRsyncTransport(input: {
+  deps: MigrationHandlerDeps;
+  tmpDir: string;
+  configPath: string;
+  publicPort: number;
+  sourcePodIp?: string;
+  log: (msg: string) => void;
+}): Promise<{ child: ReturnType<typeof spawn>; transport: MigrationTlsEndpoint }> {
+  const { deps } = input;
+  const daemonPort = await (deps.reserveLoopbackPort ?? reserveLoopbackPort)();
+  const child = spawn(
+    RSYNC_BIN,
+    ["--daemon", "--no-detach", `--config=${input.configPath}`, `--port=${daemonPort}`],
+    { stdio: ["ignore", "ignore", "ignore"] },
+  );
+  try {
+    await (deps.waitForRsyncReady ?? waitForTcpPort)(daemonPort);
+    const transport = await (deps.openMigrationTlsEndpoint ?? openMigrationTlsEndpoint)({
+      dir: input.tmpDir,
+      publicPort: input.publicPort,
+      upstreamPort: daemonPort,
+      sourceIp: input.sourcePodIp,
+      log: input.log,
+    });
+    return { child, transport };
+  } catch (error) {
+    await stopRsyncDaemon(child).catch(() => undefined);
+    await fs.rm(input.tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -1702,13 +1767,15 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         stageDir,
         transferUser,
         transferKey,
-        sourcePodIp: body.sourcePodIp,
       });
-      const child = spawn(
-        RSYNC_BIN,
-        ["--daemon", "--no-detach", `--config=${configPath}`, `--port=${port}`],
-        { stdio: ["ignore", "ignore", "ignore"] },
-      );
+      const { child, transport } = await startRsyncTransport({
+        deps,
+        tmpDir,
+        configPath,
+        publicPort: port,
+        sourcePodIp: body.sourcePodIp,
+        log,
+      });
       const session: RSyncImportSession = {
         key,
         migrationId: body.migrationId,
@@ -1720,6 +1787,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         configPath,
         secretsPath,
         child,
+        transport,
       };
       rsyncImportSessions.set(key, session);
       child.on("exit", () => {
@@ -1730,7 +1798,6 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
           `[migration-rsync] 🔴 rsync daemon error migrationId=${body.migrationId} slug=${body.slug}: ${err.message}`,
         );
       });
-      await (deps.waitForRsyncReady ?? waitForTcpPort)(port);
       const response: PrepareRsyncImportResponse = {
         migrationId: body.migrationId,
         slug: body.slug,
@@ -1738,6 +1805,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         host: requestLocalAddress(req),
         port,
         module: RSYNC_IMPORT_MODULE,
+        certificatePem: transport.certificatePem,
       };
       log(
         `🟡 [migration-rsync] prepare-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} port=${port}`,
@@ -1757,6 +1825,26 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       res.status(500).json({ error: "prepare-rsync-import failed", message });
     }
   };
+}
+
+function validateRsyncPushTarget(body: PushRsyncStateRequestBody, res: Response): {
+  targetHost: string;
+  targetPort: number;
+  targetCertificatePem: string;
+  transferUser: string;
+  transferKey: string;
+} | null {
+  const targetHost = validateRsyncTargetHost(body.targetHost, res);
+  if (!targetHost) return null;
+  const targetPort = validateRsyncPort(body.targetPort, res);
+  if (targetPort === null) return null;
+  if (!isMigrationCertificatePem(body.targetCertificatePem)) {
+    res.status(400).json({ error: "invalid targetCertificatePem" });
+    return null;
+  }
+  const credentials = validateRsyncTransferCredentials(body, res);
+  if (!credentials) return null;
+  return { targetHost, targetPort, targetCertificatePem: body.targetCertificatePem, ...credentials };
 }
 
 export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -1779,13 +1867,9 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       res.status(400).json({ error: "configured Builder system config transfer cannot include activation manifest" });
       return;
     }
-    const targetHost = validateRsyncTargetHost(body.targetHost, res);
-    if (!targetHost) return;
-    const targetPort = validateRsyncPort(body.targetPort, res);
-    if (targetPort === null) return;
-    const credentials = validateRsyncTransferCredentials(body, res);
-    if (!credentials) return;
-    const { transferUser, transferKey } = credentials;
+    const target = validateRsyncPushTarget(body, res);
+    if (!target) return;
+    const { targetHost, targetPort, targetCertificatePem, transferUser, transferKey } = target;
 
     let cleanupActivationManifest: () => Promise<void> = async () => {};
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-rsync-push-${body.migrationId}-`));
@@ -1798,7 +1882,13 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
-      await checkpointAgentStoresForCarry({ sources, log: dlog });
+      if (mode === "final") {
+        sources.push(...await exportAgentStoreSnapshots({
+          sources,
+          exportRoot: path.join(tmpDir, "snapshots"),
+          run: deps.runOpenClaw,
+        }));
+      }
 
       const activationManifest = mode !== "final" || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
         ? { source: null, cleanup: async () => {} }
@@ -1808,7 +1898,9 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
 
       const passwordFile = path.join(tmpDir, "rsync.pass");
       await fs.writeFile(passwordFile, `${transferKey}\n`, { encoding: "utf-8", mode: 0o600 });
-      const destination = `rsync://${transferUser}@${targetHost}:${targetPort}/${RSYNC_IMPORT_MODULE}/`;
+      const certificatePath = path.join(tmpDir, "target.crt");
+      await fs.writeFile(certificatePath, targetCertificatePem, { encoding: "utf-8", mode: 0o600 });
+      const destination = `rsync://${transferUser}@${targetHost}/${RSYNC_IMPORT_MODULE}/`;
       dlog(
         `[migration-rsync] push-state mode=${mode} migrationId=${body.migrationId} slug=${body.slug} paths=${sources.length} target=${targetHost}:${targetPort}`,
       );
@@ -1819,13 +1911,24 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           "--relative",
           ...(mode === "final" ? ["--delete-delay"] : []),
           "--ignore-missing-args",
+          "--compress",
+          "--compress-choice=zstd",
+          "--checksum-choice=xxh128",
+          ...LIVE_AGENT_STORE_EXCLUDE_ARGS,
           ...SQLITE_CARRY_EXCLUDE_ARGS,
           "--password-file",
           passwordFile,
           ...sources.map((source) => rsyncSourceArg(source)),
           destination,
         ],
-        { timeoutMs, label: "rsync push-state" },
+        {
+          timeoutMs,
+          label: "rsync push-state",
+          env: {
+            ...process.env,
+            RSYNC_CONNECT_PROG: rsyncTlsConnectProgram({ certificatePath, host: targetHost, port: targetPort }),
+          },
+        },
       );
       const response: ImportResponse = {
         migrationId: body.migrationId,
@@ -1887,7 +1990,11 @@ async function validateStagedRsyncImport(
     : undefined;
   const violation = findPathTraversalViolation(entries, slug, mode, [], configuredBuilderStatePlan);
   if (violation !== null) return violation;
-  const staged = await listSqliteStores(session.stageDir);
+  const liveStores = await findStagedLiveAgentStores(session.stageDir);
+  if (liveStores.length > 0) {
+    return `carried live agent database files instead of snapshots: ${liveStores.join(", ")}`;
+  }
+  const staged = (await listSqliteStores(session.stageDir)).filter((store) => !isAgentSnapshotArtifact(store));
   const unreadable = await findUnreadableStore({ storePaths: staged, relativeTo: session.stageDir });
   if (unreadable) {
     return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
@@ -1999,6 +2106,36 @@ async function activateFinishedRsyncImport(input: {
   return undefined;
 }
 
+async function deliverStagedImport(input: {
+  deps: MigrationHandlerDeps;
+  session: RSyncImportSession;
+  slug: string;
+  mode: MigrationTransferMode;
+  signal: AbortSignal;
+  log: (msg: string) => void;
+}): Promise<void> {
+  const { deps, session, log } = input;
+  const prepared = input.mode === "final"
+    ? await prepareAgentStoreSnapshots({
+      stageDir: session.stageDir,
+      importDir: session.importDir,
+      migrationId: session.migrationId,
+      requireDrained: true,
+      run: deps.runOpenClaw,
+      signal: input.signal,
+      log,
+    })
+    : null;
+  await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug);
+  if (!prepared) return;
+  await installPreparedAgentStores({
+    prepared,
+    releaseAgent: (agentId) => releaseAgentForImport(deps, agentId),
+    procRoot: deps.procRoot ?? PROC_ROOT,
+    log,
+  });
+}
+
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -2031,7 +2168,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
     );
     try {
       const startedAt = Date.now();
-      await stopRsyncDaemon(session.child);
+      await stopRsyncTransfer(session);
       const rejection = await validateStagedRsyncImport(session, body.slug, mode, configTransferMode, log);
       if (rejection !== null) {
         log(
@@ -2040,15 +2177,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
-      if (mode !== "keys") {
-        await upgradeStagedAgentStores(session.stageDir, { signal: controller.signal, log });
-      }
-      if (mode === "final") await assertCarriedAgentSessionsDrained(session.stageDir);
-      await clearSqliteSidecars(
-        (await listSqliteStores(session.stageDir)).map((store) =>
-          path.join(session.importDir, path.relative(session.stageDir, store))),
-      );
-      await copyStageToOpenClaw(session.stageDir, session.importDir, body.slug);
+      await deliverStagedImport({ deps, session, slug: body.slug, mode, signal: controller.signal, log });
       const stagedAt = Date.now();
       const verificationPending = mode === "final"
         ? await activateFinishedRsyncImport({

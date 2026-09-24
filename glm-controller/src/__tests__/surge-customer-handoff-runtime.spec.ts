@@ -21,6 +21,7 @@ import {
 } from "../surge-customer-handoff.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
+const TARGET_CERTIFICATE_PEM = "-----BEGIN CERTIFICATE-----\nTUlHUkFUSU9O\n-----END CERTIFICATE-----\n";
 const GATEWAY_ID = "gw-a";
 
 const source: SurgePod = {
@@ -544,7 +545,7 @@ describe("surge handoff direct pod transport", () => {
         response.statusCode = 200;
         response.setEncoding = vi.fn();
         const responseBody = String(options.path).includes("/prepare-rsync-import/")
-          ? { port: 30873, host: "0.0.0.0", module: "octogee-import" }
+          ? { port: 30873, host: "0.0.0.0", module: "octogee-import", certificatePem: TARGET_CERTIFICATE_PEM }
           : { imported: true };
         queueMicrotask(() => {
           onResponse(response);
@@ -619,6 +620,40 @@ describe("surge handoff direct pod transport", () => {
     }
   });
 
+  it("aborts the target import without pushing when the target offers no pinned TLS certificate", async () => {
+    const calls: SurgeTransportCall[] = [];
+    const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      calls.push({ url, body });
+      if (url.includes("/prepare-rsync-import/")) {
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+      }
+      return new Response(JSON.stringify({ imported: true }));
+    }) as unknown as typeof globalThis.fetch;
+    const transport = createSurgePodTransport({
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      fetch,
+      request: requestThroughFetch(fetch),
+      randomKey: vi.fn(() => "transfer-key"),
+      log: vi.fn(),
+    });
+
+    await expect(transport.transfer({
+      gatewayId: "default",
+      slug: "alice",
+      operationId: "surge-default-new",
+      sourcePod: source,
+      targetPod: target,
+      loadStrategy: "expedited",
+      configTransferMode: "activation-manifest",
+    })).rejects.toThrow("did not return a migration TLS certificate");
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://10.0.0.2:3003/prepare-rsync-import/default",
+      "http://10.0.0.2:3003/abort-rsync-import/default",
+    ]);
+  });
+
   it("transfers customer keys before final state and verifies each direct pod", async () => {
     const calls: SurgeTransportCall[] = [];
     const fetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
@@ -639,7 +674,7 @@ describe("surge handoff direct pod transport", () => {
         return new Response(JSON.stringify({ handoffReleased: false, openclawUp: true }), { status: 503 });
       }
       if (url.includes("/prepare-rsync-import/")) {
-        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import" }));
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import", certificatePem: TARGET_CERTIFICATE_PEM }));
       }
       if (url.includes("/durable-session-digest/")) {
         return new Response(JSON.stringify({ fileCount: 2, totalBytes: 20, sha256: "a".repeat(64) }));
@@ -711,6 +746,7 @@ describe("surge handoff direct pod transport", () => {
       mode: "keys",
       targetHost: "10.0.0.2",
       targetPort: 30873,
+      targetCertificatePem: TARGET_CERTIFICATE_PEM,
     });
     expect(calls[6]?.body).toMatchObject({
       slug: "alice",
@@ -723,6 +759,7 @@ describe("surge handoff direct pod transport", () => {
       mode: "final",
       targetHost: "10.0.0.2",
       targetPort: 30873,
+      targetCertificatePem: TARGET_CERTIFICATE_PEM,
       includeActivationManifest: true,
       configTransferMode: "activation-manifest",
     });
@@ -741,7 +778,7 @@ describe("surge handoff direct pod transport", () => {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
       if (url.includes("/prepare-rsync-import/")) {
-        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state", certificatePem: TARGET_CERTIFICATE_PEM }));
       }
       if (url.includes("/flush/")) {
         return new Response(JSON.stringify({ error: "flush failed" }), { status: 500 });
@@ -801,7 +838,7 @@ describe("surge handoff direct pod transport", () => {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
       if (url.includes("/prepare-rsync-import/")) {
-        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state" }));
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "state", certificatePem: TARGET_CERTIFICATE_PEM }));
       }
       if (url.includes("/flush/")) {
         return new Response(JSON.stringify({
@@ -863,7 +900,7 @@ describe("surge handoff direct pod transport", () => {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
       calls.push({ url, body });
       if (url.includes("/prepare-rsync-import/")) {
-        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import" }));
+        return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import", certificatePem: TARGET_CERTIFICATE_PEM }));
       }
       if (url.includes("/push-rsync-state/") && body?.mode === "keys") {
         return new Response(JSON.stringify({ error: "key export missing" }), { status: 404 });

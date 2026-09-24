@@ -394,6 +394,13 @@ function podBaseUrl(podIP: string, port: string): string {
   return `http://${host}:${port}`;
 }
 
+function requireTargetCertificate(prepared: PrepareRsyncImportResponse, target: string): string {
+  if (typeof prepared.certificatePem !== "string" || prepared.certificatePem.length === 0) {
+    throw new Error(`target ${target} did not return a migration TLS certificate`);
+  }
+  return prepared.certificatePem;
+}
+
 export function createRsyncMigrationTransfer(
   deps: RSyncMigrationTransferDeps,
 ): MigrationClient["transferState"] {
@@ -493,6 +500,7 @@ export function createRsyncMigrationTransfer(
         mode,
         targetHost: targetPod.podIP,
         targetPort: prepared.port,
+        targetCertificatePem: requireTargetCertificate(prepared, targetPod.name),
         transferUser: MIGRATION_TRANSFER_USER,
         transferKey,
         includeActivationManifest: input.includeActivationManifest,

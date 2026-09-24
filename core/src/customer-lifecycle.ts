@@ -307,6 +307,8 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
     evictionBatch?: readonly string[],
     currentEvictionBatch?: () => Promise<readonly string[]>,
   ) => Promise<RemoveCustomerResult>;
+
+  releaseAgent?: (agentId: string) => Promise<void>;
 }
 
 export type CustomerStateImportMode = "pre" | "final" | "default";

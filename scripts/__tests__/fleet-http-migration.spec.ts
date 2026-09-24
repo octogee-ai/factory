@@ -323,12 +323,20 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
   };
 }
 
+const TARGET_CERTIFICATE_PEM = "-----BEGIN CERTIFICATE-----\nTUlHUkFUSU9O\n-----END CERTIFICATE-----\n";
+const RSYNC_DAEMON_LOOPBACK_PORT = 41873;
+
 function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandlerDeps {
   return {
     publicKey: PUBLIC_KEY,
     gatewayId: GATEWAY_ID,
     adapter: mkAdapter(),
     log: vi.fn(),
+    reserveLoopbackPort: async () => RSYNC_DAEMON_LOOPBACK_PORT,
+    openMigrationTlsEndpoint: vi.fn(async () => ({
+      certificatePem: TARGET_CERTIFICATE_PEM,
+      close: async () => undefined,
+    })),
     ...overrides,
   };
 }
@@ -1750,6 +1758,11 @@ describe("queued-rsync migration control handlers", () => {
       markCustomerMigratingIn: vi.fn(),
     });
     const waitForRsyncReady = vi.fn(async () => undefined);
+    const closeTransport = vi.fn(async () => undefined);
+    const openMigrationTlsEndpoint = vi.fn(async () => ({
+      certificatePem: TARGET_CERTIFICATE_PEM,
+      close: closeTransport,
+    }));
     const daemon = mkFakeChild();
     spawnMock.mockReturnValueOnce(daemon);
     const body: PrepareRsyncImportRequestBody = {
@@ -1764,7 +1777,7 @@ describe("queued-rsync migration control handlers", () => {
     const rawBody = JSON.stringify(body);
     const sig = signForPod(body.migrationId, rawBody);
     const handler = createPrepareRsyncImportHandler(
-      mkDeps({ adapter, migrationRsyncPort: 30873, waitForRsyncReady }),
+      mkDeps({ adapter, migrationRsyncPort: 30873, waitForRsyncReady, openMigrationTlsEndpoint }),
     );
     const req = mkRequest(body, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
@@ -1778,14 +1791,20 @@ describe("queued-rsync migration control handlers", () => {
       imported: true,
       port: 30873,
       module: "state",
+      certificatePem: TARGET_CERTIFICATE_PEM,
     });
     expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
     expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
-    expect(waitForRsyncReady).toHaveBeenCalledWith(30873);
+    expect(waitForRsyncReady).toHaveBeenCalledWith(RSYNC_DAEMON_LOOPBACK_PORT);
+    expect(openMigrationTlsEndpoint).toHaveBeenCalledWith(expect.objectContaining({
+      publicPort: 30873,
+      upstreamPort: RSYNC_DAEMON_LOOPBACK_PORT,
+      sourceIp: SOURCE_POD_IP,
+    }));
     expect(String(spawnMock.mock.calls[0][0])).toMatch(/\/rsync$/);
     const spawnArgs = spawnMock.mock.calls[0][1] as string[];
     expect(spawnArgs).toEqual(
-      expect.arrayContaining(["--daemon", "--no-detach", "--port=30873"]),
+      expect.arrayContaining(["--daemon", "--no-detach", `--port=${RSYNC_DAEMON_LOOPBACK_PORT}`]),
     );
     const configArg = spawnArgs.find((arg) => arg.startsWith("--config="));
     expect(configArg).toBeDefined();
@@ -1793,7 +1812,9 @@ describe("queued-rsync migration control handlers", () => {
     const config = await fs.readFile(configPath, "utf-8");
     expect(config).toContain(`pid file = ${configPath.replace(/rsyncd\.conf$/, "rsyncd.pid")}`);
     expect(config).toContain(`lock file = ${configPath.replace(/rsyncd\.conf$/, "rsyncd.lock")}`);
-    expect(config).toContain(`  hosts allow = ${SOURCE_POD_IP}`);
+    expect(config).toContain("address = 127.0.0.1");
+    expect(config).toContain("  hosts allow = 127.0.0.1");
+    expect(config).not.toContain(SOURCE_POD_IP);
 
     const abortHandler = createAbortRsyncImportHandler(mkDeps({ adapter }));
     const replayedPrepare = mkResponse();
@@ -1818,6 +1839,7 @@ describe("queued-rsync migration control handlers", () => {
     const abortRes = mkResponse();
     await abortHandler(abortReq, abortRes.res, vi.fn());
     expect(daemon.kill).toHaveBeenCalled();
+    expect(closeTransport).toHaveBeenCalled();
   });
 
   it("reserves the surge target only for a configured Builder final import, before opening its session, and fails closed", async () => {
@@ -1994,6 +2016,7 @@ describe("queued-rsync migration control handlers", () => {
       mode: "final",
       targetHost: TARGET_POD_IP,
       targetPort: 30873,
+      targetCertificatePem: TARGET_CERTIFICATE_PEM,
       transferUser: "migration",
       transferKey: "b".repeat(64),
       includeActivationManifest: true,
@@ -2015,7 +2038,36 @@ describe("queued-rsync migration control handlers", () => {
     expect(args).toContain("/openclaw/./customers/chris");
     expect(args).not.toContain("/openclaw/./customer-keys/chris");
     expect(args.some((arg) => arg.endsWith("/./.octogee-migration-activation/chris/activation.json"))).toBe(true);
-    expect(args).toContain(`rsync://migration@${TARGET_POD_IP}:30873/state/`);
+    expect(args).toContain(`rsync://migration@${TARGET_POD_IP}/state/`);
+    expect(args).toEqual(expect.arrayContaining(["--compress", "--compress-choice=zstd"]));
+    const env = (spawnMock.mock.calls[0][2] as { env: NodeJS.ProcessEnv }).env;
+    expect(env.RSYNC_CONNECT_PROG).toContain(`-connect ${TARGET_POD_IP}:30873`);
+    expect(env.RSYNC_CONNECT_PROG).toContain("-verify_return_error");
+    expect(env.RSYNC_CONNECT_PROG).toMatch(/-CAfile \S+\/target\.crt/);
+  });
+
+  it("refuses to push without the target's pinned TLS certificate", async () => {
+    const body = {
+      migrationId: "mig-rsync-no-pin",
+      slug: "chris",
+      rpcPhase: "push-rsync-state",
+      mode: "final",
+      targetHost: TARGET_POD_IP,
+      targetPort: 30873,
+      transferUser: "migration",
+      transferKey: "b".repeat(64),
+    };
+    const { res, getStatus, getBody } = mkResponse();
+
+    await createPushRsyncStateHandler(mkDeps())(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }),
+      res,
+      vi.fn(),
+    );
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toEqual({ error: "invalid targetCertificatePem" });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("does not materialize an activation manifest for a configured Builder final transfer", async () => {
@@ -2041,6 +2093,7 @@ describe("queued-rsync migration control handlers", () => {
       configTransferMode: "configured-builder-system-config",
       targetHost: TARGET_POD_IP,
       targetPort: 30873,
+      targetCertificatePem: TARGET_CERTIFICATE_PEM,
       transferUser: "migration",
       transferKey: "b".repeat(64),
     };
@@ -2764,7 +2817,39 @@ describe("agent sqlite stores across an rsync carry", () => {
     }
   }
 
-  function pushRsync(stateDir: string, migrationId: string): {
+  const SNAPSHOT_REPOSITORY = path.join("agents", "octogee-chris-coach", "agent", ".octogee-snapshot");
+
+  function snapshotResult(ok: boolean, extra: Record<string, unknown> = {}): { code: number; stdout: string } {
+    return ok
+      ? { code: 0, stdout: JSON.stringify({ ok: true, ...extra }) }
+      : { code: 1, stdout: JSON.stringify({ ok: false, error: { message: String(extra.message) } }) };
+  }
+
+  function fakeOpenClaw(options: { failSnapshot?: string } = {}) {
+    return vi.fn(async (args: string[]) => {
+      const [, , action] = args;
+      if (action === "create") {
+        if (options.failSnapshot) return snapshotResult(false, { message: options.failSnapshot });
+        const repository = args[args.indexOf("--repository") + 1]!;
+        const snapshotPath = path.join(repository, "snap-1");
+        await fs.mkdir(snapshotPath, { recursive: true });
+        await fs.writeFile(path.join(snapshotPath, "manifest.json"), "{}");
+        await fs.writeFile(path.join(snapshotPath, "database.sqlite"), "snapshot");
+        return snapshotResult(true, { snapshotPath });
+      }
+      if (action === "verify") return snapshotResult(true);
+      if (action === "restore") {
+        await fs.copyFile(path.join(args[3]!, "database.sqlite"), args[args.indexOf("--target") + 1]!);
+        return snapshotResult(true);
+      }
+      throw new Error(`unexpected openclaw ${args.join(" ")}`);
+    });
+  }
+
+  function pushRsync(stateDir: string, migrationId: string, options: {
+    mode?: "pre" | "final";
+    runOpenClaw?: ReturnType<typeof fakeOpenClaw>;
+  } = {}): {
     handler: ReturnType<typeof createPushRsyncStateHandler>;
     req: Request;
   } {
@@ -2772,9 +2857,10 @@ describe("agent sqlite stores across an rsync carry", () => {
       migrationId,
       slug: "chris",
       rpcPhase: "push-rsync-state",
-      mode: "pre",
+      mode: options.mode ?? "final",
       targetHost: TARGET_POD_IP,
       targetPort: 30873,
+      targetCertificatePem: TARGET_CERTIFICATE_PEM,
       transferUser: "migration",
       transferKey: "b".repeat(64),
     };
@@ -2782,43 +2868,70 @@ describe("agent sqlite stores across an rsync carry", () => {
       listExportPaths: vi.fn(async () => [
         { cwd: stateDir, path: path.join("agents", "octogee-chris-coach") },
       ]),
+      exportOpenClawActivationManifest: vi.fn(async () => null as never),
     });
     return {
-      handler: createPushRsyncStateHandler(mkDeps({ adapter })),
+      handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw() })),
       req: mkRequest(body, {
         signature: signForPod(migrationId, JSON.stringify(body)),
       }),
     };
   }
 
-  it("checkpoints each store and leaves its wal/shm siblings out of the copy set", async () => {
+  it("carries an OpenClaw snapshot of each agent database and never the live files", async () => {
     const stateDir = await mkTempRoot();
     const dbPath = await writeStore(stateDir, CARRIED_STORE, () => {});
     const live = new DatabaseSync(dbPath);
     live.prepare("INSERT INTO transcript_events VALUES (?)").run("newest");
-    expect((await fs.stat(`${dbPath}-wal`)).size).toBeGreaterThan(0);
+    const runOpenClaw = fakeOpenClaw();
+    let snapshotCarried = false;
+    spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
+      const snapshotSource = args.find((arg) => arg.endsWith(`/./${SNAPSHOT_REPOSITORY}`));
+      snapshotCarried = snapshotSource !== undefined &&
+        fsSync.existsSync(path.join(snapshotSource.replace("/./", "/"), "snap-1", "database.sqlite"));
+      return mkFakeChild({ exitCode: 0 });
+    });
+    const { handler, req } = pushRsync(stateDir, "mig-carry-snapshot", { runOpenClaw });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+    live.close();
+
+    expect(getStatus()).toBe(200);
+    expect(runOpenClaw).toHaveBeenCalledWith(
+      ["backup", "sqlite", "create", "--agent", "octogee-chris-coach", "--repository", expect.stringMatching(new RegExp(`${SNAPSHOT_REPOSITORY}$`)), "--json"],
+      expect.any(Object),
+    );
+    expect(snapshotCarried).toBe(true);
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args).toEqual(expect.arrayContaining([
+      "--exclude=openclaw-agent.sqlite",
+      "--exclude=openclaw-agent.sqlite-*",
+    ]));
+  });
+
+  it("carries no agent database in a pre-sync", async () => {
+    const stateDir = await mkTempRoot();
+    await writeStore(stateDir, CARRIED_STORE, () => {});
+    const runOpenClaw = fakeOpenClaw();
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const { handler, req } = pushRsync(stateDir, "mig-carry-wal");
+    const { handler, req } = pushRsync(stateDir, "mig-carry-pre", { mode: "pre", runOpenClaw });
     const { res, getStatus } = mkResponse();
 
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
+    expect(runOpenClaw).not.toHaveBeenCalled();
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    expect(args).toContain("--exclude=*.sqlite-wal");
-    expect(args).toContain("--exclude=*.sqlite-shm");
-    const carried = path.join(stateDir, "carried.sqlite");
-    await fs.copyFile(dbPath, carried);
-    live.close();
-    expect(rowCount(carried)).toBe(1);
+    expect(args).toContain("--exclude=openclaw-agent.sqlite");
   });
 
-  it("fails the push instead of carrying a store it cannot checkpoint", async () => {
+  it("fails the push instead of carrying a store OpenClaw cannot snapshot", async () => {
     const stateDir = await mkTempRoot();
-    const dbPath = path.join(stateDir, CARRIED_STORE);
-    await fs.mkdir(path.dirname(dbPath), { recursive: true });
-    await fs.writeFile(dbPath, "this is not a database");
-    const { handler, req } = pushRsync(stateDir, "mig-carry-bad");
+    await writeStore(stateDir, CARRIED_STORE, () => {});
+    const { handler, req } = pushRsync(stateDir, "mig-carry-bad", {
+      runOpenClaw: fakeOpenClaw({ failSnapshot: "database disk image is malformed" }),
+    });
     const { res, getStatus, getBody } = mkResponse();
 
     await handler(req, res, vi.fn());
@@ -2826,7 +2939,22 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({
       error: "push-rsync-state failed",
-      message: expect.stringContaining("could not be checkpointed for carry"),
+      message: "OpenClaw snapshot of octogee-chris-coach failed: database disk image is malformed",
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to carry an unexpected SQLite store from agent state", async () => {
+    const stateDir = await mkTempRoot();
+    await writeStore(stateDir, path.join("agents", "octogee-chris-coach", "agent", "stray.sqlite"), () => {});
+    const { handler, req } = pushRsync(stateDir, "mig-carry-stray");
+    const { res, getStatus, getBody } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({
+      message: expect.stringContaining("unexpected OpenClaw SQLite store in agent state"),
     });
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -2836,12 +2964,15 @@ describe("agent sqlite stores across an rsync carry", () => {
     importDir: string;
     daemon: ReturnType<typeof mkFakeChild>;
     mode?: "pre" | "final";
+    adapter?: Partial<CustomerLifecycleAdapter>;
+    deps?: Partial<MigrationHandlerDeps>;
   }): Promise<{ deps: MigrationHandlerDeps; stageDir: string }> {
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => input.importDir),
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       markCustomerMigratingIn: vi.fn(),
       onMounted: vi.fn(),
+      ...input.adapter,
     });
     const deps = mkDeps({
       adapter,
@@ -2849,6 +2980,8 @@ describe("agent sqlite stores across an rsync carry", () => {
       waitForRsyncReady: vi.fn(async () => undefined),
       pauseSystemConfigWatch: vi.fn(async () => undefined),
       resumeSystemConfigWatch: vi.fn(async () => undefined),
+      runOpenClaw: fakeOpenClaw(),
+      ...input.deps,
     });
     spawnMock.mockReturnValueOnce(input.daemon);
     const body: PrepareRsyncImportRequestBody = {
@@ -2956,14 +3089,21 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(spawnMock.mock.calls).toHaveLength(1);
   });
 
-  it("rejects a carried store that does not open instead of delivering it", async () => {
+  const STAGED_SNAPSHOT = path.join(SNAPSHOT_REPOSITORY, "snap-1");
+
+  async function stageSnapshot(stageDir: string, seed: (db: DatabaseSync) => void): Promise<void> {
+    await writeStore(stageDir, path.join(STAGED_SNAPSHOT, "database.sqlite"), seed);
+    await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), "{}");
+  }
+
+  it("rejects a carried workspace store that does not open instead of delivering it", async () => {
     const importDir = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({
       migrationId: "mig-carry-unreadable",
       importDir,
       daemon: mkFakeChild(),
     });
-    const staged = path.join(stageDir, CARRIED_STORE);
+    const staged = path.join(stageDir, "customers", "chris", "app.sqlite");
     await fs.mkdir(path.dirname(staged), { recursive: true });
     await fs.writeFile(staged, "this is not a database");
 
@@ -2972,16 +3112,130 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(getStatus()).toBe(400);
     expect(getBody()).toMatchObject({
       error: "rsync import failed validation",
-      message: expect.stringContaining(`carried agent store ${CARRIED_STORE} does not open`),
+      message: expect.stringContaining("carried agent store customers/chris/app.sqlite does not open"),
     });
     expect(spawnMock.mock.calls).toHaveLength(1);
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+
+  it("rejects live agent database files carried instead of a snapshot", async () => {
+    const importDir = await mkTempRoot();
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-carry-live", importDir, daemon: mkFakeChild() });
+    await writeStore(stageDir, CARRIED_STORE, () => {});
+
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-live");
+
+    expect(getStatus()).toBe(400);
+    expect(getBody()).toMatchObject({
+      message: `carried live agent database files instead of snapshots: ${CARRIED_STORE}`,
+    });
+    expect(spawnMock.mock.calls).toHaveLength(1);
+    await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
+  });
+
+  it("verifies, restores and lands the carried snapshot before activating", async () => {
+    const importDir = await mkTempRoot();
+    const landedAtActivation: boolean[] = [];
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-land",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: {
+        activateImportedCustomer: vi.fn(async () => {
+          landedAtActivation.push(fsSync.existsSync(path.join(importDir, CARRIED_STORE)));
+          return { appliedFingerprint: "fp-chris" };
+        }),
+      },
+    });
+    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus } = await finishImport(deps, "mig-carry-land");
+
+    expect(getStatus()).toBe(200);
+    const run = deps.runOpenClaw as ReturnType<typeof fakeOpenClaw>;
+    expect(run.mock.calls.map(([args]) => args.slice(0, 3).join(" "))).toEqual([
+      "backup sqlite verify",
+      "backup sqlite restore",
+    ]);
+    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+    expect((await fs.stat(path.join(importDir, CARRIED_STORE))).mode & 0o777).toBe(0o600);
+    expect(landedAtActivation).toEqual([true]);
+    expect(upgradeStoresMock).toHaveBeenCalledWith(
+      path.join(importDir, ".octogee-import", "mig-carry-land"),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    await expect(fs.access(path.join(importDir, ".octogee-import", "mig-carry-land"))).rejects.toThrow();
+    await expect(fs.access(path.join(stageDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
+  });
+
+  it("releases an occupied destination through OpenClaw before replacing its database", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, () => {});
+    await fs.writeFile(`${previous}-wal`, "previous wal");
+    const releaseAgent = vi.fn(async () => undefined);
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-release",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: { releaseAgent },
+      deps: { procRoot },
+    });
+    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus } = await finishImport(deps, "mig-carry-release");
+
+    expect(getStatus()).toBe(200);
+    expect(releaseAgent).toHaveBeenCalledWith("octogee-chris-coach");
+    expect(rowCount(previous)).toBe(1);
+    await expect(fs.access(`${previous}-wal`)).rejects.toThrow();
+  });
+
+  it("refuses to replace a database a process still holds after release", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, (db) => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
+    await fs.mkdir(path.join(procRoot, "92", "fd"), { recursive: true });
+    await fs.symlink(`${previous}-shm (deleted)`, path.join(procRoot, "92", "fd", "41"));
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-held",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: { releaseAgent: vi.fn(async () => undefined) },
+      deps: { procRoot },
+    });
+    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-held");
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ message: `agent database files are still held open: ${previous}-shm` });
+    expect(rowCount(previous)).toBe(1);
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+
+  it("refuses to replace an occupied database when the gateway cannot release agents", async () => {
+    const importDir = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, () => {});
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-carry-no-release", importDir, daemon: mkFakeChild() });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-no-release");
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ message: expect.stringContaining("cannot release agents") });
+    expect(fsSync.existsSync(previous)).toBe(true);
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
   it("rejects a final running claim before overwriting or activating the target", async () => {
     const importDir = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({ migrationId: "mig-running", importDir, daemon: mkFakeChild() });
-    await writeStore(stageDir, CARRIED_STORE, (db) => db.exec("INSERT INTO session_nodes VALUES ('running')"));
+    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO session_nodes VALUES ('running')"));
     const response = await finishImport(deps, "mig-running");
     expect(response.getStatus()).toBe(500);
     expect(response.getBody()).toMatchObject({ message: expect.stringContaining("running sessions") });
@@ -2990,51 +3244,10 @@ describe("agent sqlite stores across an rsync carry", () => {
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
   });
 
-  it("clears the destination sidecars that would replay over the carried store", async () => {
-    const importDir = await mkTempRoot();
-    const stale = await writeStore(importDir, CARRIED_STORE, (db) => {
-      db.exec("INSERT INTO transcript_events VALUES ('stale')");
-    });
-    await fs.writeFile(`${stale}-wal`, "stale wal frames");
-    await fs.writeFile(`${stale}-shm`, Buffer.alloc(32768));
-    const { deps, stageDir } = await prepareImport({
-      migrationId: "mig-carry-sidecars",
-      importDir,
-      daemon: mkFakeChild(),
-    });
-    const sourceDir = await mkTempRoot();
-    const carried = await writeStore(sourceDir, CARRIED_STORE, (db) => {
-      db.exec("INSERT INTO transcript_events VALUES ('carried')");
-    });
-    const staged = path.join(stageDir, CARRIED_STORE);
-    await fs.mkdir(path.dirname(staged), { recursive: true });
-    await fs.copyFile(carried, staged);
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-
-    const { getStatus } = await finishImport(deps, "mig-carry-sidecars");
-
-    expect(getStatus()).toBe(200);
-    await expect(fs.access(`${stale}-wal`)).rejects.toThrow();
-    await expect(fs.access(`${stale}-shm`)).rejects.toThrow();
-  });
-
-  it.each(["pre", "final"] as const)("upgrades staged %s state before copying or activating it", async (mode) => {
-    const importDir = await mkTempRoot();
-    const migrationId = `mig-schema-upgrade-${mode}`;
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode });
-    await writeStore(stageDir, CARRIED_STORE, () => {});
-    spawnMock.mockImplementationOnce(() => {
-      expect(upgradeStoresMock).toHaveBeenCalledWith(stageDir, expect.objectContaining({ signal: expect.any(AbortSignal) }));
-      return mkFakeChild({ exitCode: 0 });
-    });
-    const { getStatus } = await finishImport(deps, migrationId, mode);
-    expect(getStatus()).toBe(200);
-  });
-
   it("does not deliver or activate state when offline upgrade fails", async () => {
     const importDir = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({ migrationId: "mig-schema-failure", importDir, daemon: mkFakeChild() });
-    await writeStore(stageDir, CARRIED_STORE, () => {});
+    await stageSnapshot(stageDir, () => {});
     upgradeStoresMock.mockRejectedValueOnce(new Error("schema upgrade failed"));
     const { getStatus } = await finishImport(deps, "mig-schema-failure");
     expect(getStatus()).toBe(500);
