@@ -33,6 +33,8 @@ export interface SharedPoolScalingInput {
   bounds: SharedPoolReplicaBounds;
   members: readonly SharedPoolScalingMember[];
   unplacedBuilderCount: number;
+  replacement?: { sourceGatewayId: string; targetGatewayId: string } | null;
+  replacementStalled?: boolean;
 }
 
 export type SharedPoolScalingDecision =
@@ -52,7 +54,8 @@ export type SharedPoolScalingDecision =
       reason: "minimum-replicas" | "scale-out" | "cancel-drain";
     }
   | { kind: "mint-slot"; reason: "minimum-replicas" | "scale-out" }
-  | { kind: "follow-platform-release"; gatewayId: string }
+  | { kind: "mint-slot"; reason: "platform-replacement"; replacesGatewayId: string }
+  | { kind: "finish-replacement" }
   | { kind: "begin-drain"; gatewayId: string }
   | { kind: "retire-member"; gatewayId: string }
   | { kind: "max-capacity"; assignmentCount: number; hotMemberCount: number };
