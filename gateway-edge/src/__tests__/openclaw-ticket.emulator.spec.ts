@@ -103,7 +103,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     expect(res.body.gatewayId).toBe("");
   });
 
-  it("records targetless activation demand when the client anticipates a session", async () => {
+  it("never records runtime demand — an open tab cannot summon or hold the runtime", async () => {
     await db.doc("users/caller-uid").set({
       username: "alice",
       builderSubscription: { tier: "pro", status: "active" },
@@ -127,54 +127,13 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     expect(res.body.wsTicket).toMatch(/^[0-9a-f-]{36}$/);
 
     const user = await db.doc("users/caller-uid").get();
-    expect(user.data()?.provisioning.openclaw.activationLease).toMatchObject({
-      generation: 1,
-      status: "requested",
-      cause: "ticket",
-      builderSlug: "alice",
-      sourceGatewayId: "default",
-      sourceAssignmentEpoch: 7,
-      entitlementTier: "pro",
-      sizingTier: "m",
-    });
-    expect(
-      user.data()?.provisioning.openclaw.activationLease,
-    ).not.toHaveProperty("targetGatewayId");
-    const ops = await db.collection("glmOperations").get();
-    expect(ops.empty).toBe(true);
-  });
-
-  it("mints without recording demand when the client does not anticipate — a reconnect cannot summon or hold the runtime", async () => {
-    await db.doc("users/caller-uid").set({
-      username: "alice",
-      builderSubscription: { tier: "pro", status: "active" },
-      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
-    });
-    await db.doc("gateways/default/assignments/caller-uid").set({
-      uid: "caller-uid",
-      gatewayId: "default",
-      state: "serving",
-      epoch: 7,
-    });
-
-    const token = await getActiveIdToken("caller-uid");
-    const res = await request(buildApp())
-      .post("/api/openclaw/ticket")
-      .set("Authorization", `Bearer ${token}`)
-      .send({ anticipate: false });
-
-    expect(res.status).toBe(200);
-    expect(res.body.gatewayId).toBe("default");
-    expect(res.body.wsTicket).toMatch(/^[0-9a-f-]{36}$/);
-
-    const user = await db.doc("users/caller-uid").get();
     expect(user.data()?.provisioning.openclaw).not.toHaveProperty("activationLease");
   });
 
   it.each([
     ["a Personal user", { subscription: { tier: "personal", status: "active" } }],
     ["an Enterprise Builder", { builderSubscription: { tier: "enterprise", status: "active" } }],
-  ])("mints the current shared ticket for %s when disposable activation is unavailable", async (
+  ])("mints the current shared ticket for %s", async (
     _label,
     entitlement,
   ) => {
@@ -193,8 +152,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
-      .set("Authorization", `Bearer ${token}`)
-      .send({ anticipate: true });
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(res.body.gatewayId).toBe("default");
@@ -217,8 +175,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     const token = await getActiveIdToken("caller-uid");
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
-      .set("Authorization", `Bearer ${token}`)
-      .send({ anticipate: true });
+      .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(res.body.gatewayId).toBe("default");

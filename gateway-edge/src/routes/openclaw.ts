@@ -1,7 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
-import { logger } from "../middleware/logging.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -63,41 +62,9 @@ async function requestRuntimeDemand(input: {
   });
 }
 
-async function maybeRequestActivationBeforeTicket(
-  uid: string,
-  userData: Record<string, unknown> | undefined,
-): Promise<void> {
-  try {
-    const result = await requestRuntimeDemand({
-      uid,
-      userData,
-      cause: "ticket",
-      eventKey: `ticket:${randomUUID()}`,
-      createdBy: `openclaw-ticket:${uid}`,
-    });
-    if (result && result.statusCode !== 200 && result.statusCode !== 202) {
-      logger.warn("[openclaw-ticket] disposable activation rejected", {
-        uid,
-        statusCode: result.statusCode,
-        code: result.body.code,
-      });
-    }
-  } catch (error) {
-    logger.warn("[openclaw-ticket] disposable activation unavailable", {
-      uid,
-      error,
-    });
-  }
-}
-
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
-
-    if ((req.body as { anticipate?: unknown } | undefined)?.anticipate === true) {
-      await maybeRequestActivationBeforeTicket(uid, req.user);
-    }
-
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =

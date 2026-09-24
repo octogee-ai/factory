@@ -39,6 +39,16 @@ export type RedeemOpenClawWsOutcome =
   | { kind: "unauthorized" }
   | { kind: "revision-unavailable"; reason: string };
 
+interface ChatActivityReportBase {
+  channelId: string;
+  postId: string;
+  mmUserId: string;
+}
+
+export type ChatActivityReport =
+  | (ChatActivityReportBase & { kind: "post" })
+  | (ChatActivityReportBase & { kind: "reaction"; emojiName: string; createdAt: number });
+
 export interface OpenClawRuntimeBroker {
   redeemOpenClawWs(ticketId: string, purpose?: RedeemableWsTicketPurpose): Promise<RedeemOpenClawWsOutcome>;
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
@@ -56,6 +66,7 @@ export interface OpenClawRuntimeBroker {
   activityWriteReceiptsFor(channelDocPath: string): ActivityWriteReceiptStore;
   resolveChannelOwnerUid(channelId: string): Promise<string | null>;
   resolveOctogeeUidByMmUser(mmUserId: string): Promise<string | null>;
+  requestChatActivityDemand(activity: ChatActivityReport): Promise<Record<string, unknown>>;
 }
 
 export class OpenClawRuntimeBrokerError extends Error {
@@ -375,6 +386,19 @@ export function createOpenClawRuntimeBroker(opts: {
         new Set([200, 404]),
       );
       return stringField(body, "uid");
+    },
+    async requestChatActivityDemand(
+      activity: ChatActivityReport,
+    ): Promise<Record<string, unknown>> {
+      const res = await post(
+        "/internal/openclaw/activity/chat-demand",
+        { ...activity },
+        new Set([200, 202, 404]),
+      );
+      if (res.status === 404) return { recorded: false, reason: "channel-not-found" };
+      const body = await readJsonOrNull(res);
+      if (!body) throw new OpenClawRuntimeBrokerError(502, "malformed chat demand response");
+      return body;
     },
   };
 }

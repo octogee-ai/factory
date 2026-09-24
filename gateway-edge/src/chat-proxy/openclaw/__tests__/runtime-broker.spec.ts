@@ -212,6 +212,46 @@ describe("OpenClaw runtime broker env", () => {
     ]);
   });
 
+  it("brokers chat activity demand and fails loud on a refused report", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const statuses = [202, 404, 409];
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      const status = statuses.shift()!;
+      return new Response(
+        JSON.stringify(status === 202
+          ? { recorded: true, status: "requested" }
+          : { error: "builder-runtime-assignment-stale" }),
+        { headers: { "content-type": "application/json" }, status },
+      );
+    });
+    const broker = createOpenClawRuntimeBroker({
+      baseUrl: "http://octogee-api:3001/",
+      gatewayId: "gw-bender",
+      fetchImpl,
+    });
+    const activity = {
+      kind: "post" as const,
+      channelId: "mm-channel",
+      postId: "mm-post",
+      mmUserId: "mm-user",
+    };
+
+    await expect(broker.requestChatActivityDemand(activity)).resolves.toEqual({
+      recorded: true,
+      status: "requested",
+    });
+    await expect(broker.requestChatActivityDemand(activity)).resolves.toEqual({
+      recorded: false,
+      reason: "channel-not-found",
+    });
+    await expect(broker.requestChatActivityDemand(activity)).rejects.toMatchObject({ status: 409 });
+    expect(calls[0]).toEqual({
+      url: "http://octogee-api:3001/internal/openclaw/activity/chat-demand",
+      body: { gatewayId: "gw-bender", ...activity },
+    });
+  });
+
   it("brokers preview membership without requiring Firestore access in the gateway pod", async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fetchImpl: typeof fetch = vi.fn(async (input, init) => {

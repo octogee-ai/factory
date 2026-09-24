@@ -55,6 +55,7 @@ import {
 } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
 import { startMmFinalNotificationListeners } from "./openclaw/mm-final-notification-listener.js";
+import { makeChatActivityDemandHandler } from "./openclaw/chat-activity-demand.js";
 import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
 import {
   createActivityBindingRegistry,
@@ -957,6 +958,10 @@ function startCoachFinalNotifications(
   gatewayId: string,
   runtimeBroker: OpenClawRuntimeBroker,
 ): void {
+  const chatActivityDemand = makeChatActivityDemandHandler({
+    broker: runtimeBroker,
+    log: bridgeLog,
+  });
   const manager = startMmFinalNotificationListeners({
     log: bridgeLog,
     openWebSocket: () => new WebSocket(MM_INTERNAL_WS_URL),
@@ -968,6 +973,9 @@ function startCoachFinalNotifications(
       }),
       log: bridgeLog,
     }),
+    onChatActivity: (activity) => {
+      void chatActivityDemand(activity);
+    },
   });
   const trackedCoachIds = new Set<string>();
   let reconciling = false;

@@ -9,6 +9,17 @@ export interface CoachDmEventPayload {
   createdAt: number;
 }
 
+interface ChatActivityBase {
+  coachMmUserId: string;
+  channelId: string;
+  postId: string;
+  mmUserId: string;
+}
+
+export type ChatActivityPayload =
+  | (ChatActivityBase & { kind: "post" })
+  | (ChatActivityBase & { kind: "reaction"; emojiName: string; createdAt: number });
+
 export interface CoachWsSubject {
   coachMmUserId: string;
   coachToken: string;
@@ -18,6 +29,7 @@ export interface MmFinalNotificationListenerDeps {
   log: BridgeLog;
   openWebSocket: () => WebSocket;
   onCoachDm: (payload: CoachDmEventPayload) => void;
+  onChatActivity: (payload: ChatActivityPayload) => void;
   backoffSchedule?: ReadonlyArray<number>;
   postSettleMs?: number;
 }
@@ -83,6 +95,52 @@ function parseCoachPost(data: unknown, coachMmUserId: string): BufferedCoachPost
   };
 }
 
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function postedChatActivity(
+  data: unknown,
+  coachMmUserId: string,
+): ChatActivityPayload | null {
+  const post = parseMattermostPost(data);
+  if (!post) return null;
+  const type = post.type;
+  if (type !== undefined && type !== "") return null;
+  const props = post.props as Record<string, unknown> | null | undefined;
+  if (props && typeof props === "object" && props.from_bot === "true") return null;
+  const mmUserId = stringField(post, "user_id");
+  const channelId = stringField(post, "channel_id");
+  const postId = stringField(post, "id");
+  if (!mmUserId || !channelId || !postId || mmUserId === coachMmUserId) return null;
+  return { coachMmUserId, kind: "post", channelId, postId, mmUserId };
+}
+
+function reactionChatActivity(
+  envelope: { data?: unknown; broadcast?: unknown },
+  coachMmUserId: string,
+): ChatActivityPayload | null {
+  const reaction = parseJsonRecord((envelope.data as Record<string, unknown> | undefined)?.reaction);
+  const broadcast = envelope.broadcast as Record<string, unknown> | undefined;
+  const channelId = typeof broadcast?.channel_id === "string" ? broadcast.channel_id : "";
+  if (!reaction || !channelId) return null;
+  const mmUserId = stringField(reaction, "user_id");
+  const postId = stringField(reaction, "post_id");
+  const emojiName = stringField(reaction, "emoji_name");
+  const createdAt = reaction.create_at;
+  if (!mmUserId || !postId || !emojiName || mmUserId === coachMmUserId) return null;
+  if (typeof createdAt !== "number") return null;
+  return { coachMmUserId, kind: "reaction", channelId, postId, mmUserId, emojiName, createdAt };
+}
+
 function safeToString(data: unknown): string {
   if (Buffer.isBuffer(data)) return data.toString("utf8");
   if (Array.isArray(data)) return Buffer.concat(data as Buffer[]).toString("utf8");
@@ -123,6 +181,20 @@ export function startMmFinalNotificationListeners(
     } catch (error) {
       deps.log(
         `[mm-event-listener] onCoachDm handler threw: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "warn",
+      );
+    }
+  };
+
+  const reportChatActivity = (activity: ChatActivityPayload | null): void => {
+    if (!activity) return;
+    try {
+      deps.onChatActivity(activity);
+    } catch (error) {
+      deps.log(
+        `[mm-event-listener] onChatActivity handler threw: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "warn",
@@ -200,7 +272,13 @@ export function startMmFinalNotificationListeners(
       const raw = safeToString(data);
       if (!raw) return;
       try {
-        const envelope = JSON.parse(raw) as { event?: unknown; data?: unknown };
+        const envelope = JSON.parse(raw) as { event?: unknown; data?: unknown; broadcast?: unknown };
+        if (envelope.event === "posted") {
+          reportChatActivity(postedChatActivity(envelope.data, coachMmUserId));
+        }
+        if (envelope.event === "reaction_added") {
+          reportChatActivity(reactionChatActivity(envelope, coachMmUserId));
+        }
         if (envelope.event === "posted" || envelope.event === "post_edited") {
           rememberPost(envelope.data, coachMmUserId);
         }

@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 
 import {
   isValidCustomChannelName,
@@ -18,6 +20,7 @@ import {
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
+import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 import {
   ActivityReceiptConflictError,
@@ -793,6 +796,80 @@ async function resolveUidByMmUser(
   return uid;
 }
 
+interface ChatActivity {
+  channelId: string;
+  mmUserId: string;
+  eventKey: string;
+}
+
+const MATTERMOST_EMOJI_NAME_RE = /^[a-z0-9_+-]{1,64}$/u;
+
+function chatActivityBody(req: Request): ChatActivity | null {
+  const kind = stringBody(req, "kind");
+  const channelId = stringBody(req, "channelId");
+  const postId = stringBody(req, "postId");
+  const mmUserId = stringBody(req, "mmUserId");
+  if (![channelId, postId, mmUserId].every((id) => MATTERMOST_ID_RE.test(id))) return null;
+  if (kind === "post") {
+    return { channelId, mmUserId, eventKey: `mm-post:${postId}:${mmUserId}` };
+  }
+  if (kind !== "reaction") return null;
+  const emojiName = stringBody(req, "emojiName");
+  const createdAt = (req.body as Record<string, unknown> | undefined)?.createdAt;
+  if (!MATTERMOST_EMOJI_NAME_RE.test(emojiName) || !Number.isSafeInteger(createdAt) || (createdAt as number) <= 0) {
+    return null;
+  }
+  return {
+    channelId,
+    mmUserId,
+    eventKey: `mm-reaction:${postId}:${mmUserId}:${emojiName}:${createdAt}`,
+  };
+}
+
+async function isOctogeeUser(db: Firestore, mmUserId: string): Promise<boolean> {
+  const snap = await db.collection("users").where("mattermost.userId", "==", mmUserId).limit(2).get();
+  return snap.docs.length === 1;
+}
+
+function hasDisposableBuilderRuntime(userData: Record<string, unknown>): boolean {
+  if (!accountAllowsInteractiveAccess(userData)) return false;
+  const tier = resolveBuilderTier(userData);
+  return tier !== null && BUILDER_TIERS[tier].instance !== null;
+}
+
+async function requestChatActivityDemand(
+  db: Firestore,
+  gatewayId: string,
+  activity: ChatActivity,
+): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  const ownerUid = await resolveChannelOwnerUid(db, gatewayId, activity.channelId);
+  if (ownerUid === "forbidden") return { statusCode: 403, body: FORBIDDEN };
+  if (!ownerUid) return { statusCode: 404, body: { error: "not_found" } };
+  if (!(await isOctogeeUser(db, activity.mmUserId))) {
+    return { statusCode: 200, body: { recorded: false, reason: "actor-not-human" } };
+  }
+  const ownerSnap = await db.doc(`users/${ownerUid}`).get();
+  if (!ownerSnap.exists || !hasDisposableBuilderRuntime(ownerSnap.data() ?? {})) {
+    return { statusCode: 200, body: { recorded: false, reason: "owner-not-disposable-builder" } };
+  }
+  const assignment = await db.doc(`gateways/${gatewayId}/assignments/${ownerUid}`).get();
+  const epoch = assignment.data()?.epoch;
+  const observedAt = Date.now();
+  const result = await requestBuilderActivationLease({
+    db,
+    uid: ownerUid,
+    reportingGatewayId: gatewayId,
+    assignmentEpoch: typeof epoch === "number" ? epoch : undefined,
+    eventKey: activity.eventKey,
+    cause: "chat",
+    observedAt,
+    createdBy: `mm-chat:${gatewayId}:${activity.mmUserId}`,
+    now: observedAt,
+  });
+  const recorded = result.statusCode === 200 || result.statusCode === 202;
+  return { statusCode: result.statusCode, body: { recorded, ...result.body } };
+}
+
 export async function resolveRedeemGatewayUrl(input: {
   tx: Transaction;
   db: Firestore;
@@ -1064,6 +1141,18 @@ function mountActivityRoutes(
       return;
     }
     res.json({ ownerUid });
+  });
+
+  router.post("/activity/chat-demand", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const activity = chatActivityBody(req);
+    if (!activity) {
+      res.status(400).json({ error: "invalid_chat_activity" });
+      return;
+    }
+    const result = await requestChatActivityDemand(db, bound.gatewayId, activity);
+    res.status(result.statusCode).json(result.body);
   });
 
   router.post("/activity/user-by-mm", async (req, res) => {

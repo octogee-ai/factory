@@ -1,5 +1,5 @@
 import type { Firestore } from "firebase-admin/firestore";
-export type BuilderRuntimeDemandCause = "run-start" | "ticket" | "scheduled" | "manual";
+export type BuilderRuntimeDemandCause = "run-start" | "chat" | "scheduled" | "manual";
 export type BuilderActivationLeaseResult = {
     statusCode: number;
     body: Record<string, unknown>;

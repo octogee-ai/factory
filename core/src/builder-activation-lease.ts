@@ -7,7 +7,7 @@ import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 
 export type BuilderRuntimeDemandCause =
   | "run-start"
-  | "ticket"
+  | "chat"
   | "scheduled"
   | "manual";
 

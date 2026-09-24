@@ -415,7 +415,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
         leaseId: "lease-1",
         generation: 1,
         status: "active",
-        cause: "ticket",
+        cause: "chat",
         requestedAt: now - 20 * 60_000,
         activeAt: now - 19 * 60_000,
         sourceGatewayId: "shared-blue",

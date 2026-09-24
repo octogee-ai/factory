@@ -91,8 +91,8 @@ function request(
     uid: "uid-alice",
     reportingGatewayId: "shared-blue",
     assignmentEpoch: 4,
-    eventKey: "ticket:req-1",
-    cause: "ticket",
+    eventKey: "mm-post:req-1",
+    cause: "chat",
     observedAt: 5_000,
     createdBy: "gateway-edge:shared-blue",
     leaseIdFactory: () => "lease-one",
@@ -124,8 +124,8 @@ describe("requestBuilderActivationLease", () => {
             status: "requested",
             sourceGatewayId: "shared-blue",
             sourceAssignmentEpoch: 4,
-            eventKey: "ticket:req-1",
-            cause: "ticket",
+            eventKey: "mm-post:req-1",
+            cause: "chat",
             entitlementTier: "hobby",
             sizingTier: "s",
           },
@@ -160,8 +160,8 @@ describe("requestBuilderActivationLease", () => {
             leaseId: "lease-existing",
             generation: 7,
             status: "requested",
-            cause: "ticket",
-            eventKey: "ticket:old",
+            cause: "chat",
+            eventKey: "mm-post:old",
             requestedAt: 4_000,
             lastActiveAt: 4_000,
             requestedBy: "gateway-edge:shared-blue",
@@ -187,8 +187,8 @@ describe("requestBuilderActivationLease", () => {
     await expect(request(db, {
       reportingGatewayId: "shared-green",
       assignmentEpoch: 8,
-      eventKey: "ticket:new",
-      cause: "ticket",
+      eventKey: "mm-post:new",
+      cause: "chat",
       observedAt: 9_000,
       createdBy: "openclaw-control:uid-alice:alice",
     })).resolves.toMatchObject({
@@ -205,8 +205,8 @@ describe("requestBuilderActivationLease", () => {
             status: "requested",
             sourceGatewayId: "shared-green",
             sourceAssignmentEpoch: 8,
-            cause: "ticket",
-            eventKey: "ticket:new",
+            cause: "chat",
+            eventKey: "mm-post:new",
             requestedAt: 9_000,
             lastActiveAt: 9_000,
             requestedBy: "openclaw-control:uid-alice:alice",
@@ -253,8 +253,8 @@ describe("requestBuilderActivationLease", () => {
       await expect(request(db, {
         reportingGatewayId: "shared-green",
         assignmentEpoch: 8,
-        eventKey: "ticket:new",
-        cause: "ticket",
+        eventKey: "mm-post:new",
+        cause: "chat",
         observedAt: 9_000,
       })).resolves.toMatchObject({ statusCode: 202, body: { adopted: true } });
 
@@ -363,7 +363,7 @@ describe("requestBuilderActivationLease", () => {
             generation: 7,
             targetGatewayId: "run-alice-old",
             pendingDemand: {
-              eventKey: "ticket:req-1",
+              eventKey: "mm-post:req-1",
               observedAt: 5_000,
               sourceGatewayId: "shared-blue",
               sourceAssignmentEpoch: 4,
@@ -409,12 +409,12 @@ describe("requestBuilderActivationLease", () => {
     ).not.toHaveProperty("activationLease");
   });
 
-  it("activates every Builder tier for an interactive ticket demand, Hobby included", async () => {
+  it("activates every Builder tier for an interactive chat demand, Hobby included", async () => {
     const { db, docs } = state();
 
     await expect(request(db, {
-      cause: "ticket",
-      eventKey: "ticket:req-1",
+      cause: "chat",
+      eventKey: "mm-post:req-1",
     })).resolves.toMatchObject({
       statusCode: 202,
       body: {
@@ -430,7 +430,7 @@ describe("requestBuilderActivationLease", () => {
         openclaw: {
           activationLease: {
             status: "requested",
-            cause: "ticket",
+            cause: "chat",
             entitlementTier: "hobby",
             sizingTier: "s",
           },
