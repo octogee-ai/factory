@@ -19,6 +19,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bis held for migration\b/i,
   /\bquiesce did not drain\b/i,
   /\bScheduler runs are still draining\b/i,
+  /\bexpected exactly one (ready|running) pod for transport=\S+; found \d+/i,
   /\boperation \S+ did not finish within \d+ms\b/i,
   /did not (warm|become ready|render|publish)/i,
   /durable desired revision did not materialize/i,
