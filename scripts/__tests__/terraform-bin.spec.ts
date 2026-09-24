@@ -51,7 +51,7 @@ describe("Terraform binary resolver", () => {
     const platform = hostPlatform();
     const home = mkdtempSync(path.join(tmpdir(), "terraform-bin-home-"));
     const cacheRoot = path.join(home, ".cache");
-    const installDir = path.join(cacheRoot, "octogee-toolchain", `terraform-1.16.2-${platform}`);
+    const installDir = path.join(cacheRoot, "octogee-toolchain", `terraform-1.16.4-${platform}`);
     const stubBin = path.join(home, "stub-bin");
     const executionLog = path.join(home, "executed");
     const downloadLog = path.join(home, "downloaded");
@@ -66,7 +66,7 @@ describe("Terraform binary resolver", () => {
       );
 
       const cachedBinary = path.join(installDir, "terraform");
-      writeFileSync(cachedBinary, `#!/usr/bin/env bash\nprintf executed > "${executionLog}"\nprintf 'Terraform v1.16.2\\n'\n`);
+      writeFileSync(cachedBinary, `#!/usr/bin/env bash\nprintf executed > "${executionLog}"\nprintf 'Terraform v1.16.4\\n'\n`);
       chmodSync(cachedBinary, 0o777);
 
       const result = spawnSync("bash", [terraformBin], {

@@ -86,8 +86,9 @@ tag object `ce5bbdc244ee937246cc1700d1b224d020c3b599`, peeled source
 line (re-verified 2026-09-24; no later 2026.9.6 patch release exists). Package
 version `2026.9.6`.
 
-**Overlay branch:** `ceckert/openclaw:codex/octogee-v2026.9.6-split`, head
-`415cd7e60f2edba58d2099d8114e07c448c2f824` (`dist/build-info.json` commit matches).
+**Overlay branch:** `ceckert/openclaw:codex/octogee-v2026.9.6-split-heap-reload`, head
+`10a175537c955d67c694759103e8018730de428c` (`dist/build-info.json` commit matches):
+the `codex/octogee-v2026.9.6-split` series (`415cd7e`) plus patches #21 and #22.
 The overlay is a series of small single-purpose commits on the tag, one per
 patch, replacing the former single squashed "port gateway overlay" commit.
 
@@ -119,6 +120,8 @@ discussions; record each patch's readiness in the table below.
 | 18 | `11d395cce1c` | Cron: `cron.migration` scheduled-agent handoff with durable fences (includes default-agent ownership resolution) | Shared-gateway customer migration | Needs work: `cron.migration` snapshot shape validation |
 | 19 | `41c84333696` | Cron: keep timer reservations within the admitted due set (regression from #18), method-index order, test seams | — | Fold into #18 |
 | 20 | `415cd7e60f2` | Cron: partial handoff retains non-portable jobs dormant on the source | Builder VM return (pending Octogee PR) | Fold into #18 |
+| 21 | `07704b2a923` | Models: stop catalog generations chaining across reloads (heap growth under agent churn) | Every shared/Builder gateway hot reload | Ready; main port `ceckert:codex/fix-agent-churn-heap`, PR not filed |
+| 22 | `10a175537c9` | Gateway: hand a superseded hot reload's runtime refresh to its successor | Builder mount/migration (`agents.create` then `config.patch`) | Ready; main port `ceckert:codex/reload-supersede-cancel`, PR not filed |
 
 Known follow-ups for the next recut: `cron.migration` snapshot validation, and
 letting stage replace a target's re-projected system monitors
@@ -126,22 +129,60 @@ letting stage replace a target's re-projected system monitors
 them as a target conflict.
 
 The archives below were built from the head above, install-verified together in
-an isolated npm prefix (`OpenClaw 2026.9.6 (415cd7e)`), and published with
+an isolated npm prefix (`OpenClaw 2026.9.6 (10a1755)`), and published with
 write-once generation preconditions; the published root archive's SHA-256 was
 re-verified after upload. The Mattermost archive is byte-identical to the
 previous publication and is reused.
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-2fa285e7.tgz` | `2fa285e7af7a5df37ded376c2e3f7490bd5fd9ce00c7a6b2dc8cdcbc5aedaee5` | `1790268238201060` |
+| `openclaw-fork-ba3e6b5d.tgz` | `ba3e6b5d276f16b4dc4267cee98073db65fbf3c3dabddd8779dcbe3dadc94cb2` | `1790281961101732` |
 | `openclaw-mattermost-43163935.tgz` | `43163935aad1df28f3f78a4faf0e4f0b255856400854cc3e5310999751629f23` | `1790215776773694` |
 
-Qualification of this head: every commit boundary passes `pnpm tsgo:core`;
-`pnpm check:test-types`, `pnpm config:channels:check`, `pnpm build`, and the cron
-migration/admission/timer suites (204 tests across 12 files) pass. The earlier
-split qualification also ran the full `pnpm check` (all lanes including
-assertion-SAFETY), 1038 core overlay tests, and the UI suites. Neither TEST nor
-PROD has been deployed from this change.
+Qualification of this head: `pnpm tsgo:core`, `pnpm check:test-types`, `pnpm lint`,
+`pnpm config:channels:check`, and `pnpm build` pass. The gateway reload/config suites plus
+the #21 retention regression (25 files, 1067 tests) pass, including #22's reproducer. Patch
+#21 was qualified on `07704b2` (prepared-model runtime/catalog suites, 42 files, 450 tests)
+and is unchanged here; #1–#20 are unchanged from `415cd7e` and keep that head's
+qualification. Neither TEST nor PROD has been deployed from this change.
+
+### Patch #21: catalog generations chained across reloads
+
+Every hot reload (`agents.create`, `agents.delete`, `config.patch`) left the previous
+prepared model-catalog generation reachable: `createFullModelCatalogAccess` captured
+`previousInventory` in the closure context that the catalog-auth usage reader keeps
+alive, so generations formed an unbounded chain, each pinning a retired ~10 MB
+operation plugin cache. This was the shared-gateway heap growth that ended in
+`Ineffective mark-compacts near heap limit` under agent churn. Seeding moves to
+`prepared-model-runtime.catalog-seed.ts`, keeping the superseded inventory local.
+
+A local gateway reproducer (default config, Codex off; `agents.create`/`agents.delete`
+cycles plus `config.patch`; heap read after forced GC over the inspector) grew linearly
+on `415cd7e` (377 → 670 MB over 6 cycles with 10 idle agents) and stayed flat on this
+head (262 → 280 MB). Under a 512 MiB heap with 20 idle agents, `415cd7e` died in the
+first cycle with the production OOM signature; this head ran 20 cycles (80 creates, 80
+deletes, 20 patches) at 276 → 296 MB.
+
+### Patch #22: superseded hot reloads finished a stale runtime refresh
+
+A Builder mount writes twice: `agents.create` rosters the Coach, then `config.patch`
+adds its accounts and bindings. The first write's hot reload committed within 3 s,
+then spent ~47 s in its post-commit prepared-model-runtime refresh for a config the
+patch had already replaced; only afterwards did the transaction notice supersession,
+so the patch's own reload (another ~40 s) waited behind it. TEST pod
+`octogee-gateway-shared-09a360c91291`, import `pr3568bfb7983eo`, 2026-09-24:
+`17:55:50` reload #1 committed, `17:56:37` applied then superseded, `17:57:18`
+reload #2 applied, `config.patch` answered after 90 s.
+
+The reload transaction now exposes a `supersededSignal` that fires on a newer
+in-process write or stop (watcher-only edits still validate at checkpoints). The
+hot-reload tail stops awaiting its model-runtime and context-window refreshes once
+superseded; the refresh keeps running detached, readers keep waiting on its
+replacement gate, and the successor's refresh supersedes it with a scope widened by
+the unfinished agent scope. A detached refresh that fails before any successor takes
+its scope still schedules hot-reload recovery. A reproducer with two writes and a slow
+first refresh hangs without the patch and hands off in ~10 ms with it. The saving on
+a real mount (~45 s expected) is not yet measured on a gateway.
 
 ### Port notes (v2026.9.6)
 

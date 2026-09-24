@@ -1,5 +1,5 @@
-FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146
-ARG NPM_VERSION=12.0.2
+FROM node:26-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1
+ARG NPM_VERSION=12.1.0
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
     && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
@@ -20,7 +20,7 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 # can't see: two builds from an identical git tree could silently get
 # different kubectl versions, defeating fingerprint-based reuse.
 ARG HELM_VERSION=v4.3.0
-ARG KUBECTL_VERSION=v1.36.4
+ARG KUBECTL_VERSION=v1.36.5
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \

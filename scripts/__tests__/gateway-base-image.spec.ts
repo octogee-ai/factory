@@ -70,7 +70,7 @@ describe("gateway base image", () => {
     const builderBase = readRepoFile("infra/gateway/Dockerfile.builder-base");
     const builderConfig = readRepoFile("infra/gateway/openclaw.builder.template.json");
 
-    expect(base).toContain("FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS gateway-core-system");
+    expect(base).toContain("FROM node:26.10.0-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS gateway-core-system");
     expect(base).toContain("FROM gateway-core-system AS gateway-core-runtime");
     expect(builderBase).toContain("ARG GATEWAY_BASE_IMAGE");
     expect(builderBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");
@@ -111,28 +111,28 @@ describe("gateway base image", () => {
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
 
     expect(packageJson.dependencies).toEqual({
-      "@anthropic-ai/claude-code": "2.1.271",
-      "@openai/codex": "0.154.0",
+      "@anthropic-ai/claude-code": "2.1.281",
+      "@openai/codex": "0.156.1",
       "@sparticuz/chromium": "153.0.0",
-      "firebase-tools": "15.30.0",
+      "firebase-tools": "15.31.0",
       "npm-check-updates": "23.1.0",
-      "pnpm": "12.4.1",
-      "tsx": "4.23.13",
+      "pnpm": "12.6.0",
+      "tsx": "4.23.15",
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
-      "@anthropic-ai/claude-code@2.1.271": true,
+      "@anthropic-ai/claude-code@2.1.281": true,
       "esbuild@0.28.2": true,
-      "pnpm@12.4.1": true,
+      "pnpm@12.6.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
-      version: "2.1.271",
+      version: "2.1.281",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@openai/codex"]).toMatchObject({
-      version: "0.154.0",
+      version: "0.156.1",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@sparticuz/chromium"]).toMatchObject({

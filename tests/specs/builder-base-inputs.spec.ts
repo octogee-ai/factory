@@ -66,7 +66,7 @@ describe("Builder base installation inputs", () => {
     ["OS packages", (input: ReturnType<typeof manifest>) => { input.groups.find((g: { id: string }) => g.id === "shell").debianPackages.push("screen"); }],
     ["command verification", (input: ReturnType<typeof manifest>) => { input.groups.find((g: { id: string }) => g.id === "shell").commands.push("screen"); }],
     ["Python pins", (input: ReturnType<typeof manifest>) => { input.pythonPackages[0] = "PyYAML==6.0.4"; }],
-    ["standalone pins", (input: ReturnType<typeof manifest>) => { input.standaloneTools.gh.version = "2.101.0"; }],
+    ["standalone pins", (input: ReturnType<typeof manifest>) => { input.standaloneTools.gh.version = "2.999.0"; }],
     ["standalone checksums", (input: ReturnType<typeof manifest>) => { input.standaloneTools.gcloud.sha256 = "b".repeat(64); }],
   ])("invalidates the stable cache when %s changes", (_label, update) => {
     const updated = manifest();

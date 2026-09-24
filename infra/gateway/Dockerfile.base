@@ -1,6 +1,6 @@
-FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS gateway-core-system
+FROM node:26.10.0-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS gateway-core-system
 
-ARG NPM_VERSION=12.0.2
+ARG NPM_VERSION=12.1.0
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -21,8 +21,8 @@ ENV HOME=/home/node
 FROM gateway-core-system AS gateway-system
 
 ARG FD_VERSION=10.5.0
-ARG CLAUDE_CODE_VERSION=2.1.270
-ARG CODEX_VERSION=0.154.0
+ARG CLAUDE_CODE_VERSION=2.1.281
+ARG CODEX_VERSION=0.156.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
@@ -60,7 +60,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
-FROM rust:1.98.0-slim-bookworm AS cua-driver-builder
+FROM rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS cua-driver-builder
 
 ARG CUA_SOURCE_SHA=ebc42f2ce00401adf750bcbdb083cc69e973c83c
 RUN apt-get update && apt-get install -y --no-install-recommends \

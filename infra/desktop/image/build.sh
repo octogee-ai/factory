@@ -7,7 +7,7 @@ source "$HERE/zones.sh"
 PROJECT=""
 ZONE="us-west1-b"
 FALLBACK_ZONES=""
-OMARCHY_VERSION="4.0.3"
+OMARCHY_VERSION="4.0.4"
 BUCKET=""
 BUILDER="octogee-computer-image-builder"
 KEEP_BUILDER=0
@@ -18,7 +18,7 @@ FAMILY="octogee-computer"
 
 iso_sha256_for() {
   case "$1" in
-    4.0.3) echo "03d60bc74306dca51f96e1a84b690871d8d606826b260edd0208962da8507d14" ;;
+    4.0.4) echo "ddeded2758c48318d201dfdac905ecb28f570441883f0c052ea3cd5d05acf92d" ;;
     *) echo "" ;;
   esac
 }

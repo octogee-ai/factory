@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TERRAFORM_VERSION="1.16.2"
+TERRAFORM_VERSION="1.16.4"
 
 if command -v terraform >/dev/null 2>&1; then
   INSTALLED_VERSION="$(terraform version | sed -n '1s/^Terraform v//p')"
