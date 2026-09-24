@@ -4,6 +4,7 @@ import { type AssignmentSource, type AssignmentState } from "@octogee/shared/typ
 export interface FleetStateDeps {
     db: FleetStateFirestore;
     serverTimestamp: () => unknown;
+    deleteField: () => unknown;
     now?: () => Date;
     log?: (msg: string) => void;
 }

@@ -17,6 +17,8 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\btimed?\s?out\b/i,
   /\bsocket closed before connect response\b/i,
   /\bis held for migration\b/i,
+  /\bquiesce did not drain\b/i,
+  /\bScheduler runs are still draining\b/i,
   /\boperation \S+ did not finish within \d+ms\b/i,
   /did not (warm|become ready|render|publish)/i,
   /durable desired revision did not materialize/i,

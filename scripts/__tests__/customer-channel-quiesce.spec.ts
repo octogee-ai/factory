@@ -103,7 +103,7 @@ it("does not take over a fence the kernel refuses to resume, such as a staged ha
   expect(rpc.schedulerMigration).toHaveBeenCalledTimes(2);
 });
 
-it("holds admission while an already-running scheduled job drains", async () => {
+it("keeps the old /scheduler contract for an older controller: hold drains before it answers", async () => {
   const rpc = {
     configGet: vi.fn(async () => ({ config: {} })),
     schedulerMigration: vi.fn()

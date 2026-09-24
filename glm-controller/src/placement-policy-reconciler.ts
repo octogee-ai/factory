@@ -3644,6 +3644,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
       db: input.db as unknown as FleetStateFirestore,
       now: () => new Date(input.now()),
       serverTimestamp: () => FieldValue.serverTimestamp(),
+      deleteField: () => FieldValue.delete(),
     }, {
       ...request,
       validateTarget: unavailableRecoveryTargetFence(input, request),
@@ -3653,6 +3654,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
         db: input.db as unknown as FleetStateFirestore,
         now: () => new Date(input.now()),
         serverTimestamp: () => FieldValue.serverTimestamp(),
+        deleteField: () => FieldValue.delete(),
       }, request),
     supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({
       db: input.db,

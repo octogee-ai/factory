@@ -349,6 +349,16 @@ function resolveRpcTraceSettings() {
         failureSampleMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10),
     };
 }
+async function abortSession(call, params) {
+    const payload = await call("sessions.abort", params);
+    const value = payload;
+    if (!value || typeof value !== "object" || value.ok !== true ||
+        (value.status !== "aborted" && value.status !== "no-active-run") ||
+        (value.abortedRunId !== null && typeof value.abortedRunId !== "string")) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "sessions.abort payload missing `ok: true` with an abort status");
+    }
+    return value;
+}
 async function stopChannels(call, params) {
     const payload = await call("channels.stop", params);
     if (!payload || typeof payload !== "object" ||
@@ -511,6 +521,7 @@ export function createGatewayRpc(opts = {}) {
             }
             return payload;
         },
+        sessionsAbort: (params) => abortSession(call, params),
         toolsCatalog: (params, timeoutMs) => fetchToolsCatalog(call, params, timeoutMs),
         async schedulerMigration(params) {
             const result = await call("cron.migration", params);

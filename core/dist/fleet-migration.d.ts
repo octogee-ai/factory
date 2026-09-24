@@ -1,4 +1,4 @@
-export type MigrationPhase = "initial" | "keys-synced" | "pre-synced" | "source-quiesced" | "source-flushed" | "final-synced" | "target-verified" | "cutover-done" | "source-unmounted" | "done";
+export type MigrationPhase = "initial" | "keys-synced" | "source-quiesced" | "source-flushed" | "final-synced" | "target-verified" | "cutover-done" | "source-unmounted" | "done";
 export interface MigrationState {
     phase: MigrationPhase;
     slug: string;

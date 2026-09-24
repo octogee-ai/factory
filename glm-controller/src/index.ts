@@ -2435,6 +2435,7 @@ function buildSurgeHandoffDeps(input: {
       {
         db: db as unknown as FleetStateFirestore,
         serverTimestamp: () => FieldValue.serverTimestamp(),
+        deleteField: () => FieldValue.delete(),
         log,
       },
       assignment,
@@ -3002,6 +3003,7 @@ async function buildHandlers(
         {
           db: db as unknown as FleetStateFirestore,
           serverTimestamp: () => FieldValue.serverTimestamp(),
+          deleteField: () => FieldValue.delete(),
           log: logFn,
         },
         {
@@ -3047,6 +3049,7 @@ async function buildHandlers(
         {
           db: db as unknown as FleetStateFirestore,
           serverTimestamp: () => FieldValue.serverTimestamp(),
+          deleteField: () => FieldValue.delete(),
           log: logFn,
         },
         input,
@@ -3064,6 +3067,7 @@ async function buildHandlers(
         {
           db: db as unknown as FleetStateFirestore,
           serverTimestamp: () => FieldValue.serverTimestamp(),
+          deleteField: () => FieldValue.delete(),
           log: logFn,
         },
         {

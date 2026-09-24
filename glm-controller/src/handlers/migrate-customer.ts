@@ -328,7 +328,8 @@ async function ordinaryV2IterationFailure(
 function requiresSourceResumeBeforeRetry(
   phase: CustomerMigrationV2State["phase"],
 ): boolean {
-  return phase === "preSynced" ||
+  return phase === "keysSynced" ||
+    phase === "preSynced" ||
     phase === "sourceQuiesced" ||
     phase === "finalSynced";
 }

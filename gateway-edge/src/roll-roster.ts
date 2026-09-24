@@ -1,6 +1,10 @@
 import http from "node:http";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import {
+  WORKSPACE_MOVING_CODE,
+  WORKSPACE_MOVING_MESSAGE,
+} from "@octogee/shared/types/workspace-migration";
+import {
   isAssignmentState,
   type AssignmentState,
 } from "@octogee/shared/types/gateway-releases";
@@ -186,11 +190,23 @@ export interface CreateRollRosterGateOptions {
   log: (msg: string) => void;
 }
 
+export function unavailableBody(reason: string): Record<string, unknown> {
+  if (reason !== "customer-quiescing") return { error: "gateway_revision_unavailable", reason };
+  return {
+    error: "gateway_revision_unavailable",
+    reason,
+    code: WORKSPACE_MOVING_CODE,
+    id: WORKSPACE_MOVING_CODE,
+    status_code: 503,
+    message: WORKSPACE_MOVING_MESSAGE,
+  };
+}
+
 function writeUnavailable(res: Response, reason: string, retryAfterSeconds: number): void {
   res
     .status(503)
     .set("Retry-After", String(retryAfterSeconds))
-    .json({ error: "gateway_revision_unavailable", reason });
+    .json(unavailableBody(reason));
 }
 
 // The Express gate for the sidecar's service-addressed surface. Runs before the
@@ -244,7 +260,7 @@ export function revisionUnavailableUpgradeResponse(
     `Retry-After: ${retryAfterSeconds}\r\n` +
     "Content-Type: application/json\r\n" +
     "Connection: close\r\n\r\n" +
-    JSON.stringify({ error: "gateway_revision_unavailable", reason })
+    JSON.stringify(unavailableBody(reason))
   );
 }
 

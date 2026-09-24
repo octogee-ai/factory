@@ -5,6 +5,15 @@ import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-li
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { customerMigrationV2GatewayRootFenceEqual, customerMigrationV2GatewayRootFenceMatches, } from "./customer-migration-v2.js";
 const MIGRATE_CUSTOMER_OPERATION_KIND = "migrate-customer";
+const WORKSPACE_MIGRATION_MARKER_PATH = "provisioning.openclaw.migration";
+function workspaceMigrationMarker(operationId, startedAt) {
+    return { state: "moving", startedAt, ...(operationId ? { operationId } : {}) };
+}
+function clearWorkspaceMigrationMarker(txn, deps, uid) {
+    txn.update(deps.db.collection("users").doc(uid), {
+        [WORKSPACE_MIGRATION_MARKER_PATH]: deps.deleteField(),
+    });
+}
 export async function writeGatewayHeartbeat(deps, snapshot) {
     if (!snapshot.gatewayId) {
         throw new Error("gatewayId is required for a gateway heartbeat");
@@ -205,14 +214,17 @@ function assertCustomerMigrationSourceAssignmentExact(prior, fence) {
     }
 }
 function updateUserMirror(txn, deps, params, targetRoot) {
-    if (!params.flipMirror)
+    if (!params.flipMirror) {
+        clearWorkspaceMigrationMarker(txn, deps, params.uid);
         return;
+    }
     const controlState = resolveUserGatewayControlState(targetRoot, params.uid);
     txn.update(deps.db.collection("users").doc(params.uid), {
         "provisioning.openclaw.gatewayId": params.toGatewayId,
         "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
         "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
         "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
+        [WORKSPACE_MIGRATION_MARKER_PATH]: deps.deleteField(),
     });
 }
 function updateAssignment(txn, db, params, priorEpoch, nowMs) {
@@ -535,6 +547,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
             "provisioning.openclaw.gatewayAssignedAt": nowMs,
             "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
             "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
+            [WORKSPACE_MIGRATION_MARKER_PATH]: deps.deleteField(),
             ...(disposableRuntimeReset(params, nowMs)
                 ? { "provisioning.openclaw.runtimeReset": disposableRuntimeReset(params, nowMs) }
                 : {}),
@@ -801,7 +814,18 @@ export async function markAssignmentState(deps, params) {
                 }
                 : {}),
         });
+        writeWorkspaceMigrationMarkerForState(txn, deps, params);
     });
+}
+function writeWorkspaceMigrationMarkerForState(txn, deps, params) {
+    if (params.state === "quiescing") {
+        txn.update(deps.db.collection("users").doc(params.uid), {
+            [WORKSPACE_MIGRATION_MARKER_PATH]: workspaceMigrationMarker(params.updatedByOperationId, deps.now ? deps.now().getTime() : Date.now()),
+        });
+        return;
+    }
+    if (params.state === "serving")
+        clearWorkspaceMigrationMarker(txn, deps, params.uid);
 }
 function createMissingAssignment(txn, ref, deps, params) {
     const exactBinding = [
@@ -823,6 +847,7 @@ function createMissingAssignment(txn, ref, deps, params) {
         updatedAt: deps.now ? deps.now().getTime() : Date.now(),
         updatedByOperationId: params.updatedByOperationId,
     });
+    writeWorkspaceMigrationMarkerForState(txn, deps, params);
 }
 function assertAssignmentStateUpdateMatches(assignment, params) {
     const current = assignment ?? {};

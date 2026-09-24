@@ -2727,6 +2727,7 @@ export interface SessionsJson {
 }
 
 export interface AgentSessionEntry {
+  key?: string;
   sessionId?: string;
   status?: "running" | "done" | "failed" | "killed" | "timeout";
 }
@@ -2754,7 +2755,7 @@ export async function readAgentSessionsAtPath(
   }
   const db = new DatabaseSync(storePath, { readOnly: true });
   try {
-    return db.prepare("SELECT current_session_id AS sessionId, status FROM session_nodes")
+    return db.prepare("SELECT session_key AS key, current_session_id AS sessionId, status FROM session_nodes")
       .all() as AgentSessionEntry[];
   } finally {
     db.close();

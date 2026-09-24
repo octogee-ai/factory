@@ -83,6 +83,12 @@ export interface GatewaySessionsResetResult {
     ok: true;
     [extra: string]: unknown;
 }
+export interface GatewaySessionsAbortResult {
+    ok: true;
+    abortedRunId: string | null;
+    status: "aborted" | "no-active-run";
+    [extra: string]: unknown;
+}
 export interface GatewayToolsCatalogResult {
     agentId: string;
     groups: unknown[];
@@ -204,6 +210,11 @@ export interface GatewayRpcClient {
         agentId: string;
         reason: "new" | "reset";
     }): Promise<GatewaySessionsResetResult>;
+    sessionsAbort(params: {
+        key: string;
+        agentId: string;
+        clearQueued: true;
+    }): Promise<GatewaySessionsAbortResult>;
     toolsCatalog(params: {
         agentId: string;
         includePlugins: true;

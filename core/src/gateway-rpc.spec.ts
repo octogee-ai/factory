@@ -657,6 +657,35 @@ describe("gateway-rpc", () => {
         }),
       ).resolves.toMatchObject({ ok: true });
     });
+
+    it("aborts a running session through sessions.abort and reports whether a run was stopped", async () => {
+      let captured: unknown;
+      server.setHandler("sessions.abort", (params) => {
+        captured = params;
+        return { ok: true, payload: { ok: true, abortedRunId: "run-7", status: "aborted" } };
+      });
+
+      await expect(client.sessionsAbort({
+        key: "agent:octogee-alice-coach:mattermost:group:channel",
+        agentId: "octogee-alice-coach",
+        clearQueued: true,
+      })).resolves.toEqual({ ok: true, abortedRunId: "run-7", status: "aborted" });
+      expect(captured).toEqual({
+        key: "agent:octogee-alice-coach:mattermost:group:channel",
+        agentId: "octogee-alice-coach",
+        clearQueued: true,
+      });
+    });
+
+    it("rejects a sessions.abort acknowledgement without an abort status", async () => {
+      server.setHandler("sessions.abort", () => ({ ok: true, payload: { ok: true } }));
+
+      await expect(client.sessionsAbort({
+        key: "agent:octogee-alice-coach:main",
+        agentId: "octogee-alice-coach",
+        clearQueued: true,
+      })).rejects.toMatchObject({ name: "OpenclawWireError", code: "invalid-response" });
+    });
   });
 
   describe("toolsCatalog", () => {

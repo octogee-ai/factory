@@ -166,6 +166,8 @@ describe("classifyOperationFailure", () => {
     ["gateway RPC socket dropped before the connect response", '/scheduler/shared-0: 500 {"error":"scheduler migration failed","message":"socket closed before connect response"}'],
     ["unmount socket dropped before the connect response", '/unmount/shared-0: 500 {"error":"unmount failed","message":"socket closed before connect response","code":"connect-failed"}'],
     ["scheduler fence still held by a handoff that has not settled", '/scheduler/shared-0: 500 {"error":"scheduler migration failed","message":"Cron agent octogee-sep17-coach is held for migration mig-placement-190929cbf8f86906bee813bffa1a4157:scheduler:1"}'],
+    ["bounded quiesce that could not settle after the stop", "quiesce did not drain: 1 still running on shared-0 for slug=alice"],
+    ["older provisioner's quiesce whose own hold did not drain", '/quiesce/shared-0: 500 {"error":"quiesce failed","message":"Scheduler runs are still draining for alice"}'],
   ])("classifies a pre-cutover %s as transient so placement re-arms it", (_name, error) => {
     expect(classifyOperationFailure(error)).toBe("transient");
   });

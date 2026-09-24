@@ -1668,6 +1668,7 @@ function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetSta
   return {
     db: opts.db as unknown as FleetStateFirestore,
     serverTimestamp: () => FieldValue.serverTimestamp(),
+    deleteField: () => FieldValue.delete(),
     log: opts.log,
   };
 }

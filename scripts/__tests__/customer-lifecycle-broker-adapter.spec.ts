@@ -230,6 +230,10 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
       accountId,
       started: true as const,
     })),
+    sessionsAbort: vi.fn(async () => ({ ok: true as const, abortedRunId: "run-1", status: "aborted" as const })),
+    schedulerMigration: vi.fn(async (request: { operationId: string; phase: string; agentIds?: string[] }) => ({
+      operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: true,
+    })),
     ...rosterRpc(),
     ...overrides,
   } as GatewayRpcClient;
@@ -1278,8 +1282,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       await fs.mkdir(agentDir, { recursive: true });
       const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
       try {
-        db.exec("CREATE TABLE session_nodes (current_session_id TEXT, status TEXT)");
-        db.prepare("INSERT INTO session_nodes VALUES (?, ?)").run(agentId, "running");
+        db.exec("CREATE TABLE session_nodes (session_key TEXT, current_session_id TEXT, status TEXT)");
+        db.prepare("INSERT INTO session_nodes VALUES (?, ?, ?)").run(`agent:${agentId}:main`, agentId, "running");
       } finally {
         db.close();
       }
@@ -1320,6 +1324,26 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 });
 
 describe("broker migration admission", () => {
+  const boundedStopDirs: string[] = [];
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  afterEach(async () => {
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    for (const dir of boundedStopDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+  });
+  function seedMigrationqaSession(stateDir: string, status: string): void {
+    const agentDir = path.join(stateDir, "agents", "octogee-migrationqa-coach", "agent");
+    fsSync.mkdirSync(agentDir, { recursive: true });
+    const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      db.exec("CREATE TABLE IF NOT EXISTS session_nodes (session_key TEXT, current_session_id TEXT, status TEXT)");
+      db.exec("DELETE FROM session_nodes");
+      db.prepare("INSERT INTO session_nodes VALUES (?, ?, ?)").run("agent:octogee-migrationqa-coach:main", "s1", status);
+    } finally {
+      db.close();
+    }
+  }
+
   it("refuses migration while a customer has scheduled work without stopping chat", async () => {
     const rpc = mkGatewayRpc({ cronJobCount: vi.fn(async () => 1) });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
@@ -1338,6 +1362,74 @@ describe("broker migration admission", () => {
     await adapter.quiesceCustomer("migrationqa", 100, { stopMattermost: false });
     expect(rpc.channelsStop).not.toHaveBeenCalled();
   });
+  it("stops a turn that outlives the grace window through sessions.abort and reports the customer drained", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-bounded-stop-"));
+    boundedStopDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const seed = (status: string) => seedMigrationqaSession(stateDir, status);
+    seed("running");
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot({
+        channels: { mattermost: { accounts: { "migrationqa-coach": {} } } },
+        agents: { entries: { "octogee-migrationqa-coach": {} } },
+      })),
+      sessionsAbort: vi.fn(async () => {
+        seed("killed");
+        return { ok: true as const, abortedRunId: "run-9", status: "aborted" as const };
+      }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1" }))
+      .resolves.toEqual({ drained: true, runningCount: 0 });
+    expect(rpc.channelsStop).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId: "migrationqa-coach" });
+    expect(rpc.sessionsAbort).toHaveBeenCalledExactlyOnceWith({
+      key: "agent:octogee-migrationqa-coach:main", agentId: "octogee-migrationqa-coach", clearQueued: true,
+    });
+    expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-migrationqa-coach"] });
+  });
+
+  it("stops an active scheduled run itself: the hold stays undrained until the run's session is aborted", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-cron-stop-"));
+    boundedStopDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    seedMigrationqaSession(stateDir, "running");
+    let cronRunning = true;
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot({ agents: { entries: { "octogee-migrationqa-coach": {} } } })),
+      schedulerMigration: vi.fn(async (request: { operationId: string; phase: string; agentIds?: string[] }) => ({
+        operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: !cronRunning,
+      })),
+      sessionsAbort: vi.fn(async () => {
+        cronRunning = false;
+        seedMigrationqaSession(stateDir, "killed");
+        return { ok: true as const, abortedRunId: "cron-run", status: "aborted" as const };
+      }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1" }))
+      .resolves.toEqual({ drained: true, runningCount: 0 });
+    expect(rpc.sessionsAbort).toHaveBeenCalledTimes(1);
+    const holds = vi.mocked(rpc.schedulerMigration).mock.calls.map(([request]) => request.phase);
+    expect(holds.every((phase) => phase === "hold")).toBe(true);
+    expect(holds.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("never aborts turns for the whole-process handoff owner, which stops the process itself", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-surge-stop-"));
+    boundedStopDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    seedMigrationqaSession(stateDir, "running");
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: false }))
+      .resolves.toEqual({ drained: false, runningCount: 1 });
+    expect(rpc.sessionsAbort).not.toHaveBeenCalled();
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+  });
+
   it("stops incoming coach turns before reporting an idle customer drained", async () => {
     const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot({
       channels: { mattermost: { accounts: { "migrationqa-coach": {} } } },

@@ -136,22 +136,16 @@ describe("advanceCustomerMigrationV2", () => {
     }
 
     expect(phases).toEqual([
-      "keysSynced", "preSynced", "sourceQuiesced",
+      "keysSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ]);
     const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(client.transferState.mock.calls.map((call) => call[0].mode)).toEqual([
-      "keys", "pre", "final",
+      "keys", "final",
     ]);
     expect(client.transferState.mock.calls.map((call) => call[0])).toEqual([
       expect.objectContaining({
         mode: "keys",
-        fromTransportId: "source",
-        toTransportId: "target",
-        includeActivationManifest: false,
-      }),
-      expect.objectContaining({
-        mode: "pre",
         fromTransportId: "source",
         toTransportId: "target",
         includeActivationManifest: false,
@@ -230,15 +224,29 @@ describe("advanceCustomerMigrationV2", () => {
       };
     });
 
-    await advanceCustomerMigrationV2(state("preSynced"), d);
+    await advanceCustomerMigrationV2(state("keysSynced"), d);
 
     expect(order).toEqual(["assignment-quiescing", "quiesce-rpc", "source-flush"]);
+    expect(client.scheduler.mock.calls.map((call) => call[0].phase)).not.toContain("hold");
+    expect(client.quiesce).toHaveBeenCalledWith(expect.objectContaining({ schedulerHandoff: true }));
+  });
+
+  it("resumes an operation an older controller persisted at preSynced by quiescing next, without another copy", async () => {
+    const d = deps();
+    const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
+
+    await expect(advanceCustomerMigrationV2(state("preSynced"), d)).resolves.toMatchObject({ phase: "sourceQuiesced" });
+
+    expect(client.transferState).not.toHaveBeenCalled();
+    expect(client.quiesce).toHaveBeenCalledTimes(1);
+    expect(isCustomerMigrationV2Transition("preSynced", "sourceQuiesced")).toBe(true);
+    expect(isCustomerMigrationV2Transition("keysSynced", "preSynced")).toBe(false);
   });
 
   it("persists the source's exact accepted config commit before final transfer", async () => {
     const d = deps();
 
-    await expect(advanceCustomerMigrationV2(state("preSynced"), d)).resolves.toMatchObject({
+    await expect(advanceCustomerMigrationV2(state("keysSynced"), d)).resolves.toMatchObject({
       phase: "sourceQuiesced",
       sourceSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
     });
@@ -258,7 +266,7 @@ describe("advanceCustomerMigrationV2", () => {
         ...(systemConfigCommit === undefined ? {} : { systemConfigCommit }),
       });
 
-      await expect(advanceCustomerMigrationV2(state("preSynced"), d))
+      await expect(advanceCustomerMigrationV2(state("keysSynced"), d))
         .rejects.toThrow(/accepted system.config commit/iu);
     },
   );
@@ -287,7 +295,7 @@ describe("advanceCustomerMigrationV2", () => {
   });
 
   it.each([
-    ["source", "preSynced" as const, "quiesce"],
+    ["source", "keysSynced" as const, "quiesce"],
     ["target", "sourceQuiesced" as const, "transferState"],
   ])("replays the %s handoff phase after a lost flush response", async (_name, phase, priorRpc) => {
     const d = deps();
@@ -367,7 +375,7 @@ describe("customer migration V2 failure boundary", () => {
 
   it("accepts only the next durable phase or the legal pre-cutover abort branch", () => {
     const forward: CustomerMigrationV2Phase[] = [
-      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ];
     for (let index = 0; index < forward.length - 1; index += 1) {

@@ -34,18 +34,8 @@ describe("nextMigrationStep — forward path", () => {
     });
   });
 
-  it("keys-synced → pre-sync without restoring or provisioning the target", () => {
-    expect(nextMigrationStep(s("keys-synced"))).toEqual({
-      action: "sync-state",
-      mode: "pre",
-      from: "gw-prod",
-      to: "gw-prod-v2",
-      slug: "ceckert",
-    });
-  });
-
-  it("pre-synced → quiesce-source on the source gateway", () => {
-    const step = nextMigrationStep(s("pre-synced"));
+  it("keys-synced → quiesce-source on the source gateway: one consistent copy follows the stop", () => {
+    const step = nextMigrationStep(s("keys-synced"));
     expect(step).toEqual({
       action: "quiesce-source",
       gateway: "gw-prod",
@@ -114,8 +104,7 @@ describe("nextMigrationStep — forward path", () => {
 describe("advancePhase", () => {
   it("walks the canonical sequence", () => {
     expect(advancePhase("initial")).toBe("keys-synced");
-    expect(advancePhase("keys-synced")).toBe("pre-synced");
-    expect(advancePhase("pre-synced")).toBe("source-quiesced");
+    expect(advancePhase("keys-synced")).toBe("source-quiesced");
     expect(advancePhase("source-quiesced")).toBe("source-flushed");
     expect(advancePhase("source-flushed")).toBe("final-synced");
     expect(advancePhase("final-synced")).toBe("target-verified");
@@ -134,12 +123,11 @@ describe("advancePhase", () => {
 });
 
 describe("fullPlan", () => {
-  it("from initial → 8 steps in canonical order", () => {
+  it("from initial → 7 steps in canonical order", () => {
     const plan = fullPlan(s("initial"));
-    expect(plan).toHaveLength(8);
+    expect(plan).toHaveLength(7);
     expect(plan.map((p) => p.action === "sync-state" ? `${p.mode}-sync-state` : p.action)).toEqual([
       "keys-sync-state",
-      "pre-sync-state",
       "quiesce-source",
       "flush-source",
       "final-sync-state",
@@ -168,8 +156,8 @@ describe("rollbackPlan — pre-cutover", () => {
     expect(rollbackPlan(s("initial"))).toEqual([]);
   });
 
-  it("pre-synced → unmount target import; source still owns", () => {
-    const plan = rollbackPlan(s("pre-synced"));
+  it("keys-synced → unmount target import; source still owns", () => {
+    const plan = rollbackPlan(s("keys-synced"));
     expect(plan).toHaveLength(1);
     expect(plan[0]).toEqual({
       action: "unmount-gateway",

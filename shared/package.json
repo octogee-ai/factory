@@ -237,6 +237,10 @@
     "./types/voice": {
       "types": "./dist/types/voice.d.ts",
       "default": "./dist/types/voice.js"
+    },
+    "./types/workspace-migration": {
+      "types": "./dist/types/workspace-migration.d.ts",
+      "default": "./dist/types/workspace-migration.js"
     }
   },
   "typesVersions": {
@@ -396,6 +400,9 @@
       ],
       "types/voice": [
         "dist/types/voice.d.ts"
+      ],
+      "types/workspace-migration": [
+        "dist/types/workspace-migration.d.ts"
       ]
     }
   },

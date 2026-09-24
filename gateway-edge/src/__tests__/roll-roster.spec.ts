@@ -226,14 +226,28 @@ describe("createRollRosterGate — end to end", () => {
     expect(gate.handle().nexted).toBe(true);
   });
 
-  it("503s a quiescing customer (blocked BEFORE the migration target serves)", () => {
+  it("503s a quiescing customer (blocked BEFORE the migration target serves) with the typed workspace-moving code", () => {
     const result = harness({ "uid-1": { uid: "uid-1", state: "quiescing", epoch: 3 } })
       .handle({ authorization: bearerFor("uid-1") });
     expect(result.status).toBe(503);
+    expect(result.retryAfter).toBe("2");
     expect(result.body).toEqual({
       error: "gateway_revision_unavailable",
       reason: "customer-quiescing",
+      code: "workspace-moving",
+      id: "workspace-moving",
+      status_code: 503,
+      message: "Moving your workspace — back in a minute",
     });
+  });
+
+  it("refuses only the migrating customer; a serving neighbour on the same gateway is served", () => {
+    const gate = harness({
+      "uid-1": { uid: "uid-1", state: "quiescing", epoch: 3 },
+      "uid-2": { uid: "uid-2", state: "serving", epoch: 9 },
+    });
+    expect(gate.handle({ authorization: bearerFor("uid-1") }).status).toBe(503);
+    expect(gate.handle({ authorization: bearerFor("uid-2") }).nexted).toBe(true);
   });
 
   it("legacy/cluster surface (no identity) never gates anything", () => {
@@ -251,6 +265,11 @@ describe("revisionUnavailableUpgradeResponse — the retryable migration-in-prog
     expect(response).toContain("Retry-After: 2");
     expect(response).toContain('"error":"gateway_revision_unavailable"');
     expect(response).toContain('"reason":"customer-quiescing"');
+    expect(response).toContain('"code":"workspace-moving"');
+  });
+
+  it("keeps the roster-loading refusal untyped: nothing is moving, the pod is booting", () => {
+    expect(revisionUnavailableUpgradeResponse(2, "roster-loading")).not.toContain("workspace-moving");
   });
 });
 

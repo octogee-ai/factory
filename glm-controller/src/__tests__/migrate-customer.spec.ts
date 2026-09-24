@@ -436,7 +436,6 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(result).toMatchObject({ success: true, rolledBack: false });
     expect(client.calls).toEqual([
       "transfer:keys:gw-blue->gw-green",
-      "transfer:pre:gw-blue->gw-green",
       "quiesce:gw-blue",
       "transfer:final:gw-blue->gw-green",
       "verify:gw-green",
@@ -488,6 +487,22 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(client.calls).toEqual([]);
     expect(client.scheduler).not.toHaveBeenCalled();
     expect(events.some((event) => event.startsWith("cutover:") || event.startsWith("assignment:"))).toBe(false);
+  });
+
+  it.each([false, true])("moves a Builder with an active scheduled run: the source's quiesce owns the hold, so a 409 hold never reaches the runner (durable=%s)", async (durable) => {
+    const client = happyClient();
+    vi.mocked(client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
+      if (phase === "hold") throw new Error("scheduler hold did not prove a drained matching operation");
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} };
+    });
+    const { deps, ctx, events } = mkDeps({ client, durable });
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(vi.mocked(client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("hold");
+    expect(vi.mocked(client.quiesce).mock.calls[0][0]).toMatchObject({ gatewayId: "gw-blue", schedulerHandoff: true });
+    expect(events.some((event) => event.startsWith("cutover:") || event.startsWith("v2-cutover:"))).toBe(true);
   });
 
   it("reports failure with rollback when quiesce cannot drain", async () => {
@@ -586,12 +601,11 @@ describe("migrate-customer — durable V2 migration", () => {
       targetRelease: 2,
     });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ]);
     expect(client.calls).toEqual([
       "transfer:keys:gw-blue->gw-green",
-      "transfer:pre:gw-blue->gw-green",
       "quiesce:gw-blue",
       "transfer:final:gw-blue->gw-green",
       "verify:gw-green",
@@ -715,7 +729,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "sourceQuiesced",
       "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
@@ -760,7 +774,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "sourceQuiesced",
       "finalSynced", "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(c.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
@@ -808,7 +822,7 @@ describe("migrate-customer — durable V2 migration", () => {
     reportStep: vi.fn(async () => undefined),
       persistCustomerMigrationV2: vi.fn(async (state) => {
         persisted.push(state);
-        if (state.phase === "preSynced") cancelRequested = true;
+        if (state.phase === "keysSynced") cancelRequested = true;
       }),
       cancellationRequested: vi.fn(async () => cancelRequested),
     } as unknown as OperationContext;
@@ -818,7 +832,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(result.error).toMatch(/superseded/u);
-    expect(deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "preSynced", status: "skipped" }));
+    expect(deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "keysSynced", status: "skipped" }));
     expect(deps.reportMigrationProgress).toHaveBeenCalledWith("gw-green", expect.objectContaining({ phase: "abortIntent", status: "running" }));
     expect(persisted.map((state) => state.phase)).toContain("abortIntent");
     expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
@@ -861,8 +875,9 @@ describe("scheduler handoff recovery", () => {
     const h = mkDeps();
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
     expect(vi.mocked(h.client.scheduler).mock.calls.slice(0, 3).map(([request]) => [request.gatewayId, request.phase, request.migrationId])).toEqual([
-      ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "hold", "mig-op-1:scheduler:2"],
+      ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "export", "mig-op-1:scheduler:2"],
     ]);
+    expect(vi.mocked(h.client.quiesce).mock.calls[0][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "mig-op-1:scheduler:2" });
   });
 
   it("finishes handoff cleanup for a migration whose serial lock was already released", async () => {

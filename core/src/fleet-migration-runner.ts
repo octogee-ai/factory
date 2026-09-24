@@ -103,7 +103,6 @@ async function executeStep(params: {
   const clock = deps.now ?? Date.now;
   switch (step.action) {
     case "quiesce-source":
-      if (crossGateway) await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.gateway, phase: "hold" });
       await deps.client.quiesce({
         migrationId,
         gatewayId: step.gateway,

@@ -77,7 +77,7 @@ function harness(options: HarnessOptions = {}) {
 }
 
 describe("runMigration — happy path", () => {
-  it("executes keys → pre → quiesce → final → verify → cutover → unmount with zero target restore", async () => {
+  it("executes keys → quiesce → final → verify → cutover → unmount with one state copy and zero target restore", async () => {
     const { client, deps, input } = harness();
 
     const result = await runMigration(input, deps);
@@ -85,7 +85,6 @@ describe("runMigration — happy path", () => {
     expect(result).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
     expect(client.calls).toEqual([
       "transfer:alice:keys",
-      "transfer:alice:pre",
       "quiesce:alice",
       "flush:alice:migration-final",
       "transfer:alice:final",
@@ -104,7 +103,6 @@ describe("runMigration — happy path", () => {
     const reports = events.filter((event) => event.startsWith("report:"));
     expect(reports).toEqual([
       "report:keys-sync-state:running", "report:keys-sync-state:done",
-      "report:pre-sync-state:running", "report:pre-sync-state:done",
       "report:quiesce-source:running", "report:quiesce-source:done",
       "report:flush-source:running", "report:flush-source:done",
       "report:final-sync-state:running", "report:final-sync-state:done",
@@ -142,15 +140,10 @@ describe("runMigration — happy path", () => {
       await runMigration(input, deps);
 
       const transferCalls = (client.transferState as ReturnType<typeof vi.fn>).mock.calls;
-      expect(transferCalls).toHaveLength(3);
+      expect(transferCalls).toHaveLength(2);
       expect(transferCalls.map(([call]) => call)).toEqual([
         expect.objectContaining({
           mode: "keys",
-          projectCheckoutScope,
-          includeActivationManifest: false,
-        }),
-        expect.objectContaining({
-          mode: "pre",
           projectCheckoutScope,
           includeActivationManifest: false,
         }),
@@ -173,7 +166,7 @@ describe("runMigration — failures", () => {
     const result = await runMigration(input, deps);
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(result.errorAt).toMatchObject({ phase: "pre-synced", error: "agents busy" });
+    expect(result.errorAt).toMatchObject({ phase: "keys-synced", error: "agents busy" });
     expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
     expect(events.some((event) => event.startsWith("report:rollback:"))).toBe(true);
   });
@@ -288,7 +281,7 @@ describe("runMigration — gated quiesce", () => {
   it("a pre-quiesce failure never touches roster state", async () => {
     const client = happyClient();
     (client.transferState as ReturnType<typeof vi.fn>).mockImplementation(async ({ mode }: { mode?: string }) => {
-      if (mode === "pre") throw new Error("pre sync broke");
+      if (mode === "keys") throw new Error("key sync broke");
       return { migrationId: "m1", slug: "alice", imported: true };
     });
     const { deps, input, assignmentWrites } = harness({ client, gateAssignment: true });
@@ -321,7 +314,7 @@ describe("runMigration — gated quiesce", () => {
 it("resumes source ingress after final copy fails, and never on successful cutover", async () => {
   const failed = harness({ gateAssignment: true });
   const transfer = vi.mocked(failed.client.transferState).getMockImplementation()!;
-  vi.mocked(failed.client.transferState).mockImplementationOnce(transfer).mockImplementationOnce(transfer).mockRejectedValueOnce(new Error("copy failed"));
+  vi.mocked(failed.client.transferState).mockImplementationOnce(transfer).mockRejectedValueOnce(new Error("copy failed"));
   await runMigration(failed.input, failed.deps);
   expect(failed.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
   const success = harness({ gateAssignment: true });
@@ -358,9 +351,28 @@ describe("scheduled work handoff", () => {
     });
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
     expect(order).toEqual([
-      "copy:keys", "copy:pre", "gw-blue:hold", "gw-blue:export", "gw-green:stage",
+      "copy:keys", "gw-blue:export", "gw-green:stage",
       "copy:final", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue",
     ]);
+  });
+
+  it("lets the source's quiesce own the scheduler hold: no /scheduler call precedes /quiesce, and the request names the handoff", async () => {
+    const h = harness();
+    const order: string[] = [];
+    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, gatewayId, migrationId }) => {
+      order.push(`${gatewayId}:${phase}`);
+      if (phase === "hold") throw new Error("scheduler hold did not prove a drained matching operation");
+      return { operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
+    }) });
+    vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
+      order.push(`quiesce:${request.gatewayId}`);
+      expect(request).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "m1" });
+      return { migrationId: "m1", slug: "alice", drained: true, runningCount: 0 };
+    });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+    expect(order.slice(0, 3)).toEqual(["quiesce:gw-blue", "gw-blue:export", "gw-green:stage"]);
+    expect(order).not.toContain("gw-blue:hold");
   });
 
   it("reports where the final sync spent its time: scheduler export, scheduler stage, and the copy", async () => {
@@ -382,8 +394,8 @@ describe("scheduled work handoff", () => {
     expect(finalSync).toContain("schedulerExportMs=7000");
     expect(finalSync).toContain("schedulerStageMs=4000");
     expect(finalSync).toContain("transferMs=70000");
-    const preSync = h.events.find((event) => event.startsWith("log:") && event.includes("pre-sync-state ok"));
-    expect(preSync).toContain("transferMs=400");
+    const keysSync = h.events.find((event) => event.startsWith("log:") && event.includes("keys-sync-state ok"));
+    expect(keysSync).toContain("transferMs=400");
   });
 
   it("aborts destination scheduling before reopening the source after failed transfer", async () => {
@@ -400,7 +412,7 @@ describe("scheduled work handoff", () => {
     vi.mocked(h.client.resume).mockImplementation(async () => { order.push("source-ingress-resumed"); });
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
     expect(order).toEqual([
-      "gw-blue:hold", "gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "source-ingress-resumed",
+      "gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "source-ingress-resumed",
     ]);
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
   });
@@ -487,13 +499,13 @@ describe("rollback releases the source scheduler fence", () => {
   it("never touches the source scheduler or ingress when the failure precedes the quiesce", async () => {
     const h = harness({ gateAssignment: true });
     vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
-      if (mode === "pre") throw new Error("pre sync broke");
+      if (mode === "keys") throw new Error("key sync broke");
       return { migrationId: "m1", slug, imported: true };
     });
 
     const result = await runMigration(h.input, h.deps);
 
-    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result).toMatchObject({ success: false, rolledBack: false });
     expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("resume");
     expect(h.client.resume).not.toHaveBeenCalled();
   });

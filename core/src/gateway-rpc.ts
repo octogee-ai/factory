@@ -148,6 +148,13 @@ export interface GatewaySessionsResetResult {
   [extra: string]: unknown;
 }
 
+export interface GatewaySessionsAbortResult {
+  ok: true;
+  abortedRunId: string | null;
+  status: "aborted" | "no-active-run";
+  [extra: string]: unknown;
+}
+
 export interface GatewayToolsCatalogResult {
   agentId: string;
   groups: unknown[];
@@ -278,6 +285,11 @@ export interface GatewayRpcClient {
     agentId: string;
     reason: "new" | "reset";
   }): Promise<GatewaySessionsResetResult>;
+  sessionsAbort(params: {
+    key: string;
+    agentId: string;
+    clearQueued: true;
+  }): Promise<GatewaySessionsAbortResult>;
   toolsCatalog(
     params: { agentId: string; includePlugins: true },
     timeoutMs?: number,
@@ -686,6 +698,22 @@ type GatewayCall = (
   requestTimeoutMs?: number,
 ) => Promise<unknown>;
 
+async function abortSession(
+  call: GatewayCall,
+  params: Parameters<GatewayRpcClient["sessionsAbort"]>[0],
+): Promise<GatewaySessionsAbortResult> {
+  const payload = await call("sessions.abort", params);
+  const value = payload as { ok?: unknown; status?: unknown; abortedRunId?: unknown } | null;
+  if (
+    !value || typeof value !== "object" || value.ok !== true ||
+    (value.status !== "aborted" && value.status !== "no-active-run") ||
+    (value.abortedRunId !== null && typeof value.abortedRunId !== "string")
+  ) {
+    throw new OpenclawWireError(INVALID_RESPONSE, "sessions.abort payload missing `ok: true` with an abort status");
+  }
+  return value as GatewaySessionsAbortResult;
+}
+
 async function stopChannels(
   call: GatewayCall,
   params: Parameters<GatewayRpcClient["channelsStop"]>[0],
@@ -921,6 +949,8 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       }
       return payload as GatewaySessionsResetResult;
     },
+
+    sessionsAbort: (params) => abortSession(call, params),
 
     toolsCatalog: (params, timeoutMs) => fetchToolsCatalog(call, params, timeoutMs),
 

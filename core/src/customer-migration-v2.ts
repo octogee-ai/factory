@@ -167,18 +167,6 @@ async function advancePreparation(
         includeActivationManifest: false,
       });
       return { ...state, phase: "keysSynced" };
-    case "keysSynced":
-      await deps.client.transferState({
-        migrationId: state.migrationId,
-        fromGatewayId: state.sourceGatewayId,
-        toGatewayId: state.targetGatewayId,
-        fromTransportId: state.sourceGatewayId,
-        toTransportId: state.targetGatewayId,
-        slug: state.slug,
-        mode: "pre",
-        includeActivationManifest: false,
-      });
-      return { ...state, phase: "preSynced" };
     default:
       throw new Error(`customer migration V2 preparation cannot advance ${state.phase}`);
   }
@@ -189,9 +177,9 @@ async function advanceForward(
   deps: CustomerMigrationV2Deps,
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
+    case "keysSynced":
     case "preSynced": {
       await deps.setSourceAssignmentState("quiescing");
-      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "hold" });
       await deps.client.quiesce({
         migrationId: state.migrationId,
         gatewayId: state.sourceGatewayId,
@@ -316,7 +304,7 @@ async function freshPhaseRequiresFreshDriver(
 
 const ADVANCE_HANDLERS: Record<CustomerMigrationV2Phase, AdvanceHandler> = {
   initialized: advancePreparation,
-  keysSynced: advancePreparation,
+  keysSynced: advanceForward,
   preSynced: advanceForward,
   sourceQuiesced: advanceForward,
   finalSynced: advanceForward,
@@ -343,7 +331,7 @@ export function isCustomerMigrationV2PostIntent(state: CustomerMigrationV2State)
 
 const NEXT_PHASES: Readonly<Partial<Record<CustomerMigrationV2Phase, readonly CustomerMigrationV2Phase[]>>> = {
   initialized: ["keysSynced", "freshSourceQuiesced", "aborted"],
-  keysSynced: ["preSynced"],
+  keysSynced: ["sourceQuiesced"],
   preSynced: ["sourceQuiesced"],
   sourceQuiesced: ["finalSynced"],
   finalSynced: ["targetVerified"],

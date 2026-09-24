@@ -1,4 +1,5 @@
 import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
+import { quiesceCustomerSessionsBounded, sessionStoreForPath } from "./customer-session-quiesce.js";
 import { customerFileStatePaths } from "./customer-file-state.js";
 import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
@@ -22,6 +23,10 @@ import {
   MIGRATING_IN_PIN_TTL_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
+import {
+  MIGRATION_QUIESCE_GRACE_MS,
+  MIGRATION_QUIESCE_STOP_RECHECK_MS,
+} from "../../shared/types/workspace-migration.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef } from "../../shared/types/agent-models.js";
 import { projectCheckoutEnabled, projectRepoSourceFromDoc } from "../../shared/types/project.js";
 import {
@@ -68,7 +73,6 @@ import {
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 import {
   customerCoachAgentId,
-  readAgentSessionsAtPath,
   resolveOpenClawStateDir,
 } from "./fleet-http-migration.js";
 import type { ConfigGetResult, GatewayRpcClient } from "./gateway-rpc.js";
@@ -1201,33 +1205,29 @@ async function quiesceCustomer(
   timeoutMs: number,
   opts: { stopMattermost: boolean; schedulerMigrationId?: string } = { stopMattermost: true },
 ): Promise<{ drained: boolean; runningCount: number }> {
+  const agentIds = agentIdsForMigration(slug);
   if (opts.stopMattermost) {
-    if (opts.schedulerMigrationId) {
-      const held = await migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), { operationId: opts.schedulerMigrationId, phase: "hold" });
-      if (!held.drained) throw new Error(`Scheduler runs are still draining for ${slug}`);
-    } else {
-      await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
-    }
+    if (!opts.schedulerMigrationId) await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIds);
     await setCustomerChannelsRunning(ctx.rpc, slug, false);
   }
-  const deadline = Date.now() + timeoutMs;
-  let runningCount = 0;
-  do {
-    runningCount = 0;
-    for (const sessionsPath of sessionPathsForMigration(slug)) {
-      const sessions = await readAgentSessionsAtPath(sessionsPath);
-      runningCount += sessions.filter((s) => s.status === "running").length;
-    }
-    if (runningCount === 0) {
-      if (opts.stopMattermost && !opts.schedulerMigrationId) await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
-      return { drained: true, runningCount: 0 };
-    }
-    dlog(`[quiesce:${slug}] ${runningCount} running session(s); waiting`);
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
-    await new Promise<void>((r) => setTimeout(r, Math.min(1_000, remainingMs)));
-  } while (Date.now() < deadline);
-  return { drained: false, runningCount };
+  const result = await quiesceCustomerSessionsBounded({
+    rpc: ctx.rpc,
+    slug,
+    agentIds,
+    stores: sessionPathsForMigration(slug).map(sessionStoreForPath),
+    ...(opts.stopMattermost
+      ? {
+        schedulerMigrationId: opts.schedulerMigrationId,
+        graceMs: Math.min(MIGRATION_QUIESCE_GRACE_MS, timeoutMs),
+        recheckMs: Math.min(MIGRATION_QUIESCE_STOP_RECHECK_MS, timeoutMs),
+      }
+      : { graceMs: timeoutMs, abortAfterGrace: false }),
+    log: dlog,
+  });
+  if (result.drained && opts.stopMattermost && !opts.schedulerMigrationId) {
+    await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIds);
+  }
+  return { drained: result.drained, runningCount: result.runningCount };
 }
 
 function sessionPathsForMigration(slug: string): string[] {

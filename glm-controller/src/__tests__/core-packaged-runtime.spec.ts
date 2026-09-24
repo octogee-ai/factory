@@ -98,6 +98,7 @@ function cutover(db: FleetStateFirestore, now: number) {
   const deps: FleetStateDeps = {
     db,
     serverTimestamp: () => now,
+    deleteField: () => null,
     now: () => new Date(now),
     log: vi.fn(),
   };
