@@ -21,7 +21,10 @@ UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)
 git switch -c codex/openclaw-current-recut "$UPSTREAM_SHA"
 ```
 
-Port the prior overlay oldest-first, then audit every patch against the
+Rebase the prior overlay's patch series onto the locked commit one patch at a
+time (`git rebase --onto <new-ref> <old-base> <overlay-head>`), keeping one
+single-purpose commit per patch, and type-check every boundary
+(`git rebase -x "pnpm tsgo:core" <new-ref>`). Then audit every patch against the
 locked commit. Drop behavior OpenClaw now provides and capabilities Octogee no
 longer needs. When upstream has split a
 patched file, move only the required hook to its new owner; do not restore
@@ -77,56 +80,70 @@ select TEST or PROD later.
 
 ## Current overlay
 
-The September 23 final recut selects annotated tag
-[`v2026.9.6`](https://github.com/openclaw/openclaw/releases/tag/v2026.9.6),
-locked to tag object `ce5bbdc244ee937246cc1700d1b224d020c3b599` and peeled
-source `eb377ac59e6c9fd6c7705028034812becf00271b`. Its release branch differs
-from the previous `b6b45244` main snapshot: 394 commits are main-only and 33
-release-only. This is a release port, not a claim that the tag includes every
-newer main change. Package version is `2026.9.6`.
+**Base:** annotated tag [`v2026.9.6`](https://github.com/openclaw/openclaw/releases/tag/v2026.9.6),
+tag object `ce5bbdc244ee937246cc1700d1b224d020c3b599`, peeled source
+`eb377ac59e6c9fd6c7705028034812becf00271b` — the newest release on the 2026.9.6
+line (re-verified 2026-09-24; no later 2026.9.6 patch release exists). Package
+version `2026.9.6`.
 
-The scheduled-job handoff overlay is
-`ceckert/openclaw:codex/octogee-scheduler-handoff`, built from exact source
-`69259a083e84712e90fb4328951109654bc70ba0` on top of the previous
-`a2cd214a1e1fa6c13e5a82ef13b47e6b85397bbb` overlay.
+**Overlay branch:** `ceckert/openclaw:codex/octogee-v2026.9.6-split`, head
+`415cd7e60f2edba58d2099d8114e07c448c2f824` (`dist/build-info.json` commit matches).
+The overlay is a series of small single-purpose commits on the tag, one per
+patch, replacing the former single squashed "port gateway overlay" commit.
 
-This adds the native `cron.migration` operator RPC and per-agent durable
-scheduler fences. Portable timers, job IDs, creator provenance, and scratch
-revisions move without copying the shared scheduler database. Source retirement
-precedes destination activation; rollback tombstones reject delayed requests.
-Schema 19 prevents older runtimes from ignoring these ownership fences.
+**Policy:** the goal is zero patches, pursued deliberately through discussions
+with the OpenClaw maintainers — not a stream of ad-hoc upstream PRs. The only
+upstream PR in flight is [#155072](https://github.com/openclaw/openclaw/pull/155072).
+Keep every patch small, generic, and upstream-quality so it is ready for those
+discussions; record each patch's readiness in the table below.
 
-The archives below were built, locally install-verified, and published with
-write-once generation preconditions. Published checksums and sizes match the
-verified local archives. Neither TEST nor PROD has been deployed from this change.
+| # | Commit | Patch | Octogee consumer | Upstream readiness |
+| --- | --- | --- | --- | --- |
+| 1 | `3bec963616e` | Computer: blank `target`/`node`/`environmentId` = unset | Agent computer tool | Open PR #155072 |
+| 2 | `d8d60b68287` | Gateway: keep a committed hot reload live when system cron monitors will retry | `config.patch` path (pre-boot config) | Ready (narrower than #148592) |
+| 3 | `3d2686f9eef` | Skills: Skill Workshop reviews on the published plugin generation | Gateway-internal | Ready |
+| 4 | `09a8f21bafb` | State: prepare profile identity without a host-thread state read | Hot path of #13 | Ready |
+| 5 | `cb084bfb954` | Desktop: re-read rotated external VNC credentials per observe | gateway-edge `desktop.observe` proxy | Ready |
+| 6 | `3370d1723af` | Mattermost: `threadSessionScope` channel-scoped thread sessions | pre-boot sets `threadSessionScope=channel` | Ready |
+| 7 | `f24bfc7baa9` | Mattermost: title channel sessions by display name | Builder session titles | Ready |
+| 8 | `d872a5dbbd6` | UI: label channel participants from transcript senders | Control UI | Ready |
+| 9 | `ab5cde23806` | Sessions: explicit member grants replace service-authored ones | gateway-edge channel-membership sync | Ready |
+| 10 | `63d200d4928` | Sessions: ensure initial session entries through the sharing worker | Prerequisite of #12 | Ready (with #12) |
+| 11 | `50a833fc473` | Gateway: grant channel-created sessions to synchronized members | Proxy identity `sessions.others` | Ready |
+| 12 | `c2689a667ed` | Gateway: `sessions.channel.sync` membership mirroring | gateway-edge `channel-membership-sync.ts` | Ready |
+| 13 | `170e9159f6c` | Gateway: workspace icons for session members | gateway-edge icon proxy | Ready |
+| 14 | `b57305cc3c9` | UI: refetch rejected workspace icons after auth recovery | Control UI | Ready |
+| 15 | `90f020e0361` | Plugins: live authenticated requester for `before_tool_call` | `octogee-access-tools/computer-approval.ts` | Ready |
+| 16 | `aa39f5488d0` | Plugins: `before_tool_call` reviewer guard | same | Ready (after #15) |
+| 17 | `1ab31d6b0b4` | Harness: recheck reviewer authority before native execution | Builder gateways (Codex) | Ready (after #16) |
+| 18 | `11d395cce1c` | Cron: `cron.migration` scheduled-agent handoff with durable fences (includes default-agent ownership resolution) | Shared-gateway customer migration | Needs work: `cron.migration` snapshot shape validation |
+| 19 | `41c84333696` | Cron: keep timer reservations within the admitted due set (regression from #18), method-index order, test seams | — | Fold into #18 |
+| 20 | `415cd7e60f2` | Cron: partial handoff retains non-portable jobs dormant on the source | Builder VM return (pending Octogee PR) | Fold into #18 |
+
+Known follow-ups for the next recut: `cron.migration` snapshot validation, and
+letting stage replace a target's re-projected system monitors
+(`heartbeat:` / `skill-collection-review:` declarations) instead of refusing
+them as a target conflict.
+
+The archives below were built from the head above, install-verified together in
+an isolated npm prefix (`OpenClaw 2026.9.6 (415cd7e)`), and published with
+write-once generation preconditions; the published root archive's SHA-256 was
+re-verified after upload. The Mattermost archive is byte-identical to the
+previous publication and is reused.
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-adb75f19.tgz` | `adb75f19eef8ec2d147ae9ce473aaa3b6254b607c7a9be318fee39af6a04b9bc` | `1790215793943848` |
+| `openclaw-fork-2fa285e7.tgz` | `2fa285e7af7a5df37ded376c2e3f7490bd5fd9ce00c7a6b2dc8cdcbc5aedaee5` | `1790268238201060` |
 | `openclaw-mattermost-43163935.tgz` | `43163935aad1df28f3f78a4faf0e4f0b255856400854cc3e5310999751629f23` | `1790215776773694` |
 
-Upstream adoption removes these downstream patches:
+Qualification of this head: every commit boundary passes `pnpm tsgo:core`;
+`pnpm check:test-types`, `pnpm config:channels:check`, `pnpm build`, and the cron
+migration/admission/timer suites (204 tests across 12 files) pass. The earlier
+split qualification also ran the full `pnpm check` (all lanes including
+assertion-SAFETY), 1038 core overlay tests, and the UI suites. Neither TEST nor
+PROD has been deployed from this change.
 
-- Preferences authorization: [PR #147930](https://github.com/openclaw/openclaw/pull/147930),
-  merged as `25c6dd5`.
-- Overlapping config/secrets model publication: [PR #155073](https://github.com/openclaw/openclaw/pull/155073),
-  merged as `58e27e0`; native publication completion now joins its successful
-  successor rather than requesting a false recovery restart.
-- Custom membership projection: native `cf32d5a` / `42263f8` provide the
-  projection owner, replacing the previous overlay implementation.
-- Offline plugin-dialog recovery: native wizard handling in `97043faf`
-  replaces the old patch.
-
-| Retained area | Required behavior and boundary |
-| --- | --- |
-| Channel administration and human grants | Admin-only channel sync uses native mutation authority; revocation removes only service-authored grants and preserves explicit human grants in either grant order. Native membership projection owns the facts. |
-| Mattermost channel sessions and presentation | Room threads share channel context while each turn retains its reply root; DMs stay native. Preserve readable session titles and participant names within their exact transcript identity namespaces. |
-| Workspace icon access and recovery | Use current native profile roles and session visibility; invalidate rejected requests even when a recovered bearer stays unchanged, without discarding successful or missing-image caches. |
-| Computer requester and reviewer authority | Preserve live verified requester identity independently of command-owner/admin privilege. Recheck reviewer authority through native worker admission/commit and deferred Codex execution, including final file revalidation. Two type-only SDK exports; no new RPC or approval store. |
-| External VNC reconnect | Read rotated credentials on each external attach observation while preserving managed credentials, cancellation, and native desktop lifetime. Live rotation/reconnect proof remains outstanding. |
-| Detached Skill Workshop runtime reuse | Reuse the current published plugin generation while retaining the exact model and admission owner. No unmeasured performance benefit is claimed. |
-| Cron retry deferral | Keep a committed reload live when monitor reconciliation schedules its native retry; partial-write retry convergence has regression coverage. This is narrower than the other contributor's [PR #148592](https://github.com/openclaw/openclaw/pull/148592), whose branch is not rewritten or duplicated. |
-| Computer blank selectors | Treat blank `target`, `node`, and `environmentId` as unset so sole-paired-node discovery works. [PR #155072](https://github.com/openclaw/openclaw/pull/155072) remains carried until its fix is in the selected base. |
+### Port notes (v2026.9.6)
 
 The port follows the release's worker and lifetime owners. Reviewer authority
 is rechecked through native transaction admission and commit callbacks, including
@@ -189,9 +206,8 @@ Upstream PR #155072 maintenance is outside this recut; its downstream fix remain
 
 Core production types, all 25 core-test type graphs, UI/extension production
 types, extension-test and script types, SDK/config/plugin boundaries,
-formatting, growth limits, and native unused-export checks pass. Final native
-lint qualification is still pending; no aggregate `check:changed` success is
-claimed until it finishes. No rule was weakened.
+formatting, growth limits, native unused-export checks, and native lint
+(including the assertion-SAFETY ratchet) pass. No rule was weakened.
 
 The final exact-commit build, native tarball-integrity check, and isolated pair
 installation pass. The actual Linux arm64 `openclaw-full-plugin-installer`
