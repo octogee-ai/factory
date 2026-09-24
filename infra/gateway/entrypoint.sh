@@ -27,6 +27,24 @@ log() {
 }
 
 SUPERVISE="$TSX /octogee/scripts/entrypoints/supervise-runner.ts"
+PRESTOP_FLUSH="timeout 10s $TSX /octogee/scripts/entrypoints/prestop-flush.ts"
+
+exit_when_openclaw_dies() {
+  _openclaw_pid="$1"
+  set +e
+  wait "$_openclaw_pid"
+  _openclaw_status=$?
+  set -e
+  if [ "$_openclaw_status" -eq 0 ]; then
+    _openclaw_status=1
+  fi
+  trap '' TERM INT
+  log "FATAL: OpenClaw gateway process exited (status=${_openclaw_status}); exiting container so Kubernetes restarts it"
+  $PRESTOP_FLUSH || log "prestop-flush failed (exit $?) during the OpenClaw-death container exit"
+  kill -TERM 0 2>/dev/null || true
+  exit "$_openclaw_status"
+}
+
 supervise_runner() {
   _name="$1"; shift
   _restart_delay_ms="$1"; shift
@@ -422,7 +440,8 @@ fi
 # root-cause follow-up: make OpenClaw log k8s-native (stdout) instead of to
 # a rotating file, then no mirror is ever needed.
 
-# Block on all background jobs. `wait` with no args waits for every
-# backgrounded child; our SIGTERM trap will interrupt it and run the
-# shutdown handler before we exit.
-wait
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ]; then
+  exit_when_openclaw_dies "$OPENCLAW_PID"
+else
+  wait
+fi

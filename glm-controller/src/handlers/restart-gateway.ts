@@ -14,6 +14,8 @@ interface RestartGatewayInput {
   gatewayId?: unknown;
 }
 
+const RESTART_STEP = "openclaw-restart";
+
 function deploymentNameForGateway(gatewayId: string): string {
   return `octogee-gateway-${gatewayId}`;
 }
@@ -41,7 +43,7 @@ export function createRestartGatewayHandler(
 
     const startedAt = deps.now();
     await reportStep(ctx, {
-      name: "openclaw-restart",
+      name: RESTART_STEP,
       status: "running",
       startedAt,
     });
@@ -53,9 +55,22 @@ export function createRestartGatewayHandler(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (openClawProcessDown(message)) {
+        await reportStep(ctx, {
+          name: RESTART_STEP,
+          status: "skipped",
+          startedAt,
+          completedAt: deps.now(),
+          error: message,
+        });
+        deps.log(
+          `[restart-gateway] ${gatewayId} OpenClaw process is not running; the gateway container exits on OpenClaw death and Kubernetes restarts it, which satisfies restart intent`,
+        );
+        return { steps: [], success: true };
+      }
       if (restartTargetUnavailable(message)) {
         await reportStep(ctx, {
-          name: "openclaw-restart",
+          name: RESTART_STEP,
           status: "skipped",
           startedAt,
           completedAt: deps.now(),
@@ -67,7 +82,7 @@ export function createRestartGatewayHandler(
         return { steps: [], success: true };
       }
       await reportStep(ctx, {
-        name: "openclaw-restart",
+        name: RESTART_STEP,
         status: "failed",
         startedAt,
         completedAt: deps.now(),
@@ -77,7 +92,7 @@ export function createRestartGatewayHandler(
     }
 
     await reportStep(ctx, {
-      name: "openclaw-restart",
+      name: RESTART_STEP,
       status: "done",
       startedAt,
       completedAt: deps.now(),
@@ -85,6 +100,10 @@ export function createRestartGatewayHandler(
 
     return { steps: [], success: true };
   };
+}
+
+function openClawProcessDown(message: string): boolean {
+  return /gateway not reachable at ws:\/\/127\.0\.0\.1:18789/iu.test(message);
 }
 
 function restartTargetUnavailable(message: string): boolean {

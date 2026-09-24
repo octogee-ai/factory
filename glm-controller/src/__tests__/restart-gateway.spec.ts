@@ -145,6 +145,34 @@ describe("createRestartGatewayHandler", () => {
     ]);
   });
 
+  it("treats a dead OpenClaw process as satisfied by the container's own restart instead of retrying into the fresh boot", async () => {
+    const log = vi.fn();
+    const deps = mkDeps({
+      log,
+      kubeOps: {
+        scaleDeployment: vi.fn(async () => undefined),
+        restartOpenClawInPlace: vi.fn(async () => {
+          throw new Error(
+            "openclaw gateway restart (in-place) deploy/octogee-gateway-shared-0 ns=octogee-test failed (code=1): Gateway not reachable at ws://127.0.0.1:18789 (ECONNREFUSED)",
+          );
+        }),
+        readDeployedReplicas: vi.fn(async () => 1),
+        deletePersistentVolumeClaim: vi.fn(async () => undefined),
+      },
+    });
+    const { ctx, reported } = mkCtx();
+
+    const result = await createRestartGatewayHandler(deps)(mkOp(), ctx);
+
+    expect(result.success).toBe(true);
+    expect(reported.map((step) => `${step.name}:${step.status}`)).toEqual([
+      "openclaw-restart:running",
+      "openclaw-restart:skipped",
+    ]);
+    expect(reported[1]?.error).toMatch(/ECONNREFUSED/);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/bender OpenClaw process is not running/));
+  });
+
   it("treats a restart against a disappeared pod as idempotently satisfied", async () => {
     const deps = mkDeps({
       kubeOps: {

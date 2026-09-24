@@ -1,7 +1,9 @@
 
 
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "../..");
@@ -290,6 +292,80 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(gatewayDeployment).not.toMatch(/restartPolicy:\s*(?:Never|OnFailure)/);
   });
 });
+
+describe("infra/gateway/entrypoint.sh — a dead OpenClaw process exits the shared container", () => {
+  it("waits on the OpenClaw PID after the runners start and leaves Builder pods on the supervisor", () => {
+    const tail = entrypoint.slice(entrypoint.indexOf("supervise_runner byosub-syncback"));
+    expect(tail).toMatch(/if \[ "\$GATEWAY_CLASS_EFFECTIVE" = "shared" \]; then\s+exit_when_openclaw_dies "\$OPENCLAW_PID"\s+else\s+wait\s+fi/);
+    expect(entrypoint.slice(0, entrypoint.indexOf("supervise_runner fleet-controller")))
+      .toContain("exit_when_openclaw_dies() {");
+  });
+
+  it("runs the same pre-stop flush the kubelet path runs before exiting", () => {
+    expect(entrypoint).toMatch(/PRESTOP_FLUSH="timeout 10s \$TSX \/octogee\/scripts\/entrypoints\/prestop-flush\.ts"/);
+    expect(exitWhenOpenClawDiesFunction()).toMatch(/\$PRESTOP_FLUSH \|\| log/);
+    expect(gatewayDeployment).toMatch(/timeout \{\{ \.Values\.preStopFlush\.timeoutSeconds \| default 10 \}\}s [^\n]*prestop-flush\.ts/);
+  });
+
+  describe("exit_when_openclaw_dies (POSIX sh harness)", () => {
+    it("exits the container with OpenClaw's status after logging FATAL and flushing", () => {
+      const run = runExitWhenOpenClawDies({ childExit: "kill -ABRT $$", flushExit: 0 });
+      expect(run.status).toBe(134);
+      expect(run.stdout).toContain("FATAL: OpenClaw gateway process exited (status=134)");
+      expect(run.stdout).toContain("exiting container so Kubernetes restarts it");
+      expect(run.stdout).toContain("flush-ran");
+      expect(run.stdout.indexOf("FATAL")).toBeLessThan(run.stdout.indexOf("flush-ran"));
+    });
+
+    it("never exits 0 on a clean OpenClaw exit, so Kubernetes still records a failure", () => {
+      const run = runExitWhenOpenClawDies({ childExit: "exit 0", flushExit: 0 });
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain("FATAL: OpenClaw gateway process exited (status=1)");
+    });
+
+    it("logs a failed flush and still exits with OpenClaw's status", () => {
+      const run = runExitWhenOpenClawDies({ childExit: "exit 7", flushExit: 3 });
+      expect(run.status).toBe(7);
+      expect(run.stdout).toContain("prestop-flush failed (exit 3)");
+    });
+  });
+});
+
+function exitWhenOpenClawDiesFunction(): string {
+  const start = entrypoint.indexOf("exit_when_openclaw_dies() {");
+  expect(start).toBeGreaterThan(-1);
+  const end = entrypoint.indexOf("\n}\n", start);
+  return entrypoint.slice(start, end + 3);
+}
+
+function runExitWhenOpenClawDies(input: { childExit: string; flushExit: number }) {
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-exit-"));
+  const flush = path.join(dir, "flush.sh");
+  writeFileSync(flush, `#!/bin/sh\necho flush-ran\nexit ${input.flushExit}\n`, { mode: 0o755 });
+  const harness = path.join(dir, "harness.sh");
+  writeFileSync(
+    harness,
+    [
+      "#!/bin/sh",
+      "set -e",
+      'log() { echo "[entrypoint] $*"; }',
+      `PRESTOP_FLUSH="${flush}"`,
+      exitWhenOpenClawDiesFunction(),
+      `sh -c '${input.childExit}' &`,
+      "OPENCLAW_PID=$!",
+      "sleep 0.2",
+      'exit_when_openclaw_dies "$OPENCLAW_PID"',
+      'echo "unreachable"',
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const result = spawnSync("bash", ["-c", 'set -m; sh "$1" & wait $!', "_", harness], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(result.stdout).not.toContain("unreachable");
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
 
 describe("scripts/entrypoints/fleet-controller.ts — db-less local persistence loops", () => {
 
