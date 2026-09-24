@@ -2030,6 +2030,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       log,
     );
     try {
+      const startedAt = Date.now();
       await stopRsyncDaemon(session.child);
       const rejection = await validateStagedRsyncImport(session, body.slug, mode, configTransferMode, log);
       if (rejection !== null) {
@@ -2048,6 +2049,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
           path.join(session.importDir, path.relative(session.stageDir, store))),
       );
       await copyStageToOpenClaw(session.stageDir, session.importDir, body.slug);
+      const stagedAt = Date.now();
       const verificationPending = mode === "final"
         ? await activateFinishedRsyncImport({
           deps,
@@ -2057,6 +2059,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
           signal: controller.signal,
         })
         : undefined;
+      const activatedAt = Date.now();
       const response: ImportResponse = {
         migrationId: body.migrationId,
         slug: body.slug,
@@ -2065,6 +2068,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       };
       log(
         `${verificationPending ? "🟡" : "🟢"} [migration-rsync] finish-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} ${verificationPending ? "verification-pending" : "done"}` +
+        ` stageMs=${stagedAt - startedAt} activateMs=${activatedAt - stagedAt}` +
         (verificationPending ? ` (verification pending: ${verificationPending})` : ""),
       );
       res.status(200).json(response);

@@ -7,6 +7,7 @@ export interface FleetOperationLockRef {
   input?: unknown;
   customerMigrationV2?: unknown;
   rolloutLane?: RolloutLane;
+  cutoverCommittedAt?: number;
 }
 
 const SERIAL_KINDS: ReadonlySet<string> = new Set([
@@ -44,11 +45,16 @@ export function fleetOperationLockResources(
   ]);
 }
 
+export function serialLockReleasedAfterCutover(operation: FleetOperationLockRef): boolean {
+  return operation.kind === "migrate-customer" && typeof operation.cutoverCommittedAt === "number";
+}
+
 export function serialFleetOperationsConflict(
   candidate: FleetOperationLockRef,
   other: FleetOperationLockRef,
 ): boolean {
   if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind)) return false;
+  if (serialLockReleasedAfterCutover(candidate) || serialLockReleasedAfterCutover(other)) return false;
   const candidateResources = fleetOperationLockResources(candidate);
   for (const resource of fleetOperationLockResources(other)) {
     if (candidateResources.has(resource)) return true;

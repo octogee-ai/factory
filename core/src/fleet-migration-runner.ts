@@ -47,7 +47,15 @@ export interface MigrationRunnerDeps {
   log: (msg: string) => void;
 
   reportStep?: (step: ReportedStep) => Promise<void> | void;
+
+  now?: () => number;
+  wait?: (delayMs: number) => Promise<void>;
 }
+
+const RELEASE_ATTEMPTS = 3;
+const RELEASE_RETRY_DELAY_MS = 2_000;
+
+type StepTimings = Readonly<Record<string, number>>;
 
 export interface MigrationRunnerInput {
   migrationId: string;
@@ -82,7 +90,7 @@ async function executeStep(params: {
   crossGateway: boolean;
   targetGatewayId: string;
   schedulerMigrationId: string;
-}): Promise<void> {
+}): Promise<StepTimings | undefined> {
   const {
     step,
     deps,
@@ -92,6 +100,7 @@ async function executeStep(params: {
     includeActivationManifest,
     crossGateway,
   } = params;
+  const clock = deps.now ?? Date.now;
   switch (step.action) {
     case "quiesce-source":
       if (crossGateway) await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.gateway, phase: "hold" });
@@ -111,11 +120,17 @@ async function executeStep(params: {
         reason: "migration-final",
       });
       return;
-    case "sync-state":
+    case "sync-state": {
+      const timings: Record<string, number> = {};
       if (crossGateway && step.mode === "final") {
+        const exportStartedAt = clock();
         const schedules = await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.from, phase: "export" });
+        timings.schedulerExportMs = clock() - exportStartedAt;
+        const stageStartedAt = clock();
         await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.to, phase: "stage", agentIds: schedules.agentIds, snapshot: schedules.snapshot });
+        timings.schedulerStageMs = clock() - stageStartedAt;
       }
+      const transferStartedAt = clock();
       await deps.client.transferState({
         migrationId,
         fromGatewayId: step.from,
@@ -125,7 +140,9 @@ async function executeStep(params: {
         includeActivationManifest: step.mode === "final" && includeActivationManifest,
         projectCheckoutScope,
       });
-      return;
+      timings.transferMs = clock() - transferStartedAt;
+      return timings;
+    }
     case "verify-target":
       await deps.client.verifyTarget({
         migrationId,
@@ -211,6 +228,7 @@ interface MigrationExecution {
   deps: MigrationRunnerDeps;
   crossGateway: boolean;
   quiescingMarked: boolean;
+  quiesceStarted: boolean;
   state: MigrationState;
 }
 
@@ -223,6 +241,7 @@ function createMigrationExecution(
     deps,
     crossGateway: input.crossGateway ?? input.fromGatewayId !== input.toGatewayId,
     quiescingMarked: false,
+    quiesceStarted: false,
     state: {
       phase: "initial",
       slug: input.slug,
@@ -250,7 +269,7 @@ async function markSourceQuiescing(
   execution.quiescingMarked = true;
 }
 
-function executeForwardStep(execution: MigrationExecution, step: MigrationStep): Promise<void> {
+function executeForwardStep(execution: MigrationExecution, step: MigrationStep): Promise<StepTimings | undefined> {
   const { input, deps } = execution;
   return executeStep({
     step,
@@ -287,23 +306,30 @@ async function runNextMigrationStep(
   await report(execution.deps, { name, status: "running" });
   try {
     await markSourceQuiescing(execution, step);
-    await executeForwardStep(execution, step);
+    if (step.action === "quiesce-source") execution.quiesceStarted = true;
+    const timings = await executeForwardStep(execution, step);
     await report(execution.deps, { name, status: "done" });
-    advanceExecution(execution, name, phaseAtStart);
+    advanceExecution(execution, name, phaseAtStart, timings);
     return null;
   } catch (error) {
     return handleStepFailure(execution, { step, name, phaseAtStart, error });
   }
 }
 
+function formatTimings(timings: StepTimings | undefined): string {
+  if (!timings) return "";
+  return Object.entries(timings).map(([key, value]) => ` ${key}=${value}`).join("");
+}
+
 function advanceExecution(
   execution: MigrationExecution,
   name: string,
   phaseAtStart: MigrationPhase,
+  timings: StepTimings | undefined,
 ): void {
   const nextPhase = advancePhase(execution.state.phase);
   execution.deps.log(
-    `[migration-runner] ${name} ok migrationId=${execution.input.migrationId} slug=${execution.input.slug} (phase ${phaseAtStart} → ${nextPhase})`,
+    `[migration-runner] ${name} ok migrationId=${execution.input.migrationId} slug=${execution.input.slug} (phase ${phaseAtStart} → ${nextPhase})${formatTimings(timings)}`,
   );
   execution.state = { ...execution.state, phase: nextPhase };
 }
@@ -336,13 +362,26 @@ async function handleStepFailure(
   }
   await report(deps, { name, status: "failed", error: message });
   deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${message}`);
-  const rolledBack = await rollbackExecution(execution);
+  const rollback = await rollbackExecution(execution);
+  if (rollback.unreleased) {
+    deps.log(
+      `[migration-runner] ❌ rollback left the source fenced migrationId=${input.migrationId} slug=${input.slug}: ${rollback.unreleased}`,
+    );
+  }
   return {
     success: false,
     finalPhase: execution.state.phase,
-    errorAt: { phase: phaseAtStart, error: message },
-    rolledBack,
+    errorAt: {
+      phase: phaseAtStart,
+      error: rollback.unreleased ? `${message} — ${rollback.unreleased}` : message,
+    },
+    rolledBack: rollback.rolledBack,
   };
+}
+
+interface RollbackOutcome {
+  rolledBack: boolean;
+  unreleased?: string;
 }
 
 function rollbackServingTarget(
@@ -352,25 +391,92 @@ function rollbackServingTarget(
   return { gatewayId: execution.input.fromGatewayId, uid: execution.input.uid };
 }
 
-function rollbackExecution(execution: MigrationExecution): Promise<boolean> {
+function rollbackExecution(execution: MigrationExecution): Promise<RollbackOutcome> {
   const { input, deps } = execution;
   return tryRollback(execution.state, deps, input.migrationId, {
     schedulerMigrationId: input.schedulerMigrationId ?? input.migrationId,
     crossGateway: execution.crossGateway,
     restoreServing: rollbackServingTarget(execution),
+    quiesceStarted: execution.quiesceStarted,
   });
+}
+
+interface RollbackTransports {
+  schedulerMigrationId: string;
+  crossGateway: boolean;
+  restoreServing: { gatewayId: string; uid: string } | null;
+  quiesceStarted: boolean;
+}
+
+async function confirmRelease(
+  deps: MigrationRunnerDeps,
+  name: string,
+  release: () => Promise<unknown>,
+): Promise<string | null> {
+  const wait = deps.wait ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+  await report(deps, { name, status: "running" });
+  let lastError = "";
+  for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
+    try {
+      await release();
+      await report(deps, { name, status: "done" });
+      return null;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      deps.log(`[migration-runner] ⚠ ${name} attempt ${attempt}/${RELEASE_ATTEMPTS} failed: ${lastError}`);
+      if (attempt < RELEASE_ATTEMPTS) await wait(RELEASE_RETRY_DELAY_MS);
+    }
+  }
+  await report(deps, { name, status: "failed", error: lastError });
+  return lastError;
+}
+
+// The source was closed by the quiesce (scheduler hold, then ingress stop), so
+// a pre-cutover rollback must reopen both and prove it: each release is retried,
+// and one that never confirms is named in the failure rather than left held.
+async function releaseSource(
+  state: MigrationState,
+  deps: MigrationRunnerDeps,
+  migrationId: string,
+  transports: RollbackTransports,
+): Promise<string[]> {
+  const unreleased: string[] = [];
+  if (transports.crossGateway) {
+    const error = await confirmRelease(deps, "rollback:scheduler-resume", () =>
+      deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.fromGatewayId, slug: state.slug, phase: "resume" }));
+    if (error) unreleased.push(`scheduler fence ${transports.schedulerMigrationId} on ${state.fromGatewayId} not released: ${error}`);
+  }
+  const error = await confirmRelease(deps, "rollback:resume-ingress", () =>
+    deps.client.resume({ migrationId, gatewayId: state.fromGatewayId, slug: state.slug }));
+  if (error) unreleased.push(`source ingress on ${state.fromGatewayId} not resumed: ${error}`);
+  return unreleased;
+}
+
+async function abortTargetScheduler(
+  state: MigrationState,
+  deps: MigrationRunnerDeps,
+  transports: RollbackTransports,
+): Promise<string | null> {
+  if (!transports.crossGateway) return null;
+  const name = "rollback:scheduler-abort";
+  await report(deps, { name, status: "running" });
+  try {
+    await deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.toGatewayId, slug: state.slug, phase: "abort" });
+    await report(deps, { name, status: "done" });
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await report(deps, { name, status: "failed", error: message });
+    return `target scheduler abort unconfirmed on ${state.toGatewayId}, source left closed: ${message}`;
+  }
 }
 
 async function tryRollback(
   state: MigrationState,
   deps: MigrationRunnerDeps,
   migrationId: string,
-  transports: {
-    schedulerMigrationId: string;
-    crossGateway: boolean;
-    restoreServing: { gatewayId: string; uid: string } | null;
-  },
-): Promise<boolean> {
+  transports: RollbackTransports,
+): Promise<RollbackOutcome> {
   let plan: MigrationStep[];
   try {
     plan = rollbackPlan(state);
@@ -379,18 +485,17 @@ async function tryRollback(
     deps.log(
       `[migration-runner] ⚠ cannot rollback from phase=${state.phase}: ${msg} — operator must intervene`,
     );
-    return false;
+    return { rolledBack: false };
   }
   if (plan.length === 0) {
     await restoreSourceServing(deps, transports.restoreServing);
     deps.log(
       `[migration-runner] no rollback needed at phase=${state.phase} (source still owns)`,
     );
-    return false;
+    return { rolledBack: false };
   }
-  if (transports.crossGateway) {
-    await deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.toGatewayId, slug: state.slug, phase: "abort" });
-  }
+  const abortUnconfirmed = await abortTargetScheduler(state, deps, transports);
+  if (abortUnconfirmed) return { rolledBack: false, unreleased: abortUnconfirmed };
   for (const step of plan) {
     const rbName = `rollback:${reportName(step)}`;
     await report(deps, { name: rbName, status: "running" });
@@ -417,11 +522,11 @@ async function tryRollback(
     }
   }
   await restoreSourceServing(deps, transports.restoreServing);
-  if (state.phase !== "keys-synced") {
-    if (transports.crossGateway) await deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.fromGatewayId, slug: state.slug, phase: "resume" });
-    await deps.client.resume({ migrationId, gatewayId: state.fromGatewayId, slug: state.slug });
-  }
-  return true;
+  if (!transports.quiesceStarted) return { rolledBack: true };
+  const unreleased = await releaseSource(state, deps, migrationId, transports);
+  return unreleased.length === 0
+    ? { rolledBack: true }
+    : { rolledBack: false, unreleased: unreleased.join("; ") };
 }
 
 // Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving

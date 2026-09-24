@@ -11,6 +11,7 @@ export interface CreateOperationContextDeps {
   persist: PersistFn;
   persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
   persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
+  persistCutoverCommitted?: (at: number) => Promise<void>;
   cancellationRequested?: () => Promise<boolean>;
   log: (msg: string) => void;
   
@@ -45,6 +46,9 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
     ...(deps.persistSchedulerHandoff ? { persistSchedulerHandoff: deps.persistSchedulerHandoff } : {}),
     ...(deps.persistCustomerMigrationV2
       ? { persistCustomerMigrationV2: deps.persistCustomerMigrationV2 }
+      : {}),
+    ...(deps.persistCutoverCommitted
+      ? { persistCutoverCommitted: deps.persistCutoverCommitted }
       : {}),
     ...(deps.cancellationRequested
       ? { cancellationRequested: deps.cancellationRequested }

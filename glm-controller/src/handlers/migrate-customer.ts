@@ -538,6 +538,24 @@ async function resolveMigrationTargets(
   };
 }
 
+// Recording the durable cutover releases the serial gateway lock; a failed
+// record keeps the lock held and never fails a migration that already landed.
+async function recordCutoverCommitted(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  operationId: string,
+): Promise<void> {
+  if (!ctx.persistCutoverCommitted) return;
+  try {
+    await ctx.persistCutoverCommitted(deps.now());
+  } catch (error) {
+    deps.log(
+      `[migrate-customer] ❌ op=${operationId} cutover committed but could not be recorded — the serial lock stays held ` +
+      `until this operation completes: ${errorMessage(error)}`,
+    );
+  }
+}
+
 function buildRunnerDeps(
   input: {
     deps: MigrateCustomerDeps;
@@ -550,7 +568,10 @@ function buildRunnerDeps(
   const { deps, client, ctx } = input;
   return {
     client,
-    commitCutover: (commit) => deps.commitCutover({ ...commit, automatic: input.automatic }),
+    commitCutover: async (commit) => {
+      await deps.commitCutover({ ...commit, automatic: input.automatic });
+      await recordCutoverCommitted(deps, ctx, input.operationId);
+    },
     setAssignmentState: (assignment) =>
       deps.setAssignmentState({
         ...assignment,
@@ -634,14 +655,17 @@ async function provisionCustomerOnTarget(input: {
       }));
     }
     if (input.nativeReturn) await step("checkpoint-native-computer", input.nativeReturn.checkpoint);
-    await step("cutover-firestore", () => deps.commitCutover({
-      uid,
-      slug,
-      toGatewayId: targets.toGatewayId,
-      fromGatewayId: targets.fromGatewayId,
-      flipMirror: targets.fromGatewayId !== targets.toGatewayId,
-      automatic,
-    }));
+    await step("cutover-firestore", async () => {
+      await deps.commitCutover({
+        uid,
+        slug,
+        toGatewayId: targets.toGatewayId,
+        fromGatewayId: targets.fromGatewayId,
+        flipMirror: targets.fromGatewayId !== targets.toGatewayId,
+        automatic,
+      });
+      await recordCutoverCommitted(deps, ctx, input.operationId);
+    });
   } catch (error) {
     if (input.nativeReturn) {
       const current = await deps.readUser(uid);
@@ -1052,6 +1076,14 @@ async function prepareMigration(
   if (!user) return { error: `user not found: ${request.uid}` };
   const recovered = await recoverCommittedMigration(deps, op, ctx, user, request);
   if (recovered) return { result: recovered };
+  if (op.cutoverCommittedAt !== undefined) {
+    return {
+      error:
+        `migration cutover already committed to ${request.toGatewayId}; customer now owned by ${user.currentGatewayId} — ` +
+        "source cleanup left to the eviction sweep",
+      rolledBack: false,
+    };
+  }
   const migrationId = deps.genMigrationId(op.id);
 
   try {

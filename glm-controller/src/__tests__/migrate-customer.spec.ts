@@ -186,6 +186,9 @@ function mkDeps(options: HarnessOptions = {}) {
   const steps: OperationStep[] = [];
   const ctx: OperationContext = {
     persistSchedulerHandoff: vi.fn(async () => undefined),
+    persistCutoverCommitted: vi.fn(async (at: number) => {
+      events.push(`cutover-recorded:${at}`);
+    }),
     reportStep: vi.fn(async (step: OperationStep) => {
       steps.push(step);
     }),
@@ -444,6 +447,47 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(client.calls.every((call) => !/config/u.test(call))).toBe(true);
     expect(client.restoreTarget).not.toHaveBeenCalled();
     expect(deps.readUserSnapshot).toHaveBeenCalledWith("uid-alice", "gw-green");
+  });
+
+  it("records the committed cutover before source cleanup so the serial lock releases while cleanup runs", async () => {
+    const { deps, ctx, client, events } = mkDeps();
+    vi.mocked(client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
+      events.push(`unmount:${gatewayId}`);
+      return { migrationId: "mig-op-1", slug, unmounted: true };
+    });
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: true });
+    expect(events.slice(events.indexOf("cutover:gw-blue->gw-green:mirror=true"))).toEqual([
+      "cutover:gw-blue->gw-green:mirror=true",
+      "cutover-recorded:5000",
+      "unmount:gw-blue",
+    ]);
+  });
+
+  it("keeps the migration complete and the lock held when the cutover record cannot be written", async () => {
+    const { deps, ctx, client } = mkDeps();
+    vi.mocked(ctx.persistCutoverCommitted!).mockRejectedValue(new Error("journal unavailable"));
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
+
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(client.unmount).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.log).mock.calls.some(([message]) => /❌.*cutover.*journal unavailable/u.test(message))).toBe(true);
+  });
+
+  it("never re-drives a migration whose cutover already committed once the customer has moved on", async () => {
+    const { deps, ctx, client, events } = mkDeps({ sourceGatewayId: "gw-purple" });
+    const schedulerHandoff = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+
+    const result = await createMigrateCustomerHandler(deps)(mkOp({ schedulerHandoff, attempts: 1, cutoverCommittedAt: 4_000 }), ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toMatch(/cutover already committed to gw-green; customer now owned by gw-purple/u);
+    expect(client.calls).toEqual([]);
+    expect(client.scheduler).not.toHaveBeenCalled();
+    expect(events.some((event) => event.startsWith("cutover:") || event.startsWith("assignment:"))).toBe(false);
   });
 
   it("reports failure with rollback when quiesce cannot drain", async () => {
@@ -819,6 +863,15 @@ describe("scheduler handoff recovery", () => {
     expect(vi.mocked(h.client.scheduler).mock.calls.slice(0, 3).map(([request]) => [request.gatewayId, request.phase, request.migrationId])).toEqual([
       ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "hold", "mig-op-1:scheduler:2"],
     ]);
+  });
+
+  it("finishes handoff cleanup for a migration whose serial lock was already released", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 1, cutoverCommittedAt: 4_000 }), h.ctx)).toMatchObject({ success: true });
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => [request.gatewayId, request.phase])).toEqual([
+      ["gw-blue", "retire"], ["gw-green", "activate"],
+    ]);
+    expect(h.client.unmount).toHaveBeenCalledTimes(1);
   });
 
   it("cannot start scheduling handoff when its durable identity cannot be saved", async () => {

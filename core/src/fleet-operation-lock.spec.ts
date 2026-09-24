@@ -135,6 +135,38 @@ describe("serialFleetOperationsConflict", () => {
     )).toBe(true);
   });
 
+  describe("a migration whose cutover has committed holds no serial lock", () => {
+    const committed = {
+      id: "committed",
+      kind: "migrate-customer",
+      cutoverCommittedAt: 1_700_000_000_000,
+      input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" },
+    };
+
+    it("releases both its source and target for the next migration", () => {
+      expect(serialFleetOperationsConflict(
+        { id: "next", kind: "migrate-customer", input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" } },
+        committed,
+      )).toBe(false);
+      expect(serialFleetOperationsConflict(
+        committed,
+        { id: "next", kind: "migrate-customer", input: { fromGatewayId: "shared-0", toGatewayId: "shared-2" } },
+      )).toBe(false);
+    });
+
+    it("keeps the lock until the cutover is recorded", () => {
+      const { cutoverCommittedAt: _released, ...inFlight } = committed;
+      expect(serialFleetOperationsConflict(
+        { id: "next", kind: "migrate-customer", input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" } },
+        inFlight,
+      )).toBe(true);
+    });
+
+    it("still counts as an active migration for gateway retirement claims", () => {
+      expect(findActiveGatewayMigration("shared-0", [{ ...committed, status: "running" }])?.id).toBe("committed");
+    });
+  });
+
   it("does not let an unclassified rollout bypass a classified rollout", () => {
     expect(serialFleetOperationsConflict(
       { id: "first", kind: "rollout", input: { gatewayId: "first" } },

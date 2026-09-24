@@ -45,9 +45,35 @@ export async function migrateCustomerScheduler(
   if (agentIds.length === 0) throw new Error(`Cannot hold scheduler for ${slug}: no customer agents`);
   const deadline = Date.now() + 45_000;
   while (true) {
-    const result = await rpc.schedulerMigration({ ...request, agentIds });
+    const result = await holdReleasingStaleFence(rpc, { ...request, agentIds });
     if (result.drained) return result;
     if (Date.now() >= deadline) throw new Error(`scheduler hold timed out draining ${slug}`);
     await delay(250);
+  }
+}
+
+const HELD_FOR_MIGRATION = /is held for migration ([^\s"}]+)/u;
+
+// A failed earlier attempt can leave the agents fenced by its own id (the
+// kernel refuses a new hold while that fence is held or exported). Resume that
+// id first — the kernel releases a held/exported fence on resume and refuses
+// anything else, so a live staged handoff can never be taken over this way.
+async function holdReleasingStaleFence(
+  rpc: Pick<GatewayRpcClient, "schedulerMigration">,
+  request: SchedulerMigrationRequest & { agentIds: string[] },
+): Promise<SchedulerMigrationResult> {
+  try {
+    return await rpc.schedulerMigration(request);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stale = HELD_FOR_MIGRATION.exec(message)?.[1];
+    if (!stale || stale === request.operationId) throw error;
+    try {
+      await rpc.schedulerMigration({ operationId: stale, phase: "resume", agentIds: request.agentIds });
+    } catch (resumeError) {
+      const resumeMessage = resumeError instanceof Error ? resumeError.message : String(resumeError);
+      throw new Error(`${message}; resuming the stale fence failed: ${resumeMessage}`);
+    }
+    return rpc.schedulerMigration(request);
   }
 }

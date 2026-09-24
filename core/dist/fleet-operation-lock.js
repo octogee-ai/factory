@@ -27,8 +27,13 @@ export function fleetOperationLockResources(operation) {
         ]),
     ]);
 }
+export function serialLockReleasedAfterCutover(operation) {
+    return operation.kind === "migrate-customer" && typeof operation.cutoverCommittedAt === "number";
+}
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))
+        return false;
+    if (serialLockReleasedAfterCutover(candidate) || serialLockReleasedAfterCutover(other))
         return false;
     const candidateResources = fleetOperationLockResources(candidate);
     for (const resource of fleetOperationLockResources(other)) {

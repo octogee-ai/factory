@@ -352,6 +352,7 @@ export interface Operation {
     output?: Record<string, unknown>;
     customerMigrationV2?: CustomerMigrationV2State;
     schedulerHandoff?: SchedulerHandoffState;
+    cutoverCommittedAt?: number;
 }
 export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "freshSourceQuiesced" | "freshCutoverReady" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
 export interface CustomerMigrationV2GatewayRootFence {

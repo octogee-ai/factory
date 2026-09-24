@@ -160,6 +160,27 @@ describe("classifyOperationFailure", () => {
     ).toBe("terminal");
   });
 
+  it.each([
+    ["source quiesce load timeout", "/quiesce/shared-0 timed out after 60000ms (http://octogee-gateway-shared-0.octogee-test.svc.cluster.local:3003/quiesce/shared-0)"],
+    ["scheduler hold load timeout", "/scheduler/shared-0 timed out after 60000ms (http://octogee-gateway-shared-0.octogee-test.svc.cluster.local:3003/scheduler/shared-0)"],
+    ["gateway RPC socket dropped before the connect response", '/scheduler/shared-0: 500 {"error":"scheduler migration failed","message":"socket closed before connect response"}'],
+    ["unmount socket dropped before the connect response", '/unmount/shared-0: 500 {"error":"unmount failed","message":"socket closed before connect response","code":"connect-failed"}'],
+    ["scheduler fence still held by a handoff that has not settled", '/scheduler/shared-0: 500 {"error":"scheduler migration failed","message":"Cron agent octogee-sep17-coach is held for migration mig-placement-190929cbf8f86906bee813bffa1a4157:scheduler:1"}'],
+  ])("classifies a pre-cutover %s as transient so placement re-arms it", (_name, error) => {
+    expect(classifyOperationFailure(error)).toBe("transient");
+  });
+
+  it.each([
+    ["cutover already committed but the customer moved on", "migration cutover already committed to shared-1; customer now owned by shared-2 — source cleanup left to the eviction sweep"],
+    ["declared source mismatch", "declared source shared-0 does not match resolved source shared-1"],
+    ["customer already on target", "customer already on shared-1"],
+    ["quiesce refused because of scheduled jobs", "migration blocked: octogee-alice-coach has enabled scheduled jobs; source retained"],
+    ["scheduler proof failure", "scheduler hold did not prove a drained matching operation"],
+    ["a socket message that is not the connect drop", "socket hang up while writing"],
+  ])("keeps %s terminal", (_name, error) => {
+    expect(classifyOperationFailure(error)).toBe("terminal");
+  });
+
   it("classifies the gateway mutation writer-lock-busy response as transient", () => {
     expect(
       classifyOperationFailure(

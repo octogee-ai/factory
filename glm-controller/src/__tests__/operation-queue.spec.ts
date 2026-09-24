@@ -273,6 +273,35 @@ describe("decideOperationClaim", () => {
     expect(decision).toEqual({ outcome: "claim" });
   });
 
+  it("claims the next migration on the same gateways once the running one has committed its cutover", () => {
+    const decision = decideOperationClaim({
+      op: {
+        id: "next-migration",
+        kind: "migrate-customer",
+        status: "pending",
+        createdAt: 2,
+        input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" },
+      },
+      now,
+      runningOpsSameKind: [{
+        id: "cleaning-up",
+        kind: "migrate-customer",
+        cutoverCommittedAt: now - 1_000,
+        input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" },
+      }],
+      pendingOpsSameKind: [{
+        id: "retrying-cleanup",
+        kind: "migrate-customer",
+        createdAt: 1,
+        nextAttemptAt: now + 30_000,
+        cutoverCommittedAt: now - 5_000,
+        input: { fromGatewayId: "shared-0", toGatewayId: "shared-1" },
+      }],
+    });
+
+    expect(decision).toEqual({ outcome: "claim" });
+  });
+
   it("keeps a sleeping durable migration's gateway lock", () => {
     const decision = decideOperationClaim({
       op: {

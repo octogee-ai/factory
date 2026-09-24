@@ -23,6 +23,8 @@ export interface MigrationRunnerDeps {
     }) => Promise<void>;
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
+    now?: () => number;
+    wait?: (delayMs: number) => Promise<void>;
 }
 export interface MigrationRunnerInput {
     migrationId: string;

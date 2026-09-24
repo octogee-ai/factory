@@ -20,6 +20,7 @@ export interface OperationRef {
     targetGatewayId?: string;
     targetRevisionId?: string;
   };
+  cutoverCommittedAt?: number;
 }
 
 export interface SerialConflict {
@@ -94,6 +95,7 @@ export interface OperationClaimCandidate {
   nextAttemptAt?: number | null;
   input?: Record<string, unknown>;
   customerMigrationV2?: OperationRef["customerMigrationV2"];
+  cutoverCommittedAt?: number;
 }
 
 export interface OperationClaimDecisionInput {

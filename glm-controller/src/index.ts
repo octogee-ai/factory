@@ -1766,6 +1766,7 @@ async function attemptClaimOrQueueOperation(
             kind: runningOperation.kind,
             input: runningOperation.input,
             customerMigrationV2: runningOperation.customerMigrationV2,
+            cutoverCommittedAt: runningOperation.cutoverCommittedAt,
           }] : [];
         });
         pendingOpsSameKind = pendingSnap.docs.flatMap((d) => {
@@ -1781,6 +1782,7 @@ async function attemptClaimOrQueueOperation(
             createdAt: pendingOperation.createdAt,
             nextAttemptAt: pendingOperation.nextAttemptAt,
             customerMigrationV2: pendingOperation.customerMigrationV2,
+            cutoverCommittedAt: pendingOperation.cutoverCommittedAt,
           }] : [];
         });
       }
@@ -1799,6 +1801,7 @@ async function attemptClaimOrQueueOperation(
           nextAttemptAt: freshOperation.nextAttemptAt,
           input: freshOperation.input,
           customerMigrationV2: freshOperation.customerMigrationV2,
+          cutoverCommittedAt: freshOperation.cutoverCommittedAt,
         }, rolloutLanes),
         now: Date.now(),
         runningOpsSameKind: runningOpsSameKind.map((operation) => withOperationRolloutLane(operation, rolloutLanes)),
@@ -1967,6 +1970,16 @@ async function runClaimedOperation(
           throw new Error("scheduler handoff operation is no longer owned by this attempt");
         }
         txn.update(ref, { schedulerHandoff: state, lastProgressAt: Date.now() });
+      });
+    },
+    persistCutoverCommitted: async (at) => {
+      await deps.db.runTransaction(async (txn) => {
+        const fresh = await txn.get(ref);
+        const data = fresh.exists ? fresh.data() as Operation : null;
+        if (data?.status !== "running" || data.startedAt !== op.startedAt) {
+          throw new Error("cutover record operation is no longer owned by this attempt");
+        }
+        txn.update(ref, { cutoverCommittedAt: at, lastProgressAt: Date.now() });
       });
     },
     persistCustomerMigrationV2: async (state) => {

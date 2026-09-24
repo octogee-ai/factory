@@ -19,6 +19,7 @@ export interface OperationContext {
   reportStep: (step: OperationStep) => Promise<void> | void;
   persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
   persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
+  persistCutoverCommitted?: (at: number) => Promise<void>;
   cancellationRequested?: () => Promise<boolean>;
 }
 
