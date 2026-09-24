@@ -138,3 +138,18 @@ export async function setContainerPaused(engine: DockerEngine, name: string, pau
   const action = paused ? "pause" : "unpause";
   assertOk(await engine.request("POST", `/containers/${encodeURIComponent(name)}/${action}`), `${action} ${name}`);
 }
+
+export interface ImagePruneResult {
+  imagesDeleted: number;
+  spaceReclaimed: number;
+}
+
+export async function pruneUnusedImages(engine: DockerEngine): Promise<ImagePruneResult> {
+  const filters = encodeURIComponent(JSON.stringify({ dangling: ["false"] }));
+  const res = await engine.request<{ ImagesDeleted?: Array<{ Deleted?: string }> | null; SpaceReclaimed?: number }>("POST", `/images/prune?filters=${filters}`);
+  assertOk(res, "prune images");
+  return {
+    imagesDeleted: (res.body.ImagesDeleted ?? []).filter((entry) => entry.Deleted).length,
+    spaceReclaimed: res.body.SpaceReclaimed ?? 0,
+  };
+}

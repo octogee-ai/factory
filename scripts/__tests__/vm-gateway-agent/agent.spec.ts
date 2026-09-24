@@ -17,15 +17,18 @@ interface FakeDocker {
   engine: DockerEngine;
   containers: Map<string, { config: Record<string, unknown>; running: boolean; paused?: boolean }>;
   log: string[];
+  prune: { status: number; body: unknown };
 }
 
 function fakeDocker(log: string[] = []): FakeDocker {
   const containers = new Map<string, { config: Record<string, unknown>; running: boolean; paused?: boolean }>();
+  const fake = { prune: { status: 200, body: { ImagesDeleted: null, SpaceReclaimed: 0 } as unknown } };
   const name = (path: string) => decodeURIComponent(path.split("/")[2].split("?")[0]);
   const engine: DockerEngine = {
     async request(method, path, body) {
       log.push(`${method} ${path.split("?")[0]}`);
       if (path.startsWith("/images/create")) return { status: 200, body: '{"status":"ok"}' as never };
+      if (path.startsWith("/images/prune")) return { status: fake.prune.status, body: fake.prune.body as never };
       if (method === "GET" && path.endsWith("/json")) {
         const c = containers.get(name(path));
         return c
@@ -44,7 +47,7 @@ function fakeDocker(log: string[] = []): FakeDocker {
       throw new Error(`unexpected ${method} ${path}`);
     },
   };
-  return { engine, containers, log };
+  return Object.assign(fake, { engine, containers, log });
 }
 
 type Reply = { status: number; body: unknown };
@@ -222,6 +225,36 @@ describe("convergeOnce", () => {
     expect(docker.log.slice(before)).toContain("POST /containers/octogee-fix-perms/wait");
     expect(state.appliedVersion).toBe("v2");
     expect((docker.containers.get("octogee-gateway")?.config.Labels as Record<string, string>)["ai.octogee.bundle-version"]).toBe("v2");
+  });
+
+  it("reclaims images no container uses after applying a new bundle, and never while steady", async () => {
+    const docker = fakeDocker();
+    const clock = { now: 1_000 };
+    let bundle = bundleFixture();
+    const h = deps(docker, () => runtimeReply(bundle), clock);
+    const prunes = () => docker.log.filter((l) => l === "POST /images/prune");
+
+    let state = await convergeOnce(h.d, initialAgentState());
+    expect(prunes()).toHaveLength(1);
+    state = await convergeOnce(h.d, state);
+    expect(prunes()).toHaveLength(1);
+
+    docker.prune = { status: 200, body: { ImagesDeleted: [{ Untagged: "old" }, { Deleted: "sha256:old" }], SpaceReclaimed: 4_600_000_000 } };
+    const rolled = bundleFixture();
+    bundle = { ...rolled, version: "v2", containers: rolled.containers.map((c) => ({ ...c, image: c.image.replace("main.abc", "main.def") })) };
+    state = await convergeOnce(h.d, state);
+    expect(prunes()).toHaveLength(2);
+    expect(state.appliedVersion).toBe("v2");
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] reclaimed 4600000000 bytes from 1 unused image(s) after applying bundle v2");
+  });
+
+  it("logs a failed image reclaim without failing the applied bundle", async () => {
+    const docker = fakeDocker();
+    docker.prune = { status: 409, body: { message: "a prune operation is already running" } };
+    const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
+    const state = await convergeOnce(h.d, initialAgentState());
+    expect(state.appliedVersion).toBe("v1");
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] image reclaim after applying bundle v1 failed: prune images: HTTP 409 a prune operation is already running");
   });
 
   it("replaces only the container whose spec changed, leaving the other services and the init step untouched", async () => {
@@ -415,6 +448,22 @@ describe("convergeOnce", () => {
     await convergeOnce(h.d, next);
     expect([...docker.containers.values()].some((c) => c.paused)).toBe(false);
     expect(h.d.home.desktop.run).toHaveBeenLastCalledWith("thaw");
+  });
+
+  it("reports a due checkpoint it cannot take because the bundle carries no Builder home", async () => {
+    const docker = fakeDocker();
+    const clock = { now: 1_000 };
+    let signal = { requestedAt: null as number | null, completedAt: null as number | null };
+    const h = deps(docker, () => runtimeReply(bundleFixture(), signal), clock);
+    let state = await convergeOnce(h.d, initialAgentState());
+    state = await convergeOnce(h.d, state);
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped: bundle v1 carries no Builder home (data emptyDir + GATEWAY_BUILDER_SLUG)");
+    expect(state.homeCheckpointCheckedAt).toBe(1_000);
+    signal = { requestedAt: 1_500, completedAt: null };
+    clock.now = 2_000;
+    await convergeOnce(h.d, state);
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped (requested at 1500): bundle v1 carries no Builder home (data emptyDir + GATEWAY_BUILDER_SLUG)");
+    expect(calls(h.fetchImpl, "/upload")).toHaveLength(0);
   });
 
   it("logs a failed periodic checkpoint and keeps converging instead of throwing", async () => {

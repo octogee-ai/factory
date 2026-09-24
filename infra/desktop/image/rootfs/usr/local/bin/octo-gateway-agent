@@ -42,6 +42,9 @@ while :; do
 done
 echo "octo-gateway-agent: assigned to gateway $GATEWAY_ID"
 
+reclaimed="$(docker image prune --all --force | tail -n 1)"
+echo "octo-gateway-agent: reclaimed unused images before pulling: $reclaimed"
+
 REGISTRY="${GATEWAY_IMAGE%%/*}"
 meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
   | docker login -u oauth2accesstoken --password-stdin "$REGISTRY" >/dev/null

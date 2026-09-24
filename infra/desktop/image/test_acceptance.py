@@ -43,6 +43,9 @@ elif name == 'ssh':
         if 'octo-gateway-agent.service' in command:
             states.append('failed' if case == 'inactive-agent' else 'active')
         print(' '.join(states))
+    elif 'systemctl show octo-home-disk.service' in command:
+        if case == 'home-disk-unmounted': print('exit-code')
+        else: print('success\n/dev/sdb\n/dev/sdb[/desktop-home]')
     elif 'systemctl show octo-grow-root.service' in command: print('exit-code' if case == 'grow-root-failed' else 'success')
     elif 'systemctl show' in command: print(1 if case == 'desktop-restarted' else 0)
     elif '/health' in command: print(json.dumps({'clients': ['chromium']}))
@@ -117,6 +120,11 @@ class ImageAcceptanceTests(unittest.TestCase):
         result = self.run_acceptance('grow-root-failed')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('octo-grow-root did not succeed: exit-code', result.stderr)
+
+    def test_unmounted_home_disk_fails_acceptance(self):
+        result = self.run_acceptance('home-disk-unmounted')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('octo-home-disk did not mount the home disk: exit-code', result.stderr)
 
     def test_boot_that_requires_service_restart_fails_acceptance(self):
         result = self.run_acceptance('desktop-restarted')

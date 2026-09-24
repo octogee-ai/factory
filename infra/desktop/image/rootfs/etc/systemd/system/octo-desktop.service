@@ -1,8 +1,8 @@
 [Unit]
 Description=Octogee computer desktop session (Hyprland, wayvnc, noVNC, control API, Chromium)
-After=octo-seatd.service network-online.target user-runtime-dir@1000.service
+After=octo-seatd.service network-online.target user-runtime-dir@1000.service octo-home-disk.service
 Wants=octo-seatd.service network-online.target
-Requires=user-runtime-dir@1000.service
+Requires=user-runtime-dir@1000.service octo-home-disk.service
 
 [Service]
 User=octo

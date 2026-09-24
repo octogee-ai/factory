@@ -1,0 +1,14 @@
+[Unit]
+Description=Octogee Builder home disk at the gateway state root and the desktop user's home
+After=local-fs.target
+Before=docker.service octo-gateway-agent.service octo-desktop.service user@1000.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/octo-home-disk
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

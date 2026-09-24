@@ -14,7 +14,7 @@ const input: CreateGatewayVmInput = {
   zone: "us-west1-b",
   machineType: "n2-standard-4",
   imageFamily: "octogee-computer",
-  diskSizeGb: 40,
+  diskSizeGb: 40, homeDiskSizeGb: 20,
   provisioningModel: "SPOT",
   serviceAccountEmail: "octogee-gw-b-mama-3-abc-hobby@octogee-test.iam.gserviceaccount.com",
   subnetwork: "regions/us-west1/subnetworks/octogee-gateways",
@@ -74,6 +74,16 @@ describe("instanceInsertBody", () => {
     expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/family/octogee-computer");
     expect(body.disks[0].initializeParams.diskSizeGb).toBe("40");
     expect(body.disks[0].autoDelete).toBe(true);
+    expect(body.disks[1]).toEqual({
+      boot: false,
+      autoDelete: true,
+      deviceName: "octogee-home",
+      initializeParams: {
+        diskName: `${input.instanceName}-home`,
+        diskSizeGb: "20",
+        diskType: "zones/us-west1-b/diskTypes/pd-ssd",
+      },
+    });
     expect(body.networkInterfaces).toEqual([{ subnetwork: input.subnetwork }]);
     expect(body.serviceAccounts).toEqual([
       {
@@ -516,7 +526,7 @@ describe("createGatewayVmClient — multi-zone spot fallback", () => {
     fallbackZones: ["us-central1-b", "us-central1-c"],
     machineType: "n2-standard-4",
     imageFamily: "octogee-computer",
-    diskSizeGb: 40,
+    diskSizeGb: 40, homeDiskSizeGb: 20,
     provisioningModel: "SPOT" as const,
     serviceAccountEmail: "computer@octogee.iam.gserviceaccount.com",
     subnetwork: "regions/us-central1/subnetworks/default",

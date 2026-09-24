@@ -79,6 +79,7 @@ export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
     throw new Error("GATEWAY_VM_SPEC_JSON.imageProject must be a non-empty string when set");
   }
   if (typeof spec.diskSizeGb !== "number" || spec.diskSizeGb <= 0) throw new Error("GATEWAY_VM_SPEC_JSON.diskSizeGb must be a positive number");
+  if (typeof spec.homeDiskSizeGb !== "number" || spec.homeDiskSizeGb <= 0) throw new Error("GATEWAY_VM_SPEC_JSON.homeDiskSizeGb must be a positive number");
   if (spec.provisioningModel !== "SPOT" && spec.provisioningModel !== "STANDARD") {
     throw new Error("GATEWAY_VM_SPEC_JSON.provisioningModel must be SPOT or STANDARD");
   }

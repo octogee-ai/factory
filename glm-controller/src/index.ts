@@ -317,6 +317,7 @@ import {
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
 import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
+import { FinalHomeCheckpointPendingError } from "./vm-computer-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -1114,6 +1115,7 @@ export async function runGatewayConvergencePass(
     try {
       await convergeOneGateway(passDeps, gateway, instances, runtimeById);
     } catch (err) {
+      if (err instanceof FinalHomeCheckpointPendingError) continue;
       const message = err instanceof Error ? err.message : String(err);
       failures.push(`${gateway.gatewayId}: ${message}`);
       log(`[converge-gateway] ⚠ ${gateway.gatewayId}: ${message}`);

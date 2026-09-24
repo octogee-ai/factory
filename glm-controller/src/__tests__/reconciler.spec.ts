@@ -8,6 +8,7 @@ import {
   snapshotHasReconcileRelevantRootChange,
   startReconciler,
 } from "../index";
+import { FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -607,6 +608,39 @@ describe("targeted durable state reads", () => {
 
     await runGatewayConvergencePass(passDeps);
     expect(scanned).toEqual(["gateways", "glmGateways"]);
+  });
+});
+
+describe("gateway convergence pass outcomes", () => {
+  it("waits out a pending final home checkpoint quietly while still failing the pass for real errors", async () => {
+    const removeInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+      if (gatewayId === "parking") throw new FinalHomeCheckpointPendingError("computer c is taking its final home checkpoint (requested at 1); parking on a later converge");
+      throw new Error("compute API unavailable");
+    });
+    const log = vi.fn();
+    const passDeps = (roots: Record<string, Record<string, unknown>>) => ({
+      db: makeDb({ roots, runtimes: {}, callbacks: {} }) as never,
+      helm: {
+        removeInstance,
+        readDeployedInstances: vi.fn(async () => Object.fromEntries(Object.keys(roots).map((gatewayId) => [gatewayId, { enabled: true, image: { repository: "repo", tag: "abc1234" }, gatewayId }]))),
+      } as never,
+      kubeOps: {} as never,
+      chartFingerprint: "chart",
+      prepareGatewayConfig: vi.fn(async (config) => config),
+      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })),
+      log,
+    });
+
+    await runGatewayConvergencePass(passDeps({ parking: durableRoot({ gatewayId: "parking", desiredStatus: "retired" }) }));
+    expect(removeInstance).toHaveBeenCalledWith({ namespace: expect.any(String), gatewayId: "parking" });
+    expect(log.mock.calls.flat().filter((line) => String(line).includes("⚠"))).toEqual([]);
+
+    await expect(runGatewayConvergencePass(passDeps({
+      parking: durableRoot({ gatewayId: "parking", desiredStatus: "retired" }),
+      broken: durableRoot({ gatewayId: "broken", desiredStatus: "retired" }),
+    }))).rejects.toThrow("(source=converge-gateway) broken: compute API unavailable");
+    expect(log).toHaveBeenCalledWith("[converge-gateway] ⚠ broken: compute API unavailable");
+    expect(log.mock.calls.flat().filter((line) => String(line).includes("⚠ parking"))).toEqual([]);
   });
 });
 

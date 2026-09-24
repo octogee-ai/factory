@@ -13,7 +13,7 @@ import {
   stampGatewayRuntime,
   vmRoutesFromDocs,
 } from "../vm-gateway-runtime";
-import { builderComputerInstanceInput } from "../vm-computer-lifecycle";
+import { FinalHomeCheckpointPendingError, builderComputerInstanceInput } from "../vm-computer-lifecycle";
 import { reconcileVmWarmPool } from "../vm-warm-pool";
 
 const renderedYaml = "kind: Deployment\n";
@@ -21,7 +21,7 @@ const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", i
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
 
 const spec: GatewayVmSpec = {
-  zone: "us-west1-b", machineType: "n2-standard-4", imageFamily: "octogee-computer", diskSizeGb: 40,
+  zone: "us-west1-b", machineType: "n2-standard-4", imageFamily: "octogee-computer", diskSizeGb: 40, homeDiskSizeGb: 20,
   provisioningModel: "SPOT", serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com",
   subnetwork: "regions/us-west1/subnetworks/octogee-west-gke",
 };
@@ -719,8 +719,9 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
       describe: vi.fn(async () => running),
     }, "172.20.7.7", {}, { clock: { now: 200_000 } });
 
-    await expect(h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" })).rejects.toThrow(/final home checkpoint/);
+    await expect(h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" })).rejects.toBeInstanceOf(FinalHomeCheckpointPendingError);
     expect(readPath(h.docs["glmGateways/b-x"], "vmHome")).toEqual({ checkpointRequestedAt: 200_000, parkRequestedAt: 200_000, lastCheckpoint: { completedAt: 90_000 } });
+    expect(h.log).toHaveBeenCalledWith("[vm-gateway-runtime] b-x: requested the final home checkpoint of octogee-computer-test-uida before parking; waiting up to 60000ms");
 
     h.clock.now = 230_000;
     await expect(h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" })).rejects.toThrow(/final home checkpoint/);
@@ -929,6 +930,7 @@ describe("runtime policy and stamping", () => {
     expect(parseGatewayVmSpec(JSON.stringify(spec))).toEqual(spec);
     expect(() => parseGatewayVmSpec(undefined)).toThrow(/required/);
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, diskSizeGb: "40" }))).toThrow(/diskSizeGb/);
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, homeDiskSizeGb: undefined }))).toThrow("GATEWAY_VM_SPEC_JSON.homeDiskSizeGb must be a positive number");
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, provisioningModel: "PREEMPTIBLE" }))).toThrow(/provisioningModel/);
   });
 

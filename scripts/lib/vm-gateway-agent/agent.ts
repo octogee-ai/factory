@@ -9,6 +9,7 @@ import { brokerFailure, brokerPost } from "./broker.js";
 import {
   createContainer,
   inspectContainer,
+  pruneUnusedImages,
   pullImage,
   removeContainer,
   startContainer,
@@ -238,11 +239,15 @@ export async function checkpointHomeIfDue(
   signal: HomeCheckpointSignal,
   state: VmAgentState,
 ): Promise<VmAgentState> {
-  const scope = homeScope(deps.stateRoot, bundle);
-  if (!scope) return state;
   const now = deps.now();
   const { due, force } = homeCheckpointDue(state, signal, now);
   if (!due) return state;
+  const scope = homeScope(deps.stateRoot, bundle);
+  if (!scope) {
+    const requested = force ? ` (requested at ${signal.requestedAt})` : "";
+    deps.log(`[vm-agent] home checkpoint skipped${requested}: bundle ${bundle.version} carries no Builder home (data emptyDir + GATEWAY_BUILDER_SLUG)`);
+    return { ...state, homeCheckpointCheckedAt: now };
+  }
   try {
     const result = await checkpointHome(homeDeps(deps, bundle, force), scope, { force, requestedAt: signal.requestedAt });
     if (result.status === "uploaded") {
@@ -313,6 +318,16 @@ async function applyDecision(
   deps.log(`[vm-agent] converging to bundle ${bundle.version} (running: ${runningVersions}; ${action})`);
   if (decision.kind === "full") await applyBundle(deps, bundle, plan);
   else await applyServices(deps, bundle, decision.services);
+  await reclaimUnusedImages(deps, bundle);
+}
+
+async function reclaimUnusedImages(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
+  try {
+    const { imagesDeleted, spaceReclaimed } = await pruneUnusedImages(deps.engine);
+    deps.log(`[vm-agent] reclaimed ${spaceReclaimed} bytes from ${imagesDeleted} unused image(s) after applying bundle ${bundle.version}`);
+  } catch (err) {
+    deps.log(`[vm-agent] image reclaim after applying bundle ${bundle.version} failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export function decideConvergence(plan: BundlePlan, running: ContainerInspection[]): ConvergenceDecision {

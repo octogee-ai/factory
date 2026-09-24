@@ -1,7 +1,8 @@
 [Unit]
 Description=Octogee gateway registration agent
 Wants=network-online.target docker.service octo-desktop-lifecycle.service
-After=network-online.target docker.service octo-desktop-lifecycle.service
+Requires=octo-home-disk.service
+After=network-online.target docker.service octo-desktop-lifecycle.service octo-home-disk.service
 
 [Service]
 Type=simple

@@ -128,6 +128,13 @@ function parkedCheckpointFrom(home: Partial<GatewayVmHomeState> | undefined): Ga
   return { outcome: fresh ? "fresh" : "stale", requestedAt, completedAt };
 }
 
+export class FinalHomeCheckpointPendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FinalHomeCheckpointPendingError";
+  }
+}
+
 function staleAtBound(
   deps: ComputerLifecycleDeps,
   gatewayId: string,
@@ -152,7 +159,7 @@ async function finalHomeCheckpoint(
   if (requestedAt === null) {
     requestedAt = deps.now();
     await recordVmObservation(deps, gatewayId, { vmHome: { checkpointRequestedAt: requestedAt, parkRequestedAt: requestedAt } }, "park request");
-    deps.log(`[vm-gateway-runtime] ${gatewayId}: requested the final home checkpoint of ${description.name} before parking`);
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: requested the final home checkpoint of ${description.name} before parking; waiting up to ${timeoutMs}ms`);
   }
   const completedAt = homeCheckpointCompletedAt(home);
   if (completedAt !== null && !homeCheckpointOutstanding({ ...home, checkpointRequestedAt: requestedAt })) return { outcome: "fresh", requestedAt, completedAt };
@@ -171,7 +178,7 @@ async function finalHomeCheckpoint(
     return staleAtBound(deps, gatewayId, description, requestedAt, await readHomeCheckpointCompletedAt(deps.db, gatewayId));
   }
   if (deps.now() - requestedAt >= timeoutMs) return staleAtBound(deps, gatewayId, description, requestedAt, completedAt);
-  throw new Error(`computer ${description.name} is taking its final home checkpoint (requested at ${requestedAt}); parking on a later converge`);
+  throw new FinalHomeCheckpointPendingError(`computer ${description.name} is taking its final home checkpoint (requested at ${requestedAt}); parking on a later converge`);
 }
 
 function nonEmptyString(value: unknown): string | null {

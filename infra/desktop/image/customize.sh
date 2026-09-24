@@ -43,7 +43,7 @@ log "desktop session files"
 cp -R --no-preserve=all "$HERE/desktop-rootfs/." /
 cp -R --no-preserve=all "$HERE/rootfs/." /
 chown -R root:root /usr/local/bin/octo-shims /usr/share/omarchy/octo-desktop /etc/systemd/system/octo-*.service /etc/systemd/system/octo-*.timer /etc/systemd/logind.conf.d/octo-desktop.conf /etc/modules-load.d/octo-desktop.conf /etc/sudoers.d/octo-desktop /usr/local/bin/octo-desktop-* /usr/local/bin/octo-metadata-ssh-keys
-chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys /usr/local/bin/octo-gateway-agent /usr/local/bin/octo-gateway-firewall /usr/local/bin/octo-grow-root
+chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys /usr/local/bin/octo-gateway-agent /usr/local/bin/octo-gateway-firewall /usr/local/bin/octo-grow-root /usr/local/bin/octo-home-disk
 chmod 0440 /etc/sudoers.d/octo-desktop
 rm -f /etc/sudoers.d/zz-octo-nopasswd
 visudo -cf /etc/sudoers.d/octo-desktop >/dev/null
@@ -54,7 +54,7 @@ grep -q '^timeout: 0' /boot/limine.conf || printf 'timeout: 0\n' >> /boot/limine
 sed -i -E '/^[[:space:]]*cmdline:/ { s/ resume=[^ ]+ resume_offset=[0-9]+//; s/ quiet splash loglevel=0 systemd\.show_status=false rd\.udev\.log_level=0 vt\.global_cursor_default=0//; /console=ttyS0/! s/$/ console=tty0 console=ttyS0,115200n8 loglevel=4/ }' /boot/limine.conf
 systemctl unmask NetworkManager-wait-online.service
 loginctl enable-linger octo
-systemctl enable octo-grow-root.service octo-seatd.service octo-desktop.service octo-desktop-lifecycle.service octo-metadata-ssh-keys.timer octo-gateway-agent.service sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
+systemctl enable octo-grow-root.service octo-home-disk.service octo-seatd.service octo-desktop.service octo-desktop-lifecycle.service octo-metadata-ssh-keys.timer octo-gateway-agent.service sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
 systemctl disable sddm.service
 systemctl mask sddm.service
 systemctl disable --now cups.service cups.path avahi-daemon.service bluetooth.service >/dev/null 2>&1 || true

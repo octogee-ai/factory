@@ -88,6 +88,7 @@ export interface GatewayVmSpec {
   imageFamily: string;
   imageProject?: string;
   diskSizeGb: number;
+  homeDiskSizeGb: number;
   provisioningModel: GatewayVmProvisioningModel;
   serviceAccountEmail: string;
   subnetwork: string;

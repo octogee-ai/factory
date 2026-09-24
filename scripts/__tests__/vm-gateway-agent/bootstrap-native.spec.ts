@@ -20,6 +20,7 @@ elif command == 'ufw':
 elif command == 'docker':
     with (root/'events').open('a') as out: out.write(json.dumps(args)+'\\n')
     if args[0] == 'login': sys.stdin.read()
+    if args[:2] == ['image', 'prune']: print('Total reclaimed space: 38.2GB')
     if args[0] == 'run':
         while not (root/'stopped').exists(): time.sleep(0.02)
     if args[0] == 'stop': (root/'stopped').touch()
@@ -56,6 +57,10 @@ describe("native VM bootstrap supervision", () => {
       expect(events.filter((args) => args[0] === "stop")).toEqual([["stop", "--time", "20", "octo-gateway-agent"]]);
       expect(events.find((args) => args[0] === "run")).toContain(`/home/octo:${root}/state/desktop-home`);
       expect(events.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "octo-gateway-agent"]]);
+      const dockerVerbs = events.filter((args) => args[0] !== "ufw").map((args) => args.slice(0, 2).join(" "));
+      expect(dockerVerbs.slice(0, 3)).toEqual(["image prune", "login -u", "pull -q"]);
+      expect(events.find((args) => args[0] === "image")).toEqual(["image", "prune", "--all", "--force"]);
+      expect(output).toContain("octo-gateway-agent: reclaimed unused images before pulling: Total reclaimed space: 38.2GB");
     } finally {
       clearTimeout(timer);
       if (child.exitCode === null) child.kill("SIGTERM");

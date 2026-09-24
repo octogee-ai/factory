@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEVICE="${OCTO_HOME_DEVICE:-/dev/disk/by-id/scsi-0Google_PersistentDisk_octogee-home}"
+STATE_ROOT="${OCTO_VM_STATE_ROOT:-/srv/octogee}"
+USER_HOME="${OCTO_USER_HOME:-/home/octo}"
+WAIT_SECONDS="${OCTO_HOME_DEVICE_WAIT_SECONDS:-60}"
+
+for _ in $(seq 1 "$WAIT_SECONDS"); do
+  [ -e "$DEVICE" ] && break
+  sleep 1
+done
+if [ ! -e "$DEVICE" ]; then
+  echo "octo-home-disk: $DEVICE is not attached; the Builder home stays unmounted rather than landing on the boot disk" >&2
+  exit 1
+fi
+
+set +e
+fstype="$(blkid -p -s TYPE -o value "$DEVICE")"
+probe=$?
+set -e
+case "$probe" in
+  0)
+    if [ "$fstype" != btrfs ]; then
+      echo "octo-home-disk: $DEVICE holds $fstype, not btrfs; refusing to mount or format it" >&2
+      exit 1
+    fi
+    ;;
+  2)
+    echo "octo-home-disk: formatting blank $DEVICE as btrfs"
+    mkfs.btrfs -q -L octogee-home "$DEVICE"
+    ;;
+  *)
+    echo "octo-home-disk: blkid could not probe $DEVICE (exit $probe)" >&2
+    exit 1
+    ;;
+esac
+
+install -d -m 0755 "$STATE_ROOT"
+mountpoint -q "$STATE_ROOT" || mount -o noatime "$DEVICE" "$STATE_ROOT"
+btrfs filesystem resize max "$STATE_ROOT"
+
+if [ ! -d "$STATE_ROOT/desktop-home" ]; then
+  echo "octo-home-disk: seeding $STATE_ROOT/desktop-home from the image's $USER_HOME"
+  rm -rf "$STATE_ROOT/desktop-home.seed"
+  cp -a "$USER_HOME/." "$STATE_ROOT/desktop-home.seed"
+  mv "$STATE_ROOT/desktop-home.seed" "$STATE_ROOT/desktop-home"
+fi
+mountpoint -q "$USER_HOME" || mount --bind "$STATE_ROOT/desktop-home" "$USER_HOME"
+echo "octo-home-disk: $DEVICE mounted at $STATE_ROOT; $USER_HOME bound to $STATE_ROOT/desktop-home"

@@ -71,6 +71,7 @@ and take over the desktop.
 
 | Unit | Role |
 | --- | --- |
+| `octo-home-disk.service` | oneshot before Docker, the agent, and the desktop: mounts the attached `octogee-home` pd-ssd (formatting it btrfs only when blank) at `/srv/octogee` and binds `/home/octo` from its `desktop-home`, so the Builder home (gateway data, desktop profile, Documents, checkpoint staging) lives on its own quota-sized disk and image churn on the boot disk cannot fill it; refuses to start the agent or desktop when the disk is missing or holds another filesystem |
 | `octo-grow-root.service` | oneshot before Docker and the agent: grows the root partition (`sfdisk` + `partx`) and the btrfs filesystem to fill the boot disk, so `gcloud compute disks resize` plus a reboot recovers a full computer; a no-op when the partition already fills the disk |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
 | `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |

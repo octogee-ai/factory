@@ -129,7 +129,9 @@ async function deleteKubeResource(
       }`,
     );
   }
-  deps.log(`[kube-ops] deleted ${resource}/${opts.name} ns=${opts.namespace}`);
+  deps.log(result.stdout.trim()
+    ? `[kube-ops] deleted ${resource}/${opts.name} ns=${opts.namespace}`
+    : `[kube-ops] ${resource}/${opts.name} ns=${opts.namespace} already absent`);
 }
 
 const NOT_FOUND_PATTERN = /\(NotFound\)/;

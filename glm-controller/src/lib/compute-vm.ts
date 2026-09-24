@@ -21,6 +21,7 @@ export interface CreateGatewayVmInput {
   imageFamily: string;
   imageProject?: string;
   diskSizeGb: number;
+  homeDiskSizeGb: number;
   provisioningModel: GatewayVmProvisioningModel;
   fallbackZones?: readonly string[];
   serviceAccountEmail: string;
@@ -254,6 +255,8 @@ async function placeAcrossZones(
   };
 }
 
+export const COMPUTER_HOME_DISK_DEVICE_NAME = "octogee-home";
+
 export const GATEWAY_VM_ACCESS_SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -276,6 +279,16 @@ export function instanceInsertBody(projectId: string, input: CreateGatewayVmInpu
         initializeParams: {
           sourceImage: `projects/${input.imageProject ?? projectId}/global/images/family/${input.imageFamily}`,
           diskSizeGb: String(input.diskSizeGb),
+          diskType: `zones/${input.zone}/diskTypes/pd-ssd`,
+        },
+      },
+      {
+        boot: false,
+        autoDelete: true,
+        deviceName: COMPUTER_HOME_DISK_DEVICE_NAME,
+        initializeParams: {
+          diskName: `${input.instanceName}-home`,
+          diskSizeGb: String(input.homeDiskSizeGb),
           diskType: `zones/${input.zone}/diskTypes/pd-ssd`,
         },
       },

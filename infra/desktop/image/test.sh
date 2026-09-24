@@ -91,6 +91,7 @@ image_args=(--image-family "$FAMILY" --image-project "$PROJECT")
 t_create=$(date +%s)
 create_instance_in_first_available_zone "$NAME" --project "$PROJECT" --machine-type "$MACHINE" \
   "${image_args[@]}" --boot-disk-type pd-ssd \
+  --create-disk=device-name=octogee-home,size=30GB,type=pd-ssd,auto-delete=yes \
   --metadata-from-file ssh-keys="$work/ssh-keys" \
   --labels "purpose=octogee-computer-test,octogee-image-run=${run_label}" "${service_account_args[@]}" "${ci_lifetime_args[@]}"
 IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
@@ -106,6 +107,8 @@ units="$(vssh 'systemctl is-active octo-seatd.service octo-desktop.service docke
 [[ "$modules" == 2 ]] || { echo "required DRM modules missing: ${modules}/2 loaded" >&2; exit 1; }
 read -r -a unit_states <<< "$units"
 [[ "${unit_states[*]}" == 'active active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
+home_disk="$(vssh 'systemctl show octo-home-disk.service --property=Result --value; findmnt -no SOURCE /srv/octogee; findmnt -no SOURCE /home/octo')"
+[[ "$home_disk" == success*"/dev/"*"[/desktop-home]"* ]] || { echo "octo-home-disk did not mount the home disk: $home_disk" >&2; vssh 'journalctl -u octo-home-disk --no-pager | tail -20' >&2 || true; exit 1; }
 grow_root="$(vssh 'systemctl show octo-grow-root.service --property=Result --value')"
 [[ "$grow_root" == success ]] || { echo "octo-grow-root did not succeed: $grow_root" >&2; vssh 'journalctl -u octo-grow-root --no-pager | tail -20' >&2 || true; exit 1; }
 wait_desktop

@@ -753,6 +753,23 @@ describe("createKubeSubprocessRunner — deletePersistentVolumeClaim", () => {
     ]);
   });
 
+  it("reports a PVC that was never allocated as absent, not deleted", async () => {
+    const log = vi.fn();
+    const { runKubectl } = mockSubprocess([
+      { stdout: "persistentvolumeclaim/octogee-gateway-bender-data deleted\n" },
+      { stdout: "" },
+    ]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log });
+
+    await kube.deletePersistentVolumeClaim({ namespace: "octogee-test", name: "octogee-gateway-bender-data" });
+    await kube.deletePersistentVolumeClaim({ namespace: "octogee-test", name: "octogee-gateway-sep092-s-77f99da1-data" });
+
+    expect(log.mock.calls.flat()).toEqual([
+      "[kube-ops] deleted pvc/octogee-gateway-bender-data ns=octogee-test",
+      "[kube-ops] pvc/octogee-gateway-sep092-s-77f99da1-data ns=octogee-test already absent",
+    ]);
+  });
+
   it("throws on kubectl delete PVC failures", async () => {
     const { runKubectl } = mockSubprocess([
       { stderr: "Error from server (Forbidden): denied", code: 1 },
