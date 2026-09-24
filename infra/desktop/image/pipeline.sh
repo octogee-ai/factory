@@ -19,9 +19,26 @@ OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 OVMF_VARS="$WORK/OVMF_VARS.fd"
 PIDFILE="$WORK/qemu.pid"
 BUILD_KEY="$WORK/build_key"
+MONITOR="$WORK/monitor.sock"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) [pipeline]" "$*"; }
-die() { log "ERROR: $*"; exit 1; }
+die() { log "ERROR: $*"; capture_failure_evidence; exit 1; }
+capture_failure_evidence() {
+  [[ "$guest_started" == 1 ]] || return 0
+  if qemu_running && [[ -S "$MONITOR" ]]; then
+    rm -f "$WORK/screen.ppm"
+    printf 'screendump %s\n' "$WORK/screen.ppm" | socat -t 5 - "UNIX-CONNECT:$MONITOR" >/dev/null 2>&1 || log "screendump failed"
+  fi
+  local file
+  for file in screen.ppm serial.log; do
+    [[ -s "$WORK/$file" ]] || continue
+    if gcloud -q storage cp "$WORK/$file" "${IMAGE_BUCKET}/images/${IMAGE_NAME}.failed.${file}" >/dev/null 2>&1; then
+      log "failure evidence: ${IMAGE_BUCKET}/images/${IMAGE_NAME}.failed.${file}"
+    else
+      log "could not upload failure evidence $WORK/$file"
+    fi
+  done
+}
 guest_ssh() {
   ssh -i "$BUILD_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR -o ConnectTimeout=5 "octo@127.0.0.1" "$@"
@@ -61,12 +78,13 @@ wait_guest_down() {
   return 1
 }
 
+guest_started=0
 mkdir -p "$WORK"
 trap qemu_stop EXIT
 
 log "deps"
 sudo apt-get update -qq >/dev/null
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq qemu-system-x86 qemu-utils ovmf genisoimage jq >/dev/null
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq qemu-system-x86 qemu-utils ovmf genisoimage jq socat >/dev/null
 [[ -c /dev/kvm ]] || die "/dev/kvm missing; the builder must have nested virtualization enabled"
 [[ -r /dev/kvm && -w /dev/kvm ]] || sudo chmod 0666 /dev/kvm
 
@@ -93,9 +111,10 @@ printf 'computer@octogee.com\n' > "$cidata/user_email_address.txt"
 genisoimage -quiet -output "$WORK/cidata.iso" -volid cidata -joliet -rock "$cidata/"
 
 log "unattended install"
-rm -f "$DISK" "$OVMF_VARS" "$WORK/serial.log"
+rm -f "$DISK" "$OVMF_VARS" "$WORK/serial.log" "$WORK/screen.ppm" "$MONITOR"
 qemu-img create -q -f raw "$DISK" "${DISK_GB}G"
 cp "$OVMF_VARS_SRC" "$OVMF_VARS"
+guest_started=1
 qemu-system-x86_64 \
   -cpu host -enable-kvm -machine q35,accel=kvm -smp "$VM_CPUS" -m "$VM_MEM_MB" \
   -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
@@ -105,6 +124,7 @@ qemu-system-x86_64 \
   -drive "file=$WORK/cidata.iso,media=cdrom,if=none,format=raw,id=cdrom1" -device ide-cd,drive=cdrom1,bus=ide.1 \
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22" -device virtio-net-pci,netdev=net0 \
   -device virtio-vga -display none -serial "file:$WORK/serial.log" \
+  -monitor "unix:$MONITOR,server,nowait" \
   -pidfile "$PIDFILE" -daemonize -boot menu=off
 wait_installed_guest 2400
 log "guest up: $(guest_ssh 'cat /etc/os-release | grep PRETTY_NAME; uname -r' | tr '\n' ' ')"

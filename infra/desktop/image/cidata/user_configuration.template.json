@@ -49,7 +49,7 @@
     ]
   },
   "hostname": "octogee-computer",
-  "kernels": ["linux"],
+  "kernels": ["linux-omarchy"],
   "network_config": { "type": "iso" },
   "ntp": true,
   "parallel_downloads": 8,
