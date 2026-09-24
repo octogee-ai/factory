@@ -54,10 +54,6 @@ export async function migrateCustomerScheduler(
 
 const HELD_FOR_MIGRATION = /is held for migration ([^\s"}]+)/u;
 
-// A failed earlier attempt can leave the agents fenced by its own id (the
-// kernel refuses a new hold while that fence is held or exported). Resume that
-// id first — the kernel releases a held/exported fence on resume and refuses
-// anything else, so a live staged handoff can never be taken over this way.
 async function holdReleasingStaleFence(
   rpc: Pick<GatewayRpcClient, "schedulerMigration">,
   request: SchedulerMigrationRequest & { agentIds: string[] },

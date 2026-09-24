@@ -258,9 +258,6 @@ async function confirmRelease(deps, name, release) {
     await report(deps, { name, status: "failed", error: lastError });
     return lastError;
 }
-// The source was closed by the quiesce (scheduler hold, then ingress stop), so
-// a pre-cutover rollback must reopen both and prove it: each release is retried,
-// and one that never confirms is named in the failure rather than left held.
 async function releaseSource(state, deps, migrationId, transports) {
     const unreleased = [];
     if (transports.crossGateway) {

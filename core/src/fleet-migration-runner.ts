@@ -431,9 +431,6 @@ async function confirmRelease(
   return lastError;
 }
 
-// The source was closed by the quiesce (scheduler hold, then ingress stop), so
-// a pre-cutover rollback must reopen both and prove it: each release is retried,
-// and one that never confirms is named in the failure rather than left held.
 async function releaseSource(
   state: MigrationState,
   deps: MigrationRunnerDeps,

@@ -538,8 +538,6 @@ async function resolveMigrationTargets(
   };
 }
 
-// Recording the durable cutover releases the serial gateway lock; a failed
-// record keeps the lock held and never fails a migration that already landed.
 async function recordCutoverCommitted(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,

@@ -820,9 +820,6 @@ export interface Operation {
   output?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
   schedulerHandoff?: SchedulerHandoffState;
-  // Set once a migrate-customer op has durably moved ownership to its target.
-  // From then on the op only cleans up the source, so it no longer holds the
-  // serial gateway lock; it also must never start a fresh migration.
   cutoverCommittedAt?: number;
 }
 
