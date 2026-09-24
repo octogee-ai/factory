@@ -40,6 +40,8 @@ export interface MigrationClientDeps {
   log?: (msg: string) => void;
 
   timeouts?: MigrationClientTimeouts;
+
+  transferState: MigrationClient["transferState"];
 }
 
 // `gatewayId` is the TENANT path id — bare, put in the in-pod URL path and
@@ -337,54 +339,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async transferState({
-      migrationId,
-      fromGatewayId,
-      toGatewayId,
-      fromTransportId,
-      toTransportId,
-      slug,
-      mode,
-      includeActivationManifest,
-      projectCheckoutScope,
-    }) {
-      const targetUrl = deps.resolveGatewayUrl(toTransportId ?? toGatewayId);
-      const targetImportSignature = signFleetRequest(
-        deps.privateKey,
-        gatewayScopedJobId(migrationId, toGatewayId),
-        slug,
-      );
-      const parsed = await postSignedJson<ImportResponse>({
-        transportId: fromTransportId ?? fromGatewayId,
-        path: `/push-state/${fromGatewayId}`,
-        gatewayId: fromGatewayId,
-        migrationId,
-        body: {
-          migrationId,
-          slug,
-          targetGatewayId: toGatewayId,
-          targetUrl,
-          targetImportSignature,
-          ...(mode ? { mode } : {}),
-          ...(includeActivationManifest ? { includeActivationManifest: true } : {}),
-          ...(projectCheckoutScope ? { projectCheckoutScope } : {}),
-        },
-        timeoutMs: transferMs,
-      });
-      log(
-        `[migration-client] ✅ transferState mode=${mode ?? "default"} migrationId=${migrationId} slug=${slug} ${fromGatewayId} → ${toGatewayId}`,
-      );
-      // The target kept an import it could not finish verifying. Nothing retries
-      // it — the reconcile converges the rest — so this line is the only place
-      // the unconfirmed step is named.
-      if (parsed.verificationPending) {
-        log(
-          `[migration-client] ⚠ migrationId=${migrationId} slug=${slug} imported with ` +
-          `verification pending: ${parsed.verificationPending}`,
-        );
-      }
-      return parsed;
-    },
+    transferState: deps.transferState,
 
     async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
       const requestTimeoutMs =
@@ -427,7 +382,7 @@ async function migrationRpcError(path: string, response: Response): Promise<Migr
 }
 
 export async function reportMigrationProgress(
-  deps: MigrationClientDeps,
+  deps: Pick<MigrationClientDeps, "privateKey" | "resolveGatewayUrl" | "fetch">,
   gatewayId: string,
   body: MigrationProgressRequestBody,
 ): Promise<void> {

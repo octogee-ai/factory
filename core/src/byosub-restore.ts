@@ -409,6 +409,8 @@ function resetPersistedSessions(
   return resetCount;
 }
 
+const SESSION_SCRUB_BUSY_TIMEOUT_MS = 30_000;
+
 function scrubUnsafeSqliteSessions(
   openclawDir: string,
   agentId: string,
@@ -420,6 +422,7 @@ function scrubUnsafeSqliteSessions(
   if (!fs.existsSync(dbPath)) return 0;
   const db = new DatabaseSync(dbPath);
   try {
+    db.exec(`PRAGMA busy_timeout = ${SESSION_SCRUB_BUSY_TIMEOUT_MS};`);
     const table = db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'",
     ).get();

@@ -21,6 +21,16 @@ function temporaryOpenClawDir(): string {
   return directory;
 }
 
+function procRootHolding(files: readonly string[]): string {
+  const procRoot = fs.mkdtempSync(path.join(os.tmpdir(), "recovered-runtime-proc-"));
+  temporaryDirectories.push(procRoot);
+  files.forEach((file, index) => {
+    fs.mkdirSync(path.join(procRoot, "92", "fd"), { recursive: true });
+    fs.symlinkSync(file, path.join(procRoot, "92", "fd", String(40 + index)));
+  });
+  return procRoot;
+}
+
 function stateDatabase(openclawDir: string): DatabaseSync {
   const database = new DatabaseSync(path.join(openclawDir, "state", "openclaw.sqlite"));
   database.exec(`
@@ -154,6 +164,7 @@ describe("recovered customer runtime reset", () => {
       uid: "uid-ceckert",
       slug: "ceckert-test",
       agentIds: customerIds,
+      procRoot: procRootHolding([agentDatabasePath(openclawDir, peers[0]!)]),
     });
 
     expect(result.removedAgentRegistrations).toEqual([...customerIds].sort());
@@ -213,8 +224,31 @@ describe("recovered customer runtime reset", () => {
       uid: "uid-ceckert",
       slug: "ceckert-test",
       agentIds: [agentId],
+      procRoot: procRootHolding([]),
     })).toThrow(/actively leased/u);
     expect(fs.existsSync(agentDatabasePath(openclawDir, agentId))).toBe(true);
+  });
+
+  it("refuses to reset a store a process still holds open, before changing state", () => {
+    const openclawDir = temporaryOpenClawDir();
+    const state = stateDatabase(openclawDir);
+    const agentId = "octogee-ceckert-test-coach";
+    createAgentDatabase(openclawDir, agentId, "empty");
+    registerAgent(state, openclawDir, agentId);
+    state.close();
+    const shm = `${agentDatabasePath(openclawDir, agentId)}-shm`;
+
+    expect(() => resetRecoveredCustomerRuntime({
+      openclawDir,
+      uid: "uid-ceckert",
+      slug: "ceckert-test",
+      agentIds: [agentId],
+      procRoot: procRootHolding([`${shm} (deleted)`]),
+    })).toThrow(`agent database files are still held open: ${shm}`);
+    expect(fs.existsSync(agentDatabasePath(openclawDir, agentId))).toBe(true);
+    const observed = new DatabaseSync(path.join(openclawDir, "state", "openclaw.sqlite"), { readOnly: true });
+    expect(observed.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([{ agent_id: agentId }]);
+    observed.close();
   });
 
   it("rejects a foreign peer agent id before changing local state", () => {

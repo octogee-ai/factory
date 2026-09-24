@@ -1,6 +1,5 @@
 
 
-import { SQLITE_CARRY_EXCLUDE_ARGS } from "../lib/agent-store-carry.js";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { pendingCloneAppliedFingerprint } from "../lib/pending-clone-fingerprint";
 import type { Request, Response } from "express";
@@ -17,15 +16,12 @@ import {
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
   createCompleteSurgeHandoffHandler,
-  createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
   createFinishRsyncImportHandler,
-  createImportHandler,
   createPrepareImportHandler,
   createPrepareRsyncImportHandler,
   createPushRsyncStateHandler,
-  createPushStateHandler,
   createQuiesceHandler,
   createSchedulerMigrationHandler,
   createResumeHandler,
@@ -33,19 +29,13 @@ import {
   createUnmountHandler,
   createVerifyHandler,
   findPathTraversalViolation,
-  sendPushStateImportResponse,
   type MigrationHandlerDeps,
 } from "../lib/fleet-http-migration.js";
 import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import {
   SIGNATURE_HEADER,
-  MIGRATION_ID_HEADER,
-  MIGRATION_MODE_HEADER,
-  MIGRATION_SLUG_HEADER,
   type QuiesceRequestBody,
   type UnmountRequestBody,
-  type MigrationRequestBody,
-  type PushStateRequestBody,
   type ExportPathsRequestBody,
   type PrepareImportRequestBody,
   type ActivateImportRequestBody,
@@ -91,11 +81,6 @@ const SAMPLE_UNMOUNT: UnmountRequestBody = {
   slug: "chris",
 };
 
-const SAMPLE_EXPORT: MigrationRequestBody = {
-  migrationId: "mig-1",
-  slug: "chris",
-};
-
 const SAMPLE_COMPLETE_SURGE: CompleteSurgeHandoffRequestBody = {
   migrationId: "surge-gw-a-pod-123",
   targetPodUid: "pod-123",
@@ -104,14 +89,6 @@ const SAMPLE_COMPLETE_SURGE: CompleteSurgeHandoffRequestBody = {
 const HELD_BUILDER_GATE_STATE = {
   version: 1, podUid: "builder-pod", role: "normal", mode: "held", phase: "held",
 } as const;
-
-const SAMPLE_PUSH: PushStateRequestBody = {
-  migrationId: "mig-1",
-  slug: "chris",
-  targetGatewayId: "gw-b",
-  targetUrl: "http://target-gateway:18789",
-  targetImportSignature: signForPod("mig-1", "chris"),
-};
 
 const RESTORE_SNAPSHOT = {
   uid: "uid-chris",
@@ -163,27 +140,6 @@ function mkRequest<T>(
       address: () => ({ address: opts.localAddress ?? "127.0.0.1", family: "IPv4", port: 3003 }),
     },
   } as unknown as Request;
-}
-
-function mkImportRequest(opts: {
-  migrationId?: string;
-  slug?: string;
-  mode?: string;
-  signature?: string;
-  body?: Readable;
-  pathGatewayId?: string;
-}): Request {
-  const headers: Record<string, string> = {};
-  if (opts.migrationId !== undefined) headers[MIGRATION_ID_HEADER.toLowerCase()] = opts.migrationId;
-  if (opts.slug !== undefined) headers[MIGRATION_SLUG_HEADER.toLowerCase()] = opts.slug;
-  if (opts.mode !== undefined) headers[MIGRATION_MODE_HEADER.toLowerCase()] = opts.mode;
-  if (opts.signature !== undefined) headers[SIGNATURE_HEADER.toLowerCase()] = opts.signature;
-
-const body = opts.body ?? Readable.from(["dummy-tar-bytes"]);
-  return Object.assign(body, {
-    header: (name: string) => headers[name.toLowerCase()],
-    params: { gatewayId: opts.pathGatewayId ?? GATEWAY_ID },
-  }) as unknown as Request;
 }
 
 function mkResponse(): {
@@ -242,28 +198,6 @@ it("transfers only the selected customer's Git metadata", () => {
   expect(findPathTraversalViolation(["git-metadata/alice/projects/app.git/refs/heads/work", "git-metadata/alice/projects/app.git/index"], "alice", "final")).toBeNull();
   expect(findPathTraversalViolation(["git-metadata/bob/projects/app.git/index"], "alice", "final")).not.toBeNull();
   expect(findPathTraversalViolation(["git-metadata/alice/../../bob/index"], "alice", "final")).not.toBeNull();
-});
-
-describe("sendPushStateImportResponse", () => {
-  it("relays successful target responses without duplicating destination progress on the source", async () => {
-    const { res, getStatus, getBody } = mkResponse();
-    const log = vi.fn();
-    const importResponse = new Response(
-      JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-
-    await sendPushStateImportResponse(
-      importResponse,
-      { migrationId: "mig-1", slug: "chris", targetGatewayId: "gw-b" },
-      res,
-      log,
-    );
-
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", imported: true });
-    expect(log).not.toHaveBeenCalled();
-  });
 });
 
 function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerLifecycleAdapter {
@@ -433,14 +367,6 @@ const armOnClose = (event: string | symbol) => {
     child.on("newListener", armOnClose);
   }
   return child;
-}
-
-async function readRequestBody(body: unknown): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of body as AsyncIterable<Buffer | string>) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 describe("createQuiesceHandler", () => {
@@ -1349,67 +1275,6 @@ const adapter = mkAdapter();
       message: "config changed",
       code: "hash-mismatch",
     });
-  });
-});
-
-describe("createExportHandler", () => {
-  it("rejects bad signature with 401", async () => {
-    const handler = createExportHandler(mkDeps());
-    const req = mkRequest(SAMPLE_EXPORT, { signature: "deadbeef" });
-    const { res, getStatus } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(401);
-  });
-
-  it("returns 404 when there's nothing to export for the slug", async () => {
-    const adapter = mkAdapter({
-      listExportPaths: vi.fn(async () => []),
-    });
-    const handler = createExportHandler(mkDeps({ adapter }));
-    const rawBody = JSON.stringify(SAMPLE_EXPORT);
-    const sig = signForPod(SAMPLE_EXPORT.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_EXPORT, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(404);
-    expect(getBody()).toMatchObject({ error: "no export paths" });
-  });
-
-  it("kicks off tar with -C/path arg pairs derived from listExportPaths", async () => {
-    const adapter = mkAdapter({
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-chris-coach" },
-        { cwd: "/openclaw", path: "customer-keys/chris" },
-      ]),
-    });
-
-const fakeChild = new EventEmitter() as EventEmitter & {
-      stdout: Readable;
-      stderr: Readable;
-    };
-    fakeChild.stdout = Readable.from([Buffer.from("tar-bytes")]);
-    fakeChild.stderr = Readable.from([]);
-    spawnMock.mockReturnValueOnce(fakeChild);
-
-    const handler = createExportHandler(mkDeps({ adapter }));
-    const rawBody = JSON.stringify(SAMPLE_EXPORT);
-    const sig = signForPod(SAMPLE_EXPORT.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_EXPORT, { signature: sig });
-    const { res, getStatus, getHeaders } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [bin, args] = spawnMock.mock.calls[0];
-    expect(bin).toBe("tar");
-    
-    expect(args).toEqual([
-      "-cf", "-",
-      ...SQLITE_CARRY_EXCLUDE_ARGS,
-      "-C", "/state", "agents/octogee-chris-coach",
-      "-C", "/openclaw", "customer-keys/chris",
-    ]);
-    expect(getStatus()).toBe(200);
-    expect(getHeaders()["content-type"]).toBe("application/x-tar");
   });
 });
 
@@ -3257,764 +3122,6 @@ describe("agent sqlite stores across an rsync carry", () => {
   });
 });
 
-describe("createPushStateHandler", () => {
-  it("streams a tar directly into the target gateway import endpoint", async () => {
-    const adapter = mkAdapter({
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-chris-coach" },
-        { cwd: "/openclaw", path: "customers/chris" },
-      ]),
-    });
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe("http://target-gateway:18789/import/gw-b");
-      const headers = init?.headers as Record<string, string>;
-      expect(headers["content-type"]).toBe("application/x-tar");
-      expect(headers[SIGNATURE_HEADER]).toBe(signForPod("mig-1", "chris"));
-      expect(headers[MIGRATION_ID_HEADER]).toBe("mig-1");
-      expect(headers[MIGRATION_SLUG_HEADER]).toBe("chris");
-      expect(init?.body).toBe(fakeChild.stdout);
-      expect(await readRequestBody(init?.body)).toBe("tar-bytes");
-      expect((init as RequestInit & { duplex?: string })?.duplex).toBe("half");
-      return new Response(
-        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({ migrationId: "mig-1", slug: "chris", imported: true });
-    expect(adapter.listExportPaths).toHaveBeenCalledWith("chris");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(spawnMock.mock.calls[0][0]).toBe("tar");
-    expect(spawnMock.mock.calls[0][1]).toEqual([
-      "-cf", "-",
-      ...SQLITE_CARRY_EXCLUDE_ARGS,
-      "-C", "/state", "agents/octogee-chris-coach",
-      "-C", "/openclaw", "customers/chris",
-    ]);
-  });
-
-  it.each(["pre", "final"] as const)(
-    "preserves project work in a workspace-only %s transfer",
-    async (mode) => {
-      const adapter = mkAdapter({
-        listExportPaths: vi.fn(async () => [
-          { cwd: "/state", path: "agents/octogee-chris-coach" },
-          { cwd: "/openclaw", path: "customers/chris" },
-        ]),
-      });
-      spawnMock.mockReturnValueOnce(mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 }));
-      const fetchMock = vi.fn(async () => new Response(
-        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      )) as unknown as typeof fetch;
-      const body: PushStateRequestBody = {
-        ...SAMPLE_PUSH,
-        mode,
-        projectCheckoutScope: "workspace-only",
-      };
-      const rawBody = JSON.stringify(body);
-      const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-      const req = mkRequest(body, {
-        signature: signForPod(body.migrationId, rawBody),
-      });
-      const { res, getStatus } = mkResponse();
-
-      await handler(req, res, vi.fn());
-
-      expect(getStatus()).toBe(200);
-      expect(spawnMock.mock.calls[0][1]).toEqual([
-        "-cf", "-",
-        ...SQLITE_CARRY_EXCLUDE_ARGS,
-        "-C", "/state", "agents/octogee-chris-coach",
-        "-C", "/openclaw", "customers/chris",
-      ]);
-    },
-  );
-
-  it("keeps project checkouts in an isolated disposable gateway transfer", async () => {
-    const adapter = mkAdapter({
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/openclaw", path: "customers/chris" },
-      ]),
-    });
-    spawnMock.mockReturnValueOnce(mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 }));
-    const fetchMock = vi.fn(async () => new Response(
-      JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    )) as unknown as typeof fetch;
-    const body: PushStateRequestBody = {
-      ...SAMPLE_PUSH,
-      mode: "final",
-      projectCheckoutScope: "workspace-and-projects",
-    };
-    const rawBody = JSON.stringify(body);
-    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-    const req = mkRequest(body, {
-      signature: signForPod(body.migrationId, rawBody),
-    });
-    const { res, getStatus } = mkResponse();
-
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(spawnMock.mock.calls[0][1]).toEqual([
-      "-cf", "-",
-      ...SQLITE_CARRY_EXCLUDE_ARGS,
-      "-C", "/openclaw", "customers/chris",
-    ]);
-  });
-
-  it("streams only the customer key dir in keys mode and forwards the import mode", async () => {
-    const adapter = mkAdapter({
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-chris-coach" },
-        { cwd: "/openclaw", path: "customers/chris" },
-        { cwd: "/openclaw", path: "customer-keys/chris" },
-      ]),
-      exportOpenClawActivationManifest: vi.fn(async () => {
-        throw new Error("keys mode must not export activation manifests");
-      }),
-    });
-    const fakeChild = mkFakeChild({ stdout: ["key-tar"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = init?.headers as Record<string, string>;
-      expect(headers[MIGRATION_MODE_HEADER]).toBe("keys");
-      expect(await readRequestBody(init?.body)).toBe("key-tar");
-      return new Response(
-        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
-
-    const body: PushStateRequestBody = { ...SAMPLE_PUSH, mode: "keys" };
-    const rawBody = JSON.stringify(body);
-    const sig = signForPod(body.migrationId, rawBody);
-    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-    const req = mkRequest(body, { signature: sig });
-    const { res, getStatus } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(spawnMock.mock.calls[0][1]).toEqual([
-      "-cf", "-",
-      ...SQLITE_CARRY_EXCLUDE_ARGS,
-      "-C", "/openclaw", "customer-keys/chris",
-    ]);
-    expect(adapter.exportOpenClawActivationManifest).not.toHaveBeenCalled();
-  });
-
-  it("embeds an activation manifest and forwards the target-specific import signature", async () => {
-    const adapter = mkAdapter({
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-chris-coach" },
-      ]),
-      exportOpenClawActivationManifest: vi.fn(async () => ({
-        version: 2,
-        slug: "chris",
-        appliedFingerprint: "fp-chris",
-        agentId: "octogee-chris-coach",
-        accountId: "chris-coach",
-        agent: { id: "octogee-chris-coach" },
-        mattermostAccount: { botToken: "coach-pat" },
-        bindings: [{ agentId: "octogee-chris-coach" }],
-      })),
-    });
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = init?.headers as Record<string, string>;
-      expect(headers[SIGNATURE_HEADER]).toBe("target-import-sig");
-      return new Response(
-        JSON.stringify({ migrationId: "mig-1", slug: "chris", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
-    const body = {
-      ...SAMPLE_PUSH,
-      includeActivationManifest: true,
-      targetImportSignature: "target-import-sig",
-    };
-    const rawBody = JSON.stringify(body);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-    const req = mkRequest(body, { signature: sig });
-    const { res, getStatus } = mkResponse();
-
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(adapter.exportOpenClawActivationManifest).toHaveBeenCalledWith("chris");
-    const args = spawnMock.mock.calls[0][1] as string[];
-    expect(args).toContain("agents/octogee-chris-coach");
-    expect(args).toContain(".octogee-migration-activation/chris/activation.json");
-  });
-
-  it("Builder gateway transfers contain only the movable customer agent", async () => {
-    const exportOpenClawActivationManifest = vi.fn(async () => ({
-      version: 2 as const,
-      slug: "eggman",
-      appliedFingerprint: "fp-eggman",
-      agentId: "octogee-eggman-coach",
-      accountId: "eggman-coach",
-      agent: { id: "octogee-eggman-coach" },
-      mattermostAccount: { botToken: "coach-pat" },
-      bindings: [{ agentId: "octogee-eggman-coach" }],
-    }));
-    const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => true),
-      listExportPaths: vi.fn(async () => [
-        { cwd: "/state", path: "agents/octogee-eggman-coach" },
-      ]),
-      exportOpenClawActivationManifest,
-    });
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(await readRequestBody(init?.body)).toBe("tar-bytes");
-      return new Response(
-        JSON.stringify({ migrationId: "mig-operator", slug: "eggman", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
-    const body: PushStateRequestBody = {
-      migrationId: "mig-operator",
-      slug: "eggman",
-      targetGatewayId: "eggman-green",
-      targetUrl: "http://target-gateway:18789",
-      targetImportSignature: "target-import-sig",
-      includeActivationManifest: true,
-    };
-    const rawBody = JSON.stringify(body);
-    const sig = signForPod(body.migrationId, rawBody);
-    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-    const req = mkRequest(body, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({ migrationId: "mig-operator", slug: "eggman", imported: true });
-    expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
-    const args = spawnMock.mock.calls[0][1] as string[];
-    expect(args).toContain("agents/octogee-eggman-coach");
-    expect(args.some((arg) => arg.includes("octogee-ops-"))).toBe(false);
-    expect(args).toContain(".octogee-migration-activation/eggman/activation.json");
-  });
-
-  it("fails an operator transfer when its customer activation manifest is missing", async () => {
-    const exportOpenClawActivationManifest = vi.fn(async () => {
-      throw new Error("[migration-activation:eggman] activation manifest agent missing or mismatched");
-    });
-    const adapter = mkAdapter({
-      isBuilderGateway: vi.fn(() => true),
-      listExportPaths: vi.fn(async () => [{ cwd: "/state", path: "agents/octogee-eggman-coach" }]),
-      exportOpenClawActivationManifest,
-    });
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(await readRequestBody(init?.body)).toBe("tar-bytes");
-      return new Response(
-        JSON.stringify({ migrationId: "mig-operator", slug: "eggman", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
-    const body: PushStateRequestBody = {
-      migrationId: "mig-operator",
-      slug: "eggman",
-      targetGatewayId: "eggman-green",
-      targetUrl: "http://target-gateway:18789",
-      targetImportSignature: "target-import-sig",
-      includeActivationManifest: true,
-    };
-    const rawBody = JSON.stringify(body);
-    const sig = signForPod(body.migrationId, rawBody);
-    const handler = createPushStateHandler(mkDeps({ adapter, fetch: fetchMock }));
-    const req = mkRequest(body, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(500);
-    expect(getBody()).toMatchObject({ error: "push-state failed" });
-    expect(exportOpenClawActivationManifest).toHaveBeenCalledWith("eggman");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing targetGatewayId before spawning tar", async () => {
-    const body = { migrationId: "mig-1", slug: "chris", targetUrl: "http://target" };
-    const rawBody = JSON.stringify(body);
-    const sig = signForPod("mig-1", rawBody);
-    const handler = createPushStateHandler(mkDeps());
-    const req = mkRequest(body, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(400);
-    expect(getBody()).toEqual({ error: "missing targetGatewayId" });
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing controller-signed target import signature before spawning tar", async () => {
-    const body = {
-      migrationId: "mig-1",
-      slug: "chris",
-      targetGatewayId: "gw-b",
-      targetUrl: "http://target",
-    };
-    const rawBody = JSON.stringify(body);
-    const sig = signForPod("mig-1", rawBody);
-    const handler = createPushStateHandler(mkDeps());
-    const req = mkRequest(body, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(400);
-    expect(getBody()).toEqual({ error: "missing targetImportSignature" });
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("returns 502 when the target import endpoint rejects the stream", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async () =>
-      new Response("signature rejected", { status: 401 }),
-    ) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(502);
-    expect(getBody()).toMatchObject({
-      error: "target import failed",
-      status: 401,
-      message: "signature rejected",
-    });
-    expect(fakeChild.kill).not.toHaveBeenCalled();
-  });
-
-  it("returns target alreadyMounted success after streaming the tar", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          migrationId: "mig-1",
-          slug: "chris",
-          imported: true,
-          alreadyMounted: true,
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    ) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({
-      migrationId: "mig-1",
-      slug: "chris",
-      imported: true,
-      alreadyMounted: true,
-    });
-    expect(fakeChild.kill).not.toHaveBeenCalled();
-  });
-
-  it("handles a rejected target fetch after source tar streaming starts without crashing", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async () => {
-      throw new Error("target unreachable");
-    }) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(500);
-    expect(getBody()).toMatchObject({
-      error: "push-state failed",
-      message: "target unreachable",
-    });
-    expect(fakeChild.kill).toHaveBeenCalled();
-  });
-
-  it("returns source tar failure when tar exits non-zero during streaming", async () => {
-    const fakeChild = mkFakeChild({ stderr: ["tar sad"], exitCode: 2 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    const fetchMock = vi.fn(async () =>
-      new Response("target saw stream abort", { status: 500 }),
-    ) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(500);
-    expect(getBody()).toMatchObject({
-      error: "source tar failed",
-      message: expect.stringMatching(/tar exit 2: tar sad/),
-    });
-    expect(fetchMock).toHaveBeenCalled();
-    expect(fakeChild.kill).toHaveBeenCalled();
-  });
-
-  it("aborts the target import when the controller disconnects", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    let signalSeen: AbortSignal | undefined;
-    let resolveFetchStarted: () => void = () => {};
-    const fetchStarted = new Promise<void>((resolve) => {
-      resolveFetchStarted = resolve;
-    });
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      signalSeen = init?.signal ?? undefined;
-      resolveFetchStarted();
-      return await new Promise<Response>((_resolve, reject) => {
-        signalSeen?.addEventListener(
-          "abort",
-          () => reject(signalSeen?.reason ?? new Error("aborted")),
-          { once: true },
-        );
-      });
-    }) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(mkDeps({ fetch: fetchMock }));
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-
-    const handlerPromise = handler(req, res, vi.fn());
-    await fetchStarted;
-    (res as unknown as { emit: (e: string) => void }).emit("close");
-    await handlerPromise;
-
-    expect(signalSeen?.aborted).toBe(true);
-    expect(fakeChild.kill).toHaveBeenCalled();
-    expect(getStatus()).toBe(499);
-    expect(getBody()).toMatchObject({ error: "controller disconnected" });
-  });
-
-  it("aborts the target import when the inner push-state timeout fires", async () => {
-    const fakeChild = mkFakeChild({ stdout: ["tar-bytes"], exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-    let signalSeen: AbortSignal | undefined;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      signalSeen = init?.signal ?? undefined;
-      signalSeen?.throwIfAborted();
-      return await new Promise<Response>((_resolve, reject) => {
-        signalSeen?.addEventListener(
-          "abort",
-          () => reject(signalSeen?.reason ?? new Error("aborted")),
-          { once: true },
-        );
-      });
-    }) as unknown as typeof fetch;
-
-    const handler = createPushStateHandler(
-      mkDeps({ fetch: fetchMock, pushStateTimeoutMs: 5 }),
-    );
-    const rawBody = JSON.stringify(SAMPLE_PUSH);
-    const sig = signForPod(SAMPLE_PUSH.migrationId, rawBody);
-    const req = mkRequest(SAMPLE_PUSH, { signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(signalSeen?.aborted).toBe(true);
-    expect(fakeChild.kill).toHaveBeenCalled();
-    expect(getStatus()).toBe(504);
-    expect(getBody()).toMatchObject({ error: "push-state timed out" });
-  });
-});
-
-describe("createImportHandler", () => {
-  it("rejects missing migration headers with 400", async () => {
-    const handler = createImportHandler(mkDeps());
-    const req = mkImportRequest({}); 
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(400);
-    expect((getBody() as { error?: string }).error).toBe("missing migration headers");
-  });
-
-  it("rejects malformed slug with 400", async () => {
-    const handler = createImportHandler(mkDeps());
-    const req = mkImportRequest({ migrationId: "mig-1", slug: "bad slug!" });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(400);
-    expect(getBody()).toEqual({ error: "invalid slug" });
-  });
-
-  it("rejects bad signature with 401", async () => {
-    const handler = createImportHandler(mkDeps());
-    const req = mkImportRequest({
-      migrationId: "mig-1",
-      slug: "chris",
-      signature: "deadbeef",
-    });
-    const { res, getStatus } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(401);
-  });
-
-  it("returns 200 and calls activateImportedCustomer on full success", async () => {
-    const adapter = mkAdapter();
-    const fakeListChild = mkFakeChild({
-      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\ncustomers/chris/.git/HEAD\n"],
-      exitCode: 0,
-    });
-    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-
-    const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({
-      migrationId: "mig-1",
-      slug: "chris",
-      signature: sig,
-    });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({
-      migrationId: "mig-1",
-      slug: "chris",
-      imported: true,
-    });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "default");
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
-      "chris",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
-    expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-
-    expect(spawnMock.mock.calls.length).toBe(3);
-    expect(spawnMock.mock.calls[0][0]).toBe("tar");
-    expect(spawnMock.mock.calls[0][1][0]).toBe("-tf");
-    expect(spawnMock.mock.calls[1][1][0]).toBe("-xf");
-    expect(upgradeStoresMock).toHaveBeenCalledTimes(1);
-    expect(upgradeStoresMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[2]!);
-  });
-
-  it("imports keys mode without activating the customer", async () => {
-    const adapter = mkAdapter();
-    const fakeListChild = mkFakeChild({
-      stdout: ["customer-keys/chris/id_ed25519\ncustomer-keys/chris/id_ed25519.pub\n"],
-      exitCode: 0,
-    });
-    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-
-    const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({
-      migrationId: "mig-1",
-      slug: "chris",
-      mode: "keys",
-      signature: sig,
-    });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({
-      migrationId: "mig-1",
-      slug: "chris",
-      imported: true,
-    });
-    expect(adapter.prepareKeyImportDir).toHaveBeenCalledWith("chris");
-    expect(adapter.prepareImportDir).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(adapter.writeMountMarker).not.toHaveBeenCalled();
-    expect(upgradeStoresMock).not.toHaveBeenCalled();
-  });
-
-  it("stages pre-sync state without activating or marking the target mounted", async () => {
-    const adapter = mkAdapter();
-    const fakeListChild = mkFakeChild({
-      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\ncustomers/chris/README.md\n"],
-      exitCode: 0,
-    });
-    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-
-    const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({
-      migrationId: "mig-1",
-      slug: "chris",
-      mode: "pre",
-      signature: sig,
-    });
-    const { res, getStatus } = mkResponse();
-
-    await handler(req, res, vi.fn());
-
-    expect(getStatus()).toBe(200);
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "pre");
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(adapter.writeMountMarker).not.toHaveBeenCalled();
-    expect(adapter.onMounted).not.toHaveBeenCalled();
-  });
-
-  it("returns 400 when the tarball contains a path-traversal entry (no extract attempted)", async () => {
-    const adapter = mkAdapter();
-    const fakeListChild = mkFakeChild({
-      stdout: ["customers/chris/ok.txt\n/etc/passwd\n"],
-      exitCode: 0,
-    });
-    spawnMock.mockReturnValueOnce(fakeListChild);
-
-    const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(400);
-    expect((getBody() as { error?: string }).error).toBe("tarball failed validation");
-    expect((getBody() as { message?: string }).message).toContain("absolute path");
-    expect(spawnMock.mock.calls.length).toBe(1); 
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-  });
-
-  it("refreshes the import even when the slug is already mounted so final sync is not skipped", async () => {
-    const adapter = mkAdapter();
-    const fakeListChild = mkFakeChild({
-      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\n"],
-      exitCode: 0,
-    });
-    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const pauseSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
-    const resumeSystemConfigWatch = vi.fn(async (_slug: string) => undefined);
-    const handler = createImportHandler(
-      mkDeps({
-        adapter,
-        getMountedCustomers: () => ["chris"],
-        pauseSystemConfigWatch,
-        resumeSystemConfigWatch,
-      }),
-    );
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({
-      migrationId: "mig-1",
-      slug: "chris",
-      mode: "final",
-      signature: sig,
-    });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(200);
-    expect(getBody()).toEqual({
-      migrationId: "mig-1",
-      slug: "chris",
-      imported: true,
-    });
-    expect(adapter.prepareImportDir).toHaveBeenCalledWith("chris", "final");
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith(
-      "chris",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
-    expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
-    expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
-    expect(pauseSystemConfigWatch.mock.invocationCallOrder[0]).toBeLessThan(
-      adapter.activateImportedCustomer.mock.invocationCallOrder[0],
-    );
-    expect(spawnMock.mock.calls.length).toBe(3);
-  });
-
-  it("aborts activate + responds 499 when the client disconnects mid-import", async () => {
-    const adapter = mkAdapter();
-    let signalSeenByActivate: AbortSignal | undefined;
-    let resolveActivateStarted: () => void = () => {};
-    const activateStarted = new Promise<void>((r) => {
-      resolveActivateStarted = r;
-    });
-    adapter.activateImportedCustomer = vi.fn(async (_slug: string, opts?: { signal?: AbortSignal }) => {
-      signalSeenByActivate = opts?.signal;
-      resolveActivateStarted();
-      return new Promise<{ appliedFingerprint: string }>((_resolve, reject) => {
-        const reject_ = () => reject(new Error("aborted"));
-        if (opts?.signal?.aborted) {
-          reject_();
-          return;
-        }
-        opts?.signal?.addEventListener("abort", reject_);
-      });
-    });
-    const fakeListChild = mkFakeChild({
-      stdout: ["agents/octogee-chris-coach/sessions/sessions.json\n"],
-      exitCode: 0,
-    });
-    const fakeExtractChild = mkFakeChild({ exitCode: 0 });
-    spawnMock.mockReturnValueOnce(fakeListChild).mockReturnValueOnce(fakeExtractChild).mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-
-    const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({ migrationId: "mig-1", slug: "chris", signature: sig });
-    const { res, getStatus } = mkResponse();
-
-    const handlerPromise = handler(req, res, vi.fn());
-
-await activateStarted;
-    (res as unknown as { emit: (e: string) => void }).emit("close");
-
-    await handlerPromise;
-    expect(signalSeenByActivate).toBeInstanceOf(AbortSignal);
-    expect(signalSeenByActivate?.aborted).toBe(true);
-    expect(getStatus()).toBe(499);
-  });
-
-  it("returns 500 when tar exits non-zero before activation runs", async () => {
-    const adapter = mkAdapter();
-    const fakeChild = mkFakeChild({ stderr: ["permission denied"], exitCode: 1 });
-    spawnMock.mockReturnValueOnce(fakeChild);
-
-    const handler = createImportHandler(mkDeps({ adapter }));
-    const sig = signForPod("mig-1", "chris");
-    const req = mkImportRequest({
-      migrationId: "mig-1",
-      slug: "chris",
-      signature: sig,
-    });
-    const { res, getStatus, getBody } = mkResponse();
-    await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(500);
-    expect((getBody() as { error?: string }).error).toBe("import failed");
-    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-  });
-});
-
 describe("Git metadata across migration imports", () => {
   async function tempRoot(): Promise<string> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-metadata-import-"));
@@ -4022,26 +3129,11 @@ describe("Git metadata across migration imports", () => {
     return root;
   }
 
-  async function importMetadata(transport: "rsync" | "tar", sourceDir: string, importDir: string) {
+  async function importMetadata(sourceDir: string, importDir: string) {
     const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => importDir) });
     const deps = mkDeps({ adapter, waitForRsyncReady: vi.fn(async () => undefined) });
-    const migrationId = `mig-git-${transport}`;
+    const migrationId = "mig-git-rsync";
     const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    if (transport === "tar") {
-      spawnMock.mockReturnValueOnce(mkFakeChild({
-        stdout: ["customers/chris/draft.txt\ngit-metadata/chris/workspace.git/HEAD\n"],
-        exitCode: 0,
-      })).mockImplementationOnce((_command: string, args: string[]) => {
-        const stageDir = args[args.indexOf("-C") + 1]!;
-        fsSync.cpSync(sourceDir, stageDir, { recursive: true, dereference: false });
-        return mkFakeChild({ exitCode: 0 });
-      }).mockImplementation(real.spawn);
-      const response = mkResponse();
-      await createImportHandler(deps)(mkImportRequest({
-        migrationId, slug: "chris", mode: "final", signature: signForPod(migrationId, "chris"),
-      }), response.res, vi.fn());
-      return { ...response, adapter };
-    }
     spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(real.spawn);
     const prepare: PrepareRsyncImportRequestBody = {
       migrationId, slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
@@ -4066,7 +3158,7 @@ describe("Git metadata across migration imports", () => {
     return { ...response, adapter };
   }
 
-  describe.each(["rsync", "tar"] as const)("%s", (transport) => {
+  describe("rsync", () => {
     it.each([
       ["git-metadata", "symlink"],
       ["git-metadata/chris", "symlink"],
@@ -4092,14 +3184,14 @@ describe("Git metadata across migration imports", () => {
       if (kind === "symlink") await fs.symlink(outsideDir, unsafePath);
       else await fs.writeFile(unsafePath, unsafeContent);
 
-      const result = await importMetadata(transport, sourceDir, importDir);
+      const result = await importMetadata(sourceDir, importDir);
 
       expect(result.getStatus()).toBe(400);
       expect(result.getBody()).toMatchObject({
-        error: transport === "rsync" ? "rsync import failed validation" : "tarball failed validation",
+        error: "rsync import failed validation",
         message: expect.stringContaining("unsafe Git metadata"),
       });
-      expect(spawnMock.mock.calls).toHaveLength(transport === "rsync" ? 1 : 2);
+      expect(spawnMock.mock.calls).toHaveLength(1);
       expect(upgradeStoresMock).not.toHaveBeenCalled();
       expect(result.adapter.activateImportedCustomer).not.toHaveBeenCalled();
       expect(result.adapter.writeMountMarker).not.toHaveBeenCalled();
@@ -4119,7 +3211,7 @@ describe("Git metadata across migration imports", () => {
       await fs.mkdir(path.join(sourceDir, "customers/chris"), { recursive: true });
       await fs.writeFile(path.join(sourceDir, "customers/chris/draft.txt"), "source draft");
 
-      const result = await importMetadata(transport, sourceDir, importDir);
+      const result = await importMetadata(sourceDir, importDir);
 
       expect(result.getStatus()).toBe(200);
       expect(await fs.readFile(path.join(importDir, "customers/chris/draft.txt"), "utf8")).toBe("source draft");
@@ -4143,7 +3235,7 @@ describe("Git metadata across migration imports", () => {
         await fs.writeFile(path.join(sourceDir, relative), content);
       }
 
-      const result = await importMetadata(transport, sourceDir, importDir);
+      const result = await importMetadata(sourceDir, importDir);
 
       expect(result.getStatus()).toBe(200);
       for (const [relative, content] of files) {

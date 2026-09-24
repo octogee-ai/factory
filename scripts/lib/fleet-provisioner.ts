@@ -27,15 +27,12 @@ import {
   createActivateImportHandler,
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
-  createExportHandler,
   createExportPathsHandler,
   createFlushHandler,
   createFinishRsyncImportHandler,
-  createImportHandler,
   createPrepareImportHandler,
   createPrepareRsyncImportHandler,
   createPushRsyncStateHandler,
-  createPushStateHandler,
   createMigrationProgressHandler,
   createQuiesceHandler,
   createSchedulerMigrationHandler,
@@ -1921,7 +1918,6 @@ function registerMigrationRoutes(
   app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));
-  app.post("/export/:gatewayId", createExportHandler(migrationDeps));
   app.post("/export-paths/:gatewayId", createExportPathsHandler(migrationDeps));
   app.post(
     "/export-activation-manifest/:gatewayId",
@@ -1946,8 +1942,6 @@ function registerMigrationRoutes(
     createUnreserveSurgeOpenClawHandler(processControlDeps),
   );
   app.post("/complete-surge-handoff/:gatewayId", createCompleteSurgeHandoffHandler(migrationDeps));
-  app.post("/push-state/:gatewayId", createPushStateHandler(migrationDeps));
-  app.post("/import/:gatewayId", createImportHandler(migrationDeps));
   app.post("/unmount/:gatewayId", createUnmountHandler(migrationDeps));
 }
 

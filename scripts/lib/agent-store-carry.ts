@@ -115,28 +115,6 @@ export function probeSqliteStoreOpens(dbPath: string): void {
   }
 }
 
-export async function checkpointAgentStoresForCarry(input: {
-  sources: ReadonlyArray<{ cwd: string; path: string }>;
-  log?: (msg: string) => void;
-}): Promise<string[]> {
-  const checkpointed: string[] = [];
-  for (const source of input.sources) {
-    for (const store of await listSqliteStores(path.join(source.cwd, source.path))) {
-      try {
-        checkpointSqliteStore(store);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(`agent store ${store} could not be checkpointed for carry: ${message}`);
-      }
-      checkpointed.push(store);
-    }
-  }
-  if (checkpointed.length > 0) {
-    input.log?.(`[agent-store-carry] checkpointed ${checkpointed.length} store(s) before copy`);
-  }
-  return checkpointed;
-}
-
 export async function clearSqliteSidecars(
   storePaths: readonly string[],
 ): Promise<string[]> {

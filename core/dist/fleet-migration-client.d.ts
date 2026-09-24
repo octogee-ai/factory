@@ -13,6 +13,7 @@ export interface MigrationClientDeps {
     fetch?: typeof globalThis.fetch;
     log?: (msg: string) => void;
     timeouts?: MigrationClientTimeouts;
+    transferState: MigrationClient["transferState"];
 }
 export interface MigrationClient {
     scheduler(opts: SchedulerMigrationRequestBody & {
@@ -92,4 +93,4 @@ export declare class MigrationTransportError extends Error {
 }
 export declare function isDefinitiveConfigRpcRejection(error: unknown): boolean;
 export declare function createMigrationClient(deps: MigrationClientDeps): MigrationClient;
-export declare function reportMigrationProgress(deps: MigrationClientDeps, gatewayId: string, body: MigrationProgressRequestBody): Promise<void>;
+export declare function reportMigrationProgress(deps: Pick<MigrationClientDeps, "privateKey" | "resolveGatewayUrl" | "fetch">, gatewayId: string, body: MigrationProgressRequestBody): Promise<void>;

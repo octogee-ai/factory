@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   assertCarriedAgentSessionsDrained,
-  checkpointAgentStoresForCarry,
   clearSqliteSidecars,
   findUnreadableStore,
   isSqliteVolatileArtifactPath,
@@ -88,75 +87,6 @@ describe("listSqliteStores", () => {
 
   it("returns nothing for a path that does not exist", async () => {
     expect(await listSqliteStores(path.join(root, "absent"))).toEqual([]);
-  });
-});
-
-describe("checkpointAgentStoresForCarry", () => {
-  it("folds a live wal into the main file so the copy set needs no sidecar", async () => {
-    const dbPath = seedStore("chris", ["committed"]);
-    const live = new DatabaseSync(dbPath);
-    live.prepare("INSERT INTO transcript_events VALUES (?)").run("in-wal");
-    expect(fs.statSync(`${dbPath}-wal`).size).toBeGreaterThan(0);
-
-    const checkpointed = await checkpointAgentStoresForCarry({
-      sources: [{ cwd: root, path: path.join("agents", "octogee-chris-coach") }],
-    });
-    const carried = path.join(root, "carried.sqlite");
-    fs.copyFileSync(dbPath, carried);
-    live.close();
-
-    expect(checkpointed).toEqual([dbPath]);
-    expect(readRowCount(carried)).toBe(2);
-  });
-
-  it("checkpoints a source that names a memory store file directly", async () => {
-    fs.mkdirSync(path.join(root, "memory"), { recursive: true });
-    const dbPath = path.join(root, "memory", "octogee-chris-coach.sqlite");
-    const db = new DatabaseSync(dbPath);
-    db.exec("PRAGMA journal_mode=WAL");
-    db.exec("CREATE TABLE transcript_events(body TEXT)");
-    db.prepare("INSERT INTO transcript_events VALUES (?)").run("in-wal");
-
-    const checkpointed = await checkpointAgentStoresForCarry({
-      sources: [{ cwd: root, path: path.join("memory", "octogee-chris-coach.sqlite") }],
-    });
-    const carried = path.join(root, "carried.sqlite");
-    fs.copyFileSync(dbPath, carried);
-    db.close();
-
-    expect(checkpointed).toEqual([dbPath]);
-    expect(readRowCount(carried)).toBe(1);
-  });
-
-  it("carries the store while openclaw holds its reindex lock", async () => {
-    const dbPath = seedStore("chris", ["a"]);
-    appendRows(dbPath, ["b"]);
-    const lockPath = `${dbPath}.reindex-lock.sqlite`;
-    const holder = new DatabaseSync(lockPath);
-    holder.exec("CREATE TABLE lock(x)");
-    holder.exec("BEGIN EXCLUSIVE");
-    try {
-      await expect(
-        checkpointAgentStoresForCarry({ sources: [{ cwd: root, path: "agents" }] }),
-      ).resolves.toEqual([dbPath]);
-    } finally {
-      holder.exec("ROLLBACK");
-      holder.close();
-    }
-    const carried = path.join(root, "carried.sqlite");
-    fs.copyFileSync(dbPath, carried);
-    expect(readRowCount(carried)).toBe(2);
-  });
-
-  it("rejects a store it cannot checkpoint instead of carrying it", async () => {
-    fs.mkdirSync(agentDir("chris"), { recursive: true });
-    fs.writeFileSync(storePath("chris"), "this is not a database");
-
-    await expect(
-      checkpointAgentStoresForCarry({
-        sources: [{ cwd: root, path: path.join("agents", "octogee-chris-coach") }],
-      }),
-    ).rejects.toThrow(/openclaw-agent\.sqlite could not be checkpointed for carry/);
   });
 });
 

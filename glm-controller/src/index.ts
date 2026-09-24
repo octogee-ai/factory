@@ -2723,13 +2723,10 @@ function createMigrationClientBuilder(
   logFn: (msg: string) => void,
 ) {
   return (resolveSync: (gatewayId: string) => string) => {
-    const client = createMigrationClient({
+    return createMigrationClient({
       privateKey,
       resolveGatewayUrl: resolveSync,
       log: logFn,
-    });
-    return {
-      ...client,
       transferState: createRsyncMigrationTransfer({
         db,
         namespace: NAMESPACE,
@@ -2739,7 +2736,7 @@ function createMigrationClientBuilder(
         resolveGatewayVm: (transportId) => readGatewayVmAddress(db, transportId),
         log: logFn,
       }),
-    };
+    });
   };
 }
 

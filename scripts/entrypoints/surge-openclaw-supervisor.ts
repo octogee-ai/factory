@@ -303,12 +303,12 @@ async function startPermittedOpenClawChild(
 ): Promise<SurgeOpenClawProcessGateState> {
   let retriedPreHealthExit = false;
   for (;;) {
+    await opts.reapOrphanedOpenClaw();
     if (opts.prepare || opts.before.role === "target") await opts.prepareTarget();
     const afterPreparation = await opts.current();
     if (afterPreparation.mode !== "permitted") {
       throw new Error("surge OpenClaw process was held during target preparation");
     }
-    await opts.reapOrphanedOpenClaw();
     await opts.bootWatcher.beforeStart();
     const spawned = opts.spawnOpenClaw();
     opts.child.set(spawned);

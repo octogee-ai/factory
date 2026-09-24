@@ -4,7 +4,6 @@ import type { Request, Response, RequestHandler } from "express";
 import { findUnsafeCustomerGitMetadataEntry } from "@octogee/core/git-metadata";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { createWriteStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -45,17 +44,10 @@ import {
   MIGRATION_VERIFY_TIMEOUT_MS,
   MIGRATION_RSYNC_PORT_DEFAULT,
   SIGNATURE_HEADER,
-  MIGRATION_ID_HEADER,
-  MIGRATION_MODE_HEADER,
-  MIGRATION_SLUG_HEADER,
 } from "../../shared/types/fleet-controller.js";
 import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
 import {
-  assertCarriedAgentSessionsDrained,
-  checkpointAgentStoresForCarry,
-  clearSqliteSidecars,
   findUnreadableStore,
-  isSqliteStorePath,
   listSqliteStores,
   SQLITE_CARRY_EXCLUDE_ARGS,
 } from "./agent-store-carry.js";
@@ -76,6 +68,7 @@ import {
   type OpenMigrationTlsEndpoint,
 } from "./migration-rsync-tls.js";
 import type { OpenClawCommand } from "./openclaw-cli.js";
+import { PROC_ROOT } from "./held-files.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
 import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
@@ -110,7 +103,6 @@ import {
   SAFE_DEFAULT_AGENT_PORTABLE_STATE_PATHS,
 } from "./openclaw-config-builders.js";
 import { OpenclawWireError } from "./gateway-rpc.js";
-import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
 import type { SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
 import { pendingCloneAppliedFingerprint } from "./pending-clone-fingerprint.js";
 
@@ -161,7 +153,6 @@ reserveLoopbackPort?: () => Promise<number>;
 procRoot?: string;
 }
 
-const PROC_ROOT = "/proc";
 
 async function releaseAgentForImport(deps: MigrationHandlerDeps, agentId: string): Promise<void> {
   if (!deps.adapter.releaseAgent) {
@@ -429,68 +420,9 @@ export function createCompleteSurgeHandoffHandler(
   };
 }
 
-function verifyHeaderSignature(
-  migrationId: string,
-  slug: string,
-  sigHeader: string | undefined,
-  deps: Pick<MigrationHandlerDeps, "publicKey" | "gatewayId">,
-): boolean {
-  return verifyFleetRequest(
-    deps.publicKey,
-    gatewayScopedJobId(migrationId, deps.gatewayId),
-    slug,
-    sigHeader,
-  );
-}
-
-function tarArgsForSources(
-  sources: Array<{ cwd: string; path: string }>
-): string[] {
-  return [
-    "-cf", "-",
-    ...SQLITE_CARRY_EXCLUDE_ARGS,
-    ...sources.flatMap((s) => ["-C", s.cwd, s.path]),
-  ];
-}
-
-interface TarStream {
-  child: ReturnType<typeof spawn>;
-  stdout: NonNullable<ReturnType<typeof spawn>["stdout"]>;
-  done: Promise<void>;
-}
-
-function markPromiseHandled(promise: Promise<unknown>): void {
-  promise.catch(() => undefined);
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function spawnTarStream(
-  sources: Array<{ cwd: string; path: string }>,
-): TarStream {
-  const child = spawn("tar", tarArgsForSources(sources), { stdio: ["ignore", "pipe", "pipe"] }); // eslint-disable-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
-  const stdout = child.stdout;
-  const stderr = child.stderr;
-  if (!stdout || !stderr) {
-    child.kill();
-    throw new Error("tar spawned without stdout/stderr pipes");
-  }
-
-  let stderrBuf = "";
-  stderr.on("data", (d) => {
-    stderrBuf += d.toString();
-  });
-  const done = new Promise<void>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`tar exit ${code}: ${stderrBuf.trim()}`));
-    });
-  });
-  markPromiseHandled(done);
-  return { child, stdout, done };
 }
 
 export function createMigrationProgressHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -741,61 +673,6 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
   };
 }
 
-export function createExportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
-    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
-    if (!body) return;
-
-    try {
-      const sources = await deps.adapter.listExportPaths(body.slug);
-      if (sources.length === 0) {
-
-res.status(404).json({ error: "no export paths", message: `nothing to export for slug=${body.slug}` });
-        return;
-      }
-      await checkpointAgentStoresForCarry({ sources, log: dlog });
-      dlog(
-        `[migration-http] export migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s)`,
-      );
-
-      const tar = spawnTarStream(sources);
-      tar.done
-        .then(() => {
-          dlog(`[migration-http] 🟢 export migrationId=${body.migrationId} slug=${body.slug} done`);
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          log(
-            `[migration-http] 🔴 export migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
-          );
-          if (!res.headersSent) {
-            res.status(500).json({ error: "tar failed", message });
-            return;
-          }
-          res.destroy(err instanceof Error ? err : new Error(message));
-        });
-
-      res.status(200);
-      res.setHeader("Content-Type", "application/x-tar");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${body.slug}.tar"`,
-      );
-      tar.stdout.pipe(res);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 export setup migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
-      
-      if (!res.headersSent) {
-        res.status(500).json({ error: "export setup failed", message });
-      } else {
-        res.destroy(err instanceof Error ? err : new Error(message));
-      }
-    }
-  };
-}
-
 export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -925,25 +802,6 @@ export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestH
   };
 }
 
-async function mountImportedCustomer(input: {
-  deps: MigrationHandlerDeps;
-  slug: string;
-  mode: MigrationImportMode | "keys";
-  signal: AbortSignal;
-}): Promise<string | undefined> {
-  const { deps, slug, mode, signal } = input;
-  if (mode !== "final" && mode !== "default") return undefined;
-  const verificationPending = await activateImportedCustomerForMigration({
-    deps,
-    slug,
-    mode,
-    signal,
-  });
-  deps.adapter.writeMountMarker?.(slug);
-  deps.adapter.onMounted?.(slug);
-  return verificationPending;
-}
-
 export function createActivateImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? ((msg) => console.log(msg));
   return async (req, res) => {
@@ -985,66 +843,6 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
   };
 }
 
-function isValidGatewayRouteId(gatewayId: string): boolean {
-  if (gatewayId.length === 0 || gatewayId.length > 128) return false;
-  for (let i = 0; i < gatewayId.length; i++) {
-    const code = gatewayId.charCodeAt(i);
-    const alpha = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
-    const digit = code >= 48 && code <= 57;
-    const routePunctuation = code === 45 || code === 46 || code === 95;
-    if (!(alpha || digit || (i > 0 && routePunctuation))) return false;
-  }
-  return true;
-}
-
-function resolveTargetImportUrl(targetUrl: string, targetGatewayId: string): string {
-  const url = new URL(targetUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`targetUrl must use http or https`);
-  }
-  let basePath = url.pathname;
-  while (basePath.endsWith("/")) {
-    basePath = basePath.slice(0, -1);
-  }
-  url.pathname = `${basePath}/import/${encodeURIComponent(targetGatewayId)}`;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-function validatePushStateBody(
-  body: PushStateRequestBody,
-  res: Response,
-): { targetGatewayId: string; importUrl: string; targetImportSignature: string } | null {
-  if (typeof body.targetGatewayId !== "string" || body.targetGatewayId.length === 0) {
-    res.status(400).json({ error: "missing targetGatewayId" });
-    return null;
-  }
-  if (!isValidGatewayRouteId(body.targetGatewayId)) {
-    res.status(400).json({ error: "invalid targetGatewayId" });
-    return null;
-  }
-  if (typeof body.targetUrl !== "string" || body.targetUrl.length === 0) {
-    res.status(400).json({ error: "missing targetUrl" });
-    return null;
-  }
-  if (typeof body.targetImportSignature !== "string" || body.targetImportSignature.length === 0) {
-    res.status(400).json({ error: "missing targetImportSignature" });
-    return null;
-  }
-  try {
-    return {
-      targetGatewayId: body.targetGatewayId,
-      importUrl: resolveTargetImportUrl(body.targetUrl, body.targetGatewayId),
-      targetImportSignature: body.targetImportSignature,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    res.status(400).json({ error: "invalid targetUrl", message });
-    return null;
-  }
-}
-
 async function maybeMaterializeActivationManifest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody & { includeActivationManifest?: boolean },
@@ -1071,75 +869,7 @@ async function maybeMaterializeActivationManifest(
   }
 }
 
-function attachPushStateAbortHandlers(
-  res: Response,
-  params: { migrationId: string; slug: string; timeoutMs: number },
-  log: (msg: string) => void,
-): {
-  controller: AbortController;
-  didTimeout: () => boolean;
-  detach: () => void;
-} {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error(`push-state timed out after ${params.timeoutMs}ms`));
-  }, params.timeoutMs);
-  const onResClose = () => {
-    if (res.writableEnded || controller.signal.aborted) return;
-    log(
-      `[migration-http] controller closed push-state connection migrationId=${params.migrationId} slug=${params.slug} — aborting target import`,
-    );
-    controller.abort(new Error("controller disconnected mid-push-state"));
-  };
-  res.on("close", onResClose);
-  return {
-    controller,
-    didTimeout: () => timedOut,
-    detach: () => {
-      clearTimeout(timeout);
-      res.removeListener("close", onResClose);
-    },
-  };
-}
-
-function pushStateFailureStatus(
-  didTimeout: boolean,
-  signal: AbortSignal,
-): { status: number; error: string } {
-  if (didTimeout) return { status: 504, error: "push-state timed out" };
-  if (signal.aborted) return { status: 499, error: "controller disconnected" };
-  return { status: 500, error: "push-state failed" };
-}
-
-function respondPushStateFailure(input: {
-  res: Response;
-  body: PushStateRequestBody;
-  abort: ReturnType<typeof attachPushStateAbortHandlers>;
-  sourceTarError: unknown;
-  cause: unknown;
-  log: (msg: string) => void;
-}): void {
-  const { res, body, abort, sourceTarError, cause, log } = input;
-  const message = cause instanceof Error ? cause.message : String(cause);
-  log(`[migration-http] 🔴 push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
-  if (res.headersSent) {
-    res.destroy(cause instanceof Error ? cause : new Error(message));
-    return;
-  }
-  const failure = sourceTarError
-    ? { status: 500, error: "source tar failed" }
-    : pushStateFailureStatus(abort.didTimeout(), abort.controller.signal);
-  res.status(failure.status).json({ error: failure.error, message });
-}
-
 type MigrationImportMode = "keys" | "pre" | "final" | "default";
-
-function parseMigrationImportMode(value: string | undefined): MigrationImportMode {
-  if (value === "keys" || value === "pre" || value === "final") return value;
-  return "default";
-}
 
 function sourcesForPushMode(
   sources: Array<{ cwd: string; path: string }>,
@@ -1152,46 +882,6 @@ function sourcesForPushMode(
     return sources.filter((source) => source.path !== keyPath);
   }
   return sources;
-}
-
-async function finishPushStateAlreadyMounted(
-  res: Response,
-  parsed: ImportResponse,
-  targetGatewayId: string,
-): Promise<void> {
-  dlog(
-    `[migration-http] 🟢 push-state migrationId=${parsed.migrationId} slug=${parsed.slug} target=${targetGatewayId} already mounted`,
-  );
-  res.status(200).json(parsed);
-}
-
-export async function sendPushStateImportResponse(
-  importRes: globalThis.Response,
-  params: { migrationId: string; slug: string; targetGatewayId: string },
-  res: Response,
-  log: (msg: string) => void,
-): Promise<void> {
-  if (!importRes.ok) {
-    const text = await importRes.text().catch(() => "<no body>");
-    log(
-      `[migration-http] 🔴 push-state migrationId=${params.migrationId} slug=${params.slug} target import failed status=${importRes.status}: ${text}`,
-    );
-    res
-      .status(502)
-      .json({ error: "target import failed", status: importRes.status, message: text });
-    return;
-  }
-
-  const parsed = (await importRes.json()) as ImportResponse;
-  if (parsed.alreadyMounted) {
-    await finishPushStateAlreadyMounted(res, parsed, params.targetGatewayId);
-    return;
-  }
-
-  dlog(
-    `[migration-http] 🟢 push-state migrationId=${params.migrationId} slug=${params.slug} target=${params.targetGatewayId} done`,
-  );
-  res.status(200).json(parsed);
 }
 
 const RSYNC_IMPORT_MODULE = "state";
@@ -2352,103 +2042,6 @@ export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler 
   };
 }
 
-export function createPushStateHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
-  return async (req, res) => {
-    const body = parseAndVerifyJsonBody<PushStateRequestBody>(req, res, deps, log);
-    if (!body) return;
-    const target = validatePushStateBody(body, res);
-    if (!target) return;
-
-    const abort = attachPushStateAbortHandlers(
-      res,
-      { migrationId: body.migrationId, slug: body.slug, timeoutMs },
-      log,
-    );
-
-    let cleanupActivationManifest: () => Promise<void> = async () => {};
-    let sourceTarError: unknown;
-    try {
-      const allSources = await deps.adapter.listExportPaths(body.slug);
-      const sources = sourcesForPushMode(allSources, body.slug, body.mode);
-      if (sources.length === 0) {
-        res
-          .status(404)
-          .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
-        return;
-      }
-      await checkpointAgentStoresForCarry({ sources, log: dlog });
-
-      const activationManifest = body.mode !== "final" && body.mode !== undefined
-        ? { source: null, cleanup: async () => {} }
-        : await maybeMaterializeActivationManifest(deps, body);
-      cleanupActivationManifest = activationManifest.cleanup;
-      if (activationManifest.source) {
-        sources.push(activationManifest.source);
-      }
-      dlog(
-        `[migration-http] push-state mode=${body.mode ?? "default"} migrationId=${body.migrationId} slug=${body.slug} streaming ${sources.length} path(s) to ${target.targetGatewayId}`,
-      );
-
-      const tar = spawnTarStream(sources);
-      const tarDone = tar.done.catch((err: unknown) => {
-        sourceTarError = err;
-        abort.controller.abort(err);
-        throw err;
-      });
-      let importRes: globalThis.Response;
-      try {
-        importRes = await fetchImpl(
-        target.importUrl,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-tar",
-            [SIGNATURE_HEADER]: target.targetImportSignature,
-            [MIGRATION_ID_HEADER]: body.migrationId,
-            [MIGRATION_SLUG_HEADER]: body.slug,
-            [MIGRATION_MODE_HEADER]: body.mode ?? "default",
-          },
-          body: tar.stdout,
-          duplex: "half",
-          signal: abort.controller.signal,
-        } as unknown as RequestInit & { duplex: "half" },
-        );
-        await tarDone;
-      } catch (err) {
-        tar.child.kill();
-        await tar.done.catch(() => undefined);
-        throw sourceTarError ?? err;
-      }
-
-      await sendPushStateImportResponse(
-        importRes,
-        {
-          migrationId: body.migrationId,
-          slug: body.slug,
-          targetGatewayId: target.targetGatewayId,
-        },
-        res,
-        log,
-      );
-    } catch (err) {
-      respondPushStateFailure({
-        res,
-        body,
-        abort,
-        sourceTarError,
-        cause: err,
-        log,
-      });
-    } finally {
-      abort.detach();
-      await cleanupActivationManifest();
-    }
-  };
-}
-
 function attachImportDisconnectHandlers(
   res: Response,
   migrationId: string,
@@ -2473,33 +2066,6 @@ const controller = new AbortController();
   };
 }
 
-function validateImportRequest(
-  deps: MigrationHandlerDeps,
-  req: Request,
-  res: Response,
-  log: (msg: string) => void,
-): { migrationId: string; slug: string; mode: MigrationImportMode } | null {
-  const migrationId = req.header(MIGRATION_ID_HEADER);
-  const slug = req.header(MIGRATION_SLUG_HEADER);
-  if (!migrationId || !slug) {
-    res.status(400).json({
-      error: "missing migration headers",
-      required: [MIGRATION_ID_HEADER, MIGRATION_SLUG_HEADER],
-    });
-    return null;
-  }
-  if (rejectInvalidSlug(slug, res)) return null;
-  const sigHeader = req.header(SIGNATURE_HEADER);
-  if (!verifyHeaderSignature(migrationId, slug, sigHeader, deps)) {
-    log(`[migration-http] 🔴 bad signature on import migrationId=${migrationId} slug=${slug}`);
-    res.status(401).json({ error: "invalid signature" });
-    return null;
-  }
-  if (rejectMisaddressedGateway(req, res, deps.gatewayId, log)) return null;
-  const mode = parseMigrationImportMode(req.header(MIGRATION_MODE_HEADER));
-  return { migrationId, slug, mode };
-}
-
 function respondImportFailure(
   res: Response,
   controllerSignal: AbortSignal,
@@ -2517,167 +2083,6 @@ res.status(499).json({ error: "client disconnected", message });
     return;
   }
   res.destroy(err instanceof Error ? err : new Error(message));
-}
-
-async function extractValidatedImport(input: {
-  tarPath: string;
-  importDir: string;
-  slug: string;
-  mode: MigrationImportMode;
-  signal: AbortSignal;
-  log: (message: string) => void;
-}): Promise<string | null> {
-  const entries = await listTarEntries(input.tarPath);
-  const traversal = findPathTraversalViolation(entries, input.slug, input.mode);
-  if (traversal !== null) return traversal;
-
-  const stageDir = path.join(path.dirname(input.tarPath), "stage");
-  await fs.mkdir(stageDir, { recursive: true });
-  await extractTarToDir(input.tarPath, stageDir);
-  const unsafeGitMetadata = await validateStagedGitMetadata(stageDir, input.slug);
-  if (unsafeGitMetadata !== null) return unsafeGitMetadata;
-  const delivered = entries
-    .filter((entry) => isSqliteStorePath(entry))
-    .map((entry) => path.join(stageDir, entry));
-  const unreadable = await findUnreadableStore({ storePaths: delivered, relativeTo: stageDir });
-  if (unreadable) return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
-  if (input.mode !== "keys") {
-    await upgradeStagedAgentStores(stageDir, { signal: input.signal, log: input.log });
-  }
-  if (input.mode === "final") await assertCarriedAgentSessionsDrained(stageDir);
-  await clearSqliteSidecars(delivered.map((store) => path.join(input.importDir, path.relative(stageDir, store))));
-  await copyStageToOpenClaw(stageDir, input.importDir, input.slug);
-  return null;
-}
-
-export function createImportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
-    const validated = validateImportRequest(deps, req, res, log);
-    if (!validated) return;
-    const { migrationId, slug, mode } = validated;
-
-    const { controller, detach } = attachImportDisconnectHandlers(
-      res,
-      migrationId,
-      slug,
-      log,
-    );
-
-    let tmpDir: string | null = null;
-    try {
-      if (controller.signal.aborted) throw controller.signal.reason ?? new Error("aborted");
-      const importDir = mode === "keys"
-        ? await deps.adapter.prepareKeyImportDir(slug)
-        : await deps.adapter.prepareImportDir(slug, mode);
-      log(
-        `🟡 [migration-http] import mode=${mode} migrationId=${migrationId} slug=${slug} unpacking → ${importDir}`,
-      );
-
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-${migrationId}-`));
-      const tarPath = path.join(tmpDir, "import.tar");
-
-      await streamRequestToFile(req, tarPath);
-
-      const violation = await extractValidatedImport({ tarPath, importDir, slug, mode, signal: controller.signal, log });
-      if (violation !== null) {
-        log(
-          `[migration-http] 🔴 import migrationId=${migrationId} slug=${slug} rejected: ${violation}`,
-        );
-        res.status(400).json({
-          error: "tarball failed validation",
-          message: violation,
-        });
-        return;
-      }
-
-      if (mode === "keys") {
-        const response: ImportResponse = { migrationId, slug, imported: true };
-        log(`[migration-http] 🟢 import mode=keys migrationId=${migrationId} slug=${slug} done`);
-        res.status(200).json(response);
-        return;
-      }
-
-      // Pin BEFORE activation: activation coach-wires the customer here, but cutover hasn't
-      // yet made it desired-on-this-gateway. The pin keeps the reconcile evict direction
-      // from draining the fresh import during that window. Self-expiring (see the pin's TTL).
-      deps.adapter.markCustomerMigratingIn?.(slug);
-      const verificationPending = await mountImportedCustomer({
-        deps,
-        slug,
-        mode,
-        signal: controller.signal,
-      });
-
-      const response: ImportResponse = {
-        migrationId,
-        slug,
-        imported: true,
-        ...(verificationPending ? { verificationPending } : {}),
-      };
-      log(
-        `${verificationPending ? "🟡" : "🟢"} [migration-http] import migrationId=${migrationId} slug=${slug} ${verificationPending ? "verification-pending" : "done"}` +
-        (verificationPending ? ` (verification pending: ${verificationPending})` : ""),
-      );
-      res.status(200).json(response);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 import migrationId=${migrationId} slug=${slug}: ${message}`);
-      respondImportFailure(res, controller.signal, err);
-    } finally {
-      detach();
-
-if (tmpDir) {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-      }
-    }
-  };
-}
-
-async function streamRequestToFile(req: Request, dest: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const writeStream = createWriteStream(dest);
-    let settled = false;
-    const settle = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      action();
-    };
-    req.on("error", (err) => settle(() => reject(err)));
-    writeStream.on("error", (err) => settle(() => reject(err)));
-    writeStream.on("finish", () => settle(() => resolve()));
-    req.pipe(writeStream);
-  });
-}
-
-async function listTarEntries(tarPath: string): Promise<string[]> {
-  return new Promise<string[]>((resolve, reject) => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
-    const child = spawn("tar", ["-tf", tarPath], { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(stdout.split("\n").filter((s) => s.length > 0));
-      else reject(new Error(`tar -tf exit ${code}: ${stderr.trim()}`));
-    });
-  });
-}
-
-async function extractTarToDir(tarPath: string, dest: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- gateway image, PATH controlled
-    const child = spawn("tar", ["-xf", tarPath, "-C", dest], { stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`tar -xf exit ${code}: ${stderr.trim()}`));
-    });
-  });
 }
 
 function allowedMigrationPrefixes(slug: string, mode: MigrationImportMode): string[] {

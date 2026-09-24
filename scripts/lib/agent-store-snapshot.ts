@@ -2,13 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { assertCarriedAgentSessionsDrained, listSqliteStores } from "./agent-store-carry.js";
 import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
+import { assertNotHeld, matchFiles, sqliteFamily } from "./held-files.js";
 import { runOpenClaw, type OpenClawCommand, type OpenClawCommandResult } from "./openclaw-cli.js";
 
 export const AGENT_STORE_BASENAME = "openclaw-agent.sqlite";
 export const AGENT_SNAPSHOT_DIRNAME = ".octogee-snapshot";
 export const AGENT_IMPORT_DIRNAME = ".octogee-import";
-const SQLITE_FAMILY_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
-const DELETED_LINK_SUFFIX = " (deleted)";
 
 export const LIVE_AGENT_STORE_EXCLUDE_ARGS = [
   `--exclude=${AGENT_STORE_BASENAME}`,
@@ -208,58 +207,9 @@ export async function prepareAgentStoreSnapshots(
   return { landingRoot, stores };
 }
 
-export class HeldAgentStoreError extends Error {
-  readonly heldPaths: readonly string[];
-
-  constructor(heldPaths: readonly string[]) {
-    super(`agent database files are still held open: ${heldPaths.join(", ")}`);
-    this.name = "HeldAgentStoreError";
-    this.heldPaths = heldPaths;
-  }
-}
-
-function isVanishedOrForeignProcess(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | null)?.code;
-  return code === "ENOENT" || code === "ESRCH" || code === "EACCES" || code === "EPERM";
-}
-
-async function heldByProcess(fdDir: string, candidates: ReadonlySet<string>): Promise<string[]> {
-  let descriptors: string[];
-  try {
-    descriptors = await fs.readdir(fdDir);
-  } catch (error) {
-    if (isVanishedOrForeignProcess(error)) return [];
-    throw error;
-  }
-  const held: string[] = [];
-  for (const descriptor of descriptors) {
-    let target: string;
-    try {
-      target = await fs.readlink(path.join(fdDir, descriptor));
-    } catch (error) {
-      if (isVanishedOrForeignProcess(error)) continue;
-      throw error;
-    }
-    const linked = target.endsWith(DELETED_LINK_SUFFIX) ? target.slice(0, -DELETED_LINK_SUFFIX.length) : target;
-    if (candidates.has(linked)) held.push(linked);
-  }
-  return held;
-}
-
-export async function findHeldFiles(files: readonly string[], procRoot: string): Promise<string[]> {
-  const candidates = new Set(files);
-  const held = new Set<string>();
-  for (const pid of await fs.readdir(procRoot)) {
-    if (!/^\d+$/u.test(pid)) continue;
-    for (const file of await heldByProcess(path.join(procRoot, pid, "fd"), candidates)) held.add(file);
-  }
-  return [...held].sort();
-}
-
 async function existingFamilyFiles(databasePath: string): Promise<string[]> {
   const existing: string[] = [];
-  for (const suffix of SQLITE_FAMILY_SUFFIXES) {
-    const file = `${databasePath}${suffix}`;
+  for (const file of sqliteFamily(databasePath)) {
     try {
       await fs.lstat(file);
       existing.push(file);
@@ -281,9 +231,8 @@ export async function installPreparedAgentStores(input: {
     if (occupied.length > 0) {
       input.log?.(`[agent-store-snapshot] releasing ${store.agentId} before replacing its database`);
       await input.releaseAgent(store.agentId);
-      const family = SQLITE_FAMILY_SUFFIXES.map((suffix) => `${store.destinationPath}${suffix}`);
-      const held = await findHeldFiles(family, input.procRoot);
-      if (held.length > 0) throw new HeldAgentStoreError(held);
+      const family = sqliteFamily(store.destinationPath);
+      await assertNotHeld(matchFiles(family), input.procRoot);
       for (const file of family) await fs.rm(file, { force: true });
     }
     await fs.mkdir(path.dirname(store.destinationPath), { recursive: true, mode: 0o700 });

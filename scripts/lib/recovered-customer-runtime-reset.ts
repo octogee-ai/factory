@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertNotHeldSync, matchFiles, PROC_ROOT, sqliteFamily } from "./held-files.js";
 
 import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
 import { parseAgentId, workspaceCoachAgentId } from "../../shared/types/identity.js";
@@ -264,6 +265,7 @@ export function resetRecoveredCustomerRuntime(options: {
   slug: string;
   agentIds: readonly string[];
   log?: (message: string) => void;
+  procRoot?: string;
 }): RecoveredCustomerRuntimeResetResult {
   if (!options.uid || !options.slug) throw new Error("runtime reset customer identity is required");
   const openclawDir = path.resolve(options.openclawDir);
@@ -274,6 +276,12 @@ export function resetRecoveredCustomerRuntime(options: {
   const resetAgentIds = agentIds.filter((agentId) =>
     agentStoreNeedsReset(databasePaths.get(agentId)!),
   );
+  if (resetAgentIds.length > 0) {
+    assertNotHeldSync(
+      matchFiles(resetAgentIds.flatMap((agentId) => sqliteFamily(databasePaths.get(agentId)!))),
+      options.procRoot ?? PROC_ROOT,
+    );
+  }
   const workspacePaths = new Map(
     agentIds.map((agentId) => [
       agentId,

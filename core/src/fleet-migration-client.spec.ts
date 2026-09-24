@@ -5,7 +5,6 @@ import {
   CONFIG_PATCH_DEADLINE_MS,
   SIGNATURE_HEADER,
   MIGRATION_QUIESCE_TIMEOUT_MS,
-  MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
@@ -47,6 +46,9 @@ function captureFetch(handler: (call: CapturedCall) => Response | Promise<Respon
 }
 
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
+const transferNotUnderTest = async (): Promise<never> => {
+  throw new Error("state transfer is not under test");
+};
 const SNAPSHOT: FleetBrokerUserSnapshot = {
   uid: "uid-alice",
   slug: "alice",
@@ -88,6 +90,7 @@ describe("MigrationClient transport normalization", () => {
     Object.assign(new Error("premature close"), { code: "ECONNRESET" }),
   ])("normalizes raw fetch transport failures as retryable", async (failure) => {
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://source.example.com",
       fetch: vi.fn(async () => { throw failure; }),
@@ -102,6 +105,7 @@ describe("MigrationClient transport normalization", () => {
 
   it("normalizes a truncated successful JSON response as retryable transport loss", async () => {
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://source.example.com",
       fetch: vi.fn(async () => new Response('{"migrationId":"mig-1"', {
@@ -130,6 +134,7 @@ describe("MigrationClient.quiesce", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet-test.example.com`,
       fetch: fakeFetch,
@@ -159,6 +164,7 @@ describe("MigrationClient.quiesce", () => {
       new Response(JSON.stringify({ error: "invalid signature" }), { status: 401 }),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -176,6 +182,7 @@ describe("MigrationClient.quiesce", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -195,6 +202,7 @@ describe("MigrationClient — transport/tenant split", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: (id) =>
         id === "default-r1" ? "https://rev1.example.com" : `https://${id}.example.com`,
@@ -234,6 +242,7 @@ describe("MigrationClient — transport/tenant split", () => {
       );
     });
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: (id) => `https://${id}.example.com`,
       fetch: fakeFetch,
@@ -253,33 +262,6 @@ describe("MigrationClient — transport/tenant split", () => {
     expect(calls[2].url).toBe("https://default-r1.example.com/unmount/default");
   });
 
-  it("transferState: source URL from fromTransportId, targetUrl from toTransportId, body ids bare", async () => {
-    const { calls, fakeFetch } = captureFetch(() =>
-      new Response(
-        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-    const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: (id) => `https://${id}.example.com`,
-      fetch: fakeFetch,
-    });
-    await client.transferState({
-      migrationId: "m1",
-      fromGatewayId: "default",
-      toGatewayId: "default",
-      fromTransportId: "default-r1",
-      toTransportId: "default-r2",
-      slug: "alice",
-    });
-    expect(calls[0].url).toBe("https://default-r1.example.com/push-state/default");
-    const parsed = JSON.parse(calls[0].body!);
-    expect(parsed).toMatchObject({
-      targetGatewayId: "default",
-      targetUrl: "https://default-r2.example.com",
-    });
-  });
 });
 
 describe("MigrationClient.flushGateway", () => {
@@ -299,6 +281,7 @@ describe("MigrationClient.flushGateway", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://target.example.com",
       fetch: fakeFetch,
@@ -332,6 +315,7 @@ describe("MigrationClient.unmount", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -353,6 +337,7 @@ describe("MigrationClient.unmount", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -376,6 +361,7 @@ describe("MigrationClient.restoreTarget", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -403,161 +389,18 @@ describe("MigrationClient.restoreTarget", () => {
 });
 
 describe("MigrationClient.transferState", () => {
-  it("names the post-commit step an imported customer could not confirm", async () => {
-    const logs: string[] = [];
-    const { fakeFetch } = captureFetch(() =>
-      new Response(
-        JSON.stringify({
-          migrationId: "m1",
-          slug: "alice",
-          imported: true,
-          verificationPending: "connect response timed out after 30000ms",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
+  it("hands every state transfer to the injected transport", async () => {
+    const transferState = vi.fn(async () => ({ migrationId: "mig-1", slug: "alice", imported: true }));
     const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: () => "https://fleet.example.com",
-      fetch: fakeFetch,
-      log: (message) => logs.push(message),
+      privateKey: FLEET_KEY_PAIR.privateKey,
+      resolveGatewayUrl: (id) => `http://${id}`,
+      fetch: vi.fn() as unknown as typeof fetch,
+      transferState,
     });
-    await expect(client.transferState({
-      migrationId: "m1",
-      fromGatewayId: "gw-from",
-      toGatewayId: "gw-to",
-      slug: "alice",
-    })).resolves.toMatchObject({ imported: true });
+    const request = { migrationId: "mig-1", fromGatewayId: "gw-a", toGatewayId: "gw-b", slug: "alice", mode: "final" as const };
 
-    expect(logs.some((line) => line.includes("verification pending"))).toBe(true);
-  });
-
-  it("tells the source gateway to push directly to the target gateway", async () => {
-    const { calls, fakeFetch } = captureFetch(() =>
-      new Response(
-        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: (id) =>
-        id === "gw-from" ? "https://fleet-from.example.com" : "https://fleet-to.example.com",
-      fetch: fakeFetch,
-    });
-    const res = await client.transferState({
-      migrationId: "m1",
-      fromGatewayId: "gw-from",
-      toGatewayId: "gw-to",
-      slug: "alice",
-    });
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("https://fleet-from.example.com/push-state/gw-from");
-    expect(calls[0].method).toBe("POST");
-    const parsed = JSON.parse(calls[0].body!);
-    expect(parsed).toEqual({
-      migrationId: "m1",
-      slug: "alice",
-      targetGatewayId: "gw-to",
-      targetUrl: "https://fleet-to.example.com",
-      targetImportSignature: signFleetRequest(
-        PRIVATE_KEY,
-        gatewayScopedJobId("m1", "gw-to"),
-        "alice",
-      ),
-    });
-    const expectedSig = signFleetRequest(
-      PRIVATE_KEY,
-      gatewayScopedJobId("m1", "gw-from"),
-      calls[0].body!,
-    );
-    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(expectedSig);
-    expect(res.imported).toBe(true);
-  });
-
-  it("uses the controller private key for source and target signatures and can request an activation manifest", async () => {
-    const { calls, fakeFetch } = captureFetch(() =>
-      new Response(
-        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-    const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: (id) =>
-        id === "gw-from" ? "https://fleet-from.example.com" : "https://fleet-to.example.com",
-      fetch: fakeFetch,
-    });
-    await client.transferState({
-      migrationId: "m1",
-      fromGatewayId: "gw-from",
-      toGatewayId: "gw-to",
-      slug: "alice",
-      mode: "final",
-      includeActivationManifest: true,
-      projectCheckoutScope: "workspace-only",
-    });
-
-    const parsed = JSON.parse(calls[0].body!);
-    expect(parsed).toMatchObject({
-      mode: "final",
-      includeActivationManifest: true,
-      projectCheckoutScope: "workspace-only",
-      targetImportSignature: signFleetRequest(
-        PRIVATE_KEY,
-        gatewayScopedJobId("m1", "gw-to"),
-        "alice",
-      ),
-    });
-    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
-      signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-from"), calls[0].body!),
-    );
-  });
-
-  it("can request key-only transfer before durable restore", async () => {
-    const { calls, fakeFetch } = captureFetch(() =>
-      new Response(
-        JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-    const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: () => "https://fleet.example.com",
-      fetch: fakeFetch,
-    });
-    await client.transferState({
-      migrationId: "m1",
-      fromGatewayId: "gw-from",
-      toGatewayId: "gw-to",
-      slug: "alice",
-      mode: "keys",
-    });
-
-    expect(JSON.parse(calls[0].body!)).toMatchObject({ mode: "keys" });
-  });
-
-  it("throws if push-state returns non-2xx", async () => {
-    const { calls, fakeFetch } = captureFetch(() =>
-      new Response("source gateway is draining", { status: 503 }),
-    );
-
-    const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: () => `https://fleet.example.com`,
-      fetch: fakeFetch,
-    });
-    await expect(
-      client.transferState({
-        migrationId: "m1",
-        fromGatewayId: "gw-from",
-        toGatewayId: "gw-to",
-        slug: "alice",
-      }),
-    ).rejects.toThrow(/push-state.*503.*source gateway is draining/i);
-    expect(calls).toHaveLength(1);
+    await expect(client.transferState(request)).resolves.toEqual({ migrationId: "mig-1", slug: "alice", imported: true });
+    expect(transferState).toHaveBeenCalledWith(request);
   });
 });
 
@@ -580,6 +423,7 @@ describe("MigrationClient.verifyTarget", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -619,6 +463,7 @@ describe("MigrationClient.verifyTarget", () => {
         ),
       );
       const client = createMigrationClient({
+        transferState: transferNotUnderTest,
         privateKey: PRIVATE_KEY,
         resolveGatewayUrl: () => `https://fleet.example.com`,
         fetch: fakeFetch,
@@ -657,6 +502,7 @@ describe("MigrationClient.verifyTarget", () => {
       ),
     );
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
       fetch: fakeFetch,
@@ -686,6 +532,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
   it("passes an AbortSignal on quiesce derived from MIGRATION_QUIESCE_TIMEOUT_MS", async () => {
     const { fakeFetch, seenSignal } = captureSignal();
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://fleet.example.com",
       fetch: fakeFetch,
@@ -710,6 +557,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     }) as typeof fetch;
 
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://fleet.example.com",
       fetch: fakeFetch,
@@ -724,33 +572,6 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     await expect(
       client.unmount({ migrationId: "m1", gatewayId: "gw", slug: "alice" }),
     ).rejects.toThrow(/unmount.*timed out.*25ms/i);
-  });
-
-  it("passes the AbortSignal on /push-state inside transferState", async () => {
-    const signals: Array<AbortSignal | undefined> = [];
-    const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      signals.push(init?.signal ?? undefined);
-      return new Response(JSON.stringify({ migrationId: "m1", slug: "alice", imported: true }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
-
-    const client = createMigrationClient({
-      privateKey: PRIVATE_KEY,
-      resolveGatewayUrl: () => "https://fleet.example.com",
-      fetch: fakeFetch,
-    });
-    await client.transferState({
-      migrationId: "m1",
-      fromGatewayId: "gw-from",
-      toGatewayId: "gw-to",
-      slug: "alice",
-    });
-
-    expect(signals).toHaveLength(1);
-    expect(signals[0]).toBeInstanceOf(AbortSignal);
-    expect(MIGRATION_TRANSFER_TIMEOUT_MS).toBeGreaterThan(MIGRATION_UNMOUNT_TIMEOUT_MS);
   });
 
   it("gives source unmount enough time for agent deletion and its config cleanup", () => {
@@ -779,6 +600,7 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     }) as typeof fetch;
 
     const client = createMigrationClient({
+      transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => "https://fleet.example.com",
       fetch: fakeFetch,

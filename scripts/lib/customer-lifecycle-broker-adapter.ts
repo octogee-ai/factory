@@ -158,6 +158,7 @@ import {
   removeActivationManifest,
 } from "./migration-activation-manifest.js";
 import { discardUnusableAgentStores } from "./unusable-agent-store.js";
+import { assertNotHeld, matchUnder, PROC_ROOT } from "./held-files.js";
 import {
   exportActivationManifestWithSecret,
   materializeActivationManifestSecret,
@@ -234,6 +235,7 @@ interface BuildBrokeredLifecycleAdapterOptions {
   isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
   reloadGate?: RuntimeReloadGate;
+  procRoot?: string;
 }
 
 interface BrokerCtx {
@@ -247,6 +249,7 @@ interface BrokerCtx {
   snapshotsBySlug: Map<string, FleetBrokerUserSnapshot>;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
   configRemovedForEviction: Set<string>;
+  procRoot: string;
 }
 
 // The roster and the departing agents' bindings are `agents.delete`'s job —
@@ -295,6 +298,13 @@ async function deleteAgentsAndInvalidateCache(
     // snapshot — and its base hash — is stale the moment the first one lands.
     invalidateConfigCache(ctx);
   }
+}
+
+function agentStateRelease(ctx: BrokerCtx, logPrefix: string): AgentStateRelease {
+  return {
+    releaseAgents: (agentIds) => deleteAgentsAndInvalidateCache(ctx, agentIds, logPrefix),
+    procRoot: ctx.procRoot,
+  };
 }
 
 async function deleteDepartingCustomerAgents(
@@ -1261,19 +1271,24 @@ function agentIdsForMigration(slug: string): string[] {
   for (const entry of stateDirectoryEntries(path.join(stateDir, "agents"))) {
     if (entry.isDirectory()) addIfOwned(entry.name);
   }
-  for (const entry of stateDirectoryEntries(path.join(stateDir, "memory"))) {
-    if (!entry.isFile()) continue;
-    const suffix = [".sqlite-wal", ".sqlite-shm", ".sqlite"].find((candidate) =>
-      entry.name.endsWith(candidate),
-    );
-    if (suffix) addIfOwned(entry.name.slice(0, -suffix.length));
-  }
   return [...agentIds].sort();
 }
 
-function memoryPathsForAgent(agentId: string): Array<{ cwd: string; path: string }> {
+interface AgentStateRelease {
+  releaseAgents: (agentIds: readonly string[]) => Promise<void>;
+  procRoot: string;
+}
+
+async function releaseAgentState(agentIds: readonly string[], release: AgentStateRelease): Promise<string[]> {
   const stateDir = resolveOpenClawStateDir();
-  return [{ cwd: stateDir, path: path.join("memory", `${agentId}.sqlite`) }];
+  const agentDirs = agentIds.map((agentId) => path.join(stateDir, "agents", agentId));
+  await release.releaseAgents(agentIds);
+  for (const agentDir of agentDirs) await assertNotHeld(matchUnder(agentDir), release.procRoot);
+  return agentDirs;
+}
+
+async function removeAgentDirs(agentDirs: readonly string[]): Promise<void> {
+  for (const agentDir of agentDirs) await fsp.rm(agentDir, { recursive: true, force: true });
 }
 
 async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path: string }>> {
@@ -1292,7 +1307,6 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
           cwd: stateDir,
           path: path.join("agents", agentId),
         })),
-        ...agentIdsForMigration(slug).flatMap((agentId) => memoryPathsForAgent(agentId)),
       ]),
     ...await customerFileStatePaths(OPENCLAW_DIR, slug),
   ];
@@ -1311,19 +1325,16 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
 async function prepareImportDir(
   slug: string,
   mode: CustomerStateImportMode,
+  release: AgentStateRelease,
 ): Promise<string> {
   const stateDir = resolveOpenClawStateDir();
   const builderPlan = isConfiguredGatewayBuilder(slug)
     ? configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir)
     : null;
   if (builderPlan) assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
-  const wipePaths = mode === "final" || builderPlan ? [] : [
-    ...agentIdsForMigration(slug).flatMap((agentId) => [
-      path.join(stateDir, "agents", agentId),
-      path.join(stateDir, "memory", `${agentId}.sqlite`),
-      path.join(stateDir, "memory", `${agentId}.sqlite-wal`),
-      path.join(stateDir, "memory", `${agentId}.sqlite-shm`),
-    ]),
+  const wipeState = mode !== "final" && !builderPlan;
+  if (wipeState) await removeAgentDirs(await releaseAgentState(agentIdsForMigration(slug), release));
+  const wipePaths = !wipeState ? [] : [
     path.join(OPENCLAW_DIR, "customers", slug),
     path.join(OPENCLAW_DIR, MIGRATION_ACTIVATION_DIR, slug),
   ];
@@ -1375,7 +1386,7 @@ async function activateImportedCustomer(
   // open takes down the whole target gateway the moment activation registers
   // the agent, which then blocks the very account health-check below — so
   // clear it here, while the import still owns the state.
-  for (const discarded of discardUnusableAgentStores({ agentsDir: AGENTS_DIR, logFn: ctx.log })
+  for (const discarded of discardUnusableAgentStores({ agentsDir: AGENTS_DIR, logFn: ctx.log, procRoot: ctx.procRoot })
     .discarded) {
     ctx.log(
       `[import:${slug}] discarded imported ${discarded.agentId} store (schema ${discarded.schemaVersion})`,
@@ -1596,23 +1607,12 @@ async function removeImportedCustomerBySlug(
     ctx.configRemovedForEviction.delete(slug);
     return { wasMounted: true, steps: ["config-patch-remove"], retained: true };
   }
+  const agentDirs = await releaseAgentState(agentIdsForMigration(slug), agentStateRelease(ctx, `[remove:${slug}]`));
   await fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true });
   if (!isConfiguredGatewayBuilder(slug)) {
     await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
   }
-  const stateDir = resolveOpenClawStateDir();
-  for (const agentId of agentIdsForMigration(slug)) {
-    await fsp.rm(path.join(stateDir, "agents", agentId), {
-      recursive: true,
-      force: true,
-    });
-    for (const suffix of [".sqlite", ".sqlite-wal", ".sqlite-shm"]) {
-      await fsp.rm(path.join(stateDir, "memory", `${agentId}${suffix}`), {
-        recursive: true,
-        force: true,
-      });
-    }
-  }
+  await removeAgentDirs(agentDirs);
   return { wasMounted: true, steps: ["config-patch-remove", "delete-dir"] };
 }
 
@@ -1630,6 +1630,7 @@ export function buildBrokeredLifecycleAdapter(
     snapshotsBySlug: new Map(),
     projectCheckoutScope: opts.projectCheckoutScope,
     configRemovedForEviction: new Set(),
+    procRoot: opts.procRoot ?? PROC_ROOT,
   };
   const adapter: CustomerLifecycleAdapter = {
     log: opts.log,
@@ -1757,7 +1758,7 @@ export function buildBrokeredLifecycleAdapter(
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     resumeCustomer: (slug) => setCustomerChannelsRunning(ctx.rpc, slug, true),
     listExportPaths,
-    prepareImportDir,
+    prepareImportDir: (slug, mode) => prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`)),
     prepareKeyImportDir,
     activateImportedCustomer: (slug, callOpts) =>
       openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {

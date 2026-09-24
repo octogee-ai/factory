@@ -23,6 +23,7 @@ const {
   resolveAuthDbPath,
 } = authProfileSqlite;
 import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./model-credential-materializer.js";
 import {
   agentModelTokenProfileEntry,
@@ -412,6 +413,44 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     expect(verified.prepare("SELECT body FROM transcript_events WHERE event_id = ?")
       .get("event-1")).toEqual({ body: "conversation remains" });
     verified.close();
+  });
+
+  it("waits for a live writer instead of failing the session scrub with SQLITE_BUSY", async () => {
+    const oc = mkTmp();
+    const home = mkTmp();
+    const agentId = "octogee-alice-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    writeAuthProfileStore(agentDir, { profiles: canonicalAuthProfiles(agentId) });
+    fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+    const dbPath = resolveAuthDbPath(agentDir);
+    const db = new DatabaseSync(dbPath);
+    db.exec("CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, entry_json TEXT NOT NULL)");
+    db.prepare("INSERT INTO session_nodes (session_key, entry_json) VALUES (?, ?)").run(
+      "unsafe",
+      JSON.stringify({ sessionId: "unsafe-session", providerOverride: "evil-provider", totalTokens: 7 }),
+    );
+    db.close();
+    const writer = spawn(process.execPath, ["-e", `
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(${JSON.stringify(dbPath)});
+      db.exec("BEGIN IMMEDIATE");
+      process.stdout.write("locked\\n");
+      setTimeout(() => { db.exec("COMMIT"); db.close(); }, 500);
+    `], { stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise((resolve) => writer.stdout!.once("data", resolve));
+
+    const result = purgeCustomerOauthRuntimeArtifacts({
+      openclawDir: oc,
+      homeDir: home,
+      agentIds: [agentId],
+      resetSessionStores: false,
+      allowedModelRefs: ["anthropic/claude-sonnet-4-6"],
+      allowedProviderIds: ["anthropic"],
+    });
+    await new Promise((resolve) => writer.once("close", resolve));
+
+    expect(result).toMatchObject({ resetSessions: 1 });
   });
 
   it("exact-projects bound auth profiles and per-agent model providers", () => {

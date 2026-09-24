@@ -82,6 +82,27 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
   };
 }
 
+async function procRootHolding(tempRoot: string, files: readonly string[]): Promise<string> {
+  const procRoot = path.join(tempRoot, "proc");
+  await fs.mkdir(path.join(procRoot, "92", "fd"), { recursive: true });
+  for (const [index, file] of files.entries()) {
+    await fs.symlink(file, path.join(procRoot, "92", "fd", String(40 + index)));
+  }
+  return procRoot;
+}
+
+function removalRpc(agentsDelete: ReturnType<typeof vi.fn>): GatewayRpcClient {
+  return {
+    configGet: vi.fn(async () => ({
+      config: { agents: { entries: { "octogee-alice-coach": { model: "house" } } } },
+      hash: "cfg-hash",
+    })),
+    agentsDelete,
+    channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
+    channelsStop: vi.fn(async () => ({ ok: true as const })),
+  } as unknown as GatewayRpcClient;
+}
+
 async function withRuntimeMock(fn: (runtime: RuntimeMock) => Promise<void>): Promise<void> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "customer-agent-dir-"));
   const agentsDir = path.join(tempRoot, "agents");
@@ -248,17 +269,138 @@ describe("customer lifecycle config patch agent directories", () => {
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
+      const agentsDelete = vi.fn(async ({ agentId }: { agentId: string }) => {
+        expect(fsSync.existsSync(path.join(agentsDir, agentId))).toBe(true);
+        return { ok: true as const, agentId, removedBindings: 0 };
+      });
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
-        rpc: {} as GatewayRpcClient,
+        rpc: { agentsDelete } as unknown as GatewayRpcClient,
         log: vi.fn(),
+        procRoot: await procRootHolding(tempRoot, []),
       });
 
       await adapter.prepareImportDir("alice", "pre");
 
+      expect(agentsDelete).toHaveBeenCalledWith(expect.objectContaining({ agentId: "octogee-alice-coach" }));
+
       expect(fsSync.existsSync(agentDir)).toBe(true);
       expect(fsSync.existsSync(path.join(agentDir, "stale.json"))).toBe(false);
       expect(fsSync.existsSync(customerKey)).toBe(true);
+    });
+  });
+
+  it("broker import preparation refuses to wipe an agent dir a process still holds", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const database = path.join(agentDir, "openclaw-agent.sqlite");
+      const customerFile = path.join(tempRoot, "customers", "alice", "notes.md");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(database, "live");
+      await fs.mkdir(path.dirname(customerFile), { recursive: true });
+      await fs.writeFile(customerFile, "notes");
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: {
+          agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 })),
+        } as unknown as GatewayRpcClient,
+        log: vi.fn(),
+        procRoot: await procRootHolding(tempRoot, [`${database}-shm`]),
+      });
+
+      await expect(adapter.prepareImportDir("alice", "pre"))
+        .rejects.toThrow(`agent database files are still held open: ${database}-shm`);
+      expect(fsSync.existsSync(database)).toBe(true);
+      expect(fsSync.existsSync(customerFile)).toBe(true);
+    });
+  });
+
+  it("removes a departed customer's agent dirs only after OpenClaw released them", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const customerDir = path.join(tempRoot, "customers", "alice");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "openclaw-agent.sqlite"), "released");
+      await fs.mkdir(customerDir, { recursive: true });
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const agentsDelete = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 }));
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: removalRpc(agentsDelete),
+        log: vi.fn(),
+        procRoot: await procRootHolding(tempRoot, []),
+      });
+
+      await expect(adapter.removeImportedCustomerBySlug("alice")).resolves.toMatchObject({
+        wasMounted: true,
+        steps: ["config-patch-remove", "delete-dir"],
+      });
+      expect(agentsDelete).toHaveBeenCalledWith(expect.objectContaining({ agentId: "octogee-alice-coach" }));
+      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach"))).toBe(false);
+      expect(fsSync.existsSync(customerDir)).toBe(false);
+    });
+  });
+
+  it("releases an agent dir found on disk through OpenClaw even when the roster no longer names it", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(path.join(agentDir, "openclaw-agent.sqlite"), "unrostered");
+      await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const agentsDelete = vi.fn(async ({ agentId }: { agentId: string }) => {
+        expect(fsSync.existsSync(path.join(agentsDir, agentId))).toBe(true);
+        return { ok: true as const, agentId, removedBindings: 0 };
+      });
+      const rpc = removalRpc(agentsDelete) as unknown as { configGet: ReturnType<typeof vi.fn> };
+      rpc.configGet.mockResolvedValue({ config: { agents: { entries: {} } }, hash: "cfg-hash" });
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: rpc as unknown as GatewayRpcClient,
+        log: vi.fn(),
+        procRoot: await procRootHolding(tempRoot, []),
+      });
+
+      await adapter.removeImportedCustomerBySlug("alice");
+
+      expect(agentsDelete).toHaveBeenCalledWith(expect.objectContaining({ agentId: "octogee-alice-coach" }));
+      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach"))).toBe(false);
+    });
+  });
+
+  it("refuses to remove any of a departed customer's state while a process still holds its agent database", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const database = path.join(agentDir, "openclaw-agent.sqlite");
+      const customerDir = path.join(tempRoot, "customers", "alice");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(database, "still open");
+      await fs.mkdir(customerDir, { recursive: true });
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: removalRpc(vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 }))),
+        log: vi.fn(),
+        procRoot: await procRootHolding(tempRoot, [`${database} (deleted)`]),
+      });
+
+      await expect(adapter.removeImportedCustomerBySlug("alice"))
+        .rejects.toThrow(`agent database files are still held open: ${database}`);
+      expect(fsSync.existsSync(database)).toBe(true);
+      expect(fsSync.existsSync(customerDir)).toBe(true);
     });
   });
 

@@ -365,6 +365,34 @@ describe("surge OpenClaw process supervisor", () => {
     }
   });
 
+  it("refuses an unsupervised OpenClaw before preparing target state it could still be writing", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const prepareTarget = vi.fn(async () => undefined);
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir,
+      podUid: "target-pod",
+      log: () => undefined,
+      socketPath,
+      readinessReleased: async () => false,
+      prepareTarget,
+      spawnOpenClaw: () => new FakeChild(),
+      probeHealthz: async () => true,
+      healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = { migrationId: "surge-gateway-orphan", slug: "ceckert-test", targetPodUid: "target-pod" };
+    try {
+      await client.hydrate(request);
+      await client.claimTargetCompletion(request);
+
+      await expect(client.permit(request)).rejects.toThrow(/refusing to start a second gateway/u);
+      expect(prepareTarget).not.toHaveBeenCalled();
+    } finally {
+      await supervisor.stop();
+    }
+  });
+
   it("owns a target child only after permit, prepares it after transfer, and returns it held on abort", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const prepareTarget = vi.fn(async () => undefined);
