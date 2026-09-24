@@ -1,3 +1,4 @@
+import { basename, dirname } from "node:path";
 import {
   isGatewayVmRuntimeBundle,
   type GatewayVmDiskSample,
@@ -7,6 +8,7 @@ import {
 } from "@octogee/shared/types/glm";
 import { brokerFailure, brokerPost } from "./broker.js";
 import {
+  containerPathExists,
   createContainer,
   inspectContainer,
   pruneUnusedImages,
@@ -26,6 +28,7 @@ import {
   type HomeShell,
 } from "./home-checkpoint.js";
 import type { MetadataClient } from "./metadata.js";
+import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 import type { DesktopControl } from "./desktop-control.js";
 import {
   CA_FILE,
@@ -46,6 +49,10 @@ import {
 export const TOKEN_REFRESH_MS = 20 * 60_000;
 export const RUNTIME_UID = 1000;
 export const RUNTIME_GID = 1000;
+export const AGENT_CONTAINER = "octo-gateway-agent";
+export const HOST_PROBE_CONTAINER = "octogee-host-probe";
+export const HOST_OPENCLAW_VNC_REFLECTOR = "/usr/local/bin/octo-desktop-openclaw-vnc";
+const HOST_PROBE_BIN = "/octogee-host-bin";
 
 export interface AgentFs {
   mkdir(path: string): Promise<void>;
@@ -71,9 +78,10 @@ export interface VmAgentState {
   tokensWrittenAt: number | null;
   appliedVersion: string | null;
   homeCheckpointCheckedAt: number | null;
+  hostDesktopAuth: boolean | null;
 }
 
-export const initialAgentState = (): VmAgentState => ({ tokensWrittenAt: null, appliedVersion: null, homeCheckpointCheckedAt: null });
+export const initialAgentState = (): VmAgentState => ({ tokensWrittenAt: null, appliedVersion: null, homeCheckpointCheckedAt: null, hostDesktopAuth: null });
 
 export type HomeCheckpointSignal = GatewayVmRuntimeResponse["homeCheckpoint"];
 
@@ -143,6 +151,31 @@ export async function ensureVolumes(deps: VmAgentDeps, bundle: GatewayVmRuntimeB
     await deps.fs.mkdir(documents);
     await deps.fs.chown(documents, RUNTIME_UID, RUNTIME_GID);
   }
+}
+
+export async function probeHostDesktopAuth(deps: VmAgentDeps): Promise<boolean> {
+  const agent = await inspectContainer(deps.engine, AGENT_CONTAINER);
+  if (!agent?.Image) throw new Error(`host desktop probe: ${AGENT_CONTAINER} container not found`);
+  await removeContainer(deps.engine, HOST_PROBE_CONTAINER);
+  await createContainer(deps.engine, HOST_PROBE_CONTAINER, {
+    Image: agent.Image,
+    NetworkDisabled: true,
+    HostConfig: { Binds: [`${dirname(HOST_OPENCLAW_VNC_REFLECTOR)}:${HOST_PROBE_BIN}:ro`] },
+  });
+  try {
+    const shipped = await containerPathExists(deps.engine, HOST_PROBE_CONTAINER, `${HOST_PROBE_BIN}/${basename(HOST_OPENCLAW_VNC_REFLECTOR)}`);
+    if (!shipped) {
+      deps.log(`[vm-agent] this computer's image has no ${HOST_OPENCLAW_VNC_REFLECTOR}, so its desktop publishes no OpenClaw VNC password; `
+        + `octogee-gateway runs without ${GATEWAY_HOST_DESKTOP_AUTH_DIR} and the OpenClaw desktop panel is unavailable on this computer`);
+    }
+    return shipped;
+  } finally {
+    await removeContainer(deps.engine, HOST_PROBE_CONTAINER);
+  }
+}
+
+function hostDesktopAuth(deps: VmAgentDeps, state: VmAgentState): Promise<boolean> {
+  return state.hostDesktopAuth === null ? probeHostDesktopAuth(deps) : Promise.resolve(state.hostDesktopAuth);
 }
 
 async function replaceContainer(engine: DockerEngine, spec: DockerContainerSpec): Promise<void> {
@@ -289,7 +322,9 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
     if (inspection?.State?.Paused) await setContainerPaused(deps.engine, containerName(bundle.containers[index]), false);
   }
   await deps.home.desktop.run("thaw");
-  const plan = planBundle(bundle, { stateRoot: deps.stateRoot, instanceId: identity.instanceId });
+  const desktopAuth = await hostDesktopAuth(deps, next);
+  next = { ...next, hostDesktopAuth: desktopAuth };
+  const plan = planBundle(bundle, { stateRoot: deps.stateRoot, instanceId: identity.instanceId, desktopAuth });
   const decision = decideConvergence(plan, running);
   if (decision.kind === "steady") {
     if (next.appliedVersion !== bundle.version) next = { ...next, appliedVersion: bundle.version };

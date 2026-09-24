@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DockerEngineError,
+  containerPathExists,
   createDockerEngine,
   imagePullPath,
   inspectContainer,
@@ -79,6 +80,14 @@ describe("engine helpers", () => {
 
     const denied = engine([{ status: 401, body: { message: "unauthorized" } }]);
     await expect(pullImage(denied, "r/x:t", "tok")).rejects.toThrow(DockerEngineError);
+  });
+
+  it("stats a path inside a container: present, absent, or a failure it surfaces", async () => {
+    const present = engine([{ status: 200, body: "" }]);
+    expect(await containerPathExists(present, "octogee-host-probe", "/octogee-host-bin/x")).toBe(true);
+    expect(present.calls[0]).toMatchObject({ method: "HEAD", path: "/containers/octogee-host-probe/archive?path=%2Foctogee-host-bin%2Fx" });
+    expect(await containerPathExists(engine([{ status: 404, body: "" }]), "octogee-host-probe", "/x")).toBe(false);
+    await expect(containerPathExists(engine([{ status: 500, body: { message: "boom" } }]), "octogee-host-probe", "/x")).rejects.toThrow(/stat \/x in octogee-host-probe: HTTP 500 boom/);
   });
 
   it("treats a missing container as null on inspect and as done on remove", async () => {

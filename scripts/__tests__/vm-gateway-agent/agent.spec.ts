@@ -18,15 +18,34 @@ interface FakeDocker {
   containers: Map<string, { config: Record<string, unknown>; running: boolean; paused?: boolean }>;
   log: string[];
   prune: { status: number; body: unknown };
+  hostBin: Set<string>;
+  agentImage: string | null;
 }
 
 function fakeDocker(log: string[] = []): FakeDocker {
   const containers = new Map<string, { config: Record<string, unknown>; running: boolean; paused?: boolean }>();
-  const fake = { prune: { status: 200, body: { ImagesDeleted: null, SpaceReclaimed: 0 } as unknown } };
+  const fake = {
+    prune: { status: 200, body: { ImagesDeleted: null, SpaceReclaimed: 0 } as unknown },
+    hostBin: new Set(["octo-desktop-openclaw-vnc"]),
+    agentImage: "sha256:agent" as string | null,
+  };
   const name = (path: string) => decodeURIComponent(path.split("/")[2].split("?")[0]);
   const engine: DockerEngine = {
     async request(method, path, body) {
       log.push(`${method} ${path.split("?")[0]}`);
+      if (method === "GET" && path === "/containers/octo-gateway-agent/json") {
+        return fake.agentImage
+          ? { status: 200, body: { Id: "agent", Image: fake.agentImage } as never }
+          : { status: 404, body: { message: "no such container" } as never };
+      }
+      if (method === "HEAD" && path.includes("/archive?")) {
+        const c = containers.get(name(path))!;
+        const target = new URL(`http://x${path}`).searchParams.get("path")!;
+        const [bind] = (c.config.HostConfig as { Binds: string[] }).Binds;
+        const [hostDir, containerDir] = bind.split(":");
+        expect(hostDir).toBe("/usr/local/bin");
+        return { status: fake.hostBin.has(target.slice(containerDir.length + 1)) ? 200 : 404, body: "" as never };
+      }
       if (path.startsWith("/images/create")) return { status: 200, body: '{"status":"ok"}' as never };
       if (path.startsWith("/images/prune")) return { status: fake.prune.status, body: fake.prune.body as never };
       if (method === "GET" && path.endsWith("/json")) {
@@ -181,7 +200,7 @@ describe("convergeOnce", () => {
     rendered = true;
     state = await convergeOnce(h.d, state);
 
-    expect(state).toEqual({ tokensWrittenAt: 1_000, appliedVersion: "v1", homeCheckpointCheckedAt: null });
+    expect(state).toEqual({ tokensWrittenAt: 1_000, appliedVersion: "v1", homeCheckpointCheckedAt: null, hostDesktopAuth: true });
     expect(h.files.get("/srv/octogee/tokens/gateway-broker-sa-token/token")).toEqual({ content: "id-octogee-api", mode: 0o644 });
     expect(h.files.get("/srv/octogee/tokens/k8s-api-token/token")?.content).toBe("access-1");
     expect(h.files.get("/srv/octogee/tokens/k8s-api-token/ca.crt")?.content).toBe("CA-PEM");
@@ -225,6 +244,49 @@ describe("convergeOnce", () => {
     expect(docker.log.slice(before)).toContain("POST /containers/octogee-fix-perms/wait");
     expect(state.appliedVersion).toBe("v2");
     expect((docker.containers.get("octogee-gateway")?.config.Labels as Record<string, string>)["ai.octogee.bundle-version"]).toBe("v2");
+  });
+
+  it("binds the desktop password into the gateway on a computer whose image ships the OpenClaw VNC reflector", async () => {
+    const docker = fakeDocker();
+    const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
+
+    await convergeOnce(h.d, initialAgentState());
+
+    expect(docker.containers.get("octogee-gateway")?.config.HostConfig).toMatchObject({
+      Mounts: [{ Type: "bind", Source: "/run/user/1000/octogee-openclaw-vnc", Target: "/run/octogee-desktop-vnc", ReadOnly: true }],
+    });
+    expect(docker.containers.has("octogee-host-probe")).toBe(false);
+  });
+
+  it("starts the gateway without the desktop password on a computer image that predates the OpenClaw VNC reflector, says so, and settles", async () => {
+    const docker = fakeDocker();
+    docker.hostBin.clear();
+    const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
+
+    let state = await convergeOnce(h.d, initialAgentState());
+    const creates = () => docker.log.filter((l) => l.startsWith("POST /containers/create")).length;
+    const afterFirst = creates();
+    state = await convergeOnce(h.d, state);
+
+    expect(state.hostDesktopAuth).toBe(false);
+    expect(docker.containers.get("octogee-gateway")?.running).toBe(true);
+    expect(docker.containers.get("octogee-gateway")?.config.HostConfig).not.toHaveProperty("Mounts");
+    expect(docker.containers.has("octogee-host-probe")).toBe(false);
+    expect(creates()).toBe(afterFirst);
+    expect(docker.log.filter((l) => l.startsWith("HEAD "))).toHaveLength(1);
+    expect(h.d.log).toHaveBeenCalledWith(
+      "[vm-agent] this computer's image has no /usr/local/bin/octo-desktop-openclaw-vnc, so its desktop publishes no OpenClaw VNC password; "
+      + "octogee-gateway runs without /run/octogee-desktop-vnc and the OpenClaw desktop panel is unavailable on this computer",
+    );
+  });
+
+  it("refuses to plan the gateway when it cannot probe the host desktop", async () => {
+    const docker = fakeDocker();
+    docker.agentImage = null;
+    const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
+
+    await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow(/octo-gateway-agent container not found/);
+    expect(docker.containers.has("octogee-gateway")).toBe(false);
   });
 
   it("reclaims images no container uses after applying a new bundle, and never while steady", async () => {
@@ -349,7 +411,7 @@ describe("convergeOnce", () => {
     });
     await convergeOnce(fresh.d, initialAgentState());
     const extract = docker.log.indexOf("tar --extract");
-    const init = docker.log.indexOf("POST /containers/create");
+    const init = docker.log.indexOf("POST /containers/octogee-fix-perms/start");
     expect(extract).toBeGreaterThan(-1);
     expect(init).toBeGreaterThan(extract);
     expect(calls(fresh.fetchImpl, "/download")).toHaveLength(1);

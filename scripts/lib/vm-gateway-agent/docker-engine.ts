@@ -103,6 +103,7 @@ export interface ContainerInspection {
   Id: string;
   State?: { Status?: string; Running?: boolean; Paused?: boolean; ExitCode?: number };
   Config?: { Labels?: Record<string, string>; Image?: string };
+  Image?: string;
 }
 
 export async function inspectContainer(engine: DockerEngine, name: string): Promise<ContainerInspection | null> {
@@ -110,6 +111,13 @@ export async function inspectContainer(engine: DockerEngine, name: string): Prom
   if (res.status === 404) return null;
   assertOk(res, `inspect ${name}`);
   return res.body;
+}
+
+export async function containerPathExists(engine: DockerEngine, name: string, path: string): Promise<boolean> {
+  const res = await engine.request("HEAD", `/containers/${encodeURIComponent(name)}/archive?path=${encodeURIComponent(path)}`);
+  if (res.status === 404) return false;
+  assertOk(res, `stat ${path} in ${name}`);
+  return true;
 }
 
 export async function removeContainer(engine: DockerEngine, name: string): Promise<void> {

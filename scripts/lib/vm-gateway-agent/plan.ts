@@ -29,6 +29,7 @@ export const CA_FILE = "ca.crt";
 export interface PlanContext {
   stateRoot: string;
   instanceId: string;
+  desktopAuth: boolean;
 }
 
 export interface DockerContainerSpec {
@@ -106,7 +107,7 @@ export function planContainer(
           ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
           : []),
       ],
-      ...(role === "service" && container.name === "gateway" ? {
+      ...(role === "service" && container.name === "gateway" && ctx.desktopAuth ? {
         Mounts: [{
           Type: "bind",
           Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`,

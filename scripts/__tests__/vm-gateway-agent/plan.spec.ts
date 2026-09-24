@@ -17,7 +17,7 @@ import {
 } from "../../lib/vm-gateway-agent/plan";
 import { bundleFixture } from "./fixture";
 
-const ctx = { stateRoot: "/srv/octogee", instanceId: "4242" };
+const ctx = { stateRoot: "/srv/octogee", instanceId: "4242", desktopAuth: true };
 
 describe("planBundle", () => {
   it("maps the pod contract onto host-network containers with bound volumes, tokens, and aliases", () => {
@@ -177,6 +177,13 @@ describe("planBundle", () => {
     expect(plan.services[1].config.HostConfig).not.toHaveProperty("Mounts");
     expect(plan.init!.config.HostConfig).not.toHaveProperty("Mounts");
     expect(planContainer(bundle, bundle.containers[0], ctx, "init").config.HostConfig).not.toHaveProperty("Mounts");
+  });
+
+  it("plans the gateway without the desktop password mount on a computer whose desktop publishes none", () => {
+    const plan = planBundle(bundleFixture(), { ...ctx, desktopAuth: false });
+    expect(plan.services[0].name).toBe("octogee-gateway");
+    expect(plan.services[0].config.HostConfig).not.toHaveProperty("Mounts");
+    expect(specVersion(plan.services[0])).not.toBe(specVersion(planBundle(bundleFixture(), ctx).services[0]));
   });
 
   it("refuses a mount onto an unknown volume and lists each image once", () => {
