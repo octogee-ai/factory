@@ -324,6 +324,44 @@ expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
   });
 });
 
+describe("applyConfigPatch — superseded reload", () => {
+  const superseded = () =>
+    new OpenclawWireError(
+      "rpc-error",
+      "config.patch persisted but was not applied to the active Gateway (superseded); run config.get, then use config.apply",
+    );
+
+  it("accepts a persisted patch whose reload a newer write superseded without writing again", async () => {
+    const cache = { current: { v: 1 }, hash: "h1" };
+    const configPatch = vi.fn().mockRejectedValueOnce(superseded());
+    const sleep = vi.fn(async () => {});
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({ v: 2 }) },
+      { ...baseOpts({ cache, sleep }), rpc: makeFakeRpc({ configPatch }) },
+    );
+
+    expect(result).toEqual({ mode: "rpc", attempts: 1, superseded: true });
+    expect(configPatch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(cache).toEqual({ current: undefined, hash: "" });
+  });
+
+  it("still retries an rpc-error that does not report a persisted write", async () => {
+    const configPatch = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenclawWireError("rpc-error", "config reload superseded"))
+      .mockResolvedValueOnce({ ok: true as const, path: "/fake/openclaw.json" });
+
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({ v: 2 }) },
+      { ...baseOpts({ retryBackoffInitialMs: 10 }), rpc: makeFakeRpc({ configPatch }) },
+    );
+
+    expect(result).toEqual({ mode: "rpc", attempts: 2 });
+  });
+});
+
 describe("applyConfigPatch — permanent RPC errors throw without retry", () => {
   it("retries a gateway-startup auth rejection", async () => {
     const configGet = vi.fn()

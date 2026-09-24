@@ -227,11 +227,21 @@ async function runConfigPatchAttempt(
   }
   const replacePaths = args.buildReplacePaths?.(config);
   const patchStart = ctx.now();
-  const patchResult = await ctx.rpc.configPatch(
-    patch,
-    hash,
-    configPatchReplacePathOptions(replacePaths),
-  );
+  let patchResult: Awaited<ReturnType<GatewayRpcClient["configPatch"]>>;
+  try {
+    patchResult = await ctx.rpc.configPatch(
+      patch,
+      hash,
+      configPatchReplacePathOptions(replacePaths),
+    );
+  } catch (err) {
+    if (!isPersistedSupersededError(err)) throw err;
+    updateCacheAfterPatch(ctx.cache, {});
+    ctx.log(
+      `${ctx.prefix}config.patch persisted; a newer write superseded its reload attempt=${ctx.attempts} configGet=${getMs}ms configPatch=${ctx.now() - patchStart}ms totalMs=${ctx.now() - ctx.startedAt}`,
+    );
+    return { mode: "rpc", attempts: ctx.attempts, superseded: true };
+  }
   const patchMs = ctx.now() - patchStart;
 
   updateCacheAfterPatch(ctx.cache, patchResult);
@@ -244,6 +254,14 @@ async function runConfigPatchAttempt(
     attempts: ctx.attempts,
     ...(patchResult.noop === true ? { noop: true } : {}),
   };
+}
+
+function isPersistedSupersededError(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    /config\.patch persisted but was not applied to the active Gateway \(superseded\)/.test(err.message)
+  );
 }
 
 function isPermanentConfigPatchError(err: OpenclawWireError): boolean {
@@ -385,6 +403,7 @@ export interface ApplyConfigPatchResult {
   mode: "rpc";
   attempts: number;
   noop?: boolean;
+  superseded?: boolean;
 }
 
 export async function applyConfigPatch(

@@ -37,6 +37,7 @@ export interface ApplyConfigPatchResult {
     mode: "rpc";
     attempts: number;
     noop?: boolean;
+    superseded?: boolean;
 }
 export declare function applyConfigPatch(args: ApplyConfigPatchArgs, opts?: ApplyConfigPatchOptions): Promise<ApplyConfigPatchResult>;
 export declare function upsertAgentInFullAgentList(current: unknown, agentId: string, agentEntry: unknown): unknown[];
