@@ -1,5 +1,5 @@
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
-import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
+import type { SchedulerMigrationRequest, SchedulerMigrationResult, CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type {
   FleetBrokerProjectCheckoutScope,
   FleetBrokerProjectAgent,
@@ -279,12 +279,14 @@ opts?: {
 
 uidForSlug: (slug: string) => Promise<string | null>;
 
+schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promise<SchedulerMigrationResult>;
+
 resumeCustomer: (slug: string) => Promise<void>;
 
 quiesceCustomer: (
     slug: string,
     timeoutMs: number,
-    opts?: { stopMattermost: boolean },
+    opts?: { stopMattermost: boolean; schedulerMigrationId?: string },
   ) => Promise<{ drained: boolean; runningCount: number }>;
 
 listExportPaths: (slug: string) => Promise<Array<{ cwd: string; path: string }>>;

@@ -59,6 +59,7 @@ function state(
 
 function deps(): CustomerMigrationV2Deps {
   const client = {
+    scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} })),
     transferState: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: true })),
     restoreTarget: vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", restored: true })),
     resume: vi.fn(async () => undefined),
@@ -397,5 +398,31 @@ describe("classifyCustomerMigrationV2Error", () => {
     expect(classifyCustomerMigrationV2Error({ status: 400 })).toBe("terminal");
     expect(classifyCustomerMigrationV2Error({ status: 409 })).toBe("terminal");
     expect(classifyCustomerMigrationV2Error(new Error("target verify failed checks"))).toBe("terminal");
+  });
+});
+
+describe("durable scheduler handoff", () => {
+  it("retires the source before activating target and retains cutover on failure", async () => {
+    const d = deps();
+    const current = state("cutover");
+    const phases: string[] = [];
+    vi.mocked(d.client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
+      phases.push(phase);
+      if (phase === "activate") throw new Error("timeout activating");
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true };
+    });
+    await expect(advanceCustomerMigrationV2(current, d)).rejects.toThrow("timeout activating");
+    expect(current.phase).toBe("cutover");
+    expect(phases).toEqual(["retire", "activate"]);
+    expect(d.client.unmount).not.toHaveBeenCalled();
+    expect(d.client.resume).not.toHaveBeenCalled();
+  });
+
+  it("does not restore source ownership when target abort is uncertain", async () => {
+    const d = deps();
+    vi.mocked(d.client.scheduler).mockRejectedValue(new Error("abort uncertain"));
+    await expect(advanceCustomerMigrationV2(state("abortIntent"), d)).rejects.toThrow("abort uncertain");
+    expect(d.setSourceAssignmentState).not.toHaveBeenCalled();
+    expect(d.client.resume).not.toHaveBeenCalled();
   });
 });

@@ -488,6 +488,22 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("scheduler migration protocol", () => {
+    it("carries the exact native scheduler command and private export snapshot", async () => {
+      const request = { operationId: "move-1", phase: "export" as const };
+      const result = { ...request, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { jobs: [] } };
+      server.setHandler("cron.migration", (params) => {
+        expect(params).toEqual(request);
+        return { ok: true, payload: result };
+      });
+      await expect(client.schedulerMigration(request)).resolves.toEqual(result);
+    });
+    it.each([{}, { operationId: "wrong", phase: "hold", agentIds: [], drained: true }, { operationId: "move-1", phase: "export", agentIds: [], drained: true }])("refuses invalid native acknowledgements %j", async (payload) => {
+      server.setHandler("cron.migration", () => ({ ok: true, payload }));
+      await expect(client.schedulerMigration({ operationId: "move-1", phase: "export" })).rejects.toMatchObject({ code: "invalid-response" });
+    });
+  });
+
   describe("scheduled migration eligibility", () => {
     it("counts enabled jobs for the exact agent without fetching prompts", async () => {
       server.setHandler("cron.list", (params) => {

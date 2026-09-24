@@ -251,6 +251,8 @@ export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
 }
 
 export interface QuiesceRequestBody extends MigrationRequestBody {
+  schedulerHandoff?: boolean;
+  schedulerMigrationId?: string;
   stopMattermost?: boolean;
 
 timeoutMs?: number;
@@ -356,4 +358,28 @@ export interface MigrationProgressRequestBody extends MigrationRequestBody {
   phase: string;
   status: "pending" | "running" | "done" | "failed" | "skipped";
   elapsedMs?: number;
+}
+
+
+export type SchedulerMigrationPhase = "hold" | "export" | "stage" | "activate" | "resume" | "retire" | "abort";
+
+export interface SchedulerMigrationRequest {
+  operationId: string;
+  phase: SchedulerMigrationPhase;
+  agentIds?: string[];
+  snapshot?: unknown;
+}
+
+export interface SchedulerMigrationResult {
+  operationId: string;
+  phase: SchedulerMigrationPhase;
+  agentIds: string[];
+  drained: boolean;
+  snapshot?: unknown;
+}
+
+export interface SchedulerMigrationRequestBody extends MigrationRequestBody {
+  phase: SchedulerMigrationPhase;
+  agentIds?: string[];
+  snapshot?: unknown;
 }

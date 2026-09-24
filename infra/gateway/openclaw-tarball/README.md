@@ -85,13 +85,25 @@ from the previous `b6b45244` main snapshot: 394 commits are main-only and 33
 release-only. This is a release port, not a claim that the tag includes every
 newer main change. Package version is `2026.9.6`.
 
-The overlay branch is `ceckert/openclaw:codex/octogee-v2026.9.6-20260923`; its
-exact built source is `a2cd214a1e1fa6c13e5a82ef13b47e6b85397bbb`.
+The scheduled-job handoff overlay is
+`ceckert/openclaw:codex/octogee-scheduler-handoff`, built from exact source
+`69259a083e84712e90fb4328951109654bc70ba0` on top of the previous
+`a2cd214a1e1fa6c13e5a82ef13b47e6b85397bbb` overlay.
+
+This adds the native `cron.migration` operator RPC and per-agent durable
+scheduler fences. Portable timers, job IDs, creator provenance, and scratch
+revisions move without copying the shared scheduler database. Source retirement
+precedes destination activation; rollback tombstones reject delayed requests.
+Schema 19 prevents older runtimes from ignoring these ownership fences.
+
+The archives below were built, locally install-verified, and published with
+write-once generation preconditions. Published checksums and sizes match the
+verified local archives. Neither TEST nor PROD has been deployed from this change.
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-3b8ff7d8.tgz` | `3b8ff7d8116b0f2a9649e3102ef5abeef43475cb09dc9cb932047767718093ae` | `1790185319383840` |
-| `openclaw-mattermost-36f69bd0.tgz` | `36f69bd01a05c374e9932d4bf190756b4f0c3a6bd08533f256543a2f890cb86f` | `1790185323677970` |
+| `openclaw-fork-adb75f19.tgz` | `adb75f19eef8ec2d147ae9ce473aaa3b6254b607c7a9be318fee39af6a04b9bc` | `1790215793943848` |
+| `openclaw-mattermost-43163935.tgz` | `43163935aad1df28f3f78a4faf0e4f0b255856400854cc3e5310999751629f23` | `1790215776773694` |
 
 Upstream adoption removes these downstream patches:
 

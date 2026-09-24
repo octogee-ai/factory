@@ -27,6 +27,7 @@ import {
   createPushRsyncStateHandler,
   createPushStateHandler,
   createQuiesceHandler,
+  createSchedulerMigrationHandler,
   createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -4174,5 +4175,46 @@ describe("createResumeHandler", () => {
     await createResumeHandler(mkDeps({ adapter }))(mkRequest(SAMPLE_QUIESCE, { signature: "bad" }), response.res, vi.fn());
     expect(response.getStatus()).toBe(401);
     expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("scheduler migration signed endpoint", () => {
+  const body = { migrationId: "handoff-1", slug: "chris", phase: "hold" as const };
+  it("rejects unsigned scheduler commands", async () => {
+    const schedulerMigration = vi.fn();
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(mkRequest(body, {}), response.res, vi.fn());
+    expect(response.getStatus()).toBe(401);
+    expect(schedulerMigration).not.toHaveBeenCalled();
+  });
+  it("holds schedules under the authenticated handoff identity", async () => {
+    const result = { operationId: body.migrationId, phase: body.phase, agentIds: ["octogee-chris-coach"], drained: true };
+    const schedulerMigration = vi.fn(async () => result);
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual(result);
+    expect(schedulerMigration).toHaveBeenCalledWith("chris", { operationId: "handoff-1", phase: "hold" });
+  });
+  it("does not report a draining scheduler as ready", async () => {
+    const schedulerMigration = vi.fn(async () => ({ operationId: body.migrationId, phase: body.phase, agentIds: ["octogee-chris-coach"], drained: false }));
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(409);
+  });
+  it("rejects staging without a snapshot before calling the runtime", async () => {
+    const invalid = { ...body, phase: "stage" };
+    const schedulerMigration = vi.fn();
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+      mkRequest(invalid, { signature: signForPod(invalid.migrationId, JSON.stringify(invalid)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(400);
+    expect(schedulerMigration).not.toHaveBeenCalled();
   });
 });

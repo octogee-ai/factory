@@ -1,3 +1,4 @@
+import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
 import { type OpenclawWireErrorCode } from "@octogee/shared/types/openclaw-wire-core";
 import { type DeviceIdentity } from "./gateway-device-identity.js";
 export { OpenclawWireError, type OpenclawWireErrorCode, } from "@octogee/shared/types/openclaw-wire-core";
@@ -207,6 +208,7 @@ export interface GatewayRpcClient {
         agentId: string;
         includePlugins: true;
     }, timeoutMs?: number): Promise<GatewayToolsCatalogResult>;
+    schedulerMigration(params: SchedulerMigrationRequest): Promise<SchedulerMigrationResult>;
     cronJobCount(agentId: string): Promise<number>;
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
     agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;

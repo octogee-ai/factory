@@ -5,6 +5,7 @@ import type { MigrationClient } from "./fleet-migration-client";
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} })),
     resume: vi.fn(async () => undefined),
     restoreTarget: vi.fn(async ({ slug }) => {
       calls.push(`restore:${slug}`);
@@ -316,4 +317,77 @@ it("keeps channels stopped when source assignment restoration fails", async () =
   vi.mocked(h.deps.setAssignmentState!).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("restore failed"));
   await expect(runMigration(h.input, h.deps)).rejects.toThrow("restore failed");
   expect(h.client.resume).not.toHaveBeenCalled();
+});
+
+
+describe("scheduled work handoff", () => {
+  it("stages schedules before final copy and activates only after ownership cutover", async () => {
+    const h = harness();
+    const order: string[] = [];
+    const snapshot = { version: 1, agentIds: ["octogee-alice-coach"], jobs: [] };
+    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, gatewayId }) => {
+      order.push(`${gatewayId}:${phase}`);
+      return { operationId: "m1", agentIds: snapshot.agentIds, phase, drained: true, snapshot };
+    }) });
+    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
+      order.push(`copy:${mode}`);
+      return { migrationId: "m1", slug, imported: true };
+    });
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
+    vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
+      order.push(`unmount:${gatewayId}`);
+      return { migrationId: "m1", slug, unmounted: true };
+    });
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+    expect(order).toEqual([
+      "copy:keys", "copy:pre", "gw-blue:hold", "gw-blue:export", "gw-green:stage",
+      "copy:final", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue",
+    ]);
+  });
+
+  it("aborts destination scheduling before reopening the source after failed transfer", async () => {
+    const h = harness();
+    const order: string[] = [];
+    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, gatewayId }) => {
+      order.push(`${gatewayId}:${phase}`);
+      return { operationId: "m1", agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
+    }) });
+    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
+      if (mode === "final") throw new Error("transfer failed");
+      return { migrationId: "m1", slug, imported: true };
+    });
+    vi.mocked(h.client.resume).mockImplementation(async () => { order.push("source-ingress-resumed"); });
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
+    expect(order).toEqual([
+      "gw-blue:hold", "gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "source-ingress-resumed",
+    ]);
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+});
+
+it("keeps post-cutover activation failures pending without reopening source", async () => {
+  const h = harness();
+  const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
+  vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
+    if (request.phase === "activate") throw new Error("gateway unavailable");
+    return scheduler(request);
+  });
+  const result = await runMigration(h.input, h.deps);
+  expect(result).toMatchObject({ success: false, rolledBack: false, finalPhase: "cutover-done" });
+  expect(result.errorAt?.error).toContain("scheduler handoff cleanup pending");
+  expect(h.client.unmount).not.toHaveBeenCalled();
+  expect(h.client.resume).not.toHaveBeenCalled();
+});
+
+it("does not reopen the source when target scheduler abort is unconfirmed", async () => {
+  const h = harness({ gateAssignment: true });
+  vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("verification failed"));
+  const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
+  vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
+    if (request.phase === "abort") throw new Error("abort unconfirmed");
+    return scheduler(request);
+  });
+  await expect(runMigration(h.input, h.deps)).rejects.toThrow("abort unconfirmed");
+  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.assignmentWrites).not.toContainEqual(expect.objectContaining({ state: "serving" }));
 });

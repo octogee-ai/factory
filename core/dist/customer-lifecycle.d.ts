@@ -1,5 +1,5 @@
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
-import type { CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
+import type { SchedulerMigrationRequest, SchedulerMigrationResult, CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
 import type { MigrationActivationManifest } from "./migration-activation-manifest.js";
@@ -218,9 +218,11 @@ export interface CustomerLifecycleAdapter {
     onMounted?: (slug: string) => void;
     onUnmounted?: (slug: string) => void;
     uidForSlug: (slug: string) => Promise<string | null>;
+    schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promise<SchedulerMigrationResult>;
     resumeCustomer: (slug: string) => Promise<void>;
     quiesceCustomer: (slug: string, timeoutMs: number, opts?: {
         stopMattermost: boolean;
+        schedulerMigrationId?: string;
     }) => Promise<{
         drained: boolean;
         runningCount: number;

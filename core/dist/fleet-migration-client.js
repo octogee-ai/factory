@@ -89,6 +89,23 @@ export function createMigrationClient(deps) {
         fetchWithTimeout: createFetchWithTimeout(deps.fetch ?? globalThis.fetch),
     });
     return {
+        async scheduler({ gatewayId, transportId, ...body }) {
+            const result = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/scheduler/${gatewayId}`,
+                gatewayId,
+                migrationId: body.migrationId,
+                body,
+                timeoutMs: quiesceMs,
+            });
+            if (result.operationId !== body.migrationId || result.phase !== body.phase ||
+                !Array.isArray(result.agentIds) || result.agentIds.some(id => typeof id !== "string" || !id) ||
+                (result.agentIds.length === 0 && body.phase !== "resume" && body.phase !== "abort") ||
+                result.drained !== true || (body.phase === "export" && result.snapshot === undefined)) {
+                throw new Error(`scheduler ${body.phase} did not prove a drained matching operation`);
+            }
+            return result;
+        },
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,
@@ -109,13 +126,13 @@ export function createMigrationClient(deps) {
             if (response.resumed !== true)
                 throw new Error(`source ingress did not resume for ${slug}`);
         },
-        async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
+        async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, schedulerHandoff, schedulerMigrationId }) {
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,
                 path: `/quiesce/${gatewayId}`,
                 gatewayId,
                 migrationId,
-                body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+                body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...(schedulerHandoff ? { schedulerHandoff: true, schedulerMigrationId: schedulerMigrationId ?? migrationId } : {}) },
                 timeoutMs: quiesceMs,
             });
             if (!res.drained) {

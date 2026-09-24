@@ -1,3 +1,4 @@
+import type { SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type {
   CustomerMigrationV2State,
   Operation,
@@ -16,6 +17,7 @@ export interface OperationResult {
 
 export interface OperationContext {
   reportStep: (step: OperationStep) => Promise<void> | void;
+  persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
   persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
   cancellationRequested?: () => Promise<boolean>;
 }

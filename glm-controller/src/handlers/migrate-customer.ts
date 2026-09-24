@@ -409,10 +409,10 @@ async function assertV2InitialBindings(
 }
 
 const V2_SOURCE_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
-  "initialized", "keysSynced", "preSynced", "cutover", "abortIntent",
+  "initialized", "keysSynced", "preSynced",
 ]);
 const V2_BOTH_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
-  "sourceQuiesced",
+  "sourceQuiesced", "cutover", "abortIntent",
 ]);
 const V2_TARGET_TRANSPORT_PHASES = new Set<CustomerMigrationV2State["phase"]>([
   "finalSynced", "targetVerified", "sourceRetired",
@@ -974,6 +974,64 @@ async function finishNativeReturnAfterCutover(deps: MigrateCustomerDeps, op: Ope
   });
 }
 
+async function completeSchedulerHandoff(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  user: UserGatewayInfo,
+  request: { uid: string; toGatewayId: string },
+): Promise<OperationResult> {
+  const handoff = op.schedulerHandoff!;
+  if (handoff.uid !== request.uid || handoff.slug !== user.slug || handoff.toGatewayId !== request.toGatewayId) {
+    return failure("scheduler handoff scope changed after cutover", false);
+  }
+  try {
+    const urls = new Map(await Promise.all(
+      [handoff.fromGatewayId, handoff.toGatewayId].map(async (id) => [id, await deps.resolveGatewayUrl(id)] as const),
+    ));
+    const client = deps.buildClient((id) => {
+      const url = urls.get(id);
+      if (!url) throw new Error(`unknown scheduler handoff gateway ${id}`);
+      return url;
+    });
+    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
+    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "activate" });
+    await client.unmount({ migrationId: deps.genMigrationId(op.id), slug: handoff.slug, gatewayId: handoff.fromGatewayId });
+    return { steps: [], success: true, rolledBack: false };
+  } catch (error) {
+    return failure(`scheduler handoff cleanup pending: ${errorMessage(error)}`, false);
+  }
+}
+
+async function resumePreviousSchedulerAttempt(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  user: UserGatewayInfo,
+  uid: string,
+): Promise<void> {
+  const previous = op.schedulerHandoff;
+  if (!previous || previous.migrationId === `${deps.genMigrationId(op.id)}:scheduler:${(op.attempts ?? 0) + 1}`) return;
+  if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
+    throw new Error("scheduler rollback scope changed");
+  }
+  for (const [gatewayId, phase] of [[previous.toGatewayId, "abort"], [previous.fromGatewayId, "resume"]] as const) {
+    const url = await deps.resolveGatewayUrl(gatewayId);
+    await deps.buildClient(() => url).scheduler({ migrationId: previous.migrationId, slug: previous.slug, gatewayId, phase });
+  }
+}
+
+async function recoverCommittedMigration(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  ctx: OperationContext,
+  user: UserGatewayInfo,
+  request: { uid: string; toGatewayId: string },
+): Promise<OperationResult | null> {
+  if (user.currentGatewayId !== request.toGatewayId) return null;
+  if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, user, request);
+  if (isControllerConvergenceSource(op.input.source)) return finishNativeReturnAfterCutover(deps, op, ctx, user);
+  return null;
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -992,15 +1050,12 @@ async function prepareMigration(
     return { error: error instanceof Error ? error.message : String(error) };
   }
   if (!user) return { error: `user not found: ${request.uid}` };
-  if (
-    user.currentGatewayId === request.toGatewayId &&
-    isControllerConvergenceSource(migrationInput.source)
-  ) {
-    return { result: await finishNativeReturnAfterCutover(deps, op, ctx, user) };
-  }
+  const recovered = await recoverCommittedMigration(deps, op, ctx, user, request);
+  if (recovered) return { result: recovered };
   const migrationId = deps.genMigrationId(op.id);
 
   try {
+    await resumePreviousSchedulerAttempt(deps, op, user, request.uid);
     const resolved = await resolveMigrationTargets(
       deps,
       request.uid,
@@ -1117,9 +1172,11 @@ async function executeMigration(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   prepared: PreparedMigration,
-  operationId: string,
-  automatic: boolean,
+  op: Operation,
 ): Promise<OperationResult> {
+  const operationId = op.id;
+  const automatic = resolveOperationOrigin(op.origin) === "automatic";
+  const attempt = (op.attempts ?? 0) + 1;
   const client = deps.buildClient((transportId) => {
     const url = prepared.urls.get(transportId);
     if (!url) {
@@ -1144,9 +1201,19 @@ async function executeMigration(
       await progress.report(step.name, step.status);
     },
   };
+  const schedulerMigrationId = `${prepared.migrationId}:scheduler:${attempt}`;
+  if (!ctx.persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
+  await ctx.persistSchedulerHandoff({
+    migrationId: schedulerMigrationId,
+    fromGatewayId: prepared.user.currentGatewayId,
+    toGatewayId: prepared.toGatewayId,
+    uid: prepared.uid,
+    slug: prepared.user.slug,
+  });
   const result = await runMigration(
     {
       migrationId: prepared.migrationId,
+      schedulerMigrationId,
       uid: prepared.uid,
       slug: prepared.user.slug,
       fromGatewayId: prepared.user.currentGatewayId,
@@ -1216,8 +1283,7 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
         deps,
         ctx,
         prepared,
-        op.id,
-        resolveOperationOrigin(op.origin) === "automatic",
+        op,
       ),
       prepared.stateMigration,
     );

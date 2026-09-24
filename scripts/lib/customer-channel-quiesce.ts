@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
 import { customerAgentIdsInRoster } from "./agent-roster-deletion.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
@@ -27,5 +29,25 @@ export async function assertCustomerHasNoScheduledJobs(
     if (await rpc.cronJobCount(agentId) > 0) {
       throw new Error(`migration blocked: ${agentId} has enabled scheduled jobs; source retained`);
     }
+  }
+}
+
+
+export async function migrateCustomerScheduler(
+  rpc: Pick<GatewayRpcClient, "configGet" | "schedulerMigration">,
+  slug: string,
+  localAgentIds: readonly string[],
+  request: SchedulerMigrationRequest,
+): Promise<SchedulerMigrationResult> {
+  if (request.phase !== "hold") return rpc.schedulerMigration(request);
+  const { config } = await rpc.configGet();
+  const agentIds = [...new Set([...localAgentIds, ...customerAgentIdsInRoster(config, slug)])].sort();
+  if (agentIds.length === 0) throw new Error(`Cannot hold scheduler for ${slug}: no customer agents`);
+  const deadline = Date.now() + 45_000;
+  while (true) {
+    const result = await rpc.schedulerMigration({ ...request, agentIds });
+    if (result.drained) return result;
+    if (Date.now() >= deadline) throw new Error(`scheduler hold timed out draining ${slug}`);
+    await delay(250);
   }
 }

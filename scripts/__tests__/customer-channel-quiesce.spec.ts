@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertCustomerHasNoScheduledJobs, setCustomerChannelsRunning } from "../lib/customer-channel-quiesce.js";
+import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "../lib/customer-channel-quiesce.js";
 
 function runtime() {
   return {
@@ -47,4 +47,42 @@ describe("scheduled migration eligibility", () => {
     await expect(assertCustomerHasNoScheduledJobs(rpc as never, "alice", ["octogee-alice-coach"]))
       .rejects.toThrow("scheduler unavailable");
   });
+});
+
+
+describe("scheduled migration handoff scope", () => {
+  it("holds the exact union of local and roster agents for one builder", async () => {
+    const rpc = {
+      configGet: vi.fn(async () => ({ config: { agents: { entries: {
+        "octogee-alice-coach": {}, "octogee-alice-proj-app-coach": {}, "octogee-alice2-coach": {},
+      } } } })),
+      schedulerMigration: vi.fn(async (request) => ({ ...request, drained: true })),
+    };
+    await migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], { operationId: "handoff-1", phase: "hold" });
+    expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach", "octogee-alice-proj-app-coach"] });
+  });
+  it("recovers later phases using the durable runtime scope without loading a removed roster", async () => {
+    const rpc = { configGet: vi.fn(), schedulerMigration: vi.fn(async (request) => ({ ...request, drained: true })) };
+    await migrateCustomerScheduler(rpc as never, "alice", [], { operationId: "handoff-1", phase: "retire" });
+    expect(rpc.configGet).not.toHaveBeenCalled();
+    expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "retire" });
+  });
+  it("refuses an empty hold scope", async () => {
+    const rpc = { configGet: vi.fn(async () => ({ config: {} })), schedulerMigration: vi.fn() };
+    await expect(migrateCustomerScheduler(rpc as never, "alice", [], { operationId: "handoff-1", phase: "hold" })).rejects.toThrow("no customer agents");
+    expect(rpc.schedulerMigration).not.toHaveBeenCalled();
+  });
+});
+
+
+it("holds admission while an already-running scheduled job drains", async () => {
+  const rpc = {
+    configGet: vi.fn(async () => ({ config: {} })),
+    schedulerMigration: vi.fn()
+      .mockResolvedValueOnce({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], drained: false })
+      .mockResolvedValueOnce({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], drained: true }),
+  };
+  await expect(migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], { operationId: "handoff-1", phase: "hold" })).resolves.toMatchObject({ drained: true });
+  expect(rpc.schedulerMigration).toHaveBeenCalledTimes(2);
+  expect(rpc.schedulerMigration.mock.calls[0]).toEqual(rpc.schedulerMigration.mock.calls[1]);
 });

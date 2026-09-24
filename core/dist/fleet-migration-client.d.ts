@@ -1,4 +1,4 @@
-import { type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -15,6 +15,10 @@ export interface MigrationClientDeps {
     timeouts?: MigrationClientTimeouts;
 }
 export interface MigrationClient {
+    scheduler(opts: SchedulerMigrationRequestBody & {
+        gatewayId: string;
+        transportId?: string;
+    }): Promise<SchedulerMigrationResult>;
     resume(opts: {
         migrationId: string;
         gatewayId: string;
@@ -22,6 +26,8 @@ export interface MigrationClient {
         slug: string;
     }): Promise<void>;
     quiesce(opts: {
+        schedulerHandoff?: boolean;
+        schedulerMigrationId?: string;
         migrationId: string;
         gatewayId: string;
         transportId?: string;

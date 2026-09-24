@@ -1,4 +1,4 @@
-import { assertCustomerHasNoScheduledJobs, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
+import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
 import { customerFileStatePaths } from "./customer-file-state.js";
 import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
@@ -1199,10 +1199,15 @@ async function quiesceCustomer(
   ctx: BrokerCtx,
   slug: string,
   timeoutMs: number,
-  opts = { stopMattermost: true },
+  opts: { stopMattermost: boolean; schedulerMigrationId?: string } = { stopMattermost: true },
 ): Promise<{ drained: boolean; runningCount: number }> {
   if (opts.stopMattermost) {
-    await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
+    if (opts.schedulerMigrationId) {
+      const held = await migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), { operationId: opts.schedulerMigrationId, phase: "hold" });
+      if (!held.drained) throw new Error(`Scheduler runs are still draining for ${slug}`);
+    } else {
+      await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
+    }
     await setCustomerChannelsRunning(ctx.rpc, slug, false);
   }
   const deadline = Date.now() + timeoutMs;
@@ -1214,7 +1219,7 @@ async function quiesceCustomer(
       runningCount += sessions.filter((s) => s.status === "running").length;
     }
     if (runningCount === 0) {
-      if (opts.stopMattermost) await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
+      if (opts.stopMattermost && !opts.schedulerMigrationId) await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIdsForMigration(slug));
       return { drained: true, runningCount: 0 };
     }
     dlog(`[quiesce:${slug}] ${runningCount} running session(s); waiting`);
@@ -1749,6 +1754,7 @@ export function buildBrokeredLifecycleAdapter(
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
+    schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     resumeCustomer: (slug) => setCustomerChannelsRunning(ctx.rpc, slug, true),
     listExportPaths,
     prepareImportDir,

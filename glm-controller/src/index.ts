@@ -1959,6 +1959,16 @@ async function runClaimedOperation(
         txn.update(ref, { steps: next, lastProgressAt: Date.now() });
       });
     },
+    persistSchedulerHandoff: async (state) => {
+      await deps.db.runTransaction(async (txn) => {
+        const fresh = await txn.get(ref);
+        const data = fresh.exists ? fresh.data() as Operation : null;
+        if (data?.status !== "running" || data.startedAt !== op.startedAt) {
+          throw new Error("scheduler handoff operation is no longer owned by this attempt");
+        }
+        txn.update(ref, { schedulerHandoff: state, lastProgressAt: Date.now() });
+      });
+    },
     persistCustomerMigrationV2: async (state) => {
       await deps.db.runTransaction(async (txn) => {
         const fresh = await txn.get(ref);

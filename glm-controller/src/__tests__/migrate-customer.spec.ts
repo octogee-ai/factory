@@ -67,6 +67,7 @@ function mkOp(overrides: Partial<Operation>): Operation {
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} })),
     restoreTarget: vi.fn(async ({ gatewayId, slug }) => {
       calls.push(`restore:${gatewayId}`);
       return { migrationId: "mig-op-1", slug, restored: true, steps: [] };
@@ -184,6 +185,7 @@ function mkDeps(options: HarnessOptions = {}) {
   };
   const steps: OperationStep[] = [];
   const ctx: OperationContext = {
+    persistSchedulerHandoff: vi.fn(async () => undefined),
     reportStep: vi.fn(async (step: OperationStep) => {
       steps.push(step);
     }),
@@ -758,7 +760,8 @@ describe("migrate-customer — durable V2 migration", () => {
     const persisted: Array<NonNullable<Operation["customerMigrationV2"]>> = [];
     let cancelRequested = false;
     const ctx: OperationContext = {
-      reportStep: vi.fn(async () => undefined),
+      persistSchedulerHandoff: vi.fn(async () => undefined),
+    reportStep: vi.fn(async () => undefined),
       persistCustomerMigrationV2: vi.fn(async (state) => {
         persisted.push(state);
         if (state.phase === "preSynced") cancelRequested = true;
@@ -776,5 +779,52 @@ describe("migrate-customer — durable V2 migration", () => {
     expect(persisted.map((state) => state.phase)).toContain("abortIntent");
     expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
     expect(events).toContain("assignment:gw-blue:serving");
+  });
+});
+
+describe("scheduler handoff recovery", () => {
+  const schedulerHandoff = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+
+  it("persists its scheduler attempt before contacting the scheduler", async () => {
+    const h = mkDeps();
+    vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
+      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith(schedulerHandoff);
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} };
+    });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+  });
+
+  it("recovers committed cutover with the persisted identity instead of copying state again", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => [request.gatewayId, request.phase, request.migrationId])).toEqual([
+      ["gw-blue", "retire", schedulerHandoff.migrationId], ["gw-green", "activate", schedulerHandoff.migrationId],
+    ]);
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(h.client.resume).not.toHaveBeenCalled();
+  });
+
+  it("keeps committed cutover pending when source retirement is unconfirmed", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    vi.mocked(h.client.scheduler).mockRejectedValue(new Error("timeout"));
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff }), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("scheduler handoff cleanup pending") });
+    expect(h.client.scheduler).toHaveBeenCalledTimes(1);
+    expect(h.client.unmount).not.toHaveBeenCalled();
+  });
+
+  it("closes a failed scheduler attempt before reusing the customer on a new attempt", async () => {
+    const h = mkDeps();
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+    expect(vi.mocked(h.client.scheduler).mock.calls.slice(0, 3).map(([request]) => [request.gatewayId, request.phase, request.migrationId])).toEqual([
+      ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "hold", "mig-op-1:scheduler:2"],
+    ]);
+  });
+
+  it("cannot start scheduling handoff when its durable identity cannot be saved", async () => {
+    const h = mkDeps();
+    vi.mocked(h.ctx.persistSchedulerHandoff!).mockRejectedValue(new Error("journal unavailable"));
+    await expect(createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).rejects.toThrow("journal unavailable");
+    expect(h.client.scheduler).not.toHaveBeenCalled();
   });
 });

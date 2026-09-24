@@ -35,6 +35,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
   /source unmount cleanup pending/i,
+  /scheduler handoff cleanup pending/i,
   /retirement config freeze failed/i,
   /system config writer lock is busy/i,
   /system config mutation unavailable: writer-lock-busy/i,

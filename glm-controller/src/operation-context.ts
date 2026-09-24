@@ -1,3 +1,4 @@
+import type { SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type { CustomerMigrationV2State, OperationStep } from "@octogee/shared/types/glm";
 import type { OperationContext } from "./operation-router.js";
 
@@ -8,6 +9,7 @@ export interface PersistFn {
 export interface CreateOperationContextDeps {
   
   persist: PersistFn;
+  persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
   persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;
   cancellationRequested?: () => Promise<boolean>;
   log: (msg: string) => void;
@@ -40,6 +42,7 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
         );
       }
     },
+    ...(deps.persistSchedulerHandoff ? { persistSchedulerHandoff: deps.persistSchedulerHandoff } : {}),
     ...(deps.persistCustomerMigrationV2
       ? { persistCustomerMigrationV2: deps.persistCustomerMigrationV2 }
       : {}),

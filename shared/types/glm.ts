@@ -774,6 +774,14 @@ export interface OperationStep {
   detail?: string;
 }
 
+export interface SchedulerHandoffState {
+  migrationId: string;
+  fromGatewayId: string;
+  toGatewayId: string;
+  uid: string;
+  slug: string;
+}
+
 export interface Operation {
   id: string;
   kind: OperationKind;
@@ -811,6 +819,7 @@ export interface Operation {
   attemptHistory?: OperationAttemptRecord[];
   output?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
+  schedulerHandoff?: SchedulerHandoffState;
 }
 
 export type CustomerMigrationV2Phase =

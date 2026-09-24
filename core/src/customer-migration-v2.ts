@@ -191,11 +191,13 @@ async function advanceForward(
   switch (state.phase) {
     case "preSynced": {
       await deps.setSourceAssignmentState("quiescing");
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "hold" });
       await deps.client.quiesce({
         migrationId: state.migrationId,
         gatewayId: state.sourceGatewayId,
         transportId: state.sourceGatewayId,
         slug: state.slug,
+        schedulerHandoff: true,
       });
       const flush = await deps.client.flushGateway({
         migrationId: state.migrationId,
@@ -211,6 +213,8 @@ async function advanceForward(
       };
     }
     case "sourceQuiesced": {
+      const schedules = await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "export" });
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.targetGatewayId, phase: "stage", agentIds: schedules.agentIds, snapshot: schedules.snapshot });
       const expectedSystemConfigCommit = acceptedSystemConfigCommit(
         state.sourceSystemConfigCommit,
       );
@@ -258,6 +262,8 @@ async function advanceForward(
       });
       return { ...state, phase: "cutover", cutoverAt: deps.now() };
     case "cutover":
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "retire" });
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.targetGatewayId, phase: "activate" });
       await deps.client.unmount({
         migrationId: state.migrationId,
         gatewayId: state.sourceGatewayId,
@@ -278,7 +284,9 @@ async function advanceAbort(
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
     case "abortIntent":
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.targetGatewayId, phase: "abort" });
       await deps.setSourceAssignmentState("serving");
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "resume" });
       await deps.client.resume({ migrationId: state.migrationId, gatewayId: state.sourceGatewayId, slug: state.slug });
       await deps.client.unmount({
         migrationId: state.migrationId,

@@ -7,6 +7,8 @@ import {
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
+  type SchedulerMigrationRequestBody,
+  type SchedulerMigrationResult,
   type FlushGatewayResponse,
   type ImportResponse,
   type MigrationProgressRequestBody,
@@ -45,8 +47,11 @@ export interface MigrationClientDeps {
 // gatewayId; simple-roll has one stable Service per gateway, so tenant and
 // transport are the same name (GATEWAY-SIMPLE-ROLL-SPEC).
 export interface MigrationClient {
+  scheduler(opts: SchedulerMigrationRequestBody & { gatewayId: string; transportId?: string }): Promise<SchedulerMigrationResult>;
   resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   quiesce(opts: {
+    schedulerHandoff?: boolean;
+    schedulerMigrationId?: string;
     migrationId: string;
     gatewayId: string;
     transportId?: string;
@@ -232,6 +237,23 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   });
 
   return {
+    async scheduler({ gatewayId, transportId, ...body }) {
+      const result = await postSignedJson<SchedulerMigrationResult>({
+        transportId: transportId ?? gatewayId,
+        path: `/scheduler/${gatewayId}`,
+        gatewayId,
+        migrationId: body.migrationId,
+        body,
+        timeoutMs: quiesceMs,
+      });
+      if (result.operationId !== body.migrationId || result.phase !== body.phase ||
+          !Array.isArray(result.agentIds) || result.agentIds.some(id => typeof id !== "string" || !id) ||
+          (result.agentIds.length === 0 && body.phase !== "resume" && body.phase !== "abort") ||
+          result.drained !== true || (body.phase === "export" && result.snapshot === undefined)) {
+        throw new Error(`scheduler ${body.phase} did not prove a drained matching operation`);
+      }
+      return result;
+    },
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
       const res = await postSignedJson<RestoreMigrationResponse>({
         transportId: transportId ?? gatewayId,
@@ -255,13 +277,13 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       if (response.resumed !== true) throw new Error(`source ingress did not resume for ${slug}`);
     },
 
-    async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
+    async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, schedulerHandoff, schedulerMigrationId }) {
       const res = await postSignedJson<QuiesceResponse>({
         transportId: transportId ?? gatewayId,
         path: `/quiesce/${gatewayId}`,
         gatewayId,
         migrationId,
-        body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
+        body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...(schedulerHandoff ? { schedulerHandoff: true, schedulerMigrationId: schedulerMigrationId ?? migrationId } : {}) },
         timeoutMs: quiesceMs,
       });
       if (!res.drained) {

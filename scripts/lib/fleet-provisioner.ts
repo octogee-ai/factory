@@ -38,6 +38,7 @@ import {
   createPushStateHandler,
   createMigrationProgressHandler,
   createQuiesceHandler,
+  createSchedulerMigrationHandler,
   createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -1915,6 +1916,7 @@ function registerMigrationRoutes(
   app.post("/restore/:gatewayId", createRestoreHandler(migrationDeps));
   app.post("/migration-progress/:gatewayId", createMigrationProgressHandler(migrationDeps));
   app.post("/resume/:gatewayId", createResumeHandler(migrationDeps));
+  app.post("/scheduler/:gatewayId", createSchedulerMigrationHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));
@@ -2523,6 +2525,12 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
 
   const app = express();
   app.disable("x-powered-by");
+  app.use("/scheduler", express.json({
+    limit: "9mb",
+    verify: (req: express.Request & { rawBody?: string }, _res, buf) => {
+      req.rawBody = buf.toString("utf8");
+    },
+  }));
   app.use(
     express.json({
       verify: (req: express.Request & { rawBody?: string }, _res, buf) => {

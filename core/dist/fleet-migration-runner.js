@@ -3,10 +3,14 @@ async function executeStep(params) {
     const { step, deps, migrationId, slug, projectCheckoutScope, includeActivationManifest, crossGateway, } = params;
     switch (step.action) {
         case "quiesce-source":
+            if (crossGateway)
+                await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.gateway, phase: "hold" });
             await deps.client.quiesce({
                 migrationId,
                 gatewayId: step.gateway,
                 slug: step.slug,
+                schedulerHandoff: crossGateway,
+                schedulerMigrationId: params.schedulerMigrationId,
             });
             return;
         case "flush-source":
@@ -18,6 +22,10 @@ async function executeStep(params) {
             });
             return;
         case "sync-state":
+            if (crossGateway && step.mode === "final") {
+                const schedules = await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.from, phase: "export" });
+                await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.to, phase: "stage", agentIds: schedules.agentIds, snapshot: schedules.snapshot });
+            }
             await deps.client.transferState({
                 migrationId,
                 fromGatewayId: step.from,
@@ -48,6 +56,9 @@ async function executeStep(params) {
             });
             return;
         case "unmount-gateway":
+            if (crossGateway && step.role === "source") {
+                await finalizeSchedulerHandoff(deps.client, params.schedulerMigrationId, slug, step.gateway, params.targetGatewayId);
+            }
             await deps.client.unmount({
                 migrationId,
                 gatewayId: step.gateway,
@@ -56,6 +67,17 @@ async function executeStep(params) {
             return;
         case "complete":
             return;
+    }
+}
+class SchedulerHandoffPendingError extends Error {
+}
+async function finalizeSchedulerHandoff(client, migrationId, slug, sourceGatewayId, targetGatewayId) {
+    try {
+        await client.scheduler({ migrationId, slug, gatewayId: sourceGatewayId, phase: "retire" });
+        await client.scheduler({ migrationId, slug, gatewayId: targetGatewayId, phase: "activate" });
+    }
+    catch (error) {
+        throw new SchedulerHandoffPendingError(`scheduler handoff cleanup pending: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 function reportName(step) {
@@ -117,6 +139,8 @@ function executeForwardStep(execution, step) {
         projectCheckoutScope: input.projectCheckoutScope,
         includeActivationManifest: input.includeActivationManifest,
         crossGateway: execution.crossGateway,
+        targetGatewayId: input.toGatewayId,
+        schedulerMigrationId: input.schedulerMigrationId ?? input.migrationId,
     });
 }
 function migrationComplete(execution) {
@@ -155,6 +179,10 @@ async function handleStepFailure(execution, failure) {
     const { step, name, phaseAtStart, error } = failure;
     const { input, deps } = execution;
     const message = error instanceof Error ? error.message : String(error);
+    if (isPostCutoverSourceCleanup(execution.state, step) && error instanceof SchedulerHandoffPendingError) {
+        await report(deps, { name, status: "failed", error: message });
+        return { success: false, finalPhase: execution.state.phase, errorAt: { phase: phaseAtStart, error: message }, rolledBack: false };
+    }
     if (isPostCutoverSourceCleanup(execution.state, step)) {
         await report(deps, { name, status: "skipped", error: message });
         deps.log(`[migration-runner] ⚠ ${name} cleanup failed after durable cutover migrationId=${input.migrationId} slug=${input.slug}: ${message} — target remains serving`);
@@ -179,6 +207,7 @@ function rollbackServingTarget(execution) {
 function rollbackExecution(execution) {
     const { input, deps } = execution;
     return tryRollback(execution.state, deps, input.migrationId, {
+        schedulerMigrationId: input.schedulerMigrationId ?? input.migrationId,
         crossGateway: execution.crossGateway,
         restoreServing: rollbackServingTarget(execution),
     });
@@ -198,6 +227,9 @@ async function tryRollback(state, deps, migrationId, transports) {
         deps.log(`[migration-runner] no rollback needed at phase=${state.phase} (source still owns)`);
         return false;
     }
+    if (transports.crossGateway) {
+        await deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.toGatewayId, slug: state.slug, phase: "abort" });
+    }
     for (const step of plan) {
         const rbName = `rollback:${reportName(step)}`;
         await report(deps, { name: rbName, status: "running" });
@@ -212,6 +244,8 @@ async function tryRollback(state, deps, migrationId, transports) {
                 // Rollback's cutover-firestore restores the SOURCE: flip the mirror
                 // back when the migration crossed gateways.
                 crossGateway: transports.crossGateway,
+                targetGatewayId: state.toGatewayId,
+                schedulerMigrationId: transports.schedulerMigrationId,
             });
             await report(deps, { name: rbName, status: "done" });
             deps.log(`[migration-runner] rollback ${step.action} ok`);
@@ -224,6 +258,8 @@ async function tryRollback(state, deps, migrationId, transports) {
     }
     await restoreSourceServing(deps, transports.restoreServing);
     if (state.phase !== "keys-synced") {
+        if (transports.crossGateway)
+            await deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.fromGatewayId, slug: state.slug, phase: "resume" });
         await deps.client.resume({ migrationId, gatewayId: state.fromGatewayId, slug: state.slug });
     }
     return true;

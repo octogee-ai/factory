@@ -10,6 +10,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  type SchedulerMigrationRequestBody,
   type AbortRsyncImportRequestBody,
   type ImportResponse,
   type ActivateImportRequestBody,
@@ -484,6 +485,32 @@ export function createMigrationProgressHandler(deps: MigrationHandlerDeps): Requ
   };
 }
 
+export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? console.log;
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<SchedulerMigrationRequestBody>(req, res, deps, log);
+    if (!body) return;
+    if (!["hold", "export", "stage", "activate", "resume", "retire", "abort"].includes(body.phase) ||
+        (body.agentIds !== undefined && (!Array.isArray(body.agentIds) || body.agentIds.length === 0 || body.agentIds.some(id => typeof id !== "string" || !id))) ||
+        (body.phase === "stage" && (body.agentIds === undefined || body.snapshot === undefined))) {
+      res.status(400).json({ error: "invalid scheduler migration request" });
+      return;
+    }
+    try {
+      const result = await deps.adapter.schedulerMigration(body.slug, {
+        operationId: body.migrationId, phase: body.phase,
+        ...(body.agentIds ? { agentIds: body.agentIds } : {}),
+        ...(body.snapshot === undefined ? {} : { snapshot: body.snapshot }),
+      });
+      res.status(result.drained ? 200 : 409).json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] scheduler ${body.phase} failed slug=${body.slug}: ${message}`);
+      res.status(500).json({ error: "scheduler migration failed", message });
+    }
+  };
+}
+
 export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? console.log;
   return async (req, res) => {
@@ -507,8 +534,13 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
-      const result = body.stopMattermost === false
-        ? await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000, { stopMattermost: false })
+      let options: { stopMattermost: boolean; schedulerMigrationId?: string } | undefined;
+      if (body.stopMattermost === false) options = { stopMattermost: false };
+      else if (body.schedulerHandoff === true) {
+        options = { stopMattermost: true, schedulerMigrationId: body.schedulerMigrationId ?? body.migrationId };
+      }
+      const result = options
+        ? await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000, options)
         : await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000);
       const response: QuiesceResponse = {
         migrationId: body.migrationId,

@@ -512,6 +512,20 @@ export function createGatewayRpc(opts = {}) {
             return payload;
         },
         toolsCatalog: (params, timeoutMs) => fetchToolsCatalog(call, params, timeoutMs),
+        async schedulerMigration(params) {
+            const result = await call("cron.migration", params);
+            if (!result || typeof result !== "object")
+                throw new OpenclawWireError(INVALID_RESPONSE, "cron.migration returned non-object payload");
+            const value = result;
+            if (value.operationId !== params.operationId || value.phase !== params.phase ||
+                typeof value.drained !== "boolean" || !Array.isArray(value.agentIds) ||
+                value.agentIds.some(id => typeof id !== "string" || !id) ||
+                (value.agentIds.length === 0 && params.phase !== "resume" && params.phase !== "abort") ||
+                (params.phase === "export" && value.snapshot === undefined)) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "cron.migration returned a mismatched operation or invalid scheduler state");
+            }
+            return value;
+        },
         async cronJobCount(agentId) {
             const payload = await call("cron.list", {
                 agentId, enabled: "enabled", compact: true, limit: 1,
