@@ -60,7 +60,7 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
       requests: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '5Gi' },
       limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '5Gi' },
     },
-    nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '4096' },
+    nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '5632' },
     capacity: { targetActiveBuilders: 2, typicalBuilders: 3 },
   },
   l: {

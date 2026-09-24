@@ -213,7 +213,7 @@ tiers:
         ephemeral-storage: "5Gi"
     nodejs:
       uvThreadpoolSize: "4"
-      maxOldSpaceSizeMb: "4096"
+      maxOldSpaceSizeMb: "5632"
   l:
     resources:
       requests:
