@@ -765,7 +765,7 @@ function projectMountPolicy(
   builderGateway: boolean,
 ): Record<string, unknown> {
   if (builderGateway || snapshot.byotActive === true) return patch;
-  return customerMountConfigPatch(current, patch, snapshot.slug, mountSafeModelRef(snapshot));
+  return customerMountConfigPatch(current, patch, snapshot.slug, mountSafeModelRef(snapshot), process.env);
 }
 
 function mountSafeModelRef(snapshot: UserSnapshot): string {

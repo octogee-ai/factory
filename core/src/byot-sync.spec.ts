@@ -122,6 +122,22 @@ const codexBlob = () =>
 const noCustomerOauthRuntimePurge = vi.fn(async () => ({ changed: false, resetCount: 0 }));
 
 describe("customer mount configuration projection", () => {
+  it("leaves a plugin token path that already resolves to its placeholder untouched", () => {
+    vi.stubEnv("OCTOGEE_API_SA_TOKEN_PATH", "/var/run/secrets/octogee-gateway-broker/token");
+    try {
+      const resolved = { config: { tokenPath: "/var/run/secrets/octogee-gateway-broker/token" } };
+      const drifted = { config: { tokenPath: "/tmp/other-token" } };
+      const current = { plugins: { entries: { "octogee-chat-tools": resolved, "octogee-board-tools": drifted } } };
+      const patch = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2", process.env) as any;
+      expect(patch.plugins.entries["octogee-chat-tools"].config).not.toHaveProperty("tokenPath");
+      expect(patch.plugins.entries["octogee-board-tools"].config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
+      const withoutGatewayEnv = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+      expect(withoutGatewayEnv.plugins.entries["octogee-chat-tools"].config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("does not restore an unsafe model or direct runtime from the mount candidate", () => {
     const id = "octogee-alice-coach";
     const patch = customerMountConfigPatch({}, { agents: { entries: {

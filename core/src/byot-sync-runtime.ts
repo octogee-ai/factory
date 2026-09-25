@@ -869,15 +869,29 @@ function mergeConfigPatches(...patches: Array<Record<string, unknown>>): Record<
   return merged;
 }
 
-function exactObjectPatch(current: unknown, expected: Record<string, unknown>): Record<string, unknown> {
+export type GatewayResolutionEnv = Readonly<Record<string, string | undefined>>;
+
+function resolvesToEnvPlaceholder(current: unknown, expected: unknown, env: GatewayResolutionEnv | undefined): boolean {
+  if (!env || typeof expected !== "string" || typeof current !== "string") return false;
+  const name = /^\$\{([A-Z0-9_]+)\}$/u.exec(expected)?.[1];
+  return name !== undefined && env[name] !== undefined && env[name] === current;
+}
+
+function exactObjectPatch(
+  current: unknown,
+  expected: Record<string, unknown>,
+  gatewayEnv?: GatewayResolutionEnv,
+): Record<string, unknown> {
   const existing = isRecord(current) ? current : {};
   const patch: Record<string, unknown> = {};
   for (const key of Object.keys(existing)) {
     if (!Object.prototype.hasOwnProperty.call(expected, key)) patch[key] = null;
   }
   for (const [key, value] of Object.entries(expected)) {
-    if (isRecord(value)) patch[key] = exactObjectPatch(existing[key], value);
-    else patch[key] = Array.isArray(value) ? [...value] : value;
+    if (isRecord(value)) patch[key] = exactObjectPatch(existing[key], value, gatewayEnv);
+    else if (!resolvesToEnvPlaceholder(existing[key], value, gatewayEnv)) {
+      patch[key] = Array.isArray(value) ? [...value] : value;
+    }
   }
   return patch;
 }
@@ -1144,12 +1158,13 @@ function customerCommandSurfaceRemovalPatch(config: Record<string, unknown>): Re
   return patch;
 }
 
-function customerSecurityProjectionPatch(current: unknown): Record<string, unknown> {
+function customerSecurityProjectionPatch(current: unknown, gatewayEnv?: GatewayResolutionEnv): Record<string, unknown> {
   const config = isRecord(current) ? current : {};
   const pluginEntries = recordChild(recordChild(config, "plugins"), "entries");
   const pluginEntryPatch = exactObjectPatch(
     pluginEntries,
     customerPluginEntries(),
+    gatewayEnv,
   );
   const providerEntries = recordChild(recordChild(config, "models"), "providers");
   const modelProviders = customerModelProvidersPlan(providerEntries);
@@ -1332,6 +1347,7 @@ function customerOauthRuntimeConfigPlan(
   slug: string,
   safeModelRef: string,
   forceSafeAll: boolean,
+  gatewayEnv?: GatewayResolutionEnv,
 ): {
   patch: Record<string, unknown>;
   affectedAgentIds: string[];
@@ -1390,7 +1406,7 @@ function customerOauthRuntimeConfigPlan(
       ? { models: { providers: modelProviders } }
       : {}),
   };
-  return { patch: mergeConfigPatches(oauthPatch, customerSecurityProjectionPatch(current)),
+  return { patch: mergeConfigPatches(oauthPatch, customerSecurityProjectionPatch(current, gatewayEnv)),
   affectedAgentIds: [...affectedAgentIds],
   directRuntimeModelRefs: [...directRuntimeModelRefs],
   };
@@ -1415,9 +1431,10 @@ export function customerMountConfigPatch(
   mountPatch: Record<string, unknown>,
   slug: string,
   safeModelRef: string,
+  gatewayEnv?: GatewayResolutionEnv,
 ): Record<string, unknown> {
   const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
-  const security = customerOauthRuntimeConfigPatch(candidate, slug, safeModelRef);
+  const security = customerOauthRuntimeConfigPlan(candidate, slug, safeModelRef, false, gatewayEnv).patch;
   const candidateAgents = recordChild(candidate, "agents");
   const securityAgents = recordChild(security, "agents");
   const projectAgent = (id: string, entry: unknown, patch: unknown) => {

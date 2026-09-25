@@ -622,7 +622,13 @@ function mergeConfigPatches(...patches) {
     }
     return merged;
 }
-function exactObjectPatch(current, expected) {
+function resolvesToEnvPlaceholder(current, expected, env) {
+    if (!env || typeof expected !== "string" || typeof current !== "string")
+        return false;
+    const name = /^\$\{([A-Z0-9_]+)\}$/u.exec(expected)?.[1];
+    return name !== undefined && env[name] !== undefined && env[name] === current;
+}
+function exactObjectPatch(current, expected, gatewayEnv) {
     const existing = isRecord(current) ? current : {};
     const patch = {};
     for (const key of Object.keys(existing)) {
@@ -631,9 +637,10 @@ function exactObjectPatch(current, expected) {
     }
     for (const [key, value] of Object.entries(expected)) {
         if (isRecord(value))
-            patch[key] = exactObjectPatch(existing[key], value);
-        else
+            patch[key] = exactObjectPatch(existing[key], value, gatewayEnv);
+        else if (!resolvesToEnvPlaceholder(existing[key], value, gatewayEnv)) {
             patch[key] = Array.isArray(value) ? [...value] : value;
+        }
     }
     return patch;
 }
@@ -866,10 +873,10 @@ function customerCommandSurfaceRemovalPatch(config) {
     }
     return patch;
 }
-function customerSecurityProjectionPatch(current) {
+function customerSecurityProjectionPatch(current, gatewayEnv) {
     const config = isRecord(current) ? current : {};
     const pluginEntries = recordChild(recordChild(config, "plugins"), "entries");
-    const pluginEntryPatch = exactObjectPatch(pluginEntries, customerPluginEntries());
+    const pluginEntryPatch = exactObjectPatch(pluginEntries, customerPluginEntries(), gatewayEnv);
     const providerEntries = recordChild(recordChild(config, "models"), "providers");
     const modelProviders = customerModelProvidersPlan(providerEntries);
     const hookMappings = safeHookMappings(config);
@@ -1007,7 +1014,7 @@ function oauthModelProviderRemovalPatch(config) {
         .filter((provider) => provider === "claude-cli" || provider === "openai-codex")
         .map((provider) => [provider, null]));
 }
-function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAll) {
+function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAll, gatewayEnv) {
     const affectedAgentIds = new Set();
     const config = isRecord(current) ? current : {};
     const agents = recordChild(config, "agents");
@@ -1047,7 +1054,7 @@ function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAl
             ? { models: { providers: modelProviders } }
             : {}),
     };
-    return { patch: mergeConfigPatches(oauthPatch, customerSecurityProjectionPatch(current)),
+    return { patch: mergeConfigPatches(oauthPatch, customerSecurityProjectionPatch(current, gatewayEnv)),
         affectedAgentIds: [...affectedAgentIds],
         directRuntimeModelRefs: [...directRuntimeModelRefs],
     };
@@ -1055,9 +1062,9 @@ function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAl
 export function customerOauthRuntimeConfigPatch(current, slug, safeModelRef, opts) {
     return customerOauthRuntimeConfigPlan(current, slug, safeModelRef, opts?.forceSafeAll === true).patch;
 }
-export function customerMountConfigPatch(current, mountPatch, slug, safeModelRef) {
+export function customerMountConfigPatch(current, mountPatch, slug, safeModelRef, gatewayEnv) {
     const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
-    const security = customerOauthRuntimeConfigPatch(candidate, slug, safeModelRef);
+    const security = customerOauthRuntimeConfigPlan(candidate, slug, safeModelRef, false, gatewayEnv).patch;
     const candidateAgents = recordChild(candidate, "agents");
     const securityAgents = recordChild(security, "agents");
     const projectAgent = (id, entry, patch) => {
