@@ -166,6 +166,29 @@ export function gatewayPodServiceName(id) {
 export function releasePayloadHash(payload) {
     return releasePayloadValueHash(payload);
 }
+export const PLATFORM_RELEASE_RECORD_DOC_PATH = "glmControllerState/platformRelease";
+export function platformReleaseRecord(payload, writtenAt) {
+    return {
+        schemaVersion: 1,
+        payloadHash: releasePayloadHash(payload),
+        imageTag: payload.imageTag,
+        openclawSourceSha: payload.openclawSourceSha ?? null,
+        writtenAt,
+    };
+}
+export function parsePlatformReleaseRecord(value) {
+    if (!isPlainRecord(value))
+        return null;
+    const { schemaVersion, payloadHash, imageTag, openclawSourceSha, writtenAt } = value;
+    if (schemaVersion !== 1 ||
+        typeof payloadHash !== "string" || !/^[a-f0-9]{64}$/.test(payloadHash) ||
+        typeof imageTag !== "string" || imageTag.length === 0 ||
+        (openclawSourceSha !== null && typeof openclawSourceSha !== "string") ||
+        typeof writtenAt !== "number" || !Number.isSafeInteger(writtenAt) || writtenAt < 0) {
+        return null;
+    }
+    return { schemaVersion, payloadHash, imageTag, openclawSourceSha, writtenAt };
+}
 function releasePayloadValueHash(payload) {
     return createHash("sha256")
         .update(canonicalJson(payload))

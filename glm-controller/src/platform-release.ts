@@ -1,6 +1,12 @@
 import { GATEWAY_CONFIG_SCHEMA_VERSION } from "@octogee/shared/types/gateway-mutable-config";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import { isGatewayEdgeImage, isReleasePayload } from "@octogee/shared/types/gateway-releases";
+import type { Firestore } from "firebase-admin/firestore";
+import {
+  isGatewayEdgeImage,
+  isReleasePayload,
+  PLATFORM_RELEASE_RECORD_DOC_PATH,
+  platformReleaseRecord,
+} from "@octogee/shared/types/gateway-releases";
 import { isGatewayImageTag } from "@octogee/shared/types/image-tag";
 import {
   parseSharedPoolReplicaBounds,
@@ -55,6 +61,23 @@ export function platformGatewayArtifactFromEnvironment(
     );
   }
   return artifact;
+}
+
+export async function writePlatformReleaseRecord(input: {
+  db: Firestore;
+  artifact: GatewayArtifact;
+  now(): number;
+  log(message: string): void;
+}): Promise<void> {
+  try {
+    await input.db.doc(PLATFORM_RELEASE_RECORD_DOC_PATH)
+      .set(platformReleaseRecord(input.artifact, input.now()));
+  } catch (error) {
+    input.log(
+      `[glm-controller] platform release record ${PLATFORM_RELEASE_RECORD_DOC_PATH} write failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
+  }
 }
 
 export function sharedPoolReplicaBoundsFromEnvironment(

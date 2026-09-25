@@ -416,6 +416,44 @@ export function releasePayloadHash(payload: ReleasePayload): string {
   return releasePayloadValueHash(payload);
 }
 
+export const PLATFORM_RELEASE_RECORD_DOC_PATH = "glmControllerState/platformRelease";
+
+export interface PlatformReleaseRecord {
+  schemaVersion: 1;
+  payloadHash: string;
+  imageTag: string;
+  openclawSourceSha: string | null;
+  writtenAt: number;
+}
+
+export function platformReleaseRecord(
+  payload: ReleasePayload,
+  writtenAt: number,
+): PlatformReleaseRecord {
+  return {
+    schemaVersion: 1,
+    payloadHash: releasePayloadHash(payload),
+    imageTag: payload.imageTag,
+    openclawSourceSha: payload.openclawSourceSha ?? null,
+    writtenAt,
+  };
+}
+
+export function parsePlatformReleaseRecord(value: unknown): PlatformReleaseRecord | null {
+  if (!isPlainRecord(value)) return null;
+  const { schemaVersion, payloadHash, imageTag, openclawSourceSha, writtenAt } = value;
+  if (
+    schemaVersion !== 1 ||
+    typeof payloadHash !== "string" || !/^[a-f0-9]{64}$/.test(payloadHash) ||
+    typeof imageTag !== "string" || imageTag.length === 0 ||
+    (openclawSourceSha !== null && typeof openclawSourceSha !== "string") ||
+    typeof writtenAt !== "number" || !Number.isSafeInteger(writtenAt) || writtenAt < 0
+  ) {
+    return null;
+  }
+  return { schemaVersion, payloadHash, imageTag, openclawSourceSha, writtenAt };
+}
+
 function releasePayloadValueHash(payload: unknown): string {
   return createHash("sha256")
     .update(canonicalJson(payload))

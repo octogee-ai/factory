@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { isReleasePayload } from "@octogee/shared/types/gateway-releases";
+import { describe, expect, it, vi } from "vitest";
+import {
+  isReleasePayload,
+  PLATFORM_RELEASE_RECORD_DOC_PATH,
+  releasePayloadHash,
+} from "@octogee/shared/types/gateway-releases";
 import {
   platformGatewayArtifactFromEnvironment,
   sharedPoolReplicaBoundsFromEnvironment,
+  writePlatformReleaseRecord,
 } from "../platform-release.js";
 
 const REPOSITORY = "us-central1-docker.pkg.dev/octogee/octogee";
@@ -62,5 +67,51 @@ describe("sharedPoolReplicaBoundsFromEnvironment", () => {
       SHARED_POOL_MIN_REPLICAS: "3",
       SHARED_POOL_MAX_REPLICAS: "2",
     })).toThrow("SHARED_POOL_MIN_REPLICAS");
+  });
+});
+
+describe("writePlatformReleaseRecord", () => {
+  function recordingDb(set: (data: Record<string, unknown>) => Promise<void>) {
+    const paths: string[] = [];
+    return {
+      paths,
+      db: {
+        doc: (path: string) => {
+          paths.push(path);
+          return { set };
+        },
+      },
+    };
+  }
+
+  it("records the running platform build and its release payload hash for other placers", async () => {
+    const artifact = platformGatewayArtifactFromEnvironment({ ...env, OPENCLAW_FORK_SHA: "f".repeat(40) });
+    const set = vi.fn(async () => undefined);
+    const { db, paths } = recordingDb(set);
+
+    await writePlatformReleaseRecord({ db: db as never, artifact, now: () => 1_234, log: vi.fn() });
+
+    expect(paths).toEqual([PLATFORM_RELEASE_RECORD_DOC_PATH]);
+    expect(set).toHaveBeenCalledExactlyOnceWith({
+      schemaVersion: 1,
+      payloadHash: releasePayloadHash(artifact),
+      imageTag: env.PLATFORM_GATEWAY_IMAGE_TAG,
+      openclawSourceSha: "f".repeat(40),
+      writtenAt: 1_234,
+    });
+  });
+
+  it("logs and rethrows when the record cannot be written", async () => {
+    const artifact = platformGatewayArtifactFromEnvironment(env);
+    const log = vi.fn();
+    const { db } = recordingDb(async () => {
+      throw new Error("permission denied");
+    });
+
+    await expect(writePlatformReleaseRecord({ db: db as never, artifact, now: () => 1, log }))
+      .rejects.toThrow("permission denied");
+    expect(log).toHaveBeenCalledWith(
+      `[glm-controller] platform release record ${PLATFORM_RELEASE_RECORD_DOC_PATH} write failed: permission denied`,
+    );
   });
 });

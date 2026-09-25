@@ -144,6 +144,16 @@ export declare function helmReleaseNameForGateway(gatewayId: string): string;
 export declare function gatewayEdgeServiceName(id: string): string;
 export declare function gatewayPodServiceName(id: string): string;
 export declare function releasePayloadHash(payload: ReleasePayload): string;
+export declare const PLATFORM_RELEASE_RECORD_DOC_PATH = "glmControllerState/platformRelease";
+export interface PlatformReleaseRecord {
+    schemaVersion: 1;
+    payloadHash: string;
+    imageTag: string;
+    openclawSourceSha: string | null;
+    writtenAt: number;
+}
+export declare function platformReleaseRecord(payload: ReleasePayload, writtenAt: number): PlatformReleaseRecord;
+export declare function parsePlatformReleaseRecord(value: unknown): PlatformReleaseRecord | null;
 export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag"];
 export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "builderAccess", "ownerUid", "builderSlug", "openclawOverrides", "modelBrokerLimits", "allocation", "desiredStatus", "liveRelease", "retireAfter"];

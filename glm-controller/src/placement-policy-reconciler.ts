@@ -26,9 +26,13 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   commitPlacementAtomic,
+  GATEWAY_RELEASES_SUBCOLLECTION,
   isGatewayRuntimeDoc,
+  isReleasePayload,
   projectGatewayDesiredRootForGateway,
+  releasePayloadHash,
   type PlacementFirestore,
+  type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
 import {
   GATEWAY_POD_REPLACEMENT_SCHEMA,
@@ -43,14 +47,23 @@ import {
   type PodReplacementTransition,
 } from "./pod-replacement-tracking.js";
 import {
+  authoritativeSharedGatewayLoad,
+  compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
+  isSettledSharedGateway,
+  parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
-  planSharedGatewayRebalance,
+  platformPreferredSharedGatewayCandidates,
   selectSharedGateway,
   type SharedGatewayPlacementPurpose,
   type SharedGatewayPoolCandidate,
+  type SharedGatewayRebalance,
+  type SharedGatewaySelection,
 } from "@octogee/shared/types/shared-gateway-pool";
-import { readSharedGatewayPoolConfig } from "@octogee/core/shared-gateway-pool-read";
+import {
+  InvalidSharedGatewayAutoscalingConfigError,
+  readSharedGatewayPoolConfig,
+} from "@octogee/core/shared-gateway-pool-read";
 import {
   commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
@@ -198,6 +211,8 @@ export interface PlacementPolicySnapshot {
   defaultGatewayId: string;
   sharedGatewayIds: readonly string[];
   idleMs: number;
+  buildersPerGateway: number;
+  platformCurrentGatewayIds: readonly string[];
   users: PlacementPolicyUser[];
   gateways: PlacementPolicyGateway[];
   assignments: PlacementPolicyAssignment[];
@@ -704,19 +719,50 @@ function rollingSharedGatewayPeer(
   };
 }
 
+function sharedGatewayPlacementConfig(context: PlacementPolicyReconcileContext) {
+  return {
+    defaultGatewayId: context.state.defaultGatewayId,
+    sharedGatewayIds: context.state.sharedGatewayIds,
+  };
+}
+
+function selectPlatformPreferredSharedGateway(
+  context: PlacementPolicyReconcileContext,
+  input: {
+    uid: string;
+    purpose: SharedGatewayPlacementPurpose;
+    candidates: readonly SharedGatewayPoolCandidate[];
+    currentGatewayId?: string | null;
+  },
+): SharedGatewaySelection {
+  const config = sharedGatewayPlacementConfig(context);
+  return selectSharedGateway({
+    uid: input.uid,
+    purpose: input.purpose,
+    config,
+    candidates: platformPreferredSharedGatewayCandidates({
+      config,
+      candidates: input.candidates,
+      purpose: input.purpose,
+      preference: {
+        platformCurrentGatewayIds: context.state.platformCurrentGatewayIds,
+        buildersPerGateway: context.state.buildersPerGateway,
+      },
+      currentGatewayId: input.currentGatewayId,
+    }),
+    ...(input.currentGatewayId === undefined ? {} : { currentGatewayId: input.currentGatewayId }),
+  });
+}
+
 function selectAcceptingSharedGateway(
   context: PlacementPolicyReconcileContext,
   uid: string,
   purpose: SharedGatewayPlacementPurpose,
   currentGatewayId?: string | null,
 ): string | null {
-  const selection = selectSharedGateway({
+  const selection = selectPlatformPreferredSharedGateway(context, {
     uid,
     purpose,
-    config: {
-      defaultGatewayId: context.state.defaultGatewayId,
-      sharedGatewayIds: context.state.sharedGatewayIds,
-    },
     candidates: sharedGatewayCandidates(context),
     ...(currentGatewayId === undefined ? {} : { currentGatewayId }),
   });
@@ -2124,20 +2170,50 @@ function applyProjectedRebalance(
   target.assignmentCount += 1;
 }
 
+function compareSharedGatewayLoad(
+  left: SharedGatewayPoolCandidate,
+  right: SharedGatewayPoolCandidate,
+): number {
+  const loadDifference = authoritativeSharedGatewayLoad(left) - authoritativeSharedGatewayLoad(right);
+  return loadDifference !== 0 ? loadDifference : compareSharedGatewayIds(left.gatewayId, right.gatewayId);
+}
+
+function planPlatformPreferredSharedGatewayRebalance(
+  context: PlacementPolicyReconcileContext,
+  candidates: readonly SharedGatewayPoolCandidate[],
+): SharedGatewayRebalance | null {
+  const config = sharedGatewayPlacementConfig(context);
+  const platformCurrent = new Set(context.state.platformCurrentGatewayIds);
+  const settled = candidates
+    .filter((candidate) => isSettledSharedGateway(config, candidate))
+    .sort(compareSharedGatewayLoad);
+  const currentWithHeadroom = settled.filter((candidate) =>
+    platformCurrent.has(candidate.gatewayId) &&
+    authoritativeSharedGatewayLoad(candidate) < context.state.buildersPerGateway);
+  const to = (currentWithHeadroom.length > 0 ? currentWithHeadroom : settled)[0];
+  if (!to) return null;
+  const toIsCurrent = platformCurrent.has(to.gatewayId);
+  const from = settled
+    .filter((candidate) =>
+      candidate.gatewayId !== to.gatewayId &&
+      (toIsCurrent || !platformCurrent.has(candidate.gatewayId)))
+    .at(-1);
+  if (!from) return null;
+  return authoritativeSharedGatewayLoad(from) - authoritativeSharedGatewayLoad(to) >= 2
+    ? { fromGatewayId: from.gatewayId, toGatewayId: to.gatewayId }
+    : null;
+}
+
 async function reconcileSharedGatewayRebalance(
   context: PlacementPolicyReconcileContext,
 ): Promise<void> {
-  const config = {
-    defaultGatewayId: context.state.defaultGatewayId,
-    sharedGatewayIds: context.state.sharedGatewayIds,
-  };
   const candidates = sharedGatewayCandidates(context).map((candidate) => ({ ...candidate }));
-  if (!planSharedGatewayRebalance({ config, candidates })) return;
+  if (!planPlatformPreferredSharedGatewayRebalance(context, candidates)) return;
   if (!sharedGatewayPoolStableForRebalance(context)) return;
   const users = [...context.state.users].sort((left, right) => left.uid.localeCompare(right.uid));
   const scheduled = new Set<string>();
   while (true) {
-    const plan = planSharedGatewayRebalance({ config, candidates });
+    const plan = planPlatformPreferredSharedGatewayRebalance(context, candidates);
     if (!plan) return;
     const builder = longestSettledSharedRebalanceBuilder(context, users, plan.fromGatewayId, scheduled);
     if (!builder) return;
@@ -2194,10 +2270,6 @@ async function reconcileDrainingSharedGateway(
     (gatewayId) => context.gateways.get(gatewayId)?.desiredStatus === "draining",
   );
   if (drainingGatewayIds.length === 0) return false;
-  const config = {
-    defaultGatewayId: context.state.defaultGatewayId,
-    sharedGatewayIds: context.state.sharedGatewayIds,
-  };
   const projectedCandidates = sharedGatewayCandidates(context).map((candidate) => ({
     ...candidate,
   }));
@@ -2207,10 +2279,9 @@ async function reconcileDrainingSharedGateway(
       left.uid.localeCompare(right.uid))) {
       const builder = drainingSharedGatewayBuilder(context, user, fromGatewayId);
       if (!builder) continue;
-      const selection = selectSharedGateway({
+      const selection = selectPlatformPreferredSharedGateway(context, {
         uid: user.uid,
         purpose: "migration",
-        config,
         candidates: projectedCandidates,
       });
       if (selection.kind !== "selected") continue;
@@ -2418,6 +2489,7 @@ interface FirestorePlacementPolicyInput {
   informer: FleetInformer;
   namespace: string;
   idleMs: number;
+  platformArtifact: ReleasePayload;
   now(): number;
   log(message: string): void;
   debug?(message: string): void;
@@ -2853,6 +2925,34 @@ function placementGatewayFromDocument(input: {
   };
 }
 
+function placementBuildersPerGateway(value: unknown): number {
+  const config = parseSharedGatewayAutoscalingConfig(value);
+  if (config === null) throw new InvalidSharedGatewayAutoscalingConfigError();
+  return config.buildersPerGateway;
+}
+
+async function readPlatformCurrentSharedGatewayIds(
+  input: FirestorePlacementPolicyInput,
+  sharedGateways: readonly PlacementPolicyGateway[],
+): Promise<string[]> {
+  const platformHash = releasePayloadHash(input.platformArtifact);
+  const current = await Promise.all(sharedGateways.map(async (gateway) => {
+    const snapshot = await input.db.doc(
+      `${GATEWAYS_COLLECTION}/${gateway.gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${gateway.latestRelease}`,
+    ).get();
+    const payload = snapshot.exists ? record(snapshot.data())?.payload : undefined;
+    if (!isReleasePayload(payload)) {
+      throw new Error(
+        `shared pool member ${gateway.gatewayId} latest release ${gateway.latestRelease} has no readable payload`,
+      );
+    }
+    return releasePayloadHash(payload) === platformHash;
+  }));
+  return sharedGateways
+    .filter((_gateway, index) => current[index])
+    .map((gateway) => gateway.gatewayId);
+}
+
 async function readPlacementPolicySnapshot(
   input: FirestorePlacementPolicyInput,
 ): Promise<PlacementPolicySnapshot> {
@@ -2886,6 +2986,9 @@ async function readPlacementPolicySnapshot(
   const idleMs = placementPolicyIdleMs(
     configSnap.data()?.disposableGatewayIdleMs,
     fallbackIdleMs,
+  );
+  const buildersPerGateway = placementBuildersPerGateway(
+    configSnap.data()?.sharedGatewayAutoscaling,
   );
   const runtimes = docsById(runtimeDocs);
   const diagnosticsScope = placementPodDiagnosticsScope(gatewayDocs.map((doc) => doc.id), runtimes);
@@ -2921,10 +3024,16 @@ async function readPlacementPolicySnapshot(
       now,
     }))
     .filter((gateway): gateway is PlacementPolicyGateway => gateway !== null);
+  const platformCurrentGatewayIds = await readPlatformCurrentSharedGatewayIds(
+    input,
+    gateways.filter((gateway) => sharedGatewayIds.includes(gateway.gatewayId)),
+  );
   return {
     defaultGatewayId,
     sharedGatewayIds,
     idleMs,
+    buildersPerGateway,
+    platformCurrentGatewayIds,
     users: userDocs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
     assignments,

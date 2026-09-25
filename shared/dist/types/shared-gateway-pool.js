@@ -110,6 +110,16 @@ export function isSettledSharedGateway(config, candidate) {
 function sharedGatewayAcceptsFor(purpose) {
     return purpose === "migration" ? isSettledSharedGateway : isAcceptingSharedGateway;
 }
+export function platformPreferredSharedGatewayCandidates(input) {
+    const accepts = sharedGatewayAcceptsFor(input.purpose);
+    const platformCurrent = new Set(input.preference.platformCurrentGatewayIds);
+    const currentWithHeadroom = input.candidates.filter((candidate) => platformCurrent.has(candidate.gatewayId) &&
+        accepts(input.config, candidate) &&
+        authoritativeSharedGatewayLoad(candidate) < input.preference.buildersPerGateway);
+    if (currentWithHeadroom.length === 0)
+        return [...input.candidates];
+    return input.candidates.filter((candidate) => currentWithHeadroom.includes(candidate) || candidate.gatewayId === input.currentGatewayId);
+}
 export function stableGatewayUidHash(uid) {
     let hash = 2166136261;
     for (let index = 0; index < uid.length; index += 1) {

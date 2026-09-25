@@ -107,6 +107,17 @@ export declare function authoritativeSharedGatewayLoad(candidate: SharedGatewayP
 export declare function isAcceptingSharedGateway(config: SharedGatewayPoolConfig, candidate: SharedGatewayPoolCandidate): boolean;
 export declare function isSettledSharedGateway(config: SharedGatewayPoolConfig, candidate: SharedGatewayPoolCandidate): boolean;
 export type SharedGatewayPlacementPurpose = "initial-placement" | "migration";
+export interface SharedGatewayPlatformPreference {
+    platformCurrentGatewayIds: readonly string[];
+    buildersPerGateway: number;
+}
+export declare function platformPreferredSharedGatewayCandidates(input: {
+    config: SharedGatewayPoolConfig;
+    candidates: readonly SharedGatewayPoolCandidate[];
+    purpose: SharedGatewayPlacementPurpose;
+    preference: SharedGatewayPlatformPreference;
+    currentGatewayId?: string | null;
+}): SharedGatewayPoolCandidate[];
 export declare function stableGatewayUidHash(uid: string): number;
 export declare function selectSharedGateway(input: {
     uid: string;

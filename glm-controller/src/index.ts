@@ -224,6 +224,7 @@ import {
 import {
   gatewayAuthorizationFromRootDocument,
   readGatewayArtifact,
+  type GatewayArtifact,
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
@@ -316,6 +317,7 @@ import { computeChartFingerprint } from "./chart-fingerprint.js";
 import { startSharedPoolScaler } from "./shared-pool-scaler.js";
 import {
   platformGatewayArtifactFromEnvironment,
+  writePlatformReleaseRecord,
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
 import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
@@ -2244,6 +2246,7 @@ interface ControllerBackgroundTasksDeps {
   deps: ControllerDeps;
   helm: HelmRunner;
   fleetControllerPrivateKey: string;
+  platformArtifact: GatewayArtifact;
 }
 
 function startControllerBackgroundTasks({
@@ -2251,6 +2254,7 @@ function startControllerBackgroundTasks({
   deps,
   helm,
   fleetControllerPrivateKey,
+  platformArtifact,
 }: ControllerBackgroundTasksDeps): ControllerStopper[] {
   if (!deps.kubeOps) {
     throw new Error("controller background tasks require Kubernetes operations");
@@ -2318,6 +2322,7 @@ function startControllerBackgroundTasks({
       informer,
       namespace: NAMESPACE,
       idleMs: DISPOSABLE_GATEWAY_IDLE_MS,
+      platformArtifact,
       now: () => Date.now(),
       log,
       debug: (message) => logger.debug(message),
@@ -2665,6 +2670,12 @@ async function main(): Promise<void> {
   await bootstrapGlmGateways(deps);
   const sharedPoolBounds = sharedPoolReplicaBoundsFromEnvironment();
   const platformArtifact = platformGatewayArtifactFromEnvironment();
+  await writePlatformReleaseRecord({
+    db,
+    artifact: platformArtifact,
+    now: () => Date.now(),
+    log,
+  });
   recordSharedPoolReplicaBounds(sharedPoolBounds);
   log(
     `[glm-controller] shared pool minReplicas=${sharedPoolBounds.minReplicas} maxReplicas=${sharedPoolBounds.maxReplicas} platformImage=${platformArtifact.imageTag}`,
@@ -2703,6 +2714,7 @@ async function main(): Promise<void> {
     deps,
     helm: deps.helm,
     fleetControllerPrivateKey,
+    platformArtifact,
   });
   stoppers.push(
     startSharedPoolScaler({
