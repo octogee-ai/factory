@@ -1979,6 +1979,7 @@ interface BuilderSurgeGateWiring {
     targetPodUid: string;
   }) => Promise<SurgeOpenClawProcessGateState>;
   selfReleaseReserved: () => Promise<boolean>;
+  surgeTargetOpenClawHeld: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
   releaseSurgeReadiness: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
   selfRelease: (targetPodUid: string) => Promise<void>;
   selfReleaseLoopSettled: () => Promise<boolean>;
@@ -2198,6 +2199,25 @@ interface BuilderSurgeGateWiringOptions {
   configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
 }
 
+function reservedTargetOpenClawHeld(
+  state: SurgeOpenClawProcessGateState,
+  request: BuilderSurgeTargetRequest,
+): boolean {
+  if (
+    state.role !== "target" ||
+    state.migrationId !== request.migrationId ||
+    state.slug !== request.slug ||
+    state.targetPodUid !== request.targetPodUid
+  ) {
+    throw new Error("configured Builder target is not reserved by this migration");
+  }
+  if (state.mode === "permitted") return false;
+  if (state.phase !== "held") {
+    throw new Error(`configured Builder OpenClaw is still stopping (phase ${state.phase})`);
+  }
+  return true;
+}
+
 export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOptions): BuilderSurgeGateWiring {
   const {
     adapter,
@@ -2335,6 +2355,10 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
         targetPodUid: requireOwnPodUid("reserve the configured Builder migration target"),
       });
       await waitForActiveProvisioningDrain();
+    },
+    async surgeTargetOpenClawHeld(request) {
+      if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
+      return reservedTargetOpenClawHeld(await processGate.status(), request);
     },
     async unreserveSurgeTarget(request) {
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
@@ -2635,6 +2659,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     customerAttachPending: createVerifyAttachPending({ provision: caps.provision, opts }),
     flushLocalState: opts.flushLocalState,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
+    surgeTargetOpenClawHeld: surgeGate.surgeTargetOpenClawHeld,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
     unreserveSurgeTarget: surgeGate.unreserveSurgeTarget,
   };

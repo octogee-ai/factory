@@ -1723,6 +1723,31 @@ describe("configured Builder surge release", () => {
     }
   });
 
+  it.each([
+    ["held and stopped", { mode: "held", phase: "held" }, true],
+    ["permitted and running", { mode: "permitted", phase: "running" }, false],
+    ["permitted and starting", { mode: "permitted", phase: "starting" }, false],
+    ["held while still stopping", { mode: "held", phase: "stopping" }, "still stopping"],
+    ["reserved by another migration", { mode: "held", phase: "held", migrationId: "activation-2" }, "not reserved by this migration"],
+    ["no longer a target", { mode: "held", phase: "held", role: "normal" }, "not reserved by this migration"],
+  ] as const)("reports whether a reserved Builder target's OpenClaw is held for this boot: %s", async (_label, gate, expected) => {
+    const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
+    const processGate = {
+      status: vi.fn(async () => ({ version: 1, podUid: "target-pod", role: "target", ...request, ...gate })),
+    } as unknown as SurgeOpenClawProcessSupervisorClient;
+    const wiring = createBuilderSurgeGateWiring({
+      adapter: {} as CustomerLifecycleAdapter, processGate,
+      surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayReady: async () => undefined, log: () => undefined,
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+    });
+    if (typeof expected === "string") {
+      await expect(wiring.surgeTargetOpenClawHeld(request)).rejects.toThrow(expected);
+    } else {
+      await expect(wiring.surgeTargetOpenClawHeld(request)).resolves.toBe(expected);
+    }
+  });
+
   it.each(["unassigned", "assigned", "assignment-read-failed"])(
     "rolls back a released Builder only before canonical assignment: %s",
     async (assignment) => {

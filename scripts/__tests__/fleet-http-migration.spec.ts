@@ -3166,6 +3166,124 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
+  function builderTargetImport(openClawHeld: MigrationHandlerDeps["surgeTargetOpenClawHeld"]): {
+    adapter: Partial<CustomerLifecycleAdapter>;
+    deps: Partial<MigrationHandlerDeps>;
+  } {
+    vi.stubEnv("POD_UID", "builder-pod");
+    return {
+      adapter: {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug) => slug === "chris",
+        releaseAgent: vi.fn(async () => undefined),
+      },
+      deps: {
+        reserveSurgeTarget: vi.fn(async () => undefined),
+        releaseSurgeReadiness: vi.fn(async () => undefined),
+        unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+        ...(openClawHeld ? { surgeTargetOpenClawHeld: openClawHeld } : {}),
+      },
+    };
+  }
+
+  it("replaces an occupied database on a held Builder target without calling its unreleased OpenClaw", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, (db) => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
+    await fs.writeFile(`${previous}-wal`, "previous session wal");
+    const surgeTargetOpenClawHeld = vi.fn(async () => true);
+    const target = builderTargetImport(surgeTargetOpenClawHeld);
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-held-builder",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: target.adapter,
+      deps: { ...target.deps, procRoot },
+    });
+    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus } = await finishImport(deps, "mig-carry-held-builder");
+
+    expect(getStatus()).toBe(200);
+    expect(surgeTargetOpenClawHeld).toHaveBeenCalledWith({
+      migrationId: "mig-carry-held-builder", slug: "chris", targetPodUid: "builder-pod",
+    });
+    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
+    expect(rowCount(previous)).toBe(2);
+    await expect(fs.access(`${previous}-wal`)).rejects.toThrow();
+    expect(deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
+  });
+
+  it("still refuses to replace a held Builder target's database while a process holds it", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, (db) => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
+    await fs.mkdir(path.join(procRoot, "77", "fd"), { recursive: true });
+    await fs.symlink(`${previous}-wal`, path.join(procRoot, "77", "fd", "9"));
+    const target = builderTargetImport(async () => true);
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-held-builder-open",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: target.adapter,
+      deps: { ...target.deps, procRoot },
+    });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-held-builder-open");
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ message: `agent database files are still held open: ${previous}-wal` });
+    expect(rowCount(previous)).toBe(1);
+    expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+  });
+
+  it("releases an occupied database through OpenClaw on a Builder target whose OpenClaw is permitted", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, () => {});
+    const target = builderTargetImport(async () => false);
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-permitted-builder",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: target.adapter,
+      deps: { ...target.deps, procRoot },
+    });
+    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus } = await finishImport(deps, "mig-carry-permitted-builder");
+
+    expect(getStatus()).toBe(200);
+    expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
+    expect(rowCount(previous)).toBe(1);
+  });
+
+  it("refuses to replace a Builder target's database without its process gate status", async () => {
+    const importDir = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, () => {});
+    const target = builderTargetImport(undefined);
+    const { deps, stageDir } = await prepareImport({
+      migrationId: "mig-carry-builder-no-status",
+      importDir,
+      daemon: mkFakeChild(),
+      adapter: target.adapter,
+      deps: target.deps,
+    });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-builder-no-status");
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ message: expect.stringContaining("process gate status") });
+    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
+    expect(fsSync.existsSync(previous)).toBe(true);
+  });
+
   it("rejects a final running claim before overwriting or activating the target", async () => {
     const importDir = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({ migrationId: "mig-running", importDir, daemon: mkFakeChild() });

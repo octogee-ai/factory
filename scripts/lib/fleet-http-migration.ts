@@ -139,6 +139,11 @@ flushLocalState?: (input: {
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
 reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
+surgeTargetOpenClawHeld?: (input: {
+  migrationId: string;
+  slug: string;
+  targetPodUid: string;
+}) => Promise<boolean>;
 unreserveSurgeTarget?: (input: {
   migrationId: string;
   slug: string;
@@ -157,7 +162,21 @@ procRoot?: string;
 }
 
 
-async function releaseAgentForImport(deps: MigrationHandlerDeps, agentId: string): Promise<void> {
+async function releaseAgentForImport(
+  deps: MigrationHandlerDeps,
+  activation: ConfiguredBuilderActivation | null,
+  agentId: string,
+  log: (message: string) => void,
+): Promise<void> {
+  if (activation) {
+    if (!deps.surgeTargetOpenClawHeld) {
+      throw new Error(`cannot replace agent ${agentId}'s database: Builder target has no process gate status`);
+    }
+    if (await deps.surgeTargetOpenClawHeld(activation)) {
+      log(`[migration-rsync] OpenClaw is held for this boot; replacing ${agentId}'s database offline`);
+      return;
+    }
+  }
   if (!deps.adapter.releaseAgent) {
     throw new Error(`cannot replace agent ${agentId}'s database: this gateway cannot release agents`);
   }
@@ -1733,12 +1752,18 @@ async function validateStagedRsyncImport(
   return null;
 }
 
+interface ConfiguredBuilderActivation {
+  migrationId: string;
+  slug: string;
+  targetPodUid: string;
+}
+
 function configuredBuilderActivationRequest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody,
   mode: MigrationTransferMode,
   configTransferMode: MigrationConfigTransferMode,
-): { migrationId: string; slug: string; targetPodUid: string } | null {
+): ConfiguredBuilderActivation | null {
   if (mode !== "final" || configTransferMode !== ACTIVATION_MANIFEST_TRANSFER ||
     deps.adapter.isBuilderGateway?.() !== true) return null;
   if (deps.adapter.isConfiguredBuilderCustomer?.(body.slug) !== true) {
@@ -1835,6 +1860,7 @@ async function deliverStagedImport(input: {
   session: RSyncImportSession;
   slug: string;
   mode: MigrationTransferMode;
+  activation: ConfiguredBuilderActivation | null;
   signal: AbortSignal;
   log: (msg: string) => void;
 }): Promise<void> {
@@ -1854,7 +1880,7 @@ async function deliverStagedImport(input: {
   if (!prepared) return;
   await installPreparedAgentStores({
     prepared,
-    releaseAgent: (agentId) => releaseAgentForImport(deps, agentId),
+    releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log),
     procRoot: deps.procRoot ?? PROC_ROOT,
     log,
   });
@@ -1901,7 +1927,15 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
-      await deliverStagedImport({ deps, session, slug: body.slug, mode, signal: controller.signal, log });
+      await deliverStagedImport({
+        deps,
+        session,
+        slug: body.slug,
+        mode,
+        activation: configuredBuilderActivationRequest(deps, body, mode, configTransferMode),
+        signal: controller.signal,
+        log,
+      });
       const stagedAt = Date.now();
       const verificationPending = mode === "final"
         ? await activateFinishedRsyncImport({
