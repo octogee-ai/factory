@@ -79,7 +79,12 @@ import {
 import type { AddCustomerOptions } from "./customer-lifecycle.js";
 import type { AddCustomerResult, CustomerLifecycleAdapter } from "./customer-lifecycle.js";
 import { isPermanentConfigPatchFailure } from "@octogee/core/apply-config-patch";
-import { startReconcileLoop, type EnsureOutcome, type UnmountOutcome } from "./reconcile-loop.js";
+import {
+  customerAttachPending,
+  startReconcileLoop,
+  type EnsureOutcome,
+  type UnmountOutcome,
+} from "./reconcile-loop.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
@@ -1409,6 +1414,25 @@ function createReconcileConvergenceHooks(input: {
   return { recordApplied, rememberRetry, forgetRetry };
 }
 
+function assignedRosterReader(
+  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredFingerprints" | "readDesiredSlugs" | "db">,
+): (() => Promise<string[]>) | null {
+  const fingerprints = opts.readDesiredFingerprints;
+  if (fingerprints) return async () => [...(await fingerprints()).keys()];
+  if (opts.readDesiredSlugs) return opts.readDesiredSlugs;
+  const db = opts.db;
+  return db ? () => readAssignedSlugsForGateway(db, opts.gatewayId) : null;
+}
+
+export function createVerifyAttachPending(input: {
+  provision: boolean;
+  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredFingerprints" | "readDesiredSlugs" | "db">;
+}): ((slug: string) => Promise<boolean>) | undefined {
+  const readAssigned = input.provision ? assignedRosterReader(input.opts) : null;
+  if (!readAssigned) return undefined;
+  return (slug) => customerAttachPending(slug, async () => (await readAssigned()).includes(slug));
+}
+
 function createDesiredRosterReader(input: {
   opts: StartFleetOptions;
   fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
@@ -2606,6 +2630,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     adapter: wrappedAdapter,
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
+    customerAttachPending: createVerifyAttachPending({ provision: caps.provision, opts }),
     flushLocalState: opts.flushLocalState,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,

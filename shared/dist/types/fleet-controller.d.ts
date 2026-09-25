@@ -42,6 +42,7 @@ export declare const MIGRATION_QUIESCE_TIMEOUT_MS = 60000;
 export declare const MIGRATION_TRANSFER_TIMEOUT_MS: number;
 export declare const MIGRATION_UNMOUNT_TIMEOUT_MS: number;
 export declare const MIGRATION_VERIFY_TIMEOUT_MS: number;
+export declare const MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS = "coach-attach-in-progress";
 export declare const MIGRATING_IN_PIN_TTL_MS: number;
 export declare const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
 export interface FleetHealthResponse {
@@ -236,6 +237,7 @@ export type VerifyMigrationResponse = {
     slug: string;
     ready: boolean;
     configTransferMode?: "activation-manifest";
+    code?: typeof MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS;
     checks: {
         customerDir: boolean;
         coachWired: boolean;

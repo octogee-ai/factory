@@ -1,5 +1,9 @@
 import { createMigrationProgress } from "../migration-progress.js";
-import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
+import {
+  ADD_CUSTOMER_DEADLINE_MS,
+  MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+  type MigrationProgressRequestBody,
+} from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput } from "../lib/native-computer-return.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
@@ -16,7 +20,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
-import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import {
   advanceCustomerMigrationV2,
@@ -40,6 +44,7 @@ import {
 
 const MIGRATE_STATE = "migrate-state";
 const PROVISION_FRESH = "provision-fresh";
+const COACH_ATTACH_POLL_MS = 5_000;
 
 // At most one migration per target gateway at a time. Enforced durably, before
 // this handler ever runs, by the operation queue in index.ts (operation-queue.ts
@@ -120,6 +125,7 @@ export interface MigrateCustomerDeps {
   genMigrationId: (operationId: string) => string;
 
   now: () => number;
+  sleep: (ms: number) => Promise<void>;
   log: (msg: string) => void;
 }
 
@@ -1131,16 +1137,36 @@ async function completeNativeReturn(
         deps.log(`native return ${input.slug}: paused/retired source confirmed stopped by Compute; cleanup RPC skipped: ${errorMessage(error)}`);
       }
     });
-    await reportFreshStep(deps, ctx, "verify-target", async () => {
-      const url = await deps.resolveGatewayUrl(input.toGatewayId);
-      const result = await deps.buildClient(() => url).verifyTarget({
-        migrationId: input.migrationId, gatewayId: input.toGatewayId, slug: input.slug,
-      });
-      if (!result.ready) throw new Error(`Shared coach ${input.slug} is not ready`);
-    });
+    await reportFreshStep(deps, ctx, "verify-target", () => verifyNativeReturnTarget(deps, input));
     return { steps: [], success: true, rolledBack: false };
   } catch (error) {
     return failure(`native return completion pending: status 503: ${errorMessage(error)}`, false);
+  }
+}
+
+function coachAttachInProgress(error: unknown): boolean {
+  return error instanceof MigrationRpcError && error.code === MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS;
+}
+
+async function verifyNativeReturnTarget(
+  deps: MigrateCustomerDeps,
+  input: { toGatewayId: string; slug: string; migrationId: string },
+): Promise<void> {
+  const url = await deps.resolveGatewayUrl(input.toGatewayId);
+  const client = deps.buildClient(() => url);
+  const deadline = deps.now() + ADD_CUSTOMER_DEADLINE_MS;
+  for (;;) {
+    try {
+      const result = await client.verifyTarget({
+        migrationId: input.migrationId, gatewayId: input.toGatewayId, slug: input.slug,
+      });
+      if (!result.ready) throw new Error(`Shared coach ${input.slug} is not ready`);
+      return;
+    } catch (error) {
+      if (!coachAttachInProgress(error) || deps.now() >= deadline) throw error;
+      deps.log(`native return ${input.slug}: ${input.toGatewayId} is still attaching the coach; verifying again`);
+      await deps.sleep(COACH_ATTACH_POLL_MS);
+    }
   }
 }
 

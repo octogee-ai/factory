@@ -17,6 +17,7 @@ import {
   createConfiguredBuilderAssignmentMatcher,
   createConfiguredBuilderReconcileAdmission,
   createBuilderSurgeGateWiring,
+  createVerifyAttachPending,
   desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
   ensureCustomerCheckoutsOnly,
@@ -52,7 +53,7 @@ import type {
   SurgeOpenClawProcessSupervisorClient,
 } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
-import { startReconcileLoop } from "../lib/reconcile-loop.js";
+import { _resetReconcileInFlightForTests, startReconcileLoop } from "../lib/reconcile-loop.js";
 import { startAfterSurgeReadiness } from "../lib/surge-reconcile-gate.js";
 import {
   _resetMigratingInProcessPinsForTests,
@@ -2506,5 +2507,33 @@ describe("resolveFleetCapabilities — observability vs provisioning seam", () =
         hasBrokeredRoster: true,
       }),
     ).toEqual({ reportMounted: false, provision: true, needsStateDeps: false });
+  });
+});
+
+describe("createVerifyAttachPending", () => {
+  afterEach(() => _resetReconcileInFlightForTests());
+
+  it("reports an assignment the reconcile has not picked up yet as a pending attach", async () => {
+    const readDesiredSlugs = vi.fn(async () => ["alice"]);
+    const pending = createVerifyAttachPending({ provision: true, opts: { gatewayId: "shared-1", readDesiredSlugs } });
+
+    expect(await pending?.("alice")).toBe(true);
+    expect(await pending?.("bob")).toBe(false);
+  });
+
+  it("reads the assignment from the content-convergence roster when one is wired", async () => {
+    const pending = createVerifyAttachPending({
+      provision: true,
+      opts: { gatewayId: "shared-1", readDesiredFingerprints: async () => new Map([["alice", "fp-1"]]) },
+    });
+
+    expect(await pending?.("alice")).toBe(true);
+  });
+
+  it("offers no attach signal on a gateway that does not run the mount reconcile", () => {
+    expect(createVerifyAttachPending({
+      provision: false,
+      opts: { gatewayId: "shared-1", readDesiredSlugs: async () => ["alice"] },
+    })).toBeUndefined();
   });
 });

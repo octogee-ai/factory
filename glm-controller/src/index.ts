@@ -3181,6 +3181,7 @@ async function buildHandlers(
     },
     genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     log: logFn,
   });
 

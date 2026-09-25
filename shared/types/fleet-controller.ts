@@ -72,6 +72,7 @@ export const MIGRATION_QUIESCE_TIMEOUT_MS = 60_000;
 export const MIGRATION_TRANSFER_TIMEOUT_MS = ADD_CUSTOMER_DEADLINE_MS + 30_000;
 export const MIGRATION_UNMOUNT_TIMEOUT_MS = 2 * CONFIG_PATCH_DEADLINE_MS + 30_000;
 export const MIGRATION_VERIFY_TIMEOUT_MS = VERIFY_ACCOUNT_TIMEOUT_MS + 30_000;
+export const MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS = "coach-attach-in-progress";
 
 // Window the import-handler's migrating-in pin guards a freshly-imported customer from the
 // reconcile evict direction. Must outlast import→cutover so a slow import never false-evicts;
@@ -332,6 +333,7 @@ export type VerifyMigrationResponse = {
   slug: string;
   ready: boolean;
   configTransferMode?: "activation-manifest";
+  code?: typeof MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS;
   checks: {
     customerDir: boolean;
     coachWired: boolean;

@@ -33,6 +33,7 @@ import {
 } from "../lib/fleet-http-migration.js";
 import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import {
+  MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   SIGNATURE_HEADER,
   type QuiesceRequestBody,
   type UnmountRequestBody,
@@ -867,6 +868,55 @@ describe("createVerifyHandler", () => {
       ready: false,
       checks: { mountMarked: false },
     });
+  });
+
+  async function verifyMidAttach(input: { attachPending: boolean; coachWired: boolean; mountMarked: boolean }) {
+    const adapter = mkAdapter({
+      customerCoachWiredInOpenclawConfig: vi.fn(() => input.coachWired),
+      customerMountMarked: vi.fn(() => input.mountMarked),
+    });
+    const customerAttachPending = vi.fn(async () => input.attachPending);
+    const handler = createVerifyHandler(mkDeps({ adapter, customerAttachPending }));
+    const body = { migrationId: "mig-1", slug: "chris" };
+    const response = mkResponse();
+    await handler(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }),
+      response.res,
+      vi.fn(),
+    );
+    return { adapter, customerAttachPending, status: response.getStatus(), body: response.getBody() };
+  }
+
+  it.each([
+    { coachWired: false, mountMarked: true },
+    { coachWired: true, mountMarked: false },
+  ])("reports a coach attach still in progress without waiting on the account (wired=$coachWired, marked=$mountMarked)", async (wiring) => {
+    const result = await verifyMidAttach({ attachPending: true, ...wiring });
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({
+      ready: false,
+      code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+      checks: { ...wiring, accountHealthy: false },
+    });
+    expect(result.customerAttachPending).toHaveBeenCalledWith("chris");
+    expect(result.adapter.waitForAccountHealthy).not.toHaveBeenCalled();
+  });
+
+  it("reports an unwired coach with no attach in progress as plainly not ready", async () => {
+    const result = await verifyMidAttach({ attachPending: false, coachWired: false, mountMarked: true });
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ ready: false, checks: { coachWired: false } });
+    expect(result.body).not.toHaveProperty("code");
+  });
+
+  it("verifies a fully mounted coach normally while a content re-ensure is pending", async () => {
+    const result = await verifyMidAttach({ attachPending: true, coachWired: true, mountMarked: true });
+
+    expect(result.status).toBe(200);
+    expect(result.body).not.toHaveProperty("code");
+    expect(result.adapter.waitForAccountHealthy).toHaveBeenCalled();
   });
 
   it.each([

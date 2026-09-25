@@ -3,7 +3,11 @@ import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
-import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import {
+  ADD_CUSTOMER_DEADLINE_MS,
+  MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+} from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 
@@ -181,6 +185,7 @@ function mkDeps(options: HarnessOptions = {}) {
     useDurableMigration: vi.fn(async () => options.durable === true),
     genMigrationId: (operationId: string) => `mig-${operationId}`,
     now: vi.fn(() => 5_000),
+    sleep: vi.fn(async () => undefined),
     log: vi.fn(),
   };
   const steps: OperationStep[] = [];
@@ -238,6 +243,58 @@ describe("native computer return", () => {
     expect(h.deps.commitCutover).toHaveBeenCalledOnce();
     expect(h.client.unmount).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
     expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+  });
+
+  function attachInProgress(): MigrationRpcError {
+    return new MigrationRpcError("/verify/gw-green: 409 coach attaching", {
+      status: 409,
+      code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+    });
+  }
+
+  it("waits out a coach attach Shared reports in progress instead of failing the return", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    const ready = h.client.verifyTarget;
+    h.client.verifyTarget = vi.fn()
+      .mockRejectedValueOnce(attachInProgress())
+      .mockRejectedValueOnce(attachInProgress())
+      .mockImplementation(ready);
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true, rolledBack: false });
+    expect(h.client.verifyTarget).toHaveBeenCalledTimes(3);
+    expect(h.deps.sleep).toHaveBeenCalledTimes(2);
+    expect(h.steps.filter((step) => step.status === "failed")).toEqual([]);
+  });
+
+  it("stops waiting for an in-progress coach attach at the provisioner's attach deadline", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    let clock = 5_000;
+    vi.mocked(h.deps.now).mockImplementation(() => clock);
+    vi.mocked(h.deps.sleep).mockImplementation(async (ms: number) => { clock += ms; });
+    vi.mocked(h.client.verifyTarget).mockRejectedValue(attachInProgress());
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false, rolledBack: false, error: expect.stringContaining("native return completion pending"),
+    });
+    const slept = vi.mocked(h.deps.sleep).mock.calls.reduce((total, [ms]) => total + ms, 0);
+    expect(slept).toBeGreaterThanOrEqual(ADD_CUSTOMER_DEADLINE_MS);
+    expect(slept).toBeLessThan(ADD_CUSTOMER_DEADLINE_MS + 30_000);
+  });
+
+  it("fails promptly when Shared reports the coach unwired with no attach in progress", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    vi.mocked(h.client.verifyTarget).mockRejectedValue(
+      new MigrationRpcError("/verify/gw-green: 409 coachWired:false", { status: 409 }),
+    );
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false, rolledBack: false, error: expect.stringContaining("coachWired:false"),
+    });
+    expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+    expect(h.deps.sleep).not.toHaveBeenCalled();
   });
 
   it("keeps the return incomplete when source cleanup fails", async () => {

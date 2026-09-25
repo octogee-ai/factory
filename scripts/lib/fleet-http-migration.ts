@@ -41,6 +41,7 @@ import {
   type VerifyMigrationRequestBody,
   type VerifyMigrationResponse,
   MIGRATION_TRANSFER_TIMEOUT_MS,
+  MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   MIGRATION_VERIFY_TIMEOUT_MS,
   MIGRATION_RSYNC_PORT_DEFAULT,
   SIGNATURE_HEADER,
@@ -120,6 +121,8 @@ export interface MigrationHandlerDeps {
   now?: () => number;
 
 getMountedCustomers?: () => readonly string[];
+
+customerAttachPending?: (slug: string) => Promise<boolean>;
 
 fetch?: typeof globalThis.fetch;
 
@@ -1974,18 +1977,20 @@ function configuredBuilderVerifyChecks(
   };
 }
 
+function activationCoachWired(deps: MigrationHandlerDeps, slug: string): boolean {
+  return deps.adapter.customerCoachWiredInOpenclawConfig?.(slug)
+    ?? deps.getMountedCustomers?.().includes(slug)
+    ?? false;
+}
+
 async function activationManifestVerifyChecks(
   deps: MigrationHandlerDeps,
   body: VerifyMigrationRequestBody,
+  wiring: { coachWired: boolean; mountMarked: boolean },
 ): Promise<Extract<VerifyMigrationResponse, { configTransferMode?: "activation-manifest" }>["checks"]> {
-  const coachWired =
-    deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug)
-    ?? deps.getMountedCustomers?.().includes(body.slug)
-    ?? false;
   return {
     customerDir: deps.adapter.hasCustomerDir(body.slug),
-    coachWired,
-    mountMarked: deps.adapter.customerMountMarked?.(body.slug) ?? coachWired,
+    ...wiring,
     accountHealthy: await deps.adapter.waitForAccountHealthy({
       slug: body.slug,
       timeoutMs: body.timeoutMs ?? MIGRATION_VERIFY_TIMEOUT_MS,
@@ -2009,7 +2014,23 @@ async function verifyMigrationResponse(
       checks,
     };
   }
-  const checks = await activationManifestVerifyChecks(deps, body);
+  const coachWired = activationCoachWired(deps, body.slug);
+  const mountMarked = deps.adapter.customerMountMarked?.(body.slug) ?? coachWired;
+  if ((!coachWired || !mountMarked) && await deps.customerAttachPending?.(body.slug) === true) {
+    return {
+      migrationId: body.migrationId,
+      slug: body.slug,
+      ready: false,
+      code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
+      checks: {
+        customerDir: deps.adapter.hasCustomerDir(body.slug),
+        coachWired,
+        mountMarked,
+        accountHealthy: false,
+      },
+    };
+  }
+  const checks = await activationManifestVerifyChecks(deps, body, { coachWired, mountMarked });
   return {
     migrationId: body.migrationId,
     slug: body.slug,

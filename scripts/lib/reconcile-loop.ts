@@ -72,6 +72,8 @@ interface MountJob {
 }
 const mountQueue: MountJob[] = [];
 const queuedMounts = new Set<string>();
+const activeMounts = new Set<string>();
+let reconciledDesired = new Set<string>();
 let activeMountWorkers = 0;
 // Completion clock: a plan whose snapshot predates a slug's last completed mount is
 // stale for that slug and must not re-ensure it.
@@ -86,9 +88,24 @@ export function _resetReconcileInFlightForTests(): void {
   evictionWorker = null;
   mountQueue.length = 0;
   queuedMounts.clear();
+  activeMounts.clear();
+  reconciledDesired = new Set();
   activeMountWorkers = 0;
   mountClock = 0;
   lastMountCompletedAt.clear();
+}
+
+export function customerMountPending(slug: string): boolean {
+  return queuedMounts.has(slug) || activeMounts.has(slug);
+}
+
+export async function customerAttachPending(
+  slug: string,
+  isAssigned: () => Promise<boolean>,
+): Promise<boolean> {
+  if (customerMountPending(slug)) return true;
+  if (reconciledDesired.has(slug) || !(await isAssigned())) return false;
+  return customerMountPending(slug) || !reconciledDesired.has(slug);
 }
 
 function errMessage(err: unknown): string {
@@ -197,10 +214,12 @@ async function runMountWorker(): Promise<void> {
       // as in flight, never as free to mount again.
       queuedMounts.delete(job.slug);
       inFlight.add(job.slug);
+      activeMounts.add(job.slug);
       try {
         await runMountJob(job);
       } finally {
         inFlight.delete(job.slug);
+        activeMounts.delete(job.slug);
         job.settle();
       }
     }
@@ -243,6 +262,7 @@ async function enqueueReconcileEvictions(deps: ReconcileLoopDeps, toEvict: reado
 export async function reconcileFleet(deps: ReconcileLoopDeps): Promise<void> {
   const snapshot = await readReconcileSnapshot(deps);
   if (!snapshot) return;
+  reconciledDesired = snapshot.desired;
   const plan = planReconciliation(deps, snapshot);
   if (!plan) return;
   logReconcilePlan(deps, plan);

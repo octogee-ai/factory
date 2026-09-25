@@ -1,5 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
+  customerAttachPending,
+  customerMountPending,
   reconcileFleet,
   startReconcileLoop,
   _resetReconcileInFlightForTests,
@@ -752,5 +754,104 @@ describe("startReconcileLoop", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("customerMountPending", () => {
+  it("holds for a slug queued behind the mount pool and while its ensure runs", async () => {
+    const first = deferred<"mounted">();
+    const d = mkDeps({
+      maxConcurrent: 1,
+      readDesired: async () => ["alice", "bob"],
+      ensureSlug: async (slug) => (slug === "alice" ? first.promise : "mounted"),
+    });
+
+    const tick = reconcileFleet(d);
+    await flushMicrotasks();
+
+    expect(customerMountPending("alice")).toBe(true);
+    expect(customerMountPending("bob")).toBe(true);
+    expect(customerMountPending("carol")).toBe(false);
+    first.resolve("mounted");
+    await tick;
+    expect(customerMountPending("alice")).toBe(false);
+    expect(customerMountPending("bob")).toBe(false);
+  });
+
+  it("clears when the ensure fails, so a failed attach is not reported in progress", async () => {
+    const d = mkDeps({
+      readDesired: async () => ["alice"],
+      ensureSlug: async () => { throw new Error("config.patch refused"); },
+    });
+
+    await reconcileFleet(d);
+
+    expect(customerMountPending("alice")).toBe(false);
+  });
+
+  it("does not report an eviction as a pending mount", async () => {
+    const drain = deferred<"drained">();
+    const d = mkDeps({
+      ...observed(["alice"]),
+      readDesired: async () => [],
+      unmountSlug: async () => drain.promise,
+    });
+
+    await reconcileFleet(d);
+    await flushMicrotasks();
+
+    expect(customerMountPending("alice")).toBe(false);
+    drain.resolve("drained");
+  });
+});
+
+describe("customerAttachPending", () => {
+  const assigned = (value: boolean) => vi.fn(async () => value);
+
+  it("covers an assignment no reconcile tick has picked up yet", async () => {
+    const isAssigned = assigned(true);
+
+    expect(await customerAttachPending("alice", isAssigned)).toBe(true);
+    expect(isAssigned).toHaveBeenCalledOnce();
+  });
+
+  it("does not report an unassigned slug awaiting its first ensure", async () => {
+    expect(await customerAttachPending("alice", assigned(false))).toBe(false);
+  });
+
+  it("stops once a tick attempted the assignment and the ensure failed", async () => {
+    await reconcileFleet(mkDeps({
+      readDesired: async () => ["alice"],
+      ensureSlug: async () => { throw new Error("config.patch refused"); },
+    }));
+
+    expect(await customerAttachPending("alice", assigned(true))).toBe(false);
+  });
+
+  it("holds while the picked-up ensure runs without reading the assignment", async () => {
+    const ensure = deferred<"mounted">();
+    const tick = reconcileFleet(mkDeps({
+      readDesired: async () => ["alice"],
+      ensureSlug: async () => ensure.promise,
+    }));
+    await flushMicrotasks();
+    const isAssigned = assigned(true);
+
+    expect(await customerAttachPending("alice", isAssigned)).toBe(true);
+    expect(isAssigned).not.toHaveBeenCalled();
+    ensure.resolve("mounted");
+    await tick;
+  });
+
+  it("stops when a tick attempts the assignment while the assignment read is in flight", async () => {
+    const read = deferred<boolean>();
+    const pending = customerAttachPending("alice", () => read.promise);
+    await reconcileFleet(mkDeps({
+      readDesired: async () => ["alice"],
+      ensureSlug: async () => { throw new Error("config.patch refused"); },
+    }));
+    read.resolve(true);
+
+    expect(await pending).toBe(false);
   });
 });
