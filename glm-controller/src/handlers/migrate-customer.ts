@@ -1229,15 +1229,31 @@ async function completeSchedulerHandoff(
   if (handoff.uid !== request.uid || handoff.slug !== user.slug || handoff.toGatewayId !== request.toGatewayId) {
     return failure("scheduler handoff scope changed after cutover", false);
   }
+  let client: MigrationClient;
   try {
-    const client = await gatewayClient(deps, [handoff.fromGatewayId, handoff.toGatewayId]);
+    client = await gatewayClient(deps, [handoff.fromGatewayId, handoff.toGatewayId]);
     await stageAfterCutover(deps, ctx, client, handoff);
     await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
     await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "activate" });
-    await client.unmount({ migrationId: deps.genMigrationId(op.id), slug: handoff.slug, gatewayId: handoff.fromGatewayId });
-    return { steps: [], success: true, rolledBack: false };
   } catch (error) {
     return failure(`scheduler handoff cleanup pending: ${errorMessage(error)}`, false);
+  }
+  await unmountSourceAfterCutover(deps, client, { migrationId: deps.genMigrationId(op.id), slug: handoff.slug, gatewayId: handoff.fromGatewayId });
+  return { steps: [], success: true, rolledBack: false };
+}
+
+async function unmountSourceAfterCutover(
+  deps: MigrateCustomerDeps,
+  client: MigrationClient,
+  source: { migrationId: string; slug: string; gatewayId: string },
+): Promise<void> {
+  try {
+    await client.unmount(source);
+  } catch (error) {
+    deps.log(
+      `[migrate-customer] ⚠ unmount-source cleanup failed after durable cutover migrationId=${source.migrationId} ` +
+      `slug=${source.slug} source=${source.gatewayId}: ${errorMessage(error)} — target remains serving`,
+    );
   }
 }
 

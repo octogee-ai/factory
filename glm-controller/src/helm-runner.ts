@@ -174,20 +174,42 @@ function isReleaseNotFound(stderr: string): boolean {
 const UNINSTALL_COMPLETED_WITH_ERRORS = /uninstallation completed with \d+ error\(s\):([\s\S]*)$/;
 const TERMINATING_RESOURCE_ERROR =
   /resource \S+ still exists\. status: Terminating, message: [^;\n]*/g;
+const FAILED_UNINSTALL_RELEASE = /helm uninstall (\S+) failed/;
+const MISSING_RELEASE_RECORD_ERROR =
+  /uninstall: Failed to purge the release: secrets "sh\.helm\.release\.v1\.(\S+?)\.v\d+" not found/g;
 
-function isUninstallLeavingOnlyTerminatingResources(output: string): boolean {
+type BenignUninstallErrors = { terminating: number; missingRecord: number };
+
+function benignUninstallErrors(output: string, release: string): BenignUninstallErrors | null {
   const errors = UNINSTALL_COMPLETED_WITH_ERRORS.exec(output)?.[1];
-  if (errors === undefined) return false;
-  const terminating = errors.match(TERMINATING_RESOURCE_ERROR) ?? [];
-  const residue = errors.replace(TERMINATING_RESOURCE_ERROR, "");
-  return terminating.length > 0 && /^[\s;]*$/.test(residue);
+  if (errors === undefined) return null;
+  const counts = { terminating: 0, missingRecord: 0 };
+  const residue = errors
+    .replace(TERMINATING_RESOURCE_ERROR, () => { counts.terminating++; return ""; })
+    .replace(MISSING_RELEASE_RECORD_ERROR, (match, recordRelease: string) => {
+      if (recordRelease !== release) return match;
+      counts.missingRecord++;
+      return "";
+    });
+  if (counts.terminating + counts.missingRecord === 0 || !/^[\s;]*$/.test(residue)) return null;
+  return counts;
+}
+
+function isUninstallLeavingOnlyMissingRecord(output: string, release: string): boolean {
+  const benign = benignUninstallErrors(output, release);
+  return benign !== null && benign.terminating === 0;
+}
+
+function isUninstallLeavingOnlyBenignErrors(output: string, release: string): boolean {
+  return benignUninstallErrors(output, release) !== null;
 }
 
 const WORKLOAD_STILL_TERMINATING = "gateway workload still terminating";
 
-export function isRetryableTerminatingUninstallFailure(message: string): boolean {
-  return message.includes(WORKLOAD_STILL_TERMINATING) ||
-    isUninstallLeavingOnlyTerminatingResources(message);
+export function isRetryableUninstallFailure(message: string): boolean {
+  if (message.includes(WORKLOAD_STILL_TERMINATING)) return true;
+  const release = FAILED_UNINSTALL_RELEASE.exec(message)?.[1] ?? "";
+  return isUninstallLeavingOnlyBenignErrors(message, release);
 }
 
 async function listWorkloadNames(
@@ -874,14 +896,14 @@ if (
       }
       const runKubectl = deps.runKubectl;
       if (result.code !== 0) {
-        if (isReleaseNotFound(result.stderr)) {
+        if (isReleaseNotFound(result.stderr) || isUninstallLeavingOnlyMissingRecord(result.stderr, release)) {
           deps.log(
             `[helm-runner] uninstall release=${release} ns=${namespace} — already gone`,
           );
           if (runKubectl) await awaitGatewayWorkloadGone({ ...deps, runKubectl }, namespace, gatewayId);
           return;
         }
-        if (runKubectl && isUninstallLeavingOnlyTerminatingResources(result.stderr)) {
+        if (runKubectl && isUninstallLeavingOnlyBenignErrors(result.stderr, release)) {
           deps.log(
             `[helm-runner] uninstalled release=${release} ns=${namespace} — awaiting terminating workload`,
           );

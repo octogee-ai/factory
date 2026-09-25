@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildUpgradeArgs,
   createHelmSubprocessRunner,
-  isRetryableTerminatingUninstallFailure,
+  isRetryableUninstallFailure,
   readPersonalKnobs,
   spawnHelm,
   type HelmSubprocess,
@@ -1653,7 +1653,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
       .then(() => null, (error: Error) => error);
 
     expect(failure?.message).toMatch(/gateway workload still terminating.*pod\/octogee-gateway-shared-28b140d9fb3c-7d9f-x2x.*60000ms/);
-    expect(isRetryableTerminatingUninstallFailure(`helm uninstall failed: ${failure?.message}`)).toBe(true);
+    expect(isRetryableUninstallFailure(`helm uninstall failed: ${failure?.message}`)).toBe(true);
   });
 
   it("fails a terminating-only uninstall closed when it cannot observe the workload", async () => {
@@ -1682,8 +1682,70 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
   });
 
   it("recognizes the legacy terminating-only helm failure as retryable, and nothing else", () => {
-    expect(isRetryableTerminatingUninstallFailure(`helm uninstall failed: helm uninstall octogee-gw-x failed (code=1): ${TERMINATING_ONLY}`)).toBe(true);
-    expect(isRetryableTerminatingUninstallFailure("helm uninstall failed: Error: pre-delete hook failed")).toBe(false);
+    expect(isRetryableUninstallFailure(`helm uninstall failed: helm uninstall octogee-gw-x failed (code=1): ${TERMINATING_ONLY}`)).toBe(true);
+    expect(isRetryableUninstallFailure("helm uninstall failed: Error: pre-delete hook failed")).toBe(false);
+  });
+
+  const PURGED_RECORD_MISSING =
+    "Error: uninstallation completed with 1 error(s): uninstall: Failed to purge the release: " +
+    "secrets \"sh.helm.release.v1.octogee-gw-shared-7d83139c3814.v1\" not found";
+
+  it("treats a purge whose release record is already gone as uninstalled, once the workload is gone", async () => {
+    const log = vi.fn();
+    const { runHelm } = mockSubprocess([{ code: 1, stderr: PURGED_RECORD_MISSING }]);
+    const workload = drainingWorkload(1);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm), log, ...workload,
+      workloadDrainTimeoutMs: 60_000, workloadDrainPollMs: 5_000,
+    });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "shared-7d83139c3814" }),
+    ).resolves.toBeUndefined();
+    expect(workload.wait).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/octogee-gw-shared-7d83139c3814.*already gone/));
+  });
+
+  it("fails a purge-record-missing uninstall retryably while the workload outlives the drain bound", async () => {
+    const { runHelm } = mockSubprocess([{ code: 1, stderr: PURGED_RECORD_MISSING }]);
+    const workload = drainingWorkload(Number.POSITIVE_INFINITY);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ...workload,
+      workloadDrainTimeoutMs: 60_000, workloadDrainPollMs: 5_000,
+    });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "shared-7d83139c3814" }),
+    ).rejects.toThrow(/gateway workload still terminating/);
+  });
+
+  it("recognizes the PROD purge-record-missing retire failure as retryable", () => {
+    expect(isRetryableUninstallFailure(
+      `helm uninstall failed: helm uninstall octogee-gw-shared-7d83139c3814 failed (code=1): ${PURGED_RECORD_MISSING}`,
+    )).toBe(true);
+  });
+
+  it.each([
+    [
+      "a purge failure for a missing record alongside a real error",
+      "Error: uninstallation completed with 2 error(s): uninstall: Failed to purge the release: secrets \"sh.helm.release.v1.octogee-gw-x.v1\" not found; failed to delete Secret/octogee/x: forbidden",
+    ],
+    [
+      "a purge failure for another release's record",
+      "Error: uninstallation completed with 1 error(s): uninstall: Failed to purge the release: secrets \"sh.helm.release.v1.octogee-gw-other.v1\" not found",
+    ],
+    [
+      "a purge failure other than a missing record",
+      "Error: uninstallation completed with 1 error(s): uninstall: Failed to purge the release: secrets \"sh.helm.release.v1.octogee-gw-x.v1\" is forbidden",
+    ],
+  ])("still throws for %s", async (_label, stderr) => {
+    const { runHelm } = mockSubprocess([{ code: 1, stderr }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ...drainingWorkload(0) });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "x" }),
+    ).rejects.toThrow(/helm uninstall octogee-gw-x failed/);
+    expect(isRetryableUninstallFailure(`helm uninstall failed: ${stderr}`)).toBe(false);
   });
 
   it.each([

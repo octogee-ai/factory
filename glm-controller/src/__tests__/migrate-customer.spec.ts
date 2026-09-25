@@ -1234,6 +1234,19 @@ describe("scheduler handoff recovery", () => {
     expect(h.client.unmount).not.toHaveBeenCalled();
   });
 
+  it("completes a cut-over handoff whose source unmount is refused on held agent files, leaving source cleanup to eviction", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    const heldOpen = "/unmount/gw-blue: 500 {\"error\":\"unmount failed\",\"message\":\"agent database files are still held open: /home/node/.openclaw/agents/octogee-alice-coach/openclaw-agent.sqlite\"}";
+    vi.mocked(h.client.unmount).mockRejectedValue(new Error(heldOpen));
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 6 }), h.ctx)).toMatchObject({ success: true, rolledBack: false });
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => [request.gatewayId, request.phase])).toEqual([
+      ["gw-blue", "retire"], ["gw-green", "activate"],
+    ]);
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue", slug: "alice" }));
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/unmount-source cleanup failed after durable cutover.*alice.*held open.*target remains serving/));
+  });
+
   it("closes a failed scheduler attempt before reusing the customer on a new attempt", async () => {
     const h = mkDeps();
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
