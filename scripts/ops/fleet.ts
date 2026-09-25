@@ -23,7 +23,7 @@ import {
   type GatewayDesiredStatus,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
-import { projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
 import {
   readGatewayAuthorization,
   readGatewayRuntimeHeartbeat,
@@ -55,6 +55,7 @@ import {
 } from "../lib/admin-fleet-client.js";
 
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
+import { addCustomerAssignmentRefusal } from "../lib/fleet-add-customer.js";
 import {
   FLEET_LOGS_TAIL_ENV,
   buildFleetLogsFilter,
@@ -273,7 +274,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Override placement: assign customer to a specific gateway.",
     args: "<slug> --to=<gw-id> [--apply]",
     description:
-      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile`. Refuses if the gateway doesn't exist or is `unreachable`. Same downstream path as `assign-customer-gateway.ts`, but lets ops force a specific gateway (canary placement, repair).\n\nDry-run by default. Pass `--apply` to commit.",
+      "Writes `users/{uid}.provisioning.openclaw.gatewayId` and the mirrored `gatewayProfile` to place an unassigned Builder (canary placement, repair). Refuses if the gateway doesn't exist or is `unreachable`, and refuses a Builder whose serving assignment lives on another gateway: move those with `migrate-customer`.\n\nDry-run by default. Pass `--apply` to commit.",
     examples: [
       "fleet --env=prod add-customer ceckert --to=canary",
       "fleet --env=prod add-customer ceckert --to=canary --apply",
@@ -1603,6 +1604,16 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     console.error(dim(`  Refusing to assign — the customer would never get mounted.`));
     process.exit(1);
   }
+  const assignments = await db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).where("uid", "==", user.uid).get();
+  const refusal = addCustomerAssignmentRefusal({
+    targetGatewayId: gatewayId,
+    currentGatewayId: user.data.provisioning?.openclaw?.gatewayId ?? null,
+    assignmentGatewayIds: assignments.docs.map((doc) => doc.ref.parent.parent?.id ?? "(unknown)"),
+  });
+  if (refusal) {
+    console.error(red(`${CROSS} ${refusal}`));
+    process.exit(1);
+  }
   const current = user.data.provisioning?.openclaw?.gatewayId ?? null;
   const currentProfile = normalizeGatewayProfile(user.data.provisioning?.openclaw?.gatewayProfile);
   if (current === gatewayId) {
@@ -1630,9 +1641,6 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log(`  new gatewayId       ${cyan(gatewayId)}`);
   console.log(`  gateway profile     ${gatewayProfile}`);
   console.log(`  gateway status      ${gw.status}`);
-  if (current && current !== gatewayId) {
-    console.log("\n" + yellow(`!  moving from '${current}' to '${gatewayId}'. The old gateway's reconcile drains ${slug} (observed−desired → evict) within ~15s; use migrate-customer for a zero-downtime cutover instead.`));
-  }
 
   if (!apply) {
     console.log("\n" + dim(`--- DRY RUN (re-run with --apply to commit) ---`));
