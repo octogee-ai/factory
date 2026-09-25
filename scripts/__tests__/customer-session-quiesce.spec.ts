@@ -128,6 +128,15 @@ describe("quiesceCustomerSessionsBounded", () => {
     expect(h.rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"] });
   });
 
+  it("holds the scheduler in partial mode when the caller keeps host-bound jobs dormant on this gateway", async () => {
+    const stateDir = mkStateDir();
+    writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "done"]]);
+    const h = harness(stateDir, { schedulerMigrationId: "handoff-1", retainNonportable: true });
+
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toMatchObject({ drained: true });
+    expect(h.rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], retainNonportable: true });
+  });
+
   it("lets a running turn settle inside the grace window and never aborts it", async () => {
     const stateDir = mkStateDir();
     writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "running"]]);

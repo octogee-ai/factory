@@ -379,6 +379,24 @@ describe("createQuiesceHandler", () => {
     );
     expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: false });
   });
+  it("passes a partial scheduler handoff through to the customer quiesce", async () => {
+    const adapter = mkAdapter();
+    const body = { ...SAMPLE_QUIESCE, schedulerHandoff: true, schedulerMigrationId: "mig-1:scheduler:1", retainNonportable: true };
+    const response = mkResponse();
+    await createQuiesceHandler(mkDeps({ adapter }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000, { stopMattermost: true, schedulerMigrationId: "mig-1:scheduler:1", retainNonportable: true });
+  });
+  it("ignores the partial flag outside a scheduler handoff", async () => {
+    const adapter = mkAdapter();
+    const body = { ...SAMPLE_QUIESCE, retainNonportable: true };
+    const response = mkResponse();
+    await createQuiesceHandler(mkDeps({ adapter }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000);
+  });
   it("rejects bad signature with 401", async () => {
     const handler = createQuiesceHandler(mkDeps());
     const req = mkRequest(SAMPLE_QUIESCE, { signature: "deadbeef" });
@@ -3511,6 +3529,28 @@ describe("scheduler migration signed endpoint", () => {
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
     expect(response.getStatus()).toBe(409);
+  });
+  it("forwards a partial export so host-bound jobs stay dormant here", async () => {
+    const partial = { ...body, phase: "export" as const, retainNonportable: true };
+    const result = { operationId: partial.migrationId, phase: "export", agentIds: ["octogee-chris-coach"], drained: true, snapshot: { retainedJobIds: ["desktop-watch"] } };
+    const schedulerMigration = vi.fn(async () => result);
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+      mkRequest(partial, { signature: signForPod(partial.migrationId, JSON.stringify(partial)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(200);
+    expect(schedulerMigration).toHaveBeenCalledWith("chris", { operationId: "handoff-1", phase: "export", retainNonportable: true });
+  });
+  it("rejects a partial flag that is not a boolean or names a phase that cannot retain", async () => {
+    for (const invalid of [{ ...body, retainNonportable: "yes" }, { ...body, phase: "retire", retainNonportable: true }]) {
+      const schedulerMigration = vi.fn();
+      const response = mkResponse();
+      await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+        mkRequest(invalid, { signature: signForPod(invalid.migrationId, JSON.stringify(invalid)) }), response.res, vi.fn(),
+      );
+      expect(response.getStatus()).toBe(400);
+      expect(schedulerMigration).not.toHaveBeenCalled();
+    }
   });
   it("rejects staging without a snapshot before calling the runtime", async () => {
     const invalid = { ...body, phase: "stage" };

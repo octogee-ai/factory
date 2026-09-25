@@ -175,6 +175,7 @@ export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
 export interface QuiesceRequestBody extends MigrationRequestBody {
     schedulerHandoff?: boolean;
     schedulerMigrationId?: string;
+    retainNonportable?: boolean;
     stopMattermost?: boolean;
     timeoutMs?: number;
 }
@@ -269,6 +270,7 @@ export interface SchedulerMigrationRequest {
     phase: SchedulerMigrationPhase;
     agentIds?: string[];
     snapshot?: unknown;
+    retainNonportable?: boolean;
 }
 export interface SchedulerMigrationResult {
     operationId: string;
@@ -281,4 +283,5 @@ export interface SchedulerMigrationRequestBody extends MigrationRequestBody {
     phase: SchedulerMigrationPhase;
     agentIds?: string[];
     snapshot?: unknown;
+    retainNonportable?: boolean;
 }

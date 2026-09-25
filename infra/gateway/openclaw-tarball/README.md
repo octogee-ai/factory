@@ -119,7 +119,7 @@ discussions; record each patch's readiness in the table below.
 | 17 | `1ab31d6b0b4` | Harness: recheck reviewer authority before native execution | Builder gateways (Codex) | Ready (after #16) |
 | 18 | `11d395cce1c` | Cron: `cron.migration` scheduled-agent handoff with durable fences (includes default-agent ownership resolution) | Shared-gateway customer migration | Needs work: `cron.migration` snapshot shape validation |
 | 19 | `41c84333696` | Cron: keep timer reservations within the admitted due set (regression from #18), method-index order, test seams | — | Fold into #18 |
-| 20 | `415cd7e60f2` | Cron: partial handoff retains non-portable jobs dormant on the source | Builder VM return (pending Octogee PR) | Fold into #18 |
+| 20 | `415cd7e60f2` | Cron: partial handoff retains non-portable jobs dormant on the source | Builder VM return (Octogee PR #4034) | Fold into #18 |
 | 21 | `07704b2a923` | Models: stop catalog generations chaining across reloads (heap growth under agent churn) | Every shared/Builder gateway hot reload | Ready; main port `ceckert:codex/fix-agent-churn-heap`, PR not filed |
 | 22 | `55508566e89` | Gateway: hand a superseded hot reload's runtime refresh to its successor | Builder mount/migration (`agents.create` then `config.patch`) | Ready; main port `ceckert:codex/reload-supersede-cancel`, PR not filed |
 | 23 | `c1424dae514` | Agents: release pooled auth readers for deleted and unrostered agents | Builder eviction (`agents.delete`, then the agent dir removal held-file check) | Ready; upstream main has the same gap (#150524), PR not filed |

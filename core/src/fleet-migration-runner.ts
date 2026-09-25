@@ -69,6 +69,7 @@ export interface MigrationRunnerInput {
   // no assignment layer.
   gateAssignment?: boolean;
   schedulerMigrationId?: string;
+  acceptRetainedTargetJobs?: boolean;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   includeActivationManifest?: boolean;
 }
@@ -90,6 +91,7 @@ async function executeStep(params: {
   crossGateway: boolean;
   targetGatewayId: string;
   schedulerMigrationId: string;
+  acceptRetainedTargetJobs: boolean;
 }): Promise<StepTimings | undefined> {
   const {
     step,
@@ -126,7 +128,11 @@ async function executeStep(params: {
         const schedules = await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.from, phase: "export" });
         timings.schedulerExportMs = clock() - exportStartedAt;
         const stageStartedAt = clock();
-        await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.to, phase: "stage", agentIds: schedules.agentIds, snapshot: schedules.snapshot });
+        await deps.client.scheduler({
+          migrationId: params.schedulerMigrationId, slug, gatewayId: step.to, phase: "stage",
+          agentIds: schedules.agentIds, snapshot: schedules.snapshot,
+          ...(params.acceptRetainedTargetJobs ? { retainNonportable: true } : {}),
+        });
         timings.schedulerStageMs = clock() - stageStartedAt;
       }
       const transferStartedAt = clock();
@@ -280,6 +286,7 @@ function executeForwardStep(execution: MigrationExecution, step: MigrationStep):
     crossGateway: execution.crossGateway,
     targetGatewayId: input.toGatewayId,
     schedulerMigrationId: input.schedulerMigrationId ?? input.migrationId,
+    acceptRetainedTargetJobs: input.acceptRetainedTargetJobs === true,
   });
 }
 
@@ -508,6 +515,7 @@ async function tryRollback(
         crossGateway: transports.crossGateway,
         targetGatewayId: state.toGatewayId,
         schedulerMigrationId: transports.schedulerMigrationId,
+        acceptRetainedTargetJobs: false,
       });
       await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);

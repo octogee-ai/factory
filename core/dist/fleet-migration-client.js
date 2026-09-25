@@ -126,13 +126,16 @@ export function createMigrationClient(deps) {
             if (response.resumed !== true)
                 throw new Error(`source ingress did not resume for ${slug}`);
         },
-        async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, schedulerHandoff, schedulerMigrationId }) {
+        async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, schedulerHandoff, schedulerMigrationId, retainNonportable }) {
+            const handoff = schedulerHandoff
+                ? { schedulerHandoff: true, schedulerMigrationId: schedulerMigrationId ?? migrationId, ...(retainNonportable ? { retainNonportable: true } : {}) }
+                : {};
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,
                 path: `/quiesce/${gatewayId}`,
                 gatewayId,
                 migrationId,
-                body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...(schedulerHandoff ? { schedulerHandoff: true, schedulerMigrationId: schedulerMigrationId ?? migrationId } : {}) },
+                body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...handoff },
                 timeoutMs: quiesceMs,
             });
             if (!res.drained) {

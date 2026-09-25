@@ -25,7 +25,7 @@ function handoffProgress(operation: DocumentData): HandoffProgress {
   if (typeof operation.cutoverCommittedAt === "number") return "cut-over";
   const steps = Array.isArray(operation.steps) ? operation.steps as Array<{ name?: unknown; status?: unknown }> : [];
   if (!steps.some((step) => step.name === "quiesce-source" && step.status === "done")) return "never-held";
-  return steps.some((step) => step.name === "final-sync-state") ? "staged" : "held";
+  return steps.some((step) => step.name === "final-sync-state" || step.name === "stage-scheduler") ? "staged" : "held";
 }
 
 async function releaseHandoff(

@@ -67,7 +67,7 @@ function mkOp(overrides: Partial<Operation>): Operation {
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
-    scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} })),
+    scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } })),
     restoreTarget: vi.fn(async ({ gatewayId, slug }) => {
       calls.push(`restore:${gatewayId}`);
       return { migrationId: "mig-op-1", slug, restored: true, steps: [] };
@@ -167,7 +167,7 @@ function mkDeps(options: HarnessOptions = {}) {
       epoch: 4,
       assignmentMode: "assigned" as const,
     })),
-    resolveTargetPlacement: vi.fn(async () => ({ ok: true as const, release: 2 })),
+    resolveTargetPlacement: vi.fn(async () => ({ ok: true as const, release: 2, gatewayClass: "shared" as const })),
     setAssignmentState: vi.fn(async (input) => {
       events.push(`assignment:${input.gatewayId}:${input.state}`);
     }),
@@ -342,6 +342,177 @@ describe("native computer return", () => {
     expect(client.unmount).not.toHaveBeenCalled();
     expect(native.release).toHaveBeenCalledOnce();
     expect(deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
+  });
+
+  describe("partial scheduler handoff", () => {
+    const handoffId = "mig-op-1:scheduler:1";
+    const schedulerCalls = (h: ReturnType<typeof mkDeps>) =>
+      vi.mocked(h.client.scheduler).mock.calls.map(([request]) => [request.gatewayId, request.phase, request.retainNonportable]);
+
+    it("moves portable schedules to Shared and leaves host-bound jobs dormant on the computer", async () => {
+      const h = mkDeps();
+      nativeReturn(h);
+      const order: string[] = [];
+      const snapshot = { version: 1, operationId: handoffId, agentIds: ["octogee-alice-coach"], jobs: [], scratch: [], retainedJobIds: ["desktop-watch"] };
+      vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
+        order.push(`quiesce:${request.gatewayId}`);
+        expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ migrationId: handoffId, fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" });
+        return { migrationId: "mig-op-1", slug: "alice", drained: true, runningCount: 0 };
+      });
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase, migrationId }) => {
+        order.push(`${gatewayId}:${phase}`);
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot };
+      });
+      vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
+      vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
+        order.push(`unmount:${gatewayId}`);
+        return { migrationId: "mig-op-1", slug, unmounted: true };
+      });
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+      expect(order).toEqual(["quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
+      expect(vi.mocked(h.client.quiesce).mock.calls[0][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: handoffId, retainNonportable: true });
+      expect(schedulerCalls(h)).toEqual([
+        ["gw-blue", "export", true], ["gw-green", "stage", undefined], ["gw-blue", "retire", undefined], ["gw-green", "activate", undefined],
+      ]);
+      expect(vi.mocked(h.client.scheduler).mock.calls[1][0]).toMatchObject({ migrationId: handoffId, agentIds: ["octogee-alice-coach"], snapshot });
+      expect(h.steps.filter((step) => step.status === "done").map((step) => step.name)).toEqual([
+        "quiesce-source", "flush-source", "stage-scheduler", "checkpoint-native-computer", "cutover-firestore", "activate-scheduler", "unmount-source", "verify-target",
+      ]);
+      expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");
+    });
+
+    it("aborts Shared's staged schedules and reopens the computer's scheduler when the checkpoint fails", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.checkpoint.mockRejectedValue(new Error("checkpoint timed out"));
+      const order: string[] = [];
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase, migrationId }) => {
+        order.push(`${gatewayId}:${phase}`);
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+      });
+      vi.mocked(h.client.resume).mockImplementation(async () => { order.push("resume-ingress"); });
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "checkpoint timed out" });
+      expect(order).toEqual(["gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "resume-ingress"]);
+      expect(h.deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
+    });
+
+    it("does not report a rollback while the computer's scheduler fence is unconfirmed", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.checkpoint.mockRejectedValue(new Error("checkpoint timed out"));
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
+        if (phase === "resume") throw new Error("computer unreachable");
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+      });
+
+      const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+      expect(result).toMatchObject({ success: false, rolledBack: false });
+      expect(result.error).toContain("checkpoint timed out");
+      expect(result.error).toContain("computer unreachable");
+      expect(h.client.resume).toHaveBeenCalledOnce();
+    });
+
+    it("keeps the return pending while the computer's schedules are not retired", async () => {
+      const h = mkDeps();
+      nativeReturn(h);
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
+        if (phase === "retire") throw new Error("computer unreachable");
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+      });
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("computer unreachable") });
+      expect(schedulerCalls(h).map(([, phase]) => phase)).not.toContain("activate");
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+    });
+
+    it("activates Shared's schedules once Compute proves the lost computer is stopped", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.isSourceFencedOff.mockResolvedValue(true);
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
+        if (phase === "retire") throw new Error("computer unreachable");
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+      });
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+      expect(schedulerCalls(h).map(([, phase]) => phase)).toEqual(["export", "stage", "retire", "activate"]);
+      expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain(handoffId);
+    });
+
+    it("finishes the scheduler handoff when a retry finds the native return already cut over", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      const native = nativeReturn(h);
+      const handoff = { migrationId: handoffId, fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+      const order: string[] = [];
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase, migrationId }) => {
+        order.push(`${gatewayId}:${phase}`);
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true };
+      });
+      vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
+        order.push(`unmount:${gatewayId}`);
+        return { migrationId: "mig-op-1", slug, unmounted: true };
+      });
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff, attempts: 1, input: {
+        uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+      } }), h.ctx)).toMatchObject({ success: true });
+      expect(order).toEqual(["gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
+      expect(native.release).toHaveBeenCalledOnce();
+      expect(h.client.verifyTarget).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
+      expect(h.client.transferState).not.toHaveBeenCalled();
+    });
+
+    it("re-exports portable schedules under a fresh handoff when a restart resumes a claimed checkpoint", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.checkpointRequested = true;
+      const previous = { migrationId: handoffId, fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+      const retried = "mig-op-1:scheduler:2";
+      const order: string[] = [];
+      vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
+        order.push(`quiesce:${request.gatewayId}:${request.schedulerMigrationId}:${request.retainNonportable}`);
+        return { migrationId: "mig-op-1", slug: "alice", drained: true, runningCount: 0 };
+      });
+      vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase, migrationId }) => {
+        order.push(`${gatewayId}:${phase}:${migrationId}`);
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+      });
+      vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+      expect(order).toEqual([
+        `gw-green:abort:${handoffId}`, `gw-blue:resume:${handoffId}`,
+        `quiesce:gw-blue:${retried}:true`, `gw-blue:export:${retried}`, `gw-green:stage:${retried}`,
+        "cutover", `gw-blue:retire:${retried}`, `gw-green:activate:${retried}`,
+      ]);
+      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ ...previous, migrationId: retried });
+      expect(h.client.flushGateway).not.toHaveBeenCalled();
+      expect(native.checkpoint).toHaveBeenCalledOnce();
+    });
+  });
+});
+
+describe("migrate-customer — Builder computer activation", () => {
+  it("stages Shared's schedules beside the jobs a partial return left dormant on the computer", async () => {
+    const h = mkDeps();
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    const stage = vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request).find((request) => request.phase === "stage");
+    expect(stage).toMatchObject({ gatewayId: "gw-green", retainNonportable: true });
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request).filter((request) => request.phase !== "stage")
+      .every((request) => request.retainNonportable === undefined)).toBe(true);
+    expect(vi.mocked(h.client.quiesce).mock.calls[0][0].retainNonportable).toBeUndefined();
+  });
+
+  it("stages onto a Shared target with today's strict conflict rules", async () => {
+    const h = mkDeps();
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    const stage = vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request).find((request) => request.phase === "stage");
+    expect(stage?.retainNonportable).toBeUndefined();
   });
 });
 

@@ -18,6 +18,7 @@ import {
   resolveGatewayClass,
   isGatewayClass,
   isGatewayProfile,
+  type GatewayClass,
   type HelmInstancesMap,
   type OperationAuditRecord,
   type Operation,
@@ -3053,7 +3054,7 @@ async function buildHandlers(
       const placement = await resolvePlacementFromFirestore(db, toGatewayId);
       if (!placement) return null;
       return placement.ok
-        ? { ok: true, release: placement.release }
+        ? { ok: true, release: placement.release, gatewayClass: placement.gatewayClass }
         : { ok: false, reason: placement.reason };
     },
     // The roster quiesce gate: written "quiescing" before the source quiesce
@@ -4040,7 +4041,7 @@ export async function resolvePlacementFromFirestore(
   db: Firestore,
   toGatewayId: string,
 ): Promise<
-  | { ok: true; revisionId: string; release: number | null }
+  | { ok: true; revisionId: string; release: number | null; gatewayClass: GatewayClass }
   | { ok: false; reason: "no-live-revision" | "revision-not-ready" }
   | null
 > {
@@ -4055,7 +4056,16 @@ export async function resolvePlacementFromFirestore(
   if (gateway.liveRelease == null) return { ok: false, reason: "no-live-revision" };
   const ready = await isServingGateway(db, toGatewayId);
   if (!ready) return { ok: false, reason: "revision-not-ready" };
-  return { ok: true, revisionId: toGatewayId, release: gateway.liveRelease };
+  return {
+    ok: true,
+    revisionId: toGatewayId,
+    release: gateway.liveRelease,
+    gatewayClass: resolveGatewayClass({
+      gatewayClass: gateway.gatewayClass ?? undefined,
+      profile: gateway.profile ?? undefined,
+      imageProfile: gateway.imageProfile ?? undefined,
+    }),
+  };
 }
 
 export async function resolveLiveRevisionAsSource(

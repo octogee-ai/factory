@@ -29,6 +29,7 @@ export interface MigrationClient {
     quiesce(opts: {
         schedulerHandoff?: boolean;
         schedulerMigrationId?: string;
+        retainNonportable?: boolean;
         migrationId: string;
         gatewayId: string;
         transportId?: string;

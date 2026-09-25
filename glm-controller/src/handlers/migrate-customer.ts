@@ -4,8 +4,10 @@ import type { NativeComputerReturn, NativeComputerReturnInput } from "../lib/nat
 import type {
   CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2State,
+  GatewayClass,
   Operation,
   OperationStep,
+  SchedulerHandoffState,
   StepStatus,
 } from "@octogee/shared/types/glm";
 import { resolveOperationOrigin } from "@octogee/shared/types/glm";
@@ -56,7 +58,7 @@ export interface SourcePlacement {
 }
 
 type PlacementResolution =
-  | { ok: true; release: number | null }
+  | { ok: true; release: number | null; gatewayClass: GatewayClass }
   | { ok: false; reason: string };
 
 export interface MigrateCustomerDeps {
@@ -497,6 +499,7 @@ function reportedToOperationStep(rep: ReportedStep, now: number): OperationStep 
 
 interface MigrationTargets {
   toGatewayId: string;
+  toGatewayClass: GatewayClass;
   fromGatewayId: string;
   toRelease: number | null;
   fromRelease: number;
@@ -530,6 +533,7 @@ async function resolveMigrationTargets(
   return {
     targets: {
       toGatewayId,
+      toGatewayClass: placement.gatewayClass,
       fromGatewayId: user.currentGatewayId,
       toRelease: placement.release,
       fromRelease: source.release,
@@ -599,10 +603,11 @@ interface PreparedMigration {
 // carries none: the source flushes its durable work, the cutover flips the
 // roster, and the destination's own reconcile mounts the customer from
 // Firestore/Gitea/Mattermost like any other assigned customer.
-async function provisionCustomerOnTarget(input: {
+interface FreshProvision {
   deps: MigrateCustomerDeps;
   ctx: OperationContext;
   operationId: string;
+  attempt: number;
   targets: MigrationTargets;
   uid: string;
   slug: string;
@@ -610,23 +615,22 @@ async function provisionCustomerOnTarget(input: {
   stateMigration: RollStateMigrationDecision;
   automatic: boolean;
   nativeReturn?: NativeComputerReturn | null;
-}): Promise<OperationResult> {
+}
+
+type SourceAssignment = Omit<Parameters<MigrateCustomerDeps["setAssignmentState"]>[0], "state" | "createIfMissing">;
+
+async function provisionCustomerOnTarget(input: FreshProvision): Promise<OperationResult> {
   const { deps, targets, uid, slug, migrationId, automatic } = input;
   const ctx = destinationProgressContext(input);
   deps.log(
     `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
     `provision-fresh (${input.stateMigration.reason})`,
   );
-  const sourceUrl = await deps.resolveGatewayUrl(targets.fromGatewayId);
-  const client = deps.buildClient((transportId) => {
-    if (transportId !== targets.fromGatewayId) {
-      throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
-    }
-    return sourceUrl;
-  });
+  const handoff = input.nativeReturn ? await persistNativeReturnHandoff(input) : null;
+  const client = await gatewayClient(deps, handoff ? [targets.fromGatewayId, targets.toGatewayId] : [targets.fromGatewayId]);
   const step = (name: string, action: () => Promise<unknown>) =>
     reportFreshStep(deps, ctx, name, action);
-  const sourceAssignment = {
+  const sourceAssignment: SourceAssignment = {
     gatewayId: targets.fromGatewayId,
     uid,
     slug,
@@ -640,20 +644,7 @@ async function provisionCustomerOnTarget(input: {
       state: "quiescing",
       createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
     });
-    if (!input.nativeReturn?.checkpointRequested) {
-      await step("quiesce-source", () => client.quiesce({
-        migrationId,
-        gatewayId: targets.fromGatewayId,
-        slug,
-      }));
-      await step("flush-source", () => client.flushGateway({
-        migrationId,
-        gatewayId: targets.fromGatewayId,
-        slug,
-        reason: input.nativeReturn ? "native-return" : "migration-final",
-      }));
-    }
-    if (input.nativeReturn) await step("checkpoint-native-computer", input.nativeReturn.checkpoint);
+    await closeSourceForFreshProvision(input, client, step, handoff);
     await step("cutover-firestore", async () => {
       await deps.commitCutover({
         uid,
@@ -667,24 +658,12 @@ async function provisionCustomerOnTarget(input: {
     });
   } catch (error) {
     if (input.nativeReturn) {
-      const current = await deps.readUser(uid);
-      if (current?.currentGatewayId === targets.toGatewayId) {
-        return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, migrationId, slug });
-      }
-      if (current?.currentGatewayId !== targets.fromGatewayId) {
-        throw new Error("native return ownership changed; checkpoint retained");
-      }
-      await input.nativeReturn.release();
+      const settled = await settleNativeReturnAfterFailure(input, ctx, input.nativeReturn, handoff);
+      if (settled) return settled;
     }
-    await restoreSourceServing(deps, {
-      ...sourceAssignment,
-      state: "serving",
-      createIfMissing: false,
-    });
-    await client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug });
-    return { steps: [], success: false, error: errorMessage(error), rolledBack: true };
+    return rollbackFreshProvision({ deps, client, handoff, sourceAssignment, migrationId, slug, error });
   }
-  if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, migrationId, slug });
+  if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, migrationId, slug, handoff });
   await discardSourceFootprint(deps, ctx, {
     client,
     migrationId,
@@ -692,6 +671,182 @@ async function provisionCustomerOnTarget(input: {
     slug,
   });
   return { steps: [], success: true, rolledBack: false };
+}
+
+async function closeSourceForFreshProvision(
+  input: FreshProvision,
+  client: MigrationClient,
+  step: (name: string, action: () => Promise<unknown>) => Promise<void>,
+  handoff: SchedulerHandoffState | null,
+): Promise<void> {
+  const { targets, slug, migrationId } = input;
+  await step("quiesce-source", () => client.quiesce({
+    migrationId,
+    gatewayId: targets.fromGatewayId,
+    slug,
+    ...(handoff ? { schedulerHandoff: true, schedulerMigrationId: handoff.migrationId, retainNonportable: true } : {}),
+  }));
+  if (!input.nativeReturn?.checkpointRequested) {
+    await step("flush-source", () => client.flushGateway({
+      migrationId,
+      gatewayId: targets.fromGatewayId,
+      slug,
+      reason: input.nativeReturn ? "native-return" : "migration-final",
+    }));
+  }
+  if (handoff) await step("stage-scheduler", () => stagePortableSchedules(input.deps, client, handoff));
+  if (input.nativeReturn) await step("checkpoint-native-computer", input.nativeReturn.checkpoint);
+}
+
+async function settleNativeReturnAfterFailure(
+  input: FreshProvision,
+  ctx: OperationContext,
+  native: NativeComputerReturn,
+  handoff: SchedulerHandoffState | null,
+): Promise<OperationResult | null> {
+  const { deps, targets, uid, slug, migrationId } = input;
+  const current = await deps.readUser(uid);
+  if (current?.currentGatewayId === targets.toGatewayId) {
+    return completeNativeReturn(deps, ctx, native, { ...targets, migrationId, slug, handoff });
+  }
+  if (current?.currentGatewayId !== targets.fromGatewayId) {
+    throw new Error("native return ownership changed; checkpoint retained");
+  }
+  await native.release();
+  return null;
+}
+
+async function rollbackFreshProvision(input: {
+  deps: MigrateCustomerDeps;
+  client: MigrationClient;
+  handoff: SchedulerHandoffState | null;
+  sourceAssignment: SourceAssignment;
+  migrationId: string;
+  slug: string;
+  error: unknown;
+}): Promise<OperationResult> {
+  const { deps, client, handoff, migrationId, slug } = input;
+  const cause = errorMessage(input.error);
+  if (handoff) {
+    const abortFailed = await abortStagedSchedules(deps, client, handoff);
+    if (abortFailed) return failure(`${cause}; ${abortFailed}`, false);
+  }
+  await restoreSourceServing(deps, {
+    ...input.sourceAssignment,
+    state: "serving",
+    createIfMissing: false,
+  });
+  const unreleased = handoff ? await reopenSourceScheduler(deps, client, handoff) : null;
+  await client.resume({ migrationId, gatewayId: input.sourceAssignment.gatewayId, slug });
+  if (unreleased) return failure(`${cause}; ${unreleased}`, false);
+  return { steps: [], success: false, error: cause, rolledBack: true };
+}
+
+async function persistNativeReturnHandoff(input: {
+  deps: MigrateCustomerDeps;
+  ctx: OperationContext;
+  targets: MigrationTargets;
+  uid: string;
+  slug: string;
+  migrationId: string;
+  attempt: number;
+}): Promise<SchedulerHandoffState> {
+  if (!input.ctx.persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
+  const handoff: SchedulerHandoffState = {
+    migrationId: `${input.migrationId}:scheduler:${input.attempt}`,
+    fromGatewayId: input.targets.fromGatewayId,
+    toGatewayId: input.targets.toGatewayId,
+    uid: input.uid,
+    slug: input.slug,
+  };
+  await input.ctx.persistSchedulerHandoff(handoff);
+  return handoff;
+}
+
+async function gatewayClient(deps: MigrateCustomerDeps, gatewayIds: string[]): Promise<MigrationClient> {
+  const urls = new Map(await Promise.all(
+    gatewayIds.map(async (gatewayId) => [gatewayId, await deps.resolveGatewayUrl(gatewayId)] as const),
+  ));
+  return deps.buildClient((transportId) => {
+    const url = urls.get(transportId);
+    if (!url) throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
+    return url;
+  });
+}
+
+function retainedJobIds(snapshot: unknown): string[] {
+  const ids = (snapshot as { retainedJobIds?: unknown } | null | undefined)?.retainedJobIds;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+    throw new Error("partial scheduler export did not report which host-bound jobs it retained");
+  }
+  return ids as string[];
+}
+
+async function stagePortableSchedules(
+  deps: MigrateCustomerDeps,
+  client: MigrationClient,
+  handoff: SchedulerHandoffState,
+): Promise<void> {
+  const { migrationId, slug } = handoff;
+  const exported = await client.scheduler({ migrationId, slug, gatewayId: handoff.fromGatewayId, phase: "export", retainNonportable: true });
+  const retained = retainedJobIds(exported.snapshot);
+  deps.log(
+    `[migrate-customer] native return ${slug}: portable schedules of ${exported.agentIds.join(", ")} staged on ${handoff.toGatewayId}; ` +
+    `host-bound jobs left dormant on ${handoff.fromGatewayId}: ${retained.length ? retained.join(", ") : "none"}`,
+  );
+  await client.scheduler({
+    migrationId, slug, gatewayId: handoff.toGatewayId, phase: "stage", agentIds: exported.agentIds, snapshot: exported.snapshot,
+  });
+}
+
+async function abortStagedSchedules(
+  deps: MigrateCustomerDeps,
+  client: MigrationClient,
+  handoff: SchedulerHandoffState,
+): Promise<string | null> {
+  try {
+    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "abort" });
+    return null;
+  } catch (abortError) {
+    const message = `target scheduler abort unconfirmed on ${handoff.toGatewayId}, source left closed: ${errorMessage(abortError)}`;
+    deps.log(`[migrate-customer] ⚠ native return ${handoff.slug}: ${message}`);
+    return message;
+  }
+}
+
+async function reopenSourceScheduler(
+  deps: MigrateCustomerDeps,
+  client: MigrationClient,
+  handoff: SchedulerHandoffState,
+): Promise<string | null> {
+  try {
+    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "resume" });
+    return null;
+  } catch (resumeError) {
+    const message = `scheduler fence ${handoff.migrationId} on ${handoff.fromGatewayId} not released: ${errorMessage(resumeError)}`;
+    deps.log(`[migrate-customer] ⚠ native return ${handoff.slug}: ${message}`);
+    return message;
+  }
+}
+
+async function activateHandedOffSchedules(
+  deps: MigrateCustomerDeps,
+  native: NativeComputerReturn,
+  handoff: SchedulerHandoffState,
+): Promise<void> {
+  const { migrationId, slug } = handoff;
+  try {
+    const source = await gatewayClient(deps, [handoff.fromGatewayId]);
+    await source.scheduler({ migrationId, slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
+  } catch (error) {
+    if (!await native.isSourceFencedOff()) throw error;
+    deps.log(
+      `[migrate-customer] ⚠ native return ${slug}: Compute confirmed the computer stopped before its schedules retired; ` +
+      `its exported copies stay fenced under ${migrationId} on ${handoff.fromGatewayId} until an operator retires that handoff: ${errorMessage(error)}`,
+    );
+  }
+  const target = await gatewayClient(deps, [handoff.toGatewayId]);
+  await target.scheduler({ migrationId, slug, gatewayId: handoff.toGatewayId, phase: "activate" });
 }
 
 interface MigrationExecutionInput {
@@ -814,6 +969,7 @@ function migrationRequest(input: MigrateCustomerInput):
 function durableMigrationTargets(state: CustomerMigrationV2State): MigrationTargets {
   return {
     toGatewayId: state.targetGatewayId,
+    toGatewayClass: state.targetRootFence.gatewayClass,
     fromGatewayId: state.sourceGatewayId,
     toRelease: state.targetRelease,
     fromRelease: state.sourceRelease,
@@ -924,6 +1080,7 @@ async function executeProvisionFresh(input: MigrationExecutionInput & {
     deps: input.deps,
     ctx: input.ctx,
     operationId: input.op.id,
+    attempt: (input.op.attempts ?? 0) + 1,
     targets: input.targets,
     uid: input.uid,
     slug: input.slug,
@@ -955,10 +1112,14 @@ async function completeNativeReturn(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   native: NativeComputerReturn,
-  input: { fromGatewayId: string; toGatewayId: string; slug: string; migrationId: string },
+  input: { fromGatewayId: string; toGatewayId: string; slug: string; migrationId: string; handoff: SchedulerHandoffState | null },
 ): Promise<OperationResult> {
   try {
     await native.release();
+    if (input.handoff) {
+      const handoff = input.handoff;
+      await reportFreshStep(deps, ctx, "activate-scheduler", () => activateHandedOffSchedules(deps, native, handoff));
+    }
     await reportFreshStep(deps, ctx, "unmount-source", async () => {
       try {
         const url = await deps.resolveGatewayUrl(input.fromGatewayId);
@@ -983,17 +1144,28 @@ async function completeNativeReturn(
   }
 }
 
-async function finishNativeReturnAfterCutover(deps: MigrateCustomerDeps, op: Operation, ctx: OperationContext, user: UserGatewayInfo): Promise<OperationResult> {
-  const complete: OperationResult = { steps: [], success: true, rolledBack: false };
-  if (typeof op.input.fromGatewayId !== "string" || typeof op.input.uid !== "string") return complete;
-  const gatewayId = op.input.fromGatewayId;
+async function finishNativeReturnAfterCutover(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  ctx: OperationContext,
+  user: UserGatewayInfo,
+  request: { uid: string; toGatewayId: string },
+): Promise<OperationResult | null> {
+  if (typeof op.input.fromGatewayId !== "string") return null;
+  const fromGatewayId = op.input.fromGatewayId;
   const native = await deps.prepareNativeComputerReturn({
-    fromGatewayId: gatewayId, toGatewayId: user.currentGatewayId,
-    uid: op.input.uid, slug: user.slug, operationId: op.id,
+    fromGatewayId, toGatewayId: user.currentGatewayId, uid: request.uid, slug: user.slug, operationId: op.id,
   });
-  if (!native) return complete;
+  if (!native) return null;
+  const handoff = op.schedulerHandoff ?? null;
+  if (handoff && (
+    handoff.uid !== request.uid || handoff.slug !== user.slug ||
+    handoff.fromGatewayId !== fromGatewayId || handoff.toGatewayId !== user.currentGatewayId
+  )) {
+    return failure("scheduler handoff scope changed after cutover", false);
+  }
   return completeNativeReturn(deps, ctx, native, {
-    fromGatewayId: gatewayId, toGatewayId: user.currentGatewayId, slug: user.slug, migrationId: deps.genMigrationId(op.id),
+    fromGatewayId, toGatewayId: user.currentGatewayId, slug: user.slug, migrationId: deps.genMigrationId(op.id), handoff,
   });
 }
 
@@ -1008,14 +1180,7 @@ async function completeSchedulerHandoff(
     return failure("scheduler handoff scope changed after cutover", false);
   }
   try {
-    const urls = new Map(await Promise.all(
-      [handoff.fromGatewayId, handoff.toGatewayId].map(async (id) => [id, await deps.resolveGatewayUrl(id)] as const),
-    ));
-    const client = deps.buildClient((id) => {
-      const url = urls.get(id);
-      if (!url) throw new Error(`unknown scheduler handoff gateway ${id}`);
-      return url;
-    });
+    const client = await gatewayClient(deps, [handoff.fromGatewayId, handoff.toGatewayId]);
     await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
     await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "activate" });
     await client.unmount({ migrationId: deps.genMigrationId(op.id), slug: handoff.slug, gatewayId: handoff.fromGatewayId });
@@ -1050,9 +1215,13 @@ async function recoverCommittedMigration(
   request: { uid: string; toGatewayId: string },
 ): Promise<OperationResult | null> {
   if (user.currentGatewayId !== request.toGatewayId) return null;
+  const convergence = isControllerConvergenceSource(op.input.source);
+  if (convergence) {
+    const nativeReturn = await finishNativeReturnAfterCutover(deps, op, ctx, user, request);
+    if (nativeReturn) return nativeReturn;
+  }
   if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, user, request);
-  if (isControllerConvergenceSource(op.input.source)) return finishNativeReturnAfterCutover(deps, op, ctx, user);
-  return null;
+  return convergence ? { steps: [], success: true, rolledBack: false } : null;
 }
 
 async function prepareMigration(
@@ -1250,6 +1419,7 @@ async function executeMigration(
       fromGatewayId: prepared.user.currentGatewayId,
       toGatewayId: prepared.toGatewayId,
       crossGateway: prepared.user.currentGatewayId !== prepared.toGatewayId,
+      acceptRetainedTargetJobs: prepared.targets.toGatewayClass === "builder",
       gateAssignment: true,
       projectCheckoutScope: prepared.projectCheckoutScope,
       includeActivationManifest: true,

@@ -447,14 +447,24 @@ export function createMigrationProgressHandler(deps: MigrationHandlerDeps): Requ
   };
 }
 
+const SCHEDULER_MIGRATION_PHASES = ["hold", "export", "stage", "activate", "resume", "retire", "abort"];
+const SCHEDULER_RETAINING_PHASES = ["hold", "export", "stage"];
+
+function isSchedulerMigrationRequest(body: SchedulerMigrationRequestBody): boolean {
+  const agentIdsValid = body.agentIds === undefined ||
+    (Array.isArray(body.agentIds) && body.agentIds.length > 0 && body.agentIds.every((id) => typeof id === "string" && id));
+  const stageValid = body.phase !== "stage" || (body.agentIds !== undefined && body.snapshot !== undefined);
+  const retainValid = body.retainNonportable === undefined ||
+    (typeof body.retainNonportable === "boolean" && SCHEDULER_RETAINING_PHASES.includes(body.phase));
+  return SCHEDULER_MIGRATION_PHASES.includes(body.phase) && agentIdsValid && stageValid && retainValid;
+}
+
 export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? console.log;
   return async (req, res) => {
     const body = parseAndVerifyJsonBody<SchedulerMigrationRequestBody>(req, res, deps, log);
     if (!body) return;
-    if (!["hold", "export", "stage", "activate", "resume", "retire", "abort"].includes(body.phase) ||
-        (body.agentIds !== undefined && (!Array.isArray(body.agentIds) || body.agentIds.length === 0 || body.agentIds.some(id => typeof id !== "string" || !id))) ||
-        (body.phase === "stage" && (body.agentIds === undefined || body.snapshot === undefined))) {
+    if (!isSchedulerMigrationRequest(body)) {
       res.status(400).json({ error: "invalid scheduler migration request" });
       return;
     }
@@ -463,6 +473,7 @@ export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): Req
         operationId: body.migrationId, phase: body.phase,
         ...(body.agentIds ? { agentIds: body.agentIds } : {}),
         ...(body.snapshot === undefined ? {} : { snapshot: body.snapshot }),
+        ...(body.retainNonportable === undefined ? {} : { retainNonportable: body.retainNonportable }),
       });
       res.status(result.drained ? 200 : 409).json(result);
     } catch (error) {
@@ -496,10 +507,14 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
-      let options: { stopMattermost: boolean; schedulerMigrationId?: string } | undefined;
+      let options: { stopMattermost: boolean; schedulerMigrationId?: string; retainNonportable?: boolean } | undefined;
       if (body.stopMattermost === false) options = { stopMattermost: false };
       else if (body.schedulerHandoff === true) {
-        options = { stopMattermost: true, schedulerMigrationId: body.schedulerMigrationId ?? body.migrationId };
+        options = {
+          stopMattermost: true,
+          schedulerMigrationId: body.schedulerMigrationId ?? body.migrationId,
+          ...(body.retainNonportable === true ? { retainNonportable: true } : {}),
+        };
       }
       const result = options
         ? await deps.adapter.quiesceCustomer(body.slug, body.timeoutMs ?? 60_000, options)

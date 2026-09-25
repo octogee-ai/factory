@@ -375,6 +375,19 @@ describe("scheduled work handoff", () => {
     expect(order).not.toContain("gw-blue:hold");
   });
 
+  it("stages beside the jobs a partial return left dormant only when the caller accepts them on the target", async () => {
+    const accepting = harness();
+    expect(await runMigration({ ...accepting.input, acceptRetainedTargetJobs: true }, accepting.deps)).toMatchObject({ success: true });
+    const requests = vi.mocked(accepting.client.scheduler).mock.calls.map(([request]) => request);
+    expect(requests.find((request) => request.phase === "stage")).toMatchObject({ gatewayId: "gw-green", retainNonportable: true });
+    expect(requests.filter((request) => request.phase !== "stage").every((request) => request.retainNonportable === undefined)).toBe(true);
+    expect(vi.mocked(accepting.client.quiesce).mock.calls[0][0].retainNonportable).toBeUndefined();
+
+    const strict = harness();
+    expect(await runMigration(strict.input, strict.deps)).toMatchObject({ success: true });
+    expect(vi.mocked(strict.client.scheduler).mock.calls.map(([request]) => request).every((request) => request.retainNonportable === undefined)).toBe(true);
+  });
+
   it("reports where the final sync spent its time: scheduler export, scheduler stage, and the copy", async () => {
     const h = harness();
     let clock = 0;

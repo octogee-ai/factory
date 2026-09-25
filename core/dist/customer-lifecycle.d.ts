@@ -223,6 +223,7 @@ export interface CustomerLifecycleAdapter {
     quiesceCustomer: (slug: string, timeoutMs: number, opts?: {
         stopMattermost: boolean;
         schedulerMigrationId?: string;
+        retainNonportable?: boolean;
     }) => Promise<{
         drained: boolean;
         runningCount: number;

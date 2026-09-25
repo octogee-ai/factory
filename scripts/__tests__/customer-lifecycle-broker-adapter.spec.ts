@@ -1356,6 +1356,22 @@ describe("broker migration admission", () => {
     await expect(adapter.quiesceCustomer("migrationqa", 0)).rejects.toThrow("scheduled jobs");
     expect(rpc.cronJobCount).toHaveBeenCalledTimes(2);
   });
+  it("returns a Builder whose agent keeps host-bound jobs: the hold retains them instead of refusing", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-partial-hold-"));
+    boundedStopDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    seedMigrationqaSession(stateDir, "done");
+    const rpc = mkGatewayRpc({
+      cronJobCount: vi.fn(async () => 2),
+      configGet: vi.fn(async () => configSnapshot({ agents: { entries: { "octogee-migrationqa-coach": {} } } })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1", retainNonportable: true }))
+      .resolves.toEqual({ drained: true, runningCount: 0 });
+    expect(rpc.cronJobCount).not.toHaveBeenCalled();
+    expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-migrationqa-coach"], retainNonportable: true });
+  });
   it("leaves ingress to the whole-process rollout owner when requested", async () => {
     const rpc = mkGatewayRpc();
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });

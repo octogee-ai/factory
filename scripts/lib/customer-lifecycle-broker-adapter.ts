@@ -1213,7 +1213,7 @@ async function quiesceCustomer(
   ctx: BrokerCtx,
   slug: string,
   timeoutMs: number,
-  opts: { stopMattermost: boolean; schedulerMigrationId?: string } = { stopMattermost: true },
+  opts: { stopMattermost: boolean; schedulerMigrationId?: string; retainNonportable?: boolean } = { stopMattermost: true },
 ): Promise<{ drained: boolean; runningCount: number }> {
   const agentIds = agentIdsForMigration(slug);
   if (opts.stopMattermost) {
@@ -1228,6 +1228,7 @@ async function quiesceCustomer(
     ...(opts.stopMattermost
       ? {
         schedulerMigrationId: opts.schedulerMigrationId,
+        retainNonportable: opts.retainNonportable,
         graceMs: Math.min(MIGRATION_QUIESCE_GRACE_MS, timeoutMs),
         recheckMs: Math.min(MIGRATION_QUIESCE_STOP_RECHECK_MS, timeoutMs),
       }

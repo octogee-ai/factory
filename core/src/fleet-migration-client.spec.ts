@@ -641,6 +641,24 @@ describe("MigrationClient.resume", () => {
 });
 
 describe("MigrationClient.scheduler", () => {
+  it("asks the source to retain host-bound jobs only inside a scheduler handoff", async () => {
+    const { calls, fakeFetch } = captureFetch(() =>
+      new Response(JSON.stringify({ migrationId: "m1", slug: "alice", drained: true, runningCount: 0 }), { status: 200 }));
+    const client = createMigrationClient({ transferState: transferNotUnderTest, privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch });
+    await client.quiesce({ migrationId: "m1", gatewayId: "gw-source", slug: "alice", schedulerHandoff: true, schedulerMigrationId: "m1:scheduler:1", retainNonportable: true });
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice", schedulerHandoff: true, schedulerMigrationId: "m1:scheduler:1", retainNonportable: true });
+    await client.quiesce({ migrationId: "m1", gatewayId: "gw-source", slug: "alice", retainNonportable: true });
+    expect(JSON.parse(calls[1].body!)).toEqual({ migrationId: "m1", slug: "alice" });
+  });
+
+  it("carries the partial-handoff flag on a scheduler command", async () => {
+    const result = { operationId: "handoff-1", phase: "export", agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: ["desktop-watch"] } };
+    const { fakeFetch, calls } = captureFetch(() => new Response(JSON.stringify(result), { status: 200 }));
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch });
+    await expect(client.scheduler({ migrationId: "handoff-1", slug: "alice", gatewayId: "gw-source", phase: "export", retainNonportable: true })).resolves.toEqual(result);
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "handoff-1", slug: "alice", phase: "export", retainNonportable: true });
+  });
+
   it("signs the scheduler command for its exact gateway and operation", async () => {
     const result = { operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], drained: true };
     const { fakeFetch, calls } = captureFetch(() => new Response(JSON.stringify(result), { status: 200 }));

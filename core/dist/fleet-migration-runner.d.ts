@@ -35,6 +35,7 @@ export interface MigrationRunnerInput {
     crossGateway?: boolean;
     gateAssignment?: boolean;
     schedulerMigrationId?: string;
+    acceptRetainedTargetJobs?: boolean;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     includeActivationManifest?: boolean;
 }

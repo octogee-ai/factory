@@ -286,7 +286,7 @@ resumeCustomer: (slug: string) => Promise<void>;
 quiesceCustomer: (
     slug: string,
     timeoutMs: number,
-    opts?: { stopMattermost: boolean; schedulerMigrationId?: string },
+    opts?: { stopMattermost: boolean; schedulerMigrationId?: string; retainNonportable?: boolean },
   ) => Promise<{ drained: boolean; runningCount: number }>;
 
 listExportPaths: (slug: string) => Promise<Array<{ cwd: string; path: string }>>;

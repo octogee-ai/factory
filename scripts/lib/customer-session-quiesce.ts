@@ -37,6 +37,7 @@ export interface BoundedQuiesceOptions {
   agentIds: readonly string[];
   stores: readonly CustomerSessionStore[];
   schedulerMigrationId?: string;
+  retainNonportable?: boolean;
   graceMs?: number;
   recheckMs?: number;
   abortAfterGrace?: boolean;
@@ -85,6 +86,7 @@ async function holdScheduler(
     operationId: opts.schedulerMigrationId,
     phase: "hold",
     agentIds: [...agentIds],
+    ...(opts.retainNonportable ? { retainNonportable: true } : {}),
   });
 }
 
