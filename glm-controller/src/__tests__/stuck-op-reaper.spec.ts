@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { recoverControllerOrphanedMigrations, runStuckOpReaperTick } from "../stuck-op-reaper.js";
+import { FieldValue } from "firebase-admin/firestore";
+import { recoverControllerOrphanedOperations, runStuckOpReaperTick } from "../stuck-op-reaper.js";
 import { decideOperationClaim } from "../operation-queue.js";
 
 interface FakeOpDoc {
@@ -489,7 +490,7 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
   });
 });
 
-describe("recoverControllerOrphanedMigrations", () => {
+describe("recoverControllerOrphanedOperations", () => {
   const BOOTED_AT = NOW - 30_000;
 
   function orphanedPlacement(overrides: Partial<FakeOpDoc["data"]> = {}): FakeOpDoc {
@@ -514,8 +515,8 @@ describe("recoverControllerOrphanedMigrations", () => {
   }
 
   function recover(db: unknown, log = vi.fn()) {
-    return recoverControllerOrphanedMigrations({
-      db: db as Parameters<typeof recoverControllerOrphanedMigrations>[0]["db"],
+    return recoverControllerOrphanedOperations({
+      db: db as Parameters<typeof recoverControllerOrphanedOperations>[0]["db"],
       log,
       now: () => NOW,
       controllerStartedAt: BOOTED_AT,
@@ -619,7 +620,7 @@ describe("recoverControllerOrphanedMigrations", () => {
   });
 
   it.each<[string, Partial<FakeOpDoc["data"]>]>([
-    ["a non-migration kind", { kind: "retire-gateway", input: { gatewayId: "shared-a" } }],
+    ["an add-gateway op", { kind: "add-gateway", input: { gatewayId: "shared-a" } }],
     ["a rollout the resume sweep re-drives", { kind: "rollout", input: { gatewayId: "shared-a" } }],
     ["a durable V2 migration", { customerMigrationV2: { phase: "checkpointed" } }],
     ["a suspend-customer op", { kind: "suspend-customer" }],
@@ -631,6 +632,61 @@ describe("recoverControllerOrphanedMigrations", () => {
 
     expect(result).toEqual({ scanned: 1, recovered: 0 });
     expect(op.updated).toBeUndefined();
+  });
+
+  function orphanedRetirement(overrides: Partial<FakeOpDoc["data"]> = {}): FakeOpDoc {
+    return {
+      id: "shared-pool-retire-shared-c39b93f1591e",
+      data: {
+        kind: "retire-gateway", origin: "automatic", status: "running",
+        startedAt: BOOTED_AT - 8 * 60_000,
+        lastProgressAt: BOOTED_AT - 60_000,
+        input: { gatewayId: "shared-c39b93f1591e", retirementClaimVersion: 1 },
+        steps: [
+          { name: "helm-uninstall", status: "done" },
+          { name: "delete-pvc", status: "done" },
+          { name: "delete-kube-secret", status: "done" },
+          { name: "delete-sm-secret", status: "running" },
+        ],
+        ...overrides,
+      },
+    };
+  }
+
+  it("re-arms a retirement the previous controller orphaned mid-teardown so the operation worker re-drives it from the top", async () => {
+    const orphan = orphanedRetirement();
+    const log = vi.fn();
+
+    const result = await recover(makeFakeDb([orphan]), log);
+
+    expect(result).toEqual({ scanned: 1, recovered: 1 });
+    expect(orphan.data).toMatchObject({
+      status: "pending", startedAt: null, completedAt: null, steps: [],
+      input: { gatewayId: "shared-c39b93f1591e", retirementClaimVersion: 1 },
+    });
+    for (const field of ["error", "lastProgressAt", "expireAt"]) {
+      expect(FieldValue.delete().isEqual(orphan.updated?.[field] as FieldValue)).toBe(true);
+    }
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("re-armed orphaned shared-pool-retire-shared-c39b93f1591e"));
+  });
+
+  it("leaves a retirement this controller claimed after boot to its live worker", async () => {
+    const claimedHere = orphanedRetirement({ startedAt: BOOTED_AT + 1 });
+
+    const result = await recover(makeFakeDb([claimedHere]));
+
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
+    expect(claimedHere.updated).toBeUndefined();
+  });
+
+  it("leaves a retirement this controller re-claims while the recovery transaction is pending", async () => {
+    const raced = orphanedRetirement();
+    const db = makeFakeDb([raced], { beforeTransaction: () => { raced.data.startedAt = BOOTED_AT + 5; } });
+
+    const result = await recover(db);
+
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
+    expect(raced.data.status).toBe("running");
   });
 
   it("leaves a level-triggered Builder return to the resume sweep", async () => {

@@ -308,7 +308,7 @@ import {
   type FleetInformer,
   type MirrorDocChange,
 } from "./fleet-informer.js";
-import { recoverControllerOrphanedMigrations, startStuckOpReaper } from "./stuck-op-reaper.js";
+import { recoverControllerOrphanedOperations, startStuckOpReaper } from "./stuck-op-reaper.js";
 import { claimCrashLoopEviction } from "./surge-crashloop-eviction.js";
 import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
 import {
@@ -2752,7 +2752,7 @@ async function main(): Promise<void> {
   );
 
   try {
-    await recoverControllerOrphanedMigrations({ db, log, now: () => Date.now(), controllerStartedAt });
+    await recoverControllerOrphanedOperations({ db, log, now: () => Date.now(), controllerStartedAt });
   } catch (err) {
     log(
       `[glm-controller] ⚠ boot orphan recovery failed; the stuck-op reaper recovers them after its budget: ${err instanceof Error ? err.message : String(err)}`,

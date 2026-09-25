@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import {
   GLM_OPERATIONS_COLLECTION,
   isOperationAuditRow,
@@ -7,7 +7,7 @@ import {
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
-import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
 
 export const REAPED_OPERATION_ERROR_PREFIX = "reaped: ";
 
@@ -240,16 +240,73 @@ export interface ControllerOrphanRecoveryResult {
 export const CONTROLLER_ORPHANED_OPERATION_ERROR =
   `${REAPED_OPERATION_ERROR_PREFIX}controller restarted mid-op — the claiming controller exited, so no worker can finish it; failed at boot`;
 
+const BOOT_RECOVERABLE_KINDS: ReadonlySet<string> = new Set([MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND]);
+
 function claimedByPreviousController(operation: Operation, controllerStartedAt: number): boolean {
   const claimedAt = readMillis(operation.startedAt);
   return operation.status === "running" &&
-    operation.kind === MIGRATE_CUSTOMER_KIND &&
+    BOOT_RECOVERABLE_KINDS.has(operation.kind) &&
     !operationNeedsDurableRestartResume(operation) &&
     claimedAt !== null &&
     claimedAt < controllerStartedAt;
 }
 
-export async function recoverControllerOrphanedMigrations(
+export function rearmedRetireOperationPatch(): Record<string, unknown> {
+  return {
+    status: "pending",
+    startedAt: null,
+    completedAt: null,
+    steps: [],
+    error: FieldValue.delete(),
+    lastProgressAt: FieldValue.delete(),
+    expireAt: FieldValue.delete(),
+  };
+}
+
+async function rearmOrphanedRetirement(
+  deps: ControllerOrphanRecoveryDeps,
+  doc: FirebaseFirestore.QueryDocumentSnapshot,
+): Promise<boolean> {
+  const rearmed = await deps.db.runTransaction(async (txn) => {
+    const snap = await txn.get(doc.ref);
+    if (!snap.exists) return false;
+    const current = { ...snap.data(), id: doc.id } as Operation;
+    if (!claimedByPreviousController(current, deps.controllerStartedAt)) return false;
+    txn.update(doc.ref, rearmedRetireOperationPatch());
+    return true;
+  });
+  if (rearmed) {
+    deps.log(
+      `[boot-orphan-recovery] ⚠ re-armed orphaned ${doc.id} (kind=${RETIRE_GATEWAY_KIND}) claimed by the previous controller; its teardown re-runs from the top`,
+    );
+  }
+  return rearmed;
+}
+
+async function failOrphanedMigration(
+  deps: ControllerOrphanRecoveryDeps,
+  doc: FirebaseFirestore.QueryDocumentSnapshot,
+  operation: Operation,
+  now: number,
+): Promise<boolean> {
+  const result = await reapWithLegacyGateRecovery({
+    db: deps.db,
+    doc,
+    operation,
+    now,
+    error: CONTROLLER_ORPHANED_OPERATION_ERROR,
+    logLabel: "boot-orphan-recovery",
+    stillReapable: (current) => claimedByPreviousController(current, deps.controllerStartedAt),
+  });
+  if (result.gateMessage) deps.log(result.gateMessage);
+  if (!result.reaped) return false;
+  deps.log(
+    `[boot-orphan-recovery] ⚠ failed orphaned ${doc.id} (kind=${operation.kind}) claimed by the previous controller`,
+  );
+  return true;
+}
+
+export async function recoverControllerOrphanedOperations(
   deps: ControllerOrphanRecoveryDeps,
 ): Promise<ControllerOrphanRecoveryResult> {
   const snap = await deps.db
@@ -264,21 +321,10 @@ export async function recoverControllerOrphanedMigrations(
     const operation = { ...data as Operation, id: doc.id };
     if (!claimedByPreviousController(operation, deps.controllerStartedAt)) continue;
     try {
-      const result = await reapWithLegacyGateRecovery({
-        db: deps.db,
-        doc,
-        operation,
-        now,
-        error: CONTROLLER_ORPHANED_OPERATION_ERROR,
-        logLabel: "boot-orphan-recovery",
-        stillReapable: (current) => claimedByPreviousController(current, deps.controllerStartedAt),
-      });
-      if (result.gateMessage) deps.log(result.gateMessage);
-      if (!result.reaped) continue;
-      recovered += 1;
-      deps.log(
-        `[boot-orphan-recovery] ⚠ failed orphaned ${doc.id} (kind=${operation.kind}) claimed by the previous controller`,
-      );
+      const didRecover = operation.kind === RETIRE_GATEWAY_KIND
+        ? await rearmOrphanedRetirement(deps, doc)
+        : await failOrphanedMigration(deps, doc, operation, now);
+      if (didRecover) recovered += 1;
     } catch (err) {
       deps.log(`[boot-orphan-recovery] ⚠ ${doc.id} recovery failed: ${String(err)}`);
     }
