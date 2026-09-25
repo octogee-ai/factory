@@ -67,6 +67,18 @@ function durableGateway(
   };
 }
 
+function inFlightRetirementClaim(): Record<string, unknown> {
+  return {
+    operationId: "shared-pool-retire-x",
+    version: 1,
+    claimedAt: 1,
+    phase: "claimed",
+    liveRelease: 1,
+    liveRuntimeIdentity: null,
+    previousDesiredStatus: "running",
+  };
+}
+
 describe("mapSaToTenant", () => {
   it("maps per-gateway KSAs from durable root ownership", async () => {
     const result = await mapSaToTenant(
@@ -267,6 +279,68 @@ describe("mapSaToTenant", () => {
     const result = await mapSaToTenant(
       fakeDb({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
       { namespace: "octogee", saName: "octogee-gw-bender" },
+      "octogee",
+    );
+
+    expect(result).toEqual({ attached: false, result: "unknown_tenant" });
+  });
+
+  it("keeps a retiring gateway's pod-bound identity while its retirement claim is in flight", async () => {
+    const retiring = durableGateway("shared-0a1b2c3d4e5f", {
+      desiredStatus: "retired",
+      retirementVersion: 1,
+      retirementClaim: inFlightRetirementClaim(),
+    });
+
+    await expect(
+      mapSaToTenant(
+        fakeDb({ "gateways/shared-0a1b2c3d4e5f": retiring }),
+        { namespace: "octogee", saName: "octogee-gw-shared-0a1b2c3d4e5f", podUid: "pod-uid-1" },
+        "octogee",
+      ),
+    ).resolves.toEqual({
+      attached: true,
+      result: "ok",
+      retiring: true,
+      tenant: { kind: "gateway", gatewayId: "shared-0a1b2c3d4e5f" },
+    });
+
+    await expect(
+      mapSaToTenant(
+        fakeDb({
+          "gateways/bender": durableGateway("bender", {
+            serviceAccountName: "custom-operator-ksa",
+            desiredStatus: "retired",
+            retirementVersion: 1,
+            retirementClaim: inFlightRetirementClaim(),
+          }),
+        }),
+        { namespace: "octogee", saName: "custom-operator-ksa", podUid: "pod-uid-1" },
+        "octogee",
+      ),
+    ).resolves.toMatchObject({ attached: true, retiring: true, tenant: { gatewayId: "bender" } });
+  });
+
+  it("rejects a retiring gateway identity that is not bound to a pod", async () => {
+    const result = await mapSaToTenant(
+      fakeDb({
+        "gateways/bender": durableGateway("bender", {
+          desiredStatus: "retired",
+          retirementVersion: 1,
+          retirementClaim: inFlightRetirementClaim(),
+        }),
+      }),
+      { namespace: "octogee", saName: "octogee-gw-bender" },
+      "octogee",
+    );
+
+    expect(result).toEqual({ attached: false, result: "unknown_tenant" });
+  });
+
+  it("rejects a pod-bound identity of a retired gateway without a retirement claim", async () => {
+    const result = await mapSaToTenant(
+      fakeDb({ "gateways/bender": durableGateway("bender", { desiredStatus: "retired" }) }),
+      { namespace: "octogee", saName: "octogee-gw-bender", podUid: "pod-uid-1" },
       "octogee",
     );
 

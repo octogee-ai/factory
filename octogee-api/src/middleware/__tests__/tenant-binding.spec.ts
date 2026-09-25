@@ -77,6 +77,34 @@ function gatewayRoot(serviceAccountName: string | null = null): Record<string, u
   };
 }
 
+function retiringGatewayRoot(): Record<string, unknown> {
+  return {
+    ...gatewayRoot(),
+    desiredStatus: "retired",
+    retirementVersion: 1,
+    retirementClaim: {
+      operationId: "op-retire-bender",
+      version: 1,
+      claimedAt: 1,
+      phase: "claimed",
+      liveRelease: 1,
+      liveRuntimeIdentity: null,
+      previousDesiredStatus: "running",
+    },
+  };
+}
+
+function benderPodReview(): Awaited<ReturnType<Reviewer>> {
+  return {
+    authenticated: true,
+    namespace: "octogee",
+    saName: "octogee-gw-bender",
+    audiences: ["octogee-api"],
+    podName: "octogee-gateway-bender-r7-5bc5949d46-p946t",
+    podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
+  };
+}
+
 function buildApp(opts: {
   reviewer: Reviewer;
   docs?: Record<string, Record<string, unknown>>;
@@ -155,6 +183,59 @@ describe("tenant binding middleware", () => {
       podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
     });
     await expect(registry.metrics()).resolves.toContain('result="ok"');
+  });
+
+  it("binds a retiring gateway's live pod token on a fresh review so its preStop flush is admitted", async () => {
+    const warn = vi.fn();
+    const reviewer = vi.fn<Reviewer>(async () => benderPodReview());
+    const { app } = buildApp({ warn, docs: { bender: retiringGatewayRoot() }, reviewer });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
+      .send({ gatewayId: "bender" });
+
+    expect(res.body.boundTenant).toMatchObject({
+      kind: "gateway",
+      gatewayId: "bender",
+      podUid: "b0de5f4c-2d38-4dc9-9bb7-3f20a0d7beef",
+    });
+    expect(reviewer).toHaveBeenLastCalledWith(WELL_FORMED_SA_TOKEN, { fresh: true });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a retiring gateway's cached pod token once a fresh review shows the pod is gone", async () => {
+    const warn = vi.fn();
+    const reviewer = vi.fn<Reviewer>(async (_jwt, opts) =>
+      opts?.fresh ? { authenticated: false } : benderPodReview(),
+    );
+    const { app, registry } = buildApp({ warn, docs: { bender: retiringGatewayRoot() }, reviewer });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
+      .send({ gatewayId: "bender" });
+
+    expect(res.body.boundTenant).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "[tenant-binding] retiring gateway pod token failed fresh review",
+      expect.objectContaining({ saName: "octogee-gw-bender" }),
+    );
+    await expect(registry.metrics()).resolves.toContain('result="invalid"');
+  });
+
+  it("keeps the cached review for a serving gateway", async () => {
+    const reviewer = vi.fn<Reviewer>(async () => benderPodReview());
+    const { app } = buildApp({ reviewer });
+
+    const res = await request(app)
+      .post("/internal/probe")
+      .set(K8S_SA_TOKEN_HEADER, WELL_FORMED_SA_TOKEN)
+      .send({ gatewayId: "bender" });
+
+    expect(res.body.boundTenant).toMatchObject({ gatewayId: "bender" });
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    expect(reviewer).toHaveBeenCalledWith(WELL_FORMED_SA_TOKEN);
   });
 
   it("does not fabricate pod identity when TokenReview did not verify both claims", async () => {

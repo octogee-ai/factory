@@ -6,6 +6,7 @@ import type { ReviewResult } from "./token-review.js";
 import {
   effectiveGatewayServiceAccountNameForGateway,
   readGatewayAuthorization,
+  type GatewayAuthorization,
 } from "@octogee/core/gateway-live-release";
 
 export type BoundTenant =
@@ -38,6 +39,7 @@ export type SaToTenantResult =
       attached: true;
       tenant: BoundTenant;
       result: "ok" | "ok_platform";
+      retiring?: true;
     }
   | {
       attached: false;
@@ -50,6 +52,7 @@ export type SaToTenantResult =
 export interface ServiceAccountIdentity {
   namespace: string;
   saName: string;
+  podUid?: string;
 }
 
 const GATEWAY_SA_PREFIX = "octogee-gw-";
@@ -89,10 +92,12 @@ function attachGateway(
   ownerUid: string | null,
   result: "ok",
   finalHomeCheckpoint = false,
+  retiring = false,
 ): SaToTenantResult {
   return {
     attached: true,
     result,
+    ...(retiring ? { retiring: true as const } : {}),
     tenant: {
       kind: "gateway",
       gatewayId,
@@ -102,17 +107,28 @@ function attachGateway(
   };
 }
 
+function gatewayIdentityAdmitted(
+  authorization: GatewayAuthorization | null,
+  identity: ServiceAccountIdentity,
+): authorization is GatewayAuthorization {
+  if (!authorization) return false;
+  const { gateway } = authorization;
+  if (gateway.desiredStatus !== "retired") return true;
+  return gateway.retirementClaim?.phase === "claimed" && !!identity.podUid;
+}
+
 async function bindGatewaySa(
   db: GatewayRootFirestore,
-  saName: string,
+  identity: ServiceAccountIdentity,
   suffix: string,
   result: "ok",
 ): Promise<SaToTenantResult> {
+  const { saName } = identity;
   const gatewayId = gatewayIdFromSaSuffix(suffix);
   if (!gatewayId) return { attached: false, result: "malformed_sa" };
 
   const authorization = await readGatewayAuthorization(db, gatewayId);
-  if (!authorization || authorization.gateway.desiredStatus === "retired") {
+  if (!gatewayIdentityAdmitted(authorization, identity)) {
     return { attached: false, result: "unknown_tenant" };
   }
   if (
@@ -120,13 +136,20 @@ async function bindGatewaySa(
   ) {
     return { attached: false, result: "unknown_tenant" };
   }
-  return attachGateway(gatewayId, authorization.config.ownerUid, result);
+  return attachGateway(
+    gatewayId,
+    authorization.config.ownerUid,
+    result,
+    false,
+    authorization.gateway.desiredStatus === "retired",
+  );
 }
 
 async function bindCustomGatewaySa(
   db: GatewayRootFirestore,
-  saName: string,
+  identity: ServiceAccountIdentity,
 ): Promise<SaToTenantResult> {
+  const { saName } = identity;
   const roots = await db
     .collection(GATEWAYS_COLLECTION)
     .where("serviceAccountName", "==", saName)
@@ -134,7 +157,7 @@ async function bindCustomGatewaySa(
   if (roots.docs.length !== 1) return { attached: false, result: "unknown_tenant" };
   const root = roots.docs[0];
   const authorization = await readGatewayAuthorization(db, root.id);
-  if (!authorization || authorization.gateway.desiredStatus === "retired") {
+  if (!gatewayIdentityAdmitted(authorization, identity)) {
     return { attached: false, result: "unknown_tenant" };
   }
   if (
@@ -149,6 +172,8 @@ async function bindCustomGatewaySa(
     authorization.gateway.gatewayId,
     authorization.config.ownerUid,
     "ok",
+    false,
+    authorization.gateway.desiredStatus === "retired",
   );
 }
 
@@ -181,7 +206,15 @@ export async function mapReviewToTenant(
     if (review.namespace !== expectedNamespace) return { attached: false, result: "ns_mismatch" };
     return mapComputeInstanceToTenant(db, review.computeInstance);
   }
-  return mapSaToTenant(db, { namespace: review.namespace, saName: review.saName }, expectedNamespace);
+  return mapSaToTenant(
+    db,
+    {
+      namespace: review.namespace,
+      saName: review.saName,
+      ...(review.podUid ? { podUid: review.podUid } : {}),
+    },
+    expectedNamespace,
+  );
 }
 
 export async function mapSaToTenant(
@@ -209,7 +242,7 @@ export async function mapSaToTenant(
   if (identity.saName.startsWith(GATEWAY_SA_PREFIX)) {
     return bindGatewaySa(
       db,
-      identity.saName,
+      identity,
       identity.saName.slice(GATEWAY_SA_PREFIX.length),
       "ok",
     );
@@ -220,5 +253,5 @@ export async function mapSaToTenant(
   }
 
   if (!isDnsLabel(identity.saName)) return { attached: false, result: "unknown_sa" };
-  return bindCustomGatewaySa(db, identity.saName);
+  return bindCustomGatewaySa(db, identity);
 }

@@ -162,4 +162,32 @@ describe("createKubernetesTokenReviewer", () => {
 
     expect(transportCalls).toBe(2);
   });
+
+  it("re-reviews a cached success when asked for a fresh review and drops the stale entry", async () => {
+    const reviewerTokenPath = await tempFile("reviewer-token", "reviewer-jwt");
+    const caPath = await tempFile("ca.crt", "ca-data");
+    let podDeleted = false;
+    let transportCalls = 0;
+    const reviewer = createKubernetesTokenReviewer({
+      reviewerTokenPath,
+      caPath,
+      now: () => 1_000,
+      cacheTtlMs: 30_000,
+      transport: async () => {
+        transportCalls += 1;
+        return {
+          status: 201,
+          body: podDeleted ? { status: { authenticated: false } } : authenticatedBody(),
+        };
+      },
+    });
+
+    await expect(reviewer("caller-jwt")).resolves.toMatchObject({ authenticated: true });
+    podDeleted = true;
+    await expect(reviewer("caller-jwt")).resolves.toMatchObject({ authenticated: true });
+    await expect(reviewer("caller-jwt", { fresh: true })).resolves.toEqual({ authenticated: false });
+    await expect(reviewer("caller-jwt")).resolves.toEqual({ authenticated: false });
+
+    expect(transportCalls).toBe(3);
+  });
 });

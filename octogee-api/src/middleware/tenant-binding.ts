@@ -12,6 +12,7 @@ import {
   IN_CLUSTER_IDENTITY_CA_PATH,
   IN_CLUSTER_IDENTITY_TOKEN_PATH,
   type Reviewer,
+  type ReviewResult,
 } from "../lib/token-review.js";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
 import { gatewayVmPodName } from "@octogee/shared/types/glm";
@@ -83,6 +84,21 @@ function warn(
   logger.warn(`[tenant-binding] ${msg}`, meta);
 }
 
+function boundTenantForReview(
+  tenant: BoundTenant,
+  review: Extract<ReviewResult, { authenticated: true }>,
+): BoundTenant {
+  if (tenant.kind !== "gateway" || !review.podName || !review.podUid) return tenant;
+  return {
+    ...tenant,
+    saName: review.saName,
+    podName: review.computeInstance
+      ? gatewayVmPodName(tenant.gatewayId, review.computeInstance.instanceId)
+      : review.podName,
+    podUid: review.podUid,
+  };
+}
+
 export function createTenantBindingMiddleware(
   opts: TenantBindingMiddlewareOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
@@ -93,6 +109,35 @@ export function createTenantBindingMiddleware(
   const db = opts.db ?? defaultDb;
   const logger = opts.logger ?? defaultLogger;
   const namespace = opts.namespace ?? process.env.K8S_NAMESPACE ?? "octogee";
+
+  const retiringPodStillLive = async (
+    req: Request,
+    token: string,
+    review: Extract<ReviewResult, { authenticated: true }>,
+  ): Promise<boolean> => {
+    let fresh;
+    try {
+      fresh = await reviewer(token, { fresh: true });
+    } catch (err) {
+      record(opts.metrics, req, "reviewer_error");
+      warn(logger, "retiring gateway fresh TokenReview failed", {
+        route: req.path,
+        saName: review.saName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    if (fresh.authenticated && fresh.saName === review.saName && fresh.podUid === review.podUid) {
+      return true;
+    }
+    record(opts.metrics, req, "invalid");
+    warn(logger, "retiring gateway pod token failed fresh review", {
+      route: req.path,
+      saName: review.saName,
+      podName: review.podName,
+    });
+    return false;
+  };
 
   const handleTenantBinding = async (req: Request): Promise<void> => {
     req.tenantBindingAttempted = true;
@@ -147,19 +192,12 @@ export function createTenantBindingMiddleware(
       });
       return;
     }
+    if (mapped.attached && mapped.retiring && !(await retiringPodStillLive(req, token, review))) {
+      return;
+    }
     record(opts.metrics, req, mapped.result);
     if (mapped.attached) {
-      req.boundTenant =
-        mapped.tenant.kind === "gateway" && review.podName && review.podUid
-          ? {
-              ...mapped.tenant,
-              saName: review.saName,
-              podName: review.computeInstance
-                ? gatewayVmPodName(mapped.tenant.gatewayId, review.computeInstance.instanceId)
-                : review.podName,
-              podUid: review.podUid,
-            }
-          : mapped.tenant;
+      req.boundTenant = boundTenantForReview(mapped.tenant, review);
     } else if (mapped.result !== "shared_gateway") {
       warn(logger, "service account did not map to a tenant", {
         route: req.path,

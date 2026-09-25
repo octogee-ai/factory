@@ -108,5 +108,6 @@ export function createGceIdentityReviewer(opts: GceIdentityReviewerOptions): Rev
 }
 
 export function createIssuerDispatchingReviewer(reviewers: { kubernetes: Reviewer; gce: Reviewer }): Reviewer {
-  return (jwt) => (isGoogleIssuedJwt(jwt) ? reviewers.gce(jwt) : reviewers.kubernetes(jwt));
+  return (jwt, opts) =>
+    isGoogleIssuedJwt(jwt) ? reviewers.gce(jwt, opts) : reviewers.kubernetes(jwt, opts);
 }

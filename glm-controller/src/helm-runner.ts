@@ -779,6 +779,7 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         "-n",
         namespace,
         "--wait",
+        "--cascade=foreground",
         `--timeout=${uninstallTimeout}`,
       ];
       let result = await deps.runHelm(uninstallArgs);

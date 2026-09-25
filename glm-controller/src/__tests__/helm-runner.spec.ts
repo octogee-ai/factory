@@ -1553,7 +1553,7 @@ describe("createHelmSubprocessRunner — gateway ServiceAccount ownership", () =
 });
 
 describe("createHelmSubprocessRunner — removeInstance", () => {
-  it("runs `helm uninstall octogee-gw-<name> -n <ns> --wait`", async () => {
+  it("runs `helm uninstall octogee-gw-<name> -n <ns> --wait --cascade=foreground` so it returns only after the pods (and their preStop) are gone", async () => {
     const { runHelm, calls } = mockSubprocess([{ stdout: "release \"octogee-gw-default\" uninstalled" }]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
 
@@ -1568,6 +1568,7 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     expect(args).toContain("-n");
     expect(args).toContain("octogee-test");
     expect(args).toContain("--wait");
+    expect(args).toContain("--cascade=foreground");
   });
 
   it("treats 'release not found' as a successful no-op (idempotent retire)", async () => {

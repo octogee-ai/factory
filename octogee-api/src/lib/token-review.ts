@@ -39,7 +39,11 @@ export interface ComputeInstanceIdentity {
   instanceName: string;
 }
 
-export type Reviewer = (jwt: string) => Promise<ReviewResult>;
+export interface ReviewOptions {
+  fresh?: boolean;
+}
+
+export type Reviewer = (jwt: string, opts?: ReviewOptions) => Promise<ReviewResult>;
 
 export interface TokenReviewHttpRequest {
   url: string;
@@ -141,6 +145,16 @@ function parseTokenReview(body: unknown, audience: string): ReviewResult {
   };
 }
 
+function liveCacheEntry(
+  cache: Map<string, CacheEntry>,
+  tokenHash: string,
+  at: number,
+  ttlMs: number,
+): CacheEntry | undefined {
+  const entry = cache.get(tokenHash);
+  return entry && at - entry.at < ttlMs ? entry : undefined;
+}
+
 function evictOldest(cache: Map<string, CacheEntry>): void {
   const oldest = cache.keys().next().value as string | undefined;
   if (oldest) cache.delete(oldest);
@@ -199,12 +213,10 @@ export function createKubernetesTokenReviewer(
   const cache = new Map<string, CacheEntry>();
   const audience = opts.audience ?? TENANT_BINDING_AUDIENCE;
 
-  return async (jwt: string): Promise<ReviewResult> => {
+  return async (jwt: string, reviewOpts?: ReviewOptions): Promise<ReviewResult> => {
     const tokenHash = sha256(jwt);
-    const cached = cache.get(tokenHash);
-    if (cached && now() - cached.at < cacheTtlMs) {
-      return cached.result;
-    }
+    const cached = reviewOpts?.fresh ? undefined : liveCacheEntry(cache, tokenHash, now(), cacheTtlMs);
+    if (cached) return cached.result;
     cache.delete(tokenHash);
 
     const apiHost =

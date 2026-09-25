@@ -106,6 +106,15 @@ describe("createIssuerDispatchingReviewer", () => {
     expect(gce).toHaveBeenCalledTimes(1);
     expect(kubernetes).toHaveBeenCalledTimes(2);
   });
+
+  it("forwards a fresh-review request to the selected reviewer", async () => {
+    const kubernetes = vi.fn<Reviewer>(async () => ({ authenticated: false }));
+    const gce = vi.fn<Reviewer>(async () => ({ authenticated: false }));
+    const reviewer = createIssuerDispatchingReviewer({ kubernetes, gce });
+    const token = jwt({ iss: "https://container.googleapis.com/v1/projects/x/locations/y/clusters/z" });
+    await reviewer(token, { fresh: true });
+    expect(kubernetes).toHaveBeenCalledWith(token, { fresh: true });
+  });
 });
 
 describe("parseGatewayComputerIdentity", () => {
