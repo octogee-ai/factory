@@ -7,7 +7,7 @@ import {
   MIGRATION_QUIESCE_GRACE_MS,
   MIGRATION_QUIESCE_STOP_RECHECK_MS,
 } from "../../shared/types/workspace-migration.js";
-import { customerAgentIdsInRoster } from "./agent-roster-deletion.js";
+import { schedulerHandoffAgentIds } from "./agent-roster-deletion.js";
 import {
   type AgentSessionEntry,
   customerCoachAgentId,
@@ -93,7 +93,7 @@ async function holdScheduler(
 async function scheduledAgentIds(opts: BoundedQuiesceOptions): Promise<string[]> {
   if (!opts.schedulerMigrationId) return [...opts.agentIds];
   const { config } = await opts.rpc.configGet();
-  const agentIds = [...new Set([...opts.agentIds, ...customerAgentIdsInRoster(config, opts.slug)])].sort();
+  const agentIds = schedulerHandoffAgentIds(config, opts.slug, opts.agentIds, opts.retainNonportable === true);
   if (agentIds.length === 0) throw new Error(`Cannot hold scheduler for ${opts.slug}: no customer agents`);
   return agentIds;
 }

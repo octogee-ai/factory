@@ -671,6 +671,60 @@ describe("customer lifecycle config patch agent directories", () => {
     },
   );
 
+  it.each([
+    ["broker", "native computer return", true, ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]],
+    ["prod", "native computer return", true, ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]],
+    ["broker", "Builder-to-Builder move", false, ["main", "octogee-alice-coach", "octogee-alice-proj-orbit-coach", "octogee-unmatched-route"]],
+    ["prod", "Builder-to-Builder move", false, ["main", "octogee-alice-coach", "octogee-alice-proj-orbit-coach", "octogee-unmatched-route"]],
+  ] as const)(
+    "%s adapter fences the scheduler agents a %s hands over",
+    async (adapterKind, _handoff, partialHandoff, expectedAgentIds) => {
+      await withRuntimeMock(async ({ tempRoot }) => {
+        process.env.OPENCLAW_STATE_DIR = tempRoot;
+        vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+        const config = {
+          agents: {
+            list: [
+              { id: "octogee-unmatched-route" },
+              { id: "main", default: true },
+              { id: "octogee-alice-coach", workspace: path.join(tempRoot, "customers", "alice") },
+              { id: "octogee-alice-proj-orbit-coach", workspace: path.join(tempRoot, "customers", "alice", "projects", "orbit") },
+            ],
+          },
+          channels: { mattermost: { accounts: { "alice-coach": {}, "alice-proj-orbit": {} } } },
+        };
+        await fs.writeFile(path.join(tempRoot, "openclaw.json"), JSON.stringify(config));
+        const rpc = {
+          configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
+          channelsStop: vi.fn(async () => ({ ok: true as const })),
+          schedulerMigration: vi.fn(async (request: { operationId: string; phase: string; agentIds?: string[] }) => ({
+            operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: true,
+          })),
+        } as unknown as GatewayRpcClient;
+        const adapter = adapterKind === "broker"
+          ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+            client: mkClient(brokerSnapshot),
+            rpc,
+            log: vi.fn(),
+          })
+          : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
+            db: {} as Firestore,
+            rpc,
+            log: vi.fn(),
+          });
+        const retain = partialHandoff ? { retainNonportable: true } : {};
+
+        await adapter.quiesceCustomer("alice", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1", ...retain });
+        await adapter.schedulerMigration("alice", { operationId: "handoff-1", phase: "hold", ...retain });
+
+        const heldAgentIds = vi.mocked(rpc.schedulerMigration).mock.calls
+          .filter(([request]) => request.phase === "hold")
+          .map(([request]) => request.agentIds);
+        expect(heldAgentIds).toEqual([expectedAgentIds, expectedAgentIds]);
+      });
+    },
+  );
+
   it.each(["stopped", "held", "running", "stopping", "other-pod", "unknown"])("retains a configured Builder overlay with proven chat shutdown (%s)", async (state) => {
     await withRuntimeMock(async ({ tempRoot, agentsDir, applyConfigPatch }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;

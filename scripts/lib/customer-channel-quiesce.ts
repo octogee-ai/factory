@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
-import { customerAgentIdsInRoster } from "./agent-roster-deletion.js";
+import { customerAgentIdsInRoster, schedulerHandoffAgentIds } from "./agent-roster-deletion.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 export async function setCustomerChannelsRunning(
@@ -41,7 +41,7 @@ export async function migrateCustomerScheduler(
 ): Promise<SchedulerMigrationResult> {
   if (request.phase !== "hold") return rpc.schedulerMigration(request);
   const { config } = await rpc.configGet();
-  const agentIds = [...new Set([...localAgentIds, ...customerAgentIdsInRoster(config, slug)])].sort();
+  const agentIds = schedulerHandoffAgentIds(config, slug, localAgentIds, request.retainNonportable === true);
   if (agentIds.length === 0) throw new Error(`Cannot hold scheduler for ${slug}: no customer agents`);
   const deadline = Date.now() + 45_000;
   while (true) {

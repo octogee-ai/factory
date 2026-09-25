@@ -22,6 +22,18 @@ export function customerAgentIdsInRoster(current: unknown, slug: string): string
   return agentIdsFromConfig(current).filter((agentId) => agentIdBelongsToSlug(agentId, slug));
 }
 
+export function schedulerHandoffAgentIds(
+  current: unknown,
+  slug: string,
+  localAgentIds: readonly string[],
+  partialHandoff: boolean,
+): string[] {
+  const handedOver = partialHandoff
+    ? localAgentIds.filter((agentId) => agentIdBelongsToSlug(agentId, slug))
+    : localAgentIds;
+  return [...new Set([...handedOver, ...customerAgentIdsInRoster(current, slug)])].sort();
+}
+
 /**
  * openclaw 2026.7.2 refuses any config write whose canonical roster drops
  * entries unless the write carries `allowedAgentRosterRemovals`, which only its
