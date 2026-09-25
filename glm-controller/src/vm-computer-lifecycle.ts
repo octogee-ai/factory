@@ -24,6 +24,7 @@ import {
 } from "./lib/home-checkpoint.js";
 import { releaseParkedComputer, writeParkedComputer } from "./lib/parked-computer.js";
 import { claimWarmPoolMember } from "./vm-warm-pool.js";
+import { occupiedComputerZones, spreadZones } from "./vm-placement.js";
 
 const STOPPED_STATUSES = new Set(["TERMINATED", "STOPPED"]);
 const COWBOY_STOP_REASONS = new Set<GatewayVmStopReason>(["idle", "operator"]);
@@ -237,6 +238,15 @@ export function builderComputerInstanceInput(source: ComputerInstanceSource): Cr
   };
 }
 
+function recordedSpecInConfiguredZones(recorded: GatewayVmSpec | undefined, configured: GatewayVmSpec): GatewayVmSpec {
+  if (!recorded) return configured;
+  const { machineType, imageFamily, imageProject, diskSizeGb, homeDiskSizeGb, provisioningModel, serviceAccountEmail, subnetwork } = recorded;
+  return {
+    zones: configured.zones,
+    machineType, imageFamily, ...(imageProject ? { imageProject } : {}), diskSizeGb, homeDiskSizeGb, provisioningModel, serviceAccountEmail, subnetwork,
+  };
+}
+
 function bindingOf(input: CreateGatewayVmInput): BindGatewayVmInput {
   return { labels: input.labels, metadata: input.metadata };
 }
@@ -296,8 +306,9 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       deps.log(`[vm-gateway-runtime] ${gatewayId}: claimed warm-pool member ${claimed.name} as ${ownerUid}'s computer (${claimed.provisioningModel ?? "unknown"})`);
       return { description: claimed, origin: "warm-pool" };
     }
-    const created = await deps.vm.create(input);
-    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${created.alreadyExisted ? "adopted" : "created"} cold ${input.instanceName} (${created.provisioningModel})`);
+    const zones = spreadZones(input.zones, await occupiedComputerZones(deps.vm, deps.environment));
+    const created = await deps.vm.create({ ...input, zones });
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${created.alreadyExisted ? "adopted" : "created"} cold ${input.instanceName} in ${created.description.zone} (${created.provisioningModel})`);
     return { description: created.description, origin: "cold" };
   }
 
@@ -335,7 +346,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   async function ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState> {
     if (!ownerUid) throw new Error(`gateway ${gatewayId}: a gce-vm Builder gateway needs an owner`);
     const { data, vm: existing } = await readVmRecord(deps.db, gatewayId);
-    const spec = (data?.vmSpec as GatewayVmSpec | undefined) ?? deps.vmSpec;
+    const spec = recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec);
     const input = builderComputerInstanceInput({ gatewayId, ownerUid, spec, environment: deps.environment, image, bridgeIp: bridge });
     let origin = existing?.origin;
     let description = existing ? await deps.vm.describe(existing.instanceName, existing.zone) : null;

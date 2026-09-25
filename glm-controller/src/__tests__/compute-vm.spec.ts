@@ -11,7 +11,7 @@ const BASE = "https://compute.googleapis.com/compute/v1/projects/octogee-test";
 
 const input: CreateGatewayVmInput = {
   instanceName: "octogee-gw-b-mama-3-abc-hobby",
-  zone: "us-west1-b",
+  zones: ["us-west1-b"],
   machineType: "n2-standard-4",
   imageFamily: "octogee-computer",
   diskSizeGb: 40, homeDiskSizeGb: 20,
@@ -68,7 +68,7 @@ const instance = (overrides: Record<string, unknown> = {}) => ({
 
 describe("instanceInsertBody", () => {
   it("renders a Spot VM from the image family with no external IP and the gateway identity", () => {
-    const body = instanceInsertBody("octogee-test", input, "SPOT") as Record<string, any>;
+    const body = instanceInsertBody("octogee-test", input, "us-west1-b", "SPOT") as Record<string, any>;
     expect(body.name).toBe(input.instanceName);
     expect(body.machineType).toBe("zones/us-west1-b/machineTypes/n2-standard-4");
     expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/family/octogee-computer");
@@ -106,12 +106,12 @@ describe("instanceInsertBody", () => {
   });
 
   it("sources the image from another project when the spec names one", () => {
-    const body = instanceInsertBody("octogee", { ...input, imageProject: "octogee-test" }, "SPOT") as Record<string, any>;
+    const body = instanceInsertBody("octogee", { ...input, imageProject: "octogee-test" }, "us-west1-b", "SPOT") as Record<string, any>;
     expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/family/octogee-computer");
   });
 
   it("renders on-demand scheduling for STANDARD", () => {
-    const body = instanceInsertBody("octogee-test", input, "STANDARD") as Record<string, any>;
+    const body = instanceInsertBody("octogee-test", input, "us-west1-b", "STANDARD") as Record<string, any>;
     expect(body.scheduling).toEqual({ provisioningModel: "STANDARD", automaticRestart: true, onHostMaintenance: "MIGRATE" });
   });
 });
@@ -183,7 +183,7 @@ describe("createGatewayVmClient.create", () => {
     expect((posts[1] as any).scheduling.provisioningModel).toBe("STANDARD");
     expect(result.fellBackToStandard).toBe(true);
     expect(result.provisioningModel).toBe("STANDARD");
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/spot capacity exhausted .* retrying on-demand/));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/SPOT capacity exhausted in us-west1-b; retrying on-demand in us-west1-b/));
   });
 
   it("does not fall back for an on-demand request that fails, and surfaces the code", async () => {
@@ -214,7 +214,7 @@ describe("createGatewayVmClient.create", () => {
     expect(result.alreadyExisted).toBe(true);
     expect(result.description.status).toBe("TERMINATED");
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/already exists \(TERMINATED\)/));
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/already exists in us-west1-b \(TERMINATED\)/));
   });
 
   it("fails loudly when the operation never finishes", async () => {
@@ -233,7 +233,7 @@ describe("createGatewayVmClient lifecycle", () => {
   it("reads the attached service account and scopes for reuse", async () => {
     const serviceAccounts = [{ email: input.serviceAccountEmail, scopes: ["old-scope"] }];
     const { request } = fakeCompute(() => instance({ serviceAccounts }));
-    expect((await clientWith(request).client.describe(input.instanceName, input.zone))?.serviceAccounts).toEqual(serviceAccounts);
+    expect((await clientWith(request).client.describe(input.instanceName, "us-west1-b"))?.serviceAccounts).toEqual(serviceAccounts);
   });
 
   it("sets the computer identity and waits for Compute to finish before returning", async () => {
@@ -428,20 +428,37 @@ describe("createGatewayVmClient pool primitives", () => {
     });
   });
 
-  it("list filters by labels in the zone and follows pagination", async () => {
+  it("list finds members in every zone of the aggregated listing and follows pagination", async () => {
+    const inZone = (zone: string, name: string) => ({ ...pooled, name, zone: `https://www.googleapis.com/compute/v1/projects/octogee-test/zones/${zone}` });
     const { request, calls } = fakeCompute((call) => {
-      if (call.method !== "GET" || !call.url.startsWith(`${BASE}/zones/us-west1-b/instances?`)) return new Error(`unexpected ${call.method} ${call.url}`);
+      if (call.method !== "GET" || !call.url.startsWith(`${BASE}/aggregated/instances?`)) return new Error(`unexpected ${call.method} ${call.url}`);
       const url = new URL(call.url);
-      if (url.searchParams.get("pageToken") === "p2") return { status: 200, data: { items: [{ ...pooled, name: "octogee-pool-second", id: "778" }] } };
-      return { status: 200, data: { items: [pooled], nextPageToken: "p2" } };
+      if (url.searchParams.get("pageToken") === "p2") {
+        return { status: 200, data: { items: { "zones/us-central1-f": { instances: [inZone("us-central1-f", "octogee-pool-second")] } } } };
+      }
+      return {
+        status: 200,
+        data: {
+          items: {
+            "zones/us-central1-a": { instances: [inZone("us-central1-a", "octogee-pool-legacy")] },
+            "zones/us-central1-b": { instances: [inZone("us-central1-b", "octogee-pool-ab12cd34")] },
+            "zones/us-east1-b": { warning: { code: "NO_RESULTS_ON_PAGE" } },
+          },
+          nextPageToken: "p2",
+        },
+      };
     });
     const { client } = clientWith(request);
 
-    const members = await client.list({ zones: ["us-west1-b"], labels: { "octogee-pool": "warm", "octogee-environment": "test" } });
+    const members = await client.list({ labels: { "octogee-pool": "warm", "octogee-environment": "test" } });
 
-    expect(members.map((m) => m.name)).toEqual(["octogee-pool-ab12cd34", "octogee-pool-second"]);
+    expect(members.map((m) => [m.name, m.zone])).toEqual([
+      ["octogee-pool-legacy", "us-central1-a"],
+      ["octogee-pool-ab12cd34", "us-central1-b"],
+      ["octogee-pool-second", "us-central1-f"],
+    ]);
     expect(new URL(calls[0].url).searchParams.get("filter")).toBe("(labels.octogee-pool = \"warm\") AND (labels.octogee-environment = \"test\")");
-    expect(members[0]).toMatchObject({ zone: "us-west1-b", metadataFingerprint: "mf-1", labelFingerprint: "lf-1" });
+    expect(members[1]).toMatchObject({ metadataFingerprint: "mf-1", labelFingerprint: "lf-1" });
   });
 
   it("findByLabels locates the one instance carrying every label across zones and refuses an ambiguous answer", async () => {
@@ -465,10 +482,10 @@ describe("createGatewayVmClient pool primitives", () => {
     await expect(clientWith(two.request).client.findByLabels(labels)).rejects.toThrow(/2 instances match \(octogee-computer-test-uida in us-west1-b, octogee-pool-claimed in us-central1-a\)/);
   });
 
-  it("list returns nothing when the zone has no matching instances", async () => {
+  it("list returns nothing when no zone has matching instances", async () => {
     const { request } = fakeCompute(() => ({ status: 200, data: {} }));
     const { client } = clientWith(request);
-    expect(await client.list({ zones: ["us-west1-b"], labels: { "octogee-pool": "warm" } })).toEqual([]);
+    expect(await client.list({ labels: { "octogee-pool": "warm" } })).toEqual([]);
   });
 
   it("setMetadata posts the fingerprint-guarded items and waits for the operation", async () => {
@@ -519,11 +536,10 @@ describe("createGatewayVmClient pool primitives", () => {
   });
 });
 
-describe("createGatewayVmClient — multi-zone spot fallback", () => {
+describe("createGatewayVmClient — zone walk", () => {
   const input = {
     instanceName: "octogee-pool-abc",
-    zone: "us-central1-a",
-    fallbackZones: ["us-central1-b", "us-central1-c"],
+    zones: ["us-central1-b", "us-central1-c", "us-central1-f"],
     machineType: "n2-standard-4",
     imageFamily: "octogee-computer",
     diskSizeGb: 40, homeDiskSizeGb: 20,
@@ -534,9 +550,10 @@ describe("createGatewayVmClient — multi-zone spot fallback", () => {
     metadata: {},
   };
 
-  const exhaustedIn = (zones: readonly string[]) => {
+  const exhaustedIn = (spot: readonly string[], standard: readonly string[] = []) => {
     const posts: Array<{ zone: string; model: string }> = [];
     let op = 0;
+    const gets: string[] = [];
     const { request } = fakeCompute((call) => {
       if (call.method === "POST" && call.url.endsWith("/instances")) {
         const zone = /\/zones\/([^/]+)\/instances$/u.exec(call.url)?.[1] ?? "?";
@@ -547,60 +564,104 @@ describe("createGatewayVmClient — multi-zone spot fallback", () => {
       const opMatch = /\/operations\/op-(\d+)$/u.exec(call.url);
       if (opMatch) {
         const attempt = posts[Number(opMatch[1]) - 1];
-        return zones.includes(attempt.zone) && attempt.model === "SPOT"
-          ? { status: 200, data: { name: call.url, status: "DONE", error: { errors: [{ code: "ZONE_RESOURCE_POOL_EXHAUSTED", message: "no spot" }] } } }
+        const exhausted = (attempt.model === "SPOT" ? spot : standard).includes(attempt.zone);
+        return exhausted
+          ? { status: 200, data: { name: call.url, status: "DONE", error: { errors: [{ code: "ZONE_RESOURCE_POOL_EXHAUSTED", message: "no capacity" }] } } }
           : { status: 200, data: { name: call.url, status: "DONE" } };
       }
       if (call.method === "GET" && call.url.includes(`/instances/${input.instanceName}`)) {
+        gets.push(call.url);
         const landed = posts[posts.length - 1];
         return instance({ scheduling: { provisioningModel: landed.model } });
       }
       return new Error(`unexpected ${call.method} ${call.url}`);
     });
-    return { request, posts };
+    return { request, posts, gets };
   };
 
-  it("tries spot in a fallback zone before paying on-demand", async () => {
-    const { request, posts } = exhaustedIn(["us-central1-a"]);
+  it("places the computer in the first zone of the given order and describes it there", async () => {
+    const { request, posts, gets } = exhaustedIn([]);
+    const { client } = clientWith(request);
+
+    const result = await client.create(input);
+
+    expect(posts).toEqual([{ zone: "us-central1-b", model: "SPOT" }]);
+    expect(gets).toEqual([`${BASE}/zones/us-central1-b/instances/octogee-pool-abc`]);
+    expect(result.description.zone).toBe("us-central1-b");
+  });
+
+  it("tries spot in the next zone before paying on-demand", async () => {
+    const { request, posts } = exhaustedIn(["us-central1-b"]);
     const { client, log } = clientWith(request);
 
     const result = await client.create(input);
 
     expect(posts).toEqual([
-      { zone: "us-central1-a", model: "SPOT" },
       { zone: "us-central1-b", model: "SPOT" },
+      { zone: "us-central1-c", model: "SPOT" },
     ]);
     expect(result.fellBackToStandard).toBe(false);
     expect(result.provisioningModel).toBe("SPOT");
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/spot capacity exhausted in us-central1-a.*us-central1-b/));
+    expect(result.description.zone).toBe("us-central1-c");
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/SPOT capacity exhausted in us-central1-b.*retrying SPOT in us-central1-c/));
   });
 
-  it("walks every fallback zone before it gives up on spot", async () => {
-    const { request, posts } = exhaustedIn(["us-central1-a", "us-central1-b", "us-central1-c"]);
+  it("walks every zone before it gives up on spot, then walks on-demand in the same order", async () => {
+    const { request, posts } = exhaustedIn(["us-central1-b", "us-central1-c", "us-central1-f"], ["us-central1-b"]);
     const { client } = clientWith(request);
 
     const result = await client.create(input);
 
     expect(posts).toEqual([
-      { zone: "us-central1-a", model: "SPOT" },
       { zone: "us-central1-b", model: "SPOT" },
       { zone: "us-central1-c", model: "SPOT" },
-      { zone: "us-central1-a", model: "STANDARD" },
+      { zone: "us-central1-f", model: "SPOT" },
+      { zone: "us-central1-b", model: "STANDARD" },
+      { zone: "us-central1-c", model: "STANDARD" },
     ]);
     expect(result.fellBackToStandard).toBe(true);
     expect(result.provisioningModel).toBe("STANDARD");
+    expect(result.description.zone).toBe("us-central1-c");
   });
 
-  it("falls straight to on-demand when no fallback zones are configured", async () => {
-    const { request, posts } = exhaustedIn(["us-central1-a"]);
+  it("walks the zones for an on-demand request that hits a stockout", async () => {
+    const { request, posts } = exhaustedIn([], ["us-central1-b"]);
     const { client } = clientWith(request);
 
-    const result = await client.create({ ...input, fallbackZones: [] });
+    const result = await client.create({ ...input, provisioningModel: "STANDARD" });
 
     expect(posts).toEqual([
-      { zone: "us-central1-a", model: "SPOT" },
-      { zone: "us-central1-a", model: "STANDARD" },
+      { zone: "us-central1-b", model: "STANDARD" },
+      { zone: "us-central1-c", model: "STANDARD" },
+    ]);
+    expect(result.fellBackToStandard).toBe(false);
+  });
+
+  it("surfaces the stockout once every zone refused on-demand too", async () => {
+    const all = ["us-central1-b", "us-central1-c", "us-central1-f"];
+    const { request, posts } = exhaustedIn(all, all);
+    const { client } = clientWith(request);
+
+    await expect(client.create(input)).rejects.toThrow(/ZONE_RESOURCE_POOL_EXHAUSTED/);
+    expect(posts).toHaveLength(6);
+  });
+
+  it("falls straight to on-demand in the only zone when one zone is configured", async () => {
+    const { request, posts } = exhaustedIn(["us-central1-b"]);
+    const { client } = clientWith(request);
+
+    const result = await client.create({ ...input, zones: ["us-central1-b"] });
+
+    expect(posts).toEqual([
+      { zone: "us-central1-b", model: "SPOT" },
+      { zone: "us-central1-b", model: "STANDARD" },
     ]);
     expect(result.fellBackToStandard).toBe(true);
+  });
+
+  it("refuses to place a computer with no zones", async () => {
+    const { request, posts } = exhaustedIn([]);
+    await expect(clientWith(request).client.create({ ...input, zones: [] })).rejects.toThrow(/octogee-pool-abc: no zones to place it in/);
+    expect(posts).toEqual([]);
   });
 });

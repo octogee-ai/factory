@@ -16,14 +16,13 @@ export interface GatewayVmClientDeps {
 
 export interface CreateGatewayVmInput {
   instanceName: string;
-  zone: string;
+  zones: readonly string[];
   machineType: string;
   imageFamily: string;
   imageProject?: string;
   diskSizeGb: number;
   homeDiskSizeGb: number;
   provisioningModel: GatewayVmProvisioningModel;
-  fallbackZones?: readonly string[];
   serviceAccountEmail: string;
   subnetwork: string;
   labels: Record<string, string>;
@@ -47,7 +46,6 @@ export interface GatewayVmDescription {
 }
 
 export interface ListGatewayVmsInput {
-  zones: readonly string[];
   labels: Record<string, string>;
 }
 
@@ -94,7 +92,7 @@ export class ComputeOperationError extends Error {
   }
 }
 
-const SPOT_EXHAUSTED_CODES = new Set([
+const ZONE_EXHAUSTED_CODES = new Set([
   "ZONE_RESOURCE_POOL_EXHAUSTED",
   "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
 ]);
@@ -129,13 +127,9 @@ interface ComputeInstance {
   serviceAccounts?: Array<{ email?: string; scopes?: string[] }>;
 }
 
-interface ComputeInstanceList {
-  items?: ComputeInstance[];
-  nextPageToken?: string;
-}
-
 interface ComputeAggregatedInstances {
   items?: Record<string, { instances?: ComputeInstance[] }>;
+  nextPageToken?: string;
 }
 
 function statusOf(err: unknown): number | undefined {
@@ -148,8 +142,8 @@ function isProvisioningModel(value: unknown): value is GatewayVmProvisioningMode
   return value === "SPOT" || value === "STANDARD";
 }
 
-function isSpotExhausted(err: unknown): boolean {
-  return err instanceof ComputeOperationError && err.codes.some((code) => SPOT_EXHAUSTED_CODES.has(code));
+function isZoneExhausted(err: unknown): boolean {
+  return err instanceof ComputeOperationError && err.codes.some((code) => ZONE_EXHAUSTED_CODES.has(code));
 }
 
 function schedulingFor(provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
@@ -225,34 +219,34 @@ interface VmPlacement {
   fellBackToStandard: boolean;
 }
 
-// A spot request walks the region before it pays on-demand: one zone's
-// capacity is not the region's, and the on-demand rate is roughly 4x.
-async function placeAcrossZones(
-  input: CreateGatewayVmInput,
-  insert: (candidate: CreateGatewayVmInput, model: GatewayVmProvisioningModel) => Promise<"created" | "exists">,
-  log: (msg: string) => void,
-): Promise<VmPlacement> {
-  const spot = input.provisioningModel === "SPOT";
-  const zones = spot ? [input.zone, ...(input.fallbackZones ?? [])] : [input.zone];
-  for (const [index, zone] of zones.entries()) {
+type InsertInZone = (zone: string, model: GatewayVmProvisioningModel) => Promise<"created" | "exists">;
+
+function modelAttempts(model: GatewayVmProvisioningModel): GatewayVmProvisioningModel[] {
+  return model === "SPOT" ? ["SPOT", "STANDARD"] : [model];
+}
+
+// Zonal capacity is not the region's: a stockout walks the zones in the
+// caller's order, and spot pays the ~4x on-demand rate only once every zone
+// has refused it.
+async function placeAcrossZones(input: CreateGatewayVmInput, insert: InsertInZone, log: (msg: string) => void): Promise<VmPlacement> {
+  if (input.zones.length === 0) throw new Error(`${input.instanceName}: no zones to place it in`);
+  const attempts = modelAttempts(input.provisioningModel).flatMap((model) => input.zones.map((zone) => ({ model, zone })));
+  let lastError: unknown;
+  for (const [index, { model, zone }] of attempts.entries()) {
     try {
-      const outcome = await insert({ ...input, zone }, input.provisioningModel);
-      return { outcome, zone, provisioningModel: input.provisioningModel, fellBackToStandard: false };
+      const outcome = await insert(zone, model);
+      return { outcome, zone, provisioningModel: model, fellBackToStandard: model !== input.provisioningModel };
     } catch (err) {
-      if (!(isSpotExhausted(err) && spot)) throw err;
-      const next = zones[index + 1];
-      log(
-        `[gateway-vm] ${input.instanceName}: spot capacity exhausted in ${zone}; ` +
-          (next ? `retrying spot in ${next}` : "retrying on-demand"),
-      );
+      if (!isZoneExhausted(err)) throw err;
+      lastError = err;
+      const next = attempts[index + 1];
+      if (next) {
+        const retry = next.model === "STANDARD" && model === "SPOT" ? "on-demand" : next.model;
+        log(`[gateway-vm] ${input.instanceName}: ${model} capacity exhausted in ${zone}; retrying ${retry} in ${next.zone}`);
+      }
     }
   }
-  return {
-    outcome: await insert({ ...input, zone: input.zone }, "STANDARD"),
-    zone: input.zone,
-    provisioningModel: "STANDARD",
-    fellBackToStandard: true,
-  };
+  throw lastError;
 }
 
 export const COMPUTER_HOME_DISK_DEVICE_NAME = "octogee-home";
@@ -268,10 +262,15 @@ export function hasComputerIdentity(description: GatewayVmDescription, email: st
   );
 }
 
-export function instanceInsertBody(projectId: string, input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Record<string, unknown> {
+export function instanceInsertBody(
+  projectId: string,
+  input: CreateGatewayVmInput,
+  zone: string,
+  provisioningModel: GatewayVmProvisioningModel,
+): Record<string, unknown> {
   return {
     name: input.instanceName,
-    machineType: `zones/${input.zone}/machineTypes/${input.machineType}`,
+    machineType: `zones/${zone}/machineTypes/${input.machineType}`,
     disks: [
       {
         boot: true,
@@ -279,7 +278,7 @@ export function instanceInsertBody(projectId: string, input: CreateGatewayVmInpu
         initializeParams: {
           sourceImage: `projects/${input.imageProject ?? projectId}/global/images/family/${input.imageFamily}`,
           diskSizeGb: String(input.diskSizeGb),
-          diskType: `zones/${input.zone}/diskTypes/pd-ssd`,
+          diskType: `zones/${zone}/diskTypes/pd-ssd`,
         },
       },
       {
@@ -289,7 +288,7 @@ export function instanceInsertBody(projectId: string, input: CreateGatewayVmInpu
         initializeParams: {
           diskName: `${input.instanceName}-home`,
           diskSizeGb: String(input.homeDiskSizeGb),
-          diskType: `zones/${input.zone}/diskTypes/pd-ssd`,
+          diskType: `zones/${zone}/diskTypes/pd-ssd`,
         },
       },
     ],
@@ -346,14 +345,25 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     return instance ? describeInstance(instance, instanceName, zone) : null;
   }
 
+  async function aggregatedList(filter: string): Promise<ComputeInstance[]> {
+    const instances: ComputeInstance[] = [];
+    let pageToken: string | undefined;
+    do {
+      const pageQuery = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
+      const res = await deps.request({ url: `${base}/aggregated/instances?filter=${encodeURIComponent(filter)}${pageQuery}`, method: "GET" });
+      const page = (res.data ?? {}) as ComputeAggregatedInstances;
+      instances.push(...Object.values(page.items ?? {}).flatMap((scope) => scope.instances ?? []));
+      pageToken = nonEmpty(page.nextPageToken) ?? undefined;
+    } while (pageToken);
+    return instances;
+  }
+
   async function aggregatedFind(
     filter: string,
     keep: (instance: ComputeInstance) => boolean,
     ambiguity: (matches: ComputeInstance[]) => string,
   ): Promise<GatewayVmDescription | null> {
-    const res = await deps.request({ url: `${base}/aggregated/instances?filter=${encodeURIComponent(filter)}`, method: "GET" });
-    const items = ((res.data ?? {}) as ComputeAggregatedInstances).items ?? {};
-    const matches = Object.values(items).flatMap((scope) => scope.instances ?? []).filter(keep);
+    const matches = (await aggregatedList(filter)).filter(keep);
     if (matches.length > 1) throw new Error(ambiguity(matches));
     return matches.length === 1 ? describeInstance(matches[0], matches[0].name ?? "unknown", zoneOf(matches[0], "")) : null;
   }
@@ -368,19 +378,8 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
   }
 
   async function list(input: ListGatewayVmsInput): Promise<GatewayVmDescription[]> {
-    const members: GatewayVmDescription[] = [];
-    for (const zone of input.zones) {
-      let pageToken: string | undefined;
-      do {
-        const params = new URLSearchParams({ filter: labelFilter(input.labels) });
-        if (pageToken) params.set("pageToken", pageToken);
-        const res = await deps.request({ url: `${base}/zones/${zone}/instances?${params.toString()}`, method: "GET" });
-        const page = (res.data ?? {}) as ComputeInstanceList;
-        for (const item of page.items ?? []) members.push(describeInstance(item, item.name ?? "unknown", zone));
-        pageToken = nonEmpty(page.nextPageToken) ?? undefined;
-      } while (pageToken);
-    }
-    return members;
+    const instances = (await aggregatedList(labelFilter(input.labels))).filter(carriesLabels(input.labels));
+    return instances.map((instance) => describeInstance(instance, instance.name ?? "unknown", zoneOf(instance, "")));
   }
 
   async function guardedWrite(instanceName: string, zone: string, verb: "setMetadata" | "setLabels", body: Record<string, unknown>): Promise<GuardedWriteOutcome> {
@@ -426,30 +425,30 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     await waitForOperation(zone, (metadataRes.data ?? {}) as ComputeOperation, `setMetadata ${instanceName}`);
   }
 
-  async function insert(input: CreateGatewayVmInput, provisioningModel: GatewayVmProvisioningModel): Promise<"created" | "exists"> {
+  async function insert(input: CreateGatewayVmInput, zone: string, provisioningModel: GatewayVmProvisioningModel): Promise<"created" | "exists"> {
     let res: { status: number; data?: unknown };
     try {
       res = await deps.request({
-        url: `${base}/zones/${input.zone}/instances`,
+        url: `${base}/zones/${zone}/instances`,
         method: "POST",
-        body: instanceInsertBody(deps.projectId, input, provisioningModel),
+        body: instanceInsertBody(deps.projectId, input, zone, provisioningModel),
       });
     } catch (err) {
       if (statusOf(err) === 409) return "exists";
       throw err;
     }
     if (res.status === 409) return "exists";
-    await waitForOperation(input.zone, (res.data ?? {}) as ComputeOperation, `insert ${input.instanceName}`);
+    await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `insert ${input.instanceName}`);
     return "created";
   }
 
   async function create(input: CreateGatewayVmInput): Promise<CreateGatewayVmResult> {
-    const placement = await placeAcrossZones(input, insert, deps.log);
+    const placement = await placeAcrossZones(input, (zone, model) => insert(input, zone, model), deps.log);
     const { outcome, zone, provisioningModel, fellBackToStandard } = placement;
     const description = await describe(input.instanceName, zone);
     if (!description) throw new Error(`insert ${input.instanceName}: instance vanished after ${outcome}`);
     if (outcome === "exists") {
-      deps.log(`[gateway-vm] ${input.instanceName}: already exists (${description.status}); reusing`);
+      deps.log(`[gateway-vm] ${input.instanceName}: already exists in ${zone} (${description.status}); reusing`);
     }
     return {
       description,
@@ -478,7 +477,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
       await lifecycle("start", instanceName, zone);
       return { fellBackToStandard: false };
     } catch (err) {
-      if (!isSpotExhausted(err)) throw err;
+      if (!isZoneExhausted(err)) throw err;
     }
     deps.log(`[gateway-vm] ${instanceName}: spot capacity exhausted in ${zone}; restarting on-demand`);
     const res = await deps.request({

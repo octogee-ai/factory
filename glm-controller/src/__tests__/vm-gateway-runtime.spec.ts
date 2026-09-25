@@ -21,7 +21,7 @@ const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", i
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
 
 const spec: GatewayVmSpec = {
-  zone: "us-west1-b", machineType: "n2-standard-4", imageFamily: "octogee-computer", diskSizeGb: 40, homeDiskSizeGb: 20,
+  zones: ["us-west1-b"], machineType: "n2-standard-4", imageFamily: "octogee-computer", diskSizeGb: 40, homeDiskSizeGb: 20,
   provisioningModel: "SPOT", serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com",
   subnetwork: "regions/us-west1/subnetworks/octogee-west-gke",
 };
@@ -113,7 +113,7 @@ function harness(
   vmOverrides: Partial<GatewayVmClient> = {},
   bridge = "172.20.7.7",
   desiredStatus: Record<string, string> = {},
-  extra: { clock?: { now: number }; onWait?: (ms: number, waits: number) => void; homeCheckpointTimeoutMs?: number; applyFails?: boolean } = {},
+  extra: { clock?: { now: number }; onWait?: (ms: number, waits: number) => void; homeCheckpointTimeoutMs?: number; applyFails?: boolean; vmSpec?: GatewayVmSpec } = {},
 ) {
   const { db, writes, deletes } = fakeDb(docs);
   const clock = extra.clock ?? { now: 1_000 };
@@ -147,7 +147,7 @@ function harness(
       if (args[0] === "apply" && extra.applyFails) return { stdout: "", stderr: "configmaps is forbidden", code: 1 };
       return { stdout: "", stderr: "", code: 0 };
     },
-    vm, vmSpec: spec, computeProjectId: "octogee", bridgeServiceName: "octogee-vm-bridge",
+    vm, vmSpec: extra.vmSpec ?? spec, computeProjectId: "octogee", bridgeServiceName: "octogee-vm-bridge",
     hostAliasNames: ["octogee-api.octogee-test.svc.cluster.local", "mattermost.octogee-test.svc.cluster.local"],
     kubernetes: { apiHost: "172.20.16.18", apiPort: "443", caCert: "CA" },
     routesConfigMap: "octogee-vm-routes",
@@ -230,7 +230,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       setServiceAccount: vi.fn(async () => {}),
     });
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, spec.zone, spec.serviceAccountEmail);
+    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, "us-west1-b", spec.serviceAccountEmail);
     expect(h.vm.setServiceAccount.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.vm.delete).not.toHaveBeenCalled();
     expect(h.vm.create).not.toHaveBeenCalled();
@@ -262,7 +262,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.setServiceAccount).not.toHaveBeenCalled();
     expect(h.vm.start).not.toHaveBeenCalled();
     await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, spec.zone, spec.serviceAccountEmail);
+    expect(h.vm.setServiceAccount).toHaveBeenCalledWith(COMPUTER, "us-west1-b", spec.serviceAccountEmail);
     expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.setServiceAccount.mock.invocationCallOrder[0]);
     expect(h.vm.setServiceAccount.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceId: "4242", status: "RUNNING", stopReason: null });
@@ -297,15 +297,36 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(JSON.stringify(glm.vmInstance)).not.toContain("undefined");
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
     expect(h.vm.find).not.toHaveBeenCalled();
-    expect(h.vm.list).toHaveBeenCalledWith({ zones: ["us-west1-b"], labels: POOL_LABELS });
+    expect(h.vm.list).toHaveBeenCalledWith({ labels: POOL_LABELS });
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({
-      instanceName: COMPUTER, zone: "us-west1-b", provisioningModel: "SPOT",
+      instanceName: COMPUTER, zones: ["us-west1-b"], provisioningModel: "SPOT",
       labels: expect.objectContaining({ "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" }),
       metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001" },
     }));
     expect(glm.vm).toEqual({ ...recorded, origin: "cold", updatedAt: 1_000 });
     const apply = h.kubectlCalls.find((c) => c.args[0] === "apply");
     expect(JSON.parse(apply!.stdin!)).toMatchObject({ kind: "ConfigMap", metadata: { name: "octogee-vm-routes" }, data: { "routes.json": JSON.stringify({ "b-x": "172.20.0.9" }) } });
+  });
+
+  it("places a cold computer in the configured zones, least-occupied first, even when the gateway recorded an older single-zone spec", async () => {
+    const zones = ["us-central1-b", "us-central1-c", "us-central1-f"];
+    const { zones: _zones, ...shape } = spec;
+    const recordedSpec = { ...shape, machineType: "n2-standard-8", zone: "us-central1-a", fallbackZones: zones };
+    const neighbour = { ...running, name: "octogee-computer-test-uidb", zone: "us-central1-b", labels: { ...OWNER_LABELS, "octogee-owner-uid": "uidb" } };
+    const h = harness(
+      { "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vmSpec: recordedSpec } },
+      { list: vi.fn(async (input: { labels: Record<string, string> }) => (input.labels["octogee-pool"] ? [] : [neighbour])) },
+      "172.20.7.7", {}, { vmSpec: { ...spec, zones } },
+    );
+
+    await h.runtime.upsertInstance(upsertOpts);
+
+    expect(h.vm.list).toHaveBeenCalledWith({ labels: { "octogee-environment": "test", purpose: "octogee-computer" } });
+    const created = vi.mocked(h.vm.create).mock.calls[0][0];
+    expect(created).toMatchObject({ instanceName: COMPUTER, machineType: "n2-standard-8", zones: ["us-central1-c", "us-central1-f", "us-central1-b"] });
+    expect(created).not.toHaveProperty("zone");
+    expect(created).not.toHaveProperty("fallbackZones");
+    expect(h.docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "n2-standard-8", zones });
   });
 
   it("reuses a running VM, restarts a stopped one, and refuses to render without the bridge IP", async () => {
@@ -932,6 +953,16 @@ describe("runtime policy and stamping", () => {
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, diskSizeGb: "40" }))).toThrow(/diskSizeGb/);
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, homeDiskSizeGb: undefined }))).toThrow("GATEWAY_VM_SPEC_JSON.homeDiskSizeGb must be a positive number");
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, provisioningModel: "PREEMPTIBLE" }))).toThrow(/provisioningModel/);
+  });
+
+  it("requires a non-empty list of distinct placement zones and rejects the single-zone shape", () => {
+    const zones = ["us-central1-b", "us-central1-c", "us-central1-f"];
+    expect(parseGatewayVmSpec(JSON.stringify({ ...spec, zones })).zones).toEqual(zones);
+    const { zones: _zones, ...withoutZones } = spec;
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...withoutZones, zone: "us-central1-a", fallbackZones: ["us-central1-b"] }))).toThrow("GATEWAY_VM_SPEC_JSON.zones must be a non-empty array of zone names");
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, zones: [] }))).toThrow("GATEWAY_VM_SPEC_JSON.zones must be a non-empty array of zone names");
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, zones: ["us-central1-b", ""] }))).toThrow("GATEWAY_VM_SPEC_JSON.zones must be a non-empty array of zone names");
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, zones: ["us-central1-b", "us-central1-b"] }))).toThrow("GATEWAY_VM_SPEC_JSON.zones must not repeat a zone");
   });
 
   const deployedCluster = {

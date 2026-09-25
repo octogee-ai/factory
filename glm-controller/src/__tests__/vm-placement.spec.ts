@@ -1,0 +1,46 @@
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayVmDescription } from "../lib/compute-vm";
+import { occupiedComputerZones, spreadZones } from "../vm-placement";
+
+const ZONES = ["us-central1-b", "us-central1-c", "us-central1-f"];
+
+function computer(name: string, zone: string, labels: Record<string, string> = {}): GatewayVmDescription {
+  return {
+    name, zone, status: "RUNNING", instanceId: `id-${name}`, internalIp: null, provisioningModel: "SPOT", gatewayId: null,
+    labels: { "octogee-environment": "prod", purpose: "octogee-computer", ...labels }, labelFingerprint: "lf",
+    metadata: {}, metadataFingerprint: "mf", creationTimestamp: null, serviceAccounts: [],
+  };
+}
+
+describe("spreadZones", () => {
+  it("keeps the configured order when every zone is equally occupied", () => {
+    expect(spreadZones(ZONES, [])).toEqual(ZONES);
+  });
+
+  it("puts the least-occupied zone first and breaks ties by configured order", () => {
+    expect(spreadZones(ZONES, ["us-central1-b", "us-central1-b", "us-central1-c"])).toEqual(["us-central1-f", "us-central1-c", "us-central1-b"]);
+    expect(spreadZones(ZONES, ["us-central1-b"])).toEqual(["us-central1-c", "us-central1-f", "us-central1-b"]);
+  });
+
+  it("ignores computers in zones that are no longer configured", () => {
+    expect(spreadZones(ZONES, ["us-central1-a", "us-central1-a", "us-central1-c"])).toEqual(["us-central1-b", "us-central1-f", "us-central1-c"]);
+  });
+
+  it("tries avoided zones last, still spread among themselves", () => {
+    expect(spreadZones(ZONES, [], new Set(["us-central1-b"]))).toEqual(["us-central1-c", "us-central1-f", "us-central1-b"]);
+    expect(spreadZones(ZONES, ["us-central1-c"], new Set(["us-central1-b", "us-central1-f"]))).toEqual(["us-central1-c", "us-central1-b", "us-central1-f"]);
+  });
+});
+
+describe("occupiedComputerZones", () => {
+  it("counts every live computer of the environment, bound or warm, but not retiring pool members", async () => {
+    const list = vi.fn(async () => [
+      computer("octogee-computer-prod-uida", "us-central1-b", { "octogee-owner-uid": "uida" }),
+      computer("octogee-pool-warm", "us-central1-c", { "octogee-pool": "warm" }),
+      computer("octogee-pool-going", "us-central1-f", { "octogee-pool": "retiring" }),
+    ]);
+
+    expect(await occupiedComputerZones({ list }, "prod")).toEqual(["us-central1-b", "us-central1-c"]);
+    expect(list).toHaveBeenCalledWith({ labels: { "octogee-environment": "prod", purpose: "octogee-computer" } });
+  });
+});

@@ -57,21 +57,17 @@ export function resolveBuilderRuntimePolicy(env: Record<string, string | undefin
   return raw;
 }
 
-function assertFallbackZones(spec: Partial<GatewayVmSpec>): void {
-  const zones = spec.fallbackZones;
-  if (zones === undefined) return;
-  if (!Array.isArray(zones) || zones.some((zone) => typeof zone !== "string" || zone.length === 0)) {
-    throw new Error("GATEWAY_VM_SPEC_JSON.fallbackZones must be an array of non-empty zone names when set");
+function assertZones(zones: unknown): void {
+  if (!Array.isArray(zones) || zones.length === 0 || zones.some((zone) => typeof zone !== "string" || zone.length === 0)) {
+    throw new Error("GATEWAY_VM_SPEC_JSON.zones must be a non-empty array of zone names");
   }
-  if (zones.includes(spec.zone as string)) {
-    throw new Error("GATEWAY_VM_SPEC_JSON.fallbackZones must not repeat the primary zone");
-  }
+  if (new Set(zones).size !== zones.length) throw new Error("GATEWAY_VM_SPEC_JSON.zones must not repeat a zone");
 }
 
 export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
   if (!raw?.trim()) throw new Error("GATEWAY_VM_SPEC_JSON is required when GATEWAY_BUILDER_RUNTIME=gce-vm");
   const spec = JSON.parse(raw) as Partial<GatewayVmSpec>;
-  const strings = ["zone", "machineType", "imageFamily", "serviceAccountEmail", "subnetwork"] as const;
+  const strings = ["machineType", "imageFamily", "serviceAccountEmail", "subnetwork"] as const;
   for (const key of strings) {
     if (typeof spec[key] !== "string" || spec[key].length === 0) throw new Error(`GATEWAY_VM_SPEC_JSON.${key} must be a non-empty string`);
   }
@@ -83,7 +79,7 @@ export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
   if (spec.provisioningModel !== "SPOT" && spec.provisioningModel !== "STANDARD") {
     throw new Error("GATEWAY_VM_SPEC_JSON.provisioningModel must be SPOT or STANDARD");
   }
-  assertFallbackZones(spec);
+  assertZones(spec.zones);
   return spec as GatewayVmSpec;
 }
 

@@ -51,10 +51,31 @@ export interface DesktopPoolVm {
   metadata?: { items?: Array<{ key: string; value: string }> };
   disks: Array<{ boot?: boolean; source: string }>;
 }
+export interface DesktopPoolMember { name: string; zone: string }
 interface DesktopPoolDeps {
-  readVm(name: string): Promise<DesktopPoolVm>;
+  readVm(member: DesktopPoolMember): Promise<DesktopPoolVm>;
   readDisk(url: string): Promise<{ sourceImage?: string }>;
-  markRetiring(name: string, vm: DesktopPoolVm): Promise<void>;
+  markRetiring(member: DesktopPoolMember, vm: DesktopPoolVm): Promise<void>;
+}
+interface AggregatedInstancesPage {
+  items?: Record<string, { instances?: Array<{ name: string; zone: string }> }>;
+  nextPageToken?: string;
+}
+export async function listDesktopPoolMembers(
+  environment: string,
+  fetchPage: (filter: string, pageToken: string) => Promise<AggregatedInstancesPage>,
+): Promise<DesktopPoolMember[]> {
+  const filter = `labels.octogee-environment = ${environment} AND labels.octogee-pool = warm`;
+  const members: DesktopPoolMember[] = [];
+  let pageToken = '';
+  do {
+    const page = await fetchPage(filter, pageToken);
+    for (const instance of Object.values(page.items ?? {}).flatMap(scope => scope.instances ?? [])) {
+      members.push({ name: instance.name, zone: instance.zone.slice(instance.zone.lastIndexOf('/') + 1) });
+    }
+    pageToken = page.nextPageToken ?? '';
+  } while (pageToken);
+  return members;
 }
 function unassigned(vm: DesktopPoolVm, environment: string): boolean {
   const metadata = Object.fromEntries((vm.metadata?.items ?? []).map(entry => [entry.key, entry.value]));
@@ -62,17 +83,18 @@ function unassigned(vm: DesktopPoolVm, environment: string): boolean {
     && !vm.labels['octogee-owner-uid'] && !vm.labels['octogee-gateway-id']
     && !metadata['gateway-id'] && !metadata['octogee-owner-uid'];
 }
-export async function retireDesktopPool(environment: string, project: string, imageName: string, names: string[], deps: DesktopPoolDeps): Promise<string[]> {
+export async function retireDesktopPool(environment: string, project: string, imageName: string, members: DesktopPoolMember[], deps: DesktopPoolDeps): Promise<string[]> {
   const retiring: string[] = [];
-  for (const name of names) {
-    const vm = await deps.readVm(name);
+  for (const member of members) {
+    const { name } = member;
+    const vm = await deps.readVm(member);
     if (!unassigned(vm, environment)) continue;
     if (!vm.labelFingerprint) throw new Error('warm-pool label fingerprint missing');
     const disk = vm.disks.find(entry => entry.boot);
     if (!disk) throw new Error('warm-pool boot disk missing');
     const image = (await deps.readDisk(disk.source)).sourceImage;
     if (image?.endsWith(`/projects/${project}/global/images/${imageName}`)) continue;
-    try { await deps.markRetiring(name, vm); retiring.push(name); }
+    try { await deps.markRetiring(member, vm); retiring.push(name); }
     catch (error) {
       if ((error as { response?: { status?: number } }).response?.status !== 412) throw error;
       console.warn(`desktop image: preserved concurrently changed VM ${name}`);
@@ -130,15 +152,17 @@ function createDesktopPublicationCloud(): DesktopPublicationDeps {
       });
     },
     async retirePool(environment, project, name) {
-      const zone = `${base}/octogee/zones/us-central1-a`;
-      const filter = encodeURIComponent(`labels.octogee-environment = ${environment} AND labels.octogee-pool = warm`);
-      const { items = [] } = await request<{ items?: Array<{ name: string }> }>(`${zone}/instances?filter=${filter}`);
-      return retireDesktopPool(environment, project, name, items.map(item => item.name), {
-        readVm: name => request(`${zone}/instances/${name}`),
+      const compute = `${base}/octogee`;
+      const members = await listDesktopPoolMembers(environment, (filter, pageToken) => {
+        const page = pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '';
+        return request(`${compute}/aggregated/instances?filter=${encodeURIComponent(filter)}${page}`);
+      });
+      return retireDesktopPool(environment, project, name, members, {
+        readVm: member => request(`${compute}/zones/${member.zone}/instances/${member.name}`),
         readDisk: url => request(url),
-        async markRetiring(name, vm) {
-          const operation = await request<{ name: string }>(`${zone}/instances/${name}/setLabels`, { labelFingerprint: vm.labelFingerprint, labels: { ...vm.labels, 'octogee-pool': 'retiring' } });
-          await waitOperation('octogee', operation, 'zones/us-central1-a');
+        async markRetiring(member, vm) {
+          const operation = await request<{ name: string }>(`${compute}/zones/${member.zone}/instances/${member.name}/setLabels`, { labelFingerprint: vm.labelFingerprint, labels: { ...vm.labels, 'octogee-pool': 'retiring' } });
+          await waitOperation('octogee', operation, `zones/${member.zone}`);
         },
       });
     },
