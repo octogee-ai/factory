@@ -164,6 +164,7 @@ import {
   stampGatewayRuntime,
 } from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
+import { startSchedulerHandoffRelease } from "./scheduler-handoff-release.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
@@ -1971,7 +1972,7 @@ async function runClaimedOperation(
         if (data?.status !== "running" || data.startedAt !== op.startedAt) {
           throw new Error("scheduler handoff operation is no longer owned by this attempt");
         }
-        txn.update(ref, { schedulerHandoff: state, lastProgressAt: Date.now() });
+        txn.update(ref, { schedulerHandoff: state, schedulerHandoffReleased: false, lastProgressAt: Date.now() });
       });
     },
     persistCutoverCommitted: async (at) => {
@@ -2279,6 +2280,21 @@ function startControllerBackgroundTasks({
     stalenessMs: 15 * 60 * 1000,
     now: () => Date.now(),
   });
+  const migrationClient = createMigrationClientBuilder(db, fleetControllerPrivateKey, log);
+  const stopSchedulerHandoffRelease = startSchedulerHandoffRelease({
+    db,
+    log,
+    intervalMs: 60_000,
+    now: () => Date.now(),
+    gatewayExists: async (gatewayId) => {
+      const runtime = (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data();
+      return isGatewayRuntimeDoc(runtime) && runtime.gatewayId === gatewayId;
+    },
+    scheduler: async (gatewayId, request) => {
+      const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+      await migrationClient(() => url).scheduler({ ...request, gatewayId });
+    },
+  });
   const stopNativeReturnHoldReaper = startNativeReturnHoldReaper({
     db,
     informer,
@@ -2349,6 +2365,7 @@ function startControllerBackgroundTasks({
     stopPoller,
     stopReaper,
     stopStuckOpReaper,
+    stopSchedulerHandoffRelease,
     stopNativeReturnHoldReaper,
     stopHelmRecoverySweeper,
     stopPlacementPolicyReconciler,

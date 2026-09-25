@@ -821,6 +821,8 @@ export interface Operation {
   output?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
   schedulerHandoff?: SchedulerHandoffState;
+  schedulerHandoffReleased?: boolean;
+  schedulerHandoffReleasedAt?: number;
   cutoverCommittedAt?: number;
 }
 
