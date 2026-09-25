@@ -1,13 +1,14 @@
-import type { DocumentData, Firestore } from "firebase-admin/firestore";
+import type { DocumentData, DocumentReference, Firestore } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION, type SchedulerHandoffState } from "@octogee/shared/types/glm";
+import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
 
 export interface SchedulerHandoffReleaseDeps {
   db: Firestore;
   gatewayExists: (gatewayId: string) => Promise<boolean>;
   scheduler: (
     gatewayId: string,
-    request: { migrationId: string; slug: string; phase: "abort" | "resume" | "retire" | "activate" },
-  ) => Promise<void>;
+    request: Pick<SchedulerMigrationRequestBody, "migrationId" | "slug" | "phase" | "agentIds" | "snapshot" | "retainNonportable">,
+  ) => Promise<{ agentIds: string[]; snapshot?: unknown }>;
   log: (msg: string) => void;
   now: () => number;
 }
@@ -33,22 +34,57 @@ function handoffProgress(operation: DocumentData): HandoffProgress {
   if (typeof operation.cutoverCommittedAt === "number") return "cut-over";
   const steps = Array.isArray(operation.steps) ? operation.steps as Array<{ name?: unknown; status?: unknown }> : [];
   if (!steps.some((step) => step.name === "quiesce-source")) return "never-held";
+  if ((operation.schedulerHandoff as SchedulerHandoffState).stageAfterCutover) return "held";
   return steps.some((step) => step.name === "final-sync-state" || step.name === "stage-scheduler") ? "staged" : "held";
 }
 
-async function releaseHandoff(
+async function stageOnReleasedTarget(
   deps: SchedulerHandoffReleaseDeps,
+  ref: DocumentReference,
   handoff: SchedulerHandoffState,
-  progress: Exclude<HandoffProgress, "never-held">,
+): Promise<boolean> {
+  if (!handoff.stageAfterCutover || handoff.stagedAt !== undefined) return true;
+  const request = { migrationId: handoff.migrationId, slug: handoff.slug };
+  const missing = [];
+  for (const gatewayId of [handoff.fromGatewayId, handoff.toGatewayId]) {
+    if (!await deps.gatewayExists(gatewayId)) missing.push(gatewayId);
+  }
+  if (missing.length > 0) {
+    deps.log(
+      `[scheduler-handoff-release] ❌ ${handoff.migrationId} slug=${handoff.slug}: ${missing.join(", ")} gone before the post-cutover stage; ` +
+        `the schedules exported on ${handoff.fromGatewayId} are lost`,
+    );
+    return false;
+  }
+  const exported = await deps.scheduler(handoff.fromGatewayId, { ...request, phase: "export" });
+  await deps.scheduler(handoff.toGatewayId, {
+    ...request, phase: "stage", agentIds: exported.agentIds, snapshot: exported.snapshot, retainNonportable: true,
+  });
+  await ref.update({ "schedulerHandoff.stagedAt": deps.now() });
+  return true;
+}
+
+async function completeHandoff(
+  deps: SchedulerHandoffReleaseDeps,
+  ref: DocumentReference,
+  handoff: SchedulerHandoffState,
 ): Promise<void> {
   const request = { migrationId: handoff.migrationId, slug: handoff.slug };
-  const [closing, closePhase, owner, ownerPhase] = progress === "cut-over"
-    ? [handoff.fromGatewayId, "retire", handoff.toGatewayId, "activate"] as const
-    : [handoff.toGatewayId, "abort", handoff.fromGatewayId, "resume"] as const;
-  if ((progress !== "held" || closePhase !== "abort") && await deps.gatewayExists(closing)) {
-    await deps.scheduler(closing, { ...request, phase: closePhase });
+  const staged = await stageOnReleasedTarget(deps, ref, handoff);
+  if (await deps.gatewayExists(handoff.fromGatewayId)) await deps.scheduler(handoff.fromGatewayId, { ...request, phase: "retire" });
+  if (staged && await deps.gatewayExists(handoff.toGatewayId)) await deps.scheduler(handoff.toGatewayId, { ...request, phase: "activate" });
+}
+
+async function rollBackHandoff(
+  deps: SchedulerHandoffReleaseDeps,
+  handoff: SchedulerHandoffState,
+  progress: "held" | "staged",
+): Promise<void> {
+  const request = { migrationId: handoff.migrationId, slug: handoff.slug };
+  if (progress === "staged" && await deps.gatewayExists(handoff.toGatewayId)) {
+    await deps.scheduler(handoff.toGatewayId, { ...request, phase: "abort" });
   }
-  if (await deps.gatewayExists(owner)) await deps.scheduler(owner, { ...request, phase: ownerPhase });
+  if (await deps.gatewayExists(handoff.fromGatewayId)) await deps.scheduler(handoff.fromGatewayId, { ...request, phase: "resume" });
 }
 
 export async function releaseAbandonedSchedulerHandoffs(
@@ -68,7 +104,8 @@ export async function releaseAbandonedSchedulerHandoffs(
     }
     const progress = handoffProgress(doc.data());
     try {
-      if (progress !== "never-held") await releaseHandoff(deps, handoff, progress);
+      if (progress === "cut-over") await completeHandoff(deps, doc.ref, handoff);
+      else if (progress !== "never-held") await rollBackHandoff(deps, handoff, progress);
     } catch (error) {
       deps.log(
         `[scheduler-handoff-release] ⚠ ${doc.id} ${handoff.migrationId} not released; source stays closed until the next pass: ` +

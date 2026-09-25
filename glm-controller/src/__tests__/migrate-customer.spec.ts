@@ -10,6 +10,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
+import { classifyOperationFailure } from "../operation-retry";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
 
@@ -574,6 +575,119 @@ describe("migrate-customer — Builder computer activation", () => {
   });
 });
 
+describe("migrate-customer — Builder activation onto a held computer", () => {
+  const HELD = '/scheduler/gw-green: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
+  const deferred = {
+    migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
+    stageAfterCutover: true as const,
+  };
+
+  function heldActivation(options: { sourceGatewayId?: string } = {}) {
+    const h = mkDeps(options);
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    let cutOver = options.sourceGatewayId === "gw-green";
+    const order: string[] = [];
+    vi.mocked(h.client.schedulerReady).mockImplementation(async () => {
+      if (!cutOver) throw new Error(HELD.replace("/scheduler/", "/scheduler-ready/"));
+    });
+    vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase, gatewayId, retainNonportable }) => {
+      if (gatewayId === "gw-green" && !cutOver) throw new Error(HELD);
+      order.push(`${gatewayId}:${phase}:${migrationId}${retainNonportable ? ":retain" : ""}`);
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+    });
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => { cutOver = true; order.push("cutover"); });
+    vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async (state) => { order.push(`persist:${JSON.stringify(state)}`); });
+    return { ...h, order };
+  }
+
+  it("records the handoff as staged after cutover, then stages Shared's schedules on the released computer", async () => {
+    const h = heldActivation();
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+
+    const id = deferred.migrationId;
+    expect(h.order).toEqual([
+      `persist:${JSON.stringify(deferred)}`,
+      `gw-blue:export:${id}`, "cutover", `gw-green:stage:${id}:retain`,
+      `persist:${JSON.stringify({ ...deferred, stagedAt: 5_000 })}`,
+      `gw-blue:retire:${id}`, `gw-green:activate:${id}`,
+    ]);
+    expect(h.client.schedulerReady).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Shared target's handoff staged before cutover", async () => {
+    const h = mkDeps();
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledTimes(1);
+    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({
+      migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
+    });
+  });
+
+  it("stages from the source's exported copy when a retry finds the cutover committed but nothing staged", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 }), h.ctx))
+      .toMatchObject({ success: true });
+
+    const id = deferred.migrationId;
+    expect(h.order).toEqual([
+      `gw-blue:export:${id}`, `gw-green:stage:${id}:retain`,
+      `persist:${JSON.stringify({ ...deferred, stagedAt: 5_000 })}`,
+      `gw-blue:retire:${id}`, `gw-green:activate:${id}`,
+    ]);
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+  });
+
+  it("does not re-export once the post-cutover stage is recorded", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: { ...deferred, stagedAt: 4_500 }, attempts: 1 }), h.ctx))
+      .toMatchObject({ success: true });
+
+    expect(h.order).toEqual([`gw-blue:retire:${deferred.migrationId}`, `gw-green:activate:${deferred.migrationId}`]);
+  });
+
+  it("keeps the handoff pending, retryably, while the released computer's scheduler is not ready", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+    vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase, gatewayId }) => {
+      if (gatewayId === "gw-green") throw new Error(HELD);
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} };
+    });
+
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1 }), h.ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(classifyOperationFailure(result.error)).toBe("transient");
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("retire");
+    expect(h.client.unmount).not.toHaveBeenCalled();
+  });
+
+  it("resumes only the source when a retry follows a pre-cutover failure: the held computer never received anything", async () => {
+    const h = heldActivation();
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+
+    expect(h.order[0]).toBe(`gw-blue:resume:${deferred.migrationId}`);
+    expect(h.order.filter((call) => call.includes(`:${deferred.migrationId}`))).toEqual([`gw-blue:resume:${deferred.migrationId}`]);
+  });
+
+  it("retries, never fails terminally, when a staged attempt's target cannot yet abort it", async () => {
+    const h = mkDeps();
+    const previous = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+    vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase }) => {
+      if (gatewayId === "gw-green" && phase === "abort") throw new Error(HELD);
+      throw new Error(`unexpected ${gatewayId}:${phase}`);
+    });
+
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1 }), h.ctx);
+
+    expect(result.success).toBe(false);
+    expect(classifyOperationFailure(result.error)).toBe("transient");
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+  });
+});
+
 describe("migrate-customer — input validation", () => {
   it.each([
     [{ toGatewayId: "gw-green" }, /missing uid/u],
@@ -831,7 +945,7 @@ describe("migrate-customer — durable V2 migration", () => {
     });
     expect(persisted.map((state) => state.phase)).toEqual([
       "initialized", "keysSynced", "sourceQuiesced",
-      "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
+      "finalSynced", "targetVerified", "cutover", "cutover", "sourceRetired", "complete",
     ]);
     expect(client.calls).toEqual([
       "transfer:keys:gw-blue->gw-green",
@@ -848,6 +962,25 @@ describe("migrate-customer — durable V2 migration", () => {
       expectedSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
       reason: "migration-converge",
     }));
+  });
+
+  it("moves a Builder onto a held computer: nothing reaches its scheduler until cutover releases it", async () => {
+    const h = mkDeps({ durable: true });
+    let cutOver = false;
+    const order: string[] = [];
+    vi.mocked(h.deps.commitV2Cutover).mockImplementation(async () => { cutOver = true; order.push("cutover"); });
+    vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase, gatewayId }) => {
+      if (gatewayId === "gw-green" && !cutOver) {
+        throw new Error('/scheduler/gw-green: 500 {"message":"OpenClaw workspace identities are not initialized for this boot"}');
+      }
+      order.push(`${gatewayId}:${phase}`);
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} };
+    });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+
+    expect(order).toEqual(["gw-blue:export", "cutover", "gw-blue:export", "gw-green:stage", "gw-blue:retire", "gw-green:activate"]);
+    expect(h.persisted.find((state) => state.phase === "cutover" && state.schedulerStagedAt !== undefined)).toBeDefined();
   });
 
   it("refuses initialization when the source root ownership changed", async () => {

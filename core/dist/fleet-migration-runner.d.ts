@@ -23,9 +23,11 @@ export interface MigrationRunnerDeps {
     }) => Promise<void>;
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
+    recordSchedulesStaged?: () => Promise<void>;
     now?: () => number;
     wait?: (delayMs: number) => Promise<void>;
 }
+export declare function isTargetSchedulerNotReady(error: unknown): boolean;
 export interface MigrationRunnerInput {
     migrationId: string;
     uid: string;
@@ -38,6 +40,7 @@ export interface MigrationRunnerInput {
     acceptRetainedTargetJobs?: boolean;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     includeActivationManifest?: boolean;
+    stageSchedulesAfterCutover?: boolean;
 }
 export interface MigrationRunnerResult {
     success: boolean;
@@ -48,4 +51,8 @@ export interface MigrationRunnerResult {
     };
     rolledBack: boolean;
 }
+type SchedulerRequest = Parameters<MigrationClient["scheduler"]>[0];
+type TargetSchedulerDeps = Pick<MigrationRunnerDeps, "client" | "log" | "now" | "wait">;
+export declare function callReleasedTargetScheduler(deps: TargetSchedulerDeps, request: SchedulerRequest): Promise<void>;
 export declare function runMigration(input: MigrationRunnerInput, deps: MigrationRunnerDeps): Promise<MigrationRunnerResult>;
+export {};

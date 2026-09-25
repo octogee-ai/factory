@@ -2297,7 +2297,7 @@ function startControllerBackgroundTasks({
     },
     scheduler: async (gatewayId, request) => {
       const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
-      await migrationClient(() => url).scheduler({ ...request, gatewayId });
+      return migrationClient(() => url).scheduler({ ...request, gatewayId });
     },
   });
   const stopNativeReturnHoldReaper = startNativeReturnHoldReaper({

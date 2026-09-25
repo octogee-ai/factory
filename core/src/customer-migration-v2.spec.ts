@@ -80,6 +80,7 @@ function deps(): CustomerMigrationV2Deps {
     setSourceAssignmentState: vi.fn(async () => undefined),
     commitCutover: vi.fn(async () => undefined),
     now: vi.fn(() => 1_000),
+    log: vi.fn(),
   };
 }
 
@@ -113,6 +114,11 @@ describe("customerMigrationV2GatewayRootFence", () => {
     coOwnerUids,
   });
 
+  it("admits only Builder-class roots, so every V2 target boots hold-capable and stages its schedules after cutover", () => {
+    expect(customerMigrationV2GatewayRootFence({ ...root([]), gatewayClass: "shared", profile: "standard", imageProfile: "standard" }, "source")).toBeNull();
+    expect(customerMigrationV2GatewayRootFence(root([]), "source")).toMatchObject({ gatewayClass: "builder" });
+  });
+
   it("projects an empty retired co-owner mirror and rejects non-empty legacy authority", () => {
     expect(customerMigrationV2GatewayRootFence(root([]), "source")).toMatchObject({
       gatewayId: "source",
@@ -137,7 +143,7 @@ describe("advanceCustomerMigrationV2", () => {
 
     expect(phases).toEqual([
       "keysSynced", "sourceQuiesced",
-      "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
+      "finalSynced", "targetVerified", "cutover", "cutover", "sourceRetired", "complete",
     ]);
     const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(client.transferState.mock.calls.map((call) => call[0].mode)).toEqual([
@@ -409,10 +415,76 @@ describe("classifyCustomerMigrationV2Error", () => {
   });
 });
 
-describe("durable scheduler handoff", () => {
+describe("durable scheduler handoff onto a held Builder computer", () => {
+  const HELD = '/scheduler/target: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
+
+  function heldTarget(d: CustomerMigrationV2Deps, options: { readyAfter?: number } = {}) {
+    const calls: string[] = [];
+    let targetCalls = 0;
+    vi.mocked(d.client.scheduler).mockImplementation(async ({ migrationId, phase, gatewayId, agentIds, snapshot }) => {
+      if (gatewayId === "target" && ++targetCalls <= (options.readyAfter ?? 0)) {
+        calls.push(`target:${phase}:held`);
+        throw new Error(HELD);
+      }
+      calls.push(`${gatewayId}:${phase}${snapshot ? `:${JSON.stringify({ agentIds, snapshot })}` : ""}`);
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: phase === "export" ? { jobs: ["daily"] } : undefined };
+    });
+    let clock = 1_000;
+    d.now = vi.fn(() => clock);
+    d.wait = vi.fn(async (delayMs: number) => { clock += delayMs; });
+    d.log = vi.fn();
+    return calls;
+  }
+
+  it("exports on the source at final sync and sends nothing to the target's scheduler before cutover", async () => {
+    const d = deps();
+    const calls = heldTarget(d, { readyAfter: Number.POSITIVE_INFINITY });
+
+    expect(await advanceCustomerMigrationV2(state("sourceQuiesced"), d)).toMatchObject({ phase: "finalSynced" });
+
+    expect(calls).toEqual(["source:export"]);
+  });
+
+  it("stages the source's exported copy on the released target after cutover and records it before retiring", async () => {
+    const d = deps();
+    const calls = heldTarget(d);
+
+    const staged = await advanceCustomerMigrationV2(state("cutover"), d);
+
+    expect(staged).toMatchObject({ phase: "cutover", schedulerStagedAt: 1_000 });
+    expect(calls).toEqual([
+      "source:export",
+      `target:stage:${JSON.stringify({ agentIds: ["octogee-alice-coach"], snapshot: { jobs: ["daily"] } })}`,
+    ]);
+    expect(d.client.unmount).not.toHaveBeenCalled();
+
+    expect(await advanceCustomerMigrationV2(staged, d)).toMatchObject({ phase: "sourceRetired" });
+    expect(calls.slice(2)).toEqual(["source:retire", "target:activate"]);
+  });
+
+  it("waits for the released target's OpenClaw before staging", async () => {
+    const d = deps();
+    const calls = heldTarget(d, { readyAfter: 3 });
+
+    expect(await advanceCustomerMigrationV2(state("cutover"), d)).toMatchObject({ phase: "cutover", schedulerStagedAt: expect.any(Number) });
+
+    expect(calls.filter((call) => call === "target:stage:held")).toHaveLength(3);
+  });
+
+  it("rolls forward retryably, never back, while the released target stays unready", async () => {
+    const d = deps();
+    heldTarget(d, { readyAfter: Number.POSITIVE_INFINITY });
+
+    const error = await advanceCustomerMigrationV2(state("cutover"), d).then(() => null, (caught: unknown) => caught);
+
+    expect(String(error)).toMatch(/target gateway target scheduler did not become ready within \d+ms/);
+    expect(classifyCustomerMigrationV2Error(error)).toBe("retry");
+    expect(d.client.resume).not.toHaveBeenCalled();
+  });
+
   it("retires the source before activating target and retains cutover on failure", async () => {
     const d = deps();
-    const current = state("cutover");
+    const current = { ...state("cutover"), schedulerStagedAt: 900 };
     const phases: string[] = [];
     vi.mocked(d.client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
       phases.push(phase);
@@ -426,11 +498,14 @@ describe("durable scheduler handoff", () => {
     expect(d.client.resume).not.toHaveBeenCalled();
   });
 
-  it("does not restore source ownership when target abort is uncertain", async () => {
+  it("aborts before cutover by resuming only the source: the held target never received a stage", async () => {
     const d = deps();
-    vi.mocked(d.client.scheduler).mockRejectedValue(new Error("abort uncertain"));
-    await expect(advanceCustomerMigrationV2(state("abortIntent"), d)).rejects.toThrow("abort uncertain");
-    expect(d.setSourceAssignmentState).not.toHaveBeenCalled();
-    expect(d.client.resume).not.toHaveBeenCalled();
+    const calls = heldTarget(d, { readyAfter: Number.POSITIVE_INFINITY });
+
+    expect(await advanceCustomerMigrationV2(state("abortIntent"), d)).toMatchObject({ phase: "abortTargetUnmounted" });
+
+    expect(calls).toEqual(["source:resume"]);
+    expect(d.setSourceAssignmentState).toHaveBeenCalledWith("serving");
+    expect(d.client.resume).toHaveBeenCalled();
   });
 });

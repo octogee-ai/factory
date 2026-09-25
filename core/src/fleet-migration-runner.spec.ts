@@ -684,3 +684,112 @@ describe("target scheduler readiness", () => {
     expect(h.client.resume).not.toHaveBeenCalled();
   });
 });
+
+describe("held Builder target", () => {
+  const HELD = '/scheduler/gw-green: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
+  const HELD_READY = '/scheduler-ready/gw-green: 500 {"error":"scheduler readiness failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
+
+  function heldHarness(options: { releasedAfterStageAttempts?: number } = {}) {
+    const h = harness({ gateAssignment: true });
+    let clock = 0;
+    h.deps.now = () => clock;
+    h.deps.wait = vi.fn(async (delayMs: number) => { clock += delayMs; });
+    const order: string[] = [];
+    let cutOver = false;
+    let stageAttempts = 0;
+    const kernel = vi.mocked(h.client.scheduler).getMockImplementation()!;
+    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
+      if (request.gatewayId === "gw-green") {
+        const released = cutOver && (request.phase !== "stage" || ++stageAttempts >= (options.releasedAfterStageAttempts ?? 1));
+        if (!released) {
+          order.push(`gw-green:${request.phase}:held`);
+          throw new Error(HELD);
+        }
+      }
+      order.push(`${request.gatewayId}:${request.phase}${request.retainNonportable ? ":retain" : ""}`);
+      return kernel(request);
+    });
+    vi.mocked(h.client.schedulerReady).mockImplementation(async () => {
+      if (!cutOver) throw new Error(HELD_READY);
+    });
+    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
+      order.push(`copy:${mode}`);
+      return { migrationId: "m1", slug, imported: true };
+    });
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => { cutOver = true; order.push("cutover"); });
+    vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
+      order.push(`unmount:${gatewayId}`);
+      return { migrationId: "m1", slug, unmounted: true };
+    });
+    h.deps.recordSchedulesStaged = vi.fn(async () => { order.push("staged-recorded"); });
+    const input = { ...h.input, stageSchedulesAfterCutover: true, acceptRetainedTargetJobs: true };
+    return { ...h, input, order };
+  }
+
+  it("exports before cutover and stages on the computer only after cutover releases it", async () => {
+    const h = heldHarness();
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done" });
+
+    expect(h.order).toEqual([
+      "copy:keys", "gw-blue:export", "copy:final", "cutover",
+      "gw-green:stage:retain", "staged-recorded", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue",
+    ]);
+    expect(h.client.schedulerReady).not.toHaveBeenCalled();
+    expect(h.events.some((event) => event.startsWith("report:target-scheduler-ready"))).toBe(false);
+  });
+
+  it("waits for the released computer's OpenClaw before staging", async () => {
+    const h = heldHarness({ releasedAfterStageAttempts: 4 });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.order.filter((call) => call === "gw-green:stage:held")).toHaveLength(3);
+    expect(h.order.slice(-4)).toEqual(["staged-recorded", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
+  });
+
+  it("rolls a pre-cutover failure back to the source without touching the held computer's scheduler", async () => {
+    const h = heldHarness();
+    vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("verify failed"));
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(h.order.filter((call) => call.startsWith("gw-green:"))).toEqual([]);
+    expect(h.order).toContain("gw-blue:resume");
+    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
+    expect(h.events).toContain("assignment:gw-blue:serving");
+  });
+
+  it("keeps the source's exported copy and leaves the handoff pending when the released computer never readies", async () => {
+    const h = heldHarness({ releasedAfterStageAttempts: Number.POSITIVE_INFINITY });
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false, finalPhase: "cutover-done" });
+    expect(result.errorAt?.error).toContain("scheduler handoff cleanup pending");
+    expect(h.order).not.toContain("gw-blue:retire");
+    expect(h.order).not.toContain("gw-blue:resume");
+    expect(h.deps.recordSchedulesStaged).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+  });
+
+  it("does not retire the source until the stage is durably recorded", async () => {
+    const h = heldHarness();
+    vi.mocked(h.deps.recordSchedulesStaged!).mockRejectedValue(new Error("journal unavailable"));
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.errorAt?.error).toContain("scheduler handoff cleanup pending: journal unavailable");
+    expect(h.order).not.toContain("gw-blue:retire");
+  });
+
+  it("refuses to start without a way to record the post-cutover stage", async () => {
+    const h = heldHarness();
+    delete h.deps.recordSchedulesStaged;
+
+    await expect(runMigration(h.input, h.deps)).rejects.toThrow("recordSchedulesStaged");
+    expect(h.client.transferState).not.toHaveBeenCalled();
+  });
+});

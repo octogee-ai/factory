@@ -15,6 +15,7 @@ import {
   MigrationTransportError,
   type MigrationClient,
 } from "./fleet-migration-client.js";
+import { callReleasedTargetScheduler } from "./fleet-migration-runner.js";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 
@@ -136,6 +137,8 @@ export interface CustomerMigrationV2Deps {
   setSourceAssignmentState: (state: "serving" | "quiescing") => Promise<void>;
   commitCutover: (fence: CustomerMigrationV2CutoverFence) => Promise<void>;
   now: () => number;
+  log: (message: string) => void;
+  wait?: (delayMs: number) => Promise<void>;
 }
 
 export async function advanceCustomerMigrationV2(
@@ -201,8 +204,7 @@ async function advanceForward(
       };
     }
     case "sourceQuiesced": {
-      const schedules = await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "export" });
-      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.targetGatewayId, phase: "stage", agentIds: schedules.agentIds, snapshot: schedules.snapshot });
+      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "export" });
       const expectedSystemConfigCommit = acceptedSystemConfigCommit(
         state.sourceSystemConfigCommit,
       );
@@ -250,6 +252,7 @@ async function advanceForward(
       });
       return { ...state, phase: "cutover", cutoverAt: deps.now() };
     case "cutover":
+      if (state.schedulerStagedAt === undefined) return stageSchedulesOnReleasedTarget(state, deps);
       await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "retire" });
       await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.targetGatewayId, phase: "activate" });
       await deps.client.unmount({
@@ -266,13 +269,24 @@ async function advanceForward(
   }
 }
 
+async function stageSchedulesOnReleasedTarget(
+  state: CustomerMigrationV2State,
+  deps: CustomerMigrationV2Deps,
+): Promise<CustomerMigrationV2State> {
+  const request = { migrationId: state.migrationId, slug: state.slug };
+  const exported = await deps.client.scheduler({ ...request, gatewayId: state.sourceGatewayId, phase: "export" });
+  await callReleasedTargetScheduler(deps, {
+    ...request, gatewayId: state.targetGatewayId, phase: "stage", agentIds: exported.agentIds, snapshot: exported.snapshot,
+  });
+  return { ...state, schedulerStagedAt: deps.now() };
+}
+
 async function advanceAbort(
   state: CustomerMigrationV2State,
   deps: CustomerMigrationV2Deps,
 ): Promise<CustomerMigrationV2State> {
   switch (state.phase) {
     case "abortIntent":
-      await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.targetGatewayId, phase: "abort" });
       await deps.setSourceAssignmentState("serving");
       await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "resume" });
       await deps.client.resume({ migrationId: state.migrationId, gatewayId: state.sourceGatewayId, slug: state.slug });

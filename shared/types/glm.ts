@@ -781,6 +781,8 @@ export interface SchedulerHandoffState {
   toGatewayId: string;
   uid: string;
   slug: string;
+  stageAfterCutover?: true;
+  stagedAt?: number;
 }
 
 export interface Operation {
@@ -871,6 +873,7 @@ export interface CustomerMigrationV2State {
   targetRootFence: CustomerMigrationV2GatewayRootFence;
   sourceSystemConfigCommit?: string;
   cutoverAt?: number;
+  schedulerStagedAt?: number;
   sourceRetiredAt?: number;
   completedAt?: number;
   abortFromPhase?: CustomerMigrationV2Phase;
