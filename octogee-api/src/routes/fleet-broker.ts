@@ -1,7 +1,7 @@
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
-import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerHomeCheckpoint } from "../lib/computer-runtime-observation.js";
+import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerHomeCheckpoint, recordComputerPreemptionNotice } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
@@ -3324,6 +3324,32 @@ async function recordVmDiskReport(
   return true;
 }
 
+async function recordVmPreemptionNotice(
+  deps: ResolvedFleetBrokerRouteDeps,
+  req: Request,
+  res: Response,
+  bound: GatewayBinding,
+  observation: Record<string, unknown> | undefined,
+): Promise<boolean> {
+  const preempted = (req.body as Partial<GatewayVmRuntimeRequest> | undefined)?.preempted;
+  if (preempted === undefined) return true;
+  if (preempted !== true) {
+    res.status(400).json({ error: "invalid_preemption_notice" });
+    return false;
+  }
+  const vm = observation?.vm as { instanceId?: unknown } | null | undefined;
+  if (!bound.podUid || vm?.instanceId !== bound.podUid) return true;
+  logger.warn("[fleet-broker] computer announced its Spot preemption", { gatewayId: bound.gatewayId, instanceId: bound.podUid });
+  try {
+    await recordComputerPreemptionNotice(deps.db, bound.gatewayId, { instanceId: bound.podUid, announcedAt: deps.now() });
+  } catch (error) {
+    logger.error("[fleet-broker] computer preemption notice not recorded", { gatewayId: bound.gatewayId, error });
+    res.status(503).json({ error: "preemption_notice_unrecorded" });
+    return false;
+  }
+  return true;
+}
+
 function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db } = deps;
   router.post("/vm-runtime", async (req, res) => {
@@ -3338,6 +3364,7 @@ function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDe
       res.status(404).json({ error: "vm_runtime_not_rendered" });
       return;
     }
+    if (!(await recordVmPreemptionNotice(deps, req, res, bound, observation))) return;
     if (!(await recordVmDiskReport(deps, req, res, bound, observation))) return;
     const home = observation?.vmHome as Partial<GatewayVmHomeState> | undefined;
     const response: GatewayVmRuntimeResponse = {

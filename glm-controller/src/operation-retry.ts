@@ -60,6 +60,7 @@ export function classifyOperationFailure(
 }
 
 export const MAX_OPERATION_ATTEMPTS = 3;
+export const MAX_PREEMPTED_OPERATION_ATTEMPTS = 6;
 export const MAX_OPERATION_ATTEMPT_HISTORY = 20;
 
 // `completedAt` is a plain epoch number, which a native Firestore TTL policy
@@ -215,6 +216,14 @@ function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): bool
     op.id === `builder-return-${fromGatewayId}`;
 }
 
+export function computerPreemptionError(role: "source" | "target", instanceName: string, cause: string): string {
+  return `${role} computer ${instanceName} was preempted: ${cause}`;
+}
+
+function isComputerPreemptionFailure(error: string): boolean {
+  return /^(source|target) computer \S+ was preempted: /.test(error);
+}
+
 function isGatewayMigrationReadinessFailure(error: string): boolean {
   return /gateway .* is not migration-ready/i.test(error);
 }
@@ -261,6 +270,12 @@ function failureCompletionContext(
   };
 }
 
+function restartAbortedMigration(op: OperationCompletionInput["op"]): Record<string, unknown> {
+  return op.customerMigrationV2?.phase === "aborted"
+    ? { customerMigrationV2: FieldValue.delete() }
+    : {};
+}
+
 function pendingCompletion(
   input: OperationCompletionInput,
   attempts: number,
@@ -268,6 +283,7 @@ function pendingCompletion(
 ): Record<string, unknown> {
   const backoffMs = retryBackoffMs(attempts);
   return {
+    ...restartAbortedMigration(input.op),
     status: "pending",
     startedAt: null,
     steps: [],
@@ -320,6 +336,7 @@ export function buildOperationCompletionUpdate(
   const failure = failureCompletionContext(input, persistedSteps, attempts);
   const retryBeyondCap =
     failure.levelTriggeredFence ||
+    (isComputerPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
     (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
     isLevelTriggeredContinuousPlacement(op);
   const retry = shouldRetry(

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   TOKEN_REFRESH_MS,
+  PREEMPTION_WATCH_RETRY_MS,
   convergeOnce,
   initialAgentState,
+  watchPreemption,
   type VmAgentDeps,
 } from "../../lib/vm-gateway-agent/agent";
 import type { DockerEngine } from "../../lib/vm-gateway-agent/docker-engine";
@@ -109,6 +111,7 @@ function deps(
       accessToken: async () => "access-1",
       instanceIdentity: async () => ({ instanceId: "4242", instanceName: "octogee-gw-b-x", zone: "us-central1-a" }),
       attribute: async () => null,
+      preempted: async () => false,
     },
     fetchImpl,
     fs: {
@@ -539,5 +542,56 @@ describe("convergeOnce", () => {
     state = await convergeOnce(h.d, state);
     expect(state.homeCheckpointCheckedAt).toBe(1_000);
     expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("home checkpoint failed: computer-home checkpoint-url: HTTP 502"));
+  });
+});
+
+describe("watchPreemption", () => {
+  function watching(answers: Array<boolean | Error>, replies: number[]) {
+    const docker = fakeDocker();
+    const h = deps(docker, () => ({ status: replies.shift() ?? 200, body: {} }), { now: 0 });
+    const asked: boolean[] = [];
+    h.d.metadata.preempted = vi.fn(async (waitForChange: boolean) => {
+      asked.push(waitForChange);
+      const answer = answers.shift();
+      if (answer === undefined) throw new Error("watched past the preemption");
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+    const sleeps: number[] = [];
+    const sleep = async (ms: number) => { sleeps.push(ms); };
+    return { ...h, asked, sleeps, sleep };
+  }
+
+  it("reports the preemption to Cowboy through the runtime channel the moment GCE announces it, then stops watching", async () => {
+    const h = watching([false, true], []);
+
+    await watchPreemption(h.d, { sleep: h.sleep });
+
+    expect(h.asked).toEqual([false, true]);
+    const reports = calls(h.fetchImpl, "/internal/fleet/vm-runtime");
+    expect(reports).toHaveLength(1);
+    expect(JSON.parse(String(reports[0][1].body))).toEqual({ gatewayId: "b-x", preempted: true });
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/GCE announced this Spot computer's preemption/));
+    expect(h.sleeps).toEqual([]);
+  });
+
+  it("keeps reporting until the API records it, and keeps watching through a metadata hiccup", async () => {
+    const h = watching([new Error("metadata instance/preempted: HTTP 503"), true, true], [503]);
+
+    await watchPreemption(h.d, { sleep: h.sleep });
+
+    expect(h.asked).toEqual([false, false, false]);
+    expect(calls(h.fetchImpl, "/internal/fleet/vm-runtime")).toHaveLength(2);
+    expect(h.sleeps).toEqual([PREEMPTION_WATCH_RETRY_MS, PREEMPTION_WATCH_RETRY_MS]);
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/preemption watch failed: metadata instance\/preempted: HTTP 503/));
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringMatching(/preemption watch failed: vm-runtime: HTTP 503/));
+  });
+
+  it("stops watching when the agent stops", async () => {
+    const h = watching([], []);
+
+    await watchPreemption(h.d, { sleep: h.sleep, stop: () => true });
+
+    expect(h.asked).toEqual([]);
   });
 });

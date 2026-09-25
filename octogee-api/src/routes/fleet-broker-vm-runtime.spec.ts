@@ -12,11 +12,14 @@ const bundle = {
   renderedAt: 1,
 };
 
-function appWith(docs: Record<string, Record<string, unknown>>, bound: BoundTenant | null, writes: Array<[string, unknown]> = []) {
+function appWith(docs: Record<string, Record<string, unknown>>, bound: BoundTenant | null, writes: Array<[string, unknown]> = [], writeFails = false) {
   const db = {
     doc: (path: string) => ({
       get: async () => ({ exists: docs[path] !== undefined, data: () => docs[path] }),
-      set: async (next: unknown) => { writes.push([path, next]); },
+      set: async (next: unknown) => {
+        if (writeFails) throw new Error("14 UNAVAILABLE");
+        writes.push([path, next]);
+      },
     }),
     collection: () => { throw new Error("unexpected collection access"); },
   } as unknown as Firestore;
@@ -74,5 +77,31 @@ describe("POST /internal/fleet/vm-runtime", () => {
       .post("/internal/fleet/vm-runtime").send({ disk: { sizeBytes: 10, freeBytes: 11 } });
     expect(malformed.status).toBe(400);
     expect(malformed.body).toEqual({ error: "invalid_disk_sample" });
+  });
+
+  it("records the bound instance's Spot preemption notice with the API's clock, ignores another instance's, and rejects a malformed one", async () => {
+    const vmBound: BoundTenant = { kind: "gateway", gatewayId: "b-x", podUid: "4242" };
+    const glm = { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242", status: "RUNNING" } };
+
+    const writes: Array<[string, unknown]> = [];
+    const recorded = await request(appWith({ "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": glm }, vmBound, writes))
+      .post("/internal/fleet/vm-runtime").send({ preempted: true });
+    expect(recorded.status).toBe(200);
+    expect(writes).toEqual([["glmGateways/b-x", { vmPreemption: { instanceId: "4242", announcedAt: 5_000 } }]]);
+
+    const foreign: Array<[string, unknown]> = [];
+    await request(appWith({ "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": glm }, { ...vmBound, podUid: "9999" }, foreign))
+      .post("/internal/fleet/vm-runtime").send({ preempted: true });
+    expect(foreign).toEqual([]);
+
+    const malformed = await request(appWith({ "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": glm }, vmBound))
+      .post("/internal/fleet/vm-runtime").send({ preempted: "yes" });
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toEqual({ error: "invalid_preemption_notice" });
+
+    const unrecorded = await request(appWith({ "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": glm }, vmBound, [], true))
+      .post("/internal/fleet/vm-runtime").send({ preempted: true });
+    expect(unrecorded.status).toBe(503);
+    expect(unrecorded.body).toEqual({ error: "preemption_notice_unrecorded" });
   });
 });

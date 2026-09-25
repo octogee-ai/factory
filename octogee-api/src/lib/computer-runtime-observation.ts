@@ -6,6 +6,7 @@ import {
   vmDiskFreePercent,
   type GatewayVmDiskObservation,
   type GatewayVmHomeState,
+  type GatewayVmPreemptionNotice,
 } from "@octogee/shared/types/glm";
 
 export const COMPUTER_DISK_OBSERVATION_REFRESH_MS = 10 * 60_000;
@@ -56,4 +57,12 @@ export async function recordComputerDiskObservation(
   if (!computerDiskObservationDue(previous, next)) return false;
   await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).set({ vmDisk: next }, { merge: true });
   return true;
+}
+
+export async function recordComputerPreemptionNotice(
+  db: Pick<Firestore, "doc">,
+  gatewayId: string,
+  notice: GatewayVmPreemptionNotice,
+): Promise<void> {
+  await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).set({ vmPreemption: notice }, { merge: true });
 }

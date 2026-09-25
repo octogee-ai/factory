@@ -5,6 +5,7 @@ import {
   builderComputerInstanceName,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
+  isGatewayVmPreemptionNotice,
   type GatewayVmHomeState,
   type GatewayVmOrigin,
   type GatewayVmParkedCheckpoint,
@@ -54,6 +55,7 @@ export interface ComputerLifecycle {
   pauseComputer(gatewayId: string): Promise<void>;
   recoverUnreachable(gatewayId: string): Promise<void>;
   deleteComputer(ownerUid: string): Promise<boolean>;
+  detectPreemption(gatewayId: string, sinceMs: number): Promise<string | null>;
 }
 
 type ParkedVmState = GatewayVmState & { parkedCheckpoint: GatewayVmParkedCheckpoint };
@@ -272,6 +274,67 @@ async function readComputerDeploymentPrerequisiteError(deps: ComputerLifecycleDe
   return computerIdentityPrerequisiteError(description, spec.serviceAccountEmail);
 }
 
+async function externalStopCause(
+  deps: ComputerLifecycleDeps,
+  gatewayId: string,
+  description: GatewayVmDescription,
+  recorded: GatewayVmState,
+): Promise<string> {
+  let preemptedAt: number | null = null;
+  try {
+    preemptedAt = await deps.vm.lastPreemptedAt(description.name, description.zone);
+  } catch (err) {
+    deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: could not read Compute preemptions of ${description.name}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (preemptedAt !== null && preemptedAt >= recorded.updatedAt) {
+    return `was preempted by Compute at ${new Date(preemptedAt).toISOString()} -> ${description.status}`;
+  }
+  if (recorded.stopReason === "preempted") return `was preempted by Compute -> ${description.status}`;
+  return `was already ${description.status} (stopped outside Cowboy)`;
+}
+
+function announcedPreemptionAt(data: Record<string, unknown> | undefined, vm: GatewayVmState, sinceMs: number): number | null {
+  const notice = data?.vmPreemption;
+  if (!isGatewayVmPreemptionNotice(notice) || notice.instanceId !== vm.instanceId) return null;
+  return notice.announcedAt >= sinceMs ? notice.announcedAt : null;
+}
+
+async function detectComputerPreemption(deps: ComputerLifecycleDeps, gatewayId: string, sinceMs: number): Promise<string | null> {
+  const { data, vm } = await readVmRecord(deps.db, gatewayId);
+  if (resolveGatewayRuntime(data?.runtime) !== "gce-vm" || !vm) return null;
+  const announcedAt = announcedPreemptionAt(data, vm, sinceMs);
+  if (announcedAt !== null) {
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${vm.instanceName} announced its preemption at ${new Date(announcedAt).toISOString()}, during work that started at ${new Date(sinceMs).toISOString()}`);
+    return vm.instanceName;
+  }
+  const preemptedAt = await deps.vm.lastPreemptedAt(vm.instanceName, vm.zone);
+  if (preemptedAt === null || preemptedAt < sinceMs) return null;
+  deps.log(`[vm-gateway-runtime] ${gatewayId}: Compute preempted ${vm.instanceName} at ${new Date(preemptedAt).toISOString()}, during work that started at ${new Date(sinceMs).toISOString()}`);
+  return vm.instanceName;
+}
+
+async function stopComputer(
+  deps: ComputerLifecycleDeps,
+  gatewayId: string,
+  described: GatewayVmDescription,
+  recorded: GatewayVmState,
+  stop: { reason: GatewayVmStopReason; note?: string },
+): Promise<GatewayVmState> {
+  const { reason, note = "" } = stop;
+  let description = described;
+  const stoppedHere = needsStop(description);
+  if (stoppedHere) {
+    await deps.vm.stop(description.name, description.zone);
+    description = (await deps.vm.describe(description.name, description.zone)) ?? description;
+  }
+  const cowboyStop = stoppedHere || (recorded.stopReason !== null && COWBOY_STOP_REASONS.has(recorded.stopReason));
+  const what = cowboyStop
+    ? `stopped ${description.name} for ${reason} -> ${description.status}`
+    : `${description.name} ${await externalStopCause(deps, gatewayId, description, recorded)}; parked for ${reason}`;
+  deps.log(`[vm-gateway-runtime] ${gatewayId}: ${what}; home kept on its boot disk${note}`);
+  return stateFrom(description, deps.now(), reason, recorded.origin);
+}
+
 export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLifecycle {
   const glm = (gatewayId: string) => deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
 
@@ -378,7 +441,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     const { vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
-    await recordVm(gatewayId, description ? await stopComputer(gatewayId, description, vm.origin, "operator") : null, "pause");
+    await recordVm(gatewayId, description ? await stopComputer(deps, gatewayId, description, vm, { reason: "operator" }) : null, "pause");
   }
 
   async function stopForIdle(
@@ -391,7 +454,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     const checkpoint = needsStop(description)
       ? await finalHomeCheckpoint(deps, gatewayId, description, home, opts)
       : parkedCheckpointFrom(home);
-    const state = await stopComputer(gatewayId, description, vm.origin, "idle", ` (checkpoint ${checkpoint.outcome})`);
+    const state = await stopComputer(deps, gatewayId, description, vm, { reason: "idle", note: ` (checkpoint ${checkpoint.outcome})` });
     return { ...state, parkedCheckpoint: checkpoint };
   }
 
@@ -406,22 +469,6 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       return null;
     }
     return description;
-  }
-
-  async function stopComputer(
-    gatewayId: string,
-    described: GatewayVmDescription,
-    origin: GatewayVmOrigin | undefined,
-    reason: GatewayVmStopReason,
-    note = "",
-  ): Promise<GatewayVmState> {
-    let description = described;
-    if (needsStop(description)) {
-      await deps.vm.stop(description.name, description.zone);
-      description = (await deps.vm.describe(description.name, description.zone)) ?? description;
-    }
-    deps.log(`[vm-gateway-runtime] ${gatewayId}: stopped ${description.name} for ${reason} -> ${description.status}; home kept on its boot disk${note}`);
-    return stateFrom(description, deps.now(), reason, origin);
   }
 
   async function recoverUnreachable(gatewayId: string): Promise<void> {
@@ -483,6 +530,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
 
   return {
     readDeploymentPrerequisiteError: (gatewayId) => readComputerDeploymentPrerequisiteError(deps, gatewayId),
+    detectPreemption: (gatewayId, sinceMs) => detectComputerPreemption(deps, gatewayId, sinceMs),
     ensureVm, parkComputer, pauseComputer, recoverUnreachable, deleteComputer,
   };
 }

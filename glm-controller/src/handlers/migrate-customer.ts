@@ -20,6 +20,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
+import { computerPreemptionError } from "../operation-retry.js";
 import { MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import {
@@ -122,6 +123,8 @@ export interface MigrateCustomerDeps {
     fromGatewayId: string,
     toGatewayId: string,
   ) => Promise<boolean>;
+
+  findPreemptedComputer: (gatewayId: string, sinceMs: number) => Promise<string | null>;
 
   genMigrationId: (operationId: string) => string;
 
@@ -1536,28 +1539,77 @@ function withStateMigration(
   return { ...result, output: { ...result.output, stateMigration } };
 }
 
-export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): OperationHandler {
-  return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
-    const input = op.input as MigrateCustomerInput;
-    const request = migrationRequest(input);
-    if ("error" in request) return failure(request.error);
-    const terminal = terminalDurableMigrationResult(deps, op, input, request);
-    if (terminal) return terminal;
-    const resumed = resumeDurableMigration(deps, op, ctx);
-    if (resumed) return resumed;
-    const prepared = await prepareMigration(deps, op, ctx, input, request);
-    if ("error" in prepared) return failure(prepared.error, prepared.rolledBack);
-    if ("result" in prepared) {
-      return withStateMigration(prepared.result, prepared.stateMigration);
+async function runMigrateCustomer(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  ctx: OperationContext,
+): Promise<OperationResult> {
+  const input = op.input as MigrateCustomerInput;
+  const request = migrationRequest(input);
+  if ("error" in request) return failure(request.error);
+  const terminal = terminalDurableMigrationResult(deps, op, input, request);
+  if (terminal) return terminal;
+  const resumed = resumeDurableMigration(deps, op, ctx);
+  if (resumed) return resumed;
+  const prepared = await prepareMigration(deps, op, ctx, input, request);
+  if ("error" in prepared) return failure(prepared.error, prepared.rolledBack);
+  if ("result" in prepared) {
+    return withStateMigration(prepared.result, prepared.stateMigration);
+  }
+  return withStateMigration(
+    await executeMigration(
+      deps,
+      ctx,
+      prepared,
+      op,
+    ),
+    prepared.stateMigration,
+  );
+}
+
+function migrationComputers(op: Operation): Array<["source" | "target", string]> {
+  const input = op.input as MigrateCustomerInput;
+  const sourceGatewayId = typeof input.fromGatewayId === "string"
+    ? input.fromGatewayId
+    : op.customerMigrationV2?.sourceGatewayId;
+  return [
+    ...(typeof input.toGatewayId === "string" ? [["target", input.toGatewayId] as ["target", string]] : []),
+    ...(sourceGatewayId ? [["source", sourceGatewayId] as ["source", string]] : []),
+  ];
+}
+
+async function preemptedComputer(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+): Promise<{ role: "source" | "target"; instanceName: string } | null> {
+  const since = op.firstStartedAt ?? op.startedAt;
+  if (typeof since !== "number") return null;
+  for (const [role, gatewayId] of migrationComputers(op)) {
+    try {
+      const instanceName = await deps.findPreemptedComputer(gatewayId, since);
+      if (instanceName) return { role, instanceName };
+    } catch (error) {
+      deps.log(`[migrate-customer] ⚠ op=${op.id} could not check whether ${gatewayId}'s computer was preempted: ${errorMessage(error)}`);
     }
-    return withStateMigration(
-      await executeMigration(
-        deps,
-        ctx,
-        prepared,
-        op,
-      ),
-      prepared.stateMigration,
-    );
+  }
+  return null;
+}
+
+async function attributePreemption(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  result: OperationResult,
+): Promise<OperationResult> {
+  if (result.success) return result;
+  const preempted = await preemptedComputer(deps, op);
+  if (!preempted) return result;
+  return {
+    ...result,
+    error: computerPreemptionError(preempted.role, preempted.instanceName, result.error ?? "migration failed"),
   };
+}
+
+export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): OperationHandler {
+  return async (op: Operation, ctx: OperationContext): Promise<OperationResult> =>
+    attributePreemption(deps, op, await runMigrateCustomer(deps, op, ctx));
 }

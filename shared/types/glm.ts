@@ -229,6 +229,19 @@ export interface GatewayVmDiskSample {
 
 export interface GatewayVmRuntimeRequest {
   disk?: GatewayVmDiskSample;
+  preempted?: true;
+}
+
+export interface GatewayVmPreemptionNotice {
+  instanceId: string;
+  announcedAt: number;
+}
+
+export function isGatewayVmPreemptionNotice(value: unknown): value is GatewayVmPreemptionNotice {
+  const n = value as Partial<GatewayVmPreemptionNotice> | null;
+  return !!n && typeof n === "object"
+    && typeof n.instanceId === "string" && n.instanceId.length > 0
+    && typeof n.announcedAt === "number" && Number.isFinite(n.announcedAt);
 }
 
 export interface GatewayVmDiskObservation extends GatewayVmDiskSample {

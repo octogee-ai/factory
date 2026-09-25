@@ -158,7 +158,13 @@ export interface GatewayVmDiskSample {
 }
 export interface GatewayVmRuntimeRequest {
     disk?: GatewayVmDiskSample;
+    preempted?: true;
 }
+export interface GatewayVmPreemptionNotice {
+    instanceId: string;
+    announcedAt: number;
+}
+export declare function isGatewayVmPreemptionNotice(value: unknown): value is GatewayVmPreemptionNotice;
 export interface GatewayVmDiskObservation extends GatewayVmDiskSample {
     instanceId: string;
     observedAt: number;

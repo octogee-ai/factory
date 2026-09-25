@@ -185,6 +185,7 @@ function mkDeps(options: HarnessOptions = {}) {
       events.push(`v2-cutover:${input.sourceGatewayId}->${input.targetGatewayId}`);
     }),
     useDurableMigration: vi.fn(async () => options.durable === true),
+    findPreemptedComputer: vi.fn(async () => null),
     genMigrationId: (operationId: string) => `mig-${operationId}`,
     now: vi.fn(() => 5_000),
     sleep: vi.fn(async () => undefined),
@@ -1256,5 +1257,72 @@ describe("scheduler handoff recovery", () => {
     vi.mocked(h.ctx.persistSchedulerHandoff!).mockRejectedValue(new Error("journal unavailable"));
     await expect(createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).rejects.toThrow("journal unavailable");
     expect(h.client.scheduler).not.toHaveBeenCalled();
+  });
+});
+
+describe("migrate-customer — preempted computers", () => {
+  const rsyncReset = "push-rsync-state: 500 rsync code=12 errno=104 Connection reset";
+
+  function finalTransferFails(): MigrationClient & { calls: string[] } {
+    const client = happyClient();
+    const transfer = client.transferState as ReturnType<typeof vi.fn>;
+    const happy = transfer.getMockImplementation()!;
+    transfer.mockImplementation(async (request: { mode?: string }) => {
+      if (request.mode === "final") throw Object.assign(new Error(rsyncReset), { status: 500 });
+      return happy(request);
+    });
+    return client;
+  }
+
+  const activation = () => mkOp({
+    id: "builder-activate-gw-green",
+    startedAt: 7_000,
+    firstStartedAt: 6_000,
+    input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" },
+  });
+
+  it("rolls back as before but blames the target computer Compute preempted since the migration first started", async () => {
+    const h = mkDeps({ durable: true, client: finalTransferFails() });
+    (h.deps.findPreemptedComputer as ReturnType<typeof vi.fn>).mockImplementation(async (gatewayId: string) =>
+      gatewayId === "gw-green" ? "octogee-pool-44847785" : null);
+
+    const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.error).toBe(`target computer octogee-pool-44847785 was preempted: ${rsyncReset}`);
+    expect(h.persisted.at(-1)?.phase).toBe("aborted");
+    expect(h.events).toContain("assignment:gw-blue:serving");
+    expect(h.deps.findPreemptedComputer).toHaveBeenCalledWith("gw-green", 6_000);
+  });
+
+  it("blames the source computer when the Builder's own computer was preempted mid-return", async () => {
+    const h = mkDeps({ durable: true, client: finalTransferFails() });
+    (h.deps.findPreemptedComputer as ReturnType<typeof vi.fn>).mockImplementation(async (gatewayId: string) =>
+      gatewayId === "gw-blue" ? "octogee-computer-prod-uida" : null);
+
+    const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
+
+    expect(result.error).toBe(`source computer octogee-computer-prod-uida was preempted: ${rsyncReset}`);
+  });
+
+  it("leaves the failure as it was when neither computer was preempted, and never asks on success", async () => {
+    const failed = mkDeps({ durable: true, client: finalTransferFails() });
+    const result = await createMigrateCustomerHandler(failed.deps)(activation(), failed.ctx);
+    expect(result.error).toBe(rsyncReset);
+    expect(failed.deps.findPreemptedComputer).toHaveBeenCalledTimes(2);
+
+    const succeeded = mkDeps({ durable: true });
+    await createMigrateCustomerHandler(succeeded.deps)(activation(), succeeded.ctx);
+    expect(succeeded.deps.findPreemptedComputer).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original failure and logs when Compute cannot say whether a computer was preempted", async () => {
+    const h = mkDeps({ durable: true, client: finalTransferFails() });
+    (h.deps.findPreemptedComputer as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("http 403"));
+
+    const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
+
+    expect(result.error).toBe(rsyncReset);
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403/));
   });
 });

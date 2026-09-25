@@ -52,6 +52,7 @@ function harness(
     stop: vi.fn(async () => {}),
     start: vi.fn(async () => ({ fellBackToStandard: false })),
     delete: vi.fn(async () => true),
+    lastPreemptedAt: vi.fn(async () => null),
     ...vm,
   };
   const writeVmState = vi.fn(async () => {});

@@ -47,6 +47,7 @@ import {
 } from "./plan.js";
 
 export const TOKEN_REFRESH_MS = 20 * 60_000;
+export const PREEMPTION_WATCH_RETRY_MS = 5_000;
 export const RUNTIME_UID = 1000;
 export const RUNTIME_GID = 1000;
 export const AGENT_CONTAINER = "octo-gateway-agent";
@@ -375,7 +376,32 @@ export function decideConvergence(plan: BundlePlan, running: ContainerInspection
   return { kind: "services", services: stale };
 }
 
+async function reportPreemption(deps: VmAgentDeps): Promise<void> {
+  const res = await brokerPost(deps, "vm-runtime", { preempted: true });
+  if (!res.ok) throw await brokerFailure("vm-runtime", res);
+  deps.log("[vm-agent] Cowboy has this computer's preemption notice");
+}
+
+export async function watchPreemption(deps: VmAgentDeps, opts: { sleep: (ms: number) => Promise<void>; stop?: () => boolean }): Promise<void> {
+  let waitForChange = false;
+  while (!opts.stop?.()) {
+    try {
+      if (await deps.metadata.preempted(waitForChange)) {
+        deps.log("[vm-agent] ⚠ GCE announced this Spot computer's preemption; it stops in about 30 s");
+        await reportPreemption(deps);
+        return;
+      }
+      waitForChange = true;
+    } catch (err) {
+      deps.log(`[vm-agent] preemption watch failed: ${err instanceof Error ? err.message : String(err)}; retrying in ${PREEMPTION_WATCH_RETRY_MS}ms`);
+      waitForChange = false;
+      await opts.sleep(PREEMPTION_WATCH_RETRY_MS);
+    }
+  }
+}
+
 export async function runVmGatewayAgent(deps: VmAgentDeps, opts: { intervalMs: number; sleep: (ms: number) => Promise<void>; stop?: () => boolean }): Promise<void> {
+  const preemption = watchPreemption(deps, opts);
   let state = initialAgentState();
   while (!opts.stop?.()) {
     try {
@@ -385,4 +411,5 @@ export async function runVmGatewayAgent(deps: VmAgentDeps, opts: { intervalMs: n
     }
     await opts.sleep(opts.intervalMs);
   }
+  await preemption;
 }

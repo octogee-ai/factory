@@ -80,6 +80,7 @@ export interface GatewayVmClient {
   stop(instanceName: string, zone: string): Promise<void>;
   start(instanceName: string, zone: string): Promise<StartGatewayVmResult>;
   delete(instanceName: string, zone: string): Promise<boolean>;
+  lastPreemptedAt(instanceName: string, zone: string): Promise<number | null>;
 }
 
 export class ComputeOperationError extends Error {
@@ -105,6 +106,8 @@ const DEFAULT_POLL_INTERVAL_MS = 2_000;
 interface ComputeOperation {
   name?: string;
   status?: string;
+  targetLink?: string;
+  insertTime?: string;
   error?: { errors?: Array<{ code?: string; message?: string }> };
 }
 
@@ -125,6 +128,19 @@ interface ComputeInstance {
   labelFingerprint?: string;
   metadata?: { fingerprint?: string; items?: ComputeMetadataItem[] };
   serviceAccounts?: Array<{ email?: string; scopes?: string[] }>;
+}
+
+interface ComputeOperationList {
+  items?: ComputeOperation[];
+  nextPageToken?: string;
+}
+
+const PREEMPTED_OPERATION_FILTER = 'operationType = "compute.instances.preempted"';
+
+function preemptionOf(instanceName: string, operation: ComputeOperation): number | null {
+  if (operation.targetLink?.split("/").at(-1) !== instanceName) return null;
+  const at = Date.parse(operation.insertTime ?? "");
+  return Number.isFinite(at) ? at : null;
 }
 
 interface ComputeAggregatedInstances {
@@ -302,6 +318,23 @@ export function instanceInsertBody(
     labels: input.labels,
     metadata: { items: metadataItems(input.metadata) },
   };
+}
+
+async function readLastPreemptedAt(request: ComputeRequest, base: string, instanceName: string, zone: string): Promise<number | null> {
+  let latest: number | null = null;
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({ filter: PREEMPTED_OPERATION_FILTER });
+    if (pageToken) params.set("pageToken", pageToken);
+    const res = await request({ url: `${base}/zones/${zone}/operations?${params.toString()}`, method: "GET" });
+    const page = (res.data ?? {}) as ComputeOperationList;
+    for (const operation of page.items ?? []) {
+      const at = preemptionOf(instanceName, operation);
+      if (at !== null && (latest === null || at > latest)) latest = at;
+    }
+    pageToken = nonEmpty(page.nextPageToken) ?? undefined;
+  } while (pageToken);
+  return latest;
 }
 
 export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClient {
@@ -517,6 +550,6 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     setLabels: (name, zone, input) => guardedWrite(name, zone, "setLabels", { labelFingerprint: input.fingerprint, labels: input.labels }),
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
     start,
-    delete: remove,
+    delete: remove, lastPreemptedAt: (instanceName, zone) => readLastPreemptedAt(deps.request, base, instanceName, zone),
   };
 }

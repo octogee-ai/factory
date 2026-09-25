@@ -131,6 +131,7 @@ function harness(
     stop: vi.fn(async () => {}),
     start: vi.fn(async () => ({ fellBackToStandard: false })),
     delete: vi.fn(async () => true),
+    lastPreemptedAt: vi.fn(async () => null),
     ...vmOverrides,
   };
   const log = vi.fn();
@@ -1159,5 +1160,76 @@ describe("readDeploymentPrerequisiteError", () => {
   it("propagates Compute failures for the rollout retry policy", async () => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: recorded } }, { describe: vi.fn(async () => { throw new Error("ECONNRESET"); }) });
     await expect(h.runtime.readDeploymentPrerequisiteError("b-x")).rejects.toThrow("ECONNRESET");
+  });
+});
+
+describe("computer preemption", () => {
+  const vmDoc = (vm: Record<string, unknown> = {}) => ({
+    "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, ...vm }, vmInstance: { enabled: true } },
+  });
+
+  it("names the computer Compute preempted at or after the migration started", async () => {
+    const h = harness(vmDoc(), { lastPreemptedAt: vi.fn(async () => 5_000) });
+
+    expect(await h.runtime.detectPreemption("b-x", 5_000)).toBe(COMPUTER);
+    expect(h.vm.lastPreemptedAt).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: Compute preempted octogee-computer-test-uida at 1970-01-01T00:00:05.000Z/));
+  });
+
+  it("does not blame a preemption that predates the migration, a computer never preempted, or a gateway without a computer", async () => {
+    expect(await harness(vmDoc(), { lastPreemptedAt: vi.fn(async () => 4_999) }).runtime.detectPreemption("b-x", 5_000)).toBeNull();
+    expect(await harness(vmDoc()).runtime.detectPreemption("b-x", 5_000)).toBeNull();
+    const cluster = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "cluster" } }, { lastPreemptedAt: vi.fn(async () => 9_000) });
+    expect(await cluster.runtime.detectPreemption("b-x", 5_000)).toBeNull();
+    expect(cluster.vm.lastPreemptedAt).not.toHaveBeenCalled();
+  });
+
+  it("trusts the computer's own preemption notice before Compute has recorded the preemption", async () => {
+    const docs = vmDoc();
+    docs["glmGateways/b-x"].vmPreemption = { instanceId: "4242", announcedAt: 5_500 };
+    const h = harness(docs);
+
+    expect(await h.runtime.detectPreemption("b-x", 5_000)).toBe(COMPUTER);
+    expect(h.vm.lastPreemptedAt).not.toHaveBeenCalled();
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: octogee-computer-test-uida announced its preemption at 1970-01-01T00:00:05.500Z/));
+  });
+
+  it("ignores a preemption notice from an earlier run or another instance", async () => {
+    const earlier = vmDoc();
+    earlier["glmGateways/b-x"].vmPreemption = { instanceId: "4242", announcedAt: 4_000 };
+    expect(await harness(earlier).runtime.detectPreemption("b-x", 5_000)).toBeNull();
+    const replaced = vmDoc();
+    replaced["glmGateways/b-x"].vmPreemption = { instanceId: "1111", announcedAt: 5_500 };
+    expect(await harness(replaced).runtime.detectPreemption("b-x", 5_000)).toBeNull();
+  });
+
+  it("says a computer Compute preempted was preempted when retirement parks it, instead of claiming an idle stop", async () => {
+    const stopping = { ...running, status: "STOPPING" };
+    const h = harness(vmDoc(), { describe: vi.fn(async () => stopping), lastPreemptedAt: vi.fn(async () => 900) });
+
+    await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
+
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(
+      /b-x: octogee-computer-test-uida was preempted by Compute at 1970-01-01T00:00:00.900Z -> STOPPING; parked for idle/,
+    ));
+    expect(h.log).not.toHaveBeenCalledWith(expect.stringMatching(/stopped octogee-computer-test-uida for idle/));
+  });
+
+  it("says a computer that stopped without Cowboy or a preemption stopped outside Cowboy", async () => {
+    const h = harness(vmDoc(), { describe: vi.fn(async () => stopped) });
+
+    await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
+
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: octogee-computer-test-uida was already TERMINATED \(stopped outside Cowboy\); parked for idle/));
+  });
+
+  it("still parks the computer when the preemption lookup fails, and says so", async () => {
+    const h = harness(vmDoc(), { describe: vi.fn(async () => stopped), lastPreemptedAt: vi.fn(async () => { throw new Error("http 403"); }) });
+
+    await h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
+
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "TERMINATED", stopReason: "idle" });
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: could not read Compute preemptions of octogee-computer-test-uida: http 403/));
   });
 });

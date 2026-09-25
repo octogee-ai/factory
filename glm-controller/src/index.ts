@@ -3180,6 +3180,16 @@ async function buildHandlers(
       });
       return gatewayClass(sourceData) !== "shared" && gatewayClass(targetData) !== "shared";
     },
+    findPreemptedComputer: async (gatewayId, sinceMs) => {
+      const runtime = vmGatewayRuntimeRef.current;
+      const instanceName = runtime ? await runtime.detectPreemption(gatewayId, sinceMs) : null;
+      if (runtime && instanceName) {
+        await runtime.recoverUnreachable(gatewayId).catch((error: unknown) => {
+          logFn(`[migrate-customer] ⚠ ${gatewayId}: restart of preempted computer ${instanceName} deferred to the heartbeat recovery: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      return instanceName;
+    },
     genMigrationId: (operationId) => `mig-${operationId}`,
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

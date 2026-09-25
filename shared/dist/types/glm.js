@@ -57,6 +57,12 @@ export function isGatewayVmRuntimeBundle(value) {
         && !!b.hostAliases && typeof b.hostAliases === "object"
         && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
 }
+export function isGatewayVmPreemptionNotice(value) {
+    const n = value;
+    return !!n && typeof n === "object"
+        && typeof n.instanceId === "string" && n.instanceId.length > 0
+        && typeof n.announcedAt === "number" && Number.isFinite(n.announcedAt);
+}
 export function isGatewayVmDiskSample(value) {
     const d = value;
     return !!d && typeof d === "object"

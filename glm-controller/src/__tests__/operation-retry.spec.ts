@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   MAX_OPERATION_ATTEMPTS,
+  MAX_PREEMPTED_OPERATION_ATTEMPTS,
   MAX_OPERATION_ATTEMPT_HISTORY,
   OPERATION_JOURNAL_RETENTION_MS,
   buildOperationCompletionUpdate,
@@ -719,5 +720,80 @@ describe("buildOperationCompletionUpdate", () => {
       now,
     });
     expect(update.rolledBack).toBe(true);
+  });
+
+  describe("a migration whose computer was preempted", () => {
+    const rsyncReset = "push-rsync-state: 500 rsync code=12 errno=104 Connection reset";
+    const preempted = `target computer octogee-pool-44847785 was preempted: ${rsyncReset}`;
+    const activation = (attempts: number, customerMigrationV2?: unknown) => ({
+      id: "builder-activate-b-ceckert-s-b1ffafcf",
+      kind: "migrate-customer",
+      origin: "automatic",
+      input: { source: "builder-activation-lease", fromGatewayId: "shared-0", toGatewayId: "b-ceckert-s-b1ffafcf" },
+      attempts,
+      attemptHistory: [],
+      ...(customerMigrationV2 ? { customerMigrationV2: customerMigrationV2 as never } : {}),
+    });
+
+    it("retries a rolled-back activation past the normal attempt cap and restarts its aborted migration from scratch", () => {
+      const update = buildOperationCompletionUpdate({
+        op: activation(MAX_OPERATION_ATTEMPTS - 1, { phase: "aborted", abortReason: rsyncReset }),
+        result: { steps: [], success: false, error: preempted, rolledBack: true },
+        steps: [],
+        now,
+      });
+
+      expect(update.status).toBe("pending");
+      expect(update.error).toMatch(/^attempt 3 failed \(transient\): target computer octogee-pool-44847785 was preempted: /);
+      expect(update.customerMigrationV2).toEqual(FieldValue.delete());
+    });
+
+    it("gives up once the preemption retry budget is spent", () => {
+      const update = buildOperationCompletionUpdate({
+        op: activation(MAX_PREEMPTED_OPERATION_ATTEMPTS - 1),
+        result: { steps: [], success: false, error: preempted, rolledBack: true },
+        steps: [],
+        now,
+      });
+
+      expect(MAX_PREEMPTED_OPERATION_ATTEMPTS).toBeGreaterThan(MAX_OPERATION_ATTEMPTS);
+      expect(update.status).toBe("failed");
+      expect(update.error).toBe(preempted);
+    });
+
+    it("keeps an unfinished migration's durable state across the retry so it resumes rather than restarts", () => {
+      const update = buildOperationCompletionUpdate({
+        op: activation(1, { phase: "abortIntent", abortReason: rsyncReset }),
+        result: { steps: [], success: false, error: `source computer octogee-computer-prod-uida was preempted: customer migration V2 retry pending: status 503: abort cleanup blocked: fetch failed`, rolledBack: false },
+        steps: [],
+        now,
+      });
+
+      expect(update.status).toBe("pending");
+      expect(update).not.toHaveProperty("customerMigrationV2");
+    });
+
+    it("restarts any retried migration whose durable state already aborted, since resuming it would only replay the abort", () => {
+      const update = buildOperationCompletionUpdate({
+        op: activation(0, { phase: "aborted", abortReason: "target verify failed: timed out" }),
+        result: { steps: [], success: false, error: "target verify failed: timed out", rolledBack: true },
+        steps: [],
+        now,
+      });
+
+      expect(update.status).toBe("pending");
+      expect(update.customerMigrationV2).toEqual(FieldValue.delete());
+    });
+
+    it("still fails a rolled-back activation without a preemption at the normal cap", () => {
+      const update = buildOperationCompletionUpdate({
+        op: activation(MAX_OPERATION_ATTEMPTS - 1, { phase: "aborted", abortReason: "target verify failed: timed out" }),
+        result: { steps: [], success: false, error: "target verify failed: timed out", rolledBack: true },
+        steps: [],
+        now,
+      });
+
+      expect(update.status).toBe("failed");
+    });
   });
 });

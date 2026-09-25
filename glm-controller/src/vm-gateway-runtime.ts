@@ -25,6 +25,7 @@ export interface VmGatewayRuntime extends HelmRunner {
   readDeploymentPrerequisiteError(gatewayId: string): Promise<string | null>;
   recoverUnreachable(gatewayId: string): Promise<void>;
   deleteComputer(ownerUid: string): Promise<boolean>;
+  detectPreemption(gatewayId: string, sinceMs: number): Promise<string | null>;
 }
 
 export interface VmGatewayRuntimeDeps {
@@ -295,6 +296,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     readDeploymentPrerequisiteError: computers.readDeploymentPrerequisiteError,
     recoverUnreachable: computers.recoverUnreachable,
     deleteComputer: computers.deleteComputer,
+    detectPreemption: computers.detectPreemption,
   };
 }
 

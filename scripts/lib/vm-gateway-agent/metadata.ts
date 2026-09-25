@@ -15,11 +15,14 @@ export interface MetadataClient {
   accessToken(): Promise<string>;
   instanceIdentity(): Promise<InstanceIdentity>;
   attribute(key: string): Promise<string | null>;
+  preempted(waitForChange: boolean): Promise<boolean>;
 }
 
+export const PREEMPTION_WAIT_TIMEOUT_SEC = 300;
+
 export function createMetadataClient(fetchImpl: typeof fetch = fetch): MetadataClient {
-  async function get(path: string): Promise<Response> {
-    return fetchImpl(`${METADATA_BASE}/${path}`, { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(5_000) });
+  async function get(path: string, timeoutMs = 5_000): Promise<Response> {
+    return fetchImpl(`${METADATA_BASE}/${path}`, { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(timeoutMs) });
   }
   async function text(path: string): Promise<string> {
     const res = await get(path);
@@ -45,6 +48,13 @@ export function createMetadataClient(fetchImpl: typeof fetch = fetch): MetadataC
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`metadata attribute ${key}: HTTP ${res.status}`);
       return (await res.text()).trim();
+    },
+    async preempted(waitForChange) {
+      const res = waitForChange
+        ? await get(`instance/preempted?wait_for_change=true&timeout_sec=${PREEMPTION_WAIT_TIMEOUT_SEC}`, (PREEMPTION_WAIT_TIMEOUT_SEC + 10) * 1_000)
+        : await get("instance/preempted");
+      if (!res.ok) throw new Error(`metadata instance/preempted: HTTP ${res.status}`);
+      return (await res.text()).trim() === "TRUE";
     },
   };
 }

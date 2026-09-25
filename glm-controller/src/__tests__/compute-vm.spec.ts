@@ -665,3 +665,50 @@ describe("createGatewayVmClient — zone walk", () => {
     expect(posts).toEqual([]);
   });
 });
+
+describe("createGatewayVmClient.lastPreemptedAt", () => {
+  const preempted = (instanceName: string, insertTime: string) => ({
+    operationType: "compute.instances.preempted",
+    targetLink: `https://www.googleapis.com/compute/v1/projects/octogee-test/zones/us-central1-a/instances/${instanceName}`,
+    insertTime,
+    status: "DONE",
+  });
+
+  it("reads the newest Compute preemption of that instance across the zone's operation pages", async () => {
+    const { request, calls } = fakeCompute((call) => {
+      if (call.method !== "GET" || !call.url.startsWith(`${BASE}/zones/us-central1-a/operations?`)) return new Error(`unexpected ${call.method} ${call.url}`);
+      const url = new URL(call.url);
+      if (url.searchParams.get("pageToken") === "p2") {
+        return { status: 200, data: { items: [preempted("octogee-pool-44847785", "2026-09-25T21:19:43.000-00:00")] } };
+      }
+      return {
+        status: 200,
+        data: {
+          items: [
+            preempted("octogee-pool-44847785", "2026-09-24T08:00:00.000-00:00"),
+            preempted("octogee-pool-other", "2026-09-25T22:00:00.000-00:00"),
+          ],
+          nextPageToken: "p2",
+        },
+      };
+    });
+    const { client } = clientWith(request);
+
+    const at = await client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a");
+
+    expect(at).toBe(Date.parse("2026-09-25T21:19:43.000Z"));
+    expect(new URL(calls[0].url).searchParams.get("filter")).toBe("operationType = \"compute.instances.preempted\"");
+  });
+
+  it("answers null when Compute has no preemption on record for the instance", async () => {
+    const { request } = fakeCompute(() => ({ status: 200, data: { items: [preempted("octogee-pool-other", "2026-09-25T22:00:00.000Z")] } }));
+
+    expect(await clientWith(request).client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a")).toBeNull();
+  });
+
+  it("propagates a failed operations read instead of reporting no preemption", async () => {
+    const { request } = fakeCompute(() => http(403));
+
+    await expect(clientWith(request).client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a")).rejects.toThrow(/http 403/);
+  });
+});

@@ -13,3 +13,25 @@ it("mints the computer access token with the email scope so GKE TokenReview can 
   ]);
   expect((init.headers as Record<string, string>)["Metadata-Flavor"]).toBe("Google");
 });
+
+it("reads whether GCE has announced this Spot computer's preemption, long-polling for the change once it has an answer", async () => {
+  const answers = ["FALSE", "TRUE\n"];
+  const fetchImpl = vi.fn(async () => new Response(answers.shift()!)) as unknown as typeof fetch;
+  const metadata = createMetadataClient(fetchImpl);
+
+  await expect(metadata.preempted(false)).resolves.toBe(false);
+  await expect(metadata.preempted(true)).resolves.toBe(true);
+
+  const [[first, firstInit], [second]] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, RequestInit]>;
+  expect(first).toBe(`${METADATA_BASE}/instance/preempted`);
+  expect((firstInit.headers as Record<string, string>)["Metadata-Flavor"]).toBe("Google");
+  const watched = new URL(second);
+  expect(`${watched.origin}${watched.pathname}`).toBe(`${METADATA_BASE}/instance/preempted`);
+  expect(watched.searchParams.get("wait_for_change")).toBe("true");
+  expect(Number(watched.searchParams.get("timeout_sec"))).toBeGreaterThan(0);
+});
+
+it("fails loudly when the metadata server will not say whether the computer is preempted", async () => {
+  const fetchImpl = vi.fn(async () => new Response("", { status: 503 })) as unknown as typeof fetch;
+  await expect(createMetadataClient(fetchImpl).preempted(false)).rejects.toThrow(/metadata instance\/preempted: HTTP 503/);
+});
