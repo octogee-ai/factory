@@ -86,9 +86,9 @@ tag object `ce5bbdc244ee937246cc1700d1b224d020c3b599`, peeled source
 line (re-verified 2026-09-24; no later 2026.9.6 patch release exists). Package
 version `2026.9.6`.
 
-**Overlay branch:** `ceckert/openclaw:codex/octogee-v2026.9.6-split-heap-reload`, head
-`10a175537c955d67c694759103e8018730de428c` (`dist/build-info.json` commit matches):
-the `codex/octogee-v2026.9.6-split` series (`415cd7e`) plus patches #21 and #22.
+**Overlay branch:** `ceckert/openclaw:codex/octogee-v2026.9.6-split-auth-readers`, head
+`c1424dae514cab3683f545ad9fed2023e232a509` (`dist/build-info.json` commit matches):
+the `codex/octogee-v2026.9.6-split` series (`415cd7e`) plus patches #21, #22 and #23.
 The overlay is a series of small single-purpose commits on the tag, one per
 patch, replacing the former single squashed "port gateway overlay" commit.
 
@@ -121,7 +121,8 @@ discussions; record each patch's readiness in the table below.
 | 19 | `41c84333696` | Cron: keep timer reservations within the admitted due set (regression from #18), method-index order, test seams | — | Fold into #18 |
 | 20 | `415cd7e60f2` | Cron: partial handoff retains non-portable jobs dormant on the source | Builder VM return (pending Octogee PR) | Fold into #18 |
 | 21 | `07704b2a923` | Models: stop catalog generations chaining across reloads (heap growth under agent churn) | Every shared/Builder gateway hot reload | Ready; main port `ceckert:codex/fix-agent-churn-heap`, PR not filed |
-| 22 | `10a175537c9` | Gateway: hand a superseded hot reload's runtime refresh to its successor | Builder mount/migration (`agents.create` then `config.patch`) | Ready; main port `ceckert:codex/reload-supersede-cancel`, PR not filed |
+| 22 | `55508566e89` | Gateway: hand a superseded hot reload's runtime refresh to its successor | Builder mount/migration (`agents.create` then `config.patch`) | Ready; main port `ceckert:codex/reload-supersede-cancel`, PR not filed |
+| 23 | `c1424dae514` | Agents: release pooled auth readers for deleted and unrostered agents | Builder eviction (`agents.delete`, then the agent dir removal held-file check) | Ready; upstream main has the same gap (#150524), PR not filed |
 
 Known follow-ups for the next recut: `cron.migration` snapshot validation, and
 letting stage replace a target's re-projected system monitors
@@ -129,14 +130,14 @@ letting stage replace a target's re-projected system monitors
 them as a target conflict.
 
 The archives below were built from the head above, install-verified together in
-an isolated npm prefix (`OpenClaw 2026.9.6 (10a1755)`), and published with
+an isolated npm prefix (`OpenClaw 2026.9.6 (c1424da)`), and published with
 write-once generation preconditions; the published root archive's SHA-256 was
 re-verified after upload. The Mattermost archive is byte-identical to the
 previous publication and is reused.
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-ba3e6b5d.tgz` | `ba3e6b5d276f16b4dc4267cee98073db65fbf3c3dabddd8779dcbe3dadc94cb2` | `1790281961101732` |
+| `openclaw-fork-7eb88f34.tgz` | `7eb88f34820175d6e5e8856f7cce4c08c5fc92399c10ea89072af7fd7999dda1` | `1790300189211798` |
 | `openclaw-mattermost-43163935.tgz` | `43163935aad1df28f3f78a4faf0e4f0b255856400854cc3e5310999751629f23` | `1790215776773694` |
 
 Qualification of this head: `pnpm tsgo:core`, `pnpm check:test-types`, `pnpm lint`,
@@ -144,7 +145,23 @@ Qualification of this head: `pnpm tsgo:core`, `pnpm check:test-types`, `pnpm lin
 the #21 retention regression (25 files, 1067 tests) pass, including #22's reproducer. Patch
 #21 was qualified on `07704b2` (prepared-model runtime/catalog suites, 42 files, 450 tests)
 and is unchanged here; #1–#20 are unchanged from `415cd7e` and keep that head's
-qualification. Neither TEST nor PROD has been deployed from this change.
+qualification. Head `c1424da` passes `pnpm build`, `pnpm check`, and
+`pnpm config:channels:check`. #22 differs from `10a1755` only by a typed declaration
+that satisfies the assertion SAFETY ratchet. #23 is qualified by the agent deletion, candidate-store,
+OAuth refresh fence, and auth read-pool suites (4 files, 41 tests), including its two
+reproducers. Neither TEST nor PROD has been deployed from this change.
+
+### Patch #23: pooled auth readers outlived deleted agents
+
+Upstream #150524 keeps read-only auth-profile handles on each agent's
+`openclaw-agent.sqlite` for 30 minutes of idle time, and the OAuth peer scan reads every
+agent directory on disk, rostered or not. `agents.delete` closed the agent's own
+database handles but not the pooled reader, so a departed Builder's database stayed
+open and Octogee's held-file check refused to remove it. That blocked eviction on
+shared gateways, and with it scaler convergence. The patch closes the deleted agent's pooled
+readers in `prepareAgentDeleteDatabases` and stops pooling peer-scan readers for
+agents outside the roster. The interim Octogee exemption for read-only connections
+during final removal (#4025) can be removed once this archive is live everywhere.
 
 ### Patch #21: catalog generations chained across reloads
 
