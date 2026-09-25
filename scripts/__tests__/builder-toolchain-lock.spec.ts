@@ -40,8 +40,8 @@ function sha256(value: string): string {
 }
 
 const NPM_PACKAGES = {
-  "@anthropic-ai/claude-code": "2.1.281",
-  "@openai/codex": "0.156.1",
+  "@anthropic-ai/claude-code": "2.1.282",
+  "@openai/codex": "0.157.0",
   "@sparticuz/chromium": "149.0.0",
   "firebase-tools": "15.28.2",
   "npm-check-updates": "23.1.0",
@@ -59,8 +59,8 @@ function groupsFixture(): BuilderToolGroups {
         enabled: true,
         delivery: "npm",
         npmPackages: {
-          "@anthropic-ai/claude-code": "2.1.281",
-          "@openai/codex": "0.156.1",
+          "@anthropic-ai/claude-code": "2.1.282",
+          "@openai/codex": "0.157.0",
         },
         commands: ["claude", "codex"],
       },
@@ -103,15 +103,15 @@ function lockFixture(): Record<string, unknown> {
         dependencies: NPM_PACKAGES,
       },
       "node_modules/@anthropic-ai/claude-code": {
-        version: "2.1.281",
-        resolved: "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.281.tgz",
+        version: "2.1.282",
+        resolved: "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.282.tgz",
         integrity: "sha512-Y2xhdWRl",
         hasInstallScript: true,
         bin: { claude: "bin/claude.exe" },
       },
       "node_modules/@openai/codex": {
-        version: "0.156.1",
-        resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.156.1.tgz",
+        version: "0.157.0",
+        resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.157.0.tgz",
         integrity: "sha512-Y29kZXg=",
         bin: { codex: "bin/codex.js" },
       },
@@ -164,7 +164,7 @@ async function writePinnedInputs(home: string): Promise<{
     private: true,
     dependencies: NPM_PACKAGES,
     allowScripts: {
-      "@anthropic-ai/claude-code@2.1.281": true,
+      "@anthropic-ai/claude-code@2.1.282": true,
       "esbuild@0.28.2": true,
       "pnpm@12.6.0": true,
       "protobufjs@7.6.6": true,
@@ -190,8 +190,8 @@ async function writePinnedInputs(home: string): Promise<{
 async function fakeInstall(destination: string): Promise<void> {
   const bin = path.join(destination, "node_modules", ".bin");
   await fs.mkdir(bin, { recursive: true });
-  await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\necho '2.1.281 (Claude Code)'\n", { mode: 0o755 });
-  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\necho 'codex-cli 0.156.1'\n", { mode: 0o755 });
+  await fs.writeFile(path.join(bin, "claude"), "#!/bin/sh\necho '2.1.282 (Claude Code)'\n", { mode: 0o755 });
+  await fs.writeFile(path.join(bin, "codex"), "#!/bin/sh\necho 'codex-cli 0.157.0'\n", { mode: 0o755 });
   for (const command of ["firebase", "ncu", "pnpm", "tsc", "tsx"]) {
     await fs.writeFile(path.join(bin, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
@@ -241,7 +241,7 @@ describe("Builder npm toolchain lock", () => {
         codex: "node_modules/.bin/codex",
         chromium: "node_modules/@sparticuz/chromium/build/index.js",
       },
-      versions: { claude: "2.1.281", codex: "0.156.1", chromium: "149.0.0" },
+      versions: { claude: "2.1.282", codex: "0.157.0", chromium: "149.0.0" },
       packages: NPM_PACKAGES,
     });
 
@@ -370,7 +370,7 @@ describe("Builder npm toolchain lock", () => {
   });
 
   it.each([
-    ["@anthropic-ai/claude-code", "2.1.281"],
+    ["@anthropic-ai/claude-code", "2.1.282"],
     ["pnpm", "12.6.0"],
   ])("requires the exact pinned %s install approval before invoking npm", async (name, version) => {
     const home = await tempRoot();
