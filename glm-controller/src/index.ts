@@ -2522,6 +2522,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
           log,
           ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
           ensureServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
+          runKubectl,
         });
   const vmRuntime = BUILDER_VM_SPEC
     ? createVmGatewayRuntime({

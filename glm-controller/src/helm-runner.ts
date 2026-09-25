@@ -11,6 +11,7 @@ import {
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
 import type { GatewayServiceAccountIdentity } from "./gateway-service-account-ensurer.js";
+import type { KubectlSubprocess } from "./fleet-ingress.js";
 
 export interface HelmRunner {
 
@@ -120,6 +121,12 @@ export interface HelmSubprocessRunnerDeps {
     identity: GatewayServiceAccountIdentity;
     annotations?: Record<string, string>;
   }) => Promise<void>;
+
+  runKubectl?: KubectlSubprocess;
+  now?: () => number;
+  wait?: (ms: number) => Promise<void>;
+  workloadDrainTimeoutMs?: number;
+  workloadDrainPollMs?: number;
 }
 
 const RELEASE_PREFIX = "octogee-gw-";
@@ -162,6 +169,69 @@ const NOT_FOUND_PATTERNS = [
 
 function isReleaseNotFound(stderr: string): boolean {
   return NOT_FOUND_PATTERNS.some((p) => p.test(stderr));
+}
+
+const UNINSTALL_COMPLETED_WITH_ERRORS = /uninstallation completed with \d+ error\(s\):([\s\S]*)$/;
+const TERMINATING_RESOURCE_ERROR =
+  /resource \S+ still exists\. status: Terminating, message: [^;\n]*/g;
+
+function isUninstallLeavingOnlyTerminatingResources(output: string): boolean {
+  const errors = UNINSTALL_COMPLETED_WITH_ERRORS.exec(output)?.[1];
+  if (errors === undefined) return false;
+  const terminating = errors.match(TERMINATING_RESOURCE_ERROR) ?? [];
+  const residue = errors.replace(TERMINATING_RESOURCE_ERROR, "");
+  return terminating.length > 0 && /^[\s;]*$/.test(residue);
+}
+
+const WORKLOAD_STILL_TERMINATING = "gateway workload still terminating";
+
+export function isRetryableTerminatingUninstallFailure(message: string): boolean {
+  return message.includes(WORKLOAD_STILL_TERMINATING) ||
+    isUninstallLeavingOnlyTerminatingResources(message);
+}
+
+async function listWorkloadNames(
+  runKubectl: KubectlSubprocess,
+  namespace: string,
+  kind: "pods" | "deployments",
+  selector: string,
+): Promise<string[]> {
+  const result = await runKubectl(["-n", namespace, "get", kind, "-l", selector, "-o", "name"]);
+  if (result.code !== 0) {
+    throw new Error(
+      `kubectl get ${kind} -l ${selector} failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
+  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+async function awaitGatewayWorkloadGone(
+  deps: HelmSubprocessRunnerDeps & { runKubectl: KubectlSubprocess },
+  namespace: string,
+  gatewayId: string,
+): Promise<void> {
+  const release = releaseNameForGateway(gatewayId);
+  const now = deps.now ?? Date.now;
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const timeoutMs = deps.workloadDrainTimeoutMs ?? 180_000;
+  const pollMs = deps.workloadDrainPollMs ?? 5_000;
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    const remaining = [
+      ...(await listWorkloadNames(deps.runKubectl, namespace, "pods", `app=octogee-gateway,gateway-id=${gatewayId}`)),
+      ...(await listWorkloadNames(deps.runKubectl, namespace, "deployments", `app.kubernetes.io/instance=${release}`)),
+    ];
+    if (remaining.length === 0) {
+      deps.log(`[helm-runner] release=${release} ns=${namespace} workload gone`);
+      return;
+    }
+    if (now() >= deadline) {
+      throw new Error(
+        `${WORKLOAD_STILL_TERMINATING}: release ${release} is uninstalled but ${remaining.join(", ")} remained after ${timeoutMs}ms`,
+      );
+    }
+    await wait(pollMs);
+  }
 }
 
 function releaseNameForGateway(gatewayId: string): string {
@@ -802,11 +872,20 @@ if (
         deps.log(`[helm-runner] recovery: ${recovered} — retrying uninstall`);
         result = await deps.runHelm(uninstallArgs);
       }
+      const runKubectl = deps.runKubectl;
       if (result.code !== 0) {
         if (isReleaseNotFound(result.stderr)) {
           deps.log(
-            `[helm-runner] uninstall release=${release} ns=${namespace} — already gone, no-op`,
+            `[helm-runner] uninstall release=${release} ns=${namespace} — already gone`,
           );
+          if (runKubectl) await awaitGatewayWorkloadGone({ ...deps, runKubectl }, namespace, gatewayId);
+          return;
+        }
+        if (runKubectl && isUninstallLeavingOnlyTerminatingResources(result.stderr)) {
+          deps.log(
+            `[helm-runner] uninstalled release=${release} ns=${namespace} — awaiting terminating workload`,
+          );
+          await awaitGatewayWorkloadGone({ ...deps, runKubectl }, namespace, gatewayId);
           return;
         }
         throw new Error(

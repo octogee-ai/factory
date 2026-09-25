@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildUpgradeArgs,
   createHelmSubprocessRunner,
+  isRetryableTerminatingUninstallFailure,
   readPersonalKnobs,
   spawnHelm,
   type HelmSubprocess,
@@ -1591,6 +1592,120 @@ describe("createHelmSubprocessRunner — removeInstance", () => {
     await expect(
       runner.removeInstance({ namespace: "octogee-test", gatewayId: "broken" }),
     ).rejects.toThrow(/pre-delete hook failed/);
+  });
+
+  const TERMINATING_ONLY =
+    "Error: uninstallation completed with 2 error(s): resource Deployment/octogee/octogee-gateway-shared-28b140d9fb3c still exists. status: Terminating, message: Resource scheduled for deletion\n" +
+    "resource Pod/octogee/octogee-gateway-shared-28b140d9fb3c-7d9f-x2x still exists. status: Terminating, message: Resource scheduled for deletion";
+
+  function drainingWorkload(podPolls: number) {
+    let clock = 0;
+    const kubectlCalls: string[][] = [];
+    let podReads = 0;
+    const runKubectl = vi.fn(async (args: string[]) => {
+      kubectlCalls.push(args);
+      if (args.includes("pods")) {
+        podReads++;
+        return { code: 0, stderr: "", stdout: podReads <= podPolls ? "pod/octogee-gateway-shared-28b140d9fb3c-7d9f-x2x\n" : "" };
+      }
+      return { code: 0, stderr: "No resources found in octogee namespace.", stdout: "" };
+    });
+    return {
+      runKubectl,
+      kubectlCalls,
+      now: () => clock,
+      wait: vi.fn(async (ms: number) => { clock += ms; }),
+    };
+  }
+
+  it("completes a terminating-only uninstall only once the gateway's pods and Deployment are gone", async () => {
+    const log = vi.fn();
+    const { runHelm } = mockSubprocess([{ code: 1, stderr: TERMINATING_ONLY }]);
+    const workload = drainingWorkload(2);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm), log, ...workload,
+      workloadDrainTimeoutMs: 60_000, workloadDrainPollMs: 5_000,
+    });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "shared-28b140d9fb3c" }),
+    ).resolves.toBeUndefined();
+    expect(workload.wait).toHaveBeenCalledTimes(2);
+    expect(workload.kubectlCalls).toContainEqual(
+      ["-n", "octogee", "get", "pods", "-l", "app=octogee-gateway,gateway-id=shared-28b140d9fb3c", "-o", "name"],
+    );
+    expect(workload.kubectlCalls).toContainEqual(
+      ["-n", "octogee", "get", "deployments", "-l", "app.kubernetes.io/instance=octogee-gw-shared-28b140d9fb3c", "-o", "name"],
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/octogee-gw-shared-28b140d9fb3c.*workload gone/));
+  });
+
+  it("fails a terminating-only uninstall whose pods outlive the drain bound, retryably", async () => {
+    const { runHelm } = mockSubprocess([{ code: 1, stderr: TERMINATING_ONLY }]);
+    const workload = drainingWorkload(Number.POSITIVE_INFINITY);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ...workload,
+      workloadDrainTimeoutMs: 60_000, workloadDrainPollMs: 5_000,
+    });
+
+    const failure = await runner
+      .removeInstance({ namespace: "octogee", gatewayId: "shared-28b140d9fb3c" })
+      .then(() => null, (error: Error) => error);
+
+    expect(failure?.message).toMatch(/gateway workload still terminating.*pod\/octogee-gateway-shared-28b140d9fb3c-7d9f-x2x.*60000ms/);
+    expect(isRetryableTerminatingUninstallFailure(`helm uninstall failed: ${failure?.message}`)).toBe(true);
+  });
+
+  it("fails a terminating-only uninstall closed when it cannot observe the workload", async () => {
+    const { runHelm } = mockSubprocess([{ code: 1, stderr: TERMINATING_ONLY }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "shared-28b140d9fb3c" }),
+    ).rejects.toThrow(/helm uninstall octogee-gw-shared-28b140d9fb3c failed \(code=1\): Error: uninstallation completed/);
+  });
+
+  it("waits out pods a prior uninstall left terminating before treating an absent release as removed", async () => {
+    const { runHelm } = mockSubprocess([
+      { code: 1, stderr: "Error: uninstall: Release not loaded: release: not found" },
+    ]);
+    const workload = drainingWorkload(1);
+    const runner = createHelmSubprocessRunner({
+      runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ...workload,
+      workloadDrainTimeoutMs: 60_000, workloadDrainPollMs: 5_000,
+    });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "shared-28b140d9fb3c" }),
+    ).resolves.toBeUndefined();
+    expect(workload.wait).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes the legacy terminating-only helm failure as retryable, and nothing else", () => {
+    expect(isRetryableTerminatingUninstallFailure(`helm uninstall failed: helm uninstall octogee-gw-x failed (code=1): ${TERMINATING_ONLY}`)).toBe(true);
+    expect(isRetryableTerminatingUninstallFailure("helm uninstall failed: Error: pre-delete hook failed")).toBe(false);
+  });
+
+  it.each([
+    [
+      "a terminating resource alongside a real error",
+      "Error: uninstallation completed with 2 error(s): resource Deployment/octogee/octogee-gateway-x still exists. status: Terminating, message: Resource scheduled for deletion; failed to delete Secret/octogee/x: forbidden",
+    ],
+    [
+      "a resource still present but not terminating",
+      "Error: uninstallation completed with 1 error(s): resource Deployment/octogee/octogee-gateway-x still exists. status: InProgress, message: Replicas: 1/1",
+    ],
+    [
+      "a terminating resource after the wait deadline",
+      "Error: uninstallation completed with 1 error(s): resource Deployment/octogee/octogee-gateway-x still exists. status: Terminating, message: Resource scheduled for deletion\ncontext deadline exceeded",
+    ],
+  ])("still throws for %s", async (_label, stderr) => {
+    const { runHelm } = mockSubprocess([{ code: 1, stderr }]);
+    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
+
+    await expect(
+      runner.removeInstance({ namespace: "octogee", gatewayId: "x" }),
+    ).rejects.toThrow(/helm uninstall octogee-gw-x failed/);
   });
 
   it("self-heals a release stuck in pending-* before uninstalling (rolls back to last good, then uninstalls)", async () => {
