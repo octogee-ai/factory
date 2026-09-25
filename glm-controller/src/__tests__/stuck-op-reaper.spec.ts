@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { runStuckOpReaperTick } from "../stuck-op-reaper.js";
+import { recoverControllerOrphanedMigrations, runStuckOpReaperTick } from "../stuck-op-reaper.js";
+import { decideOperationClaim } from "../operation-queue.js";
 
 interface FakeOpDoc {
   id: string;
@@ -14,6 +15,9 @@ interface FakeOpDoc {
     customerMigrationV2?: { phase: string };
     recordType?: string;
     input?: Record<string, unknown>;
+    steps?: Array<{ name: string; status: string }>;
+    cutoverCommittedAt?: number;
+    schedulerHandoffReleased?: boolean;
   };
   updated?: Record<string, unknown>;
 }
@@ -482,5 +486,166 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
     expect(ops[0].updated).toBeDefined();
     expect(ops[1].updated).toBeDefined();
     expect(ops[2].updated).toBeUndefined();
+  });
+});
+
+describe("recoverControllerOrphanedMigrations", () => {
+  const BOOTED_AT = NOW - 30_000;
+
+  function orphanedPlacement(overrides: Partial<FakeOpDoc["data"]> = {}): FakeOpDoc {
+    return {
+      id: "placement-orphan",
+      data: {
+        status: "running",
+        kind: "migrate-customer",
+        origin: "automatic",
+        startedAt: BOOTED_AT - 2 * 60_000,
+        lastProgressAt: BOOTED_AT - 60_000,
+        input: {
+          uid: "uid-mike",
+          fromGatewayId: "shared-a",
+          toGatewayId: "shared-b",
+          source: "continuous-placement-policy",
+        },
+        schedulerHandoffReleased: false,
+        ...overrides,
+      },
+    };
+  }
+
+  function recover(db: unknown, log = vi.fn()) {
+    return recoverControllerOrphanedMigrations({
+      db: db as Parameters<typeof recoverControllerOrphanedMigrations>[0]["db"],
+      log,
+      now: () => NOW,
+      controllerStartedAt: BOOTED_AT,
+    });
+  }
+
+  it("fails a pre-cutover migration the previous controller orphaned without waiting out the reaper budget, reopening its source and unblocking the queued conflicting migration", async () => {
+    const orphan = orphanedPlacement({
+      steps: [
+        { name: "keys-sync-state", status: "done" },
+        { name: "quiesce-source", status: "running" },
+      ],
+    });
+    const queued = {
+      id: "placement-queued",
+      kind: "migrate-customer",
+      status: "pending",
+      input: { uid: "uid-nina", fromGatewayId: "shared-a", toGatewayId: "shared-c" },
+    };
+    const assignment = {
+      uid: "uid-mike",
+      gatewayId: "shared-a",
+      state: "quiescing",
+      updatedByOperationId: "placement-orphan",
+    };
+    const ops = [orphan];
+    const db = makeFakeDb(ops, {
+      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a" } } } },
+      assignments: { "shared-a/uid-mike": assignment },
+    });
+    const running = () => ops
+      .filter((op) => op.data.status === "running")
+      .map((op) => ({ id: op.id, kind: op.data.kind ?? "", input: op.data.input }));
+    expect(decideOperationClaim({
+      op: queued as never, now: NOW, runningOpsSameKind: running(), pendingOpsSameKind: [],
+    }).outcome).toBe("queue");
+
+    const result = await recover(db);
+
+    expect(result).toEqual({ scanned: 1, recovered: 1 });
+    expect(orphan.data).toMatchObject({
+      status: "failed",
+      completedAt: NOW,
+      error: expect.stringMatching(/^reaped: controller restarted mid-op/),
+      schedulerHandoffReleased: false,
+    });
+    expect(assignment).toMatchObject({ state: "serving", updatedByOperationId: "placement-orphan" });
+    expect(decideOperationClaim({
+      op: queued as never, now: NOW, runningOpsSameKind: running(), pendingOpsSameKind: [],
+    }).outcome).toBe("claim");
+  });
+
+  it("fails a post-cutover orphan for handoff completion without reopening the source it already left", async () => {
+    const orphan = orphanedPlacement({
+      cutoverCommittedAt: BOOTED_AT - 90_000,
+      steps: [
+        { name: "cutover-firestore", status: "done" },
+        { name: "unmount-source", status: "running" },
+      ],
+    });
+    const assignment = {
+      uid: "uid-mike",
+      gatewayId: "shared-a",
+      state: "quiescing",
+      updatedByOperationId: "placement-orphan",
+    };
+    const db = makeFakeDb([orphan], {
+      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-b" } } } },
+      assignments: { "shared-a/uid-mike": assignment },
+    });
+
+    const result = await recover(db);
+
+    expect(result).toEqual({ scanned: 1, recovered: 1 });
+    expect(orphan.data).toMatchObject({
+      status: "failed",
+      cutoverCommittedAt: BOOTED_AT - 90_000,
+      schedulerHandoffReleased: false,
+    });
+    expect(assignment.state).toBe("quiescing");
+  });
+
+  it("leaves a migration this controller claimed after boot to its live worker", async () => {
+    const claimedHere = orphanedPlacement({ startedAt: BOOTED_AT + 1 });
+    const db = makeFakeDb([claimedHere]);
+
+    const result = await recover(db);
+
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
+    expect(claimedHere.updated).toBeUndefined();
+  });
+
+  it("leaves an orphan this controller re-claims while the recovery transaction is pending", async () => {
+    const raced = orphanedPlacement();
+    const db = makeFakeDb([raced], { beforeTransaction: () => { raced.data.startedAt = BOOTED_AT + 5; } });
+
+    const result = await recover(db);
+
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
+    expect(raced.data.status).toBe("running");
+  });
+
+  it.each<[string, Partial<FakeOpDoc["data"]>]>([
+    ["a non-migration kind", { kind: "retire-gateway", input: { gatewayId: "shared-a" } }],
+    ["a rollout the resume sweep re-drives", { kind: "rollout", input: { gatewayId: "shared-a" } }],
+    ["a durable V2 migration", { customerMigrationV2: { phase: "checkpointed" } }],
+    ["a suspend-customer op", { kind: "suspend-customer" }],
+  ])("leaves %s to its own restart recovery", async (_label, overrides) => {
+    const op = orphanedPlacement(overrides);
+    const db = makeFakeDb([op]);
+
+    const result = await recover(db);
+
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
+    expect(op.updated).toBeUndefined();
+  });
+
+  it("leaves a level-triggered Builder return to the resume sweep", async () => {
+    const op: FakeOpDoc = {
+      id: "builder-return-builder-alice",
+      data: {
+        kind: "migrate-customer", origin: "automatic", status: "running",
+        startedAt: BOOTED_AT - 60_000,
+        input: { uid: "alice", source: "builder-activation-lease", fromGatewayId: "builder-alice" },
+      },
+    };
+
+    const result = await recover(makeFakeDb([op]));
+
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
+    expect(op.updated).toBeUndefined();
   });
 });

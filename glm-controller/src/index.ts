@@ -307,7 +307,7 @@ import {
   type FleetInformer,
   type MirrorDocChange,
 } from "./fleet-informer.js";
-import { startStuckOpReaper } from "./stuck-op-reaper.js";
+import { recoverControllerOrphanedMigrations, startStuckOpReaper } from "./stuck-op-reaper.js";
 import { claimCrashLoopEviction } from "./surge-crashloop-eviction.js";
 import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
@@ -2656,6 +2656,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
 }
 
 async function main(): Promise<void> {
+  const controllerStartedAt = Date.now();
   initializeApp({
     credential: applicationDefault(),
     storageBucket: resolveDefaultStorageBucket(process.env.GOOGLE_CLOUD_PROJECT),
@@ -2708,6 +2709,14 @@ async function main(): Promise<void> {
       `[glm-controller] ⚠ resume-orphaned-ops sweep failed: ${err instanceof Error ? err.message : String(err)}`,
     ),
   );
+
+  try {
+    await recoverControllerOrphanedMigrations({ db, log, now: () => Date.now(), controllerStartedAt });
+  } catch (err) {
+    log(
+      `[glm-controller] ⚠ boot orphan recovery failed; the stuck-op reaper recovers them after its budget: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const stoppers = startControllerBackgroundTasks({
     db,

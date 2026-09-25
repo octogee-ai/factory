@@ -7,6 +7,7 @@ import {
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
+import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 
 export const REAPED_OPERATION_ERROR_PREFIX = "reaped: ";
 
@@ -86,44 +87,48 @@ function assignmentIsOwnedByMigration(input: {
     userGatewayId(input.user) === input.gate.fromGatewayId;
 }
 
-interface LegacyMigrationReapResult {
+interface ReapResult {
   reaped: boolean;
   gateMessage?: string;
 }
 
-async function reapLegacyMigrationWithGateRecovery(input: {
-  deps: StuckOpReaperDeps;
+async function reapWithLegacyGateRecovery(input: {
+  db: Firestore;
   doc: FirebaseFirestore.QueryDocumentSnapshot;
   operation: Operation;
   now: number;
   error: string;
-}): Promise<LegacyMigrationReapResult | null> {
+  logLabel: string;
+  stillReapable: (current: Operation) => boolean;
+}): Promise<ReapResult> {
   const gate = legacyMigrationGate(input.doc.id, input.operation);
-  if (!gate) return null;
-  const assignmentRef = input.deps.db
+  const assignmentRef = gate && input.db
     .collection(GATEWAYS_COLLECTION)
     .doc(gate.fromGatewayId)
     .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
     .doc(gate.uid);
-  const userRef = input.deps.db.collection("users").doc(gate.uid);
-  return input.deps.db.runTransaction(async (txn) => {
+  const userRef = gate && input.db.collection("users").doc(gate.uid);
+  return input.db.runTransaction(async (txn) => {
     const [operationSnap, assignmentSnap, userSnap] = await Promise.all([
       txn.get(input.doc.ref),
-      txn.get(assignmentRef),
-      txn.get(userRef),
+      assignmentRef ? txn.get(assignmentRef) : null,
+      userRef ? txn.get(userRef) : null,
     ]);
     if (!operationSnap.exists) return { reaped: false };
     const current = { ...operationSnap.data(), id: input.doc.id } as Operation;
-    if (!operationIsStillStale(current, input.now, input.deps.stalenessMs)) {
-      return { reaped: false };
-    }
-    const currentGate = legacyMigrationGate(input.doc.id, current);
+    if (!input.stillReapable(current)) return { reaped: false };
+    txn.update(input.doc.ref, {
+      status: "failed",
+      completedAt: input.now,
+      error: input.error,
+    });
+    if (!gate || !assignmentRef || !assignmentSnap || !userSnap) return { reaped: true };
     const assignment = assignmentSnap.exists ? assignmentSnap.data() : undefined;
     const exactOwnedGate = assignmentIsOwnedByMigration({
       assignment,
       user: userSnap.exists ? userSnap.data() : undefined,
       gate,
-      currentGate,
+      currentGate: legacyMigrationGate(input.doc.id, current),
     });
     if (exactOwnedGate) {
       txn.update(assignmentRef, {
@@ -131,17 +136,10 @@ async function reapLegacyMigrationWithGateRecovery(input: {
         updatedAt: input.now,
         updatedByOperationId: gate.operationId,
       });
-    }
-    txn.update(input.doc.ref, {
-      status: "failed",
-      completedAt: input.now,
-      error: input.error,
-    });
-    if (exactOwnedGate) {
       return {
         reaped: true,
         gateMessage:
-          `[stuck-op-reaper] restored source assignment gateway=${gate.fromGatewayId} ` +
+          `[${input.logLabel}] restored source assignment gateway=${gate.fromGatewayId} ` +
           `uid=${gate.uid} owner=${gate.operationId}`,
       };
     }
@@ -149,7 +147,7 @@ async function reapLegacyMigrationWithGateRecovery(input: {
       return {
         reaped: true,
         gateMessage:
-          `[stuck-op-reaper] source assignment recovery skipped gateway=${gate.fromGatewayId} ` +
+          `[${input.logLabel}] source assignment recovery skipped gateway=${gate.fromGatewayId} ` +
           `uid=${gate.uid} owner=${String(assignment.updatedByOperationId ?? "none")}`,
       };
     }
@@ -192,13 +190,17 @@ export async function runStuckOpReaperTick(
     stuck.map(async ({ doc, data, ageMin }) => {
       try {
         const error = `${REAPED_OPERATION_ERROR_PREFIX}op exceeded ${budgetMin}m running budget — controller likely restarted mid-op or the work hung past the inner deadlines`;
-        const legacyResult = await reapLegacyMigrationWithGateRecovery({
-          deps,
-          doc,
-          operation: data,
-          now,
-          error,
-        });
+        const legacyResult = legacyMigrationGate(doc.id, data) === null
+          ? null
+          : await reapWithLegacyGateRecovery({
+              db: deps.db,
+              doc,
+              operation: data,
+              now,
+              error,
+              logLabel: "stuck-op-reaper",
+              stillReapable: (current) => operationIsStillStale(current, now, deps.stalenessMs),
+            });
         if (legacyResult !== null) {
           if (legacyResult.gateMessage) deps.log(legacyResult.gateMessage);
           if (!legacyResult.reaped) return false;
@@ -221,6 +223,67 @@ export async function runStuckOpReaperTick(
   );
   const reaped = results.filter((r) => r.status === "fulfilled" && r.value).length;
   return { scanned: snap.docs.length, reaped };
+}
+
+export interface ControllerOrphanRecoveryDeps {
+  db: Firestore;
+  log: (msg: string) => void;
+  now: () => number;
+  controllerStartedAt: number;
+}
+
+export interface ControllerOrphanRecoveryResult {
+  scanned: number;
+  recovered: number;
+}
+
+export const CONTROLLER_ORPHANED_OPERATION_ERROR =
+  `${REAPED_OPERATION_ERROR_PREFIX}controller restarted mid-op — the claiming controller exited, so no worker can finish it; failed at boot`;
+
+function claimedByPreviousController(operation: Operation, controllerStartedAt: number): boolean {
+  const claimedAt = readMillis(operation.startedAt);
+  return operation.status === "running" &&
+    operation.kind === MIGRATE_CUSTOMER_KIND &&
+    !operationNeedsDurableRestartResume(operation) &&
+    claimedAt !== null &&
+    claimedAt < controllerStartedAt;
+}
+
+export async function recoverControllerOrphanedMigrations(
+  deps: ControllerOrphanRecoveryDeps,
+): Promise<ControllerOrphanRecoveryResult> {
+  const snap = await deps.db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("status", "==", "running")
+    .get();
+  const now = deps.now();
+  let recovered = 0;
+  for (const doc of snap.docs) {
+    const data = doc.data() as unknown;
+    if (!data || isOperationAuditRow(data)) continue;
+    const operation = { ...data as Operation, id: doc.id };
+    if (!claimedByPreviousController(operation, deps.controllerStartedAt)) continue;
+    try {
+      const result = await reapWithLegacyGateRecovery({
+        db: deps.db,
+        doc,
+        operation,
+        now,
+        error: CONTROLLER_ORPHANED_OPERATION_ERROR,
+        logLabel: "boot-orphan-recovery",
+        stillReapable: (current) => claimedByPreviousController(current, deps.controllerStartedAt),
+      });
+      if (result.gateMessage) deps.log(result.gateMessage);
+      if (!result.reaped) continue;
+      recovered += 1;
+      deps.log(
+        `[boot-orphan-recovery] ⚠ failed orphaned ${doc.id} (kind=${operation.kind}) claimed by the previous controller`,
+      );
+    } catch (err) {
+      deps.log(`[boot-orphan-recovery] ⚠ ${doc.id} recovery failed: ${String(err)}`);
+    }
+  }
+  return { scanned: snap.docs.length, recovered };
 }
 
 export interface StartStuckOpReaperDeps extends StuckOpReaperDeps {
