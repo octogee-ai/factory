@@ -113,8 +113,9 @@ describe("migration activation Mattermost secrets", () => {
       ],
     };
 
-    const safe = await materializeActivationManifestSecret(openclawDir, manifest);
+    const { manifest: safe, secretsChanged } = await materializeActivationManifestSecret(openclawDir, manifest);
 
+    expect(secretsChanged).toBe(true);
     expect(safe.mattermostAccount.botToken).toEqual({
       source: "file",
       provider: "octogee-mattermost",
@@ -130,5 +131,8 @@ describe("migration activation Mattermost secrets", () => {
       "alice-proj-orbit": "orbit-pat",
       "bob-proj-orbit": "foreign-pat",
     });
+
+    await expect(materializeActivationManifestSecret(openclawDir, manifest))
+      .resolves.toMatchObject({ manifest: safe, secretsChanged: false });
   });
 });

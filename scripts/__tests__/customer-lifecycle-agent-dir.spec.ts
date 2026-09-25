@@ -16,7 +16,7 @@ vi.mock("../lib/surge-openclaw-process-gate.js", () => ({
 
 vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/mattermost-account-secrets.js")>();
-  return { ...actual, updateMattermostAccountSecrets: vi.fn(async () => undefined) };
+  return { ...actual, updateMattermostAccountSecrets: vi.fn(async () => ({ changed: true })) };
 });
 
 interface RuntimeMock {

@@ -163,6 +163,11 @@ import {
   exportActivationManifestWithSecret,
   materializeActivationManifestSecret,
 } from "./migration-activation-secrets.js";
+import {
+  configSecretMaterialChangeReasons,
+  createSecretMaterialLedger,
+  type SecretMaterialLedger,
+} from "./secret-material-change.js";
 import { isConfiguredGatewayBuilder } from "./system-config-watch-state.js";
 import { writeTierTemplateFiles } from "./tier-template-files.js";
 import { reassertConvergedContextFilesForSlug } from "./context-file-convergence.js";
@@ -549,7 +554,7 @@ async function materializeCustomerBrokerProfiles(
   slug: string,
   logFn: (message: string) => void,
   logPrefix = `[add:${slug}]`,
-): Promise<void> {
+): Promise<{ materialized: number }> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
   const materialized = await materializeBrokerProfilesForAgents(agentIds, {
@@ -571,6 +576,36 @@ async function materializeCustomerBrokerProfiles(
         ` the post-boot sweep retries it`,
     );
   }
+  return { materialized: materialized.materialized };
+}
+
+async function writeMountAccountSecrets(
+  slug: string,
+  accountId: string,
+  coachPat: string,
+  projectAgents: Parameters<typeof mattermostProjectAccountSecretChange>[1],
+  evictionSlugs: readonly string[],
+): Promise<{ changed: boolean }> {
+  const projectSecretChange = mattermostProjectAccountSecretChange(slug, projectAgents);
+  return updateMattermostAccountSecrets(OPENCLAW_DIR, {
+    set: { [accountId]: coachPat, ...projectSecretChange.set },
+    remove: [...projectSecretChange.remove, ...evictionSlugs.map((evicted) => `${evicted}-coach`)],
+    removePrefixes: evictionSlugs.map((evicted) => `${evicted}-proj-`),
+  });
+}
+
+function brokerProfileMaterializationReason(materialized: number): string | null {
+  if (materialized === 0) return null;
+  return `broker model profiles materialized for ${materialized} agent(s)`;
+}
+
+async function mountPatchSecretMaterialReasons(
+  ctx: BrokerCtx,
+  before: unknown,
+  noop: boolean,
+): Promise<string[]> {
+  if (noop) return [];
+  return configSecretMaterialChangeReasons(before, (await ctx.rpc.configGet()).config);
 }
 
 function agentIdsFromEntries(entries: ReadonlyArray<Record<string, unknown>>): string[] {
@@ -660,6 +695,19 @@ async function captureRoutingActivationBaseline(
     accountIds,
     baseline: await captureMattermostRoutingActivationBaseline(ctx.rpc, accountIds),
   };
+}
+
+async function reloadRuntimeSecretsIfChanged(
+  ctx: BrokerCtx,
+  logPrefix: string,
+  ledger: SecretMaterialLedger,
+): Promise<void> {
+  if (!ledger.changed) {
+    ctx.log(`${logPrefix} secrets.reload skipped — no secret material changed`);
+    return;
+  }
+  ctx.log(`${logPrefix} secrets.reload — ${ledger.reasons.join("; ")}`);
+  await reloadRuntimeSecrets(ctx, logPrefix);
 }
 
 async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
@@ -859,23 +907,16 @@ async function applyAddCustomerConfigPatch(
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
   );
-  const projectSecretChange = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   evictionSlugs = await currentEvictionSlugs(
     snapshot.slug,
     evictionSlugs,
     callOpts?.currentEvictionBatch,
   );
-  await updateMattermostAccountSecrets(OPENCLAW_DIR, {
-    set: {
-      [accountId]: coachPat,
-      ...projectSecretChange.set,
-    },
-    remove: [
-      ...projectSecretChange.remove,
-      ...evictionSlugs.map((slug) => `${slug}-coach`),
-    ],
-    removePrefixes: evictionSlugs.map((slug) => `${slug}-proj-`),
-  });
+  const secretMaterial = createSecretMaterialLedger();
+  secretMaterial.noteIf(
+    (await writeMountAccountSecrets(snapshot.slug, accountId, coachPat, projectAgents, evictionSlugs)).changed,
+    "Mattermost account secrets file changed",
+  );
   const projectAccounts = buildProjectAgentAccounts(
     snapshot.slug,
     projectAgents,
@@ -892,7 +933,8 @@ async function applyAddCustomerConfigPatch(
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
   await callOpts?.brokerProfilesReady;
-  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
+  const brokerProfiles = await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
+  secretMaterial.note(brokerProfileMaterializationReason(brokerProfiles.materialized));
   await reconcileCustomerRosterAgents(
     ctx,
     snapshot.slug,
@@ -906,9 +948,11 @@ async function applyAddCustomerConfigPatch(
   routingActivationRequired = markPendingProjectActivations(routingActivationReason, pendingProjectAccountIds, routingActivationBaseline)
     || routingActivationRequired;
   const startedAt = Date.now();
+  let configBefore: unknown;
   const configPatch = await applyConfigPatch(
     {
       buildPatch: (current) => {
+        configBefore = current;
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
         const currentBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
         const missingAccountIds = mattermostAccountBindingsNeedingActivation(
@@ -982,8 +1026,12 @@ async function applyAddCustomerConfigPatch(
       signal: callOpts?.signal,
     },
   );
+  secretMaterial.note(
+    await mountPatchSecretMaterialReasons(ctx, configBefore, configPatch.noop === true),
+  );
   await settleProjectAgentActivations(ctx, {
     snapshot, projectAgents, channels: snapshot.channels, baseline: routingActivationBaseline,
+    secretMaterial,
     activate: () => activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
       accountIds: affectedAccountIds,
       baseline: routingActivationBaseline,
@@ -1011,11 +1059,12 @@ async function settleProjectAgentActivations(
     projectAgents: NonNullable<UserSnapshot["projectAgents"]>;
     channels: UserSnapshot["channels"];
     baseline: Readonly<Record<string, number>>;
+    secretMaterial: SecretMaterialLedger;
     activate(): Promise<void>;
   },
 ): Promise<void> {
   const errors: unknown[] = [];
-  await reloadRuntimeSecrets(ctx, `[add:${input.snapshot.slug}]`);
+  await reloadRuntimeSecretsIfChanged(ctx, `[add:${input.snapshot.slug}]`, input.secretMaterial);
   try {
     await input.activate();
   } catch (error) {
@@ -1064,24 +1113,34 @@ async function reconcileConfiguredBuilderProjectAgents(
   await ensureCustomerRosterAgents(ctx, projectAgentEntries, logPrefix);
   const agentIds = agentIdsFromEntries(projectAgentEntries);
   await Promise.all(agentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })));
-  await materializeCustomerBrokerProfiles(agentIds, snapshot.slug, ctx.log);
+  const secretMaterial = createSecretMaterialLedger();
+  const brokerProfiles = await materializeCustomerBrokerProfiles(agentIds, snapshot.slug, ctx.log);
+  secretMaterial.note(brokerProfileMaterializationReason(brokerProfiles.materialized));
   const projectSecrets = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
-  await updateMattermostAccountSecrets(OPENCLAW_DIR, { set: projectSecrets.set });
+  const setSecrets = await updateMattermostAccountSecrets(OPENCLAW_DIR, { set: projectSecrets.set });
   const pendingAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
   const baseline = pendingAccountIds.length > 0
     ? await captureMattermostRoutingActivationBaseline(ctx.rpc, pendingAccountIds)
     : {};
-  await applyConfigPatch({
-    buildPatch: (current) => configuredBuilderProjectAgentPatch(current, patchInput).patch,
+  let configBefore: unknown;
+  const configPatch = await applyConfigPatch({
+    buildPatch: (current) => {
+      configBefore = current;
+      return configuredBuilderProjectAgentPatch(current, patchInput).patch;
+    },
     buildReplacePaths: (current) => configuredBuilderProjectAgentPatch(current, patchInput).replacePaths,
     logPrefix,
   }, { rpc: convergedConfigRpc(ctx), cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS, signal: options.signal });
+  secretMaterial.note(
+    await mountPatchSecretMaterialReasons(ctx, configBefore, configPatch.noop === true),
+  );
   const retiredAccountIds = managedProjectIds.map((projectId) => `${snapshot.slug}-proj-${projectId}`)
     .filter((accountId) => !projectAccounts[accountId]);
   for (const accountId of retiredAccountIds) await ctx.rpc.channelsStop({ channel: "mattermost", accountId });
-  await updateMattermostAccountSecrets(OPENCLAW_DIR, { remove: [...new Set([...projectSecrets.remove, ...retiredAccountIds])] });
+  const removedSecrets = await updateMattermostAccountSecrets(OPENCLAW_DIR, { remove: [...new Set([...projectSecrets.remove, ...retiredAccountIds])] });
+  secretMaterial.noteIf(setSecrets.changed || removedSecrets.changed, "Mattermost account secrets file changed");
   await settleProjectAgentActivations(ctx, {
-    snapshot, projectAgents, channels: brokerSnapshot.channels, baseline,
+    snapshot, projectAgents, channels: brokerSnapshot.channels, baseline, secretMaterial,
     activate: async () => {
       if (pendingAccountIds.length === 0) return;
       markMattermostRoutingActivationPending(OPENCLAW_DIR, logPrefix, pendingAccountIds, baseline);
@@ -1383,7 +1442,12 @@ async function activateImportedCustomer(
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
-  const safeManifest = await materializeActivationManifestSecret(OPENCLAW_DIR, manifest);
+  const secretMaterial = createSecretMaterialLedger();
+  const { manifest: safeManifest, secretsChanged } = await materializeActivationManifestSecret(
+    OPENCLAW_DIR,
+    manifest,
+  );
+  secretMaterial.noteIf(secretsChanged, "Mattermost account secrets file changed");
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
@@ -1403,7 +1467,13 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
-  await materializeCustomerBrokerProfiles(activationManifestAgentIds(safeManifest), slug, ctx.log, `[import:${slug}]`);
+  const brokerProfiles = await materializeCustomerBrokerProfiles(
+    activationManifestAgentIds(safeManifest),
+    slug,
+    ctx.log,
+    `[import:${slug}]`,
+  );
+  secretMaterial.note(brokerProfileMaterializationReason(brokerProfiles.materialized));
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
@@ -1412,9 +1482,10 @@ async function activateImportedCustomer(
     waitForAppliedRevision: ctx.isBuilderGateway(),
   });
   if (ctx.isBuilderGateway()) {
-    await restoreModelCredentialOauthStoreForSlug(slug, {
+    const restore = await restoreModelCredentialOauthStoreForSlug(slug, {
       logFn: (message) => ctx.log(`[import:${slug}] ${message}`),
     });
+    secretMaterial.noteIf(restore.restored, "model credential OAuth store restored");
   }
   const accountIds = [
     safeManifest.accountId,
@@ -1448,9 +1519,11 @@ async function activateImportedCustomer(
     },
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
+  secretMaterial.noteIf(patch.configNoop !== true, "activation config patch changed the config");
   const verificationPending = await settleActivatedImport(ctx, {
     slug,
     patch,
+    secretMaterial,
     signal: opts?.signal,
     configuredBuilderRouting: isConfiguredGatewayBuilder(slug)
       ? { accountIds, baseline: routingActivationBaseline }
@@ -1472,6 +1545,7 @@ async function settleActivatedImport(
       restartExistingAccountIds?: string[];
       configNoop?: boolean;
     };
+    secretMaterial: SecretMaterialLedger;
     signal?: AbortSignal;
     configuredBuilderRouting?: {
       accountIds: readonly string[];
@@ -1479,10 +1553,10 @@ async function settleActivatedImport(
     };
   },
 ): Promise<string | undefined> {
-  const { slug, patch, signal, configuredBuilderRouting } = input;
+  const { slug, patch, secretMaterial, signal, configuredBuilderRouting } = input;
   try {
     await waitForAppliedConfigRevision(ctx.rpc, slug, { signal });
-    await reloadRuntimeSecrets(ctx, `[import:${slug}]`);
+    await reloadRuntimeSecretsIfChanged(ctx, `[import:${slug}]`, secretMaterial);
     if (configuredBuilderRouting && patch.configNoop === true) {
       await activateMattermostRoutingAfterConfigPatch(
         ctx.rpc,

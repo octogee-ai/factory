@@ -33,7 +33,7 @@ export async function exportActivationManifestWithSecret(
 export async function materializeActivationManifestSecret(
   openclawDir: string,
   manifest: MigrationActivationManifest,
-): Promise<MigrationActivationManifest> {
+): Promise<{ manifest: MigrationActivationManifest; secretsChanged: boolean }> {
   const projectAgents = manifest.projectAgents ?? [];
   const accounts = [
     {
@@ -52,22 +52,25 @@ export async function materializeActivationManifestSecret(
     }
     tokens[account.accountId] = token;
   }
-  await updateMattermostAccountSecrets(openclawDir, {
+  const { changed } = await updateMattermostAccountSecrets(openclawDir, {
     set: tokens,
     removePrefixes: [`${manifest.slug}-proj-`],
   });
   return {
-    ...manifest,
-    mattermostAccount: {
-      ...manifest.mattermostAccount,
-      botToken: mattermostAccountSecretRef(manifest.accountId),
-    },
-    projectAgents: projectAgents.map((project) => ({
-      ...project,
+    secretsChanged: changed,
+    manifest: {
+      ...manifest,
       mattermostAccount: {
-        ...project.mattermostAccount,
-        botToken: mattermostAccountSecretRef(project.accountId),
+        ...manifest.mattermostAccount,
+        botToken: mattermostAccountSecretRef(manifest.accountId),
       },
-    })),
+      projectAgents: projectAgents.map((project) => ({
+        ...project,
+        mattermostAccount: {
+          ...project.mattermostAccount,
+          botToken: mattermostAccountSecretRef(project.accountId),
+        },
+      })),
+    },
   };
 }

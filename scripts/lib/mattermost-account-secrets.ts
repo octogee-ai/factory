@@ -118,6 +118,10 @@ async function withMattermostAccountSecretsLease(
   lease.release();
 }
 
+function secretsSnapshot(secrets: Record<string, string>): string {
+  return JSON.stringify(Object.keys(secrets).sort().map((accountId) => [accountId, secrets[accountId]]));
+}
+
 export async function updateMattermostAccountSecrets(
   openclawDir: string,
   change: {
@@ -125,13 +129,15 @@ export async function updateMattermostAccountSecrets(
     remove?: readonly string[];
     removePrefixes?: readonly string[];
   },
-): Promise<void> {
+): Promise<{ changed: boolean }> {
   const filePath = mattermostAccountSecretsPath(openclawDir);
   const prior = updates.get(filePath) ?? Promise.resolve();
+  let changed = false;
   const current = prior.catch(() => undefined).then(() => withMattermostAccountSecretsLease(
     filePath,
     async () => {
       const secrets = await readSecrets(filePath);
+      const before = secretsSnapshot(secrets);
       for (const accountId of change.remove ?? []) {
         assertAccountId(accountId);
         delete secrets[accountId];
@@ -147,6 +153,7 @@ export async function updateMattermostAccountSecrets(
         if (token.length === 0) throw new Error(`Mattermost account ${accountId} has an empty token`);
         secrets[accountId] = token;
       }
+      changed = secretsSnapshot(secrets) !== before;
       await writeSecrets(filePath, secrets);
     },
   ));
@@ -156,6 +163,7 @@ export async function updateMattermostAccountSecrets(
   } finally {
     if (updates.get(filePath) === current) updates.delete(filePath);
   }
+  return { changed };
 }
 
 export async function readMattermostAccountSecret(

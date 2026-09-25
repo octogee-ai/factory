@@ -163,4 +163,24 @@ describe("Mattermost account SecretRefs", () => {
     await expect(readMattermostAccountSecret(openclawDir, "bob-proj-keep"))
       .resolves.toBe("pat-bob");
   });
+
+  it("reports whether the secrets file content changed", async () => {
+    const openclawDir = tempOpenClawDir();
+
+    await expect(updateMattermostAccountSecrets(openclawDir, { set: { "alice-coach": "pat-a" } }))
+      .resolves.toEqual({ changed: true });
+    await expect(updateMattermostAccountSecrets(openclawDir, { set: { "alice-coach": "pat-a" } }))
+      .resolves.toEqual({ changed: false });
+    await expect(updateMattermostAccountSecrets(openclawDir, {
+      set: { "alice-coach": "pat-a" },
+      remove: ["never-set"],
+      removePrefixes: ["alice-proj-"],
+    })).resolves.toEqual({ changed: false });
+    await expect(updateMattermostAccountSecrets(openclawDir, { set: { "alice-coach": "pat-rotated" } }))
+      .resolves.toEqual({ changed: true });
+    await expect(updateMattermostAccountSecrets(openclawDir, { remove: ["alice-coach"] }))
+      .resolves.toEqual({ changed: true });
+    await expect(updateMattermostAccountSecrets(openclawDir, { remove: ["alice-coach"] }))
+      .resolves.toEqual({ changed: false });
+  });
 });

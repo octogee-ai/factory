@@ -93,11 +93,13 @@ RUN node ops/verify-native-modules.mjs
 # ── Workspace templates ─────────────────────────────────────────────────────
 # ── Plugin extensions ────────────────────────────────────────────────────────
 # Staged at /octogee/extensions/ and projected into ~/.openclaw/extensions/.
+# Each extension ships as one self-contained index.js: runtime dependencies are
+# bundled in, only node builtins and openclaw/plugin-sdk/* stay external, and no
+# node_modules tree is left for OpenClaw's plugin-generation capture to copy.
 COPY --chown=node:node infra/gateway/extensions/ /octogee/extensions/
 COPY --chown=node:node infra/gateway/build-extensions.mjs \
       infra/gateway/extension-manifest.mjs \
-      infra/gateway/install-extension-deps.mjs \
-      infra/gateway/verify-extension-deps.mjs \
+      infra/gateway/verify-extension-bundles.mjs \
       /octogee/infra/gateway/
 RUN node /octogee/infra/gateway/build-extensions.mjs \
       /octogee/extensions \
@@ -110,20 +112,12 @@ RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/bundled-extensions/octog
       --outfile=/octogee/bundled-extensions/octogee-identity-tools/index.js \
     && rm /octogee/bundled-extensions/octogee-identity-tools/index.ts
 
-# ── Extension runtime deps ──────────────────────────────────────────────────
-# Every extension declaring `dependencies`, enumerated from the image tree.
-# A hand-maintained list here is what shipped octogee-board-tools with no
-# node_modules: esbuild bundles with `--packages=external`, so `typebox`
-# resolves at load time or not at all.
-WORKDIR /octogee/extensions
-RUN node /octogee/infra/gateway/install-extension-deps.mjs /octogee/extensions
-
-# ── Extension dependency gate ───────────────────────────────────────────────
+# ── Extension bundle gate ───────────────────────────────────────────────────
 # A plugin whose imports do not resolve is skipped at boot — the gateway comes
 # up Ready with fewer plugins than configured and only `openclaw` CLI output
-# names the missing module. Load each declared dependency from its extension
-# directory here, where a failure can still stop the image from being pushed.
-RUN node /octogee/infra/gateway/verify-extension-deps.mjs /octogee/extensions
+# names the missing module. Load each bundle here, where a failure can still
+# stop the image from being pushed, and refuse any leftover node_modules.
+RUN node /octogee/infra/gateway/verify-extension-bundles.mjs /octogee/extensions
 
 # Keep full devDependency installs, compiler inputs, npm caches, and deleted
 # extension TypeScript sources out of the deliverable image. COPY transfers the

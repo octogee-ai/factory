@@ -1,56 +1,96 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { extensionDirectories, readExtensionPackage } from "./extension-manifest.mjs";
+import {
+  extensionDirectories,
+  readExtensionPackage,
+  runtimeDependencies,
+} from "./extension-manifest.mjs";
 
 const extensionsRoot = path.resolve(process.argv[2] ?? "/octogee/extensions");
 const esbuild = path.resolve(
   process.argv[3] ?? "/octogee/scripts/node_modules/.bin/esbuild",
 );
+const npm = process.argv[4] ?? "npm";
 
-function removeTypeScriptSources(dir) {
+const BUILD_ONLY_MANIFEST_FIELDS = ["dependencies", "devDependencies", "overrides", "scripts"];
+const BUILD_ONLY_ENTRIES = new Set(["__tests__", "node_modules", "package-lock.json", "tsconfig.json"]);
+
+function run(name, command, args, cwd) {
+  const result = spawnSync(command, args, { cwd, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`${name} ${path.basename(command)} failed with status ${result.status}`);
+  }
+}
+
+function installBundleInputs(dir) {
+  const name = path.basename(dir);
+  const dependencies = runtimeDependencies(dir);
+  if (dependencies.length === 0) return;
+  if (!existsSync(path.join(dir, "package-lock.json"))) {
+    throw new Error(
+      `${name} declares dependencies (${dependencies.join(", ")}) but has no package-lock.json`,
+    );
+  }
+  console.error(`[extension-build] bundle inputs: ${name} (${dependencies.join(", ")})`);
+  run(name, npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"], dir);
+}
+
+function bundle(dir) {
+  const name = path.basename(dir);
+  const entry = path.join(dir, "index.ts");
+  if (!existsSync(entry)) throw new Error(`${name} is missing index.ts`);
+  run(name, esbuild, [
+    entry,
+    "--bundle",
+    "--platform=node",
+    "--format=esm",
+    "--target=node24",
+    "--external:openclaw",
+    "--external:openclaw/*",
+    `--outfile=${path.join(dir, "index.js")}`,
+  ]);
+}
+
+function stripBuildInputs(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
     const target = path.join(dir, entry.name);
+    if (BUILD_ONLY_ENTRIES.has(entry.name)) {
+      rmSync(target, { recursive: true, force: true });
+      continue;
+    }
     if (entry.isDirectory()) {
-      removeTypeScriptSources(target);
+      stripBuildInputs(target);
       continue;
     }
     if (/\.(?:cts|mts|ts|tsx)$/u.test(entry.name)) rmSync(target);
   }
 }
 
+function writeShippedManifest(dir) {
+  const manifest = readExtensionPackage(dir);
+  for (const field of BUILD_ONLY_MANIFEST_FIELDS) delete manifest[field];
+  writeFileSync(path.join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 const directories = extensionDirectories(extensionsRoot);
 if (directories.length === 0) throw new Error(`no Octogee extensions found in ${extensionsRoot}`);
 
 for (const dir of directories) {
-  const packageJson = readExtensionPackage(dir);
-  if (packageJson.type !== "module") {
+  if (readExtensionPackage(dir).type !== "module") {
     throw new Error(`${path.basename(dir)} must declare package.json type=module`);
   }
-  const entry = path.join(dir, "index.ts");
-  if (!existsSync(entry)) throw new Error(`${path.basename(dir)} is missing index.ts`);
-  const output = path.join(dir, "index.js");
-  const compiled = spawnSync(
-    esbuild,
-    [
-      entry,
-      "--bundle",
-      "--platform=node",
-      "--format=esm",
-      "--target=node24",
-      "--packages=external",
-      `--outfile=${output}`,
-    ],
-    { stdio: "inherit" },
-  );
-  if (compiled.error) throw compiled.error;
-  if (compiled.status !== 0) {
-    throw new Error(`${path.basename(dir)} compilation failed with status ${compiled.status}`);
-  }
+  installBundleInputs(dir);
+  bundle(dir);
 }
 
-for (const dir of directories) removeTypeScriptSources(dir);
+for (const dir of directories) {
+  stripBuildInputs(dir);
+  writeShippedManifest(dir);
+  const bytes = readFileSync(path.join(dir, "index.js")).length;
+  console.error(`[extension-build] ${path.basename(dir)}: index.js ${bytes} bytes, self-contained`);
+}

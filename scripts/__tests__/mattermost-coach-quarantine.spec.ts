@@ -3,7 +3,7 @@ import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 
 const mocks = vi.hoisted(() => ({
   applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
-  updateMattermostAccountSecrets: vi.fn(async () => undefined),
+  updateMattermostAccountSecrets: vi.fn(async () => ({ changed: true })),
 }));
 
 vi.mock("../lib/apply-config-patch.js", async (importOriginal) => ({
