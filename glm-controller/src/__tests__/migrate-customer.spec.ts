@@ -71,6 +71,7 @@ function mkOp(overrides: Partial<Operation>): Operation {
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    schedulerReady: vi.fn(async () => undefined),
     scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } })),
     restoreTarget: vi.fn(async ({ gatewayId, slug }) => {
       calls.push(`restore:${gatewayId}`);

@@ -106,6 +106,18 @@ export function createMigrationClient(deps) {
             }
             return result;
         },
+        async schedulerReady({ migrationId, gatewayId, transportId, slug }) {
+            const result = await postSignedJson({
+                transportId: transportId ?? gatewayId,
+                path: `/scheduler-ready/${gatewayId}`,
+                gatewayId,
+                migrationId,
+                body: { migrationId, slug },
+                timeoutMs: quiesceMs,
+            });
+            if (result.ready !== true)
+                throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
+        },
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,

@@ -219,6 +219,7 @@ export interface CustomerLifecycleAdapter {
     onUnmounted?: (slug: string) => void;
     uidForSlug: (slug: string) => Promise<string | null>;
     schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promise<SchedulerMigrationResult>;
+    schedulerReady: () => Promise<void>;
     resumeCustomer: (slug: string) => Promise<void>;
     quiesceCustomer: (slug: string, timeoutMs: number, opts?: {
         stopMattermost: boolean;

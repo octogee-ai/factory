@@ -50,6 +50,7 @@ export interface MigrationClientDeps {
 // transport are the same name (GATEWAY-SIMPLE-ROLL-SPEC).
 export interface MigrationClient {
   scheduler(opts: SchedulerMigrationRequestBody & { gatewayId: string; transportId?: string }): Promise<SchedulerMigrationResult>;
+  schedulerReady(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   quiesce(opts: {
     schedulerHandoff?: boolean;
@@ -256,6 +257,17 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         throw new Error(`scheduler ${body.phase} did not prove a drained matching operation`);
       }
       return result;
+    },
+    async schedulerReady({ migrationId, gatewayId, transportId, slug }) {
+      const result = await postSignedJson<{ ready?: unknown }>({
+        transportId: transportId ?? gatewayId,
+        path: `/scheduler-ready/${gatewayId}`,
+        gatewayId,
+        migrationId,
+        body: { migrationId, slug },
+        timeoutMs: quiesceMs,
+      });
+      if (result.ready !== true) throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
     },
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
       const res = await postSignedJson<RestoreMigrationResponse>({

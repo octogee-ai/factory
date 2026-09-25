@@ -1491,6 +1491,16 @@ describe("broker migration admission", () => {
     expect(rpc.cronJobCount).not.toHaveBeenCalled();
     expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-migrationqa-coach"], retainNonportable: true });
   });
+  it("proves scheduler readiness with a read-only gateway RPC and surfaces why it is not ready", async () => {
+    const ready = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot({})) });
+    await expect(buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: ready, log: vi.fn() }).schedulerReady()).resolves.toBeUndefined();
+    expect(ready.configGet).toHaveBeenCalledOnce();
+    expect(ready.schedulerMigration).not.toHaveBeenCalled();
+
+    const booting = mkGatewayRpc({ configGet: vi.fn(async () => { throw new Error("OpenClaw workspace identities are not initialized for this boot"); }) });
+    await expect(buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: booting, log: vi.fn() }).schedulerReady())
+      .rejects.toThrow("workspace identities are not initialized for this boot");
+  });
   it("leaves ingress to the whole-process rollout owner when requested", async () => {
     const rpc = mkGatewayRpc();
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });

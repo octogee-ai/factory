@@ -640,6 +640,22 @@ describe("MigrationClient.resume", () => {
   });
 });
 
+describe("MigrationClient.schedulerReady", () => {
+  it.each([
+    [{ ready: true }, null],
+    [{ ready: false }, "did not confirm readiness"],
+  ])("asks the gateway itself, signed, whether its scheduler is ready (%o)", async (response, rejection) => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify(response), { status: 200 }));
+    const client = createMigrationClient({ transferState: transferNotUnderTest, privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://target.example.com", fetch: fakeFetch });
+    const result = client.schedulerReady({ migrationId: "m1", gatewayId: "target", slug: "alice" });
+    if (rejection) await expect(result).rejects.toThrow(rejection);
+    else await expect(result).resolves.toBeUndefined();
+    expect(calls[0].url).toBe("https://target.example.com/scheduler-ready/target");
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice" });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "target"), calls[0].body!));
+  });
+});
+
 describe("MigrationClient.scheduler", () => {
   it("asks the source to retain host-bound jobs only inside a scheduler handoff", async () => {
     const { calls, fakeFetch } = captureFetch(() =>

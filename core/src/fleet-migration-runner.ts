@@ -8,7 +8,7 @@ import {
   type MigrationState,
   type MigrationStep,
 } from "./fleet-migration.js";
-import type { MigrationClient } from "./fleet-migration-client.js";
+import { MigrationRpcError, type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
 
 export interface ReportedStep {
@@ -54,6 +54,9 @@ export interface MigrationRunnerDeps {
 
 const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_DELAY_MS = 2_000;
+const TARGET_SCHEDULER_READY_TIMEOUT_MS = 120_000;
+const TARGET_SCHEDULER_READY_POLL_MS = 5_000;
+const TARGET_SCHEDULER_NOT_READY = /workspace identities are not initialized for this boot/;
 
 type StepTimings = Readonly<Record<string, number>>;
 
@@ -81,6 +84,35 @@ export interface MigrationRunnerResult {
   rolledBack: boolean;
 }
 
+async function handOffSchedules(params: {
+  deps: MigrationRunnerDeps;
+  slug: string;
+  from: string;
+  to: string;
+  schedulerMigrationId: string;
+  acceptRetainedTargetJobs: boolean;
+  targetScheduler: TargetSchedulerState;
+}): Promise<Record<string, number>> {
+  const { deps, slug } = params;
+  const clock = deps.now ?? Date.now;
+  const exportStartedAt = clock();
+  const schedules = await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: params.from, phase: "export" });
+  const schedulerExportMs = clock() - exportStartedAt;
+  const stageStartedAt = clock();
+  params.targetScheduler.mayHoldStage = true;
+  try {
+    await callTargetScheduler(deps, {
+      migrationId: params.schedulerMigrationId, slug, gatewayId: params.to, phase: "stage",
+      agentIds: schedules.agentIds, snapshot: schedules.snapshot,
+      ...(params.acceptRetainedTargetJobs ? { retainNonportable: true } : {}),
+    });
+  } catch (error) {
+    if (error instanceof TargetSchedulerNotReadyError) params.targetScheduler.mayHoldStage = false;
+    throw error;
+  }
+  return { schedulerExportMs, schedulerStageMs: clock() - stageStartedAt };
+}
+
 async function executeStep(params: {
   step: MigrationStep;
   deps: MigrationRunnerDeps;
@@ -92,6 +124,7 @@ async function executeStep(params: {
   targetGatewayId: string;
   schedulerMigrationId: string;
   acceptRetainedTargetJobs: boolean;
+  targetScheduler: TargetSchedulerState;
 }): Promise<StepTimings | undefined> {
   const {
     step,
@@ -122,19 +155,9 @@ async function executeStep(params: {
       });
       return;
     case "sync-state": {
-      const timings: Record<string, number> = {};
-      if (crossGateway && step.mode === "final") {
-        const exportStartedAt = clock();
-        const schedules = await deps.client.scheduler({ migrationId: params.schedulerMigrationId, slug, gatewayId: step.from, phase: "export" });
-        timings.schedulerExportMs = clock() - exportStartedAt;
-        const stageStartedAt = clock();
-        await deps.client.scheduler({
-          migrationId: params.schedulerMigrationId, slug, gatewayId: step.to, phase: "stage",
-          agentIds: schedules.agentIds, snapshot: schedules.snapshot,
-          ...(params.acceptRetainedTargetJobs ? { retainNonportable: true } : {}),
-        });
-        timings.schedulerStageMs = clock() - stageStartedAt;
-      }
+      const timings: Record<string, number> = crossGateway && step.mode === "final"
+        ? await handOffSchedules({ ...params, from: step.from, to: step.to })
+        : {};
       const transferStartedAt = clock();
       await deps.client.transferState({
         migrationId,
@@ -183,6 +206,52 @@ async function executeStep(params: {
 }
 
 class SchedulerHandoffPendingError extends Error {}
+
+class TargetSchedulerNotReadyError extends Error {}
+
+interface TargetSchedulerState {
+  mayHoldStage: boolean;
+}
+
+type SchedulerRequest = Parameters<MigrationClient["scheduler"]>[0];
+
+function callTargetScheduler(
+  deps: MigrationRunnerDeps,
+  request: SchedulerRequest,
+  options: { waitForReady: boolean } = { waitForReady: true },
+): Promise<void> {
+  return untilTargetSchedulerReady(deps, request.gatewayId, request.phase, async () => {
+    await deps.client.scheduler(request);
+  }, options);
+}
+
+async function untilTargetSchedulerReady(
+  deps: MigrationRunnerDeps,
+  gatewayId: string,
+  purpose: string,
+  call: () => Promise<void>,
+  options: { waitForReady: boolean } = { waitForReady: true },
+): Promise<void> {
+  const clock = deps.now ?? Date.now;
+  const wait = deps.wait ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+  const deadline = clock() + TARGET_SCHEDULER_READY_TIMEOUT_MS;
+  while (true) {
+    try {
+      await call();
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!TARGET_SCHEDULER_NOT_READY.test(message)) throw error;
+      if (!options.waitForReady || clock() >= deadline) {
+        throw new TargetSchedulerNotReadyError(
+          `target gateway ${gatewayId} scheduler did not become ready within ${TARGET_SCHEDULER_READY_TIMEOUT_MS}ms: ${message}`,
+        );
+      }
+      deps.log(`[migration-runner] ⏳ target gateway ${gatewayId} scheduler not ready for ${purpose}; retrying: ${message}`);
+      await wait(TARGET_SCHEDULER_READY_POLL_MS);
+    }
+  }
+}
 
 async function finalizeSchedulerHandoff(
   client: MigrationClient,
@@ -234,6 +303,7 @@ interface MigrationExecution {
   crossGateway: boolean;
   quiescingMarked: boolean;
   quiesceStarted: boolean;
+  targetScheduler: TargetSchedulerState;
   state: MigrationState;
 }
 
@@ -247,6 +317,7 @@ function createMigrationExecution(
     crossGateway: input.crossGateway ?? input.fromGatewayId !== input.toGatewayId,
     quiescingMarked: false,
     quiesceStarted: false,
+    targetScheduler: { mayHoldStage: false },
     state: {
       phase: "initial",
       slug: input.slug,
@@ -285,9 +356,31 @@ function executeForwardStep(execution: MigrationExecution, step: MigrationStep):
     includeActivationManifest: input.includeActivationManifest,
     crossGateway: execution.crossGateway,
     targetGatewayId: input.toGatewayId,
-    schedulerMigrationId: input.schedulerMigrationId ?? input.migrationId,
+    schedulerMigrationId: schedulerMigrationId(input),
     acceptRetainedTargetJobs: input.acceptRetainedTargetJobs === true,
+    targetScheduler: execution.targetScheduler,
   });
+}
+
+function schedulerMigrationId(input: MigrationRunnerInput): string {
+  return input.schedulerMigrationId ?? input.migrationId;
+}
+
+const TARGET_SCHEDULER_READY_STEP = "target-scheduler-ready";
+
+async function awaitTargetSchedulerReady(execution: MigrationExecution): Promise<void> {
+  const { input, deps } = execution;
+  await report(deps, { name: TARGET_SCHEDULER_READY_STEP, status: "running" });
+  try {
+    await untilTargetSchedulerReady(deps, input.toGatewayId, "readiness", () =>
+      deps.client.schedulerReady({ migrationId: input.migrationId, gatewayId: input.toGatewayId, slug: input.slug }));
+  } catch (error) {
+    if (!(error instanceof MigrationRpcError && error.status === 404)) throw error;
+    deps.log(`[migration-runner] target gateway ${input.toGatewayId} predates the scheduler readiness endpoint; migrating without the readiness gate`);
+    await report(deps, { name: TARGET_SCHEDULER_READY_STEP, status: "skipped", error: error.message });
+    return;
+  }
+  await report(deps, { name: TARGET_SCHEDULER_READY_STEP, status: "done" });
 }
 
 function migrationComplete(execution: MigrationExecution): MigrationRunnerResult {
@@ -308,6 +401,13 @@ async function runNextMigrationStep(
   const step = nextMigrationStep(execution.state);
   if (step.action === "complete") return migrationComplete(execution);
   const phaseAtStart = execution.state.phase;
+  if (step.action === "quiesce-source" && execution.crossGateway) {
+    try {
+      await awaitTargetSchedulerReady(execution);
+    } catch (error) {
+      return handleStepFailure(execution, { step, name: TARGET_SCHEDULER_READY_STEP, phaseAtStart, error });
+    }
+  }
   const name = reportName(step);
   await report(execution.deps, { name, status: "running" });
   try {
@@ -400,10 +500,11 @@ function rollbackServingTarget(
 function rollbackExecution(execution: MigrationExecution): Promise<RollbackOutcome> {
   const { input, deps } = execution;
   return tryRollback(execution.state, deps, input.migrationId, {
-    schedulerMigrationId: input.schedulerMigrationId ?? input.migrationId,
+    schedulerMigrationId: schedulerMigrationId(input),
     crossGateway: execution.crossGateway,
     restoreServing: rollbackServingTarget(execution),
     quiesceStarted: execution.quiesceStarted,
+    targetScheduler: execution.targetScheduler,
   });
 }
 
@@ -412,6 +513,7 @@ interface RollbackTransports {
   crossGateway: boolean;
   restoreServing: { gatewayId: string; uid: string } | null;
   quiesceStarted: boolean;
+  targetScheduler: TargetSchedulerState;
 }
 
 async function confirmRelease(
@@ -463,12 +565,22 @@ async function abortTargetScheduler(
   if (!transports.crossGateway) return null;
   const name = "rollback:scheduler-abort";
   await report(deps, { name, status: "running" });
+  const mayHoldStage = transports.targetScheduler.mayHoldStage;
   try {
-    await deps.client.scheduler({ migrationId: transports.schedulerMigrationId, gatewayId: state.toGatewayId, slug: state.slug, phase: "abort" });
+    await callTargetScheduler(
+      deps,
+      { migrationId: transports.schedulerMigrationId, gatewayId: state.toGatewayId, slug: state.slug, phase: "abort" },
+      { waitForReady: mayHoldStage },
+    );
     await report(deps, { name, status: "done" });
     return null;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof TargetSchedulerNotReadyError && !mayHoldStage) {
+      await report(deps, { name, status: "skipped", error: message });
+      deps.log(`[migration-runner] target ${state.toGatewayId} never received a stage for ${transports.schedulerMigrationId}; nothing to abort`);
+      return null;
+    }
     await report(deps, { name, status: "failed", error: message });
     return `target scheduler abort unconfirmed on ${state.toGatewayId}, source left closed: ${message}`;
   }
@@ -497,7 +609,7 @@ async function tryRollback(
     );
     return { rolledBack: false };
   }
-  const abortUnconfirmed = await abortTargetScheduler(state, deps, transports);
+  const abortUnconfirmed = transports.quiesceStarted ? await abortTargetScheduler(state, deps, transports) : null;
   if (abortUnconfirmed) return { rolledBack: false, unreleased: abortUnconfirmed };
   for (const step of plan) {
     const rbName = `rollback:${reportName(step)}`;
@@ -516,6 +628,7 @@ async function tryRollback(
         targetGatewayId: state.toGatewayId,
         schedulerMigrationId: transports.schedulerMigrationId,
         acceptRetainedTargetJobs: false,
+        targetScheduler: transports.targetScheduler,
       });
       await report(deps, { name: rbName, status: "done" });
       deps.log(`[migration-runner] rollback ${step.action} ok`);

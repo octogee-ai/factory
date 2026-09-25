@@ -24,6 +24,7 @@ import {
   createPushRsyncStateHandler,
   createQuiesceHandler,
   createSchedulerMigrationHandler,
+  createSchedulerReadyHandler,
   createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -3551,6 +3552,35 @@ describe("createResumeHandler", () => {
   });
 });
 
+
+describe("scheduler readiness signed endpoint", () => {
+  const body = { migrationId: "m1", slug: "chris" };
+  const signed = () => mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) });
+  it("confirms readiness only after a gateway RPC connects, and never touches cron.migration", async () => {
+    const schedulerReady = vi.fn(async () => undefined);
+    const schedulerMigration = vi.fn();
+    const response = mkResponse();
+    await createSchedulerReadyHandler(mkDeps({ adapter: mkAdapter({ schedulerReady, schedulerMigration }) }))(signed(), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual({ ready: true });
+    expect(schedulerReady).toHaveBeenCalledOnce();
+    expect(schedulerMigration).not.toHaveBeenCalled();
+  });
+  it("reports why the scheduler is not ready", async () => {
+    const schedulerReady = vi.fn(async () => { throw new Error("OpenClaw workspace identities are not initialized for this boot"); });
+    const response = mkResponse();
+    await createSchedulerReadyHandler(mkDeps({ adapter: mkAdapter({ schedulerReady }) }))(signed(), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toEqual({ error: "scheduler readiness failed", message: "OpenClaw workspace identities are not initialized for this boot" });
+  });
+  it("rejects an unsigned readiness probe", async () => {
+    const schedulerReady = vi.fn();
+    const response = mkResponse();
+    await createSchedulerReadyHandler(mkDeps({ adapter: mkAdapter({ schedulerReady }) }))(mkRequest(body, {}), response.res, vi.fn());
+    expect(response.getStatus()).toBe(401);
+    expect(schedulerReady).not.toHaveBeenCalled();
+  });
+});
 
 describe("scheduler migration signed endpoint", () => {
   const body = { migrationId: "handoff-1", slug: "chris", phase: "hold" as const };

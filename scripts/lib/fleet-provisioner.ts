@@ -36,6 +36,7 @@ import {
   createMigrationProgressHandler,
   createQuiesceHandler,
   createSchedulerMigrationHandler,
+  createSchedulerReadyHandler,
   createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -1939,6 +1940,7 @@ function registerMigrationRoutes(
   app.post("/migration-progress/:gatewayId", createMigrationProgressHandler(migrationDeps));
   app.post("/resume/:gatewayId", createResumeHandler(migrationDeps));
   app.post("/scheduler/:gatewayId", createSchedulerMigrationHandler(migrationDeps));
+  app.post("/scheduler-ready/:gatewayId", createSchedulerReadyHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));

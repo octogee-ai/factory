@@ -171,6 +171,7 @@ describe("classifyOperationFailure", () => {
     ["source gateway with no ready pod while OpenClaw restarts", "expected exactly one ready pod for transport=shared-50fedc9f5f74; found 0"],
     ["gateway with no running pod", "expected exactly one running pod for transport=shared-0; found 0"],
     ["gateway mid-roll with two ready pods", "expected exactly one ready pod for transport=shared-0; found 2"],
+    ["Builder computer whose OpenClaw has not initialized this boot's workspace identities", 'target gateway ceckert-s-7b9a4acb scheduler did not become ready within 120000ms: /scheduler/ceckert-s-7b9a4acb: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}'],
   ])("classifies a pre-cutover %s as transient so placement re-arms it", (_name, error) => {
     expect(classifyOperationFailure(error)).toBe("transient");
   });

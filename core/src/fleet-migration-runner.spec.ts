@@ -1,11 +1,25 @@
 import { describe, it, expect, vi } from "vitest";
 import { runMigration, type MigrationRunnerDeps } from "./fleet-migration-runner";
-import type { MigrationClient } from "./fleet-migration-client";
+import { MigrationRpcError, type MigrationClient } from "./fleet-migration-client";
+
+// Mirrors the pinned OpenClaw cron.migration kernel: an abort with no row for the
+// operation writes an "aborted" tombstone, and any later non-abort phase for that
+// operation on that gateway is refused.
+function kernelScheduler() {
+  const tombstones = new Set<string>();
+  return vi.fn(async ({ migrationId, phase, gatewayId }: Parameters<MigrationClient["scheduler"]>[0]) => {
+    const key = `${gatewayId}/${migrationId}`;
+    if (phase === "abort") tombstones.add(key);
+    else if (tombstones.has(key)) throw new Error(`/scheduler/${gatewayId}: 500 {"error":"scheduler migration failed","message":"Cron migration already aborted: ${migrationId}"}`);
+    return { operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
+  });
+}
 
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
-    scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} })),
+    scheduler: kernelScheduler(),
+    schedulerReady: vi.fn(async () => undefined),
     resume: vi.fn(async () => undefined),
     restoreTarget: vi.fn(async ({ slug }) => {
       calls.push(`restore:${slug}`);
@@ -103,6 +117,7 @@ describe("runMigration — happy path", () => {
     const reports = events.filter((event) => event.startsWith("report:"));
     expect(reports).toEqual([
       "report:keys-sync-state:running", "report:keys-sync-state:done",
+      "report:target-scheduler-ready:running", "report:target-scheduler-ready:done",
       "report:quiesce-source:running", "report:quiesce-source:done",
       "report:flush-source:running", "report:flush-source:done",
       "report:final-sync-state:running", "report:final-sync-state:done",
@@ -519,6 +534,152 @@ describe("rollback releases the source scheduler fence", () => {
     const result = await runMigration(h.input, h.deps);
 
     expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("resume");
+    expect(h.client.resume).not.toHaveBeenCalled();
+  });
+});
+
+describe("target scheduler readiness", () => {
+  const NOT_READY = '/scheduler/gw-green: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
+  const READY_NOT_READY = '/scheduler-ready/gw-green: 500 {"error":"scheduler readiness failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
+
+  function clockedHarness() {
+    const h = harness({ gateAssignment: true });
+    let clock = 0;
+    h.deps.now = () => clock;
+    h.deps.wait = vi.fn(async (delayMs: number) => { clock += delayMs; });
+    return h;
+  }
+
+  function targetNotReadyFor(h: ReturnType<typeof harness>, notReady: (request: { phase: string; gatewayId: string }) => boolean) {
+    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
+    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
+      if (request.gatewayId === "gw-green" && notReady(request)) throw new Error(NOT_READY);
+      return scheduler(request);
+    });
+  }
+
+  it("sends nothing to the target's scheduler for the attempt before it stages", async () => {
+    const h = harness({ gateAssignment: true });
+    const calls: string[] = [];
+    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
+    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
+      calls.push(`${request.gatewayId}:${request.phase}`);
+      return scheduler(request);
+    });
+
+    expect(await runMigration({ ...h.input, schedulerMigrationId: "m1:scheduler:1" }, h.deps)).toMatchObject({ success: true });
+
+    const targetCalls = calls.filter((call) => call.startsWith("gw-green:"));
+    expect(targetCalls[0]).toBe("gw-green:stage");
+  });
+
+  it("asks the target whether its scheduler is ready before fencing the source", async () => {
+    const h = clockedHarness();
+    let probes = 0;
+    vi.mocked(h.client.schedulerReady).mockImplementation(async () => {
+      if (++probes < 3) throw new Error(READY_NOT_READY);
+    });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(probes).toBe(3);
+    expect(h.client.schedulerReady).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-green", slug: "alice" });
+    const lastProbe = vi.mocked(h.client.schedulerReady).mock.invocationCallOrder[2];
+    expect(lastProbe).toBeLessThan(vi.mocked(h.client.quiesce).mock.invocationCallOrder[0]);
+  });
+
+  it("proceeds without the gate when the target predates the readiness endpoint", async () => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.schedulerReady).mockRejectedValue(new MigrationRpcError("/scheduler-ready/gw-green: 404 Cannot POST", { status: 404 }));
+    const calls: string[] = [];
+    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
+    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
+      calls.push(`${request.gatewayId}:${request.phase}`);
+      return scheduler(request);
+    });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.client.schedulerReady).toHaveBeenCalledOnce();
+    expect(calls.filter((call) => call.startsWith("gw-green:"))[0]).toBe("gw-green:stage");
+    expect(h.events.filter((event) => event.startsWith("log:") && event.includes("predates the scheduler readiness endpoint") && event.includes("gw-green"))).toHaveLength(1);
+    expect(h.events).toContain("report:target-scheduler-ready:skipped");
+  });
+
+  it.each([401, 403])("fails the migration without fencing the source when the readiness probe is refused with %i", async (status) => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.schedulerReady).mockRejectedValue(new MigrationRpcError(`/scheduler-ready/gw-green: ${status} invalid signature`, { status }));
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.errorAt?.error).toContain(`${status} invalid signature`);
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.scheduler).not.toHaveBeenCalled();
+  });
+
+  it("never fences the source when the target scheduler stays unready, and fails retryably", async () => {
+    const h = clockedHarness();
+    vi.mocked(h.client.schedulerReady).mockRejectedValue(new Error(READY_NOT_READY));
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt?.error).toMatch(/target gateway gw-green scheduler did not become ready within \d+ms/);
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.scheduler).not.toHaveBeenCalled();
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.assignmentWrites).toEqual([]);
+    expect(h.events).toContain("report:target-scheduler-ready:failed");
+    expect(h.events.some((event) => event.startsWith("report:quiesce-source"))).toBe(false);
+  });
+
+  it("waits out a target that restarts between the readiness gate and the stage", async () => {
+    const h = clockedHarness();
+    let stages = 0;
+    targetNotReadyFor(h, ({ phase }) => phase === "stage" && ++stages < 3);
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(stages).toBe(3);
+  });
+
+  it("releases the source when a stage never reached an unready target", async () => {
+    const h = clockedHarness();
+    let ready = true;
+    targetNotReadyFor(h, ({ phase }) => {
+      if (phase === "stage") ready = false;
+      return !ready;
+    });
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(h.events).toContain("report:rollback:scheduler-abort:skipped");
+    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => `${request.gatewayId}:${request.phase}`))
+      .toContain("gw-blue:resume");
+    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
+    expect(h.events).toContain("assignment:gw-blue:serving");
+  });
+
+  it("keeps the source closed when a stage that may have landed cannot be aborted on an unready target", async () => {
+    const h = clockedHarness();
+    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
+      if (mode === "final") throw new Error("transfer failed");
+      return { migrationId: "m1", slug, imported: true };
+    });
+    let staged = false;
+    targetNotReadyFor(h, ({ phase }) => {
+      if (phase === "stage") { staged = true; return false; }
+      return staged;
+    });
+
+    const result = await runMigration(h.input, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.errorAt?.error).toContain("target scheduler abort unconfirmed on gw-green, source left closed");
+    expect(h.events).toContain("report:rollback:scheduler-abort:failed");
     expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("resume");
     expect(h.client.resume).not.toHaveBeenCalled();
   });

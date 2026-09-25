@@ -1,5 +1,5 @@
 import { type MigrationPhase } from "./fleet-migration.js";
-import type { MigrationClient } from "./fleet-migration-client.js";
+import { type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
 export interface ReportedStep {
     name: string;

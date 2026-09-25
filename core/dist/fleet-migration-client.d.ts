@@ -20,6 +20,12 @@ export interface MigrationClient {
         gatewayId: string;
         transportId?: string;
     }): Promise<SchedulerMigrationResult>;
+    schedulerReady(opts: {
+        migrationId: string;
+        gatewayId: string;
+        transportId?: string;
+        slug: string;
+    }): Promise<void>;
     resume(opts: {
         migrationId: string;
         gatewayId: string;

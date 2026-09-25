@@ -1863,6 +1863,7 @@ export function buildBrokeredLifecycleAdapter(
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
+    schedulerReady: async () => { await ctx.rpc.configGet(); },
     resumeCustomer: (slug) => setCustomerChannelsRunning(ctx.rpc, slug, true),
     listExportPaths,
     prepareImportDir: (slug, mode) => prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`)),

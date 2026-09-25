@@ -19,6 +19,14 @@ function isHandoff(value: unknown): value is SchedulerHandoffState {
     .every((key) => typeof handoff[key] === "string" && handoff[key] !== "");
 }
 
+const UNSETTLED_OPERATION_STATUSES: ReadonlySet<unknown> = new Set(["pending", "running", "failed"]);
+
+export function schedulerHandoffAwaitingRelease(operation: DocumentData | undefined): boolean {
+  return operation?.schedulerHandoffReleased === false &&
+    UNSETTLED_OPERATION_STATUSES.has(operation.status) &&
+    isHandoff(operation.schedulerHandoff);
+}
+
 type HandoffProgress = "never-held" | "held" | "staged" | "cut-over";
 
 function handoffProgress(operation: DocumentData): HandoffProgress {

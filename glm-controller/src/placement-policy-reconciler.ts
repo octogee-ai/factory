@@ -4,6 +4,7 @@ import type {
   Transaction,
 } from "firebase-admin/firestore";
 import { isReapedOperationError } from "./stuck-op-reaper.js";
+import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { createHash } from "node:crypto";
 
@@ -3663,7 +3664,7 @@ export function retirementAuthorityFenceAllows(
     retirementAssignmentFenceAllows(input);
 }
 
-type RetiredDisposableGatewayVerdict = "delete" | "rearmed" | "skip";
+type RetiredDisposableGatewayVerdict = "delete" | "rearmed" | "handoff-pending" | "skip";
 
 function retiredDisposableGatewayVerdict(input: {
   request: DeleteRetiredDisposableGatewayInput;
@@ -3672,6 +3673,7 @@ function retiredDisposableGatewayVerdict(input: {
   claimOperationId: unknown;
   operation: Record<string, unknown> | undefined;
   ownerMirrorGatewayId: string | null;
+  unreleasedHandoffOperationId: string | null;
 }): RetiredDisposableGatewayVerdict {
   const { request, root, operation } = input;
   const fenced = [
@@ -3685,7 +3687,9 @@ function retiredDisposableGatewayVerdict(input: {
     input.ownerMirrorGatewayId !== request.gatewayId,
   ].every(Boolean);
   if (!fenced) return "skip";
-  if (operation?.status === "succeeded") return "delete";
+  if (operation?.status === "succeeded") {
+    return input.unreleasedHandoffOperationId === null ? "delete" : "handoff-pending";
+  }
   if (operation?.status === "failed" && isReapedOperationError(operation.error)) return "rearmed";
   return "skip";
 }
@@ -3709,12 +3713,21 @@ async function deleteRetiredDisposableGatewayFirestore(
   const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
   const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
   const ownerRef = input.db.collection("users").doc(request.ownerUid);
+  const handoffOperationRefs = [
+    `builder-activate-${request.gatewayId}`,
+    `builder-return-${request.gatewayId}`,
+  ].map((id) => input.db.collection(GLM_OPERATIONS_COLLECTION).doc(id));
+  let unreleasedHandoffOperationId: string | null = null;
   const verdict = await input.db.runTransaction(async (transaction): Promise<RetiredDisposableGatewayVerdict> => {
-    const [rootSnapshot, operationSnapshot, ownerSnapshot] = await Promise.all([
+    const [rootSnapshot, operationSnapshot, ownerSnapshot, ...handoffSnapshots] = await Promise.all([
       transaction.get(gatewayRef),
       transaction.get(operationRef),
       transaction.get(ownerRef),
+      ...handoffOperationRefs.map((ref) => transaction.get(ref)),
     ]);
+    unreleasedHandoffOperationId = handoffSnapshots.find(
+      (snapshot) => schedulerHandoffAwaitingRelease(snapshot.data()),
+    )?.id ?? null;
     const root = projectGatewayDesiredRootForGateway(
       rootSnapshot.exists ? rootSnapshot.data() : undefined,
       request.gatewayId,
@@ -3735,6 +3748,7 @@ async function deleteRetiredDisposableGatewayFirestore(
       claimOperationId: claim?.operationId,
       operation: operationSnapshot.exists ? operation : undefined,
       ownerMirrorGatewayId,
+      unreleasedHandoffOperationId,
     });
     if (verdict === "rearmed") transaction.update(operationRef, rearmedRetireOperationPatch());
     return verdict;
@@ -3742,6 +3756,12 @@ async function deleteRetiredDisposableGatewayFirestore(
   if (verdict === "rearmed") {
     input.log(
       `[placement-policy] re-armed reaped retirement ${operationId} for ${request.gatewayId}; the op runner re-drives it`,
+    );
+    return false;
+  }
+  if (verdict === "handoff-pending") {
+    input.log(
+      `[placement-policy] kept retired disposable runtime ${request.gatewayId}: ${unreleasedHandoffOperationId} has an unreleased scheduler handoff; the handoff release sweep must settle it first`,
     );
     return false;
   }

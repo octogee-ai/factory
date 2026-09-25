@@ -281,6 +281,8 @@ uidForSlug: (slug: string) => Promise<string | null>;
 
 schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promise<SchedulerMigrationResult>;
 
+schedulerReady: () => Promise<void>;
+
 resumeCustomer: (slug: string) => Promise<void>;
 
 quiesceCustomer: (

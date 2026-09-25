@@ -487,6 +487,22 @@ export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): Req
   };
 }
 
+export function createSchedulerReadyHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? console.log;
+  return async (req, res) => {
+    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
+    if (!body) return;
+    try {
+      await deps.adapter.schedulerReady();
+      res.status(200).json({ ready: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] scheduler readiness failed migrationId=${body.migrationId}: ${message}`);
+      res.status(500).json({ error: "scheduler readiness failed", message });
+    }
+  };
+}
+
 export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? console.log;
   return async (req, res) => {
