@@ -245,6 +245,50 @@ describe("applyConfigPatch — hash-mismatch", () => {
       ),
     ).rejects.toMatchObject({ code: "hash-mismatch" });
   });
+
+  it("asks beforeRetry after the backoff and retries when it confirms", async () => {
+    const events: string[] = [];
+    const configPatch = vi.fn()
+      .mockRejectedValueOnce(new OpenclawWireError("hash-mismatch", "racing writer"))
+      .mockResolvedValueOnce({ ok: true });
+    const beforeRetry = vi.fn(async () => {
+      events.push("beforeRetry");
+      return true;
+    });
+    const configGet = vi.fn(async () => {
+      events.push("configGet");
+      return { config: {}, hash: "h1" };
+    });
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}), beforeRetry },
+        { ...baseOpts(), rpc: makeFakeRpc({ configGet, configPatch }) },
+      ),
+    ).resolves.toMatchObject({ attempts: 2 });
+
+    expect(events).toEqual(["configGet", "beforeRetry", "configGet"]);
+  });
+
+  it.each([
+    new OpenclawWireError("hash-mismatch", "racing writer"),
+    new OpenclawWireError("connect-failed", "WS open timed out"),
+  ])("bubbles the failure without another attempt when beforeRetry declines ($code)", async (failure) => {
+    const configPatch = vi.fn(async () => {
+      throw failure;
+    });
+    const log = vi.fn();
+
+    await expect(
+      applyConfigPatch(
+        { buildPatch: () => ({}), beforeRetry: async () => false, logPrefix: "[remove:alice]" },
+        { ...baseOpts({ log }), rpc: makeFakeRpc({ configPatch }) },
+      ),
+    ).rejects.toBe(failure);
+
+    expect(configPatch).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/\[remove:alice\] config\.patch retry declined/));
+  });
 });
 
 describe("applyConfigPatch — transient RPC errors retry with backoff", () => {

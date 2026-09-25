@@ -8,6 +8,9 @@ export interface ApplyConfigPatchArgs {
     buildReplacePaths?: (current: unknown) => string[];
     logPrefix?: string;
     skipIfAlreadyApplied?: boolean;
+    /** Runs after a failed attempt's backoff, before the next attempt. Returning false
+     *  declines the retry and bubbles that attempt's failure. */
+    beforeRetry?: () => Promise<boolean>;
 }
 export interface ConfigCache {
     current: unknown;

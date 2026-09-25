@@ -24,7 +24,10 @@ import {
 } from "../lib/openclaw-config-builders.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import { snapshotConfigFingerprint } from "../lib/snapshot-fingerprint.js";
-import { mergePatchValueAlreadyApplied } from "@octogee/core/apply-config-patch";
+import {
+  applyConfigPatch as realApplyConfigPatch,
+  mergePatchValueAlreadyApplied,
+} from "@octogee/core/apply-config-patch";
 import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch } from "@octogee/core/byot-sync-runtime";
 import { canonicalCustomerModelDefinition } from "../../shared/types/agent-models.js";
 import { _resetBrokerProfileLogStateForTests, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
@@ -1918,23 +1921,119 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry cleanup after an admission wins the config CAS", async () => {
-    const current = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
-      rpc: mkRemovalRpc(current),
-      log: vi.fn(),
-    });
-    patchMocks.applyConfigPatch.mockRejectedValueOnce(
-      new OpenclawWireError("hash-mismatch", "admission won"),
+  function realPatchOnce(): void {
+    patchMocks.applyConfigPatch.mockImplementationOnce(
+      (...[args, options]: Parameters<typeof realApplyConfigPatch>) => realApplyConfigPatch(args, options),
     );
+  }
+
+  function casLostOnce() {
+    return vi.fn()
+      .mockRejectedValueOnce(new OpenclawWireError(
+        "hash-mismatch",
+        "config changed since last load; re-run config.get and retry",
+      ))
+      .mockResolvedValue({ ok: true });
+  }
+
+  it("rebuilds the removal from a fresh config.get and completes the eviction after losing the config CAS", async () => {
+    const current = {
+      agents: { entries: keyedRoster(["octogee-alice-coach"]) },
+      channels: { mattermost: { accounts: { "alice-coach": {} } } },
+    };
+    const configPatchAndWaitForChange = casLostOnce();
+    const rpc = mkRemovalRpc(current, { configPatchAndWaitForChange } as Partial<GatewayRpcClient>);
+    realPatchOnce();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach", ["alice"], async () => ["alice"]),
+    ).resolves.toEqual(["alice"]);
+
+    expect(configPatchAndWaitForChange).toHaveBeenCalledTimes(2);
+    expect(configPatchAndWaitForChange.mock.calls[1]![0]).toEqual({
+      channels: { mattermost: { accounts: { "alice-coach": null } } },
+    });
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      { remove: ["alice-coach"], removePrefixes: ["alice-proj-"] },
+    );
+  });
+
+  it("does not retry a removal that has no placement check to re-confirm the eviction", async () => {
+    const current = {
+      agents: { entries: keyedRoster(["octogee-alice-coach"]) },
+      channels: { mattermost: { accounts: { "alice-coach": {} } } },
+    };
+    const configPatchAndWaitForChange = casLostOnce();
+    const rpc = mkRemovalRpc(current, { configPatchAndWaitForChange } as Partial<GatewayRpcClient>);
+    realPatchOnce();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await expect(
       adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach"),
     ).rejects.toMatchObject({ code: "hash-mismatch" });
 
-    expect(patchMocks.applyConfigPatch).toHaveBeenCalledTimes(1);
-    expect(patchMocks.applyConfigPatch.mock.calls[0]![1]).toMatchObject({ maxRetries: 1 });
+    expect(configPatchAndWaitForChange).toHaveBeenCalledTimes(1);
+    expect(secretMocks.updateMattermostAccountSecrets).not.toHaveBeenCalled();
+  });
+
+  it("stops retrying and keeps the Builder's accounts when it is desired here again after losing the CAS", async () => {
+    const current = {
+      agents: { entries: keyedRoster(["octogee-alice-coach"]) },
+      channels: { mattermost: { accounts: { "alice-coach": {} } } },
+    };
+    const configPatchAndWaitForChange = casLostOnce();
+    const rpc = mkRemovalRpc(current, { configPatchAndWaitForChange } as Partial<GatewayRpcClient>);
+    realPatchOnce();
+    const log = vi.fn();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach", ["alice"], async () => []),
+    ).resolves.toEqual([]);
+
+    expect(configPatchAndWaitForChange).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/\[remove:alice\].*alice.*desired on this gateway/));
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      { remove: [], removePrefixes: [] },
+    );
+  });
+
+  it("retries only the batch slugs that are still evicted after losing the CAS", async () => {
+    const current = {
+      agents: { entries: keyedRoster(["octogee-alice-coach", "octogee-bob-coach"]) },
+      channels: { mattermost: { accounts: { "alice-coach": {}, "bob-coach": {} } } },
+    };
+    const configPatchAndWaitForChange = casLostOnce();
+    const rpc = mkRemovalRpc(current, { configPatchAndWaitForChange } as Partial<GatewayRpcClient>);
+    realPatchOnce();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach", ["alice", "bob"], async () => ["alice"]),
+    ).resolves.toEqual(["alice"]);
+
+    expect(configPatchAndWaitForChange.mock.calls[1]![0]).toEqual({
+      channels: { mattermost: { accounts: { "alice-coach": null } } },
+    });
+  });
+
+  it("fails the eviction loudly without touching secrets when the removal patch is rejected", async () => {
+    const current = { agents: { entries: keyedRoster(["octogee-alice-coach"]) } };
+    const configPatchAndWaitForChange = vi.fn(async () => {
+      throw new OpenclawWireError("invalid-patch", "channels.mattermost.accounts: bad shape");
+    });
+    const rpc = mkRemovalRpc(current, { configPatchAndWaitForChange } as Partial<GatewayRpcClient>);
+    realPatchOnce();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(
+      adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach", ["alice"], async () => ["alice"]),
+    ).rejects.toMatchObject({ code: "invalid-patch" });
+
+    expect(configPatchAndWaitForChange).toHaveBeenCalledTimes(1);
     expect(secretMocks.updateMattermostAccountSecrets).not.toHaveBeenCalled();
   });
 

@@ -16,6 +16,9 @@ export interface ApplyConfigPatchArgs {
   buildReplacePaths?: (current: unknown) => string[];
   logPrefix?: string;
   skipIfAlreadyApplied?: boolean;
+  /** Runs after a failed attempt's backoff, before the next attempt. Returning false
+   *  declines the retry and bubbles that attempt's failure. */
+  beforeRetry?: () => Promise<boolean>;
 }
 
 export interface ConfigCache {
@@ -406,6 +409,16 @@ export interface ApplyConfigPatchResult {
   superseded?: boolean;
 }
 
+async function throwUnlessRetryConfirmed(
+  args: ApplyConfigPatchArgs,
+  err: OpenclawWireError,
+  ctx: { attempts: number; log: (msg: string) => void; prefix: string },
+): Promise<void> {
+  if (!args.beforeRetry || await args.beforeRetry()) return;
+  ctx.log(`⚠ ${ctx.prefix}config.patch retry declined after attempt=${ctx.attempts} (${err.code}) — bubbling`);
+  throw err;
+}
+
 export async function applyConfigPatch(
   args: ApplyConfigPatchArgs,
   opts: ApplyConfigPatchOptions = {},
@@ -468,6 +481,7 @@ export async function applyConfigPatch(
           throwIfAborted,
           totalDeadlineMs,
         });
+        await throwUnlessRetryConfirmed(args, err, { attempts, log, prefix });
       }
     }
   } finally {

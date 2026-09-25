@@ -214,6 +214,12 @@ async function handleConfigPatchFailure(err, ctx) {
     ctx.throwIfAborted();
     return Math.min(ctx.currentBackoff * 2, ctx.maxBackoff);
 }
+async function throwUnlessRetryConfirmed(args, err, ctx) {
+    if (!args.beforeRetry || await args.beforeRetry())
+        return;
+    ctx.log(`⚠ ${ctx.prefix}config.patch retry declined after attempt=${ctx.attempts} (${err.code}) — bubbling`);
+    throw err;
+}
 export async function applyConfigPatch(args, opts = {}) {
     const log = opts.log ?? defaultLog;
     const prefix = args.logPrefix ? `${args.logPrefix} ` : "";
@@ -271,6 +277,7 @@ export async function applyConfigPatch(args, opts = {}) {
                     throwIfAborted,
                     totalDeadlineMs,
                 });
+                await throwUnlessRetryConfirmed(args, err, { attempts, log, prefix });
             }
         }
     }

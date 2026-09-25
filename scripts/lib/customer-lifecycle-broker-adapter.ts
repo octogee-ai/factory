@@ -1150,6 +1150,44 @@ async function reconcileConfiguredBuilderProjectAgents(
   return { elapsedMs: Date.now() - startedAt, appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) };
 }
 
+async function removeCustomerAccountsWhileStillEvicted(
+  ctx: BrokerCtx,
+  slug: string,
+  slugs: readonly string[],
+  currentEvictionBatch?: () => Promise<readonly string[]>,
+): Promise<void> {
+  const logPrefix = `[remove:${slug}]`;
+  let batch = slugs;
+  try {
+    await applyConfigPatch(
+      {
+        buildPatch: (current) => buildRemoveCustomerAccountsPatch(current, batch),
+        buildReplacePaths: (current) => [...new Set(
+          batch.flatMap((batchSlug) => customerConfigReplacePaths(current, batchSlug)),
+        )],
+        logPrefix,
+        beforeRetry: async () => {
+          if (!currentEvictionBatch) return false;
+          const stillEvicted = new Set(await currentEvictionBatch());
+          const desiredAgain = batch.filter((batchSlug) => !stillEvicted.has(batchSlug));
+          if (desiredAgain.length > 0) {
+            ctx.log(`${logPrefix} ${desiredAgain.join(",")} desired on this gateway again — not removing on retry`);
+          }
+          batch = batch.filter((batchSlug) => stillEvicted.has(batchSlug));
+          return batch.length > 0;
+        },
+      },
+      {
+        rpc: convergedConfigRpc(ctx),
+        cache: ctx.configCache,
+        totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
+      },
+    );
+  } catch (err) {
+    if (batch.length > 0) throw err;
+  }
+}
+
 async function applyRemoveCustomerConfigPatch(
   ctx: BrokerCtx,
   slug: string,
@@ -1160,21 +1198,7 @@ async function applyRemoveCustomerConfigPatch(
   const slugs = [...new Set([slug, ...(evictionBatch ?? [])])];
   if (!ctx.configRemovedForEviction.has(slug)) {
     await deleteDepartingCustomerAgents(ctx, slugs, `[remove:${slug}]`);
-    await applyConfigPatch(
-      {
-        buildPatch: (current) => buildRemoveCustomerAccountsPatch(current, slugs),
-        buildReplacePaths: (current) => [...new Set(
-          slugs.flatMap((batchSlug) => customerConfigReplacePaths(current, batchSlug)),
-        )],
-        logPrefix: `[remove:${slug}]`,
-      },
-      {
-        rpc: convergedConfigRpc(ctx),
-        cache: ctx.configCache,
-        totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS,
-        maxRetries: 1,
-      },
-    );
+    await removeCustomerAccountsWhileStillEvicted(ctx, slug, slugs, currentEvictionBatch);
     for (const batchSlug of slugs) ctx.configRemovedForEviction.add(batchSlug);
   }
   const remaining = currentEvictionBatch
