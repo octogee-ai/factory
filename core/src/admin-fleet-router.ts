@@ -3951,13 +3951,15 @@ function rearmableBuilderReturnOperation(input: {
   const terminalStatus = operation.status === "failed" || operation.status === "rolled-back";
   const steps = operation.steps;
   const error = operation.error;
-  const readinessPreflightFailure = Array.isArray(steps) && steps.length === 0 &&
+  const endpointPreflightFailure = Array.isArray(steps) && steps.length === 0 &&
     typeof error === "string" && [
       `source gateway ${operationInput.fromGatewayId} is not migration-ready (`,
       `target gateway ${operationInput.toGatewayId} is not migration-ready (`,
+      `target gateway ${operationInput.toGatewayId} has no durable placement`,
+      `placement rejected for ${operationInput.toGatewayId}: `,
     ].some((prefix) => error.startsWith(prefix));
   const failedBeforeSourceQuiesce = operation.rolledBack === false &&
-    (readinessPreflightFailure || (Array.isArray(steps) && steps.length === 1 &&
+    (endpointPreflightFailure || (Array.isArray(steps) && steps.length === 1 &&
       isPlainRecord(steps[0]) && steps[0].name === "keys-sync-state" &&
       steps[0].status === "failed"));
   return [
@@ -4059,25 +4061,16 @@ function matchesBuilderReturnRetryState(input: {
   ].every(Boolean);
 }
 
-function rearmBuilderReturnOperation(
+function requestBuilderReturnRetry(
   db: Firestore,
   transaction: Transaction,
-  returnOperationId: string,
+  input: { returnOperationId: string; requestedAt: number; requestedBy: string },
 ): void {
   transaction.update(
-    db.collection(GLM_OPERATIONS_COLLECTION).doc(returnOperationId),
+    db.collection(GLM_OPERATIONS_COLLECTION).doc(input.returnOperationId),
     {
-      status: "pending",
-      startedAt: null,
-      completedAt: null,
-      steps: [],
-      error: FieldValue.delete(),
-      expireAt: FieldValue.delete(),
-      rolledBack: FieldValue.delete(),
-      output: FieldValue.delete(),
-      lastProgressAt: FieldValue.delete(),
-      waitingOn: FieldValue.delete(),
-      nextAttemptAt: FieldValue.delete(),
+      retryRequestedAt: input.requestedAt,
+      retryRequestedBy: input.requestedBy,
     },
   );
 }
@@ -4088,6 +4081,8 @@ async function retryActivationLeaseReturn(
   input: {
     uid: string;
     operationId: string;
+    requestedAt: number;
+    requestedBy: string;
   },
 ): Promise<ReasonedActivationLeaseMutationOutcome> {
   const userRef = db.collection("users").doc(input.uid);
@@ -4110,7 +4105,11 @@ async function retryActivationLeaseReturn(
   })) {
     return { kind: "conflict", reason: "Builder return no longer matches its original lease" };
   }
-  rearmBuilderReturnOperation(db, transaction, retryLease.returnOperationId);
+  requestBuilderReturnRetry(db, transaction, {
+    returnOperationId: retryLease.returnOperationId,
+    requestedAt: input.requestedAt,
+    requestedBy: input.requestedBy,
+  });
   return { kind: "retried" };
 }
 
@@ -5144,6 +5143,8 @@ router.post(
             retryActivationLeaseReturn(db, transaction, {
               uid,
               operationId,
+              requestedAt: Date.now(),
+              requestedBy: (req as ActorRequest).uid ?? "unknown",
             })
           ),
         });

@@ -140,6 +140,7 @@ export interface PlacementPolicyMigration {
   source: "continuous-placement-policy" | "builder-activation-lease";
   status: "pending" | "running" | "succeeded" | "failed" | "rolled-back";
   error?: string;
+  retryRequested?: boolean;
 }
 
 export type PlacementPolicyKubernetesStatus = "ready" | "not-ready" | "missing" | "unknown";
@@ -1759,8 +1760,9 @@ async function reconcileReturnMigrationOnTarget(
   const operationId = `builder-return-${targetGatewayId}`;
   const returnOperation = context.operations.get(operationId);
   if (
-    returnOperation?.status === "failed" ||
-    returnOperation?.status === ROLLED_BACK_STATUS
+    (returnOperation?.status === "failed" ||
+      returnOperation?.status === ROLLED_BACK_STATUS) &&
+    returnOperation.retryRequested !== true
   ) {
     blockTerminalReturnOperation(context, user.uid, lease, returnOperation);
     return true;
@@ -2481,6 +2483,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
     source,
     status,
     ...(typeof data.error === "string" ? { error: data.error } : {}),
+    ...(millis(data.retryRequestedAt) !== null ? { retryRequested: true } : {}),
   };
 }
 
@@ -3134,6 +3137,23 @@ function existingPlacementMigrationMatchesDemand(
   ].every(Boolean);
 }
 
+function operatorRetriedBuilderReturnMatchesDemand(
+  data: Record<string, unknown>,
+  request: EnqueuePlacementMigrationInput,
+): boolean {
+  const operationInput = record(data.input);
+  return [
+    request.source === BUILDER_ACTIVATION_LEASE_SOURCE,
+    data.kind === MIGRATE_CUSTOMER_KIND,
+    data.status === "failed" || data.status === ROLLED_BACK_STATUS,
+    millis(data.retryRequestedAt) !== null,
+    operationInput?.uid === request.uid,
+    operationInput?.builderSlug === request.builderSlug,
+    operationInput?.fromGatewayId === request.fromGatewayId,
+    operationInput?.source === request.source,
+  ].every(Boolean);
+}
+
 function placementMigrationIsNonTerminal(data: Record<string, unknown>): boolean {
   return ["pending", "running", "succeeded"].includes(data.status as string);
 }
@@ -3194,6 +3214,16 @@ export async function enqueuePlacementMigration(
       return;
     }
     const data = existing.data() as Record<string, unknown>;
+    if (operatorRetriedBuilderReturnMatchesDemand(data, request)) {
+      transaction.update(ref, {
+        ...rearmedPlacementMigrationPatch(),
+        "input.toGatewayId": request.toGatewayId,
+        gatewayId: request.toGatewayId,
+        retryRequestedAt: FieldValue.delete(),
+        retryRequestedBy: FieldValue.delete(),
+      });
+      return;
+    }
     if (!existingPlacementMigrationMatchesDemand(data, request)) {
       throw new Error(`migration operation ${ref.id} does not match activation demand`);
     }

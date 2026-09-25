@@ -1930,6 +1930,9 @@ describe("manual disposable runtime return", () => {
     { label: "first key transfer failure", rolledBack: false, steps: [{ name: "keys-sync-state", status: "failed" }], expected: 202 },
     { label: "source readiness preflight failure", rolledBack: false, steps: [], error: "source gateway run-alice is not migration-ready (desiredStatus=running, desiredRelease=8, liveRelease=7); requires running or draining with a converged release", expected: 202 },
     { label: "target readiness preflight failure", rolledBack: false, steps: [], error: "target gateway shared-blue is not migration-ready (desiredStatus=running, desiredRelease=8, liveRelease=7); requires running with a converged release", expected: 202 },
+    { label: "retired target placement preflight failure", rolledBack: false, steps: [], error: "target gateway shared-blue has no durable placement", expected: 202 },
+    { label: "rejected target placement preflight failure", rolledBack: false, steps: [], error: "placement rejected for shared-blue: gateway is draining", expected: 202 },
+    { label: "another gateway placement failure", rolledBack: false, steps: [], error: "target gateway shared-green has no durable placement", expected: 409 },
     { label: "another gateway readiness failure", rolledBack: false, steps: [], error: "source gateway run-bob is not migration-ready (desiredStatus=running)", expected: 409 },
     { label: "unknown failure without rollback", rolledBack: false, steps: [], expected: 409 },
     { label: "source quiesce without rollback", rolledBack: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "failed" }], expected: 409 },
@@ -2017,16 +2020,14 @@ describe("manual disposable runtime return", () => {
 
     expect(state.operations[operationId]).toMatchObject({
       kind: "migrate-customer",
-      status: "pending",
-      origin: "automatic",
-      createdBy: "glm-controller-placement-policy",
-      inputUid: "uid-alice",
+      status: "failed",
       gatewayId: "shared-blue",
-      attempts: 1,
-      attemptHistory: [{ attempt: 1, error: "checkpoint failed" }],
-      startedAt: null,
-      completedAt: null,
-      steps: [],
+      rolledBack,
+      steps,
+      error,
+      completedAt: 2,
+      retryRequestedAt: expect.any(Number),
+      retryRequestedBy: "unknown",
       input: {
         uid: "uid-alice",
         builderSlug: "alice",
@@ -2035,8 +2036,6 @@ describe("manual disposable runtime return", () => {
         source: "builder-activation-lease",
       },
     });
-    expect(state.operations[operationId]).not.toHaveProperty("error");
-    expect(state.operations[operationId]).not.toHaveProperty("rolledBack");
     expect(state.users["uid-alice"]).toMatchObject({
       provisioning: {
         openclaw: {
