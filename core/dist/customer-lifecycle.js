@@ -757,9 +757,26 @@ export async function removeCustomerFromGateway(adapter, uid, opts = {}) {
         steps.push("delete-dir");
         adapter.log(`[remove:${slug}] customer dir deleted`);
     }
+    if (await releaseUnmountedGiteaKey(adapter, slug))
+        steps.push("release-gitea-key");
     if (adapter.onUnmounted)
         adapter.onUnmounted(slug);
     return { wasMounted: true, steps };
+}
+async function releaseUnmountedGiteaKey(adapter, slug) {
+    const pubKey = adapter.readLocalCustomerPubKey(slug);
+    if (pubKey === null)
+        return false;
+    try {
+        await adapter.releaseGiteaUserKey(slug, pubKey);
+    }
+    catch (err) {
+        adapter.log(`⚠ [remove:${slug}] Gitea key release failed; local keypair kept for the preStop release: ${String(err)}`);
+        return false;
+    }
+    await adapter.deleteCustomerSshKey(slug);
+    adapter.log(`[remove:${slug}] Gitea key released and local keypair removed`);
+    return true;
 }
 export function pubKeysMatch(a, b) {
     const norm = (s) => {

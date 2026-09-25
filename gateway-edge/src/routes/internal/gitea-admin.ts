@@ -15,6 +15,7 @@ import {
 import {
   configuredBuilderBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
+import { gatewayKeyOwnerId } from "@octogee/core/gitea-naming";
 import { db } from "../../lib/db.js";
 import { requireInternalServiceAuth } from "../../middleware/auth.js";
 import { logger } from "../../middleware/logging.js";
@@ -180,7 +181,7 @@ function gatewayKeyOwnerForRequest(req: Request, res: Response): string | null {
     res.status(403).json({ error: "gateway pod identity is required for SSH key ownership" });
     return null;
   }
-  return `${caller.gatewayId}/${caller.podName}`;
+  return gatewayKeyOwnerId(caller.gatewayId, caller.podName);
 }
 
 async function requireAssignedHere(req: Request, res: Response, slug: string): Promise<boolean> {

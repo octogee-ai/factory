@@ -3,6 +3,7 @@ import { startGatewayHeartbeatPoller } from "../gateway-heartbeat-poller.js";
 import { startOrphanHeartbeatReaper } from "../orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "../stuck-op-reaper.js";
 import { startNativeReturnHoldReaper } from "../native-return-hold-reaper.js";
+import { startGiteaGatewayKeyGc } from "../gitea-gateway-key-gc.js";
 
 type Start = (work: () => Promise<void>, log: (message: string) => void) => () => void;
 const loops: Array<[string, Start]> = [
@@ -25,6 +26,13 @@ const loops: Array<[string, Start]> = [
     informer: { glmGateways: () => null },
     now: Date.now, intervalMs: 100, log,
     runTick: async () => { await work(); return { scanned: 0, released: 0 }; },
+  })],
+  ["gitea gateway key gc", (work, log) => startGiteaGatewayKeyGc({
+    gitea: { listUsernames: vi.fn(), listUserKeys: vi.fn(), deleteUserKey: vi.fn() },
+    readLiveOwnerIds: vi.fn(),
+    mode: "enforce", maxCallsPerTick: 1, minCallIntervalMs: 0, graceMs: 0,
+    now: Date.now, sleep: async () => {}, intervalMs: 100, log,
+    runTick: async () => { await work(); return { users: [], passCompleted: true, calls: 0 }; },
   })],
 ];
 

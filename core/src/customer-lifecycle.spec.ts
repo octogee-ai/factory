@@ -45,6 +45,8 @@ giteaRegisteredPubKeys?: string[];
 
 giteaReadShouldThrow: boolean;
 
+giteaReleaseShouldFail?: boolean;
+
   blobSyncShouldFail: boolean;
   reassertByotShouldFail?: boolean;
   reassertByotUserData?: Record<string, unknown>;
@@ -177,6 +179,10 @@ return "ssh-pubkey";
     deleteCustomerSshKey: async () => {
       record("deleteCustomerSshKey");
       state.disk.sshKey = false;
+    },
+    releaseGiteaUserKey: async (_slug, pubKey) => {
+      record(`releaseGiteaUserKey:${pubKey}`);
+      if (state.giteaReleaseShouldFail) throw new Error("gitea release failed");
     },
 
     blobSyncForSlug: async () => {
@@ -2046,11 +2052,55 @@ describe("removeCustomerFromGateway", () => {
     const result = await removeCustomerFromGateway(makeAdapter(state), "uid-test");
 
     expect(result.wasMounted).toBe(true);
-    expect(result.steps).toEqual(["config-patch-remove", "delete-dir"]);
+    expect(result.steps).toEqual(["config-patch-remove", "delete-dir", "release-gitea-key"]);
     expect(state.calls).toContain("applyRemoveCustomerConfigPatch");
     expect(state.calls).toContain("deleteCustomerDir");
     expect(state.calls).toContain("onUnmounted");
     expect(state.writes).toEqual([]);
+  });
+
+  it("releases this gateway's Gitea key and forgets the local keypair once the customer is gone", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+
+    await removeCustomerFromGateway(makeAdapter(state), "uid-test");
+
+    const release = state.calls.indexOf("releaseGiteaUserKey:ssh-pubkey");
+    expect(release).toBeGreaterThan(state.calls.indexOf("applyRemoveCustomerConfigPatch"));
+    expect(state.calls.indexOf("deleteCustomerSshKey")).toBeGreaterThan(release);
+    expect(state.disk.sshKey).toBe(false);
+  });
+
+  it("keeps the local keypair and finishes the unmount when the Gitea release fails", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    state.giteaReleaseShouldFail = true;
+
+    const result = await removeCustomerFromGateway(makeAdapter(state), "uid-test");
+
+    expect(result.steps).toEqual(["config-patch-remove", "delete-dir"]);
+    expect(state.calls).toContain("onUnmounted");
+    expect(state.calls).not.toContain("deleteCustomerSshKey");
+    expect(state.disk.sshKey).toBe(true);
+    expect(state.logs.some((line) => line.includes("Gitea key release failed"))).toBe(true);
+  });
+
+  it("does not release a Gitea key when the eviction is cancelled", async () => {
+    const state = makeState(mountedSnapshot(), mountedDisk());
+    const adapter: CustomerLifecycleAdapter = {
+      ...makeAdapter(state),
+      applyRemoveCustomerConfigPatch: async () => {
+        state.calls.push("applyRemoveCustomerConfigPatch");
+        return ["test"];
+      },
+    };
+
+    const result = await removeCustomerFromGateway(adapter, "uid-test", {
+      evictionBatch: ["test"],
+      currentEvictionBatch: async () => [],
+    });
+
+    expect(result.retained).toBe(true);
+    expect(state.calls.some((call) => call.startsWith("releaseGiteaUserKey"))).toBe(false);
+    expect(state.disk.sshKey).toBe(true);
   });
 
   it("is a no-op when the customer was never mounted", async () => {
@@ -2613,6 +2663,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     readLocalCustomerPubKey: false,
     readGiteaCustomerPubKeys: false,
     deleteCustomerSshKey: false,
+    releaseGiteaUserKey: false,
     blobSyncForSlug: false,
     restoreByosubForAgent: false,
     listProjectsNeedingClone: false,

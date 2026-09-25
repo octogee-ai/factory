@@ -5,3 +5,7 @@ export declare function workspaceRepoName(): string;
 export declare function systemConfigRepoName(): string;
 export declare function projectRepoName(projectSlug: string): string;
 export declare function giteaUsername(slug: string): string;
+export declare const GATEWAY_KEY_TITLE = "octogee-gateway";
+export declare function gatewayKeyOwnerId(gatewayId: string, podName: string): string;
+export declare function gatewayKeyTitle(identity: string): string;
+export declare function isManagedGatewayKeyTitle(title: string): boolean;

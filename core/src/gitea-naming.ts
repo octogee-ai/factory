@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 
 
 export const WORKSPACE_REPO = "workspace";
@@ -21,4 +23,19 @@ export function projectRepoName(projectSlug: string): string {
 
 export function giteaUsername(slug: string): string {
   return `ws-${slug}`;
+}
+
+export const GATEWAY_KEY_TITLE = "octogee-gateway";
+
+export function gatewayKeyOwnerId(gatewayId: string, podName: string): string {
+  return `${gatewayId}/${podName}`;
+}
+
+export function gatewayKeyTitle(identity: string): string {
+  const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
+  return `${GATEWAY_KEY_TITLE}-${digest}`;
+}
+
+export function isManagedGatewayKeyTitle(title: string): boolean {
+  return title === GATEWAY_KEY_TITLE || title.startsWith(`${GATEWAY_KEY_TITLE}-`);
 }

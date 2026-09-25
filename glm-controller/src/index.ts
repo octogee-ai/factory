@@ -304,12 +304,19 @@ import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import {
   assignedSlugsFromUserMirror,
   createFleetInformer,
+  mirroredOrScan,
   type FleetInformer,
   type MirrorDocChange,
 } from "./fleet-informer.js";
 import { recoverControllerOrphanedMigrations, startStuckOpReaper } from "./stuck-op-reaper.js";
 import { claimCrashLoopEviction } from "./surge-crashloop-eviction.js";
 import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
+import {
+  createGiteaKeyAdminClient,
+  parseGiteaGatewayKeyGcMode,
+  readLiveGatewayOwnerIds,
+  startGiteaGatewayKeyGc,
+} from "./gitea-gateway-key-gc.js";
 import { startHelmRecoverySweeper } from "./helm-recovery-sweeper.js";
 import { resumeOrphanedRunningOps } from "./resume-orphaned-ops.js";
 import { completeHealthySharedPoolAddGatewayOperations } from "./shared-pool-add-gateway-recovery.js";
@@ -2249,6 +2256,11 @@ interface ControllerBackgroundTasksDeps {
   platformArtifact: GatewayArtifact;
 }
 
+const GITEA_GATEWAY_KEY_GC_INTERVAL_MS = 60_000;
+const GITEA_GATEWAY_KEY_GC_MAX_CALLS_PER_TICK = 120;
+const GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS = 250;
+const GITEA_GATEWAY_KEY_GC_GRACE_MS = 60 * 60 * 1000;
+
 function startControllerBackgroundTasks({
   db,
   deps,
@@ -2306,6 +2318,33 @@ function startControllerBackgroundTasks({
     log,
     intervalMs: 60_000,
     now: () => Date.now(),
+  });
+  const kubeOps = deps.kubeOps;
+  const stopGiteaGatewayKeyGc = startGiteaGatewayKeyGc({
+    gitea: createGiteaKeyAdminClient({
+      apiUrl: requireEnv("GIT_API_URL", "the Gitea gateway key sweep requires it"),
+      token: requireEnv("GIT_API_TOKEN", "the Gitea gateway key sweep requires it"),
+    }),
+    readLiveOwnerIds: async () => {
+      const [gateways, glmGateways] = await Promise.all([
+        mirroredOrScan(informer.gateways(), () => db.collection(GATEWAYS_COLLECTION).get()),
+        mirroredOrScan(informer.glmGateways(), () => db.collection(GLM_GATEWAYS_COLLECTION).get()),
+      ]);
+      return readLiveGatewayOwnerIds({
+        gateways,
+        glmGateways,
+        readGatewayPodDiagnosticsBatch: (gatewayIds) =>
+          kubeOps.readGatewayPodDiagnosticsBatch({ namespace: NAMESPACE, gatewayIds }),
+      });
+    },
+    mode: parseGiteaGatewayKeyGcMode(process.env.GITEA_GATEWAY_KEY_GC_MODE),
+    maxCallsPerTick: GITEA_GATEWAY_KEY_GC_MAX_CALLS_PER_TICK,
+    minCallIntervalMs: GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS,
+    graceMs: GITEA_GATEWAY_KEY_GC_GRACE_MS,
+    intervalMs: GITEA_GATEWAY_KEY_GC_INTERVAL_MS,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    log,
   });
   const stopHelmRecoverySweeper = startHelmRecoverySweeper({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
@@ -2373,6 +2412,7 @@ function startControllerBackgroundTasks({
     stopStuckOpReaper,
     stopSchedulerHandoffRelease,
     stopNativeReturnHoldReaper,
+    stopGiteaGatewayKeyGc,
     stopHelmRecoverySweeper,
     stopPlacementPolicyReconciler,
     stopDisruptionObserver,

@@ -144,6 +144,7 @@ export interface CustomerLifecycleAdapter {
     readLocalCustomerPubKey: (slug: string) => string | null;
     readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
     deleteCustomerSshKey: (slug: string) => Promise<void>;
+    releaseGiteaUserKey: (slug: string, pubKey: string) => Promise<void>;
     blobSyncForSlug: (slug: string) => Promise<void>;
     restoreByosubForAgent: (slug: string) => Promise<{
         restored: boolean;
@@ -258,7 +259,7 @@ export interface RestoreCustomerRuntimeResult {
     restored: boolean;
     steps: AddCustomerStep[];
 }
-export type RemoveCustomerStep = "config-patch-remove" | "delete-dir";
+export type RemoveCustomerStep = "config-patch-remove" | "delete-dir" | "release-gitea-key";
 export interface RemoveCustomerResult {
     wasMounted: boolean;
     steps: RemoveCustomerStep[];

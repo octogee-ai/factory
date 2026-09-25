@@ -2031,6 +2031,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
       applyRemoveCustomerConfigPatch: vi.fn(async () => undefined),
       hasCustomerDir: vi.fn(() => true),
       deleteCustomerDir: vi.fn(async () => undefined),
+      readLocalCustomerPubKey: vi.fn(() => null),
       ...overrides,
     } as CustomerLifecycleAdapter;
   }

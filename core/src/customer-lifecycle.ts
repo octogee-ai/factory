@@ -183,6 +183,8 @@ readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
 
 deleteCustomerSshKey: (slug: string) => Promise<void>;
 
+  releaseGiteaUserKey: (slug: string, pubKey: string) => Promise<void>;
+
   blobSyncForSlug: (slug: string) => Promise<void>;
 
 restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: boolean }>;
@@ -357,7 +359,8 @@ export interface RestoreCustomerRuntimeResult {
 
 export type RemoveCustomerStep =
   | "config-patch-remove"
-  | "delete-dir";
+  | "delete-dir"
+  | "release-gitea-key";
 
 export interface RemoveCustomerResult {
   wasMounted: boolean;
@@ -1473,8 +1476,29 @@ export async function removeCustomerFromGateway(
     adapter.log(`[remove:${slug}] customer dir deleted`);
   }
 
+  if (await releaseUnmountedGiteaKey(adapter, slug)) steps.push("release-gitea-key");
+
   if (adapter.onUnmounted) adapter.onUnmounted(slug);
   return { wasMounted: true, steps };
+}
+
+async function releaseUnmountedGiteaKey(
+  adapter: CustomerLifecycleAdapter,
+  slug: string,
+): Promise<boolean> {
+  const pubKey = adapter.readLocalCustomerPubKey(slug);
+  if (pubKey === null) return false;
+  try {
+    await adapter.releaseGiteaUserKey(slug, pubKey);
+  } catch (err) {
+    adapter.log(
+      `⚠ [remove:${slug}] Gitea key release failed; local keypair kept for the preStop release: ${String(err)}`,
+    );
+    return false;
+  }
+  await adapter.deleteCustomerSshKey(slug);
+  adapter.log(`[remove:${slug}] Gitea key released and local keypair removed`);
+  return true;
 }
 
 export function pubKeysMatch(a: string, b: string): boolean {

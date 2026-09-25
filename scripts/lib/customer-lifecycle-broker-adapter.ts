@@ -94,6 +94,7 @@ import { seedDeferredProjectWorkspace } from "./deferred-project-workspace.js";
 import {
   ensureGiteaOrgForWorkspace,
   ensureSystemConfigRepo,
+  releaseGiteaUserKey,
 } from "./gitea-admin-broker-client.js";
 import {
   hasReadableOpenclawConfig,
@@ -1821,6 +1822,7 @@ export function buildBrokeredLifecycleAdapter(
     readLocalCustomerPubKey,
     readGiteaCustomerPubKeys,
     deleteCustomerSshKey,
+    releaseGiteaUserKey,
     blobSyncForSlug: async (slug) => {
       await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });
     },
