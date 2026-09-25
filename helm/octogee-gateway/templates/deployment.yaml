@@ -124,11 +124,14 @@ spec:
             - -c
             - |
               set -eu
-              # -rn, not -a/-p: fsGroup owns /home/node, and preserving
-              # source owner/timestamps needs FOWNER, which restricted PSA denies.
-              cp -rn /etc/skel/. /home/node/
-              mkdir -p /home/node/.npm-cache
-              install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
+              chown 1000:1000 /home/node
+              chmod 0755 /home/node
+              exec setpriv --reuid=1000 --regid=1000 --keep-groups sh -c '
+                set -eu
+                cp -rn /etc/skel/. /home/node/
+                mkdir -p /home/node/.npm-cache
+                install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
+              '
           env:
             # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
             # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
@@ -143,10 +146,12 @@ spec:
                   name: gateway-auth-token-{{ .Values.gatewayId }}
                   key: token
           securityContext:
-            runAsNonRoot: true
+            runAsUser: 0
+            runAsNonRoot: false
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+              add: [CHOWN, FOWNER, SETUID, SETGID]
           volumeMounts:
             - name: data
               mountPath: /home/node

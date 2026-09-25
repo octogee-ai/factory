@@ -390,6 +390,28 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(findDoc(out, "ServiceAccount", "octogee-gw-bender")).toBeNull();
   });
 
+  it("hands /home/node to the runtime user before seeding it as that user", () => {
+    const profiles: Record<string, string>[] = [{}, { profile: "builder" }];
+    for (const values of profiles) {
+      const dep = findDoc(helmTemplate("octogee-gw-default", values), "Deployment", "octogee-gateway-default")!;
+      const init = containerBlock(dep, "fix-perms");
+      expect(init).toMatch(/runAsUser: 0\b/);
+      expect(init).toMatch(/runAsNonRoot: false/);
+      expect(init).toMatch(/allowPrivilegeEscalation: false/);
+      expect(init).toMatch(/drop: \[ALL\]/);
+      expect(init).toMatch(/add: \[CHOWN, FOWNER, SETUID, SETGID\]/);
+      const handOff = init.indexOf("chown 1000:1000 /home/node");
+      const mode = init.indexOf("chmod 0755 /home/node");
+      const drop = init.indexOf("exec setpriv --reuid=1000 --regid=1000 --keep-groups");
+      const seed = init.indexOf("cp -rn /etc/skel/. /home/node/");
+      expect(handOff).toBeGreaterThan(-1);
+      expect(mode).toBeGreaterThan(handOff);
+      expect(drop).toBeGreaterThan(mode);
+      expect(seed).toBeGreaterThan(drop);
+      expect(containerBlock(dep, "gateway")).not.toMatch(/runAsUser: 0\b/);
+    }
+  });
+
   it("disables the default Kubernetes ServiceAccount token automount", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/automountServiceAccountToken:\s*false/);
@@ -703,7 +725,7 @@ const out = helmTemplate();
     expect(shared).not.toMatch(/^ {6}runtimeClassName:/m);
   });
 
-  it("renders every builder-gateway container and init container Restricted-compliant", () => {
+  it("renders every builder-gateway container Restricted-compliant, with fix-perms as the one init exception", () => {
     const output = helmTemplate("octogee-gw-builder", {
       gatewayId: "builder",
       gatewayClass: "builder",
@@ -715,10 +737,16 @@ const out = helmTemplate();
 
     expect(pod?.securityContext?.runAsNonRoot).toBe(true);
     expect(pod?.securityContext?.seccompProfile).toEqual({ type: "RuntimeDefault" });
-    for (const container of [...(pod?.initContainers ?? []), ...(pod?.containers ?? [])]) {
+    for (const container of pod?.containers ?? []) {
       expect(container.securityContext?.allowPrivilegeEscalation).toBe(false);
       expect(container.securityContext?.capabilities).toEqual({ drop: ["ALL"] });
     }
+    expect(pod?.initContainers?.map((container) => container.securityContext)).toEqual([{
+      runAsUser: 0,
+      runAsNonRoot: false,
+      allowPrivilegeEscalation: false,
+      capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "SETUID", "SETGID"] },
+    }]);
   });
 
   it("renders a PodDisruptionBudget keyed by gateway-instance for an isolated gateway", () => {
@@ -1066,18 +1094,13 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     expect(init).not.toMatch(/name:\s*MM_BOT_TOKEN\b/);
   });
 
-  it("renders a Restricted-compatible init container that seeds /home/node", () => {
-    const out = helmTemplate();
-    const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
+  it("seeds /home/node without masking a failed step", () => {
+    const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/initContainers:[\s\S]*?- name:\s*fix-perms/);
-    const init = dep.match(/- name:\s*fix-perms\s*[\s\S]*?(?=\n {8}- name:|\n {6}containers:)/)?.[0] ?? "";
-    expect(init).toMatch(/runAsNonRoot:\s*true/);
-    expect(init).toMatch(/allowPrivilegeEscalation:\s*false/);
-    expect(init).toMatch(/drop:\s*\[ALL\]/);
-    expect(init).not.toMatch(/runAsUser:\s*0/);
+    const init = containerBlock(dep, "fix-perms");
     expect(init).toMatch(/cp -rn \/etc\/skel\/\. \/home\/node\//);
     expect(init).not.toContain("|| true");
-    expect(init).not.toMatch(/chown\s/);
+    expect(init.match(/chown\s/g)).toHaveLength(1);
   });
 
   it("does not preserve source ownership/timestamps on the fix-perms copy (#2812: cp -a fails 'preserving times' — fsGroup already owns /home/node under restricted PSA)", () => {
