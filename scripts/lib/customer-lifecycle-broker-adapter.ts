@@ -158,7 +158,7 @@ import {
   removeActivationManifest,
 } from "./migration-activation-manifest.js";
 import { discardUnusableAgentStores } from "./unusable-agent-store.js";
-import { assertNotHeld, matchUnder, PROC_ROOT } from "./held-files.js";
+import { assertNotHeld, type HeldPathOptions, matchUnder, PROC_ROOT } from "./held-files.js";
 import {
   exportActivationManifestWithSecret,
   materializeActivationManifestSecret,
@@ -1279,11 +1279,15 @@ interface AgentStateRelease {
   procRoot: string;
 }
 
-async function releaseAgentState(agentIds: readonly string[], release: AgentStateRelease): Promise<string[]> {
+async function releaseAgentState(
+  agentIds: readonly string[],
+  release: AgentStateRelease,
+  heldPathOptions: HeldPathOptions = {},
+): Promise<string[]> {
   const stateDir = resolveOpenClawStateDir();
   const agentDirs = agentIds.map((agentId) => path.join(stateDir, "agents", agentId));
   await release.releaseAgents(agentIds);
-  for (const agentDir of agentDirs) await assertNotHeld(matchUnder(agentDir), release.procRoot);
+  for (const agentDir of agentDirs) await assertNotHeld(matchUnder(agentDir), release.procRoot, heldPathOptions);
   return agentDirs;
 }
 
@@ -1607,7 +1611,11 @@ async function removeImportedCustomerBySlug(
     ctx.configRemovedForEviction.delete(slug);
     return { wasMounted: true, steps: ["config-patch-remove"], retained: true };
   }
-  const agentDirs = await releaseAgentState(agentIdsForMigration(slug), agentStateRelease(ctx, `[remove:${slug}]`));
+  const agentDirs = await releaseAgentState(
+    agentIdsForMigration(slug),
+    agentStateRelease(ctx, `[remove:${slug}]`),
+    { ignoreReadOnlyConnections: true },
+  );
   await fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true });
   if (!isConfiguredGatewayBuilder(slug)) {
     await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });

@@ -91,6 +91,21 @@ async function procRootHolding(tempRoot: string, files: readonly string[]): Prom
   return procRoot;
 }
 
+async function procRootHoldingWithFlags(
+  tempRoot: string,
+  files: readonly { path: string; flags: string }[],
+): Promise<string> {
+  const procRoot = path.join(tempRoot, "proc");
+  await fs.mkdir(path.join(procRoot, "93", "fd"), { recursive: true });
+  await fs.mkdir(path.join(procRoot, "93", "fdinfo"), { recursive: true });
+  for (const [index, file] of files.entries()) {
+    const descriptor = String(40 + index);
+    await fs.symlink(file.path, path.join(procRoot, "93", "fd", descriptor));
+    await fs.writeFile(path.join(procRoot, "93", "fdinfo", descriptor), `pos:\t0\nflags:\t${file.flags}\nmnt_id:\t1\n`);
+  }
+  return procRoot;
+}
+
 function removalRpc(agentsDelete: ReturnType<typeof vi.fn>): GatewayRpcClient {
   return {
     configGet: vi.fn(async () => ({
@@ -401,6 +416,114 @@ describe("customer lifecycle config patch agent directories", () => {
         .rejects.toThrow(`agent database files are still held open: ${database}`);
       expect(fsSync.existsSync(database)).toBe(true);
       expect(fsSync.existsSync(customerDir)).toBe(true);
+    });
+  });
+
+  it("removes a departed customer's state that OpenClaw holds only through a read-only connection", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const database = path.join(agentDir, "openclaw-agent.sqlite");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(database, "pooled reader");
+      await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: removalRpc(vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 }))),
+        log: vi.fn(),
+        procRoot: await procRootHoldingWithFlags(tempRoot, [
+          { path: database, flags: "02500000" },
+          { path: `${database}-wal`, flags: "02500002" },
+          { path: `${database}-shm`, flags: "02500002" },
+        ]),
+      });
+
+      await adapter.removeImportedCustomerBySlug("alice");
+
+      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach"))).toBe(false);
+    });
+  });
+
+  it("refuses to remove a departed customer's state while a process reads a non-SQLite file in it", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const sessionsFile = path.join(agentDir, "sessions.json");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(sessionsFile, "{}");
+      await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: removalRpc(vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 }))),
+        log: vi.fn(),
+        procRoot: await procRootHoldingWithFlags(tempRoot, [{ path: sessionsFile, flags: "02500000" }]),
+      });
+
+      await expect(adapter.removeImportedCustomerBySlug("alice"))
+        .rejects.toThrow(`agent database files are still held open: ${sessionsFile}`);
+      expect(fsSync.existsSync(sessionsFile)).toBe(true);
+    });
+  });
+
+  it("refuses to wipe an agent dir for import while OpenClaw still reads its database", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const database = path.join(agentDir, "openclaw-agent.sqlite");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(database, "pooled reader");
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: {
+          agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 })),
+        } as unknown as GatewayRpcClient,
+        log: vi.fn(),
+        procRoot: await procRootHoldingWithFlags(tempRoot, [
+          { path: database, flags: "02500000" },
+          { path: `${database}-shm`, flags: "02500002" },
+        ]),
+      });
+
+      await expect(adapter.prepareImportDir("alice", "pre"))
+        .rejects.toThrow(`agent database files are still held open: ${database}, ${database}-shm`);
+      expect(fsSync.existsSync(database)).toBe(true);
+    });
+  });
+
+  it("refuses to remove a departed customer's state while a process holds its database for writing", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const database = path.join(agentDir, "openclaw-agent.sqlite");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(database, "writer");
+      await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: removalRpc(vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId, removedBindings: 0 }))),
+        log: vi.fn(),
+        procRoot: await procRootHoldingWithFlags(tempRoot, [
+          { path: database, flags: "02500000" },
+          { path: database, flags: "02500002" },
+          { path: `${database}-wal`, flags: "02500002" },
+        ]),
+      });
+
+      await expect(adapter.removeImportedCustomerBySlug("alice"))
+        .rejects.toThrow(`agent database files are still held open: ${database}, ${database}-wal`);
+      expect(fsSync.existsSync(database)).toBe(true);
     });
   });
 

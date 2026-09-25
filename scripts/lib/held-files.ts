@@ -41,7 +41,54 @@ function linkedPath(target: string): string {
   return target.endsWith(DELETED_LINK_SUFFIX) ? target.slice(0, -DELETED_LINK_SUFFIX.length) : target;
 }
 
-async function heldByProcess(fdDir: string, match: HeldPathMatcher): Promise<string[]> {
+export interface HeldPathOptions {
+  ignoreReadOnlyConnections?: boolean;
+}
+
+interface HeldDescriptor {
+  path: string;
+  writable: boolean | undefined;
+}
+
+const O_ACCMODE = 0o3;
+const SQLITE_DATABASE_SUFFIX = ".sqlite";
+const READ_ONLY_CONNECTION_SIDECARS = ["-wal", "-shm"] as const;
+
+async function descriptorWritable(fdinfoPath: string): Promise<boolean | undefined> {
+  let fdinfo: string;
+  try {
+    fdinfo = await fsp.readFile(fdinfoPath, "utf8");
+  } catch (error) {
+    if (isVanishedOrForeignProcess(error)) return undefined;
+    throw error;
+  }
+  const flags = /^flags:\s+([0-7]+)$/mu.exec(fdinfo)?.[1];
+  return flags === undefined ? undefined : (Number.parseInt(flags, 8) & O_ACCMODE) !== 0;
+}
+
+function connectionDatabasePath(heldPath: string): string {
+  const sidecar = READ_ONLY_CONNECTION_SIDECARS.find((suffix) => heldPath.endsWith(suffix));
+  return sidecar ? heldPath.slice(0, -sidecar.length) : heldPath;
+}
+
+function withoutReadOnlyConnections(descriptors: readonly HeldDescriptor[]): HeldDescriptor[] {
+  const databaseModes = new Map<string, boolean[]>();
+  for (const descriptor of descriptors) {
+    if (!descriptor.path.endsWith(SQLITE_DATABASE_SUFFIX)) continue;
+    databaseModes.set(descriptor.path, [...(databaseModes.get(descriptor.path) ?? []), descriptor.writable === false]);
+  }
+  const readOnlyDatabases = new Set(
+    [...databaseModes].filter(([, readOnly]) => readOnly.every(Boolean)).map(([database]) => database),
+  );
+  return descriptors.filter((descriptor) => !readOnlyDatabases.has(connectionDatabasePath(descriptor.path)));
+}
+
+async function heldByProcess(
+  processDir: string,
+  match: HeldPathMatcher,
+  options: HeldPathOptions,
+): Promise<string[]> {
+  const fdDir = path.join(processDir, "fd");
   let descriptors: string[];
   try {
     descriptors = await fsp.readdir(fdDir);
@@ -49,7 +96,7 @@ async function heldByProcess(fdDir: string, match: HeldPathMatcher): Promise<str
     if (isVanishedOrForeignProcess(error)) return [];
     throw error;
   }
-  const held: string[] = [];
+  const held: HeldDescriptor[] = [];
   for (const descriptor of descriptors) {
     let target: string;
     try {
@@ -59,9 +106,15 @@ async function heldByProcess(fdDir: string, match: HeldPathMatcher): Promise<str
       throw error;
     }
     const linked = linkedPath(target);
-    if (match(linked)) held.push(linked);
+    if (!match(linked)) continue;
+    held.push({
+      path: linked,
+      writable: options.ignoreReadOnlyConnections
+        ? await descriptorWritable(path.join(processDir, "fdinfo", descriptor))
+        : undefined,
+    });
   }
-  return held;
+  return (options.ignoreReadOnlyConnections ? withoutReadOnlyConnections(held) : held).map((descriptor) => descriptor.path);
 }
 
 function heldByProcessSync(fdDir: string, match: HeldPathMatcher): string[] {
@@ -91,10 +144,14 @@ function processIds(entries: readonly string[]): string[] {
   return entries.filter((entry) => /^\d+$/u.test(entry));
 }
 
-export async function findHeldPaths(match: HeldPathMatcher, procRoot: string): Promise<string[]> {
+export async function findHeldPaths(
+  match: HeldPathMatcher,
+  procRoot: string,
+  options: HeldPathOptions = {},
+): Promise<string[]> {
   const held = new Set<string>();
   for (const pid of processIds(await fsp.readdir(procRoot))) {
-    for (const file of await heldByProcess(path.join(procRoot, pid, "fd"), match)) held.add(file);
+    for (const file of await heldByProcess(path.join(procRoot, pid), match, options)) held.add(file);
   }
   return [...held].sort();
 }
@@ -107,8 +164,12 @@ export function findHeldPathsSync(match: HeldPathMatcher, procRoot: string): str
   return [...held].sort();
 }
 
-export async function assertNotHeld(match: HeldPathMatcher, procRoot: string): Promise<void> {
-  const held = await findHeldPaths(match, procRoot);
+export async function assertNotHeld(
+  match: HeldPathMatcher,
+  procRoot: string,
+  options: HeldPathOptions = {},
+): Promise<void> {
+  const held = await findHeldPaths(match, procRoot, options);
   if (held.length > 0) throw new HeldAgentStoreError(held);
 }
 
