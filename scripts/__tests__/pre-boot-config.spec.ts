@@ -1028,7 +1028,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
 
 describe("preBootFirestoreEnabled", () => {
   it("stays off for db-less gateways without an explicit credential file", () => {
-    expect(preBootFirestoreEnabled({}, () => false)).toBe(false);
+    expect(preBootFirestoreEnabled({}, () => true)).toBe(false);
   });
 
   it("turns on when SA_KEY_PATH points at an existing credential file", () => {

@@ -1006,17 +1006,6 @@ set -u
 [[ -z "$INVITE_SECRET" ]] && warn "INVITE_SECRET not found — invite links will fail until configured"
 ksecret invite-secret --from-literal=secret="${INVITE_SECRET:-placeholder}"
 
-# ── 12. GCP Service Account key ───────────────────────────────────────────
-# Used by gateway-edge and gateway for GCP API access (Workload Identity
-# preferred on prod; SA key is a fallback for services that need it directly).
-info "octogee-sa-key"
-SA_KEY_PATH="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
-if [[ -f "$SA_KEY_PATH" ]]; then
-  ksecret octogee-sa-key --from-file=key.json="$SA_KEY_PATH"
-else
-  warn "SA key not found at $SA_KEY_PATH — skipping octogee-sa-key (Workload Identity must be configured)"
-fi
-
 # ── Firebase / Cloud Functions secrets (must exist before firebase deploy) ───
 # Firebase prompts interactively if these secrets don't exist in Secret Manager.
 # Pre-create them with placeholder values; runtime services read the canonical

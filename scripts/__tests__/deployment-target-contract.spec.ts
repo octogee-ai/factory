@@ -466,12 +466,6 @@ describe("deployment target consumers", () => {
         '[[ "$TARGET_LIFECYCLE" == "candidate" ]] && ENV_FILE=',
       );
     }
-    expect(source("scripts/setup-secrets.sh")).toContain(
-      'SA_KEY_PATH="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"',
-    );
-    expect(source("scripts/teardown-env.sh")).toContain(
-      'SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"',
-    );
   });
 
   it("preserves the candidate target in verification probes and repairs", () => {

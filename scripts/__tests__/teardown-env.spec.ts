@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -23,7 +23,6 @@ type TeardownOptions = {
   storageListFailure?: boolean;
   storageEmpty?: boolean;
   storageResidual?: boolean;
-  missingServiceAccount?: boolean;
   functionListFailure?: boolean;
   functionDeleteFailure?: boolean;
   functions?: Array<{ name: string; generation: "GEN_1" | "GEN_2" }>;
@@ -59,7 +58,7 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   const helmListCount = path.join(temp, "helm-list-count");
   const storageRemoved = path.join(temp, "storage-removed");
   const sqlOwnerManifest = path.join(temp, "sql-owner-manifest.yaml");
-  const serviceAccount = path.join(temp, "service-account.json");
+  const laptopServiceAccountKey = path.join(temp, ".openclaw", "secrets", "octogee-test-sa-key.json");
   writeFileSync(log, "");
   writeFileSync(describeCount, "0");
   writeFileSync(deletedPvcs, "");
@@ -69,7 +68,8 @@ function runPrivateCentralTeardown(options: TeardownOptions = {}) {
   writeFileSync(uninstalledGatewayReleases, "");
   writeFileSync(helmListCount, "0");
   writeFileSync(sqlOwnerManifest, "");
-  writeFileSync(serviceAccount, '{"project_id":"octogee-data-test"}');
+  mkdirSync(path.dirname(laptopServiceAccountKey), { recursive: true });
+  writeFileSync(laptopServiceAccountKey, '{"type":"service_account","project_id":"octogee-test"}');
 
   executable(path.join(temp, "gcloud"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -374,6 +374,8 @@ esac
     cwd: repoRoot,
     env: {
       ...process.env,
+      HOME: temp,
+      SA_KEY_PATH: laptopServiceAccountKey,
       PATH: `${temp}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       FAKE_CALL_LOG: log,
       FAKE_DATABASE_FAILURE: options.databaseFailure ?? "",
@@ -404,7 +406,6 @@ esac
       FAKE_FUNCTION_INVENTORY: options.functionInventory
         ?? `${(options.functions ?? []).map(({ name, generation }) => `${name},${generation}`).join("\n")}${options.functions?.length ? "\n" : ""}`,
       FAKE_GITEA_WORKLOAD_NAME: options.giteaWorkloadName ?? "octogee-gitea",
-      SA_KEY_PATH: options.missingServiceAccount ? path.join(temp, "missing-service-account.json") : serviceAccount,
     },
     input: options.interactiveInput,
     encoding: "utf8",
@@ -698,12 +699,14 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(source).toContain("run_auth_cleanup --verify");
   });
 
-  it("uses ADC for the Auth preflight when the optional service-account key is absent", () => {
-    const result = runPrivateCentralTeardown({ missingServiceAccount: true });
+  it("authenticates Firebase Auth cleanup with application default credentials even when laptop key files exist", () => {
+    const result = runPrivateCentralTeardown();
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.calls.some((call) => call.startsWith("npx ") && call.includes("--verify") && !call.includes("--service-account"))).toBe(true);
-    expect(result.calls.some((call) => call.startsWith("sql databases"))).toBe(true);
+    expect(result.calls.filter((call) => call.includes("delete-firebase-auth-users.ts"))).toEqual([
+      "npx -y tsx ops/delete-firebase-auth-users.ts --verify --project=octogee-test",
+      "npx -y tsx ops/delete-firebase-auth-users.ts --project=octogee-test",
+    ]);
   });
 
   it("fails before Firestore or Auth cleanup when the target Storage bucket cannot be wiped", () => {

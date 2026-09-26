@@ -107,14 +107,12 @@ GITEA_API_TOKEN_SM_KEY="gitea-api-token-${TARGET_SECRET_NAME_SUFFIX}"
 case "$ENV" in
   prod)
     ENV_FILE="$REPO_DIR/.env"
-    SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-sa-key.json"
     ENV_LABEL="🔴 PRODUCTION"
     MM_DB_NAME="mattermost_prod"
     GITEA_DB_NAME="gitea_prod"
     ;;
   test)
     ENV_FILE="$REPO_DIR/.env.test"
-    SA_KEY_DEFAULT="$HOME/.openclaw/secrets/octogee-test-sa-key.json"
     ENV_LABEL="🟡 TEST"
     MM_DB_NAME="mattermost_test"
     GITEA_DB_NAME="gitea_test"
@@ -128,7 +126,6 @@ case "$TARGET_ID" in
   prod-central|test-central) ;;
   *) ENV_FILE="$REPO_DIR/.env.$TARGET_ID" ;;
 esac
-SA_KEY_DEFAULT="$HOME/.openclaw/secrets/$TARGET_FIREBASE_PROJECT-sa-key.json"
 
 ok()   { echo -e "  ${GREEN}✅ $1${NC}"; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
@@ -221,23 +218,8 @@ CURRENT_CTX=$(kubectl config current-context)
 ok "kubectl context: $CURRENT_CTX"
 
 if $FULL; then
-  SA_KEY="${SA_KEY_PATH:-$SA_KEY_DEFAULT}"
-  AUTH_SERVICE_ACCOUNT_PATH=""
-  if [[ -f "$SA_KEY" ]]; then
-    AUTH_SERVICE_ACCOUNT_PATH="$SA_KEY"
-  else
-    info "Service-account key not found at $SA_KEY; using application default credentials for Auth cleanup"
-  fi
   run_auth_cleanup() {
-    local verify="$1"
-    (
-      cd "$SCRIPT_DIR"
-      if [[ -n "$AUTH_SERVICE_ACCOUNT_PATH" ]]; then
-        npx -y tsx ops/delete-firebase-auth-users.ts $verify --project="$FIREBASE_PROJECT" --service-account="$AUTH_SERVICE_ACCOUNT_PATH"
-      else
-        npx -y tsx ops/delete-firebase-auth-users.ts $verify --project="$FIREBASE_PROJECT"
-      fi
-    )
+    (cd "$SCRIPT_DIR" && npx -y tsx ops/delete-firebase-auth-users.ts "$@" --project="$FIREBASE_PROJECT")
   }
   run_auth_cleanup --verify || die "Firebase Auth cleanup preflight failed for $FIREBASE_PROJECT"
 fi
@@ -1251,7 +1233,7 @@ fi
 if $FULL; then
   echo ""
   if confirm "Delete all Firebase Auth users in '$FIREBASE_PROJECT'?"; then
-    run_auth_cleanup ""
+    run_auth_cleanup
     ok "Auth users deleted"
   else
     die "Full teardown cancelled; Firebase Auth users remain in $FIREBASE_PROJECT"

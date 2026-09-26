@@ -16,7 +16,7 @@ import {
 } from "../lib/openclaw-config-builders.js";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
 import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
-import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
+import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import {
   isBareGatewayId,
   readGatewayAuthorization,
@@ -30,7 +30,6 @@ import {
 } from "@octogee/shared/types/agent-models";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-const OPENCLAW_DIR = openClawDir();
 const CONFIG_PATH = openClawConfigPath();
 
 function log(msg: string): void {
@@ -841,7 +840,6 @@ export function preBootFirestoreEnabled(
   const candidates = [
     env.GOOGLE_APPLICATION_CREDENTIALS,
     env.SA_KEY_PATH,
-    path.join(OPENCLAW_DIR, "secrets/octogee-test-sa-key.json"),
   ].filter((p): p is string => typeof p === "string" && p.trim().length > 0);
 
   return candidates.some((p) => {

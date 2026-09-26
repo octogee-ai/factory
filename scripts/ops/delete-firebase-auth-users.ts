@@ -1,6 +1,5 @@
-import { applicationDefault, cert, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { readFileSync } from "node:fs";
+import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
 
 type FirebaseAuthCleanupClient = {
   listUsers(maxResults: number, pageToken?: string): Promise<{
@@ -36,53 +35,27 @@ export async function deleteAllFirebaseAuthUsers(
   return uids.length;
 }
 
-function argument(name: string): string | undefined {
-  return process.argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
-}
-
-function requiredArgument(name: string): string {
-  const value = argument(name);
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-}
-
-export function serviceAccountForProject(value: unknown, projectId: string): {
-  projectId: string;
-  clientEmail: string;
-  privateKey: string;
-} {
-  const serviceAccount = value as {
-    project_id?: unknown;
-    client_email?: unknown;
-    private_key?: unknown;
-  };
-  if (
-    serviceAccount.project_id !== projectId ||
-    typeof serviceAccount.client_email !== "string" ||
-    typeof serviceAccount.private_key !== "string"
-  ) {
-    throw new Error(`service-account project does not match ${projectId}`);
+function parseArgs(argv: readonly string[]): { projectId: string; verify: boolean } {
+  let projectId = "";
+  let verify = false;
+  for (const arg of argv) {
+    if (arg === "--verify") verify = true;
+    else if (arg.startsWith("--project=")) projectId = arg.slice("--project=".length);
+    else throw new Error(`unknown argument: ${arg}`);
   }
-  return {
-    projectId: serviceAccount.project_id,
-    clientEmail: serviceAccount.client_email,
-    privateKey: serviceAccount.private_key,
-  };
+  if (!projectId) throw new Error("--project is required");
+  return { projectId, verify };
 }
 
-async function main(): Promise<void> {
-  const projectId = requiredArgument("--project");
-  const serviceAccountPath = argument("--service-account");
-  const credential = serviceAccountPath
-    ? cert(serviceAccountForProject(JSON.parse(readFileSync(serviceAccountPath, "utf8")), projectId))
-    : applicationDefault();
-  const app = initializeApp({ credential, projectId });
-  if (process.argv.includes("--verify")) {
-    await getAuth(app).listUsers(1);
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const { projectId, verify } = parseArgs(argv);
+  const auth = getAuth(initializeOperatorFirebaseAdmin(projectId));
+  if (verify) {
+    await auth.listUsers(1);
     console.log("Firebase Auth cleanup credential verified");
     return;
   }
-  const deleted = await deleteAllFirebaseAuthUsers(getAuth(app));
+  const deleted = await deleteAllFirebaseAuthUsers(auth);
   console.log(`Deleted ${deleted} Firebase Auth user(s)`);
 }
 
