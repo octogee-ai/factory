@@ -10,6 +10,7 @@ import {
   platformInvariantViolations,
   reconcilePlatformInvariants,
 } from "./system-config-invariants.js";
+import { openClawOperatorRoles } from "@octogee/shared/types/openclaw-proxy-identity";
 
 const builder = {
   gatewayClass: "builder" as const,
@@ -1034,11 +1035,50 @@ it("makes native Mattermost reactions available to coach and project coding poli
 });
 
 
-it("preserves native role definitions through reconciliation and configuration validation", () => {
-  const context = { gatewayClass: "builder" as const, gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" as const };
-  const roles = { default: "collaborator", definitions: { collaborator: { scopes: ["operator.read"], sessions: { others: "none" } } } };
-  const config = { gateway: { roles } };
-  reconcilePlatformInvariants(config, context);
-  expect(config.gateway.roles).toEqual(roles);
-  expect(platformInvariantViolations(config, context)).toEqual([]);
+const PRE_NATIVE_ROLE_SET = {
+  default: "member",
+  definitions: {
+    member: { sessions: { others: "none" }, agents: "*", scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.pairing"] },
+    "team-member": { sessions: { others: "none" }, agents: ["octogee-jefe-coach"], scopes: ["operator.read", "operator.write", "operator.questions"] },
+    service: { sessions: { others: "write" }, agents: "*", scopes: ["operator.read"] },
+    owner: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+    "co-owner": { sessions: { others: "write" }, agents: "*", scopes: ["operator.read"] },
+    "trusted-helper": { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+    viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+  },
+};
+
+describe("per-user Builder role definitions", () => {
+  const context = {
+    gatewayClass: "builder" as const, gatewayId: "jefe", apiOrigin: "https://api.octogee.com",
+    controlIdentity: "per-user" as const, workspaceSlug: "jefe",
+  };
+
+  it("restores the canonical member, admin, and service definitions over a pre-native role set", () => {
+    const config = { gateway: { roles: structuredClone(PRE_NATIVE_ROLE_SET) } };
+    const { changedPaths } = reconcilePlatformInvariants(config, context);
+    const canonical = openClawOperatorRoles("jefe").definitions;
+    expect(config.gateway.roles.definitions).toMatchObject(canonical);
+    for (const role of ["service", "admin"]) expect(config.gateway.roles.definitions).toHaveProperty(role);
+    expect(changedPaths).toContain("gateway.roles");
+    expect(platformInvariantViolations(config, context)).toEqual([]);
+  });
+
+  it("keeps Builder-defined roles and the Builder's default alongside the canonical definitions", () => {
+    const roles = { default: "collaborator", definitions: { collaborator: { scopes: ["operator.read"], sessions: { others: "none" } } } };
+    const config = { gateway: { roles: structuredClone(roles) } };
+    reconcilePlatformInvariants(config, context);
+    expect(config.gateway.roles).toEqual({
+      default: "collaborator",
+      definitions: { ...roles.definitions, ...openClawOperatorRoles("jefe").definitions },
+    });
+    expect(platformInvariantViolations(config, context)).toEqual([]);
+  });
+
+  it("reports a redefined canonical role as a platform invariant violation", () => {
+    const config = { gateway: { roles: openClawOperatorRoles("jefe") } };
+    reconcilePlatformInvariants(config, context);
+    config.gateway.roles.definitions.admin.scopes = ["operator.read"];
+    expect(platformInvariantViolations(config, context)).toEqual(["gateway.roles.definitions.admin"]);
+  });
 });

@@ -10,6 +10,7 @@ import {
 } from "../../core/dist/system-config-invariants.js";
 
 import { platformModelRefs } from "../../shared/dist/types/agent-models.js";
+import { openClawOperatorRoles } from "../../shared/dist/types/openclaw-proxy-identity.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
@@ -1863,11 +1864,35 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.gateway.roles.definitions.member.agents).toEqual(["octogee-team-workspace-coach"]);
   });
 
-  it("preserves native role definitions across gateway restarts", () => {
+  it("restores the canonical member, admin, and service definitions over a pre-native role set", () => {
+    const stale = {
+      default: "member",
+      definitions: {
+        member: { sessions: { others: "none" }, agents: "*", scopes: ["operator.admin", "operator.read"] },
+        "team-member": { sessions: { others: "none" }, agents: ["octogee-jefe-coach"], scopes: ["operator.read"] },
+        service: { sessions: { others: "write" }, agents: "*", scopes: ["operator.read"] },
+        owner: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+        "co-owner": { sessions: { others: "write" }, agents: "*", scopes: ["operator.read"] },
+        "trusted-helper": { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+        viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+      },
+    };
+    const { config } = runPolicyWithDir("builder", { gateway: { roles: stale } }, undefined,
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" });
+    const canonical = openClawOperatorRoles("jefe").definitions;
+    expect(config.gateway.roles.definitions).toMatchObject(canonical);
+    expect(config.gateway.roles.definitions.admin).toEqual(canonical.admin);
+    expect(config.gateway.roles.definitions.service).toEqual(canonical.service);
+  });
+
+  it("keeps Builder-defined roles and the Builder's default across gateway restarts", () => {
     const roles = { default: "reader", definitions: { reader: { scopes: ["operator.read"], sessions: { others: "none" }, agents: "*" } } };
     const { config } = runPolicyWithDir("builder", { gateway: { roles } }, undefined,
-      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner" });
-    expect(config.gateway.roles).toEqual(roles);
+      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" });
+    expect(config.gateway.roles).toEqual({
+      default: "reader",
+      definitions: { ...roles.definitions, ...openClawOperatorRoles("jefe").definitions },
+    });
   });
 
   it("returns a Builder gateway to token auth when the control identity is not per-user", () => {

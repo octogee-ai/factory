@@ -53,6 +53,7 @@ export declare const OPENCLAW_OPERATOR_ROLES: Readonly<{
     }>;
 }>;
 export declare function openClawOperatorRoles(workspaceSlug?: string): typeof OPENCLAW_OPERATOR_ROLES;
+export declare function withOpenClawOperatorRoles(roles: unknown, workspaceSlug?: string): Record<string, unknown>;
 export declare function openClawRoleScopes(role: OpenClawOperatorRole): string[];
 export declare function resolveControlIdentityFromEnv(env?: NodeJS.ProcessEnv): GatewayControlIdentity;
 export declare function isPerUserControlIdentity(env?: NodeJS.ProcessEnv): boolean;

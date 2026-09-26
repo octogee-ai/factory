@@ -62,6 +62,16 @@ export function openClawOperatorRoles(workspaceSlug) {
     }
     return roles;
 }
+export function withOpenClawOperatorRoles(roles, workspaceSlug) {
+    const canonical = openClawOperatorRoles(workspaceSlug);
+    if (!isPlainRecord(roles))
+        return canonical;
+    const definitions = isPlainRecord(roles.definitions) ? roles.definitions : {};
+    return { ...roles, definitions: { ...definitions, ...canonical.definitions } };
+}
+function isPlainRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 export function openClawRoleScopes(role) {
     return [...OPENCLAW_OPERATOR_ROLES.definitions[role].scopes];
 }

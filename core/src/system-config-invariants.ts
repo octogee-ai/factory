@@ -4,6 +4,7 @@ import {
   OPENCLAW_TRUSTED_PROXIES,
   OPENCLAW_TRUSTED_PROXY_AUTH,
   openClawIdentityScopes,
+  withOpenClawOperatorRoles,
 } from "@octogee/shared/types/openclaw-proxy-identity";
 
 type JsonObject = Record<string, unknown>;
@@ -390,7 +391,11 @@ function customerToolInvariants(): PlatformInvariant[] {
   ];
 }
 
-function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefined): PlatformInvariant[] {
+function controlIdentityInvariants(
+  perUser: boolean,
+  ownerUid: string | undefined,
+  workspaceSlug: string | undefined,
+): PlatformInvariant[] {
   return [
     { kind: "exact", path: "plugins.entries.octogee-identity-tools.enabled", value: perUser },
     ...(perUser ? [{ kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["octogee-identity-tools"] }] : []),
@@ -406,7 +411,11 @@ function controlIdentityInvariants(perUser: boolean, ownerUid: string | undefine
       value: perUser ? openClawIdentityScopes(ownerUid) : ABSENT,
     },
     { kind: "exact", path: "gateway.trustedProxies", value: perUser ? [...OPENCLAW_TRUSTED_PROXIES] : ABSENT },
-    ...(!perUser ? [{ kind: "exact" as const, path: "gateway.roles", value: ABSENT }] : []),
+    ...(perUser
+      ? Object.entries(openClawOperatorRoles(workspaceSlug).definitions).map(([role, definition]) => (
+        { kind: "exact" as const, path: `gateway.roles.definitions.${role}`, value: definition }
+      ))
+      : [{ kind: "exact" as const, path: "gateway.roles", value: ABSENT }]),
   ];
 }
 
@@ -425,7 +434,7 @@ export function platformInvariantTable(
     { kind: "exact", path: "gateway.port", value: 18789 },
     { kind: "exact", path: "gateway.mode", value: "local" },
     { kind: "exact", path: "gateway.bind", value: "lan" },
-    ...controlIdentityInvariants(perUser, context.ownerUid),
+    ...controlIdentityInvariants(perUser, context.ownerUid, context.workspaceSlug),
     { kind: "exact", path: "gateway.auth.token", value: ABSENT },
     { kind: "exact", path: "gateway.auth.password", value: ABSENT },
     { kind: "exact", path: "gateway.auth.allowTailscale", value: ABSENT },
@@ -932,20 +941,24 @@ export function reconcilePlatformInvariants(
   context: SystemConfigInvariantContext,
 ): { changedPaths: string[] } {
   const table = platformInvariantTable(context);
-  const changedPaths = Array.from(new Set(
-    table
+  const rolesChanged = reconcileOperatorRoles(config, context);
+  const changedPaths = Array.from(new Set([
+    ...(rolesChanged ? ["gateway.roles"] : []),
+    ...table
       .filter((invariant) => !invariantSatisfied(config, invariant))
       .map((invariant) => invariant.path),
-  ));
+  ]));
   for (const invariant of table) {
     if (changedPaths.includes(invariant.path)) applyInvariant(config, invariant);
   }
-  if (context.gatewayClass === "builder" && context.controlIdentity === "per-user") {
-    const gateway = config.gateway as JsonObject;
-    if (gateway.roles === undefined) {
-      gateway.roles = openClawOperatorRoles(context.workspaceSlug);
-      changedPaths.push("gateway.roles");
-    }
-  }
   return { changedPaths };
+}
+
+function reconcileOperatorRoles(config: JsonObject, context: SystemConfigInvariantContext): boolean {
+  if (context.gatewayClass !== "builder" || context.controlIdentity !== "per-user") return false;
+  const [gateway] = parentForPath(config, "gateway.roles");
+  const roles = withOpenClawOperatorRoles(gateway.roles, context.workspaceSlug);
+  if (equal(gateway.roles, roles)) return false;
+  gateway.roles = roles;
+  return true;
 }

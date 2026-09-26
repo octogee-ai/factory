@@ -11,7 +11,7 @@ import {
 import { modelCatalogForProvider } from "../../shared/dist/types/model-catalog.js";
 import { parseAgentId } from "../../shared/dist/types/identity.js";
 import {
-  openClawOperatorRoles,
+  withOpenClawOperatorRoles,
   OPENCLAW_TRUSTED_PROXIES,
   OPENCLAW_TRUSTED_PROXY_AUTH,
   isPerUserControlIdentity,
@@ -1531,7 +1531,7 @@ function applyControlIdentityPolicy(config, env) {
     auth.trustedProxy = structuredClone(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy);
     auth.identityScopes = openClawIdentityScopes(resolveOwnerUidFromEnv(env));
     config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
-    config.gateway.roles ??= openClawOperatorRoles(env.GATEWAY_BUILDER_SLUG);
+    config.gateway.roles = withOpenClawOperatorRoles(config.gateway.roles, env.GATEWAY_BUILDER_SLUG);
     // Only extend an allowlist that already exists. An absent `plugins.allow`
     // means "every plugin is allowed", so identity-tools is permitted already;
     // materializing a list here would narrow the gateway to this single entry
