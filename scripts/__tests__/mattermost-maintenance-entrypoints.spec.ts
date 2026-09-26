@@ -17,15 +17,16 @@ describe("repair-missing-project-channels config", () => {
       },
     )).toEqual({
       apply: false,
-      saKey: "/tmp/sa.json",
+      project: "octogee-test",
       mmUrl: "https://mattermost.test",
       mmAdminToken: "token",
     });
   });
 
-  it("tracks --apply without requiring credentials during parse", () => {
-    expect(resolveRepairMissingProjectChannelsConfig(["--apply"], {})).toMatchObject({
+  it("tracks --apply and --project without requiring credentials during parse", () => {
+    expect(resolveRepairMissingProjectChannelsConfig(["--apply", "--project=octogee"], {})).toEqual({
       apply: true,
+      project: "octogee",
       mmUrl: undefined,
       mmAdminToken: undefined,
     });

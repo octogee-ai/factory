@@ -1,9 +1,8 @@
 
 
-import { initializeApp, cert } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import * as fs from "fs";
-import * as path from "path";
+import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
 
 const ENVS = new Set(["test", "prod"]);
 const SAFE_UID = /^[A-Za-z0-9_-]+$/;
@@ -118,22 +117,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const envSuffix = args.env === "prod" ? "" : `-${args.env}`;
   const project = args.env === "prod" ? "octogee" : `octogee-${args.env}`;
-  const saPath = path.join(
-    process.env.HOME ?? "",
-    `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
-  );
-  if (!fs.existsSync(saPath)) {
-    console.error(`SA key not found at ${saPath}`);
-    process.exit(1);
-  }
   process.env.GCP_PROJECT_ID = project;
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
-  initializeApp({
-    credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
-    projectId: project,
-  });
+  initializeOperatorFirebaseAdmin(project);
   const db = getFirestore();
   const userRef = db.collection("users").doc(args.uid);
   if (!(await userRef.get()).exists) {

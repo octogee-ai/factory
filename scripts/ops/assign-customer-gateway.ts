@@ -1,9 +1,6 @@
 
 
-import { initializeApp, cert } from "firebase-admin/app";
 import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore";
-import * as fs from "fs";
-import * as path from "path";
 import { pathToFileURL } from "node:url";
 import {
   GLM_OPERATIONS_COLLECTION,
@@ -26,6 +23,7 @@ import {
   type SharedGatewayPoolConfig,
 } from "../../shared/types/shared-gateway-pool.js";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "../../shared/types/fleet-controller.js";
+import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
 
 async function readOrchestratorConfig(db: Firestore): Promise<SharedGatewayPoolConfig | null> {
   const snapshot = await db.collection("gateways").where("gatewayClass", "==", "shared").get();
@@ -367,19 +365,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     process.exit(1);
   }
   const opts = parsed.args;
-  const envSuffix = opts.env === "prod" ? "" : `-${opts.env}`;
-  const saPath = path.join(
-    process.env.HOME ?? "",
-    `.openclaw/secrets/octogee${envSuffix}-sa-key.json`,
-  );
-  if (!fs.existsSync(saPath)) {
-    console.error(`SA key not found at ${saPath}`);
-    process.exit(1);
-  }
-  initializeApp({
-    credential: cert(JSON.parse(fs.readFileSync(saPath, "utf-8"))),
-    projectId: opts.env === "prod" ? "octogee" : `octogee-${opts.env}`,
-  });
+  initializeOperatorFirebaseAdmin(opts.env === "prod" ? "octogee" : `octogee-${opts.env}`);
   const db = getFirestore();
   const uids: string[] = [];
   if (opts.uid) {

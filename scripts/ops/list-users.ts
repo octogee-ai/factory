@@ -1,11 +1,8 @@
 
 
-import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import { pathToFileURL } from "node:url";
+import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
 
 function stringField(record: Record<string, unknown>, key: string, fallback: string): string {
   const value = record[key];
@@ -28,10 +25,7 @@ export function formatListUsersLine(id: string, data: Record<string, unknown>): 
 }
 
 async function main() {
-  const saKeyPath = path.join(os.homedir(), ".openclaw/secrets/octogee-test-sa-key.json");
-  if (!getApps().length) {
-    initializeApp({ credential: cert(JSON.parse(fs.readFileSync(saKeyPath, "utf-8"))) });
-  }
+  initializeOperatorFirebaseAdmin("octogee-test");
   const db = getFirestore();
   const snap = await db.collection("users").get();
   console.log(`\n${snap.size} user(s) in Firestore:\n`);

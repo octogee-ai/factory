@@ -1,45 +1,29 @@
 
 
-import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import {
   TYPING_PHRASES_BY_VIBE,
   WORKSPACE_VIBE_PRESETS,
 } from '../../shared/types/display-names';
 import { pathToFileURL } from 'node:url';
-
-const DEFAULT_SA_KEY_PATH = resolve(
-  process.env.HOME || '~',
-  '.openclaw/secrets/octogee-test-sa-key.json',
-);
+import { initializeOperatorFirebaseAdmin } from '../lib/operator-firebase-admin.js';
 
 export interface SeedTypingPhrasesArgs {
   force: boolean;
+  project: string;
 }
 
 export function parseSeedTypingPhrasesArgs(argv: string[]): SeedTypingPhrasesArgs {
-  return { force: argv.includes('--force') };
-}
-
-function loadSa(): Record<string, unknown> {
-
-const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || DEFAULT_SA_KEY_PATH;
-  try {
-    return JSON.parse(readFileSync(keyPath, 'utf-8'));
-  } catch (err) {
-    throw new Error(
-      `Could not read service-account key at ${keyPath} (${(err as Error)?.message ?? "unknown"}). ` +
-        `Set GOOGLE_APPLICATION_CREDENTIALS or drop the key file at ${DEFAULT_SA_KEY_PATH}.`,
-    );
-  }
+  const projectFlag = argv.find((arg) => arg.startsWith('--project='));
+  return {
+    force: argv.includes('--force'),
+    project: projectFlag ? projectFlag.slice('--project='.length) : 'octogee-test',
+  };
 }
 
 async function main() {
-  const { force } = parseSeedTypingPhrasesArgs(process.argv.slice(2));
-  const sa = loadSa();
-  const app = initializeApp({ credential: cert(sa) }, 'seed-typing-phrases');
+  const { force, project } = parseSeedTypingPhrasesArgs(process.argv.slice(2));
+  const app = initializeOperatorFirebaseAdmin(project);
   const db = getFirestore(app);
 
   console.log(

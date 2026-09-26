@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  parsePurgeRestoreJobsArgs,
-  VESTIGIAL_GATEWAY_FIELDS,
-} from "../ops/purge-restore-jobs.js";
-import {
   parseRotateBuilderMmPatArgs,
   ROTATE_BUILDER_MM_PAT_USAGE,
 } from "../ops/rotate-builder-mm-pat.js";
@@ -61,19 +57,6 @@ describe("seed-orchestrator-config args", () => {
 });
 
 describe("one-shot operator CLI parsers", () => {
-  it("parses purge-restore-jobs without a default project", () => {
-    expect(parsePurgeRestoreJobsArgs(["--project=octogee-test", "--apply"])).toEqual({
-      project: "octogee-test",
-      apply: true,
-    });
-    expect(parsePurgeRestoreJobsArgs([])).toEqual({ project: null, apply: false });
-    expect(VESTIGIAL_GATEWAY_FIELDS).toEqual([
-      "inFlightJobId",
-      "lastJobCompletedAt",
-      "failedCustomers",
-    ]);
-  });
-
   it("parses GitHub project seeding and rejects incomplete create requests", () => {
     expect(parseSeedGithubProjectArgs([
       "--slug",

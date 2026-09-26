@@ -1,28 +1,25 @@
 
 
-import { cert, initializeApp } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import { projectGeneralChannelName } from "../../shared/types/identity.js";
 import { pathToFileURL } from "node:url";
+import { initializeOperatorFirebaseAdmin } from "../lib/operator-firebase-admin.js";
 
 export interface RepairMissingProjectChannelsConfig {
   apply: boolean;
   mmAdminToken: string | undefined;
   mmUrl: string | undefined;
-  saKey: string;
+  project: string;
 }
 
 export function resolveRepairMissingProjectChannelsConfig(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): RepairMissingProjectChannelsConfig {
+  const projectFlag = argv.find((arg) => arg.startsWith("--project="));
   return {
     apply: argv.includes("--apply"),
-    saKey: env.GOOGLE_APPLICATION_CREDENTIALS ||
-      path.join(os.homedir(), ".openclaw", "secrets", "octogee-test-sa-key.json"),
+    project: projectFlag ? projectFlag.slice("--project=".length) : "octogee-test",
     mmUrl: env.MM_URL,
     mmAdminToken: env.MM_ADMIN_TOKEN,
   };
@@ -215,13 +212,9 @@ async function main() {
   MM_URL = config.mmUrl;
   MM_ADMIN_TOKEN = config.mmAdminToken;
 
-  const saKey = JSON.parse(fs.readFileSync(config.saKey, "utf-8"));
-  initializeApp({
-    credential: cert(saKey),
-    projectId: saKey.project_id,
-  });
+  initializeOperatorFirebaseAdmin(config.project);
   db = getFirestore();
-  console.log(`Project: ${saKey.project_id}${APPLY ? "" : " [DRY RUN — pass --apply to write]"}`);
+  console.log(`Project: ${config.project}${APPLY ? "" : " [DRY RUN — pass --apply to write]"}`);
 
   const needs = await findProjectsNeedingRepair();
   console.log(`Found ${needs.length} project(s) missing channels/general:`);
