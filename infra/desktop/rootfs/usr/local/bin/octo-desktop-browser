@@ -22,6 +22,7 @@ if (( $# == 0 )); then
   fi
 fi
 
+export ACCESSIBILITY_ENABLED=1
 exec chromium --ozone-platform=wayland --disable-gpu "${sandbox_args[@]}" --no-first-run --password-store=basic \
   --force-renderer-accessibility \
   --user-data-dir="$HOME/.config/octogee-chromium" \

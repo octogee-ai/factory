@@ -15,7 +15,7 @@ function fixture() {
   const sessions = join(home, '.config/octogee-chromium/Default/Sessions');
   mkdirSync(bin);
   mkdirSync(sessions, { recursive: true });
-  writeFileSync(join(bin, 'chromium'), '#!/usr/bin/bash\nprintf "%s\\n" "$@" > "$CAPTURE_FILE"\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'chromium'), '#!/usr/bin/bash\nprintf "%s\\n" "$@" > "$CAPTURE_FILE"\nprintf "%s" "${ACCESSIBILITY_ENABLED-unset}" > "$CAPTURE_FILE.a11y"\n', { mode: 0o755 });
   return {
     home,
     sessions,
@@ -35,6 +35,13 @@ afterEach(() => {
 });
 
 describe('desktop Chromium startup', () => {
+  it('loads Chromium\'s AT-SPI bridge so the browser registers on the accessibility bus', () => {
+    const state = fixture();
+    const args = state.launch();
+    expect(args).toContain('--force-renderer-accessibility');
+    expect(readFileSync(join(state.home, 'arguments.a11y'), 'utf8')).toBe('1');
+  });
+
   it.each([undefined, '0'])('keeps the Chromium sandbox enabled with opt-out %s', (value) => {
     expect(fixture().launch([], undefined, value)).not.toContain('--no-sandbox');
   });
