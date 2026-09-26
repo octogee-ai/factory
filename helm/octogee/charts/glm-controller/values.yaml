@@ -60,7 +60,7 @@ env:
 # Gitea gateway SSH key sweep: dry-run logs per-user managed-key counts,
 # enforce deletes keys whose owning gateway pod or computer VM is gone.
 giteaGatewayKeyGc:
-  mode: dry-run
+  mode: enforce
 
 posthog:
   host: ""
