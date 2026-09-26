@@ -25,7 +25,6 @@ mattermost:
   db:
     name: mattermost___DB_SLUG__
   siteUrl: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
-  allowedInternalConnections: "octogee-gateway.__NAMESPACE__.svc.cluster.local"
   pvc:
     size: 5Gi
   resources:

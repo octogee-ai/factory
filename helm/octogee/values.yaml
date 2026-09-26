@@ -97,7 +97,6 @@ mattermost:
   # Default SiteURL is the IAP-protected admin host (overridable per-env).
   # Browser-direct path uses MM_PUBLIC_URL + ALLOWCORSFROM, not SiteURL.
   siteUrl: "https://mattermost.octogee.com"
-  allowedInternalConnections: "octogee-gateway.octogee.svc.cluster.local"
   # Space-separated origins allowed to call MM cross-origin (REST + WS).
   # Required for browser-direct access from app.octogee.com → mattermost.octogee.com.
   # Override per-env.
@@ -286,10 +285,6 @@ gatewayFleet:
     cloudArmor:
       enabled: false
       policyName: ""
-  # Vestigial since FLEET-CONTROL-NEG-SHED removed the fleet host: no
-  # template consumes this. Cowboy (glm-controller) owns the dynamic
-  # per-instance api/preview Ingress paths via host-scoped JSON patch.
-  instances: []
 
 networkPolicy:
   enforceDefaultDeny: false
