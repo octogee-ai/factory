@@ -27,7 +27,7 @@ import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentImportRuntime, invokeLocalOpenClaw } from "./lib/agent-import-runtime.js";
 import { startDesktopNodePairing } from "./lib/desktop-node-pairing.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
-import { createSharingRoutes } from "./routes/sharing.js";
+import { createSharingRoutes } from "./routes/sharing/index.js";
 import { createProjectCreateRoutes } from "./routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "./routes/projects/repo-source.js";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";

@@ -60,7 +60,7 @@ import { createPostHogServices, type PostHogServices } from "./lib/posthog.js";
 import { createProductObservability } from "./lib/product-observability.js";
 import { createGracefulShutdown } from "./lib/graceful-shutdown.js";
 import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
-import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing.js";
+import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing/index.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
 import { createVoiceRoutes } from "../../gateway-edge/src/routes/voice.js";

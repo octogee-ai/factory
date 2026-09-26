@@ -12,7 +12,7 @@ import inviteRoutes from "./invites.js";
 import integrationRoutes from "./integrations.js";
 import connectRoutes from "./connect.js";
 import notificationRoutes from "./notifications.js";
-import sharingRoutes from "./sharing.js";
+import sharingRoutes from "./sharing/index.js";
 import emailWebhookRoutes from "./email-webhook.js";
 import emailUnsubscribeRoutes from "./email-unsubscribe.js";
 import authEmailRoutes from "./auth-email.js";
