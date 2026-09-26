@@ -91,11 +91,25 @@ below.
 The Browser panel uses the gateway's attach-only `computer` CDP profile.
 `gateway.nodes.browser.mode=off` prevents automatic delegation to the native
 computer node, whose `nodeHost.browserProxy.enabled` is false.
+Keep both settings: the attach-only profile reaches the Chromium the human
+watches, without a second node browser profile or browser process.
 
 The Desktop panel uses the paired desktop node's `desktop.stream` command.
-The gateway explicitly allows it, and the node sets `desktop.host.enabled=true`,
+Native pairing approval grants it, and the node sets `desktop.host.enabled=true`,
 `managed=false`, and port `5901`. The existing local pairing loop approves the
 node's expanded manifest on reconnection.
+
+Builder VMs use OpenClaw's `full` tool profile, without an Octogee node-command
+deny list. The same loopback pairing approves shell, files, MCP and local
+inference as well as the desktop. Native file-transfer commands are explicitly
+opted in and their plugin is loaded; `octogee-desktop` asks on an unapproved
+path. Exec approvals, file grants, workspace bindings and dangerous-command
+checks still apply. No additional shell daemon, Ollama server, or broad file
+grant is provisioned. Ollama's ambient model discovery defaults off. Native
+Tool Search/harness defaults keep tools discoverable without putting every
+schema upfront. The owner coach has access;
+non-owner computer/browser requests still require owner approval, and project
+agent restrictions remain. Shared gateways are unchanged and have no node.
 
 `octo-desktop-openclaw-vnc` waits for WayVNC, then runs an
 [x11vnc reflector](https://github.com/LibVNC/x11vnc/blob/master/doc/OPTIONS.md)
@@ -288,4 +302,3 @@ the first key is required or the first keystroke after a focus change is lost
 - [x] Boot the installed disk as a native GCE image (`omarchy-spike-v1`) and repeat: same result
 - [ ] Same session scripts run inside a QEMU/KVM Omarchy VM with virtio-gpu and no host GPU
 - [ ] CPU, memory, image size and time-to-ready recorded above
-

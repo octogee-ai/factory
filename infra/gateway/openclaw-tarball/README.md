@@ -1,52 +1,57 @@
 # OpenClaw current build
 
-Octogee builds its gateway from a released OpenClaw tag, or an explicitly
-selected upstream branch snapshot, plus the Octogee overlay. `current.json`
-selects the two write-once GCS artifacts; the build resolves their exact generations and derives a new
-immutable `octogee-gateway-base:inputs-…` tag. No step here deploys TEST or
-PROD.
+Octogee uses a released OpenClaw tag or an explicitly selected main snapshot,
+plus the smallest overlay required by its consumers. `current.json` selects
+two write-once GCS artifacts. Build main resolves their generations and produces
+an immutable, digest-addressed image family. Building never deploys TEST or PROD.
 
-## Refresh a tag or selected branch
+## Refresh a tag or green main snapshot
 
-Start from a clean OpenClaw checkout with `origin` pointing at
-`openclaw/openclaw` and `ceckert` at the Octogee fork. Fetch the selected ref,
-lock its full commit at the start, and cut the matching overlay branch. For a
-tag, verify its peeled commit. For a branch, record the locked snapshot
-honestly; a package version alone does not make it a GA release:
+1. Fetch upstream in a clean OpenClaw checkout (`origin`: `openclaw/openclaw`,
+   `ceckert`: the fork). For a tag, record the annotated tag object and peeled
+   commit. For main, inspect the jobs of the most recent successful **full** CI
+   run, not just a green fast/security-only push run. Record its exact head SHA,
+   run URL and skipped jobs. A newer tip is not automatically a better candidate.
+2. Lock that full SHA before starting. Rebase the prior overlay onto it, checking
+   each changed boundary. Do not chase a moving tip during the build. Drop
+   adopted behavior, unused capabilities and optimizations that change upstream
+   correctness. Use native owners when files or APIs move.
+3. Test affected behavior, with a failing control for new bugs; run applicable
+   native type, lint, generated-output and package checks. Reuse upstream
+   coverage instead of copying whole suites. Keep real resource/authorization
+   boundary tests even when trimming fixtures.
+4. Commit the final source and build with `pnpm build`. Verify
+   `dist/build-info.json.commit` equals the clean checkout's HEAD. Use the
+   repository-pinned package manager and frozen lockfile. `build:docker` is not
+   a substitute: the full build creates the files required by `npm pack`.
+5. Check open upstream contributions separately against current main. Remove
+   an overlay fix once the selected base contains equivalent behavior and its
+   consumer tests pass. An open PR, a merge outside the selected base, or a
+   matching package version is not enough.
 
 ```bash
-cd /path/to/openclaw
 git fetch origin main
-UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)
-git switch -c codex/openclaw-current-recut "$UPSTREAM_SHA"
-```
-
-Rebase the prior overlay's patch series onto the locked commit one patch at a
-time (`git rebase --onto <new-ref> <old-base> <overlay-head>`), keeping one
-single-purpose commit per patch, and type-check every boundary
-(`git rebase -x "pnpm tsgo:core" <new-ref>`). Then audit every patch against the
-locked commit. Drop behavior OpenClaw now provides and capabilities Octogee no
-longer needs. When upstream has split a
-patched file, move only the required hook to its new owner; do not restore
-deleted upstream wiring. Build and test the affected behavior before packing:
-
-```bash
+# Set this to the inspected full-CI run's 40-character head SHA, not FETCH_HEAD.
+UPSTREAM_SHA=<verified-full-green-sha>
+git rebase --onto "$UPSTREAM_SHA" <previous-upstream-base> <overlay-branch>
 pnpm install --frozen-lockfile
-pnpm build
+pnpm tsgo:prod
 pnpm check
 pnpm config:channels:check
+pnpm build
+git status --short
+cat dist/build-info.json
 ```
 
-The focused tests must cover every changed patch area. The root build embeds
-its source commit in `dist/build-info.json`; check it matches the final overlay
-head before packaging. Refresh any still-open upstream PR that carries an
-overlay patch, using `--force-with-lease` after its own build and focused tests.
+Record incomplete or inherited failing checks precisely; never describe a
+partial run as aggregate `pnpm check` success. Keep single-purpose patches
+and concise evidence in the PR, not historical benchmark diaries here.
 
 ## Package and publish
 
-From a clean Octogee checkout, package the built overlay into a fresh
-directory. Validate the root package and the local Mattermost package in an
-isolated npm prefix before publication.
+Run both maintained packers **sequentially** from a clean Octogee checkout into
+a fresh directory. `OPENCLAW_SKIP_BUILD=1` is only for exact source already
+built in this cycle. Both packers use the same OpenClaw artifact tree.
 
 ```bash
 ARTIFACT_DIR=$(mktemp -d -t openclaw-current-artifacts-XXXXXX)
@@ -55,7 +60,21 @@ ROOT_TGZ=$(OPENCLAW_SKIP_BUILD=1 \
   /path/to/openclaw "$ARTIFACT_DIR")
 MATTERMOST_TGZ=$(bash infra/gateway/openclaw-tarball/pack-mattermost-tarball.sh \
   /path/to/openclaw "$ARTIFACT_DIR")
+```
 
+Before publication:
+
+- Run upstream's `scripts/check-openclaw-package-tarball.mjs` on the root archive.
+- Install the exact root and Mattermost pair in an isolated npm prefix and
+  verify installed build-info. Core, Codex, Parallel and Mattermost must come
+  from the same checkout, not merely share a version.
+- Build the actual Linux `openclaw-full-plugin-installer` target in
+  `infra/gateway/Dockerfile.base`. Its native registry refresh, bundled-trust
+  check, source-match verification and three native-hook imports must pass.
+  Recipe fixtures alone are not installed-image proof.
+- Confirm the native prepack/postpack lifecycle leaves the source clean.
+
+```bash
 ROOT_SHA256=$(shasum -a 256 "$ROOT_TGZ" | awk '{print $1}')
 ROOT_OBJECT="openclaw-fork-${ROOT_SHA256:0:8}.tgz"
 MATTERMOST_SHA256=$(shasum -a 256 "$MATTERMOST_TGZ" | awk '{print $1}')
@@ -67,265 +86,115 @@ gcloud storage cp --if-generation-match=0 "$MATTERMOST_TGZ" \
   "gs://octogee-openclaw-fork/${MATTERMOST_OBJECT}"
 ```
 
-The write-once precondition is required. Never replace a release object or
-reuse the retired `*-main.tgz` objects. Set `upstreamRef`, `openclawObject`,
-and `mattermostObject` in `current.json`, and mirror the two object names in
-`cloudbuild-base.yaml`; the focused base-reuse test proves that mirror. Push
-the overlay branch with `--force-with-lease`.
+Never overwrite an object or use retired `*-main.tgz` names. If an object
+already exists, verify its complete hash before reuse; an eight-character
+name is not proof. Read back published generations and hashes. Set
+`upstreamRef`, `openclawObject` and `mattermostObject` in `current.json`, and
+mirror the names in root `cloudbuild-base.yaml`. Push the exact overlay branch;
+use `--force-with-lease` only when rewriting a previously published branch.
 
-An artifact refresh must still create an Octogee main build input. Update this
-current-overlay assessment in the same PR; its path is intentionally included
-in Build main scope. Build main produces images only. The operator alone can
-select TEST or PROD later.
+Update the Current overlay assessment below in the same Octogee PR. This README
+is deliberately a gateway build input, including for artifact-only recuts.
+Run focused artifact/base-image tests, evaluate feedback and wait for final-head
+CI. After merge, Build main produces images, not a deployment. Environment
+selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
 ## Current overlay
 
-**Base:** upstream `openclaw/openclaw` `main` at
-[`dfb6474c538f493a70a4d2c399703966899a9ed0`](https://github.com/openclaw/openclaw/commit/dfb6474c538f493a70a4d2c399703966899a9ed0)
-(2026-09-25 08:48 -0700, merge of PR #158184). This is a branch snapshot, not a
-release; the package version string remains `2026.9.6`. Upstream's push-to-main CI
-skips real jobs, so "green" here means the merged PR head's `openclaw/ci-gate`
-succeeded for #158184. Caveat: #154208 (`f80fef130a9`, three commits below the base)
-was merged over a failed gate (a flaky Codex computer-use timing test), outside the
-overlay's areas.
+**Locked upstream:** main
+[`b458b9f1c6bc60389c7f88161262e5d39e23dcce`](https://github.com/openclaw/openclaw/commit/b458b9f1c6bc60389c7f88161262e5d39e23dcce).
+The September 26 selection uses the newest completed full-green main run found:
+[36218202039](https://github.com/openclaw/openclaw/actions/runs/36218202039),
+141 successful jobs, seven skipped, including successful `openclaw/ci-gate`.
+Newer full runs were failed or pending; their fast-green push runs were not used.
+This is a main snapshot with package version `2026.9.6`, not the GA tag's bytes.
 
-**Overlay branch:** `ceckert/openclaw:codex/octogee-main-dfb6474c538-recut`, head
-`0c521507080ce345cedc33d29348a41fe21b1085` (`dist/build-info.json` commit matches).
-31 commits on the base: 29 single-purpose overlay patches, #28's test fixup, and one
-`build(workboard)` Control UI bundle-hash commit.
+**Exact overlay:** `ceckert/openclaw:codex/openclaw-slim-main-sept26`,
+[`51df909dd54b134f7b237a4046ce1b7b61986dd4`](https://github.com/ceckert/openclaw/commit/51df909dd54b134f7b237a4046ce1b7b61986dd4).
+The clean build's source matches. Its 28 commits include fixture corrections,
+test reductions, resource-cleanup follow-ups and regenerated Workboard assets;
+commit count is not a count of distinct runtime features.
 
-**Policy:** the goal is zero patches, pursued deliberately through discussions
-with the OpenClaw maintainers — not a stream of ad-hoc upstream PRs. The only
-upstream PR in flight is [#155072](https://github.com/openclaw/openclaw/pull/155072).
-Keep every patch small, generic, and upstream-quality so it is ready for those
-discussions; record each patch's readiness in the table below.
+### What remains and when it can go
 
-| # | Commit | Patch | Octogee consumer | Upstream readiness |
-| --- | --- | --- | --- | --- |
-| 1 | `128f29c99c2` | Computer: blank `target`/`node`/`environmentId` = unset | Agent computer tool | Open PR #155072 |
-| 2 | `3b549cf7b19` | Gateway: keep a committed hot reload live when system cron monitors will retry | `config.patch` path (pre-boot config) | Ready (narrower than #148592) |
-| 3 | `a2767359702` | Skills: Skill Workshop reviews on the published plugin generation | Gateway-internal | Ready |
-| 4 | `4dd0f0425f7` | State: prepare profile identity without a host-thread state read | Hot path of #13 | Ready |
-| 5 | `d0e6fae74c8` | Desktop: re-read rotated external VNC credentials per observe | gateway-edge `desktop.observe` proxy | Ready |
-| 6 | `7bed157e9b9` | Mattermost: `threadSessionScope` channel-scoped thread sessions | pre-boot sets `threadSessionScope=channel` | Ready |
-| 7 | `db21b911d33` | Mattermost: title channel sessions by display name | Builder session titles | Ready |
-| 8 | `091f8bd10f3` | UI: label channel participants from transcript senders | Control UI | Ready |
-| 9 | `2db4a137a53` | Sessions: explicit member grants replace service-authored ones | gateway-edge channel-membership sync | Ready |
-| 10 | `e4a94a21411` | Sessions: ensure initial session entries through the sharing worker | Prerequisite of #12 | Ready (with #12) |
-| 11 | `31d173ab84a` | Gateway: grant channel-created sessions to synchronized members | Proxy identity `sessions.others` | Ready |
-| 12 | `0cbe0c17518` | Gateway: `sessions.channel.sync` membership mirroring | gateway-edge `channel-membership-sync.ts` | Ready |
-| 13 | `64f3ece248a` | Gateway: workspace icons for session members | gateway-edge icon proxy | Ready |
-| 14 | `65483cb6489` | UI: refetch rejected workspace icons after auth recovery | Control UI | Ready |
-| 15 | `737a3295127` | Plugins: live authenticated requester for `before_tool_call` | `octogee-access-tools/computer-approval.ts` | Ready |
-| 16 | `05f8e586128` | Plugins: `before_tool_call` reviewer guard | same | Ready (after #15) |
-| 17 | `18e4ba01481` | Harness: recheck reviewer authority before native execution | Builder gateways (Codex) | Ready (after #16) |
-| 18 | `518b1bcf6df` | Cron: `cron.migration` scheduled-agent handoff with durable fences (includes default-agent ownership resolution) | Shared-gateway customer migration | Needs work: `cron.migration` snapshot shape validation |
-| 19 | `063bff41746` | Cron: keep timer reservations within the admitted due set (regression from #18) | — | Fold into #18 |
-| 20 | `ac661ac4d70` | Cron: partial handoff retains non-portable jobs dormant on the source | Builder VM return (Octogee PR #4034) | Fold into #18 |
-| 21 | `671b773e10e` | Models: stop catalog generations chaining across reloads (heap growth under agent churn) | Every shared/Builder gateway hot reload | Ready; PR not filed |
-| 22 | `832ed7a227f` | Gateway: hand a superseded hot reload's runtime refresh to its successor | Builder mount/migration (`agents.create` then `config.patch`) | Ready; PR not filed |
-| 23 | `29641fdd60b` | Agents: release pooled auth readers for deleted and unrostered agents | Builder eviction (`agents.delete`, then the agent dir removal held-file check) | Ready; PR not filed |
-| 24 | `6c5735314cb` | Plugins: reuse gateway activation across resolved secret rotation | `secrets.reload` on every mount/import | Ready; PR not filed |
-| 25 | `075c4406f0c` | Gateway: advance the retained registry's activation stamp on plugin-neutral commits | Every `config.patch`/`agents.create` on shared gateways | Ready; PR not filed |
-| 26 | `d2577c228d6` | Agents: borrow the Gateway registry for every workspace of a config-wide generation | Shared gateways with per-customer workspaces | Ready; PR not filed |
-| — | `63963eb441c` | build(workboard): Control UI bundle hash for the recut head (covers #14) | Control UI | — |
-| 27 | `54fabd0320c` | Secrets: config-write refreshes stop retaining removed agents' auth stores | Builder eviction/unmount (`agents.delete`, then the held-file check) | Ready; upstream main has the same bug, PR not filed |
-| 28 | `2091f315e28` | Agents: retire a deleted agent's model runtime before releasing its database (test run under a canonical state dir in `e4c728b9178`) | Builder eviction/unmount after an import's `secrets.reload` | Ready; PR not filed |
-| 29 | `0c521507080` | Agents: retire a deleted agent's memory index before releasing its database | Builder eviction/unmount of agents that have run (memory-core index reader) | Ready; PR not filed |
+| Behavior / commit | Octogee consumer | Removal condition |
+| --- | --- | --- |
+| Committed hot reload survives retryable cron-monitor activation (`304e64c`) | Gateway config writes | Native reload preserves committed runtime while monitors retry. |
+| Skill Workshop uses published plugin generation (`d3fc118`) | Native skill review | Native reviews borrow the active generation with the same lifetime guarantees. |
+| Rotated external VNC credentials read per observation (`7f122a6`) | Desktop proxy | Native reconnect/observe sees rotated credentials without stale password capture. |
+| Mattermost channel-scoped threads and display-name titles (`3485bd9`, `098fe54`) | Threaded workspace rooms | Native channel scope preserves room context without mixing reply destinations. |
+| Transcript sender labels (`23b5d97`) | Multi-human Control UI sessions | Native participants display the actual transcript sender. |
+| Explicit grants, initial sharing-worker entries, channel-member grants and `sessions.channel.sync` (`011c128` through `a755482`) | gateway-edge membership sync | A native sync seam preserves personal grants, removals and tenant isolation. |
+| Member-authorized icons and browser-auth retry (`5da10e7`, `4319b26`) | Shared-session Control UI | Native icons use session membership and recover after browser authentication. |
+| Live tool requester, reviewer guard and native execution recheck (`3dcea82`, `e0c557f`, `45948ed`) | `octogee-access-tools` computer approval | Native hooks retain live requester/reviewer authority through approval and execution. |
+| Durable scheduled-agent migration (`33a9735`) | Cowboy Shared/Builder handoff | Native cron transfer supports fenced ownership and scoped partial migration. |
+| Superseded hot-reload tail handoff (`f0087d3`) | Back-to-back mount/config writes | Native successors inherit unfinished scope without waiting for stale work or losing failures. |
+| Model-catalog generation release (`71540de`) | Long-lived gateways | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
+| Workspace-only Gateway registry reuse (`9907538`, narrowed by `a8a5ce9`) | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent is in the selected base; config/environment/metadata checks remain. |
+| Deleted-agent model/auth/secrets/memory cleanup (`fb99ee1`, `0ed4358`, `1a84c2d`) | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes native owners without disrupting surviving agents. |
 
-Recut adaptations against the new base (all other patches applied cleanly):
+The deletion fix uses the native memory-manager close API. Its proof establishes
+a retained manager/provider lifetime; do not assume the current implementation
+necessarily retains the older query-only/WAL reader.
 
-- #5 merges with upstream desktop audio (#157723); audio preauth uses the freshly
-  resolved VNC password.
-- #6: upstream #155812 routes threaded reactions to the thread session. Upstream's
-  cases stay alongside the channel-scoped cases; channel config and docs are
-  regenerated.
-- #8's header merges with #157482.
-- #11: `createdVia` moves to upstream's split sqlite entry-cache files; the former
-  `isMember` rewrite is dropped because upstream `projection.readMembership` does it.
-- #12 uses `defineValidatedGatewayHandler` (#156521).
-- #16 runs the reviewer check inside upstream's `OperatorApprovalStoreGuard` binding
-  (#150237); a reviewer error resolves as not-found (fails closed). #17's tests
-  moved to `native-hook-relay.reviewer-authority.test.ts` for the line cap.
-- #18 sits on upstream's run-admission worker (#157634). Its shared state schema
-  step is renumbered v19→v20 because upstream took v19 (#157709). The untested
-  `lifecycleGeneration` refusal at the reservation commit boundary is dropped;
-  upstream's `commitGuard` owns it. The `cron.migration` kernel, RPC handler,
-  snapshot format, and types are byte-identical to the previous pin `c1424da`.
-- #19 is mostly upstream-covered: upstream's `observeCronJobWrites` helper replaces
-  the post-commit spy.
-- #22 sits on upstream's revisioned config source (#157372), split into
-  `config-reload-supersession.ts` and `config-reload-restart.ts` for the line-cap
-  ratchet.
+Cron migration consolidates the prior three patches. It validates incoming
+snapshot shape/size and replaces matching target-projected system monitors
+while refusing unrelated user-job/tenant conflicts. Nonportable jobs remain
+dormant on the source for partial handoffs. The former snapshot-validation and
+monitor-reprojection follow-ups are covered by the new regressions.
 
-Upstream changes since v2026.9.6 that affect Octogee:
+### Removed or narrowed
 
-- Shared state schema is now 20 and forward-only: older gateway builds refuse the
-  database. Builder VMs with persistent disks cannot be image-downgraded after
-  running this build.
-- Config writes publish immediately through one revisioned source (#157372);
-  reloads are admitted while retained work drains (#157796); a `restart-required`
-  verdict follows a bundled code digest change (#156827).
-- Cron activation, release, and finish run on the state worker (#157634).
-- `sessions.messages.subscribe` requires `key` (#156071).
-- `agents.delete` waits for database resources (#157631).
-- Mattermost threaded reactions route to thread sessions by default (#155812);
-  Octogee's `threadSessionScope=channel` overrides it.
-- Role-based model limits (`gateway.roles`, #156346).
+- Adopted native blank computer selectors (#155072) and host-read-free profile
+  identity preparation (#155800); neither patch remains.
+- Removed registry reuse across resolved-secret changes and stamp advancement
+  after plugin-neutral writes. Real callbacks demonstrated stale credential/model
+  state. Native invalidation is restored; reuse only ignores workspace
+  differences when the full activation identity matches.
+- Consolidated deletion cleanup and cron handoff. Removed duplicate tests and
+  stale fixture assumptions while retaining resource, scope and auth coverage.
 
-Known follow-ups for the next recut: `cron.migration` snapshot validation, and
-letting stage replace a target's re-projected system monitors
-(`heartbeat:` / `skill-collection-review:` declarations) instead of refusing
-them as a target conflict.
+Against the earlier audited `e4c728b`/`dfb6474` overlay, the diff drops from
+194 to 184 files and 8,524 to 7,738 net added lines. Native test/support-path
+classification drops from 67 to 61 files and 5,452 to 4,718 net added lines
+(734 fewer). This compares source overlays, not deployed environments; the
+intervening memory fix is included too.
 
-The archives below were built from the head above, install-verified together in
-an isolated npm prefix (`OpenClaw 2026.9.6 (0c52150)`), and published with
-write-once generation preconditions; the published root archive's SHA-256 was
-re-verified after upload. The Mattermost archive is byte-identical to the previous
-publication and is reused.
+The three grouped upstream PRs above have maintainer-readable reproductions.
+#158986's hosted gate passed. #159002 and #159013 share a failing hosted deferred
+SecretRef-reload timeout; local proof does not make their hosted CI green.
+#159002 also has an exact installed-updater proof from published 2026.9.6.
+Check actual upstream adoption at each recut rather than assuming submission
+means the overlay can be dropped.
+
+### Qualification and artifacts
+
+The exact source passes the full native build, core/UI/extension production
+types and 1,099 focused tests across 58 files. Browser auth-recovery coverage
+also passes (four cases). No aggregate `pnpm check` success is claimed.
+The build reports a 371,762-byte startup gzip against a 371,332-byte budget;
+the unchanged-UI upstream-only contribution build reports 371,784 bytes.
+The warning was not suppressed and no budget was raised.
+
+Both maintained packers, native archive integrity, isolated root/Mattermost
+installation and the actual Linux arm64 full-plugin-installer target pass.
+The image verifies 156 identical Codex runtime files with bundled trust and
+three native-hook imports. Local image ID:
+`sha256:8b55510deed40364279159d65001d5fc643963c5d555c2000258ecd6140d0361`.
+The final Octogee artifact/base-image tests pass (114 + 19). This is local
+installer proof, not a published gateway image family or rollout claim.
+
+Published with generation-zero preconditions; both complete SHA-256 values were
+verified by reading the objects back:
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-b81fc15f.tgz` | `b81fc15f8a9521cfb356fdee873eed900fe1f1cef17810ef6063487fad24bb27` | `1790440055172252` |
-| `openclaw-mattermost-4ee09605.tgz` | `4ee0960599474fed423e28b77ad56a0e794f3a4c1fcc5adb73c7864bad04ec09` | `1790361284337036` |
+| `openclaw-fork-a93003cd.tgz` | `a93003cdcfcbe841e9e5eee1fcd9e23de256a99261ecb153ef12f39b5b17b76f` | `1790445507547949` |
+| `openclaw-mattermost-77619145.tgz` | `776191456b764d679e3dd8a17a8e90d2c1d94bd1285e4622d69efc88aa52928f` | `1790445510528027` |
 
-Qualification of this head: `git rebase -x "pnpm tsgo"` passes at all 26 patch
-boundaries; `pnpm check`, `pnpm tsgo:prod`, `pnpm check:test-types`, and
-`pnpm config:channels:check` pass; the focused suites (62 files, 1163 tests) pass;
-`pnpm build` passes with `dist/build-info.json` equal to the head and a clean tree.
-#21–#26 are each red on the pristine base (base plus the patch's test file only) and
-green on the head: #21 retention (`expected [] to deeply equal [0..4]`), #22 7/8
-failing without the handoff → 8/8, #23 `expected true to be false`, #24 registry not
-reused, #25 assertion failures, #26 four registries → one. Patches #1–#28 (`e4c728b`)
-run on TEST and PROD since 2026-09-26.
-
-#27 is qualified on `54fabd0`: its refresh test is red without the fix and green with
-it; `pnpm tsgo:core`, the secrets, secrets-startup, runtime-authority and
-gateway-auth-refresh suites (12 files, 247 tests), and `pnpm build` (build-info equal
-to the head, clean tree) pass. A Gateway `lsof` reproduction held 7 descriptors on
-the deleted agent's `openclaw-agent.sqlite` after `agents.delete` on `63963eb` and 0
-on this head.
-
-#28 is qualified on `e4c728b`: its Gateway proof (`agents.create` → `sessions.create` →
-`secrets.reload` → `agents.delete`, then no open connection to the agent database) is
-red without the fix and green with it, three solo runs and in the batch; `pnpm
-tsgo:core`, the agent-mutation, prepared-model-runtime and secrets suites (46 files,
-642 tests), and `pnpm build` (build-info equal to the head, clean tree) pass.
-
-#29 is qualified on `0c52150`: its Gateway proof (a memory runtime holding a query-only
-reader on the agent database, then `agents.delete`) is red without the fix (the index
-stays open and the `-wal` survives) and green with it; #28's proof still passes in the
-same file; `pnpm tsgo:core`, the agent-mutation and memory-runtime suites (2 files, 140
-tests), and `pnpm build` (build-info equal to the head, clean tree) pass.
-
-### Patch #27: deleted agents' auth stores stayed open
-
-`prepareActiveSecretsRuntimeRefresh` merged the config-derived agent directories into
-the snapshot's `explicitAgentDirs`, so every later config write re-read the auth
-store of every agent ever configured — including the write inside `agents.delete`
-that removes the agent. The reopened pooled reader (30-minute idle timer, reset by
-each retry's `config.patch`) kept `openclaw-agent.sqlite` and its WAL/SHM open, and
-Octogee's held-file check refused every source unmount after a migration until the
-gateway restarted. Refreshes now carry only caller-supplied explicit directories and
-recompute agent directories from each written config.
-
-### Patch #28: a deleted agent's model runtime reopened its database
-
-With #27 in place, removing an agent changes the auth-profile snapshot set, which
-fires a global auth mutation. That marked every prepared model-runtime owner stale —
-including the deleted agent's own owner, still registered until the config reload
-retired it — and the auth publication drain rebuilt it against the old roster,
-reopening `openclaw-agent.sqlite` through the pooled auth reader after
-`agents.delete` had closed it. It only happens once the agent has a published
-runtime owner, which an import's `secrets.reload` creates, so agents imported onto a
-shared gateway and moved off again still held their databases on `54fabd0`.
-`agents.delete` now retires the agent's prepared model-runtime owners (and waits for
-an in-flight build) before closing the pooled readers for its databases.
-
-### Patch #29: a deleted agent's memory index held its database
-
-With #27 and #28 live, TEST sources still refused most unmounts. Watching the gateway's
-descriptors through a drain showed `agents.delete` closing the writer connection's WAL
-while its writable descriptor, `-shm`, and a second WAL descriptor from an earlier
-reader stayed open. memory-core's per-agent index manager keeps a query-only
-connection (`openOpenClawAgentDatabaseReadOnly`, outside the agent-database resource
-registry) for its lifetime, and nothing closed it on deletion. In WAL mode that reader
-holds a shared lock, so SQLite defers closing the released writer's descriptor too,
-and Octogee's writable-holder check fails. Agents with no WAL at the time passed the
-check but kept a read-only descriptor on the deleted file. `agents.delete` now closes
-the active memory runtime's managers for the agent after its roster removal commits,
-alongside #28's model-runtime and pooled-reader release.
-
-Packaging keeps the exact core source and rebuilds Codex and Parallel from that
-same checkout. The full image places Codex at `dist/extensions/codex` with its
-declared production dependencies, using upstream's supported source-image route:
-native discovery must report `origin: "bundled"` before granting keyed-store APIs.
-`infra/gateway/verify-codex-source-match.mjs` checks bundled location and trust,
-identity/version, the exact manifest, and all runtime bytes against the source
-archive; a shared version string does not prove matching bytes.
-
-### Patches #24–#26: plugin reload freeze
-
-Every `secrets.reload` and every post-commit prepared model-runtime convergence
-cold-loaded every plugin through `capturePluginGenerationArtifact`, freezing the
-event loop for 35–85 s under gVisor (measured on TEST, 2026-09-25). #24 reuses the
-gateway activation when only resolved secrets rotate. #25 advances the retained
-registry's activation stamp on plugin-neutral commits, so they no longer force a
-recapture. #26 fixes the workspace-dir mismatch behind per-workspace cold loads: the
-config-wide startup generation has no `workspaceDir`, while the active registry is
-stamped with `agents.defaults.workspace`, so every customer workspace loaded its own
-registry. A three-customer test gateway went from four registries (five captures) to
-one.
-
-### Patch #23: pooled auth readers outlived deleted agents
-
-Upstream #150524 keeps read-only auth-profile handles on each agent's
-`openclaw-agent.sqlite` for 30 minutes of idle time, and the OAuth peer scan reads every
-agent directory on disk, rostered or not. `agents.delete` closed the agent's own
-database handles but not the pooled reader, so a departed Builder's database stayed
-open and Octogee's held-file check refused to remove it. That blocked eviction on
-shared gateways, and with it scaler convergence. The patch closes the deleted agent's pooled
-readers in `prepareAgentDeleteDatabases` and stops pooling peer-scan readers for
-agents outside the roster. The interim Octogee exemption for read-only connections
-during final removal (#4025) can be removed once this archive is live everywhere.
-
-### Patch #21: catalog generations chained across reloads
-
-Every hot reload (`agents.create`, `agents.delete`, `config.patch`) left the previous
-prepared model-catalog generation reachable: `createFullModelCatalogAccess` captured
-`previousInventory` in the closure context that the catalog-auth usage reader keeps
-alive, so generations formed an unbounded chain, each pinning a retired ~10 MB
-operation plugin cache. This was the shared-gateway heap growth that ended in
-`Ineffective mark-compacts near heap limit` under agent churn. Seeding moves to
-`prepared-model-runtime.catalog-seed.ts`, keeping the superseded inventory local.
-
-A local gateway reproducer (default config, Codex off; `agents.create`/`agents.delete`
-cycles plus `config.patch`; heap read after forced GC over the inspector) grew linearly
-without the patch (377 → 670 MB over 6 cycles with 10 idle agents) and stayed flat
-with it (262 → 280 MB). Under a 512 MiB heap with 20 idle agents, the unpatched build
-died in the first cycle with the production OOM signature; the patched build ran 20
-cycles (80 creates, 80 deletes, 20 patches) at 276 → 296 MB.
-
-### Patch #22: superseded hot reloads finished a stale runtime refresh
-
-A Builder mount writes twice: `agents.create` rosters the Coach, then `config.patch`
-adds its accounts and bindings. The first write's hot reload committed within 3 s,
-then spent ~47 s in its post-commit prepared-model-runtime refresh for a config the
-patch had already replaced; only afterwards did the transaction notice supersession,
-so the patch's own reload (another ~40 s) waited behind it. TEST pod
-`octogee-gateway-shared-09a360c91291`, import `pr3568bfb7983eo`, 2026-09-24:
-`17:55:50` reload #1 committed, `17:56:37` applied then superseded, `17:57:18`
-reload #2 applied, `config.patch` answered after 90 s.
-
-The reload transaction now exposes a `supersededSignal` that fires on a newer
-in-process write or stop (watcher-only edits still validate at checkpoints). The
-hot-reload tail stops awaiting its model-runtime and context-window refreshes once
-superseded; the refresh keeps running detached, readers keep waiting on its
-replacement gate, and the successor's refresh supersedes it with a scope widened by
-the unfinished agent scope. A detached refresh that fails before any successor takes
-its scope still schedules hot-reload recovery. A reproducer with two writes and a slow
-first refresh hangs without the patch and hands off in ~10 ms with it. The saving on
-a real mount (~45 s expected) is not yet measured on a gateway.
+The selected source uses **shared-state schema 20 / agent schema 23**. Preserve
+native migration backups and roll forward; older images may refuse migrated
+databases. No image-only downgrade or session reset is part of this recut.
 
 ### Mattermost session and delivery policy
 
@@ -359,24 +228,10 @@ Human posts retain Octogee's submission ID in namespaced Mattermost properties,
 bound to the posting user. Mattermost clears `pending_post_id` in later REST reads;
 the durable ID lets native history reconcile the optimistic user bubble.
 
-For v2026.9.3, a disposable runtime connected to the real TEST Mattermost service proved that
-two humans, separate roots, and an existing thread share one channel session;
-another channel remains isolated. An overlapping two-human test used distinct
-answers and verified each appeared under its own root with `followup`. The test
-also verified durable submission properties survive REST retrieval and native
-history contains the turns. These were API/runtime checks, not a browser rollout.
-All four fixture tokens were revoked, users deactivated, and private rooms and the
-team archived afterward. Adapter and pre-boot behavior have separate regressions.
-
-Startup-default preservation is also dropped downstream: Octogee already provisions
-explicit account policies and plugin enablement. A separate generic auto-enable
-reproduction still loses an effective schema default; that is upstream follow-up,
-not a reason to preserve Octogee's patch. No replacement control RPC is needed.
-
-Native `ls` continues to replace the former discovery patch. Resolved-secret caching,
-custom `secrets.apply`, no-archive deletion, database-recreation polling, and custom
-fresh-chat terminal ownership remain removed. The Dockerfile's WebSocket import
-rewrite is removed because the released Mattermost package resolves it natively.
+Native `ls`, ordinary archived deletion, native terminal ownership and explicit
+Octogee account/plugin policies replace earlier patches. Custom `secrets.apply`,
+resolved-secret caching, database-recreation polling and startup-default
+preservation remain removed. No replacement admin RPC is needed.
 
 ## Temporary native CUA driver patch
 
@@ -394,7 +249,7 @@ library. The Dockerfile is already part of the immutable base fingerprint;
 changing the source pin produces a new base identity. The npm Node runtime and
 generated bindings remain from the same 0.28.2 release.
 
-The current base (`dfb6474`) requires 0.28.2. The same 40-line patch applies
+The selected main snapshot requires 0.28.2. The same 40-line patch applies
 unchanged to its native release commit
 [`fc188250b4ca8549b8e61f937fdb1fb560770e86`](https://github.com/trycua/cua/commit/fc188250b4ca8549b8e61f937fdb1fb560770e86).
 Local Docker builds of the exact builder stage pass on native arm64 and emulated
@@ -404,6 +259,13 @@ have no live desktop. Release compilation, dynamic loading, and library
 architecture checks pass on both. The six installer regressions pass. PR #3659
 has the refreshed evidence; it remains draft pending its canonical desktop
 validation, and the published driver still lacks the standalone mappings.
+
+OpenClaw owns the package-version pin in its root and `cua-computer` manifests;
+Octogee owns this matching native backport and adapted skills. CUA 0.29.1 is
+available, but current OpenClaw main still selects 0.28.2 and 0.29.1 still lacks
+the modifier mappings. A version upgrade must align OpenClaw's dependency lock,
+JS bindings, native artifact digests, backport and skill provenance together;
+changing only `CUA_SOURCE_SHA` is not a safe version upgrade.
 
 Remove the native builder stage and installer overlay when the selected
 OpenClaw package uses a published CUA version containing the fix and passes

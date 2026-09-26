@@ -22,20 +22,18 @@ function stringList(parent: JsonObject, key: string): string[] {
   return value;
 }
 
-export const DESKTOP_TOOLS = ["browser", "computer"] as const;
+export const DESKTOP_TOOLS = ["browser", "computer", "nodes", "file-transfer", "ollama"] as const;
 export const GATEWAY_HOST_DESKTOP_AUTH_DIR = "/run/octogee-desktop-vnc";
 export const COMPUTER_SKILLS_DIR = "/opt/octogee/skills/computer";
-export const DESKTOP_NODE_DENIED_COMMANDS = [
-  "system.run",
-  "system.run.prepare",
-  "system.which",
-  "system.execApprovals.get",
-  "system.execApprovals.set",
-  "terminal.upload",
-  "fs.listDir",
-  "browser.proxy",
-  "browser.proxy.upload.v1",
-  "mcp.tools.call.v1",
+const FILE_TRANSFER_NODE_COMMANDS = [
+  "file.stat",
+  "file.fetch",
+  "dir.list",
+  "dir.fetch",
+  "file.create",
+  "file.write",
+  "workspace.memory",
+  "workspace.skills",
 ] as const;
 
 function builderComputer(env: NodeJS.ProcessEnv): boolean {
@@ -53,10 +51,8 @@ export function applyComputerBrowserAgentPolicy(
     const tools = agent.tools;
     if (!tools || typeof tools !== "object" || Array.isArray(tools)) return;
     const policy = tools as JsonObject;
-    for (const key of ["allow", "alsoAllow"] as const) {
-      if (policy[key] === undefined) continue;
-      policy[key] = [...new Set([...stringList(policy, key), ...DESKTOP_TOOLS])];
-    }
+    policy.profile = "full";
+    Reflect.deleteProperty(policy, "allow");
     const deny = stringList(policy, "deny").filter((tool) => !DESKTOP_TOOLS.includes(tool as typeof DESKTOP_TOOLS[number]));
     if (deny.length > 0) policy.deny = deny;
     else Reflect.deleteProperty(policy, "deny");
@@ -92,17 +88,24 @@ export function applyOpenClawComputerBrowserConfig(
     attachOnly: true,
   };
   const plugins = objectAt(config, "plugins");
-  plugins.allow = [...new Set([...stringList(plugins, "allow"), "browser"])];
-  objectAt(objectAt(plugins, "entries"), "browser").enabled = true;
+  plugins.allow = [...new Set([...stringList(plugins, "allow"), "browser", "cua-computer", "file-transfer", "ollama"])];
+  const entries = objectAt(plugins, "entries");
+  for (const id of ["browser", "file-transfer", "ollama"]) objectAt(entries, id).enabled = true;
+  const fileTransfer = objectAt(objectAt(entries, "file-transfer"), "config");
+  const filePolicy = objectAt(objectAt(fileTransfer, "nodes"), "octogee-desktop");
+  if (filePolicy.ask === undefined) filePolicy.ask = "on-miss";
+  const discovery = objectAt(objectAt(objectAt(entries, "ollama"), "config"), "discovery");
+  if (discovery.enabled === undefined) discovery.enabled = false;
   const tools = objectAt(config, "tools");
-  tools.alsoAllow = [...new Set([...stringList(tools, "alsoAllow"), ...DESKTOP_TOOLS])];
+  tools.profile = "full";
+  Reflect.deleteProperty(tools, "allow");
   const skillLoad = objectAt(objectAt(config, "skills"), "load");
   skillLoad.extraDirs = [...new Set([...stringList(skillLoad, "extraDirs"), COMPUTER_SKILLS_DIR])];
   const nodes = objectAt(objectAt(config, "gateway"), "nodes");
   nodes.browser = { mode: "off" };
   const commands = objectAt(nodes, "commands");
-  commands.allow = [...new Set([...stringList(commands, "allow"), "desktop.stream"])];
-  commands.deny = [...new Set([...stringList(commands, "deny"), ...DESKTOP_NODE_DENIED_COMMANDS])];
+  commands.allow = [...new Set([...stringList(commands, "allow"), ...FILE_TRANSFER_NODE_COMMANDS])];
+  Reflect.deleteProperty(commands, "deny");
   const agents = objectAt(config, "agents");
   if (agents.list !== undefined) {
     if (!Array.isArray(agents.list)) throw new Error("OpenClaw computer browser requires agents.list array");

@@ -24,47 +24,46 @@ describe("computer browser runtime", () => {
     expect(config.plugins.entries.browser.enabled).toBe(true);
     expect(config.plugins.allow).toContain("browser");
     expect(config.gateway.nodes.browser).toEqual({ mode: "off" });
-    expect(config.gateway.nodes.commands.allow).toContain("desktop.stream");
-    expect(config.tools.alsoAllow).toEqual(expect.arrayContaining(["browser", "computer"]));
+    expect(config.gateway.nodes.commands.allow).toContain("file.write");
+    expect(config.tools.profile).toBe("full");
     expect(config.skills.load.extraDirs).toEqual(["/opt/octogee/skills/computer"]);
-    expect(config.gateway.nodes.commands.deny).toEqual(expect.arrayContaining(["system.run", "terminal.upload", "browser.proxy"]));
-    expect(config.gateway.nodes.commands.deny).not.toEqual(expect.arrayContaining(["computer.act", "screen.snapshot"]));
+    expect(config.gateway.nodes.commands.deny).toBeUndefined();
     expect(config.agents.list[0]).not.toHaveProperty("tools");
     expect(config.agents.list[1].tools.deny).toEqual(expect.arrayContaining(["browser", "computer"]));
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
-  it("extends the owner coach's own tool policy so the agent step keeps the desktop tools", () => {
+  it("uses the full owner profile instead of an incremental tool allowlist, preserving explicit exec restrictions", () => {
     const config = {
       tools: { profile: "coding", alsoAllow: ["workspace_commit"] },
       agents: {
         entries: {
-          "octogee-owner-coach": { tools: { profile: "coding", alsoAllow: ["workspace_commit"], deny: ["exec", "browser"] } },
+          "octogee-owner-coach": { tools: { profile: "coding", allow: ["read"], deny: ["exec", "browser"] } },
           "octogee-owner-proj-site-coach": { tools: { profile: "minimal", alsoAllow: ["read"] } },
         },
       },
     };
     applyOpenClawComputerBrowserConfig(config, vmEnv);
     expect(config.agents.entries["octogee-owner-coach"].tools).toEqual({
-      profile: "coding",
-      alsoAllow: ["workspace_commit", "browser", "computer"],
+      profile: "full",
       deny: ["exec"],
     });
     expect(config.agents.entries["octogee-owner-proj-site-coach"].tools).toEqual({
       profile: "minimal",
       alsoAllow: ["read"],
-      deny: ["browser", "computer"],
+      deny: ["browser", "computer", "nodes", "file-transfer", "ollama"],
     });
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
-  it("keeps the restored tool list and adds the desktop tools once", () => {
+  it("keeps explicit optional tools when switching to the full profile", () => {
     const config = {
       tools: { profile: "coding", alsoAllow: ["workspace_commit", "computer"] },
       agents: { entries: { "octogee-owner-coach": {} } },
     };
     applyOpenClawComputerBrowserConfig(config, vmEnv);
-    expect(config.tools.alsoAllow).toEqual(["workspace_commit", "computer", "browser"]);
+    expect(config.tools.profile).toBe("full");
+    expect(config.tools.alsoAllow).toEqual(["workspace_commit", "computer"]);
     expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
@@ -78,8 +77,8 @@ describe("computer browser runtime", () => {
     const before = structuredClone(agents);
     expect(gatewayAgentRoster(agents)).toEqual([
       { id: "octogee-owner-coach" },
-      { id: "octogee-owner-proj-site-coach", tools: { deny: ["browser", "computer"] } },
-      { id: "another-agent", tools: { profile: "full", deny: ["browser", "computer"] } },
+      { id: "octogee-owner-proj-site-coach", tools: { deny: ["browser", "computer", "nodes", "file-transfer", "ollama"] } },
+      { id: "another-agent", tools: { profile: "full", deny: ["browser", "computer", "nodes", "file-transfer", "ollama"] } },
     ]);
     expect(agents).toEqual(before);
   });
@@ -89,6 +88,32 @@ describe("computer browser runtime", () => {
     applyPreBootPatches(config, vmEnv);
     expect(config.browser.defaultProfile).toBe("computer");
     expect(config.plugins.entries.browser.enabled).toBe(true);
+    expect(config.tools.profile).toBe("full");
+  });
+
+  it("opens the Builder node surface at pre-boot without granting exec or file approvals", () => {
+    const config = template();
+    config.gateway.nodes = { commands: { allow: ["desktop.stream"], deny: [
+      "system.run", "system.run.prepare", "system.which", "system.execApprovals.get",
+      "system.execApprovals.set", "terminal.upload", "fs.listDir", "browser.proxy",
+      "browser.proxy.upload.v1", "mcp.tools.call.v1",
+    ] } };
+    config.tools.exec = { mode: "allowlist", ask: "always" };
+    applyPreBootPatches(config, vmEnv);
+    expect(config.gateway.nodes.commands).toEqual({ allow: [
+      "desktop.stream", "file.stat", "file.fetch", "dir.list", "dir.fetch",
+      "file.create", "file.write", "workspace.memory", "workspace.skills",
+    ] });
+    expect(config.plugins.allow).toEqual(expect.arrayContaining(["browser", "cua-computer", "file-transfer", "ollama"]));
+    expect(config.plugins.entries["file-transfer"]).toMatchObject({
+      enabled: true, config: { nodes: { "octogee-desktop": { ask: "on-miss" } } },
+    });
+    expect(config.plugins.entries.ollama.enabled).toBe(true);
+    expect(config.plugins.entries.ollama.config.discovery.enabled).toBe(false);
+    expect(config.plugins.entries["cua-computer"]?.enabled).toBeUndefined();
+    expect(config.tools.exec).toEqual({ mode: "allowlist", ask: "always" });
+    expect(config.tools.toolSearch).toBeUndefined();
+    expect(applyOpenClawComputerBrowserConfig(config, vmEnv)).toBe(false);
   });
 
   it("attaches the native gateway desktop to Omarchy during pre-boot so local sessions select it automatically", () => {
@@ -107,7 +132,7 @@ describe("computer browser runtime", () => {
   it("denies the desktop tools for every agent when the VM has no assigned owner", () => {
     const config = { agents: { entries: { "octogee-owner-coach": {} } } };
     applyOpenClawComputerBrowserConfig(config, { ...vmEnv, GATEWAY_BUILDER_SLUG: "" });
-    expect(config.agents.entries["octogee-owner-coach"]).toEqual({ tools: { deny: ["browser", "computer"] } });
+    expect(config.agents.entries["octogee-owner-coach"]).toEqual({ tools: { deny: ["browser", "computer", "nodes", "file-transfer", "ollama"] } });
   });
 
   it.each([
@@ -127,11 +152,16 @@ describe("computer browser runtime", () => {
     config.tools.deny = ["browser"];
     config.agents.list = [{ id: "octogee-owner-proj-site-coach", tools: { deny: ["computer", "browser"] } }];
     config.skills = { load: { extraDirs: ["/home/node/builder-skills"] } };
+    const nativePolicy = { ask: "always", denyPaths: ["/private/**"] };
+    config.plugins.entries["file-transfer"] = { config: { nodes: { "octogee-desktop": nativePolicy } } };
+    config.plugins.entries.ollama = { config: { discovery: { enabled: true } } };
     applyOpenClawComputerBrowserConfig(config, vmEnv);
     expect(config.skills.load.extraDirs).toEqual(["/home/node/builder-skills", "/opt/octogee/skills/computer"]);
     expect(config.browser.profiles.custom).toEqual({ cdpUrl: "http://127.0.0.1:9444", attachOnly: true });
     expect(config.tools.deny).toEqual(["browser"]);
-    expect(config.agents.list[0].tools.deny).toEqual(["computer", "browser"]);
+    expect(config.plugins.entries["file-transfer"].config.nodes["octogee-desktop"]).toEqual(nativePolicy);
+    expect(config.plugins.entries.ollama.config.discovery.enabled).toBe(true);
+    expect(config.agents.list[0].tools.deny).toEqual(["computer", "browser", "nodes", "file-transfer", "ollama"]);
   });
 
   it("rejects malformed owned config rather than silently replacing it", () => {
