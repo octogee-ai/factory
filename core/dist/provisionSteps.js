@@ -114,15 +114,6 @@ export function buildCoachBindings(current, coachAgentId, slug, mmUpdate) {
     wireCoachMattermostBindings(clone, coachAgentId, slug, mmUpdate);
     return clone.bindings ?? [];
 }
-export function buildCoachAccountFragment(slug, mmUpdate) {
-    const clone = { channels: { mattermost: {} } };
-    wireCoachMattermostAccount(clone, slug, mmUpdate);
-    const mm = clone.channels?.mattermost ?? {};
-    return {
-        accounts: mm.accounts ?? {},
-        defaultAccount: mm.defaultAccount ?? "default",
-    };
-}
 export function buildRemoveCustomerConfig(current, slug, agentId) {
     const config = structuredClone(current);
     const projectAgentPrefix = `octogee-${slug}-proj-`;
@@ -189,33 +180,6 @@ export function wireCoachMattermostBindings(config, coachAgentId, slug, mmUpdate
         upsertMattermostBindingByAgentAndPeer(config.bindings, binding);
         log(`[mattermost] binding: ${coachAgentId} ← ${label} group:${channelId} (account=${accountId})`);
     }
-}
-export function wireCoachMattermostAccount(config, slug, mmUpdate) {
-    config.channels ??= {};
-    config.channels.mattermost ??= {};
-    const mm = config.channels.mattermost;
-    mm.accounts ??= {};
-    if (!mm.defaultAccount)
-        mm.defaultAccount = "default";
-    const token = mmUpdate._coachPersonalToken;
-    if (typeof token !== "string" || token.length === 0) {
-        log(`[mattermost] ⚠ no coach PAT in mmUpdate for ${slug} — skipping accounts upsert; coach WS will not connect until re-provisioned`);
-        return;
-    }
-    const accountId = `${slug}-coach`;
-    const customerMmUserId = mmUpdate["mattermost.userId"];
-    const adminMmUserId = process.env.MM_ADMIN_USER_ID;
-    const groupAllowFrom = [customerMmUserId, adminMmUserId].filter((id) => typeof id === "string" && id.length > 0);
-    if (groupAllowFrom.length === 0) {
-        log(`[mattermost] ⚠ no authorized coach sender for ${slug} — skipping accounts upsert`);
-        return;
-    }
-    mm.accounts[accountId] = {
-        botToken: token,
-        groupPolicy: "allowlist",
-        groupAllowFrom,
-    };
-    log(`[mattermost] account: ${accountId} ← coach PAT (WS will subscribe on next reload)`);
 }
 export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
     const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds, mmUpdate);

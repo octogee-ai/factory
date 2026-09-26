@@ -811,7 +811,7 @@ describe("system config platform invariants", () => {
 
     expect(changedPaths).toEqual(["channels.mattermost.accounts"]);
     expect(account.dmPolicy).toBe("disabled");
-    expect(account).not.toHaveProperty("allowFrom");
+    expect(account.allowFrom).toEqual(["a".repeat(26)]);
     expect((config.gateway as Record<string, unknown>).port).toBe(9000);
     expect(platformInvariantViolations(config, builder)).toEqual(["gateway.port"]);
   });
@@ -858,6 +858,34 @@ describe("system config platform invariants", () => {
     expect(builderAccount.dmPolicy).toBe("disabled");
     expect(builderAccount).not.toHaveProperty("allowFrom");
     expect(platformInvariantViolations(builderConfig, builder)).toEqual([]);
+  });
+
+  it.each([
+    ["strips an imported single-id allowFrom from shared", barn, false],
+    ["keeps the single-owner command and approval authority on Builder", builder, true],
+  ])("%s platform-agent accounts", (_label, context, kept) => {
+    const owner = "a".repeat(26);
+    const config: Record<string, unknown> = {
+      agents: { list: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-orbit-coach" }] },
+      channels: {
+        mattermost: {
+          accounts: {
+            "alice-coach": { dmPolicy: "disabled", allowFrom: [owner] },
+            "alice-proj-orbit": { dmPolicy: "disabled", allowFrom: [owner] },
+          },
+        },
+      },
+    };
+    expect(platformInvariantViolations(config, context).includes("channels.mattermost.accounts")).toBe(!kept);
+    reconcilePlatformInvariants(config, context);
+
+    const accounts = (((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>);
+    for (const accountId of ["alice-coach", "alice-proj-orbit"]) {
+      if (kept) expect(accounts[accountId].allowFrom).toEqual([owner]);
+      else expect(accounts[accountId]).not.toHaveProperty("allowFrom");
+    }
+    expect(platformInvariantViolations(config, context)).toEqual([]);
   });
 
   it("removes paired command ownership on shared gateways but leaves Builder ownership settings alone", () => {

@@ -2108,6 +2108,28 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    ["Builder", "alice", [`mattermost:${ALICE_OWNER_MM_ID}`]],
+    ["shared", "", undefined],
+  ] as const)("names the owner as the native OpenClaw command owner only on a %s gateway", async (_label, builderSlug, ownerAllowFrom) => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", builderSlug);
+    const snapshot = aliceSnapshot();
+    let patch: { commands?: { ownerAllowFrom?: unknown } } | undefined;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch({}) as typeof patch;
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(rosterRpc({})),
+      log: vi.fn(),
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    expect(patch?.commands?.ownerAllowFrom).toEqual(ownerAllowFrom);
+  });
+
   it("reports project readiness after reloading credentials and activating routing", async () => {
     const events: string[] = [];
     const snapshot = aliceSnapshot({
@@ -2191,7 +2213,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       config = {
         ...config,
         agents: { ...config.agents, entries: { ...config.agents.entries, ...patch.agents.entries } },
-        channels: { mattermost: { accounts: { ...config.channels.mattermost.accounts, ...patch.channels.mattermost.accounts } } },
+        channels: { mattermost: { accounts: Object.fromEntries(Object.entries({ ...config.channels.mattermost.accounts, ...patch.channels.mattermost.accounts })
+          .map(([accountId, account]) => [accountId, { ...config.channels.mattermost.accounts[accountId], ...(account as object) }])) } },
         bindings: patch.bindings,
       };
       return { mode: "rpc", attempts: 1 };
@@ -2203,7 +2226,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
     expect(config.agents.entries["octogee-alice-coach"]).toEqual(coach);
     expect(config.agents.defaults).toEqual({ model: "owner-default" });
-    expect(config.channels.mattermost.accounts["alice-coach"]).toEqual({ botToken: "owner-coach-token" });
+    expect(config.channels.mattermost.accounts["alice-coach"]).toEqual({ botToken: "owner-coach-token", allowFrom: [ALICE_OWNER_MM_ID] });
     expect(config.agents.entries["octogee-alice-proj-orbit-coach"]).toMatchObject({ workspace: expect.stringContaining("/projects/orbit") });
     expect(rpc.agentsCreate).toHaveBeenCalledExactlyOnceWith({
       name: projectAgentId, workspace: expect.stringContaining("/projects/orbit"),
@@ -2211,6 +2234,31 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(rpc.agentsDelete).not.toHaveBeenCalled();
     expect(routingActivationMocks.activate).toHaveBeenCalledWith(rpc, expect.any(String), expect.any(Function), { restartAccountIds: ["alice-proj-orbit"] });
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit", activationId: "activation-1" })]);
+  });
+
+  it("makes the owner the native OpenClaw owner on a configured Builder without platform projects", async () => {
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [] });
+    const coachAccount = { botToken: "owner-coach-token", dmPolicy: "disabled", groupPolicy: "open" };
+    const config = {
+      agents: { entries: { "octogee-alice-coach": {} } },
+      channels: { mattermost: { accounts: { "alice-coach": coachAccount } } },
+      bindings: [{ agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } }],
+    };
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    const rpc = mkGatewayRpc(rosterRpc(config));
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      expect(args.buildPatch(config)).toEqual({
+        commands: { ownerAllowFrom: [`mattermost:${ALICE_OWNER_MM_ID}`] },
+        channels: { mattermost: { accounts: { "alice-coach": { allowFrom: [ALICE_OWNER_MM_ID] } } } },
+      });
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+
+    await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
   });
 
   it("discovers deleted platform projects from authored config despite RPC secret redaction and retires runtime before credentials", async () => {
@@ -2534,14 +2582,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
   it("takes shared coach approval authorization from the owner's Mattermost id", async () => {
     const builderMmUserId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const platformAdminMmUserId = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const brokerSnapshot = {
-      ...aliceSnapshot({
-        mattermostUserId: builderMmUserId,
-        customerMmUserId: builderMmUserId,
-      }),
-      platformAdminMmUserId,
-    } as FleetBrokerUserSnapshot & { platformAdminMmUserId: string };
+    const brokerSnapshot = aliceSnapshot({
+      mattermostUserId: builderMmUserId,
+      customerMmUserId: builderMmUserId,
+    });
     const client = mkClient({ userSnapshot: vi.fn(async () => brokerSnapshot) });
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       const patch = args.buildPatch({

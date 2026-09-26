@@ -2,7 +2,12 @@ import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomer
 import { quiesceCustomerSessionsBounded, sessionStoreForPath } from "./customer-session-quiesce.js";
 import { customerFileStatePaths } from "./customer-file-state.js";
 import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
-import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "./configured-builder-project-agents.js";
+import {
+  builderOwnerCommandsPatch,
+  configuredBuilderManagedProjectIds,
+  configuredBuilderOwnerAuthorityPatch,
+  configuredBuilderProjectAgentPatch,
+} from "./configured-builder-project-agents.js";
 import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -853,6 +858,21 @@ function markPendingProjectActivations(reason: string, accountIds: string[], bas
   return true;
 }
 
+function mountMattermostAccountsPatch(
+  current: unknown,
+  slug: string,
+  evictionSlugs: string[],
+  customerAccounts: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...customerAccounts,
+    ...staleProjectAgentAccountNulls(current, slug, Object.keys(customerAccounts)),
+    ...(evictionSlugs.length > 0
+      ? buildRemoveCustomerAccountsPatch(current, evictionSlugs).channels.mattermost.accounts
+      : {}),
+  };
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -976,7 +996,11 @@ async function applyAddCustomerConfigPatch(
           customerAgentEntries,
           builderGateway,
         );
+        const ownerCommands = builderGateway
+          ? builderOwnerCommandsPatch(current, snapshot.slug, brokerCustomerMattermostUserId(brokerSnapshot, snapshot))
+          : undefined;
         const mountPatch = {
+          ...(ownerCommands ? { commands: ownerCommands } : {}),
           agents: {
             ownership: "explicit",
             ...(agentDefaults ? { defaults: agentDefaults } : {}),
@@ -993,19 +1017,10 @@ async function applyAddCustomerConfigPatch(
           ),
           channels: {
             mattermost: {
-              accounts: {
+              accounts: mountMattermostAccountsPatch(current, snapshot.slug, evictionSlugs, {
                 [accountId]: accountEntry,
                 ...projectAccounts,
-                ...staleProjectAgentAccountNulls(
-                  current,
-                  snapshot.slug,
-                  Object.keys(projectAccounts),
-                ),
-                ...(evictionSlugs.length > 0
-                  ? buildRemoveCustomerAccountsPatch(current, evictionSlugs)
-                    .channels.mattermost.accounts
-                  : {}),
-              },
+              }),
             },
           },
         };
@@ -1098,7 +1113,13 @@ async function reconcileConfiguredBuilderProjectAgents(
   const managedProjectIds = configuredBuilderManagedProjectIds(readOpenClawConfig(), snapshot.slug,
     (brokerSnapshot.projectAgents ?? []).map((agent) => agent.projectId));
   if (managedProjectIds.length === 0) {
-    return { elapsedMs: 0, appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) };
+    if (Object.keys(configuredBuilderOwnerAuthorityPatch(current, snapshot.slug, brokerSnapshot.customerMmUserId)).length > 0) {
+      await applyConfigPatch({
+        buildPatch: (latest) => configuredBuilderOwnerAuthorityPatch(latest, snapshot.slug, brokerSnapshot.customerMmUserId),
+        logPrefix: `[project-agents:${snapshot.slug}]`,
+      }, { rpc: convergedConfigRpc(ctx), cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS, signal: options.signal });
+    }
+    return { elapsedMs: Date.now() - startedAt, appliedFingerprint: snapshotConfigFingerprint(brokerSnapshot) };
   }
   const projectAgents = brokerProjectAgents(brokerSnapshot, snapshot, options.withoutProjectIds);
   const identity = resolveCoachIdentity(brokerSnapshot.coachIdentity, DEFAULT_COACH);
@@ -1106,6 +1127,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents, brokerSnapshot.customerMmUserId);
   const patchInput = {
     slug: snapshot.slug, managedProjectIds, projectAgentEntries, projectAccounts, channels: brokerSnapshot.channels,
+    ownerMmUserId: brokerSnapshot.customerMmUserId,
     activationProjectIds: projectAgents.filter((agent) => agent.status === "provisioning" && agent.activationId).map((agent) => agent.projectId),
   };
   const logPrefix = `[project-agents:${snapshot.slug}]`;

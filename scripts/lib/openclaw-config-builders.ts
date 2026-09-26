@@ -275,7 +275,6 @@ export interface MattermostAccountEntry {
   dmPolicy?: "allowlist" | "disabled";
   allowFrom?: string[];
   groupPolicy?: "open" | "allowlist" | "disabled";
-  groupAllowFrom?: string[];
   groups?: Record<string, { requireMention?: boolean }> | null;
 
   commands?: {

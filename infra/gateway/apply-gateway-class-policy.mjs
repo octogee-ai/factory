@@ -10,6 +10,7 @@ import {
 } from "../../shared/dist/types/agent-models.js";
 import { modelCatalogForProvider } from "../../shared/dist/types/model-catalog.js";
 import { parseAgentId } from "../../shared/dist/types/identity.js";
+import { projectPlatformAgentMattermostAccounts } from "../../shared/dist/types/openclaw-mattermost-accounts.js";
 import {
   withOpenClawOperatorRoles,
   OPENCLAW_TRUSTED_PROXIES,
@@ -545,27 +546,6 @@ function customerToolsBySender(_config, agentId) {
     : {};
 }
 
-function managedMattermostAccounts(config) {
-  const accounts = new Map();
-  const addAgent = (agentId) => {
-    const parsed = parseAgentId(agentId);
-    if (parsed.kind === "coach") accounts.set(`${parsed.username}-coach`, "coach");
-    if (parsed.kind === "project") accounts.set(`${parsed.username}-proj-${parsed.project}`, "project");
-  };
-  if (Array.isArray(config.agents?.list)) {
-    for (const entry of config.agents.list) {
-      if (objectValue(entry) && typeof entry.id === "string") addAgent(entry.id);
-    }
-  }
-  const entries = objectValue(config.agents?.entries);
-  if (entries) {
-    for (const agentId of Object.keys(entries)) {
-      addAgent(agentId);
-    }
-  }
-  return accounts;
-}
-
 function disableCustomerAutomationsAndSkillWrites(config) {
   config.cron ??= {};
   config.cron.triggers ??= {};
@@ -580,14 +560,6 @@ function disableCustomerAutomationsAndSkillWrites(config) {
   delete config.skills.workshop.allowSymlinkTargetWrites;
 }
 
-function mattermostAccountSecretRef(accountId) {
-  return {
-    source: "file",
-    provider: "octogee-mattermost",
-    id: `/${accountId.replaceAll("~", "~0").replaceAll("/", "~1")}`,
-  };
-}
-
 function forceCustomerMattermostProjection(config) {
   config.channels ??= {};
   config.channels.mattermost ??= {};
@@ -598,38 +570,15 @@ function forceCustomerMattermostProjection(config) {
     callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
     allowedSourceIps: ["${MM_INTERACTIONS_ALLOWED_SOURCE_IPS}"],
   };
-  projectPlatformAgentMattermostAccounts(config, { platformOwned: true });
+  projectMattermostAccounts(config, true);
 }
 
-function projectPlatformAgentMattermostAccounts(config, { platformOwned }) {
+function projectMattermostAccounts(config, platformOwned) {
   config.channels ??= {};
   config.channels.mattermost ??= {};
   const mattermost = config.channels.mattermost;
-  const managed = managedMattermostAccounts(config);
-  const accounts = objectValue(mattermost.accounts) ?? {};
-  mattermost.accounts = accounts;
-  for (const [accountId, rawAccount] of Object.entries(accounts)) {
-    const account = objectValue(rawAccount);
-    const accountKind = managed.get(accountId);
-    if (!platformOwned) {
-      if (accountKind && account) {
-        account.dmPolicy = "disabled";
-        delete account.allowFrom;
-      }
-      continue;
-    }
-    if (!accountKind || !account) {
-      delete accounts[accountId];
-      continue;
-    }
-    account.botToken = mattermostAccountSecretRef(accountId);
-    account.dmPolicy = "disabled";
-    delete account.allowFrom;
-    delete account.baseUrl;
-    delete account.network;
-    delete account.interactions;
-    delete account.callbackBaseUrl;
-  }
+  mattermost.accounts = objectValue(mattermost.accounts) ?? {};
+  projectPlatformAgentMattermostAccounts(config, mattermost.accounts, platformOwned);
 }
 
 function objectValue(value) {
@@ -1506,7 +1455,7 @@ function projectBuilderSecretProviders(config, openclawDir) {
 // and the codex BYOSUB plugin stay at the Builder's discretion; the platform
 // keeps only its plugin configuration boundary and tenant-scoped secret providers.
 function applyBuilderPolicy(config, openclawDir, env) {
-  projectPlatformAgentMattermostAccounts(config, { platformOwned: false });
+  projectMattermostAccounts(config, false);
   config.agents ??= {};
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};

@@ -539,6 +539,46 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(builder.channels.mattermost.accounts[projectAccountId].allowFrom).toBeUndefined();
   });
 
+  it.each([
+    ["shared", { gatewayClass: "shared" as const }],
+    ["builder", { gatewayClass: "builder" as const, gatewayId: "alice-xs-12345678", apiOrigin: "https://api-test.octogee.com" }],
+  ])("projects %s platform-agent Mattermost accounts identically at boot and in the core invariant", (gatewayClass, context) => {
+    const owner = "a".repeat(26);
+    const accounts = () => ({
+      "alice-coach": {
+        dmPolicy: "open",
+        allowFrom: [owner],
+        groupPolicy: "open",
+        baseUrl: "http://mm",
+        network: { dangerouslyAllowPrivateNetwork: true },
+        interactions: { callbackBaseUrl: "http://cb" },
+        callbackBaseUrl: "http://cb",
+      },
+      "alice-proj-orbit": { dmPolicy: "allowlist", allowFrom: ["*", owner] },
+      "alice-proj-garden": { allowFrom: [owner, "b".repeat(26)] },
+      "stray-account": { allowFrom: [owner] },
+    });
+    const config = () => ({
+      agents: {
+        list: [
+          { id: "octogee-alice-coach" },
+          { id: "octogee-alice-proj-orbit-coach" },
+          { id: "octogee-alice-proj-garden-coach" },
+        ],
+      },
+      channels: { mattermost: { accounts: accounts() } },
+    });
+
+    const boot = runPolicy(gatewayClass, config());
+    const invariant: Record<string, unknown> = config();
+    reconcilePlatformInvariants(invariant, context);
+
+    const invariantAccounts = ((invariant.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
+      .accounts as Record<string, Record<string, unknown>>;
+    expect(boot.channels.mattermost.accounts).toEqual(invariantAccounts);
+    expect(invariantAccounts["alice-coach"].allowFrom).toEqual(gatewayClass === "builder" ? [owner] : undefined);
+  });
+
   it("shared class retains the durable disabled Codex invariant", () => {
     const out = runPolicy("shared", {
       plugins: {

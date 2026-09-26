@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   buildCoachAgentEntry,
   buildCoachBindings,
-  buildCoachAccountFragment,
   type ProvisioningContext,
 } from "../lib/provisionSteps.js";
 
@@ -39,15 +38,6 @@ function mkMmUpdate(extra: Record<string, any> = {}): Record<string, any> {
     ...extra,
   };
 }
-
-const ORIG_ADMIN_ID = process.env.MM_ADMIN_USER_ID;
-beforeEach(() => {
-  process.env.MM_ADMIN_USER_ID = "mm-admin";
-});
-afterEach(() => {
-  if (ORIG_ADMIN_ID === undefined) delete process.env.MM_ADMIN_USER_ID;
-  else process.env.MM_ADMIN_USER_ID = ORIG_ADMIN_ID;
-});
 
 describe("buildCoachAgentEntry", () => {
   it("produces an agent entry keyed by octogee-{slug}-coach", () => {
@@ -108,26 +98,3 @@ describe("buildCoachBindings", () => {
   });
 });
 
-describe("buildCoachAccountFragment", () => {
-  it("returns the account entry keyed by {slug}-coach with an owner/admin sender allowlist", () => {
-    const frag = buildCoachAccountFragment(SLUG, mkMmUpdate());
-    expect(frag.accounts[ACCOUNT_ID]).toEqual({
-      botToken: "tok-marie",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["mm-marie", "mm-admin"],
-    });
-    expect(frag.defaultAccount).toBe("default");
-  });
-
-  it("omits the account entry when no coach PAT is available", () => {
-    const frag = buildCoachAccountFragment(SLUG, mkMmUpdate({ _coachPersonalToken: "" }));
-    expect(frag.accounts).toEqual({});
-    expect(frag.defaultAccount).toBe("default");
-  });
-
-  it("fails closed when no owner/admin sender id is available", () => {
-    delete process.env.MM_ADMIN_USER_ID;
-    const frag = buildCoachAccountFragment(SLUG, mkMmUpdate({ "mattermost.userId": "" }));
-    expect(frag.accounts).toEqual({});
-  });
-});

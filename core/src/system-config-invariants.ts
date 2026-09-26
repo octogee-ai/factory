@@ -1,4 +1,8 @@
-import { parseAgentId, mattermostAccountIdForAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
+import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
+import {
+  platformAgentMattermostAccountsProjected,
+  projectPlatformAgentMattermostAccounts,
+} from "@octogee/shared/types/openclaw-mattermost-accounts";
 import {
   openClawOperatorRoles,
   OPENCLAW_TRUSTED_PROXIES,
@@ -728,106 +732,27 @@ function customerToolsBySenderPolicy(_config: JsonObject, agentId: string): Json
 }
 
 
-function managedMattermostAccounts(config: JsonObject): Map<string, "coach" | "project"> {
-  const result = new Map<string, "coach" | "project">();
-  const agents = asObject(config.agents);
-  if (!agents) return result;
-  const addAgent = (agentId: string): void => {
-    const parsed = parseAgentId(agentId);
-    if (parsed.kind !== "coach" && parsed.kind !== "project") return;
-    const accountId = mattermostAccountIdForAgentId(agentId);
-    if (accountId) result.set(accountId, parsed.kind);
-  };
-  if (Array.isArray(agents.list)) {
-    for (const entry of agents.list) {
-      const agent = asObject(entry);
-      if (typeof agent?.id === "string") addAgent(agent.id);
-    }
-  }
-  const entries = asObject(agents.entries);
-  if (entries) {
-    for (const agentId of Object.keys(entries)) {
-      addAgent(agentId);
-    }
-  }
-  return result;
-}
-
-function mattermostAccountSecretRef(accountId: string): JsonObject {
-  return {
-    source: "file",
-    provider: "octogee-mattermost",
-    id: `/${accountId.replace(/~/gu, "~0").replace(/\//gu, "~1")}`,
-  };
-}
-
 function mattermostAccounts(config: JsonObject): JsonObject | null | typeof ABSENT {
   const value = readPath(config, "channels.mattermost.accounts");
   return value === ABSENT ? ABSENT : asObject(value);
-}
-
-function platformAgentDirectMessagesDisabled(account: JsonObject): boolean {
-  return account.dmPolicy === "disabled"
-    && !Object.prototype.hasOwnProperty.call(account, "allowFrom");
 }
 
 function accountProjectionSatisfied(config: JsonObject, platformOwned: boolean): boolean {
   const accounts = mattermostAccounts(config);
   if (accounts === ABSENT) return true;
   if (!accounts) return false;
-  const managed = managedMattermostAccounts(config);
-  if (!platformOwned) {
-    return Object.entries(accounts).every(([accountId, rawAccount]) => {
-      if (!managed.has(accountId)) return true;
-      const account = asObject(rawAccount);
-      return account !== null && platformAgentDirectMessagesDisabled(account);
-    });
-  }
-  return Object.entries(accounts).every(([accountId, rawAccount]) => {
-    const account = asObject(rawAccount);
-    const accountKind = managed.get(accountId);
-    return accountKind !== undefined
-      && account !== null
-      && equal(account.botToken, mattermostAccountSecretRef(accountId))
-      && platformAgentDirectMessagesDisabled(account)
-      && !Object.prototype.hasOwnProperty.call(account, "baseUrl")
-      && !Object.prototype.hasOwnProperty.call(account, "network")
-      && !Object.prototype.hasOwnProperty.call(account, "interactions")
-      && !Object.prototype.hasOwnProperty.call(account, "callbackBaseUrl");
-  });
+  return platformAgentMattermostAccountsProjected(config, accounts, platformOwned);
 }
 
 function reconcileMattermostAccounts(config: JsonObject, platformOwned: boolean): void {
   const current = mattermostAccounts(config);
   if (current === ABSENT) return;
-  const [mattermost, leaf] = parentForPath(config, "channels.mattermost.accounts");
   if (!current) {
+    const [mattermost, leaf] = parentForPath(config, "channels.mattermost.accounts");
     mattermost[leaf] = {};
     return;
   }
-  const managed = managedMattermostAccounts(config);
-  for (const [accountId, rawAccount] of Object.entries(current)) {
-    const account = asObject(rawAccount);
-    const accountKind = managed.get(accountId);
-    if (!platformOwned) {
-      if (accountKind !== undefined && account) {
-        account.dmPolicy = "disabled";
-        delete account.allowFrom;
-      }
-      continue;
-    }
-    if (accountKind === undefined || !account) {
-      delete current[accountId];
-      continue;
-    }
-    account.botToken = mattermostAccountSecretRef(accountId);
-    account.dmPolicy = "disabled";
-    delete account.allowFrom;
-    delete account.baseUrl;
-    delete account.network;
-    delete account.interactions;
-    delete account.callbackBaseUrl;
-  }
+  projectPlatformAgentMattermostAccounts(config, current, platformOwned);
 }
 
 function invariantSatisfied(config: JsonObject, invariant: PlatformInvariant): boolean {

@@ -207,7 +207,6 @@ export interface FleetBrokerUserSnapshot {
     onboardingVibe: string | null;
     coachToken: string | null;
     coachMmUserId: string | null;
-    platformAdminMmUserId?: string;
     coachIdentity?: FleetBrokerCoachIdentity;
     byotActive?: boolean;
     systemConfig?: {

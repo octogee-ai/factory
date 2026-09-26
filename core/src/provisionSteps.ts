@@ -55,8 +55,6 @@ export interface AgentEntry {
 
 export interface MattermostAccount {
   botToken?: string;
-  groupPolicy?: string;
-  groupAllowFrom?: string[];
   [k: string]: unknown;
 }
 
@@ -224,19 +222,6 @@ export function buildCoachBindings(
   return clone.bindings ?? [];
 }
 
-export function buildCoachAccountFragment(
-  slug: string,
-  mmUpdate: MmUpdate,
-): { accounts: Record<string, MattermostAccount>; defaultAccount: string } {
-  const clone: OpenclawConfigShape = { channels: { mattermost: {} } };
-  wireCoachMattermostAccount(clone, slug, mmUpdate);
-  const mm = clone.channels?.mattermost ?? {};
-  return {
-    accounts: mm.accounts ?? {},
-    defaultAccount: mm.defaultAccount ?? "default",
-  };
-}
-
 export function buildRemoveCustomerConfig(
   current: OpenclawConfigShape & Record<string, unknown>,
   slug: string,
@@ -330,42 +315,6 @@ export function wireCoachMattermostBindings(
     upsertMattermostBindingByAgentAndPeer(config.bindings, binding);
     log(`[mattermost] binding: ${coachAgentId} ← ${label} group:${channelId} (account=${accountId})`);
   }
-}
-
-export function wireCoachMattermostAccount(
-  config: OpenclawConfigShape,
-  slug: string,
-  mmUpdate: MmUpdate,
-): void {
-  config.channels ??= {};
-  config.channels.mattermost ??= {};
-  const mm = config.channels.mattermost;
-  mm.accounts ??= {};
-  if (!mm.defaultAccount) mm.defaultAccount = "default";
-
-  const token = mmUpdate._coachPersonalToken;
-  if (typeof token !== "string" || token.length === 0) {
-    log(
-      `[mattermost] ⚠ no coach PAT in mmUpdate for ${slug} — skipping accounts upsert; coach WS will not connect until re-provisioned`,
-    );
-    return;
-  }
-  const accountId = `${slug}-coach`;
-  const customerMmUserId = mmUpdate["mattermost.userId"];
-  const adminMmUserId = process.env.MM_ADMIN_USER_ID;
-  const groupAllowFrom = [customerMmUserId, adminMmUserId].filter(
-    (id): id is string => typeof id === "string" && id.length > 0,
-  );
-  if (groupAllowFrom.length === 0) {
-    log(`[mattermost] ⚠ no authorized coach sender for ${slug} — skipping accounts upsert`);
-    return;
-  }
-  mm.accounts[accountId] = {
-    botToken: token,
-    groupPolicy: "allowlist",
-    groupAllowFrom,
-  };
-  log(`[mattermost] account: ${accountId} ← coach PAT (WS will subscribe on next reload)`);
 }
 
 export async function markProvisioningComplete(

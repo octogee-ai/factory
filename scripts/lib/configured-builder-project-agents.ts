@@ -34,6 +34,7 @@ export interface ConfiguredBuilderProjectAgentInput {
   projectAgentEntries: readonly ConfigEntry[];
   projectAccounts: Record<string, unknown>;
   channels: readonly BindingChannelInput[];
+  ownerMmUserId: string | null | undefined;
 }
 
 export interface ConfiguredBuilderProjectAgentPatch {
@@ -41,6 +42,7 @@ export interface ConfiguredBuilderProjectAgentPatch {
     agents: ReturnType<typeof customerAgentRosterPatch>;
     bindings: unknown[];
     channels: { mattermost: { accounts: Record<string, unknown> } };
+    commands?: { ownerAllowFrom: string[] };
   };
   replacePaths: string[];
   retiredAgentIds: string[];
@@ -50,6 +52,54 @@ function record(value: unknown): ConfigEntry {
   if (value == null) return {};
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("project reconciliation expected a config object");
   return value as ConfigEntry;
+}
+
+const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
+
+function validOwnerMmUserId(slug: string, ownerMmUserId: string | null | undefined): string {
+  if (typeof ownerMmUserId !== "string" || !MATTERMOST_ID_RE.test(ownerMmUserId)) {
+    throw new Error(`owner Mattermost id is unavailable for ${slug}`);
+  }
+  return ownerMmUserId;
+}
+
+function withOwnerAuthority(account: ConfigEntry, slug: string, ownerMmUserId: string | null | undefined): ConfigEntry {
+  if (account.allowFrom !== undefined) return account;
+  return { ...account, allowFrom: [validOwnerMmUserId(slug, ownerMmUserId)] };
+}
+
+function coachOwnerAuthority(current: unknown, slug: string, ownerMmUserId: string | null | undefined): Record<string, ConfigEntry> {
+  const accountId = `${slug}-coach`;
+  const coach = record(record(record(record(current).channels).mattermost).accounts)[accountId];
+  if (coach === undefined || record(coach).allowFrom !== undefined) return {};
+  return { [accountId]: { allowFrom: [validOwnerMmUserId(slug, ownerMmUserId)] } };
+}
+
+export function builderOwnerCommandsPatch(
+  current: unknown,
+  slug: string,
+  ownerMmUserId: string | null | undefined,
+): { ownerAllowFrom: string[] } | undefined {
+  if (record(record(current).commands).ownerAllowFrom !== undefined) return undefined;
+  return { ownerAllowFrom: [`mattermost:${validOwnerMmUserId(slug, ownerMmUserId)}`] };
+}
+
+export interface ConfiguredBuilderOwnerAuthorityPatch {
+  commands?: { ownerAllowFrom: string[] };
+  channels?: { mattermost: { accounts: Record<string, ConfigEntry> } };
+}
+
+export function configuredBuilderOwnerAuthorityPatch(
+  current: unknown,
+  slug: string,
+  ownerMmUserId: string | null | undefined,
+): ConfiguredBuilderOwnerAuthorityPatch {
+  const commands = builderOwnerCommandsPatch(current, slug, ownerMmUserId);
+  const accounts = coachOwnerAuthority(current, slug, ownerMmUserId);
+  return {
+    ...(commands ? { commands } : {}),
+    ...(Object.keys(accounts).length > 0 ? { channels: { mattermost: { accounts } } } : {}),
+  };
 }
 
 function currentRoster(current: unknown): ConfigEntry[] {
@@ -138,15 +188,19 @@ export function configuredBuilderProjectAgentPatch(current: unknown, input: Conf
     }
     const desired = record(input.projectAccounts[accountId]);
     const existing = existingAccounts[accountId];
-    accountPatch[accountId] = existing && !replaced.has(id) ? existing : { ...desired, ...record(existing), botToken: desired.botToken };
+    const account = existing && !replaced.has(id) ? record(existing) : { ...desired, ...record(existing), botToken: desired.botToken };
+    accountPatch[accountId] = withOwnerAuthority(account, input.slug, input.ownerMmUserId);
     if (!existingAccounts[accountId] || !existingAgents.has(projectAgentId(input.slug, id))) replaced.add(id);
   }
+  const ownerAuthority = configuredBuilderOwnerAuthorityPatch(current, input.slug, input.ownerMmUserId);
+  Object.assign(accountPatch, ownerAuthority.channels?.mattermost.accounts);
   const isKeyed = record(record(current).agents).entries !== undefined;
   return {
     patch: {
       agents: customerAgentRosterPatch(current, input.slug, isKeyed ? entries : fullRoster),
       bindings: projectBindings(current, input, replaced, active),
       channels: { mattermost: { accounts: accountPatch } },
+      ...(ownerAuthority.commands ? { commands: ownerAuthority.commands } : {}),
     },
     replacePaths: customerConfigReplacePaths(current, input.slug).filter((path) => path === "bindings" || [...accounts].some((id) => path.startsWith(`channels.mattermost.accounts.${id}.`))),
     retiredAgentIds: roster.filter((entry) => managed.has(String(entry.id)) && !desiredAgents.has(String(entry.id))).map((entry) => String(entry.id)),

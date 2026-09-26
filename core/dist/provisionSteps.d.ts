@@ -35,8 +35,6 @@ export interface AgentEntry {
 }
 export interface MattermostAccount {
     botToken?: string;
-    groupPolicy?: string;
-    groupAllowFrom?: string[];
     [k: string]: unknown;
 }
 export interface OpenclawConfigShape {
@@ -69,10 +67,6 @@ export declare function writeCustomerTemplateFiles(ctx: ProvisioningContext): Pr
 export declare function registerCoachAgent(ctx: ProvisioningContext, config: OpenclawConfigShape): string;
 export declare function buildCoachAgentEntry(ctx: ProvisioningContext): AgentEntry;
 export declare function buildCoachBindings(current: unknown, coachAgentId: string, slug: string, mmUpdate: MmUpdate): AgentBinding[];
-export declare function buildCoachAccountFragment(slug: string, mmUpdate: MmUpdate): {
-    accounts: Record<string, MattermostAccount>;
-    defaultAccount: string;
-};
 export declare function buildRemoveCustomerConfig(current: OpenclawConfigShape & Record<string, unknown>, slug: string, agentId: string): OpenclawConfigShape & Record<string, unknown>;
 export declare function provisionMattermost(ctx: ProvisioningContext): Promise<MmUpdate>;
 export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBinding[], binding: AgentBinding & {
@@ -83,7 +77,6 @@ export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBin
     };
 }): void;
 export declare function wireCoachMattermostBindings(config: OpenclawConfigShape, coachAgentId: string, slug: string, mmUpdate: MmUpdate): void;
-export declare function wireCoachMattermostAccount(config: OpenclawConfigShape, slug: string, mmUpdate: MmUpdate): void;
 export declare function markProvisioningComplete(ctx: ProvisioningContext, mmUpdate: MmUpdate, allAgentIds: string[]): Promise<void>;
 export declare function buildUserOperationalFields(ctx: ProvisioningContext, provisioningObj: Record<string, unknown>, mmUpdate: MmUpdate): Record<string, unknown>;
 export declare function notifyOpsOfSignup(ctx: ProvisioningContext): Promise<void>;

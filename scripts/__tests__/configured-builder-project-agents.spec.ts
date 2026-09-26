@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { configuredBuilderManagedProjectIds, configuredBuilderProjectAgentPatch } from "../lib/configured-builder-project-agents.js";
+import {
+  configuredBuilderManagedProjectIds,
+  configuredBuilderOwnerAuthorityPatch,
+  configuredBuilderProjectAgentPatch,
+} from "../lib/configured-builder-project-agents.js";
 import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
 import { buildCustomerBindings, buildProjectAgentAccounts, buildProjectAgents } from "../lib/openclaw-config-builders.js";
 
 const slug = "alice";
 const projectId = "launch";
 const agentId = "octogee-alice-proj-launch-coach";
+const ownerMmUserId = "a".repeat(26);
 const projectAgents = [{ projectId, enabled: true, mmUserId: "b".repeat(26), token: "project-pat" }];
 const channels = [
   { channelId: "workspace-channel", scope: "workspace" as const },
@@ -24,8 +29,9 @@ const desired = {
     projectAgents,
     hostCode: "builder-full",
   }),
-  projectAccounts: buildProjectAgentAccounts(slug, projectAgents, "a".repeat(26)),
+  projectAccounts: buildProjectAgentAccounts(slug, projectAgents, ownerMmUserId),
   channels,
+  ownerMmUserId,
 };
 const customCoach = { id: "octogee-alice-coach", workspace: "/owner/workspace", model: "owner-model", tools: { allow: ["custom-tool"] } };
 const importedProject = { id: "octogee-alice-proj-imported-coach", workspace: "/owner/imported-project", model: "owner-import-model" };
@@ -44,6 +50,7 @@ function currentConfig(representation: "list" | "entries", extraAgents: Record<s
       ...(representation === "list" ? { list: roster } : { entries: Object.fromEntries(roster.map(({ id, ...entry }) => [id, entry])) }),
     },
     tools: { allow: ["owner-tool"] },
+    commands: { ownerAllowFrom: [`mattermost:${ownerMmUserId}`] },
     bindings: existingBindings,
     channels: { mattermost: { accounts: {
       "alice-coach": { allowFrom: ["owner"], custom: { list: ["coach-preference"] } },
@@ -78,7 +85,7 @@ describe("configuredBuilderProjectAgentPatch", () => {
     const managedProjectIds = configuredBuilderManagedProjectIds(current, slug, []);
     expect(managedProjectIds).toEqual(["retired"]);
     const result = configuredBuilderProjectAgentPatch(current, {
-      slug, managedProjectIds, activationProjectIds: [], projectAgentEntries: [], projectAccounts: {}, channels: [],
+      slug, managedProjectIds, activationProjectIds: [], projectAgentEntries: [], projectAccounts: {}, channels: [], ownerMmUserId,
     });
     expect(result.retiredAgentIds).toEqual([retiredProject.id]);
     expect(result.patch.channels.mattermost.accounts).toEqual({ "alice-proj-retired": null });
@@ -210,6 +217,45 @@ describe("configuredBuilderProjectAgentPatch", () => {
     });
     expect(activating.bindings).not.toContainEqual(customBinding);
     expect(activating.bindings).toContainEqual({ agentId, match: { channel: "mattermost", accountId: "alice-proj-launch" } });
+  });
+
+  it("restores the Builder's owner, command and approval authority on a configured Builder that lost it", () => {
+    const current = currentConfig("entries", desired.projectAgentEntries);
+    const { allowFrom: _coachOwner, ...coachWithoutOwner } = current.channels.mattermost.accounts["alice-coach"];
+    const { allowFrom: _projectOwner, ...projectWithoutOwner } = desired.projectAccounts["alice-proj-launch"];
+    current.channels.mattermost.accounts = {
+      ...current.channels.mattermost.accounts,
+      "alice-coach": coachWithoutOwner,
+      "alice-proj-launch": projectWithoutOwner,
+    };
+
+    const { commands: _commands, ...withoutOwner } = current;
+
+    const { patch } = configuredBuilderProjectAgentPatch(withoutOwner, { ...desired, activationProjectIds: [] });
+
+    expect(patch.commands).toEqual({ ownerAllowFrom: [`mattermost:${ownerMmUserId}`] });
+    expect(patch.channels.mattermost.accounts["alice-coach"]).toEqual({ allowFrom: [ownerMmUserId] });
+    expect(patch.channels.mattermost.accounts["alice-proj-launch"]).toEqual({ ...projectWithoutOwner, allowFrom: [ownerMmUserId] });
+  });
+
+  it("makes the Builder the native OpenClaw owner and coach approver only where that authority is missing", () => {
+    const coach = { botToken: mattermostAccountSecretRef("alice-coach"), groupPolicy: "open" };
+    const config = (account?: Record<string, unknown>, commands?: Record<string, unknown>) => ({
+      ...(commands ? { commands } : {}),
+      channels: { mattermost: { accounts: account ? { "alice-coach": account } : {} } },
+    });
+
+    expect(configuredBuilderOwnerAuthorityPatch(config(coach), slug, ownerMmUserId)).toEqual({
+      commands: { ownerAllowFrom: [`mattermost:${ownerMmUserId}`] },
+      channels: { mattermost: { accounts: { "alice-coach": { allowFrom: [ownerMmUserId] } } } },
+    });
+    expect(configuredBuilderOwnerAuthorityPatch(
+      config({ ...coach, allowFrom: ["b".repeat(26)] }, { ownerAllowFrom: ["mattermost:" + "b".repeat(26)] }),
+      slug,
+      ownerMmUserId,
+    )).toEqual({});
+    expect(configuredBuilderOwnerAuthorityPatch(config(undefined, { ownerAllowFrom: [] }), slug, ownerMmUserId)).toEqual({});
+    expect(() => configuredBuilderOwnerAuthorityPatch(config(coach), slug, null)).toThrow("owner Mattermost id");
   });
 
   it("rejects account or agent entries that are outside the authoritative project snapshot", () => {

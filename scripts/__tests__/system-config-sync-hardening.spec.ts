@@ -85,7 +85,10 @@ describe("system config sync hardening", () => {
     const written = JSON.parse(fs.readFileSync(path.join(h.repoDir, "openclaw.json"), "utf8")) as {
       channels: { mattermost: { accounts: Record<string, Record<string, unknown>> } };
     };
-    expect(written.channels.mattermost.accounts["ceckert-coach"]).toEqual({ dmPolicy: "disabled" });
+    expect(written.channels.mattermost.accounts["ceckert-coach"]).toEqual({
+      dmPolicy: "disabled",
+      allowFrom: ["a".repeat(26)],
+    });
     expect(committed.length).toBeGreaterThan(0);
     expect(logs.some((line) =>
       line.includes("reconciled platform-owned projections before checkpoint (channels.mattermost.accounts)"))).toBe(true);
