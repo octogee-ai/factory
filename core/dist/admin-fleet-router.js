@@ -2226,7 +2226,7 @@ async function claimCustomerDeletion(opts) {
                 operationId: null,
             };
         }
-        const inFlight = await transaction.get(opts.db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", opts.uid));
+        const inFlight = await transaction.get(inFlightOperationsForUid(opts.db, opts.uid));
         const conflict = inFlight.docs.find((doc) => {
             const data = doc.data();
             return ((data.kind === "suspend-customer" || data.kind === "erase-customer") &&
@@ -2444,6 +2444,13 @@ function projectOperationForMigrationLock(doc) {
         input: operation.input,
         customerMigrationV2: operation.customerMigrationV2,
     };
+}
+const IN_FLIGHT_OPERATION_STATUSES = ["pending", "running"];
+function inFlightOperationsForUid(db, uid) {
+    return db
+        .collection(GLM_OPERATIONS_COLLECTION)
+        .where("inputUid", "==", uid)
+        .where("status", "in", [...IN_FLIGHT_OPERATION_STATUSES]);
 }
 function isInFlightCustomerMigration(doc) {
     const data = doc.data();
@@ -4272,10 +4279,7 @@ export function addAdminFleetRoutes(router, deps) {
         }
     });
     async function findInFlightMigrateOp(uid) {
-        const opsSnap = await db
-            .collection(GLM_OPERATIONS_COLLECTION)
-            .where("inputUid", "==", uid)
-            .get();
+        const opsSnap = await inFlightOperationsForUid(db, uid).get();
         const doc = opsSnap.docs.find((d) => {
             const data = d.data();
             return (data.kind === OP_KIND_MIGRATE_CUSTOMER &&
@@ -4423,7 +4427,7 @@ export function addAdminFleetRoutes(router, deps) {
                         .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
                         .doc(uid);
                     const assignmentSnap = await txn.get(assignmentRef);
-                    const opsSnap = await txn.get(db.collection(GLM_OPERATIONS_COLLECTION).where("inputUid", "==", uid));
+                    const opsSnap = await txn.get(inFlightOperationsForUid(db, uid));
                     const inFlight = opsSnap.docs.find(isInFlightCustomerMigration);
                     if (inFlight) {
                         return {

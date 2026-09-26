@@ -39,22 +39,27 @@ vi.mock("../lib/db", () => {
     };
   }
 
-  function runQuery(collectionName: string, filters: Array<{ field: string; value: unknown }>) {
+  type QueryFilter = { field: string; op: string; value: unknown };
+
+  function runQuery(collectionName: string, filters: QueryFilter[]) {
     const docs = Object.entries(state.store)
       .filter(([path, data]) => {
         const parts = path.split("/");
         if (parts.length !== 2 || parts[0] !== collectionName || data === undefined) return false;
-        return filters.every((f) => (data as StoredDoc)[f.field] === f.value);
+        return filters.every((f) => {
+          const actual = (data as StoredDoc)[f.field];
+          return f.op === "in" ? (f.value as unknown[]).includes(actual) : actual === f.value;
+        });
       })
       .map(([path, data]) => ({ id: path.split("/")[1], data: () => data }));
     return { docs, size: docs.length };
   }
 
-  function queryRef(collectionName: string, filters: Array<{ field: string; value: unknown }>): any {
+  function queryRef(collectionName: string, filters: QueryFilter[]): any {
     return {
       __query: { collectionName, filters },
-      where: (field: string, _op: string, value: unknown) =>
-        queryRef(collectionName, [...filters, { field, value }]),
+      where: (field: string, op: string, value: unknown) =>
+        queryRef(collectionName, [...filters, { field, op, value }]),
       get: async () => runQuery(collectionName, filters),
     };
   }
@@ -62,8 +67,8 @@ vi.mock("../lib/db", () => {
   function collection(name: string): any {
     return {
       doc: (id: string) => docRef(`${name}/${id}`),
-      where: (field: string, _op: string, value: unknown) =>
-        queryRef(name, [{ field, value }]),
+      where: (field: string, op: string, value: unknown) =>
+        queryRef(name, [{ field, op, value }]),
     };
   }
 

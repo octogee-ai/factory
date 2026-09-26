@@ -2713,6 +2713,7 @@ describe("account deletion revokes connector grants at the provider first", () =
     const calls: string[] = [];
     const remaining = { ...users };
     const added: Record<string, unknown>[] = [];
+    const operationDocsRead = { count: 0 };
     let autoId = 0;
     let transactionTail = Promise.resolve();
     const ref = (path: string) => ({
@@ -2729,33 +2730,35 @@ describe("account deletion revokes connector grants at the provider first", () =
     const queryCollection = (
       name: string,
       collectionGroup: boolean,
-      filters: Array<{ field: string; value: unknown }> = [],
+      filters: Array<{ field: string; op: string; value: unknown }> = [],
     ) => {
       const chain = {
         collectionName: name,
-        where: (field: string, _op: string, value: unknown) =>
-          queryCollection(name, collectionGroup, [...filters, { field, value }]),
-        get: async () => ({
-          docs: Object.entries(otherDocs)
+        where: (field: string, op: string, value: unknown) =>
+          queryCollection(name, collectionGroup, [...filters, { field, op, value }]),
+        get: async () => {
+          const docs = Object.entries(otherDocs)
             .filter(([path, data]) => {
               const parts = path.split("/");
               const inCollection = collectionGroup
                 ? parts.at(-2) === name
                 : parts.length === 2 && parts[0] === name;
-              return inCollection && filters.every(({ field, value }) => {
+              return inCollection && filters.every(({ field, op, value }) => {
                 const actual = field.split(".").reduce<unknown>((current, part) =>
                   current && typeof current === "object"
                     ? (current as Record<string, unknown>)[part]
                     : undefined, data);
-                return actual === value;
+                return op === "in" ? (value as unknown[]).includes(actual) : actual === value;
               });
             })
             .map(([path, data]) => ({
               id: path.split("/").at(-1)!,
               ref: ref(path),
               data: () => data,
-            })),
-        }),
+            }));
+          if (name === "glmOperations") operationDocsRead.count += docs.length;
+          return { docs };
+        },
         doc: (id = `op-${++autoId}`) => ref(`${name}/${id}`),
       };
       return chain;
@@ -2863,8 +2866,25 @@ describe("account deletion revokes connector grants at the provider first", () =
         calls.push(`revoke:${uid}`);
       }),
     });
-    return { app, calls, added, remaining, otherDocs };
+    return { app, calls, added, remaining, otherDocs, operationDocsRead };
   }
+
+  it("reads only a customer's in-flight operations, never their terminal history", async () => {
+    const history = Object.fromEntries(
+      Array.from({ length: 40 }, (_, index) => [
+        `glmOperations/failed-${index}`,
+        { kind: "migrate-customer", status: "failed", inputUid: "u2" },
+      ]),
+    );
+    const { app, operationDocsRead } = makeDeleteApp(
+      { u2: { username: "acme", email: "c@d.co" } },
+      history,
+    );
+
+    await request(app).post("/customer/u2/delete").expect(202);
+
+    expect(operationDocsRead.count).toBe(0);
+  });
 
   it("schedules retention for a pre-provisioning account instead of deleting inline", async () => {
     const { app, calls } = makeDeleteApp({ u1: { email: "a@b.co" } });
