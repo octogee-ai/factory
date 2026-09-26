@@ -67,36 +67,32 @@ export async function bootstrapWorkspaceIdentities(args) {
         return;
     const state = files(env);
     const boot = fs.readFileSync(state.boot, "utf8");
-    const identities = [
+    const services = [
         { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, role: "service" },
         { uid: OPENCLAW_PROVISIONER_SERVICE_IDENTITY, role: "service" },
-        { uid: env.GATEWAY_OWNER_UID, role: "admin" },
     ];
+    const identities = [...services, { uid: env.GATEWAY_OWNER_UID, role: "admin" }];
     const list = async () => (await args.request("users.list", {}, { scopes: ["operator.admin"] })).profiles;
     const find = (profiles, uid) => profiles.find(profile => profile.emails.includes(uid.toLowerCase()));
-    let journal;
     if (fs.existsSync(state.journal)) {
-        journal = JSON.parse(fs.readFileSync(state.journal, "utf8"));
-        if (journal.ownerUid !== env.GATEWAY_OWNER_UID || !Array.isArray(journal.pending) || journal.pending.some(item => !identities.some(identity => identity.uid === item.uid && identity.role === item.role)))
+        const journal = JSON.parse(fs.readFileSync(state.journal, "utf8"));
+        if (journal.ownerUid !== env.GATEWAY_OWNER_UID)
             throw new Error("Workspace identity initialization journal does not match this owner");
     }
     else {
-        const profiles = await list();
-        journal = { ownerUid: env.GATEWAY_OWNER_UID, pending: identities.filter(identity => !find(profiles, identity.uid)) };
-        atomicWrite(state.journal, JSON.stringify(journal));
+        atomicWrite(state.journal, JSON.stringify({ ownerUid: env.GATEWAY_OWNER_UID }));
     }
-    while (journal.pending.length) {
-        const identity = journal.pending[0];
+    for (const identity of identities) {
         let profile = find(await list(), identity.uid);
         if (!profile) {
             await (args.createProfile ?? createProfile)(identity.uid, env);
             profile = find(await list(), identity.uid);
         }
         if (!profile)
-            throw new Error(`OpenClaw did not create the initial profile for ${identity.uid}`);
-        await args.request("users.setRole", { profileId: profile.id, role: identity.role }, { scopes: ["operator.admin"] });
-        journal.pending.shift();
-        atomicWrite(state.journal, JSON.stringify(journal));
+            throw new Error(`OpenClaw did not create the profile for ${identity.uid}`);
+        if ((profile.role ?? null) !== identity.role) {
+            await args.request("users.setRole", { profileId: profile.id, role: identity.role }, { scopes: ["operator.admin"] });
+        }
     }
     if (fs.readFileSync(state.boot, "utf8") !== boot)
         throw new Error("Workspace identity boot changed during initialization");

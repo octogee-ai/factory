@@ -34,15 +34,24 @@ describe("native workspace identity initialization", () => {
     expect(workspaceIdentityReady(env)).toBe(true);
   });
 
-  it("preserves native role edits, including default/null, on later boots", async () => {
+  it("forces the owner back to admin on later boots", async () => {
     const { env, profiles, request, args } = fixture();
     await bootstrapWorkspaceIdentities(args);
-    profiles[2].role = null;
+    profiles[2].role = "member";
     request.mockClear();
     beginWorkspaceIdentityBoot(env);
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
     await bootstrapWorkspaceIdentities(args);
-    expect(profiles[2].role).toBeNull();
+    expect(profiles[2].role).toBe("admin");
+    expect(request).toHaveBeenCalledWith("users.setRole", { profileId: profiles[2].id, role: "admin" }, expect.anything());
+  });
+
+  it("leaves correctly assigned roles untouched", async () => {
+    const { env, args, request } = fixture();
+    await bootstrapWorkspaceIdentities(args);
+    request.mockClear();
+    beginWorkspaceIdentityBoot(env);
+    await bootstrapWorkspaceIdentities(args);
     expect(request).not.toHaveBeenCalledWith("users.setRole", expect.anything(), expect.anything());
   });
 
@@ -60,7 +69,7 @@ describe("native workspace identity initialization", () => {
     expect(profiles[0].id).toBe("created-before-crash");
   });
 
-  it("restores the same owner's identities on a replacement gateway without resetting roles", async () => {
+  it("restores the same owner's identities on a replacement gateway with the owner as admin", async () => {
     const { env, profiles, args, request } = fixture();
     await bootstrapWorkspaceIdentities(args);
     profiles[2].role = "custom";
@@ -69,8 +78,32 @@ describe("native workspace identity initialization", () => {
     request.mockClear();
     await bootstrapWorkspaceIdentities(args);
     expect(() => assertWorkspaceIdentityReady(env)).not.toThrow();
-    expect(profiles[2].role).toBe("custom");
-    expect(request).not.toHaveBeenCalledWith("users.setRole", expect.anything(), expect.anything());
+    expect(profiles[2].role).toBe("admin");
+  });
+
+  it("assigns roles to platform and owner identities restored without one", async () => {
+    const { profiles, args } = fixture();
+    profiles.push(
+      { id: "restored-edge", emails: ["svc:gateway-edge"], role: null },
+      { id: "restored-provisioner", emails: ["svc:octogee-provisioner"], role: null },
+      { id: "restored-owner", emails: ["alice"], role: null },
+    );
+    await bootstrapWorkspaceIdentities(args);
+    expect(profiles.map(profile => [profile.id, profile.role])).toEqual([
+      ["restored-edge", "service"],
+      ["restored-provisioner", "service"],
+      ["restored-owner", "admin"],
+    ]);
+  });
+
+  it("restores the service role of a platform identity on a later boot", async () => {
+    const { env, profiles, args } = fixture();
+    await bootstrapWorkspaceIdentities(args);
+    profiles[1].role = "member";
+    beginWorkspaceIdentityBoot(env);
+    await bootstrapWorkspaceIdentities(args);
+    expect(profiles.map(profile => profile.role)).toEqual(["service", "service", "admin"]);
+    expect(() => assertWorkspaceIdentityReady(env)).not.toThrow();
   });
 
   it("rejects an identity journal belonging to a different owner", async () => {
@@ -82,11 +115,11 @@ describe("native workspace identity initialization", () => {
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 
-  it("never changes preexisting owner assignments and does nothing on shared gateways", async () => {
+  it("forces a preexisting owner to admin and does nothing on shared gateways", async () => {
     const { env, profiles, args, request } = fixture();
     profiles.push({ id: "existing-owner", emails: ["alice"], role: "custom" });
     await bootstrapWorkspaceIdentities(args);
-    expect(profiles[0].role).toBe("custom");
+    expect(profiles[0].role).toBe("admin");
     request.mockClear();
     await bootstrapWorkspaceIdentities({ ...args, env: { ...env, GATEWAY_CLASS: "shared" } });
     expect(request).not.toHaveBeenCalled();
