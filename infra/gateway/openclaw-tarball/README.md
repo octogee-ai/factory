@@ -90,8 +90,8 @@ was merged over a failed gate (a flaky Codex computer-use timing test), outside 
 overlay's areas.
 
 **Overlay branch:** `ceckert/openclaw:codex/octogee-main-dfb6474c538-recut`, head
-`54fabd0320c8559a61fdd5509e3235f6997fde30` (`dist/build-info.json` commit matches).
-28 commits on the base: 27 single-purpose overlay patches plus one
+`e4c728b9178b4a961b54637c709958bff7960080` (`dist/build-info.json` commit matches).
+30 commits on the base: 28 single-purpose overlay patches, their test fixup, and one
 `build(workboard)` Control UI bundle-hash commit.
 
 **Policy:** the goal is zero patches, pursued deliberately through discussions
@@ -130,6 +130,7 @@ discussions; record each patch's readiness in the table below.
 | 26 | `d2577c228d6` | Agents: borrow the Gateway registry for every workspace of a config-wide generation | Shared gateways with per-customer workspaces | Ready; PR not filed |
 | — | `63963eb441c` | build(workboard): Control UI bundle hash for the recut head (covers #14) | Control UI | — |
 | 27 | `54fabd0320c` | Secrets: config-write refreshes stop retaining removed agents' auth stores | Builder eviction/unmount (`agents.delete`, then the held-file check) | Ready; upstream main has the same bug, PR not filed |
+| 28 | `2091f315e28` | Agents: retire a deleted agent's model runtime before releasing its database (test run under a canonical state dir in `e4c728b9178`) | Builder eviction/unmount after an import's `secrets.reload` | Ready; PR not filed |
 
 Recut adaptations against the new base (all other patches applied cleanly):
 
@@ -177,14 +178,14 @@ letting stage replace a target's re-projected system monitors
 them as a target conflict.
 
 The archives below were built from the head above, install-verified together in
-an isolated npm prefix (`OpenClaw 2026.9.6 (54fabd0)`), and published with
+an isolated npm prefix (`OpenClaw 2026.9.6 (e4c728b)`), and published with
 write-once generation preconditions; the published root archive's SHA-256 was
 re-verified after upload. The Mattermost archive is byte-identical to the previous
 publication and is reused.
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-7d9a40fa.tgz` | `7d9a40fae9b813dc34b41141883b9bb6ba4db0ae5cddf413ec908877a1c140d3` | `1790379618892901` |
+| `openclaw-fork-d9c7e1f6.tgz` | `d9c7e1f66fabf78b0a12fbd842e190c632d4d8782aca89e455e9bcb8e5d8ab89` | `1790397689660129` |
 | `openclaw-mattermost-4ee09605.tgz` | `4ee0960599474fed423e28b77ad56a0e794f3a4c1fcc5adb73c7864bad04ec09` | `1790361284337036` |
 
 Qualification of this head: `git rebase -x "pnpm tsgo"` passes at all 26 patch
@@ -194,8 +195,8 @@ boundaries; `pnpm check`, `pnpm tsgo:prod`, `pnpm check:test-types`, and
 #21–#26 are each red on the pristine base (base plus the patch's test file only) and
 green on the head: #21 retention (`expected [] to deeply equal [0..4]`), #22 7/8
 failing without the handoff → 8/8, #23 `expected true to be false`, #24 registry not
-reused, #25 assertion failures, #26 four registries → one. Patches #1–#26 (`63963eb`)
-run on TEST and PROD since 2026-09-25.
+reused, #25 assertion failures, #26 four registries → one. Patches #1–#27 (`54fabd0`)
+run on TEST and PROD since 2026-09-26.
 
 #27 is qualified on `54fabd0`: its refresh test is red without the fix and green with
 it; `pnpm tsgo:core`, the secrets, secrets-startup, runtime-authority and
@@ -203,6 +204,12 @@ gateway-auth-refresh suites (12 files, 247 tests), and `pnpm build` (build-info 
 to the head, clean tree) pass. A Gateway `lsof` reproduction held 7 descriptors on
 the deleted agent's `openclaw-agent.sqlite` after `agents.delete` on `63963eb` and 0
 on this head.
+
+#28 is qualified on `e4c728b`: its Gateway proof (`agents.create` → `sessions.create` →
+`secrets.reload` → `agents.delete`, then no open connection to the agent database) is
+red without the fix and green with it, three solo runs and in the batch; `pnpm
+tsgo:core`, the agent-mutation, prepared-model-runtime and secrets suites (46 files,
+642 tests), and `pnpm build` (build-info equal to the head, clean tree) pass.
 
 ### Patch #27: deleted agents' auth stores stayed open
 
@@ -214,6 +221,19 @@ each retry's `config.patch`) kept `openclaw-agent.sqlite` and its WAL/SHM open, 
 Octogee's held-file check refused every source unmount after a migration until the
 gateway restarted. Refreshes now carry only caller-supplied explicit directories and
 recompute agent directories from each written config.
+
+### Patch #28: a deleted agent's model runtime reopened its database
+
+With #27 in place, removing an agent changes the auth-profile snapshot set, which
+fires a global auth mutation. That marked every prepared model-runtime owner stale —
+including the deleted agent's own owner, still registered until the config reload
+retired it — and the auth publication drain rebuilt it against the old roster,
+reopening `openclaw-agent.sqlite` through the pooled auth reader after
+`agents.delete` had closed it. It only happens once the agent has a published
+runtime owner, which an import's `secrets.reload` creates, so agents imported onto a
+shared gateway and moved off again still held their databases on `54fabd0`.
+`agents.delete` now retires the agent's prepared model-runtime owners (and waits for
+an in-flight build) before closing the pooled readers for its databases.
 
 Packaging keeps the exact core source and rebuilds Codex and Parallel from that
 same checkout. The full image places Codex at `dist/extensions/codex` with its
