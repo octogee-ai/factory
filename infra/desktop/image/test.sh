@@ -90,10 +90,10 @@ image_args=(--image-family "$FAMILY" --image-project "$PROJECT")
 [[ -n "$IMAGE" ]] && image_args=(--image "$IMAGE" --image-project "$PROJECT")
 t_create=$(date +%s)
 create_instance_in_first_available_zone "$NAME" --project "$PROJECT" --machine-type "$MACHINE" \
-  "${image_args[@]}" --boot-disk-type pd-ssd \
+  ${image_args[@]+"${image_args[@]}"} --boot-disk-type pd-ssd \
   --create-disk=device-name=octogee-home,size=30GB,type=pd-ssd,auto-delete=yes \
   --metadata-from-file ssh-keys="$work/ssh-keys" \
-  --labels "purpose=octogee-computer-test,octogee-image-run=${run_label}" "${service_account_args[@]}" "${ci_lifetime_args[@]}"
+  --labels "purpose=octogee-computer-test,octogee-image-run=${run_label}" ${service_account_args[@]+"${service_account_args[@]}"} ${ci_lifetime_args[@]+"${ci_lifetime_args[@]}"}
 IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 wait_ssh 300
 t_ssh=$(date +%s)

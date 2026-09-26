@@ -111,7 +111,7 @@ if ! gcloud compute instances describe "$BUILDER" --zone "$ZONE" --project "$PRO
     --boot-disk-size 150GB --boot-disk-type pd-ssd \
     --scopes storage-rw,logging-write \
     --labels "purpose=octogee-computer-image-build,octogee-image-run=${run_label}" \
-    --metadata enable-oslogin=false --metadata-from-file "ssh-keys=$payload/ssh-keys" "${service_account_args[@]}" "${ci_lifetime_args[@]}"
+    --metadata enable-oslogin=false --metadata-from-file "ssh-keys=$payload/ssh-keys" ${service_account_args[@]+"${service_account_args[@]}"} ${ci_lifetime_args[@]+"${ci_lifetime_args[@]}"}
 fi
 trap 'cleanup; rm -rf "$payload" "$payload.tgz"' EXIT
 for _ in $(seq 1 30); do gssh true && break; sleep 6; done
@@ -148,7 +148,7 @@ if [[ "$CANDIDATE" == 0 ]]; then family_args=(--family "$FAMILY"); fi
 log "registering image"
 gcloud compute images create "$IMAGE_NAME" --project "$PROJECT" \
   --source-uri "${BUCKET}/images/${IMAGE_NAME}.tar.gz" \
-  "${family_args[@]}" \
+  ${family_args[@]+"${family_args[@]}"} \
   --guest-os-features UEFI_COMPATIBLE,VIRTIO_SCSI_MULTIQUEUE \
   --labels "$image_labels" \
   --format='value(name,status,diskSizeGb)'
