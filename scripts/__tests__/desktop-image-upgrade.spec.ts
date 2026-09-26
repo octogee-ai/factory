@@ -20,6 +20,7 @@ it('opts the disposable image provisioner into a full Omarchy package upgrade', 
     const [optIn, ...args] = readFileSync(probe, 'utf8').trimEnd().split('\n');
     expect(optIn).toBe('1');
     expect(args).toContain('-Syu');
+    expect(args).toEqual(expect.arrayContaining(['at-spi2-core', 'python', 'python-pip']));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
