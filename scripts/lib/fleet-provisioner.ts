@@ -1495,7 +1495,7 @@ function startMaybeReconcileLoop(params: {
   // a project-agent toggle) reconverge without a remount. appliedFp mirrors to disk
   // (when openclawDir is known) so a container restart with the emptyDir intact does not
   // re-ensure an unchanged fleet; a MISSING entry is stale by definition — see
-  // content-convergence.ts and applied-fingerprint-store.ts.
+  // applied-fingerprint-store.ts.
   const fingerprintSource = opts.readDesiredFingerprints;
   const desiredFp = new Map<string, string>();
   const appliedFpFile =

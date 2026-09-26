@@ -308,7 +308,7 @@ export const EDGES: readonly ScopeEdge[] = [
     when: "scripts/",
     jobs: [JOBS.tests],
     reason:
-      "tests/specs reads scripts/ source directly beyond lib/: scripts/lib/* (byot-auth-profiles, byot-sync, auth-profile-sqlite, key-fingerprint, model-credential-materializer, usage-log-line specs), scripts/secret-resolver.mjs + scripts/entrypoints/fleet-controller.ts (byok-provider-registry-parity, gateway-entrypoint, gateway-rpc-local-exceptions specs), scripts/setup-secrets.sh + scripts/verify-secrets.sh (byot-sync-secret-management, openrouter-platform-secret-management specs), and internal-routing-guard.spec.ts walks the entire scripts/ tree",
+      "tests/specs reads scripts/ source directly beyond lib/: scripts/lib/* (byot-sync, auth-profile-sqlite, model-credential-materializer, usage-log-line specs), scripts/secret-resolver.mjs + scripts/entrypoints/fleet-controller.ts (byok-provider-registry-parity, gateway-entrypoint, gateway-rpc-local-exceptions specs), scripts/setup-secrets.sh + scripts/verify-secrets.sh (byot-sync-secret-management, openrouter-platform-secret-management specs), and internal-routing-guard.spec.ts walks the entire scripts/ tree",
   },
   {
     when: "scripts/lib/vite-third-party-licenses.",

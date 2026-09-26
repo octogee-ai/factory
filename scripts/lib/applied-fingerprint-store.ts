@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 // On-disk mirror of the reconcile's applied-fingerprint bookkeeping. Persistence keeps
 // a container restart with the emptyDir intact from forgetting what was applied; a
-// missing entry is treated as STALE (content-convergence.ts), so forgetting would mean
+// missing entry is treated as STALE, so forgetting would mean
 // a needless-but-harmless re-ensure sweep, never a masked change.
 //
 // Corrupt or missing files load as empty — every mounted customer then re-ensures once,

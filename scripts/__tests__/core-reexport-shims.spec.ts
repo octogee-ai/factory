@@ -33,7 +33,6 @@ import * as mattermostProfileSyncCore from "@octogee/core/mattermost/profile-syn
 import * as mattermostProvisionCore from "@octogee/core/mattermost/provision";
 import * as notificationsCore from "@octogee/core/notifications";
 import * as secretManagerCore from "@octogee/core/secret-manager";
-import * as siteIdCore from "@octogee/core/site-id";
 import * as tierTemplateFilesCore from "@octogee/core/tier-template-files";
 import * as usageLogTailerCore from "@octogee/core/usage-log-tailer";
 import * as workspaceSlugsCore from "@octogee/core/workspace-slugs";
@@ -71,7 +70,6 @@ import * as mattermostProfileSyncShim from "../lib/mattermost/profile-sync.js";
 import * as mattermostProvisionShim from "../lib/mattermost/provision.js";
 import * as notificationsShim from "../lib/notifications.js";
 import * as secretManagerShim from "../lib/secret-manager.js";
-import * as siteIdShim from "../lib/site-id.js";
 import * as tierTemplateFilesShim from "../lib/tier-template-files.js";
 import * as usageLogTailerShim from "../lib/usage-log-tailer.js";
 import * as workspaceSlugsShim from "../lib/workspace-slugs.js";
@@ -111,7 +109,6 @@ const shims = [
   ["mattermost/provision", mattermostProvisionShim, mattermostProvisionCore],
   ["notifications", notificationsShim, notificationsCore],
   ["secret-manager", secretManagerShim, secretManagerCore],
-  ["site-id", siteIdShim, siteIdCore],
   ["tier-template-files", tierTemplateFilesShim, tierTemplateFilesCore],
   ["usage-log-tailer", usageLogTailerShim, usageLogTailerCore],
   ["workspace-slugs", workspaceSlugsShim, workspaceSlugsCore],

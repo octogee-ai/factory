@@ -237,10 +237,6 @@
       "types": "./dist/secret-manager.d.ts",
       "default": "./dist/secret-manager.js"
     },
-    "./site-id": {
-      "types": "./dist/site-id.d.ts",
-      "default": "./dist/site-id.js"
-    },
     "./usage-log-line": {
       "types": "./dist/usage-log-line.d.ts",
       "default": "./dist/usage-log-line.js"
@@ -535,9 +531,6 @@
       ],
       "secret-manager": [
         "dist/secret-manager.d.ts"
-      ],
-      "site-id": [
-        "dist/site-id.d.ts"
       ],
       "usage-log-line": [
         "dist/usage-log-line.d.ts"

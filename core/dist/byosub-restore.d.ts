@@ -50,9 +50,8 @@ export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRu
  * legacy auth-state.json file when the SQLite row is absent. Returns null
  * when neither source has data.
  *
- * Single source for both the restore decision (byosub-restore) and the
- * gateway-side health sweep (codex-auth-health-io). Keeps the text-in /
- * health-out contract of `deriveCodexAuthHealth` unchanged.
+ * Keeps the text-in / health-out contract of `deriveCodexAuthHealth`
+ * unchanged.
  */
 export declare function readCodexAuthStateText(openclawDir: string, agentId: string): string | null;
 export declare function shouldRestoreCodexCredential(opts: {
