@@ -100,6 +100,8 @@ spec:
                   key: token
             - name: GITEA_GATEWAY_KEY_GC_MODE
               value: {{ required "glm-controller.giteaGatewayKeyGc.mode is required" (.Values.giteaGatewayKeyGc).mode | quote }}
+            - name: GITEA_GATEWAY_KEY_GC_LEGACY_MODE
+              value: {{ required "glm-controller.giteaGatewayKeyGc.legacy is required" (.Values.giteaGatewayKeyGc).legacy | quote }}
             - name: MM_URL
               value: {{ .Values.env.mmUrl | default (printf "http://mattermost.%s.svc.cluster.local:8065" .Release.Namespace) | quote }}
             - name: MM_ADMIN_TOKEN

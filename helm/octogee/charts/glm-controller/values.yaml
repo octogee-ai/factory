@@ -59,8 +59,11 @@ env:
 
 # Gitea gateway SSH key sweep: dry-run logs per-user managed-key counts,
 # enforce deletes keys whose owning gateway pod or computer VM is gone.
+# legacy governs legacy-titled keys separately: enforce deletes those whose key
+# material no live gateway serving that Builder holds under its owner title.
 giteaGatewayKeyGc:
   mode: enforce
+  legacy: dry-run
 
 posthog:
   host: ""

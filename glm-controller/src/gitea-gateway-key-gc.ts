@@ -1,7 +1,9 @@
+import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import {
   GATEWAY_KEY_TITLE,
   gatewayKeyOwnerId,
   gatewayKeyTitle,
+  giteaUsername,
   isManagedGatewayKeyTitle,
 } from "@octogee/core/gitea-naming";
 import { podBelongsToGateway } from "@octogee/core/gateway-live-release";
@@ -13,9 +15,12 @@ export const GITEA_PAGE_SIZE = 50;
 
 export type GiteaGatewayKeyGcMode = "dry-run" | "enforce";
 
-export function parseGiteaGatewayKeyGcMode(raw: string | undefined): GiteaGatewayKeyGcMode {
+export function parseGiteaGatewayKeyGcMode(
+  raw: string | undefined,
+  envName = "GITEA_GATEWAY_KEY_GC_MODE",
+): GiteaGatewayKeyGcMode {
   if (raw === "dry-run" || raw === "enforce") return raw;
-  throw new Error(`GITEA_GATEWAY_KEY_GC_MODE must be dry-run or enforce (got ${raw ?? "<unset>"})`);
+  throw new Error(`${envName} must be dry-run or enforce (got ${raw ?? "<unset>"})`);
 }
 
 export interface GiteaPublicKeyRecord {
@@ -31,10 +36,17 @@ export interface GiteaKeyAdmin {
   deleteUserKey(username: string, keyId: number): Promise<boolean>;
 }
 
+export interface LiveKeyHolders {
+  owners: ReadonlySet<string>;
+  ownersByUsername: ReadonlyMap<string, ReadonlySet<string>>;
+  legacyBlocked: string | null;
+}
+
 export interface GiteaGatewayKeyGcDeps {
   gitea: GiteaKeyAdmin;
-  readLiveOwnerIds: () => Promise<ReadonlySet<string>>;
+  readLiveKeyHolders: () => Promise<LiveKeyHolders>;
   mode: GiteaGatewayKeyGcMode;
+  legacyMode: GiteaGatewayKeyGcMode;
   maxCallsPerTick: number;
   minCallIntervalMs: number;
   graceMs: number;
@@ -51,6 +63,8 @@ export interface UserKeyCensus {
   young: number;
   stale: number;
   deleted: number;
+  legacyStale: number;
+  legacyDeleted: number;
 }
 
 interface SweepPass {
@@ -77,7 +91,7 @@ export function createGiteaGatewayKeyGcState(): GiteaGatewayKeyGcState {
 }
 
 function emptyTotals(): Omit<UserKeyCensus, "username"> {
-  return { managed: 0, live: 0, legacy: 0, young: 0, stale: 0, deleted: 0 };
+  return { managed: 0, live: 0, legacy: 0, young: 0, stale: 0, deleted: 0, legacyStale: 0, legacyDeleted: 0 };
 }
 
 function publicKeyIdentity(pubKey: string): string {
@@ -130,42 +144,116 @@ async function readAllPages<T>(pacer: Pacer, readPage: (page: number) => Promise
 }
 
 function censusLine(census: Omit<UserKeyCensus, "username">): string {
-  return `managed=${census.managed} live=${census.live} legacy=${census.legacy} young=${census.young} stale=${census.stale} deleted=${census.deleted}`;
+  return `managed=${census.managed} live=${census.live} legacy=${census.legacy} young=${census.young} stale=${census.stale} deleted=${census.deleted} legacyStale=${census.legacyStale} legacyDeleted=${census.legacyDeleted}`;
+}
+
+function modesLine(deps: GiteaGatewayKeyGcDeps): string {
+  return `(${deps.mode}, legacy ${deps.legacyMode})`;
+}
+
+interface LegacyPlan {
+  deletable: GiteaPublicKeyRecord[];
+  blocked: string | null;
+}
+
+function missingHolderKeys(
+  username: string,
+  keys: readonly GiteaPublicKeyRecord[],
+  holders: LiveKeyHolders,
+): string[] {
+  const titles = new Set(keys.map((key) => key.title));
+  const required = holders.ownersByUsername.get(username) ?? new Set<string>();
+  return [...required].filter((owner) => !titles.has(gatewayKeyTitle(owner))).sort();
+}
+
+function planLegacyDeletion(
+  username: string,
+  keys: readonly GiteaPublicKeyRecord[],
+  classes: ReadonlyMap<GiteaPublicKeyRecord, KeyClass>,
+  holders: LiveKeyHolders,
+  cutoff: number,
+): LegacyPlan {
+  if (holders.legacyBlocked !== null) return { deletable: [], blocked: holders.legacyBlocked };
+  if (!username.startsWith(giteaUsername(""))) return { deletable: [], blocked: "not a Builder user" };
+  const missing = missingHolderKeys(username, keys, holders);
+  if (missing.length > 0) return { deletable: [], blocked: `live holders without an owner key: ${missing.join(",")}` };
+  const liveMaterial = new Set(
+    keys.filter((key) => classes.get(key) === "live").map((key) => publicKeyIdentity(key.key)),
+  );
+  const deletable = keys.filter(
+    (key) =>
+      classes.get(key) === "legacy" &&
+      key.createdAt !== null &&
+      key.createdAt <= cutoff &&
+      !liveMaterial.has(publicKeyIdentity(key.key)),
+  );
+  return { deletable, blocked: null };
+}
+
+async function deleteKeys(
+  deps: GiteaGatewayKeyGcDeps,
+  pacer: Pacer,
+  username: string,
+  keys: readonly GiteaPublicKeyRecord[],
+): Promise<number> {
+  let deleted = 0;
+  for (const key of keys) {
+    if (pacer.remaining < 1) break;
+    if (await pacer.call(() => deps.gitea.deleteUserKey(username, key.id))) deleted += 1;
+  }
+  return deleted;
+}
+
+function shouldLogUser(deps: GiteaGatewayKeyGcDeps, census: UserKeyCensus, legacyBlocked: string | null): boolean {
+  if (census.managed === 0) return false;
+  if (deps.mode === "dry-run" || deps.legacyMode === "dry-run") return true;
+  return census.stale > 0 || census.legacyStale > 0 || (census.legacy > 0 && legacyBlocked !== null);
 }
 
 async function sweepUser(
   deps: GiteaGatewayKeyGcDeps,
   pacer: Pacer,
   username: string,
-  liveTitles: ReadonlySet<string>,
-  cutoff: number,
+  snapshot: TickSnapshot,
 ): Promise<{ census: UserKeyCensus; finished: boolean }> {
   const keys = await readAllPages(pacer, (page) => deps.gitea.listUserKeys(username, page));
   const census: UserKeyCensus = { username, ...emptyTotals() };
-  const stale: GiteaPublicKeyRecord[] = [];
+  const classes = new Map<GiteaPublicKeyRecord, KeyClass>();
   for (const key of keys) {
-    const keyClass = classifyKey(key, liveTitles, cutoff);
+    const keyClass = classifyKey(key, snapshot.liveTitles, snapshot.cutoff);
+    classes.set(key, keyClass);
     if (keyClass === "unmanaged") continue;
     census.managed += 1;
     census[keyClass] += 1;
-    if (keyClass === "stale") stale.push(key);
   }
+  const legacy = planLegacyDeletion(username, keys, classes, snapshot.holders, snapshot.cutoff);
+  census.legacyStale = legacy.deletable.length;
   if (deps.mode === "enforce") {
-    for (const key of stale) {
-      if (pacer.remaining < 1) break;
-      if (await pacer.call(() => deps.gitea.deleteUserKey(username, key.id))) census.deleted += 1;
-    }
+    census.deleted = await deleteKeys(deps, pacer, username, keys.filter((key) => classes.get(key) === "stale"));
   }
-  const finished = deps.mode === "dry-run" || census.deleted === census.stale;
-  if (census.managed > 0 && (deps.mode === "dry-run" || census.stale > 0)) {
-    deps.log(`[gitea-key-gc] ${username} ${censusLine(census)} (${deps.mode})`);
+  const staleFinished = deps.mode === "dry-run" || census.deleted === census.stale;
+  if (staleFinished && deps.legacyMode === "enforce") {
+    census.legacyDeleted = await deleteKeys(deps, pacer, username, legacy.deletable);
+  }
+  const finished = staleFinished && (deps.legacyMode === "dry-run" || census.legacyDeleted === census.legacyStale);
+  if (shouldLogUser(deps, census, legacy.blocked)) {
+    const blocked = legacy.blocked !== null && census.legacy > 0 ? ` legacyBlocked="${legacy.blocked}"` : "";
+    deps.log(`[gitea-key-gc] ${username} ${censusLine(census)}${blocked} ${modesLine(deps)}`);
   }
   return { census, finished };
 }
 
+interface TickSnapshot {
+  holders: LiveKeyHolders;
+  liveTitles: ReadonlySet<string>;
+  cutoff: number;
+}
+
 function addCensus(totals: Omit<UserKeyCensus, "username">, census: UserKeyCensus, finished: boolean): void {
   totals.deleted += census.deleted;
+  totals.legacyDeleted += census.legacyDeleted;
   if (!finished) return;
+  totals.legacyStale += census.legacyStale;
   totals.managed += census.managed;
   totals.live += census.live;
   totals.legacy += census.legacy;
@@ -183,9 +271,12 @@ export async function runGiteaGatewayKeyGcTick(
   state: GiteaGatewayKeyGcState,
 ): Promise<GiteaGatewayKeyGcTickResult> {
   const snapshotAt = deps.now();
-  const liveOwners = await deps.readLiveOwnerIds();
-  const liveTitles = new Set([...liveOwners].map((owner) => gatewayKeyTitle(owner)));
-  const cutoff = snapshotAt - deps.graceMs;
+  const holders = await deps.readLiveKeyHolders();
+  const snapshot: TickSnapshot = {
+    holders,
+    liveTitles: new Set([...holders.owners].map((owner) => gatewayKeyTitle(owner))),
+    cutoff: snapshotAt - deps.graceMs,
+  };
   const pacer = createPacer(deps, state);
   state.pass ??= await startPass(pacer, deps);
   const pass = state.pass;
@@ -193,7 +284,7 @@ export async function runGiteaGatewayKeyGcTick(
 
   while (pass.next < pass.usernames.length && pacer.remaining > 0) {
     const username = pass.usernames[pass.next];
-    const { census, finished } = await sweepUser(deps, pacer, username, liveTitles, cutoff);
+    const { census, finished } = await sweepUser(deps, pacer, username, snapshot);
     users.push(census);
     addCensus(pass.totals, census, finished);
     if (!finished) break;
@@ -203,7 +294,7 @@ export async function runGiteaGatewayKeyGcTick(
   const passCompleted = pass.next >= pass.usernames.length;
   if (passCompleted) {
     deps.log(
-      `[gitea-key-gc] pass complete users=${pass.usernames.length} ${censusLine(pass.totals)} (${deps.mode})`,
+      `[gitea-key-gc] pass complete users=${pass.usernames.length} ${censusLine(pass.totals)} ${modesLine(deps)}`,
     );
     state.pass = null;
   }
@@ -216,6 +307,8 @@ interface OwnerSourceDoc {
 }
 
 export interface LiveGatewayOwnerSources {
+  users: readonly OwnerSourceDoc[];
+  runningMigrations: readonly OwnerSourceDoc[];
   gateways: readonly OwnerSourceDoc[];
   glmGateways: readonly OwnerSourceDoc[];
   readGatewayPodDiagnosticsBatch: (
@@ -223,16 +316,16 @@ export interface LiveGatewayOwnerSources {
   ) => Promise<Record<string, GatewayPodDiagnostics>>;
 }
 
-function vmOwnerId(doc: OwnerSourceDoc): string | null {
+function vmOwner(doc: OwnerSourceDoc): { gatewayId: string; owner: string } | null {
   const data = doc.data();
   const vm = data?.vm as { instanceId?: unknown } | null | undefined;
   const instanceId = vm?.instanceId;
   if (typeof instanceId !== "string" || !/^\d+$/u.test(instanceId)) return null;
   const gatewayId = typeof data?.gatewayId === "string" ? data.gatewayId : doc.id;
-  return gatewayKeyOwnerId(gatewayId, gatewayVmPodName(gatewayId, instanceId));
+  return { gatewayId, owner: gatewayKeyOwnerId(gatewayId, gatewayVmPodName(gatewayId, instanceId)) };
 }
 
-export async function readLiveGatewayOwnerIds(sources: LiveGatewayOwnerSources): Promise<Set<string>> {
+async function readOwnersByGateway(sources: LiveGatewayOwnerSources): Promise<Map<string, Set<string>>> {
   const gatewayIds = new Set<string>();
   for (const doc of [...sources.gateways, ...sources.glmGateways]) {
     gatewayIds.add(doc.id);
@@ -241,7 +334,12 @@ export async function readLiveGatewayOwnerIds(sources: LiveGatewayOwnerSources):
   }
   const ids = [...gatewayIds].sort();
   const diagnostics = await sources.readGatewayPodDiagnosticsBatch(ids);
-  const owners = new Set<string>();
+  const ownersByGateway = new Map<string, Set<string>>();
+  const addOwner = (gatewayId: string, owner: string) => {
+    const owners = ownersByGateway.get(gatewayId) ?? new Set<string>();
+    owners.add(owner);
+    ownersByGateway.set(gatewayId, owners);
+  };
   for (const instanceId of ids) {
     const observed = diagnostics[instanceId];
     if (!observed || observed.status === "unknown") {
@@ -251,15 +349,92 @@ export async function readLiveGatewayOwnerIds(sources: LiveGatewayOwnerSources):
     }
     for (const pod of observed.pods) {
       for (const gatewayId of ids) {
-        if (podBelongsToGateway(gatewayId, pod.name)) owners.add(gatewayKeyOwnerId(gatewayId, pod.name));
+        if (podBelongsToGateway(gatewayId, pod.name)) addOwner(gatewayId, gatewayKeyOwnerId(gatewayId, pod.name));
       }
     }
   }
   for (const doc of sources.glmGateways) {
-    const owner = vmOwnerId(doc);
-    if (owner) owners.add(owner);
+    const vm = vmOwner(doc);
+    if (vm) addOwner(vm.gatewayId, vm.owner);
   }
-  return owners;
+  return ownersByGateway;
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+interface BuilderGateways {
+  gatewaysBySlug: Map<string, Set<string>>;
+  legacyBlocked: string | null;
+}
+
+type Place = (slug: string, gatewayId: string | null) => void;
+
+function placeAssignedBuilders(sources: LiveGatewayOwnerSources, place: Place): Map<string, string> {
+  const slugByUid = new Map<string, string>();
+  for (const doc of sources.users) {
+    const data = doc.data();
+    const slug = slugFromAssignedUser(data);
+    if (!slug) continue;
+    slugByUid.set(doc.id, slug);
+    const openclaw = (data?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined)?.openclaw;
+    place(slug, stringField(openclaw?.gatewayId));
+  }
+  for (const doc of [...sources.gateways, ...sources.glmGateways]) {
+    const data = doc.data();
+    const slug = stringField(data?.builderSlug);
+    if (slug) place(slug, stringField(data?.gatewayId) ?? doc.id);
+  }
+  return slugByUid;
+}
+
+function placeMigratingBuilders(
+  sources: LiveGatewayOwnerSources,
+  slugByUid: ReadonlyMap<string, string>,
+  place: Place,
+): string[] {
+  const unattributed: string[] = [];
+  for (const doc of sources.runningMigrations) {
+    const input = doc.data()?.input as { uid?: unknown; fromGatewayId?: unknown; toGatewayId?: unknown } | undefined;
+    const uid = stringField(input?.uid);
+    const slug = uid ? slugByUid.get(uid) : undefined;
+    if (!slug) {
+      unattributed.push(doc.id);
+      continue;
+    }
+    place(slug, stringField(input?.fromGatewayId));
+    place(slug, stringField(input?.toGatewayId));
+  }
+  return unattributed.sort();
+}
+
+function builderGateways(sources: LiveGatewayOwnerSources): BuilderGateways {
+  const gatewaysBySlug = new Map<string, Set<string>>();
+  const place: Place = (slug, gatewayId) => {
+    if (!gatewayId) return;
+    const gateways = gatewaysBySlug.get(slug) ?? new Set<string>();
+    gateways.add(gatewayId);
+    gatewaysBySlug.set(slug, gateways);
+  };
+  const slugByUid = placeAssignedBuilders(sources, place);
+  const unattributed = placeMigratingBuilders(sources, slugByUid, place);
+  const legacyBlocked = unattributed.length > 0
+    ? `running migrations name no known Builder: ${unattributed.join(",")}`
+    : null;
+  return { gatewaysBySlug, legacyBlocked };
+}
+
+export async function readLiveGatewayKeyHolders(sources: LiveGatewayOwnerSources): Promise<LiveKeyHolders> {
+  const ownersByGateway = await readOwnersByGateway(sources);
+  const owners = new Set([...ownersByGateway.values()].flatMap((held) => [...held]));
+  const { gatewaysBySlug, legacyBlocked } = builderGateways(sources);
+  const ownersByUsername = new Map<string, Set<string>>();
+  for (const [slug, gatewayIds] of gatewaysBySlug) {
+    const held = [...gatewayIds].flatMap((gatewayId) => [...(ownersByGateway.get(gatewayId) ?? [])]);
+    if (held.length > 0) ownersByUsername.set(giteaUsername(slug), new Set(held));
+  }
+  return { owners, ownersByUsername, legacyBlocked };
 }
 
 export interface GiteaKeyAdminClientDeps {
