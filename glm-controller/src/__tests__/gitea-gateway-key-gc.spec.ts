@@ -49,16 +49,8 @@ class FakeGitea implements GiteaKeyAdmin {
   }
 }
 
-function holders(
-  owners: string[],
-  ownersByUsername: Record<string, string[]> = {},
-  legacyBlocked: string | null = null,
-) {
-  return {
-    owners: new Set(owners),
-    ownersByUsername: new Map(Object.entries(ownersByUsername).map(([username, held]) => [username, new Set(held)])),
-    legacyBlocked,
-  };
+function holders(owners: string[]) {
+  return { owners: new Set(owners) };
 }
 
 function legacyKey(id: number, material: string, createdAt: number | null = NOW - 90 * 24 * HOUR): GiteaPublicKeyRecord {
@@ -76,7 +68,6 @@ function deps(
     gitea,
     readLiveKeyHolders: async () => holders([LIVE_OWNER]),
     mode: "enforce",
-    legacyMode: "dry-run",
     maxCallsPerTick: 1000,
     minCallIntervalMs: 0,
     graceMs: HOUR,
@@ -92,7 +83,7 @@ function deps(
 }
 
 describe("runGiteaGatewayKeyGcTick", () => {
-  it("deletes only managed keys whose owner is no live gateway and that predate the grace window", async () => {
+  it("deletes managed keys that are stale or legacy and predate the grace window, keeping live, young, and user keys", async () => {
     const userKey = { id: 1, title: "my laptop", key: "ssh-ed25519 LAPTOP", createdAt: NOW - 90 * 24 * HOUR };
     const bareLegacy = { id: 2, title: "octogee-gateway", key: "ssh-ed25519 BARE", createdAt: NOW - 90 * 24 * HOUR };
     const pubKeyTitled = {
@@ -112,9 +103,13 @@ describe("runGiteaGatewayKeyGcTick", () => {
 
     const result = await runGiteaGatewayKeyGcTick(deps(gitea), state);
 
-    expect(gitea.deleted).toEqual([{ username: "ws-jack", id: 5 }]);
+    expect(gitea.deleted).toEqual([
+      { username: "ws-jack", id: 5 },
+      { username: "ws-jack", id: 2 },
+      { username: "ws-jack", id: 3 },
+    ]);
     expect(result.users).toEqual([
-      { username: "ws-jack", managed: 6, live: 1, legacy: 2, young: 2, stale: 1, deleted: 1, legacyStale: 2, legacyDeleted: 0 },
+      { username: "ws-jack", managed: 6, live: 1, legacy: 2, young: 2, stale: 1, deleted: 1, legacyStale: 2, legacyDeleted: 2 },
     ]);
     expect(result.passCompleted).toBe(true);
     expect(state.pass).toBeNull();
@@ -214,9 +209,7 @@ describe("runGiteaGatewayKeyGcTick", () => {
 });
 
 describe("runGiteaGatewayKeyGcTick legacy keys", () => {
-  const OTHER_LIVE_OWNER = gatewayKeyOwnerId("shared-0", "octogee-gateway-shared-0-7d9f-other");
-
-  it("deletes old legacy keys whose key material no live gateway holds once every live holder has its owner key", async () => {
+  it("deletes old legacy keys whose key material no live gateway holds after stale owner keys", async () => {
     const live = managedKey(1, LIVE_OWNER);
     const userAdded = { id: 2, title: "my laptop", key: "ssh-ed25519 LAPTOP", createdAt: NOW - 90 * 24 * HOUR };
     const oldBare = legacyKey(4, "OLDBARE");
@@ -228,10 +221,7 @@ describe("runGiteaGatewayKeyGcTick legacy keys", () => {
     const gitea = new FakeGitea(new Map([
       ["ws-jack", [live, userAdded, oldBare, oldPubTitled, youngLegacy, undatedLegacy, heldLegacy, staleOwnerKey]],
     ]));
-    const d = deps(gitea, {
-      legacyMode: "enforce",
-      readLiveKeyHolders: async () => holders([LIVE_OWNER], { "ws-jack": [LIVE_OWNER] }),
-    });
+    const d = deps(gitea);
 
     const result = await runGiteaGatewayKeyGcTick(d, createGiteaGatewayKeyGcState());
 
@@ -245,28 +235,22 @@ describe("runGiteaGatewayKeyGcTick legacy keys", () => {
     expect(result.passCompleted).toBe(true);
   });
 
-  it("keeps every legacy key for a Builder when a live holder has no owner-titled key", async () => {
+  it("deletes a Builder's old legacy keys even while a live gateway has not registered its owner key", async () => {
+    const otherLiveOwner = gatewayKeyOwnerId("shared-0", "octogee-gateway-shared-0-7d9f-other");
     const gitea = new FakeGitea(new Map([
       ["ws-jill", [managedKey(1, LIVE_OWNER), legacyKey(4, "OLDBARE"), legacyKey(5, "OLDPUB")]],
     ]));
-    const d = deps(gitea, {
-      legacyMode: "enforce",
-      readLiveKeyHolders: async () =>
-        holders([LIVE_OWNER, OTHER_LIVE_OWNER], { "ws-jill": [LIVE_OWNER, OTHER_LIVE_OWNER] }),
-    });
+    const d = deps(gitea, { readLiveKeyHolders: async () => holders([LIVE_OWNER, otherLiveOwner]) });
 
-    const result = await runGiteaGatewayKeyGcTick(d, createGiteaGatewayKeyGcState());
+    await runGiteaGatewayKeyGcTick(d, createGiteaGatewayKeyGcState());
 
-    expect(gitea.deleted).toEqual([]);
-    expect(result.users[0]).toMatchObject({ legacy: 2, legacyStale: 0, legacyDeleted: 0 });
-    expect(d.logs.some((line) => line.includes("ws-jill") && line.includes("legacyBlocked") && line.includes(OTHER_LIVE_OWNER))).toBe(true);
-    expect(result.passCompleted).toBe(true);
+    expect(gitea.deleted).toEqual([{ username: "ws-jill", id: 4 }, { username: "ws-jill", id: 5 }]);
   });
 
   it("deletes old legacy keys for a Builder no live gateway serves", async () => {
     const gitea = new FakeGitea(new Map([["ws-parked", [legacyKey(4, "OLDBARE"), legacyKey(5, "OLDPUB")]]]));
 
-    await runGiteaGatewayKeyGcTick(deps(gitea, { legacyMode: "enforce" }), createGiteaGatewayKeyGcState());
+    await runGiteaGatewayKeyGcTick(deps(gitea), createGiteaGatewayKeyGcState());
 
     expect(gitea.deleted).toEqual([{ username: "ws-parked", id: 4 }, { username: "ws-parked", id: 5 }]);
   });
@@ -274,45 +258,27 @@ describe("runGiteaGatewayKeyGcTick legacy keys", () => {
   it("never deletes legacy keys of a Gitea user that is not a Builder", async () => {
     const gitea = new FakeGitea(new Map([["octogee-admin", [legacyKey(4, "OLDBARE")]]]));
 
-    await runGiteaGatewayKeyGcTick(deps(gitea, { legacyMode: "enforce" }), createGiteaGatewayKeyGcState());
+    await runGiteaGatewayKeyGcTick(deps(gitea), createGiteaGatewayKeyGcState());
 
     expect(gitea.deleted).toEqual([]);
   });
 
-  it("keeps every legacy key while key holders cannot all be attributed to Builders", async () => {
-    const gitea = new FakeGitea(new Map([["ws-parked", [legacyKey(4, "OLDBARE")]]]));
-    const d = deps(gitea, {
-      legacyMode: "enforce",
-      readLiveKeyHolders: async () => holders([LIVE_OWNER], {}, "running migration op-1 names no known Builder"),
-    });
-
-    await runGiteaGatewayKeyGcTick(d, createGiteaGatewayKeyGcState());
-
-    expect(gitea.deleted).toEqual([]);
-    expect(d.logs.some((line) => line.includes("op-1"))).toBe(true);
-  });
-
-  it("counts deletable legacy keys in legacy dry-run while still deleting stale owner keys", async () => {
+  it("counts deletable legacy keys in dry-run without deleting", async () => {
     const gitea = new FakeGitea(new Map([["ws-parked", [legacyKey(4, "OLDBARE"), managedKey(11, DEAD_OWNER)]]]));
-    const d = deps(gitea);
+    const d = deps(gitea, { mode: "dry-run" });
 
     const result = await runGiteaGatewayKeyGcTick(d, createGiteaGatewayKeyGcState());
 
-    expect(gitea.deleted).toEqual([{ username: "ws-parked", id: 11 }]);
-    expect(result.users[0]).toMatchObject({ legacyStale: 1, legacyDeleted: 0 });
-    expect(d.logs.some((line) => line.includes("ws-parked") && line.includes("legacyStale=1") && line.includes("legacy dry-run"))).toBe(true);
-    expect(d.logs.some((line) => line.includes("pass complete") && line.includes("legacyStale=1"))).toBe(true);
+    expect(gitea.deleted).toEqual([]);
+    expect(result.users[0]).toMatchObject({ stale: 1, legacyStale: 1, deleted: 0, legacyDeleted: 0 });
+    expect(d.logs.some((line) => line.includes("pass complete") && line.includes("legacyStale=1") && line.includes("dry-run"))).toBe(true);
   });
 
   it("spreads a legacy backlog over ticks within the per-tick call budget", async () => {
     const backlog = Array.from({ length: 90 }, (_, index) => legacyKey(index + 100, `OLD${index}`));
     const gitea = new FakeGitea(new Map([["ws-jack", [managedKey(1, LIVE_OWNER), ...backlog]]]));
     const state = createGiteaGatewayKeyGcState();
-    const d = deps(gitea, {
-      legacyMode: "enforce",
-      maxCallsPerTick: 30,
-      readLiveKeyHolders: async () => holders([LIVE_OWNER], { "ws-jack": [LIVE_OWNER] }),
-    });
+    const d = deps(gitea, { maxCallsPerTick: 30 });
 
     let ticks = 0;
     do {
@@ -368,8 +334,6 @@ describe("readLiveGatewayKeyHolders", () => {
       ])));
 
     const { owners } = await readLiveGatewayKeyHolders({
-      users: [],
-      runningMigrations: [],
       gateways: [doc("shared-0"), doc("builder-jack")],
       glmGateways: [
         doc("shared-0", { gatewayId: "shared-0" }),
@@ -388,8 +352,6 @@ describe("readLiveGatewayKeyHolders", () => {
 
   it("attributes a revision pod to the tenant gateway that registered its key", async () => {
     const { owners } = await readLiveGatewayKeyHolders({
-      users: [],
-      runningMigrations: [],
       gateways: [doc("shared-0")],
       glmGateways: [doc("shared-0-r3", { gatewayId: "shared-0" })],
       readGatewayPodDiagnosticsBatch: async (gatewayIds) =>
@@ -404,60 +366,12 @@ describe("readLiveGatewayKeyHolders", () => {
 
   it("fails closed when any gateway's pods cannot be observed", async () => {
     await expect(readLiveGatewayKeyHolders({
-      users: [],
-      runningMigrations: [],
       gateways: [doc("shared-0")],
       glmGateways: [],
       readGatewayPodDiagnosticsBatch: async () => ({
         "shared-0": { ...diagnostics([], "unknown"), error: "pods not found" },
       }),
     })).rejects.toThrow(/shared-0.*pods not found/);
-  });
-
-  it("attributes live holders to each Builder by assignment, configured Builder gateway, running migration, and computer VM", async () => {
-    const pods: Record<string, string[]> = {
-      "shared-0": ["octogee-gateway-shared-0-a-1"],
-      "builder-jack": ["octogee-gateway-builder-jack-b-2"],
-      "builder-jill": ["octogee-gateway-builder-jill-c-3"],
-    };
-    const result = await readLiveGatewayKeyHolders({
-      users: [
-        doc("uid-jack", { provisioning: { openclaw: { gatewayId: "shared-0", slug: "jack" } } }),
-        doc("uid-jill", { username: "jill", provisioning: { openclaw: { gatewayId: "shared-0" } } }),
-        doc("uid-idle", { username: "idle" }),
-      ],
-      runningMigrations: [
-        doc("op-1", { kind: "migrate-customer", status: "running", input: { uid: "uid-jill", fromGatewayId: "shared-0", toGatewayId: "builder-jill" } }),
-      ],
-      gateways: [doc("shared-0"), doc("builder-jack", { builderSlug: "jack" }), doc("builder-jill")],
-      glmGateways: [doc("builder-jack", { gatewayId: "builder-jack", vm: { instanceId: "42" } })],
-      readGatewayPodDiagnosticsBatch: async (gatewayIds) =>
-        Object.fromEntries(gatewayIds.map((id) => [id, diagnostics(pods[id] ?? [])])),
-    });
-
-    expect(result.legacyBlocked).toBeNull();
-    expect([...(result.ownersByUsername.get("ws-jack") ?? [])].sort()).toEqual([
-      "builder-jack/octogee-gateway-builder-jack-b-2",
-      "builder-jack/octogee-gateway-builder-jack-vm-42",
-      "shared-0/octogee-gateway-shared-0-a-1",
-    ]);
-    expect([...(result.ownersByUsername.get("ws-jill") ?? [])].sort()).toEqual([
-      "builder-jill/octogee-gateway-builder-jill-c-3",
-      "shared-0/octogee-gateway-shared-0-a-1",
-    ]);
-    expect(result.ownersByUsername.has("ws-idle")).toBe(false);
-  });
-
-  it("blocks legacy deletion when a running migration names no known Builder", async () => {
-    const result = await readLiveGatewayKeyHolders({
-      users: [],
-      runningMigrations: [doc("op-9", { input: { uid: "uid-gone", fromGatewayId: "shared-0", toGatewayId: "builder-x" } })],
-      gateways: [doc("shared-0")],
-      glmGateways: [],
-      readGatewayPodDiagnosticsBatch: async () => ({ "shared-0": diagnostics([]) }),
-    });
-
-    expect(result.legacyBlocked).toMatch(/op-9/);
   });
 });
 

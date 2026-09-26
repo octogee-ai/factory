@@ -63,7 +63,6 @@ env:
 # material no live gateway serving that Builder holds under its owner title.
 giteaGatewayKeyGc:
   mode: enforce
-  legacy: dry-run
 
 posthog:
   host: ""

@@ -1,4 +1,3 @@
-import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import {
   GATEWAY_KEY_TITLE,
   gatewayKeyOwnerId,
@@ -38,15 +37,12 @@ export interface GiteaKeyAdmin {
 
 export interface LiveKeyHolders {
   owners: ReadonlySet<string>;
-  ownersByUsername: ReadonlyMap<string, ReadonlySet<string>>;
-  legacyBlocked: string | null;
 }
 
 export interface GiteaGatewayKeyGcDeps {
   gitea: GiteaKeyAdmin;
   readLiveKeyHolders: () => Promise<LiveKeyHolders>;
   mode: GiteaGatewayKeyGcMode;
-  legacyMode: GiteaGatewayKeyGcMode;
   maxCallsPerTick: number;
   minCallIntervalMs: number;
   graceMs: number;
@@ -147,47 +143,27 @@ function censusLine(census: Omit<UserKeyCensus, "username">): string {
   return `managed=${census.managed} live=${census.live} legacy=${census.legacy} young=${census.young} stale=${census.stale} deleted=${census.deleted} legacyStale=${census.legacyStale} legacyDeleted=${census.legacyDeleted}`;
 }
 
-function modesLine(deps: GiteaGatewayKeyGcDeps): string {
-  return `(${deps.mode}, legacy ${deps.legacyMode})`;
+function modeLine(deps: GiteaGatewayKeyGcDeps): string {
+  return `(${deps.mode})`;
 }
 
-interface LegacyPlan {
-  deletable: GiteaPublicKeyRecord[];
-  blocked: string | null;
-}
-
-function missingHolderKeys(
-  username: string,
-  keys: readonly GiteaPublicKeyRecord[],
-  holders: LiveKeyHolders,
-): string[] {
-  const titles = new Set(keys.map((key) => key.title));
-  const required = holders.ownersByUsername.get(username) ?? new Set<string>();
-  return [...required].filter((owner) => !titles.has(gatewayKeyTitle(owner))).sort();
-}
-
-function planLegacyDeletion(
+function deletableLegacyKeys(
   username: string,
   keys: readonly GiteaPublicKeyRecord[],
   classes: ReadonlyMap<GiteaPublicKeyRecord, KeyClass>,
-  holders: LiveKeyHolders,
   cutoff: number,
-): LegacyPlan {
-  if (holders.legacyBlocked !== null) return { deletable: [], blocked: holders.legacyBlocked };
-  if (!username.startsWith(giteaUsername(""))) return { deletable: [], blocked: "not a Builder user" };
-  const missing = missingHolderKeys(username, keys, holders);
-  if (missing.length > 0) return { deletable: [], blocked: `live holders without an owner key: ${missing.join(",")}` };
+): GiteaPublicKeyRecord[] {
+  if (!username.startsWith(giteaUsername(""))) return [];
   const liveMaterial = new Set(
     keys.filter((key) => classes.get(key) === "live").map((key) => publicKeyIdentity(key.key)),
   );
-  const deletable = keys.filter(
+  return keys.filter(
     (key) =>
       classes.get(key) === "legacy" &&
       key.createdAt !== null &&
       key.createdAt <= cutoff &&
       !liveMaterial.has(publicKeyIdentity(key.key)),
   );
-  return { deletable, blocked: null };
 }
 
 async function deleteKeys(
@@ -204,10 +180,10 @@ async function deleteKeys(
   return deleted;
 }
 
-function shouldLogUser(deps: GiteaGatewayKeyGcDeps, census: UserKeyCensus, legacyBlocked: string | null): boolean {
+function shouldLogUser(deps: GiteaGatewayKeyGcDeps, census: UserKeyCensus): boolean {
   if (census.managed === 0) return false;
-  if (deps.mode === "dry-run" || deps.legacyMode === "dry-run") return true;
-  return census.stale > 0 || census.legacyStale > 0 || (census.legacy > 0 && legacyBlocked !== null);
+  if (deps.mode === "dry-run") return true;
+  return census.stale > 0 || census.legacyStale > 0;
 }
 
 async function sweepUser(
@@ -226,25 +202,21 @@ async function sweepUser(
     census.managed += 1;
     census[keyClass] += 1;
   }
-  const legacy = planLegacyDeletion(username, keys, classes, snapshot.holders, snapshot.cutoff);
-  census.legacyStale = legacy.deletable.length;
+  const legacy = deletableLegacyKeys(username, keys, classes, snapshot.cutoff);
+  census.legacyStale = legacy.length;
   if (deps.mode === "enforce") {
     census.deleted = await deleteKeys(deps, pacer, username, keys.filter((key) => classes.get(key) === "stale"));
+    if (census.deleted === census.stale) census.legacyDeleted = await deleteKeys(deps, pacer, username, legacy);
   }
-  const staleFinished = deps.mode === "dry-run" || census.deleted === census.stale;
-  if (staleFinished && deps.legacyMode === "enforce") {
-    census.legacyDeleted = await deleteKeys(deps, pacer, username, legacy.deletable);
-  }
-  const finished = staleFinished && (deps.legacyMode === "dry-run" || census.legacyDeleted === census.legacyStale);
-  if (shouldLogUser(deps, census, legacy.blocked)) {
-    const blocked = legacy.blocked !== null && census.legacy > 0 ? ` legacyBlocked="${legacy.blocked}"` : "";
-    deps.log(`[gitea-key-gc] ${username} ${censusLine(census)}${blocked} ${modesLine(deps)}`);
+  const finished = deps.mode === "dry-run" ||
+    (census.deleted === census.stale && census.legacyDeleted === census.legacyStale);
+  if (shouldLogUser(deps, census)) {
+    deps.log(`[gitea-key-gc] ${username} ${censusLine(census)} ${modeLine(deps)}`);
   }
   return { census, finished };
 }
 
 interface TickSnapshot {
-  holders: LiveKeyHolders;
   liveTitles: ReadonlySet<string>;
   cutoff: number;
 }
@@ -273,7 +245,6 @@ export async function runGiteaGatewayKeyGcTick(
   const snapshotAt = deps.now();
   const holders = await deps.readLiveKeyHolders();
   const snapshot: TickSnapshot = {
-    holders,
     liveTitles: new Set([...holders.owners].map((owner) => gatewayKeyTitle(owner))),
     cutoff: snapshotAt - deps.graceMs,
   };
@@ -294,7 +265,7 @@ export async function runGiteaGatewayKeyGcTick(
   const passCompleted = pass.next >= pass.usernames.length;
   if (passCompleted) {
     deps.log(
-      `[gitea-key-gc] pass complete users=${pass.usernames.length} ${censusLine(pass.totals)} ${modesLine(deps)}`,
+      `[gitea-key-gc] pass complete users=${pass.usernames.length} ${censusLine(pass.totals)} ${modeLine(deps)}`,
     );
     state.pass = null;
   }
@@ -307,8 +278,6 @@ interface OwnerSourceDoc {
 }
 
 export interface LiveGatewayOwnerSources {
-  users: readonly OwnerSourceDoc[];
-  runningMigrations: readonly OwnerSourceDoc[];
   gateways: readonly OwnerSourceDoc[];
   glmGateways: readonly OwnerSourceDoc[];
   readGatewayPodDiagnosticsBatch: (
@@ -360,81 +329,9 @@ async function readOwnersByGateway(sources: LiveGatewayOwnerSources): Promise<Ma
   return ownersByGateway;
 }
 
-function stringField(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
-}
-
-interface BuilderGateways {
-  gatewaysBySlug: Map<string, Set<string>>;
-  legacyBlocked: string | null;
-}
-
-type Place = (slug: string, gatewayId: string | null) => void;
-
-function placeAssignedBuilders(sources: LiveGatewayOwnerSources, place: Place): Map<string, string> {
-  const slugByUid = new Map<string, string>();
-  for (const doc of sources.users) {
-    const data = doc.data();
-    const slug = slugFromAssignedUser(data);
-    if (!slug) continue;
-    slugByUid.set(doc.id, slug);
-    const openclaw = (data?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined)?.openclaw;
-    place(slug, stringField(openclaw?.gatewayId));
-  }
-  for (const doc of [...sources.gateways, ...sources.glmGateways]) {
-    const data = doc.data();
-    const slug = stringField(data?.builderSlug);
-    if (slug) place(slug, stringField(data?.gatewayId) ?? doc.id);
-  }
-  return slugByUid;
-}
-
-function placeMigratingBuilders(
-  sources: LiveGatewayOwnerSources,
-  slugByUid: ReadonlyMap<string, string>,
-  place: Place,
-): string[] {
-  const unattributed: string[] = [];
-  for (const doc of sources.runningMigrations) {
-    const input = doc.data()?.input as { uid?: unknown; fromGatewayId?: unknown; toGatewayId?: unknown } | undefined;
-    const uid = stringField(input?.uid);
-    const slug = uid ? slugByUid.get(uid) : undefined;
-    if (!slug) {
-      unattributed.push(doc.id);
-      continue;
-    }
-    place(slug, stringField(input?.fromGatewayId));
-    place(slug, stringField(input?.toGatewayId));
-  }
-  return unattributed.sort();
-}
-
-function builderGateways(sources: LiveGatewayOwnerSources): BuilderGateways {
-  const gatewaysBySlug = new Map<string, Set<string>>();
-  const place: Place = (slug, gatewayId) => {
-    if (!gatewayId) return;
-    const gateways = gatewaysBySlug.get(slug) ?? new Set<string>();
-    gateways.add(gatewayId);
-    gatewaysBySlug.set(slug, gateways);
-  };
-  const slugByUid = placeAssignedBuilders(sources, place);
-  const unattributed = placeMigratingBuilders(sources, slugByUid, place);
-  const legacyBlocked = unattributed.length > 0
-    ? `running migrations name no known Builder: ${unattributed.join(",")}`
-    : null;
-  return { gatewaysBySlug, legacyBlocked };
-}
-
 export async function readLiveGatewayKeyHolders(sources: LiveGatewayOwnerSources): Promise<LiveKeyHolders> {
   const ownersByGateway = await readOwnersByGateway(sources);
-  const owners = new Set([...ownersByGateway.values()].flatMap((held) => [...held]));
-  const { gatewaysBySlug, legacyBlocked } = builderGateways(sources);
-  const ownersByUsername = new Map<string, Set<string>>();
-  for (const [slug, gatewayIds] of gatewaysBySlug) {
-    const held = [...gatewayIds].flatMap((gatewayId) => [...(ownersByGateway.get(gatewayId) ?? [])]);
-    if (held.length > 0) ownersByUsername.set(giteaUsername(slug), new Set(held));
-  }
-  return { owners, ownersByUsername, legacyBlocked };
+  return { owners: new Set([...ownersByGateway.values()].flatMap((held) => [...held])) };
 }
 
 export interface GiteaKeyAdminClientDeps {

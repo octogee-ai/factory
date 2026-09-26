@@ -2257,9 +2257,9 @@ interface ControllerBackgroundTasksDeps {
 }
 
 const GITEA_GATEWAY_KEY_GC_INTERVAL_MS = 60_000;
-const GITEA_GATEWAY_KEY_GC_MAX_CALLS_PER_TICK = 120;
-const GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS = 250;
-const GITEA_GATEWAY_KEY_GC_GRACE_MS = 60 * 60 * 1000;
+const GITEA_GATEWAY_KEY_GC_MAX_CALLS_PER_TICK = 480;
+const GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS = 100;
+const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 
 function startControllerBackgroundTasks({
   db,
@@ -2326,18 +2326,11 @@ function startControllerBackgroundTasks({
       token: requireEnv("GIT_API_TOKEN", "the Gitea gateway key sweep requires it"),
     }),
     readLiveKeyHolders: async () => {
-      const [gateways, glmGateways, users, runningMigrations] = await Promise.all([
+      const [gateways, glmGateways] = await Promise.all([
         mirroredOrScan(informer.gateways(), () => db.collection(GATEWAYS_COLLECTION).get()),
         mirroredOrScan(informer.glmGateways(), () => db.collection(GLM_GATEWAYS_COLLECTION).get()),
-        mirroredOrScan(informer.users(), () => db.collection("users").get()),
-        db.collection(GLM_OPERATIONS_COLLECTION)
-          .where("kind", "==", "migrate-customer")
-          .where("status", "==", "running")
-          .get(),
       ]);
       return readLiveGatewayKeyHolders({
-        users,
-        runningMigrations: runningMigrations.docs,
         gateways,
         glmGateways,
         readGatewayPodDiagnosticsBatch: (gatewayIds) =>
@@ -2345,10 +2338,6 @@ function startControllerBackgroundTasks({
       });
     },
     mode: parseGiteaGatewayKeyGcMode(process.env.GITEA_GATEWAY_KEY_GC_MODE),
-    legacyMode: parseGiteaGatewayKeyGcMode(
-      process.env.GITEA_GATEWAY_KEY_GC_LEGACY_MODE,
-      "GITEA_GATEWAY_KEY_GC_LEGACY_MODE",
-    ),
     maxCallsPerTick: GITEA_GATEWAY_KEY_GC_MAX_CALLS_PER_TICK,
     minCallIntervalMs: GITEA_GATEWAY_KEY_GC_MIN_CALL_INTERVAL_MS,
     graceMs: GITEA_GATEWAY_KEY_GC_GRACE_MS,

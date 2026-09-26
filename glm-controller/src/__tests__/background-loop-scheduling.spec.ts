@@ -30,7 +30,7 @@ const loops: Array<[string, Start]> = [
   ["gitea gateway key gc", (work, log) => startGiteaGatewayKeyGc({
     gitea: { listUsernames: vi.fn(), listUserKeys: vi.fn(), deleteUserKey: vi.fn() },
     readLiveKeyHolders: vi.fn(),
-    mode: "enforce", legacyMode: "dry-run", maxCallsPerTick: 1, minCallIntervalMs: 0, graceMs: 0,
+    mode: "enforce", maxCallsPerTick: 1, minCallIntervalMs: 0, graceMs: 0,
     now: Date.now, sleep: async () => {}, intervalMs: 100, log,
     runTick: async () => { await work(); return { users: [], passCompleted: true, calls: 0 }; },
   })],
