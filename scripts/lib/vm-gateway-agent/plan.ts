@@ -99,6 +99,7 @@ export function planContainer(
     ...(container.args ? { Cmd: container.args } : {}),
     HostConfig: {
       NetworkMode: "host",
+      ...(role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER ? { PidMode: "host" } : {}),
       Binds: [
         ...bindsFor(bundle, container, ctx),
         ...(role === "service" && container.name === "gateway" ? ["/home/octo/Documents:/home/octo/Documents"] : []),

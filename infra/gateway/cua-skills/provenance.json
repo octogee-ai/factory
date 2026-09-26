@@ -1,0 +1,26 @@
+{
+  "driverVersion": "0.28.2",
+  "skills": {
+    "cua-driver": {
+      "repository": "https://github.com/trycua/cua",
+      "commit": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
+      "path": "libs/cua-driver/rust/Skills/cua-driver",
+      "version": "0.28.2",
+      "adaptedFrom": {
+        "SKILL.md": "a6ca1717f88a1d95e302f82f953ac4887d4ad7478290a73d36062e3ce479f0fe",
+        "LINUX.md": "4d096f19eab5c56f0231bed98e2048abc09f969a92e70311be9e1f5ecc5209e0"
+      },
+      "files": ["SKILL.md"]
+    },
+    "cua-omarchy": {
+      "repository": "https://github.com/omacom/omarchy",
+      "commit": "94e97055daca90bfe4248f7a419648ed71f97c49",
+      "pullRequest": "https://github.com/omacom/omarchy/pull/11342",
+      "path": "default/agents/optional-skills/cua-omarchy",
+      "adaptedFrom": {
+        "SKILL.md": "23d635cad67c56be98f573fec39508ad9543027ca4042f8b4a0e7b713c7f796b"
+      },
+      "files": ["SKILL.md"]
+    }
+  }
+}

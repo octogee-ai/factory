@@ -73,7 +73,7 @@ RUN set -eux; \
     printf '#!/bin/sh\nexit 0\n' > /tmp/shims/udevadm; \
     chmod 0755 /tmp/shims/modprobe /tmp/shims/udevadm; \
     PATH="/tmp/shims:${PATH}" pacman -Syu --noconfirm --needed \
-      bash ca-certificates curl dbus git glib2 sudo shadow util-linux procps-ng \
+      at-spi2-core bash ca-certificates curl dbusgit glib2 sudo shadow util-linux procps-ng \
       iproute2 jq python systemd polkit pambase libinput xdg-desktop-portal \
       libglvnd mesa mesa-utils vulkan-icd-loader; \
     rm -rf /tmp/shims

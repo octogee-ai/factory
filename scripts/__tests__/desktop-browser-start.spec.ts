@@ -61,6 +61,10 @@ describe('desktop Chromium startup', () => {
     ]));
   });
 
+  it.each([[[]], [['--new-tab', 'https://example.com']]])('always exposes the renderer accessibility tree (args %j)', (args) => {
+    expect(fixture().launch(args)).toContain('--force-renderer-accessibility');
+  });
+
   it('restores a saved session without adding another homepage tab', () => {
     const state = fixture();
     writeFileSync(join(state.sessions, 'Session_123'), 'saved session');

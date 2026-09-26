@@ -114,6 +114,8 @@ grow_root="$(vssh 'systemctl show octo-grow-root.service --property=Result --val
 wait_desktop
 t_desktop=$(date +%s)
 vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
+accessibility="$(vssh 'bash -s' < "$HERE/../acceptance/accessibility-bus.sh")" \
+  || { echo "desktop accessibility bus does not serve Chromium" >&2; exit 1; }
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
 chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
@@ -152,6 +154,7 @@ cat <<RESULT
 | Root filesystem growth (octo-grow-root) | ${grow_root} |
 | Desktop service restarts needed | 0 |
 | Chromium window | "${chromium_title}" |
+| Accessibility bus | ${accessibility} |
 | Resize + screenshot + XWayland geometry | 800x600, 1024x768, restored 1440x900 |
 | Screenshot size | ${screenshot_size} (expected ${RESOLUTION}) |
 | Home survives stop/start | ${persist} |

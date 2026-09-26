@@ -58,7 +58,8 @@ verifies every installed Octogee service executable with `systemd-analyze`,
 checks the modules, all five services (including the registration agent), and
 the root-growth oneshot's result,
 waits for the desktop to report a Chromium
-client on the loopback control API, takes a screenshot, drives a navigation
+client on the loopback control API, requires Chromium on the AT-SPI registry
+(`acceptance/accessibility-bus.sh`), takes a screenshot, drives a navigation
 and verifies it through the window title, optionally stops and starts the VM
 to prove the home persists, prints a results block, and deletes the VM.
 Missing modules, non-executable service commands, inactive services, a compositor that needed a service restart,
@@ -75,7 +76,7 @@ and take over the desktop.
 | `octo-grow-root.service` | oneshot before Docker and the agent: grows the root partition (`sfdisk` + `partx`) and the btrfs filesystem to fill the boot disk, so `gcloud compute disks resize` plus a reboot recovers a full computer; a no-op when the partition already fills the disk |
 | `octo-seatd.service` | seatd unbound from a VT, so the compositor gets a seat with no console |
 | `user-runtime-dir@1000.service` | creates the desktop user's runtime mount before compositor sockets; user linger keeps it alive without an SSH session |
-| `octo-desktop.service` | as `octo`: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium; everything bound to 127.0.0.1 |
+| `octo-desktop.service` | as `octo`, on the user manager's session bus `/run/user/1000/bus` with AT-SPI running: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium with its accessibility tree exposed; everything bound to 127.0.0.1 |
 | `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
 | `octo-metadata-ssh-keys.service` | installs `octo:` keys from GCE metadata before sshd |
 | `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set (a warm-pool member boots without them and is assigned later through `setMetadata`), then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket |

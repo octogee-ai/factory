@@ -26,6 +26,7 @@ describe("computer browser runtime", () => {
     expect(config.gateway.nodes.browser).toEqual({ mode: "off" });
     expect(config.gateway.nodes.commands.allow).toContain("desktop.stream");
     expect(config.tools.alsoAllow).toEqual(expect.arrayContaining(["browser", "computer"]));
+    expect(config.skills.load.extraDirs).toEqual(["/opt/octogee/skills/computer"]);
     expect(config.gateway.nodes.commands.deny).toEqual(expect.arrayContaining(["system.run", "terminal.upload", "browser.proxy"]));
     expect(config.gateway.nodes.commands.deny).not.toEqual(expect.arrayContaining(["computer.act", "screen.snapshot"]));
     expect(config.agents.list[0]).not.toHaveProperty("tools");
@@ -125,7 +126,9 @@ describe("computer browser runtime", () => {
     config.browser.profiles = { custom: { cdpUrl: "http://127.0.0.1:9444", attachOnly: true } };
     config.tools.deny = ["browser"];
     config.agents.list = [{ id: "octogee-owner-proj-site-coach", tools: { deny: ["computer", "browser"] } }];
+    config.skills = { load: { extraDirs: ["/home/node/builder-skills"] } };
     applyOpenClawComputerBrowserConfig(config, vmEnv);
+    expect(config.skills.load.extraDirs).toEqual(["/home/node/builder-skills", "/opt/octogee/skills/computer"]);
     expect(config.browser.profiles.custom).toEqual({ cdpUrl: "http://127.0.0.1:9444", attachOnly: true });
     expect(config.tools.deny).toEqual(["browser"]);
     expect(config.agents.list[0].tools.deny).toEqual(["computer", "browser"]);

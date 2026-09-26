@@ -9,6 +9,10 @@ if ! command -v wtype >/dev/null 2>&1; then
   echo "desktop-node: wtype is required for CUA Wayland keyboard input" >&2
   exit 1
 fi
+if ! command -v dbus-send >/dev/null 2>&1; then
+  echo "desktop-node: dbus-send is required to reach the desktop's accessibility bus" >&2
+  exit 1
+fi
 
 export HOME="${HOME:-/home/node}"
 state="$HOME/.openclaw"
@@ -41,7 +45,12 @@ export DISPLAY="${DISPLAY:-:0}"
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=Hyprland
 export CUA_DRIVER_RS_ENABLE_WAYLAND=1
-export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/octogee-desktop-node-has-no-session-bus
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+
+until dbus-send --session --print-reply --reply-timeout=5000 --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress >/dev/null; do
+  echo "desktop-node: waiting for the accessibility bus (org.a11y.Bus) on $DBUS_SESSION_BUS_ADDRESS"
+  sleep 2
+done
 
 until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
   echo "desktop-node: waiting for the gateway on 127.0.0.1:18789"

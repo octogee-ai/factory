@@ -390,6 +390,31 @@ the modifier/launcher checks. An upstream merge alone does not update an
 installed npm package. Until then, a driver version change deliberately fails
 the image build and requires reassessing this backport.
 
+## Vendored computer-use skills
+
+`infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
+0.28.2 skill pack
+([`fc188250`](https://github.com/trycua/cua/tree/fc188250b4ca8549b8e61f937fdb1fb560770e86/libs/cua-driver/rust/Skills/cua-driver))
+and the `cua-omarchy` companion from Omarchy
+[PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
+`provenance.json` records each repository, commit, and the SHA-256 of every
+upstream file the adaptation came from. The runtime image installs them to
+`/opt/octogee/skills/computer` with `install-cua-skills.mjs`, which refuses a
+driver version other than the installed native package and patch, an unpinned
+source, a skill version drift, or any file not listed in provenance. Nothing is
+fetched at build or run time; `cua-driver skills install` is never used.
+
+The adaptation keeps the loop, targeting, delivery, verification, and refusal
+guidance and maps it onto the `computer` tool. It drops the standalone CLI and
+MCP transport, the install, self-update, and `skills install --from main`
+instructions, permission profiles and approval-bypass flags, cursor overlay,
+recording, embedding, macOS, Windows, and Omarchy package and plugin
+management. CUA's browser guide is replaced by the `browser` tool.
+
+When the driver version changes, the build fails until the skills are
+re-adapted: diff the upstream files at the new release against the recorded
+digests, carry forward what applies, and update `provenance.json`.
+
 ## What the packers do
 
 `pack-fork-tarball.sh` produces an installable root package. It runs upstream's

@@ -74,6 +74,29 @@ if [[ "$title_after" != *"$expected_title"* ]]; then
   echo "native computer acceptance failed: Chromium did not navigate through computer.act"
   exit 1
 fi
+
+echo "native computer acceptance: accessibility tree"
+act_payload() { act "$1" | jq -c '(.payload // (.payloadJSON | fromjson))'; }
+desktop_tree="$(act_payload '{"action":"get_accessibility_tree"}')"
+if ! jq -e --arg title "$expected_title" '.details.windows | any((.title // "") | contains($title))' <<< "$desktop_tree" >/dev/null; then
+  echo "native computer acceptance failed: get_accessibility_tree does not list the Chromium window"
+  printf '%s\n' "$desktop_tree"
+  exit 1
+fi
+window_ref="$(act_payload '{"action":"list_windows"}' \
+  | jq -r --arg title "$expected_title" '[.details.windows[] | select((.title // "") | contains($title))][0].windowRef // empty')"
+if [ -z "$window_ref" ]; then
+  echo "native computer acceptance failed: list_windows has no Chromium window titled $expected_title"
+  exit 1
+fi
+window_tree="$(act_payload "$(jq -cn --arg ref "$window_ref" '{action: "get_window_state", windowRef: $ref, includeScreenshot: false}')")"
+if ! jq -e '(.details.degraded // false) == false and ((.observation.elements // []) | length) > 0' <<< "$window_tree" >/dev/null; then
+  echo "native computer acceptance failed: the Chromium window has no accessibility elements"
+  printf '%s\n' "$window_tree"
+  exit 1
+fi
+printf 'accessibility elements=%s\n' "$(jq '.observation.elements | length' <<< "$window_tree")"
+
 echo "native computer acceptance: pointer input"
 pointer="$(oc nodes invoke --node "$node_id" --command screen.snapshot --invoke-timeout 30000 \
   --params "$(jq -cn --arg id "$execution_id" '{executionId: $id}')" \

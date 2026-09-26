@@ -133,7 +133,7 @@ describe("planBundle", () => {
     expect(desktopBinds(planContainer(bundle, bundle.containers[0], ctx, "init").config)).toEqual([]);
   });
 
-  it("gives only the desktop node the desktop's Wayland and XWayland sockets", () => {
+  it("gives only the desktop node the desktop's Wayland and XWayland sockets and the host PID namespace", () => {
     const bundle = bundleFixture();
     bundle.containers.push({
       name: "desktop-node",
@@ -150,8 +150,12 @@ describe("planBundle", () => {
     expect(plan.services[2].config).toMatchObject({
       User: "1000:1000",
       Entrypoint: ["/usr/local/bin/octogee-desktop-node"],
-      HostConfig: { NetworkMode: "host", RestartPolicy: { Name: "unless-stopped" } },
+      HostConfig: { NetworkMode: "host", PidMode: "host", RestartPolicy: { Name: "unless-stopped" } },
     });
+    const pidMode = (index: number) => (plan.services[index].config.HostConfig as { PidMode?: string }).PidMode;
+    expect(pidMode(0)).toBeUndefined();
+    expect(pidMode(1)).toBeUndefined();
+    expect((plan.init!.config.HostConfig as { PidMode?: string }).PidMode).toBeUndefined();
     expect(binds(2)).toEqual([
       "/srv/octogee/volumes/desktop-node-state:/home/node/.openclaw",
       "/run/user/1000:/run/user/1000",

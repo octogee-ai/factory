@@ -38,8 +38,8 @@
       "id": "computer",
       "enabled": true,
       "delivery": "base",
-      "debianPackages": ["wtype"],
-      "commands": ["wtype"]
+      "debianPackages": ["dbus-bin", "wtype"],
+      "commands": ["dbus-send", "wtype"]
     },
     {
       "id": "web-development",

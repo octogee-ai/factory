@@ -174,7 +174,9 @@ touching the desktop.
 it authenticates to the co-located gateway as a local-direct operator, checks that
 the `octogee-desktop` node is connected and paired with `computer.act` and
 `screen.snapshot`, takes a snapshot, then types a URL into Chromium with
-`computer.act` and waits for the window title to change. Run it inside the
+`computer.act` and waits for the window title to change. It then requires the
+Chromium window in `get_accessibility_tree` and accessibility elements from
+`get_window_state` before it drives the pointer. Run it inside the
 Builder VM's gateway container:
 
 ```bash
@@ -206,9 +208,11 @@ coach's built-in `computer` tool.
 - Hyprland 0.56 with its mandatory headless Aquamarine backend; no `/dev/dri`,
   rendering is llvmpipe with animations, blur and shadows off.
 - No systemd. The entrypoint starts `seatd` unbound from a VT (aquamarine
-  opens a libseat session even when only the headless backend will be used),
-  then the session is `dbus-run-session` → Hyprland → wayvnc, noVNC, control
-  API, Chromium. A `uwsm` shim runs Omarchy's autostart apps directly.
+  opens a libseat session even when only the headless backend will be used)
+  and a session `dbus-daemon` at `/run/user/1000/bus`, standing in for the
+  VM's user manager. The session then checks the accessibility bus and runs
+  Hyprland → wayvnc, noVNC, control API, Chromium. A `uwsm` shim runs
+  Omarchy's autostart apps directly.
 - `wlrctl` is built from source (not packaged); noVNC is a pinned release.
 - Home is seeded from `/opt/octo-home-seed` on first start into the `octo-home`
   named volume, so browser sessions survive `docker compose down`;

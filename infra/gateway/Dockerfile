@@ -151,6 +151,12 @@ RUN chmod 1777 /tmp \
     && apt-get update && apt-get install -y --no-install-recommends gettext-base libx11-6 libxi6 libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Computer-use skills (loaded only by VM Builder gateways) ────────────────
+COPY infra/gateway/cua-skills /tmp/cua-skills
+COPY infra/gateway/install-cua-skills.mjs /tmp/install-cua-skills.mjs
+RUN node /tmp/install-cua-skills.mjs "$(npm root -g)/openclaw" /tmp/cua-skills /opt/octogee/skills/computer \
+    && rm -rf /tmp/cua-skills /tmp/install-cua-skills.mjs
+
 # ── Entrypoint + config templates ──────────────────────────────────────────
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
 COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/infra/gateway/openclaw.builder.template.json

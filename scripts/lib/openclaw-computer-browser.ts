@@ -24,6 +24,7 @@ function stringList(parent: JsonObject, key: string): string[] {
 
 export const DESKTOP_TOOLS = ["browser", "computer"] as const;
 export const GATEWAY_HOST_DESKTOP_AUTH_DIR = "/run/octogee-desktop-vnc";
+export const COMPUTER_SKILLS_DIR = "/opt/octogee/skills/computer";
 export const DESKTOP_NODE_DENIED_COMMANDS = [
   "system.run",
   "system.run.prepare",
@@ -95,6 +96,8 @@ export function applyOpenClawComputerBrowserConfig(
   objectAt(objectAt(plugins, "entries"), "browser").enabled = true;
   const tools = objectAt(config, "tools");
   tools.alsoAllow = [...new Set([...stringList(tools, "alsoAllow"), ...DESKTOP_TOOLS])];
+  const skillLoad = objectAt(objectAt(config, "skills"), "load");
+  skillLoad.extraDirs = [...new Set([...stringList(skillLoad, "extraDirs"), COMPUTER_SKILLS_DIR])];
   const nodes = objectAt(objectAt(config, "gateway"), "nodes");
   nodes.browser = { mode: "off" };
   const commands = objectAt(nodes, "commands");

@@ -35,6 +35,7 @@ for _ in $(seq 1 50); do
 done
 [[ -S /run/seatd.sock ]] || { echo "ERROR: seatd did not create /run/seatd.sock" >&2; exit 1; }
 
+runuser -u octo -- dbus-daemon --session --address="unix:path=${runtime}/bus" --nofork --nopidfile &
 runuser -u octo -- /usr/local/bin/octo-desktop-session &
 session_pid=$!
 stop_session() {

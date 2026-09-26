@@ -51,7 +51,7 @@ describe("Builder tool groups", () => {
       manifest.groups.flatMap((group) => group.debianPackages ?? []),
     );
     expect(debianPackages).toEqual(new Set([
-      "bash-completion", "bc", "build-essential", "cloc", "cmake", "dnsutils",
+      "bash-completion", "bc", "build-essential", "cloc", "cmake", "dbus-bin", "dnsutils",
       "fd-find", "ffmpeg", "file", "fonts-liberation", "fonts-noto-color-emoji",
       "fzf", "git-lfs", "htop", "imagemagick", "iproute2", "iputils-ping", "less", "lsof",
       "make", "nano", "net-tools", "netcat-openbsd", "pandoc", "pipx", "pkg-config",

@@ -27,7 +27,12 @@ elif name == 'scp':
     pathlib.Path(args[-1]).write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * 8 + struct.pack('>II', 1440, 900))
 elif name == 'ssh':
     command = args[-1]
-    if command == 'python3 -':
+    if command == 'bash -s':
+        if case == 'no-accessibility':
+            print('Chromium never registered on the accessibility bus', file=sys.stderr)
+            sys.exit(1)
+        print('accessibility bus unix:path=/run/user/1000/at-spi/bus_0 serves: Chromium')
+    elif command == 'python3 -':
         if case == 'missing-resize': sys.exit(22)
         if case == 'resize-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists(): sys.exit(22)
         print('display resize verified: 1440x900')
@@ -79,6 +84,12 @@ class ImageAcceptanceTests(unittest.TestCase):
         result = self.run_acceptance('success')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Home survives stop/start | yes', result.stdout)
+        self.assertIn('| Accessibility bus | accessibility bus unix:path=/run/user/1000/at-spi/bus_0 serves: Chromium |', result.stdout)
+
+    def test_desktop_without_chromium_on_the_accessibility_bus_fails_acceptance(self):
+        result = self.run_acceptance('no-accessibility')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('desktop accessibility bus does not serve Chromium', result.stderr)
 
     def test_ci_vm_has_independent_cloud_deletion_deadline(self):
         result = self.run_acceptance('success', ci=True)
