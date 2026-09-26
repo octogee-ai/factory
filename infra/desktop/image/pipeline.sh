@@ -5,7 +5,8 @@ OMARCHY_VERSION="${OMARCHY_VERSION:?}"
 OMARCHY_ISO_SHA256="${OMARCHY_ISO_SHA256:?}"
 IMAGE_NAME="${IMAGE_NAME:?}"
 IMAGE_BUCKET="${IMAGE_BUCKET:?}"
-DISK_GB="${DISK_GB:-40}"
+IMAGE_DEVICE="${IMAGE_DEVICE:?}"
+DISK_GB="${DISK_GB:?}"
 VM_MEM_MB="${VM_MEM_MB:-8192}"
 VM_CPUS="${VM_CPUS:-4}"
 SSH_PORT=2222
@@ -13,7 +14,6 @@ SSH_PORT=2222
 WORK="$HOME/image-build"
 PAYLOAD="$HOME/image-payload"
 ISO="$WORK/omarchy-${OMARCHY_VERSION}.iso"
-DISK="$WORK/disk.raw"
 OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
 OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 OVMF_VARS="$WORK/OVMF_VARS.fd"
@@ -38,6 +38,15 @@ capture_failure_evidence() {
       log "could not upload failure evidence $WORK/$file"
     fi
   done
+}
+is_block_device() { [[ -b "$1" ]]; }
+prepare_image_disk() {
+  is_block_device "$IMAGE_DEVICE" || die "image disk $IMAGE_DEVICE is not attached"
+  DISK="$(readlink -f "$IMAGE_DEVICE")"
+  local bytes
+  bytes="$(sudo blockdev --getsize64 "$DISK")"
+  (( bytes == DISK_GB * 1024 * 1024 * 1024 )) || die "image disk $DISK is $bytes bytes; expected $DISK_GB GiB"
+  sudo chown "$(id -u)" "$DISK"
 }
 guest_ssh() {
   ssh -i "$BUILD_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -84,9 +93,11 @@ trap qemu_stop EXIT
 
 log "deps"
 sudo apt-get update -qq >/dev/null
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq qemu-system-x86 qemu-utils ovmf genisoimage jq socat >/dev/null
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq qemu-system-x86 ovmf genisoimage jq socat >/dev/null
 [[ -c /dev/kvm ]] || die "/dev/kvm missing; the builder must have nested virtualization enabled"
 [[ -r /dev/kvm && -w /dev/kvm ]] || sudo chmod 0666 /dev/kvm
+
+prepare_image_disk
 
 log "iso ${OMARCHY_VERSION}"
 if [[ ! -f "$ISO" ]] || ! printf '%s  %s\n' "$OMARCHY_ISO_SHA256" "$ISO" | sha256sum -c --quiet - 2>/dev/null; then
@@ -111,15 +122,14 @@ printf 'computer@octogee.com\n' > "$cidata/user_email_address.txt"
 genisoimage -quiet -output "$WORK/cidata.iso" -volid cidata -joliet -rock "$cidata/"
 
 log "unattended install"
-rm -f "$DISK" "$OVMF_VARS" "$WORK/serial.log" "$WORK/screen.ppm" "$MONITOR"
-qemu-img create -q -f raw "$DISK" "${DISK_GB}G"
+rm -f "$OVMF_VARS" "$WORK/serial.log" "$WORK/screen.ppm" "$MONITOR"
 cp "$OVMF_VARS_SRC" "$OVMF_VARS"
 guest_started=1
 qemu-system-x86_64 \
   -cpu host -enable-kvm -machine q35,accel=kvm -smp "$VM_CPUS" -m "$VM_MEM_MB" \
   -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
   -drive "if=pflash,format=raw,file=$OVMF_VARS" \
-  -drive "file=$DISK,format=raw,if=none,id=drive0" -device virtio-blk-pci,drive=drive0,bootindex=1 \
+  -drive "file=$DISK,format=raw,cache=none,if=none,id=drive0" -device virtio-blk-pci,drive=drive0,bootindex=1 \
   -drive "file=$ISO,media=cdrom,if=none,format=raw,id=cdrom0" -device ide-cd,drive=cdrom0,bus=ide.0,bootindex=2 \
   -drive "file=$WORK/cidata.iso,media=cdrom,if=none,format=raw,id=cdrom1" -device ide-cd,drive=cdrom1,bus=ide.1 \
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22" -device virtio-net-pci,netdev=net0 \
@@ -145,11 +155,7 @@ log "seal"
 guest_ssh 'sudo -n bash -c "rm -f /home/octo/.ssh/authorized_keys /root/.ssh/authorized_keys; rm -rf /tmp/customize /tmp/customize-payload.tgz; sync; systemctl --no-block poweroff"' >/dev/null 2>&1 || true
 wait_guest_down || die "guest did not power off"
 rm -f "$PIDFILE"
+sudo blockdev --flushbufs "$DISK"
 
-log "package"
-tar -C "$WORK" --sparse -czf "$WORK/${IMAGE_NAME}.tar.gz" disk.raw
-ls -la "$WORK/${IMAGE_NAME}.tar.gz"
-log "upload"
-gcloud -q storage cp "$WORK/${IMAGE_NAME}.tar.gz" "${IMAGE_BUCKET}/images/${IMAGE_NAME}.tar.gz"
 gcloud -q storage cp "$WORK/serial.log" "${IMAGE_BUCKET}/images/${IMAGE_NAME}.serial.log"
-log "PIPELINE_DONE ${IMAGE_BUCKET}/images/${IMAGE_NAME}.tar.gz"
+log "PIPELINE_DONE ${IMAGE_NAME} on ${IMAGE_DEVICE}"

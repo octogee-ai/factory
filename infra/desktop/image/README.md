@@ -16,25 +16,29 @@ metadata-driven SSH key installer. Spec:
 infra/desktop/image/build.sh --project octogee-test
 ```
 
-1. Creates a nested-virt builder VM (`n2-standard-8`, Debian 12) and uploads
-   the payload: `pipeline.sh`, `customize.sh`, the `cidata` template, the
+1. Creates a nested-virt builder VM (`n2-standard-8`, Debian 12) with a second
+   40 GB pd-ssd (`<builder>-image`, auto-deleted with the builder) that will
+   become the image, and uploads the payload: `pipeline.sh`, `customize.sh`, the `cidata` template, the
    guest overlay in `rootfs/`, and the shared session scripts from
    `../rootfs`.
 2. `pipeline.sh` (on the builder) downloads the ISO, verifies it against the
    checksum pinned in `build.sh`, renders the `cidata` drive (archinstall
    layout for `/dev/vda`, a throwaway build password, a one-build SSH key),
-   and runs Omarchy's unattended install in QEMU/KVM.
+   and runs Omarchy's unattended install in QEMU/KVM directly onto the
+   attached image disk.
 3. `customize.sh` (inside the guest, as root) installs the session packages,
    builds `wlrctl`, installs pinned noVNC and websockify, copies the overlay
    and session scripts, enables the units, sets Limine's timeout to zero,
    cleans the kernel command line, resets the machine identity and SSH host
    keys, and records the image name in `/etc/octogee-computer-image`.
-4. The build key is removed, the guest powers off, the raw disk is packaged as
-   `disk.raw` in a sparse tarball and uploaded to
-   `gs://<project>-octogee-computer-images/images/`.
-5. `gcloud compute images create` registers it as
+4. The build key is removed and the guest powers off. The serial log goes to
+   `gs://<project>-octogee-computer-images/images/`, as does failure evidence
+   (serial log, screen) when the install fails.
+5. `build.sh` stops the builder and `gcloud compute images create
+   --source-disk` registers the image disk as
    `octogee-computer-<omarchy>-<stamp>` in family `octogee-computer` with
-   `UEFI_COMPATIBLE`.
+   `UEFI_COMPATIBLE`. Deleting the builder deletes the image disk, on success
+   and on failure.
 
 The image carries no credentials: no password login, no authorized keys, no
 SSH host keys. `octo-metadata-ssh-keys.service` reconciles keys for `octo` from

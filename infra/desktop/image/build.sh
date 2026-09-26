@@ -15,6 +15,8 @@ CANDIDATE=0
 REQUESTED_IMAGE_NAME=""
 SERVICE_ACCOUNT=""
 FAMILY="octogee-computer"
+IMAGE_DISK_GB=40
+IMAGE_DEVICE_NAME="octogee-image"
 
 iso_sha256_for() {
   case "$1" in
@@ -31,9 +33,10 @@ usage: $0 --project <gcp-project> [--zone $ZONE] [--fallback-zones <zone,zone>] 
 
 Builds the Octogee computer image (Omarchy + the desktop session + Docker) from
 the pinned Omarchy ISO with an unattended install inside a nested-virt GCE
-builder VM, uploads the raw disk tarball, and registers it as a GCE image in
-family "$FAMILY". --candidate leaves the image outside the family for acceptance
-testing before publication. Prints the image name on success.
+builder VM onto a persistent disk attached to the builder, and registers that
+disk as a GCE image in family "$FAMILY". --candidate leaves the image outside
+the family for acceptance testing before publication. Prints the image name on
+success.
 EOF
 }
 
@@ -57,6 +60,7 @@ done
 ISO_SHA256="$(iso_sha256_for "$OMARCHY_VERSION")"
 [[ -n "$ISO_SHA256" ]] || { echo "no pinned checksum for Omarchy $OMARCHY_VERSION; add it to iso_sha256_for" >&2; exit 2; }
 BUCKET="${BUCKET:-gs://${PROJECT}-octogee-computer-images}"
+IMAGE_DISK="${BUILDER}-image"
 SOURCE_SHA="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 IMAGE_NAME="${REQUESTED_IMAGE_NAME:-octogee-computer-${OMARCHY_VERSION//./-}-$(date -u +%Y%m%d-%H%M)}"
 [[ "$IMAGE_NAME" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "invalid image name" >&2; exit 2; }
@@ -89,7 +93,7 @@ cleanup() {
   fi
 }
 
-log "image ${IMAGE_NAME} (omarchy ${OMARCHY_VERSION}, source ${SOURCE_SHA}) -> ${BUCKET}"
+log "image ${IMAGE_NAME} (omarchy ${OMARCHY_VERSION}, source ${SOURCE_SHA}) via ${IMAGE_DISK}"
 if ! gcloud -q storage ls "$BUCKET" >/dev/null 2>&1; then
   gcloud -q storage buckets create "$BUCKET" --project "$PROJECT" --location "${ZONE%-*}" --uniform-bucket-level-access >/dev/null
   log "created ${BUCKET}"
@@ -109,9 +113,12 @@ if ! gcloud compute instances describe "$BUILDER" --zone "$ZONE" --project "$PRO
     --machine-type n2-standard-8 --enable-nested-virtualization \
     --image-family debian-12 --image-project debian-cloud \
     --boot-disk-size 150GB --boot-disk-type pd-ssd \
+    --create-disk "name=${IMAGE_DISK},device-name=${IMAGE_DEVICE_NAME},size=${IMAGE_DISK_GB}GB,type=pd-ssd,auto-delete=yes" \
     --scopes storage-rw,logging-write \
     --labels "purpose=octogee-computer-image-build,octogee-image-run=${run_label}" \
     --metadata enable-oslogin=false --metadata-from-file "ssh-keys=$payload/ssh-keys" ${service_account_args[@]+"${service_account_args[@]}"} ${ci_lifetime_args[@]+"${ci_lifetime_args[@]}"}
+else
+  gcloud compute instances start "$BUILDER" --zone "$ZONE" --project "$PROJECT" --quiet
 fi
 trap 'cleanup; rm -rf "$payload" "$payload.tgz"' EXIT
 for _ in $(seq 1 30); do gssh true && break; sleep 6; done
@@ -119,7 +126,7 @@ gssh true || { echo "builder never answered ssh" >&2; exit 1; }
 
 gcloud compute scp --zone "$ZONE" --project "$PROJECT" --quiet --ssh-key-file "$SSH_KEY" "$payload.tgz" "imagebuilder@$BUILDER:~/image-payload.tgz" 2>/dev/null
 gssh "rm -rf ~/image-payload && mkdir -p ~/image-payload && tar -C ~/image-payload -xzf ~/image-payload.tgz && chmod +x ~/image-payload/*.sh"
-gssh "rm -f ~/pipeline.log; nohup env OMARCHY_VERSION='$OMARCHY_VERSION' OMARCHY_ISO_SHA256='$ISO_SHA256' IMAGE_NAME='$IMAGE_NAME' IMAGE_BUCKET='$BUCKET' ~/image-payload/pipeline.sh >~/pipeline.log 2>&1 </dev/null & echo \$! > ~/pipeline.pid; echo started"
+gssh "rm -f ~/pipeline.log; nohup env OMARCHY_VERSION='$OMARCHY_VERSION' OMARCHY_ISO_SHA256='$ISO_SHA256' IMAGE_NAME='$IMAGE_NAME' IMAGE_BUCKET='$BUCKET' IMAGE_DEVICE='/dev/disk/by-id/google-${IMAGE_DEVICE_NAME}' DISK_GB='$IMAGE_DISK_GB' ~/image-payload/pipeline.sh >~/pipeline.log 2>&1 </dev/null & echo \$! > ~/pipeline.pid; echo started"
 
 log "pipeline running on ${BUILDER}; log follows"
 seen=0
@@ -145,9 +152,11 @@ done
 
 family_args=()
 if [[ "$CANDIDATE" == 0 ]]; then family_args=(--family "$FAMILY"); fi
+log "stopping builder to release ${IMAGE_DISK}"
+gcloud compute instances stop "$BUILDER" --zone "$ZONE" --project "$PROJECT" --quiet
 log "registering image"
 gcloud compute images create "$IMAGE_NAME" --project "$PROJECT" \
-  --source-uri "${BUCKET}/images/${IMAGE_NAME}.tar.gz" \
+  --source-disk "$IMAGE_DISK" --source-disk-zone "$ZONE" \
   ${family_args[@]+"${family_args[@]}"} \
   --guest-os-features UEFI_COMPATIBLE,VIRTIO_SCSI_MULTIQUEUE \
   --labels "$image_labels" \
