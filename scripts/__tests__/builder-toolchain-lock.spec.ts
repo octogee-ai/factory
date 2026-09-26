@@ -6,9 +6,11 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  BuilderToolchainHydrationError,
   hydrateBuilderToolchain,
   installBuilderToolchainDependencies,
   parseBuilderToolchainLock,
+  readToolchainDetail,
   readToolchainStatus,
 } from "../lib/builder-toolchain-hydrator.js";
 import { parseBuilderToolGroups, type BuilderToolGroups } from "../lib/builder-tool-groups.js";
@@ -187,6 +189,16 @@ async function writePinnedInputs(home: string): Promise<{
   };
 }
 
+function sparticuzChromiumModule(executable: string): string {
+  return [
+    "export const inflate = async () => undefined;",
+    "export default class Chromium {",
+    `  static async executablePath() { return ${JSON.stringify(executable)}; }`,
+    "}",
+    "",
+  ].join("\n");
+}
+
 async function fakeInstall(destination: string): Promise<void> {
   const bin = path.join(destination, "node_modules", ".bin");
   await fs.mkdir(bin, { recursive: true });
@@ -204,7 +216,7 @@ async function fakeInstall(destination: string): Promise<void> {
   );
   await fs.writeFile(
     path.join(chromiumPackage, "build", "index.js"),
-    `export default { executablePath: async () => ${JSON.stringify(chromiumExecutable)} };\n`,
+    sparticuzChromiumModule(chromiumExecutable),
   );
   await fs.writeFile(
     chromiumExecutable,
@@ -411,8 +423,113 @@ describe("Builder npm toolchain lock", () => {
           { mode: 0o755 },
         );
       },
-    })).rejects.toMatchObject({ reasonCode: "invalid-command-version" });
+    })).rejects.toMatchObject({ reasonCode: "invalid-command-version:claude" });
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "failed" });
+  });
+
+  it("names the failing command, pinned version, exit code, and output of a rejected version check", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const diagnostic = 'claude --version expected 2.1.282: exited 1 stdout="" ' +
+      'stderr="Error: claude native binary not installed."';
+
+    const failure = await hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: async (destination) => {
+        await fakeInstall(destination);
+        await fs.writeFile(
+          path.join(destination, "node_modules", ".bin", "claude"),
+          "#!/bin/sh\necho 'Error: claude native binary\n  not installed.' >&2\nexit 1\n",
+          { mode: 0o755 },
+        );
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BuilderToolchainHydrationError);
+    expect((failure as BuilderToolchainHydrationError).cause).toEqual(new Error(diagnostic));
+    await expect(readToolchainDetail(root)).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "invalid-command-version:claude",
+      diagnostic,
+    });
+  });
+
+  it("rejects a Chromium payload whose browser major differs from the pinned package", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+
+    const failure = await hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: async (destination) => {
+        await fakeInstall(destination);
+        await fs.writeFile(
+          path.join(destination, "chromium"),
+          "#!/bin/sh\necho 'Chromium 148.0.7700.1'\n",
+          { mode: 0o755 },
+        );
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      reasonCode: "invalid-command-version:chromium",
+      cause: new Error('chromium --version expected 149.x: exited 0 stdout="Chromium 148.0.7700.1" stderr=""'),
+    });
+  });
+
+  it("reports why the pinned Chromium package could not resolve its browser", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+
+    const failure = await hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: registryCredentials,
+      installDependencies: async (destination) => {
+        await fakeInstall(destination);
+        await fs.writeFile(
+          path.join(destination, "node_modules", "@sparticuz", "chromium", "build", "index.js"),
+          "export const inflate = async () => undefined;\n",
+        );
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      reasonCode: "invalid-command-version:chromium",
+      cause: new Error("chromium executable expected 149.x: unresolved (invalid Chromium module)"),
+    });
+  });
+
+  it("stops without publishing a status when the broker reports the runtime retired", async () => {
+    const home = await tempRoot();
+    const root = path.join(home, ".octogee", "toolchains");
+    const pin = await writePinnedInputs(home);
+    const log = vi.fn();
+    const published: string[] = [];
+    const installDependencies = vi.fn(fakeInstall);
+
+    await expect(hydrateBuilderToolchain({
+      root,
+      ...pin,
+      registryCredentialsProvider: async () => {
+        throw new BuilderToolchainHydrationError("runtime-retired");
+      },
+      installDependencies,
+      publishStatus: async (status) => { published.push(status.status); },
+      log,
+    })).rejects.toMatchObject({ reasonCode: "runtime-retired" });
+
+    expect(installDependencies).not.toHaveBeenCalled();
+    expect(published).toEqual(["downloading"]);
+    expect(log).not.toHaveBeenCalledWith(
+      "[builder-toolchain] npm proxy credentials unavailable; waiting for assignment",
+    );
   });
 
   it("waits for assignment-scoped proxy credentials without invoking direct npm", async () => {

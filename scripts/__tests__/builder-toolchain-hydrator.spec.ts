@@ -41,7 +41,7 @@ describe("Builder toolchain hydration loop", () => {
       hydrate,
       writeStatus: async (status) => { states.push(status); },
       sleep: async (ms) => { sleeps.push(ms); },
-      waitAfterReady: async () => {},
+      waitForShutdown: async () => {},
       initialBackoffMs: 1_000,
       maxBackoffMs: 8_000,
     });
@@ -53,7 +53,7 @@ describe("Builder toolchain hydration loop", () => {
 
   it("logs every failed hydration attempt with its reason before retrying", async () => {
     const hydrate = vi.fn()
-      .mockRejectedValueOnce(new BuilderToolchainHydrationError("invalid-command-version"))
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError("npm-install-failed"))
       .mockRejectedValueOnce(new BuilderToolchainHydrationError(
         "internal-error",
         { cause: new Error("ENOSPC: no space left on device") },
@@ -71,16 +71,126 @@ describe("Builder toolchain hydration loop", () => {
       writeStatus: async () => {},
       log: (message) => { logs.push(message); },
       sleep: async () => {},
-      waitAfterReady: async () => {},
+      waitForShutdown: async () => {},
       initialBackoffMs: 1_000,
       maxBackoffMs: 8_000,
     });
 
     expect(hydrate).toHaveBeenCalledTimes(3);
     expect(logs).toEqual([
-      "[builder-toolchain] hydration attempt 1 failed reason=invalid-command-version; retrying",
+      "[builder-toolchain] hydration attempt 1 failed reason=npm-install-failed; retrying",
       "[builder-toolchain] hydration attempt 2 failed reason=internal-error error=ENOSPC: no space left on device; retrying",
     ]);
+  });
+
+  it("doubles the retry delay after each transient failure up to the cap", async () => {
+    const hydrate = vi.fn()
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError("npm-install-failed"))
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError("npm-install-failed"))
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError("npm-install-failed"))
+      .mockRejectedValueOnce(new BuilderToolchainHydrationError("npm-install-failed"))
+      .mockResolvedValue({
+        schemaVersion: 1,
+        status: "ready",
+        updatedAt: "2026-08-30T00:00:00.000Z",
+      });
+    const sleeps: number[] = [];
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      writeStatus: async () => {},
+      log: () => {},
+      sleep: async (ms) => { sleeps.push(ms); },
+      waitForShutdown: async () => {},
+      initialBackoffMs: 1_000,
+      maxBackoffMs: 4_000,
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(5);
+    expect(sleeps).toEqual([1_000, 2_000, 4_000, 4_000]);
+  });
+
+  it.each([
+    "invalid-command-version:chromium",
+    "missing-command:firebase",
+    "unsafe-command-path",
+  ])("does not reinstall after a deterministic %s verification failure", async (reasonCode) => {
+    const hydrate = vi.fn().mockRejectedValue(new BuilderToolchainHydrationError(
+      reasonCode,
+      { cause: new Error("chromium executable expected 153.x: unresolved (invalid Chromium module)") },
+    ));
+    const logs: string[] = [];
+    const waitForShutdown = vi.fn(async () => {});
+    const sleep = vi.fn(async () => {});
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      writeStatus: async () => {},
+      log: (message) => { logs.push(message); },
+      sleep,
+      waitForShutdown,
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(waitForShutdown).toHaveBeenCalledTimes(1);
+    expect(logs).toEqual([
+      `[builder-toolchain] hydration attempt 1 failed reason=${reasonCode} ` +
+        "error=chromium executable expected 153.x: unresolved (invalid Chromium module); " +
+        "not retrying until the gateway restarts",
+    ]);
+  });
+
+  it("stops hydrating once the broker reports the runtime retired", async () => {
+    const hydrate = vi.fn().mockRejectedValue(new BuilderToolchainHydrationError("runtime-retired"));
+    const logs: string[] = [];
+    const waitForShutdown = vi.fn(async () => {});
+    const sleep = vi.fn(async () => {});
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate,
+      writeStatus: async () => {},
+      log: (message) => { logs.push(message); },
+      sleep,
+      waitForShutdown,
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(waitForShutdown).toHaveBeenCalledTimes(1);
+    expect(logs).toEqual([
+      "[builder-toolchain] runtime retired; hydration stopped until the gateway restarts",
+    ]);
+  });
+
+  it("stops retrying ready publication once the broker reports the runtime retired", async () => {
+    const ready = {
+      schemaVersion: 1 as const,
+      status: "ready" as const,
+      updatedAt: "2026-08-30T00:00:00.000Z",
+    };
+    const ensureReadyPublished = vi.fn().mockRejectedValue(
+      new BuilderToolchainHydrationError("runtime-retired"),
+    );
+    const waitForShutdown = vi.fn(async () => {});
+    const sleep = vi.fn(async () => {});
+
+    await runBuilderToolchainHydrationLoop({
+      probeInteractiveReadiness: async () => true,
+      hydrate: async () => ready,
+      ensureReadyPublished,
+      writeStatus: async () => {},
+      log: () => {},
+      sleep,
+      waitForShutdown,
+    });
+
+    expect(ensureReadyPublished).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(waitForShutdown).toHaveBeenCalledTimes(1);
   });
 
   it("keeps assignment-gated credential retries on the initial cadence", async () => {
@@ -103,7 +213,7 @@ describe("Builder toolchain hydration loop", () => {
       hydrate,
       writeStatus: async () => {},
       sleep: async (ms) => { sleeps.push(ms); },
-      waitAfterReady: async () => {},
+      waitForShutdown: async () => {},
       initialBackoffMs: 5_000,
       maxBackoffMs: 40_000,
     });
@@ -130,7 +240,7 @@ describe("Builder toolchain hydration loop", () => {
       ensureReadyPublished,
       writeStatus: async () => {},
       sleep: async (ms) => { sleeps.push(ms); },
-      waitAfterReady: async () => {},
+      waitForShutdown: async () => {},
       initialBackoffMs: 5_000,
       maxBackoffMs: 40_000,
     });
@@ -190,7 +300,7 @@ describe("Builder toolchain stable wrappers", () => {
     );
     await fs.writeFile(
       path.join(chromiumPackage, "build", "index.js"),
-      `export default { executablePath: async () => ${JSON.stringify(chromiumExecutable)} };\n`,
+      `export default class Chromium { static async executablePath() { return ${JSON.stringify(chromiumExecutable)}; } }\n`,
     );
     await fs.writeFile(chromiumExecutable, "#!/bin/sh\nexit 9\n", { mode: 0o755 });
     await fs.writeFile(path.join(objectPath, ".toolchain-lock.json"), JSON.stringify({

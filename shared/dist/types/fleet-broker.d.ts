@@ -126,6 +126,7 @@ export interface FleetBrokerCustomerRuntimeReset {
     disposableLeaseGeneration: number;
     requestedAt: number;
 }
+export declare const RETIRED_COMPUTER_BINDING_DENIAL_REASON = "retired computer bindings may only reach final-checkpoint routes";
 export declare const BUILDER_RUNTIME_STATE_RECOVERY_TIERS: readonly ["minute", "hour", "day"];
 export type BuilderRuntimeStateRecoveryTier = (typeof BUILDER_RUNTIME_STATE_RECOVERY_TIERS)[number];
 export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {

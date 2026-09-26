@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
 import {
   createBuilderNpmProxyCredentialsProvider,
+  guardRetiredRuntimeBrokerClient,
   createRetriableBuilderToolchainStatusPublication,
   createBuilderToolchainStatusPublisher,
   probeBuilderInteractiveReadiness,
   resolveBuilderToolchainHydratorConfig,
 } from "../entrypoints/builder-toolchain-hydrator.js";
 import { runBuilderToolchainHydrationLoop } from "../lib/builder-toolchain-hydrator.js";
+import { FleetBrokerHttpError } from "../lib/fleet-broker-client.js";
 
 describe("Builder toolchain hydrator entrypoint", () => {
   it("resolves the image-pinned npm lock and managed proxy contract", () => {
@@ -139,7 +142,7 @@ describe("Builder toolchain hydrator entrypoint", () => {
       hydrate,
       ensureReadyPublished,
       writeStatus: async () => {},
-      waitAfterReady: async () => {},
+      waitForShutdown: async () => {},
     });
 
     expect(hydrate).toHaveBeenCalledTimes(1);
@@ -149,6 +152,64 @@ describe("Builder toolchain hydrator entrypoint", () => {
       ["uid-alice", "ready"],
       ["uid-alice", "ready"],
     ]);
+  });
+
+  it("stops calling the broker once it reports this computer's runtime retired", async () => {
+    const retired = new FleetBrokerHttpError(
+      "fleet-broker POST /internal/fleet/npm-registry-credentials → 403",
+      403,
+      RETIRED_COMPUTER_BINDING_DENIAL_REASON,
+    );
+    const client = {
+      npmRegistryCredentials: vi.fn().mockRejectedValue(retired),
+      uidForSlug: vi.fn(async () => "uid-alice"),
+      setToolchainStatus: vi.fn(async () => undefined),
+    };
+    const log = vi.fn();
+    const guarded = guardRetiredRuntimeBrokerClient(client, log);
+
+    await expect(guarded.npmRegistryCredentials("alice")).rejects.toMatchObject({
+      reasonCode: "runtime-retired",
+      cause: retired,
+    });
+    await expect(guarded.setToolchainStatus("uid-alice", "pending")).rejects.toMatchObject({
+      reasonCode: "runtime-retired",
+    });
+    await expect(guarded.uidForSlug("alice")).rejects.toMatchObject({ reasonCode: "runtime-retired" });
+    await expect(guarded.npmRegistryCredentials("alice")).rejects.toMatchObject({
+      reasonCode: "runtime-retired",
+    });
+
+    expect(client.npmRegistryCredentials).toHaveBeenCalledTimes(1);
+    expect(client.setToolchainStatus).not.toHaveBeenCalled();
+    expect(client.uidForSlug).not.toHaveBeenCalled();
+    expect(log.mock.calls).toEqual([[
+      "[builder-toolchain] broker reports this computer's runtime retired; " +
+        "stopping npm credential and toolchain status requests",
+    ]]);
+  });
+
+  it("passes an unassigned-Builder denial through so assignment polling continues", async () => {
+    const unassigned = new FleetBrokerHttpError(
+      "fleet-broker POST /internal/fleet/npm-registry-credentials → 403",
+      403,
+      null,
+    );
+    const client = {
+      npmRegistryCredentials: vi.fn()
+        .mockRejectedValueOnce(unassigned)
+        .mockResolvedValueOnce({ registryUrl: "r", token: "t", expiresAt: "e" }),
+      uidForSlug: vi.fn(async () => "uid-alice"),
+      setToolchainStatus: vi.fn(async () => undefined),
+    };
+    const guarded = guardRetiredRuntimeBrokerClient(client, vi.fn());
+
+    await expect(guarded.npmRegistryCredentials("alice")).rejects.toBe(unassigned);
+    await expect(guarded.npmRegistryCredentials("alice")).resolves.toEqual({
+      registryUrl: "r",
+      token: "t",
+      expiresAt: "e",
+    });
   });
 
   it("treats only a successful surge-readiness response as interactive readiness", async () => {

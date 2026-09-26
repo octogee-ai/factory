@@ -7,6 +7,7 @@ import {
 import {
   configuredBuilderBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
+import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
@@ -325,7 +326,7 @@ async function gatewayDenialReason(
   if (bound.finalHomeCheckpoint) {
     return FINAL_HOME_CHECKPOINT_ROUTES.has(req.path)
       ? null
-      : "retired computer bindings may only reach final-checkpoint routes";
+      : RETIRED_COMPUTER_BINDING_DENIAL_REASON;
   }
 
   // These brokers perform route-specific authorization from their own body
@@ -367,7 +368,7 @@ const PLACEMENT_DENIAL_REASONS: ReadonlySet<string> = new Set([
   "request names a gatewayId other than the bound gateway",
   "request names a user not assigned to the bound gateway",
   "request names a workspace slug not assigned to the bound gateway",
-  "retired computer bindings may only reach final-checkpoint routes",
+  RETIRED_COMPUTER_BINDING_DENIAL_REASON,
 ]);
 
 export function tenantDenialCause(reason: string): TenantDenialCause {

@@ -15,6 +15,7 @@ import type {
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
+import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
 import { gatewayCredentialHeaders as defaultGatewayCredentialHeaders } from "@octogee/core/internal-fetch";
 import type { SystemConfigObservedStatus } from "./system-config-status.js";
@@ -24,6 +25,54 @@ function baseUrl(): string {
   if (process.env.FLEET_BROKER_URL) return process.env.FLEET_BROKER_URL;
   // In-cluster service URL; the projected gateway KSA token is the auth boundary.
   return process.env.OCTOGEE_API_URL || "http://octogee-api.octogee.svc.cluster.local:3001";
+}
+
+export class FleetBrokerHttpError extends Error {
+  readonly status: number;
+  readonly denialReason: string | null;
+
+  constructor(message: string, status: number, denialReason: string | null) {
+    super(message);
+    this.name = "FleetBrokerHttpError";
+    this.status = status;
+    this.denialReason = denialReason;
+  }
+}
+
+const TENANT_DENIAL_PREFIX = "forbidden: ";
+
+function tenantDenialReason(body: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const error = (parsed as { error?: unknown } | null)?.error;
+  return typeof error === "string" && error.startsWith(TENANT_DENIAL_PREFIX)
+    ? error.slice(TENANT_DENIAL_PREFIX.length)
+    : null;
+}
+
+async function brokerHttpError(
+  path: string,
+  resp: Response,
+  redactErrorBody = false,
+): Promise<FleetBrokerHttpError> {
+  const text = (await resp.text().catch(() => "")).slice(0, 300);
+  const message = redactErrorBody
+    ? `fleet-broker POST ${path} → ${resp.status}`
+    : `fleet-broker POST ${path} → ${resp.status} ${text}`;
+  return new FleetBrokerHttpError(
+    message,
+    resp.status,
+    resp.status === 403 ? tenantDenialReason(text) : null,
+  );
+}
+
+export function isRetiredComputerBindingDenial(error: unknown): boolean {
+  return error instanceof FleetBrokerHttpError && error.status === 403 &&
+    error.denialReason === RETIRED_COMPUTER_BINDING_DENIAL_REASON;
 }
 
 async function postJson<T>(
@@ -37,13 +86,7 @@ async function postJson<T>(
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    if (options.redactErrorBody) {
-      throw new Error(`fleet-broker POST ${path} → ${resp.status}`);
-    }
-    const text = (await resp.text().catch(() => "")).slice(0, 300);
-    throw new Error(`fleet-broker POST ${path} → ${resp.status} ${text}`);
-  }
+  if (!resp.ok) throw await brokerHttpError(path, resp, options.redactErrorBody);
   return (await resp.json()) as T;
 }
 
@@ -57,10 +100,7 @@ async function postNoContent(
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    const text = (await resp.text().catch(() => "")).slice(0, 300);
-    throw new Error(`fleet-broker POST ${path} → ${resp.status} ${text}`);
-  }
+  if (!resp.ok) throw await brokerHttpError(path, resp);
 }
 
 export interface FleetBrokerClient {

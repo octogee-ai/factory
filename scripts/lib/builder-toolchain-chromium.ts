@@ -7,12 +7,14 @@ interface ChromiumModule {
   executablePath: () => Promise<string>;
 }
 
-function chromiumModule(value: unknown): ChromiumModule | null {
-  if (!value || typeof value !== "object") return null;
+function isExportContainer(value: unknown): value is { executablePath?: unknown } {
+  return Boolean(value) && (typeof value === "object" || typeof value === "function");
+}
+
+export function chromiumModuleFromNamespace(value: unknown): ChromiumModule | null {
+  if (!isExportContainer(value)) return null;
   const candidate = value as { default?: unknown; executablePath?: unknown };
-  const exported = candidate.default && typeof candidate.default === "object"
-    ? candidate.default as { executablePath?: unknown }
-    : candidate;
+  const exported = isExportContainer(candidate.default) ? candidate.default : candidate;
   return typeof exported.executablePath === "function"
     ? exported as ChromiumModule
     : null;
@@ -20,7 +22,7 @@ function chromiumModule(value: unknown): ChromiumModule | null {
 
 export async function resolveBuilderChromiumExecutable(modulePath: string): Promise<string> {
   const imported = await import(pathToFileURL(modulePath).href) as unknown;
-  const chromium = chromiumModule(imported);
+  const chromium = chromiumModuleFromNamespace(imported);
   if (!chromium) throw new Error("invalid Chromium module");
   const executable = await chromium.executablePath();
   if (typeof executable !== "string" || !path.isAbsolute(executable)) {

@@ -21,6 +21,7 @@ import { resolveBuilderChromiumExecutable } from "./builder-toolchain-chromium.j
 
 export const BUILDER_TOOLCHAIN_COMMANDS = ["claude", "codex", "chromium"] as const;
 export const DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY = "https://registry.npmjs.org/";
+export const BUILDER_TOOLCHAIN_RUNTIME_RETIRED = "runtime-retired";
 
 export type BuilderToolchainCommand = typeof BUILDER_TOOLCHAIN_COMMANDS[number];
 
@@ -51,6 +52,7 @@ export interface BuilderToolchainDetail {
   bundleSha256?: string;
   attempt?: number;
   reasonCode?: string;
+  diagnostic?: string;
   nextRetryAt?: string;
 }
 
@@ -91,7 +93,7 @@ export interface RunBuilderToolchainHydrationLoopOptions {
   writeStatus: (status: DeveloperToolchainStatus) => Promise<void>;
   log?: (message: string) => void;
   sleep?: (ms: number) => Promise<void>;
-  waitAfterReady?: () => Promise<void>;
+  waitForShutdown?: () => Promise<void>;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   shouldStop?: () => boolean;
@@ -113,6 +115,7 @@ const INSTALLED_LOCK_FILE = ".toolchain-lock.json";
 const DEFAULT_LOCK_STALE_MS = 60 * 60 * 1_000;
 const MAX_LOCK_BYTES = 8 * 1_024 * 1_024;
 const MAX_GROUPS_BYTES = 256 * 1_024;
+const MAX_DIAGNOSTIC_OUTPUT_CHARS = 240;
 const NPM_EXECUTABLE = "/usr/local/bin/npm";
 const INVALID_TOOLCHAIN_LOCK = "invalid-toolchain-lock";
 export const BUILDER_TOOLCHAIN_COMMAND_PATHS: Record<BuilderToolchainCommand, string> = {
@@ -135,6 +138,11 @@ const ALLOWED_INSTALL_SCRIPTS = {
 
 function hydrationError(reasonCode: string, cause?: unknown): BuilderToolchainHydrationError {
   return new BuilderToolchainHydrationError(reasonCode, cause === undefined ? undefined : { cause });
+}
+
+function isRuntimeRetired(error: unknown): boolean {
+  return error instanceof BuilderToolchainHydrationError &&
+    error.reasonCode === BUILDER_TOOLCHAIN_RUNTIME_RETIRED;
 }
 
 function isNodeError(error: unknown, code: string): boolean {
@@ -411,7 +419,9 @@ export async function writeToolchainStatus(
       await options.publishStatus(status);
     } catch (error) {
       const type = error instanceof Error ? error.name : typeof error;
-      (options.log ?? console.error)(`[builder-toolchain] status publication failed (${type})`);
+      (options.log ?? console.error)(
+        `[builder-toolchain] status publication failed (${type}) status=${status.status} error=${errorMessage(error)}`,
+      );
     }
   }
 }
@@ -584,6 +594,106 @@ function commandReportsPinnedVersion(
   return major !== undefined && reportedMajor === major;
 }
 
+interface VersionCommandResult {
+  exit: string;
+  stdout: string;
+  stderr: string;
+}
+
+function diagnosticOutput(value: string): string {
+  const flattened = value.replace(/\s+/gu, " ").trim();
+  return flattened.length > MAX_DIAGNOSTIC_OUTPUT_CHARS
+    ? `${flattened.slice(0, MAX_DIAGNOSTIC_OUTPUT_CHARS)}…`
+    : flattened;
+}
+
+function expectedVersionLabel(command: BuilderToolchainCommand, version: string): string {
+  return command === "chromium" ? `${version.split(".")[0]}.x` : version;
+}
+
+function commandVersionError(
+  command: BuilderToolchainCommand,
+  version: string,
+  subject: string,
+  detail: string,
+): BuilderToolchainHydrationError {
+  return hydrationError(
+    `invalid-command-version:${command}`,
+    new Error(`${subject} expected ${expectedVersionLabel(command, version)}: ${detail}`),
+  );
+}
+
+function runVersionCommand(
+  executable: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<VersionCommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, ["--version"], {
+      cwd,
+      env: { ...process.env, NO_COLOR: "1" },
+      signal,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code, exitSignal) => {
+      resolve({ exit: String(code ?? exitSignal ?? "unknown"), stdout, stderr });
+    });
+  });
+}
+
+async function versionExecutable(
+  command: BuilderToolchainCommand,
+  commandPath: string,
+  version: string,
+): Promise<string> {
+  if (command !== "chromium") return commandPath;
+  try {
+    return await resolveBuilderChromiumExecutable(commandPath);
+  } catch (error) {
+    throw commandVersionError(
+      command,
+      version,
+      "chromium executable",
+      `unresolved (${errorMessage(error)})`,
+    );
+  }
+}
+
+async function validateCommandVersion(
+  objectPath: string,
+  command: BuilderToolchainCommand,
+  version: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const commandPath = path.join(objectPath, BUILDER_TOOLCHAIN_COMMAND_PATHS[command]);
+  const executable = await versionExecutable(command, commandPath, version);
+  const subject = `${command} --version`;
+  let result: VersionCommandResult;
+  try {
+    result = await runVersionCommand(executable, objectPath, signal);
+  } catch (error) {
+    throw commandVersionError(command, version, subject, `failed to start (${errorMessage(error)})`);
+  }
+  const reported = result.exit === "0" &&
+    commandReportsPinnedVersion(command, `${result.stdout}\n${result.stderr}`, version);
+  if (!reported) {
+    throw commandVersionError(
+      command,
+      version,
+      subject,
+      `exited ${result.exit} stdout=${JSON.stringify(diagnosticOutput(result.stdout))} ` +
+        `stderr=${JSON.stringify(diagnosticOutput(result.stderr))}`,
+    );
+  }
+}
+
 async function validateCommandVersions(
   objectPath: string,
   descriptor: BuilderToolchainLock,
@@ -591,36 +701,7 @@ async function validateCommandVersions(
 ): Promise<void> {
   await validateCommandFiles(objectPath);
   for (const command of BUILDER_TOOLCHAIN_COMMANDS) {
-    const commandPath = path.join(objectPath, BUILDER_TOOLCHAIN_COMMAND_PATHS[command]);
-    const executable = command === "chromium"
-      ? await resolveBuilderChromiumExecutable(commandPath).catch(() => {
-        throw hydrationError("invalid-command-version");
-      })
-      : commandPath;
-    const output = await new Promise<string>((resolve, reject) => {
-      const child = spawn(executable, ["--version"], {
-        cwd: objectPath,
-        env: { ...process.env, NO_COLOR: "1" },
-        signal,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-      child.once("error", reject);
-      child.once("exit", (code, exitSignal) => {
-        if (code === 0) resolve(`${stdout}\n${stderr}`);
-        else reject(new Error(`${command} --version exited ${code ?? exitSignal ?? "unknown"}`));
-      });
-    }).catch(() => {
-      throw hydrationError("invalid-command-version");
-    });
-    if (!commandReportsPinnedVersion(command, output, descriptor.versions[command])) {
-      throw hydrationError("invalid-command-version");
-    }
+    await validateCommandVersion(objectPath, command, descriptor.versions[command], signal);
   }
 }
 
@@ -771,7 +852,8 @@ async function installWithRegistryFallback(input: {
       token: candidate.token,
       expiresAt: new Date(expiresAtMs).toISOString(),
     };
-  } catch {
+  } catch (error) {
+    if (isRuntimeRetired(error)) throw error;
     input.log("[builder-toolchain] npm proxy credentials unavailable; waiting for assignment");
     throw hydrationError("npm-proxy-credentials-unavailable");
   }
@@ -805,8 +887,10 @@ async function persistHydrationFailure(input: {
   persist: ToolchainStatusPersister;
 }): Promise<never> {
   const error = input.error;
+  if (isRuntimeRetired(error)) throw error;
   const knownError = error instanceof BuilderToolchainHydrationError;
   const reasonCode = knownError ? error.reasonCode : "internal-error";
+  const cause = knownError ? error.cause : error;
   const failureStatus = reasonCode === "npm-proxy-credentials-unavailable" ? "pending" : "failed";
   await input.persist(statusFor(failureStatus, input.now()), detailFor(failureStatus, {
     ...(input.toolchainId ? { toolchainId: input.toolchainId } : {}),
@@ -815,6 +899,7 @@ async function persistHydrationFailure(input: {
     ...(input.bundleSha256 ? { bundleSha256: input.bundleSha256 } : {}),
     attempt: input.attempt,
     reasonCode,
+    ...(cause === undefined ? {} : { diagnostic: errorMessage(cause) }),
   }));
   if (knownError) throw error;
   throw hydrationError(reasonCode, error);
@@ -958,12 +1043,15 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
 const waitForever = (): Promise<void> => new Promise(() => {});
 
 type HydrationLoopSleep = (ms: number) => Promise<void>;
+type HydrationFailureKind = "retry" | "assignment" | "terminal" | "retired";
 
 interface HydrationAttemptResult {
   status?: BuilderToolchainStatus;
   stopped: boolean;
-  waitingForAssignment: boolean;
+  failure?: HydrationFailureKind;
 }
+
+const DETERMINISTIC_VERIFICATION_FAILURE = /^(?:invalid-command-version:|missing-command:|unsafe-command-path$)/u;
 
 async function waitForInteractiveReadiness(
   options: RunBuilderToolchainHydrationLoopOptions,
@@ -994,8 +1082,23 @@ function hydrationFailureReason(error: unknown): string {
   return `reason=${error.reasonCode} error=${errorMessage(error.cause)}`;
 }
 
-function describeHydrationFailure(attempt: number, error: unknown): string {
-  return `[builder-toolchain] hydration attempt ${attempt} failed ${hydrationFailureReason(error)}; retrying`;
+function classifyHydrationFailure(error: unknown): HydrationFailureKind {
+  if (!(error instanceof BuilderToolchainHydrationError)) return "retry";
+  if (error.reasonCode === BUILDER_TOOLCHAIN_RUNTIME_RETIRED) return "retired";
+  if (DETERMINISTIC_VERIFICATION_FAILURE.test(error.reasonCode)) return "terminal";
+  return error.reasonCode === "npm-proxy-credentials-unavailable" ? "assignment" : "retry";
+}
+
+function describeHydrationFailure(
+  attempt: number,
+  error: unknown,
+  failure: HydrationFailureKind,
+): string {
+  if (failure === "retired") {
+    return "[builder-toolchain] runtime retired; hydration stopped until the gateway restarts";
+  }
+  const next = failure === "terminal" ? "not retrying until the gateway restarts" : "retrying";
+  return `[builder-toolchain] hydration attempt ${attempt} failed ${hydrationFailureReason(error)}; ${next}`;
 }
 
 function resolveHydrationLoopRuntime(options: RunBuilderToolchainHydrationLoopOptions): {
@@ -1004,6 +1107,7 @@ function resolveHydrationLoopRuntime(options: RunBuilderToolchainHydrationLoopOp
   maxBackoffMs: number;
   shouldStop: () => boolean;
   log: (message: string) => void;
+  waitForShutdown: () => Promise<void>;
 } {
   return {
     sleep: options.sleep ?? defaultSleep,
@@ -1011,6 +1115,7 @@ function resolveHydrationLoopRuntime(options: RunBuilderToolchainHydrationLoopOp
     maxBackoffMs: options.maxBackoffMs ?? 5 * 60_000,
     shouldStop: options.shouldStop ?? (() => false),
     log: options.log ?? console.error,
+    waitForShutdown: options.waitForShutdown ?? waitForever,
   };
 }
 
@@ -1021,19 +1126,12 @@ async function runHydrationAttempt(
   log: (message: string) => void,
 ): Promise<HydrationAttemptResult> {
   try {
-    return {
-      status: await hydrate(attempt),
-      stopped: false,
-      waitingForAssignment: false,
-    };
+    return { status: await hydrate(attempt), stopped: false };
   } catch (error) {
     const stopped = shouldStop();
-    if (!stopped) log(describeHydrationFailure(attempt, error));
-    return {
-      stopped,
-      waitingForAssignment: error instanceof BuilderToolchainHydrationError &&
-        error.reasonCode === "npm-proxy-credentials-unavailable",
-    };
+    const failure = classifyHydrationFailure(error);
+    if (!stopped) log(describeHydrationFailure(attempt, error, failure));
+    return { stopped, failure };
   }
 }
 
@@ -1048,18 +1146,29 @@ async function publishReadyUntilAccepted(
     try {
       await publish(status);
       break;
-    } catch {
-      if (shouldStop()) return false;
+    } catch (error) {
+      if (shouldStop() || isRuntimeRetired(error)) break;
       await sleep(retryMs);
     }
   }
   return !shouldStop();
 }
 
+function nextBackoffMs(
+  failure: HydrationFailureKind | undefined,
+  backoffMs: number,
+  runtime: { initialBackoffMs: number; maxBackoffMs: number },
+): number {
+  return failure === "assignment"
+    ? runtime.initialBackoffMs
+    : Math.min(backoffMs * 2, runtime.maxBackoffMs);
+}
+
 export async function runBuilderToolchainHydrationLoop(
   options: RunBuilderToolchainHydrationLoopOptions,
 ): Promise<void> {
-  const { sleep, initialBackoffMs, maxBackoffMs, shouldStop, log } = resolveHydrationLoopRuntime(options);
+  const runtime = resolveHydrationLoopRuntime(options);
+  const { sleep, initialBackoffMs, shouldStop, log } = runtime;
   if (!(await waitForInteractiveReadiness(options, sleep, shouldStop)) || shouldStop()) return;
 
   let attempt = 0;
@@ -1068,6 +1177,10 @@ export async function runBuilderToolchainHydrationLoop(
     attempt += 1;
     const result = await runHydrationAttempt(options.hydrate, attempt, shouldStop, log);
     if (result.stopped) return;
+    if (result.failure === "terminal" || result.failure === "retired") {
+      await runtime.waitForShutdown();
+      return;
+    }
     if (result.status?.status === "ready") {
       const published = await publishReadyUntilAccepted(
         result.status,
@@ -1076,14 +1189,11 @@ export async function runBuilderToolchainHydrationLoop(
         initialBackoffMs,
         shouldStop,
       );
-      if (!published) return;
-      await (options.waitAfterReady ?? waitForever)();
+      if (published) await runtime.waitForShutdown();
       return;
     }
 
-    await sleep(result.waitingForAssignment ? initialBackoffMs : backoffMs);
-    backoffMs = result.waitingForAssignment
-      ? initialBackoffMs
-      : Math.min(backoffMs * 2, maxBackoffMs);
+    await sleep(result.failure === "assignment" ? initialBackoffMs : backoffMs);
+    backoffMs = nextBackoffMs(result.failure, backoffMs, runtime);
   }
 }

@@ -4,12 +4,18 @@ import { pathToFileURL } from "node:url";
 import type { DeveloperToolchainStatusArtifact } from "../../shared/types/developer-toolchain.js";
 import type { FleetBrokerNpmRegistryCredentials } from "../../shared/types/fleet-broker.js";
 import {
+  BUILDER_TOOLCHAIN_RUNTIME_RETIRED,
+  BuilderToolchainHydrationError,
   DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
   hydrateBuilderToolchain,
   runBuilderToolchainHydrationLoop,
   writeToolchainStatus,
 } from "../lib/builder-toolchain-hydrator.js";
-import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import {
+  createFleetBrokerClient,
+  isRetiredComputerBindingDenial,
+  type FleetBrokerClient,
+} from "../lib/fleet-broker-client.js";
 
 export interface BuilderToolchainHydratorConfig {
   root: string;
@@ -60,6 +66,41 @@ export function resolveBuilderToolchainHydratorConfig(
     gatewayId: envValue(env, "GATEWAY_ID"),
     builderSlug: envValue(env, "GATEWAY_BUILDER_SLUG"),
     readinessUrl: `http://127.0.0.1:${fleetControllerPort}/surge-ready`,
+  };
+}
+
+type HydratorBrokerClient = Pick<
+  FleetBrokerClient,
+  "npmRegistryCredentials" | "uidForSlug" | "setToolchainStatus"
+>;
+
+export function guardRetiredRuntimeBrokerClient(
+  client: HydratorBrokerClient,
+  log: (message: string) => void,
+): HydratorBrokerClient {
+  let retirement: unknown = null;
+  const retiredError = (cause: unknown): BuilderToolchainHydrationError =>
+    new BuilderToolchainHydrationError(BUILDER_TOOLCHAIN_RUNTIME_RETIRED, { cause });
+  const guard = async <T>(call: () => Promise<T>): Promise<T> => {
+    if (retirement) throw retiredError(retirement);
+    try {
+      return await call();
+    } catch (error) {
+      if (!isRetiredComputerBindingDenial(error)) throw error;
+      if (!retirement) {
+        log(
+          "[builder-toolchain] broker reports this computer's runtime retired; " +
+            "stopping npm credential and toolchain status requests",
+        );
+      }
+      retirement = error;
+      throw retiredError(error);
+    }
+  };
+  return {
+    npmRegistryCredentials: (slug) => guard(() => client.npmRegistryCredentials(slug)),
+    uidForSlug: (slug) => guard(() => client.uidForSlug(slug)),
+    setToolchainStatus: (uid, status) => guard(() => client.setToolchainStatus(uid, status)),
   };
 }
 
@@ -149,17 +190,17 @@ const abortableSleep = (signal: AbortSignal) => (ms: number): Promise<void> =>
 
 export async function runBuilderToolchainHydrator(input: {
   config: BuilderToolchainHydratorConfig;
-  client?: Pick<
-    FleetBrokerClient,
-    "npmRegistryCredentials" | "uidForSlug" | "setToolchainStatus"
-  >;
+  client?: HydratorBrokerClient;
   signal?: AbortSignal;
   log?: (message: string) => void;
   registryCredentialsProvider?: () => Promise<FleetBrokerNpmRegistryCredentials>;
 }): Promise<void> {
   const signal = input.signal ?? new AbortController().signal;
   const log = input.log ?? console.error;
-  const client = input.client ?? createFleetBrokerClient(input.config.gatewayId);
+  const client = guardRetiredRuntimeBrokerClient(
+    input.client ?? createFleetBrokerClient(input.config.gatewayId),
+    log,
+  );
   const publication = createRetriableBuilderToolchainStatusPublication({
     client,
     builderSlug: input.config.builderSlug,
@@ -193,14 +234,20 @@ export async function runBuilderToolchainHydrator(input: {
       try {
         await publication.ensureReadyPublished(artifact);
       } catch (error) {
-        log("[builder-toolchain] ready status publication unavailable; retrying");
+        const retired = error instanceof BuilderToolchainHydrationError &&
+          error.reasonCode === BUILDER_TOOLCHAIN_RUNTIME_RETIRED;
+        if (!retired) {
+          log(`[builder-toolchain] ready status publication unavailable; retrying error=${
+            error instanceof Error ? error.message : String(error)
+          }`);
+        }
         throw error;
       }
     },
     writeStatus,
     log,
     sleep: abortableSleep(signal),
-    waitAfterReady: () => new Promise((resolve) => {
+    waitForShutdown: () => new Promise((resolve) => {
       if (signal.aborted) resolve();
       else signal.addEventListener("abort", () => resolve(), { once: true });
     }),
