@@ -41,6 +41,18 @@ describe("registered computer owner approval", () => {
     const hook = await registeredHook();
     expect(await hook({ toolName: "computer" }, context({ getAuthenticatedIdentity: () => ({ profileId: "profile", userId: "owner" }) }))).toBeUndefined();
     expect(await hook({ toolName: "browser" }, context({ ...channelRequester, senderId: facts.ownerMattermostUserId }))).toBeUndefined();
+    expect(await hook({ toolName: "nodes", params: { action: "invoke", invokeCommand: "computer.act" } }, context({ ...channelRequester, senderId: facts.ownerMattermostUserId }))).toBeUndefined();
+  });
+
+  it.each(["computer.act", "system.execApprovals.set"])("requires the same owner approval for nodes invoking %s", async (invokeCommand) => {
+    const hook = await registeredHook();
+    const event = { toolName: "nodes", params: { action: "invoke", invokeCommand } };
+    const result = await hook(event, context());
+    expect(result?.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
+    const guard = result.requireApproval.reviewerGuard;
+    expect(await guard.prepare({ decision: "allow-once", userId: "member" })).toBeNull();
+    expect(await guard.prepare({ decision: "allow-once", userId: "owner" })).toBeTypeOf("function");
+    expect(await hook(event, context({}))).toMatchObject({ block: true });
   });
 
   it("requires exact channel account and sender identity for the owner reviewer", async () => {

@@ -108,7 +108,7 @@ checks still apply. No additional shell daemon, Ollama server, or broad file
 grant is provisioned. Ollama's ambient model discovery defaults off. Native
 Tool Search/harness defaults keep tools discoverable without putting every
 schema upfront. The owner coach has access;
-non-owner computer/browser requests still require owner approval, and project
+non-owner computer/browser/nodes requests still require owner approval, and project
 agent restrictions remain. Shared gateways are unchanged and have no node.
 
 `octo-desktop-openclaw-vnc` waits for WayVNC, then runs an

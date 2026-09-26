@@ -43,7 +43,7 @@ function requesterAuthority(context: PluginHookToolContext, facts: ComputerConte
 
 export function computerApprovalHook(config: ComputerConfig) {
   return async (event: { toolName: string }, context: PluginHookToolContext): Promise<PluginHookBeforeToolCallResult | undefined> => {
-    if (event.toolName !== "computer" && event.toolName !== "browser") return;
+    if (event.toolName !== "computer" && event.toolName !== "browser" && event.toolName !== "nodes") return;
     try {
       if (!context.agentId || !context.runId || !context.abortSignal) throw new Error("Computer control requires an active agent task");
       const options = { ...config, agentId: context.agentId, signal: context.abortSignal };
