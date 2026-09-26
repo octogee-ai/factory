@@ -1,15 +1,18 @@
 /* eslint-disable sonarjs/no-duplicate-string */
-import { applyGoogleGrantApproval, parseGoogleGrantApproval } from "../lib/google-grant-approval.js";
+import { parseGoogleGrantApproval } from "../lib/google-grant-approval.js";
+import { applyNativeGoogleGrantApproval } from "../lib/native-google-grant-approval.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { FieldValue, type Firestore, type Transaction } from "firebase-admin/firestore";
+import { type Firestore } from "firebase-admin/firestore";
 
 import { timestampMillis } from "@octogee/core/timestamps";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { connectorReviewerHasWorkspaceAccess } from "../lib/connector-reviewer-access.js";
 import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { connectorApprovalBinding, connectorApprovalRpc, readConnectorApproval, type ConnectorApprovalRpc } from "../lib/connector-approval-client.js";
+import { nativeApprovalViewState, type NativeApprovalSnapshot } from "../lib/native-connector-approval.js";
 
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 const NOT_FOUND = { error: "not_found" } as const;
@@ -18,6 +21,7 @@ const APPROVAL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 interface Deps {
   db: Firestore;
   now: () => number;
+  nativeRpc: ConnectorApprovalRpc;
 }
 
 type ApprovalState = "pending" | "approved" | "denied" | "executing" | "succeeded" | "failed" | "unknown";
@@ -41,7 +45,7 @@ type ProductivityActionKind =
   | "project-publish";
 
 const APPROVAL_STATES = new Set<ApprovalState>([
-  "pending", "approved", "denied", "executing", "succeeded", "failed", "unknown",
+  "executing", "succeeded", "failed", "unknown",
 ]);
 const PRODUCTIVITY_ACTION_KINDS = new Set<ProductivityActionKind>([
   "google-access",
@@ -532,11 +536,26 @@ function projectActionPreview(kind: ProductivityActionKind, value: unknown): Rec
   throw new Error("canonical productivity approval action is unsupported");
 }
 
-function projectApproval(id: string, data: Record<string, unknown>, now: number): ProductivityApprovalView {
-  const approvalExpiresAt = timestampMillis(data.approvalExpiresAt);
+function projectedApprovalState(data: Record<string, unknown>, native: NativeApprovalSnapshot | null, approvalExpiresAt: number, now: number): ApprovalState | "expired" {
+  const executionLeaseExpiresAt = timestampMillis(data.executionLeaseExpiresAt);
+  let state: ApprovalState | "expired" = data.state as ApprovalState;
+  if (data.state === "prepared") {
+    if (!native) throw new Error("Prepared approval requires a native decision");
+    state = nativeApprovalViewState(native);
+    if (state === "pending" && approvalExpiresAt <= now) state = "expired";
+  }
+  else if (
+    data.state === "executing"
+    && (typeof executionLeaseExpiresAt !== "number" || executionLeaseExpiresAt <= now)
+  ) state = Object.hasOwn(data, "providerStartedAt") ? "unknown" : "failed";
+  return state;
+}
+
+function projectApproval(id: string, data: Record<string, unknown>, native: NativeApprovalSnapshot | null, now: number): ProductivityApprovalView {
+  const approvalExpiresAt = native?.expiresAtMs ?? timestampMillis(data.approvalExpiresAt);
   const action = record(data.action);
   if (
-    !isApprovalState(data.state)
+    !(data.state === "prepared" || isApprovalState(data.state))
     || typeof approvalExpiresAt !== "number"
     || !action
     || typeof action.kind !== "string"
@@ -545,16 +564,9 @@ function projectApproval(id: string, data: Record<string, unknown>, now: number)
     throw new Error("canonical productivity approval is malformed");
   }
   const kind = action.kind as ProductivityActionKind;
-  const executionLeaseExpiresAt = timestampMillis(data.executionLeaseExpiresAt);
-  let state: ApprovalState | "expired" = data.state;
-  if (data.state === "pending" && approvalExpiresAt <= now) state = "expired";
-  else if (
-    data.state === "executing"
-    && (typeof executionLeaseExpiresAt !== "number" || executionLeaseExpiresAt <= now)
-  ) state = Object.hasOwn(data, "providerStartedAt") ? "unknown" : "failed";
   return {
     approvalId: id,
-    state,
+    state: projectedApprovalState(data, native, approvalExpiresAt, now),
     action: { kind },
     preview: projectActionPreview(kind, data.preview),
     reason: typeof data.reason === "string" ? data.reason : null,
@@ -562,7 +574,7 @@ function projectApproval(id: string, data: Record<string, unknown>, now: number)
   };
 }
 
-async function loadOwnedApproval(
+async function loadAuthorizedApproval(
   deps: Deps,
   approvalId: string,
   uid: string,
@@ -571,7 +583,8 @@ async function loadOwnedApproval(
   if (!APPROVAL_ID_PATTERN.test(approvalId)) return null;
   const snap = await deps.db.doc(`${PRODUCTIVITY_APPROVALS_COLLECTION}/${approvalId}`).get();
   const data = snap.data();
-  if (!snap.exists || !data || data.ownerUid !== uid || !hashesEqual(data.nonceHash, providedNonceHash)) {
+  if (!snap.exists || !data || !hashesEqual(data.nonceHash, providedNonceHash)
+    || !(await connectorReviewerHasWorkspaceAccess(deps.db, data, uid))) {
     return null;
   }
   return data;
@@ -580,70 +593,24 @@ async function loadOwnedApproval(
 async function preview(deps: Deps, req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const approvalId = typeof req.params.approvalId === "string" ? req.params.approvalId : "";
-    const data = await loadOwnedApproval(deps, approvalId, req.uid!, nonceHash(req.query.nonce));
+    const data = await loadAuthorizedApproval(deps, approvalId, req.uid!, nonceHash(req.query.nonce));
     if (!data) {
       res.status(404).json(NOT_FOUND);
       return;
     }
-    res.json(projectApproval(approvalId, data, deps.now()));
+    if (data.ownerUid === req.uid && isApprovalState(data.state)) {
+      res.set("cache-control", "no-store").json(projectApproval(approvalId, data, null, deps.now()));
+      return;
+    }
+    if (data.state === "prepared" && !data.nativeApprovalId) {
+      res.status(409).json({ error: "approval_preparing" }); return;
+    }
+    const native = await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data), { uid: req.uid!, authorization: req.headers.authorization ?? "" });
+    const updated = await applyNativeGoogleGrantApproval(deps.db, approvalId, data, native);
+    res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, native, deps.now()));
   } catch (error) {
     next(error);
   }
-}
-
-type ResolveOutcome =
-  | { kind: "not-found" }
-  | { kind: "expired" }
-  | { kind: "forbidden" }
-  | { kind: "resolved"; data: Record<string, unknown> };
-
-function resolvedDecision(
-  data: Record<string, unknown>,
-  targetState: "approved" | "denied",
-): ResolveOutcome | null {
-  if (data.state === "pending" || data.state === "approved") return null;
-  const sameDecision = data.state === targetState;
-  const completedApproval = targetState === "approved"
-    && ["executing", "succeeded", "failed", "unknown"].includes(String(data.state));
-  return sameDecision || completedApproval
-    ? { kind: "resolved", data }
-    : { kind: "expired" };
-}
-
-async function applyStandingGrantDecision(deps: Deps, tx: Transaction, uid: string, data: Record<string, unknown>, targetState: "approved" | "denied"): Promise<boolean> {
-  if (targetState !== "approved" || record(data.action)?.kind !== "google-access") return true;
-  return applyGoogleGrantApproval(deps.db, tx, uid, data.preview);
-}
-
-async function resolveApproval(
-  deps: Deps,
-  approvalId: string,
-  uid: string,
-  providedNonceHash: string,
-  targetState: "approved" | "denied",
-): Promise<ResolveOutcome> {
-  if (!APPROVAL_ID_PATTERN.test(approvalId)) return { kind: "not-found" };
-  const ref = deps.db.doc(`${PRODUCTIVITY_APPROVALS_COLLECTION}/${approvalId}`);
-  const ownerRef = deps.db.doc(`users/${uid}`);
-  return deps.db.runTransaction(async (tx): Promise<ResolveOutcome> => {
-    const [snap, ownerSnap] = await Promise.all([tx.get(ref), tx.get(ownerRef)]);
-    const data = snap.data();
-    if (!snap.exists || !data || data.ownerUid !== uid || !hashesEqual(data.nonceHash, providedNonceHash)) {
-      return { kind: "not-found" };
-    }
-    const priorDecision = resolvedDecision(data, targetState);
-    if (priorDecision) return priorDecision;
-    if (data.state === "approved" && targetState !== "approved") return { kind: "expired" };
-    const approvalExpiresAt = timestampMillis(data.approvalExpiresAt);
-    if (typeof approvalExpiresAt !== "number" || approvalExpiresAt <= deps.now()) return { kind: "expired" };
-    if (!accountAllowsInteractiveAccess(ownerSnap.data())) return { kind: "forbidden" };
-
-    if (data.state === "approved") return { kind: "resolved", data };
-
-    if (!(await applyStandingGrantDecision(deps, tx, uid, data, targetState))) return { kind: "expired" };
-    tx.update(ref, { state: targetState, updatedAt: FieldValue.serverTimestamp() });
-    return { kind: "resolved", data: { ...data, state: targetState } };
-  });
 }
 
 async function respondToApproval(
@@ -660,20 +627,19 @@ async function respondToApproval(
       return;
     }
     const approvalId = String(req.params.approvalId);
-    const result = await resolveApproval(deps, approvalId, req.uid!, providedHash, targetState);
-    if (result.kind === "not-found") {
+    const data = await loadAuthorizedApproval(deps, approvalId, req.uid!, providedHash);
+    if (!data) {
       res.status(404).json(NOT_FOUND);
       return;
     }
-    if (result.kind === "expired") {
-      res.status(409).json({ error: "approval_expired" });
+    if (data.ownerUid === req.uid && isApprovalState(data.state)) {
+      res.set("cache-control", "no-store").json(projectApproval(approvalId, data, null, deps.now()));
       return;
     }
-    if (result.kind === "forbidden") {
-      res.status(403).json({ error: "forbidden" });
-      return;
-    }
-    res.json(projectApproval(approvalId, result.data, deps.now()));
+    const native = await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data),
+      { uid: req.uid!, authorization: req.headers.authorization ?? "" }, targetState === "approved" ? "allow-once" : "deny");
+    const updated = await applyNativeGoogleGrantApproval(deps.db, approvalId, data, native);
+    res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, native, deps.now()));
   } catch (error) {
     next(error);
   }
@@ -683,6 +649,7 @@ export function createProductivityApprovalRoutes(options: Partial<Deps> = {}): R
   const deps: Deps = {
     db: options.db ?? defaultDb,
     now: options.now ?? Date.now,
+    nativeRpc: options.nativeRpc ?? connectorApprovalRpc(options.db ?? defaultDb),
   };
   const router = Router();
   router.get("/:approvalId", (req, res, next) => preview(deps, req, res, next));

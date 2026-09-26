@@ -15,6 +15,7 @@ import {
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
+import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
 import { openClawConfigPath, openClawDir } from "../lib/openclaw-config-path.js";
 import {
   isBareGatewayId,
@@ -616,6 +617,7 @@ export function applyPreBootPatches(
     applyMattermostPreBootPatches(config, env, logFn),
     applySharedMattermostRoutingSafetyPatch(config, env, logFn),
     applyOpenClawComputerBrowserConfig(config, env),
+    applyConnectorApprovalDelivery(config),
     applyAnthropicBaseUrlPatch(config, env, logFn),
     applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),

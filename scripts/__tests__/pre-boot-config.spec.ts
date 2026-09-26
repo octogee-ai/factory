@@ -1156,6 +1156,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
         },
       },
       plugins: { entries: {} },
+      approvals: { plugin: { enabled: true, mode: "session" } },
     };
     const changed = applyPreBootPatches(config, {
       GATEWAY_CLASS: "builder",

@@ -18,6 +18,7 @@ import byosubHealthRoutes from "./routes/byosub-health.js";
 import { createByosubAuthRouter } from "./routes/byosub-auth.js";
 import internalBillingRoutes from "./routes/internal/billing.js";
 import internalAgentMessageRoutes from "./routes/internal/agent-message.js";
+import { createInternalConnectorApprovalRouter } from "./routes/internal/connector-approvals.js";
 
 import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
@@ -200,6 +201,7 @@ app.use((req, res, next) =>
 
 app.use("/api/g/:gatewayId/internal", internalByotSyncRoutes);
 if (surface === "sidecar") {
+  app.use("/api/g/:gatewayId/internal/connector-approvals", createInternalConnectorApprovalRouter());
   app.use("/api/g/:gatewayId/internal/agent-message", internalAgentMessageRoutes);
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
   app.use("/internal/connectors", internalConnectorRoutes);
