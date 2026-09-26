@@ -1167,8 +1167,7 @@ async function removeCustomerAccountsWhileStillEvicted(
           batch.flatMap((batchSlug) => customerConfigReplacePaths(current, batchSlug)),
         )],
         logPrefix,
-        beforeRetry: async () => {
-          if (!currentEvictionBatch) return false;
+        beforeRetry: currentEvictionBatch && (async () => {
           const stillEvicted = new Set(await currentEvictionBatch());
           const desiredAgain = batch.filter((batchSlug) => !stillEvicted.has(batchSlug));
           if (desiredAgain.length > 0) {
@@ -1176,7 +1175,7 @@ async function removeCustomerAccountsWhileStillEvicted(
           }
           batch = batch.filter((batchSlug) => stillEvicted.has(batchSlug));
           return batch.length > 0;
-        },
+        }),
       },
       {
         rpc: convergedConfigRpc(ctx),

@@ -1970,7 +1970,7 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     );
   });
 
-  it("does not retry a removal that has no placement check to re-confirm the eviction", async () => {
+  it("retries a signed unmount removal from a fresh config.get after a concurrent unmount wins the config CAS", async () => {
     const current = {
       agents: { entries: keyedRoster(["octogee-alice-coach"]) },
       channels: { mattermost: { accounts: { "alice-coach": {} } } },
@@ -1982,10 +1982,16 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
 
     await expect(
       adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach"),
-    ).rejects.toMatchObject({ code: "hash-mismatch" });
+    ).resolves.toEqual(["alice"]);
 
-    expect(configPatchAndWaitForChange).toHaveBeenCalledTimes(1);
-    expect(secretMocks.updateMattermostAccountSecrets).not.toHaveBeenCalled();
+    expect(configPatchAndWaitForChange).toHaveBeenCalledTimes(2);
+    expect(configPatchAndWaitForChange.mock.calls[1]![0]).toEqual({
+      channels: { mattermost: { accounts: { "alice-coach": null } } },
+    });
+    expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalledWith(
+      expect.any(String),
+      { remove: ["alice-coach"], removePrefixes: ["alice-proj-"] },
+    );
   });
 
   it("stops retrying and keeps the Builder's accounts when it is desired here again after losing the CAS", async () => {
