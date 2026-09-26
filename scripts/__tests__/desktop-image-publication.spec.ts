@@ -1,15 +1,57 @@
 import { expect, it, vi } from 'vitest';
-import { publishDesktopArtifact, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
+import { planDesktopPublication, publishDesktopArtifact, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
 const artifact = { project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' };
 const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha } };
 function cloud(): DesktopPublicationDeps {
-  return { getImage: vi.fn().mockResolvedValue(source), copyImage: vi.fn(), setFamily: vi.fn(), retirePool: vi.fn().mockResolvedValue(['spare']) };
+  return {
+    getImage: vi.fn().mockResolvedValue(source), copyImage: vi.fn(), setFamily: vi.fn(),
+    resolveFamily: vi.fn().mockResolvedValue('octogee-computer-previous'), staleWarmPool: vi.fn().mockResolvedValue([]), retirePool: vi.fn().mockResolvedValue(['spare']),
+  };
 }
 it('publishes an accepted TEST image without rebuilding or copying it', async () => {
   const deps = cloud();
   expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name, retiring: ['spare'] });
   expect(deps.copyImage).not.toHaveBeenCalled();
   expect(deps.setFamily).toHaveBeenCalledWith('octogee-test', artifact.name);
+});
+it('leaves the family alone and only retires stale spares when it already serves the image', async () => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
+  expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name, retiring: ['spare'] });
+  expect(deps.setFamily).not.toHaveBeenCalled();
+});
+it('plans nothing when the family already serves the image and no warm spare is stale', async () => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
+  expect(await planDesktopPublication(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name, familyImage: artifact.name, staleWarmPool: [], unchanged: true });
+  expect(deps.staleWarmPool).toHaveBeenCalledWith('test', 'octogee-test', artifact.name);
+  expect(deps.setFamily).not.toHaveBeenCalled(); expect(deps.retirePool).not.toHaveBeenCalled(); expect(deps.copyImage).not.toHaveBeenCalled();
+});
+it('plans a publication when the family serves another image', async () => {
+  expect(await planDesktopPublication(artifact, 'prod', cloud())).toMatchObject({ project: 'octogee', familyImage: 'octogee-computer-previous', unchanged: false });
+});
+it('plans a publication when the family is empty', async () => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(null);
+  expect(await planDesktopPublication(artifact, 'test', deps)).toMatchObject({ familyImage: null, unchanged: false });
+});
+it('plans a publication that retires stale warm spares left behind on an unchanged family', async () => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name); vi.mocked(deps.staleWarmPool).mockResolvedValue(['old-spare']);
+  expect(await planDesktopPublication(artifact, 'test', deps)).toMatchObject({ staleWarmPool: ['old-spare'], unchanged: false });
+});
+it('plans nothing for PROD only when the family serves a verified copy of the tested image', async () => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce({ ...source, id: '456', sourceImageId: source.id });
+  expect(await planDesktopPublication(artifact, 'prod', deps)).toMatchObject({ project: 'octogee', unchanged: true });
+});
+it.each([
+  ['another source image', { ...source, id: '456', sourceImageId: '789' }],
+  ['another source commit', { ...source, id: '456', sourceImageId: source.id, labels: { source: 'c'.repeat(40) } }],
+])('refuses to plan PROD as unchanged when its family image is a copy of %s', async (_, copy) => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(copy);
+  await expect(planDesktopPublication(artifact, 'prod', deps)).rejects.toThrow('not a copy');
+});
+it('does not plan when the tested image identity was replaced', async () => {
+  const deps = cloud(); vi.mocked(deps.getImage).mockResolvedValue({ ...source, id: '456' });
+  await expect(planDesktopPublication(artifact, 'test', deps)).rejects.toThrow('no longer matches');
 });
 it('does not publish when the tested image identity was replaced', async () => {
   const deps = cloud(); vi.mocked(deps.getImage).mockResolvedValue({ ...source, id: '456' });
@@ -29,7 +71,7 @@ it('rejects a destination image copied from another source', async () => {
   expect(deps.setFamily).not.toHaveBeenCalled();
 });
 
-import { listDesktopPoolMembers, retireDesktopPool, type DesktopPoolVm } from '../lib/desktop-image-publication';
+import { listDesktopPoolMembers, retireDesktopPool, staleDesktopPool, type DesktopPoolVm } from '../lib/desktop-image-publication';
 const spare = { name: 'spare', zone: 'us-central1-c' };
 function poolVm(): DesktopPoolVm {
   return { labels: { 'octogee-environment': 'test', 'octogee-pool': 'warm' }, labelFingerprint: 'observed', disks: [{ boot: true, source: 'disk-url' }] };
@@ -52,6 +94,17 @@ it('retires only stale unassigned members using the freshly read fingerprint', a
   const old = { name: 'old', zone: 'us-central1-a' }, current = { name: 'current', zone: 'us-central1-f' };
   expect(await retireDesktopPool('test', artifact.project, artifact.name, [old, current], deps)).toEqual(['old']);
   expect(markRetiring).toHaveBeenCalledExactlyOnceWith(old, vm);
+});
+it('reports stale unassigned members without mutating them', async () => {
+  const assigned = poolVm(); assigned.labels['octogee-owner-uid'] = 'builder';
+  const vms: Record<string, DesktopPoolVm> = { old: poolVm(), current: poolVm(), assigned };
+  const images: Record<string, string> = { old: 'old', current: `https://www.googleapis.com/compute/v1/projects/${artifact.project}/global/images/${artifact.name}`, assigned: 'old' };
+  const members = Object.keys(vms).map(name => ({ name, zone: 'us-central1-a' }));
+  const stale = await staleDesktopPool('test', artifact.project, artifact.name, members, {
+    readVm: async member => ({ ...vms[member.name], disks: [{ boot: true, source: member.name }] }),
+    readDisk: async url => ({ sourceImage: images[url] }),
+  });
+  expect(stale.map(({ member }) => member.name)).toEqual(['old']);
 });
 it('preserves a member claimed concurrently and surfaces other failures', async () => {
   const deps = { readVm: async () => poolVm(), readDisk: async () => ({ sourceImage: 'old' }), markRetiring: vi.fn().mockRejectedValue({ response: { status: 412 } }) };

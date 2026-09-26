@@ -172,30 +172,35 @@ Both cache reuse and publication verify the live image identity. Recreating an
 image under the same name fails that check. A retry can accept an existing
 candidate with matching inputs without rebuilding it.
 
-Publish a built main SHA using the existing Fleet CLI:
+**Deploy platform build** (`release-environment.yml`) publishes the selected
+SHA's desktop image after its platform deploy succeeds; a release whose image
+is already the family image, with no stale warm spare, changes nothing. Publish
+the family alone (rollback or retry) with the Fleet CLI:
 
 ```bash
 npm run --prefix scripts fleet -- --env=test desktop-image publish --sha=<full-main-sha>
 npm run --prefix scripts fleet -- --env=test desktop-image publish --sha=<full-main-sha> --apply
 ```
 
-The first command previews the artifact. The second journals publication,
-advances the TEST family, and marks stale unassigned warm-pool members for
-Cowboy to replace using their observed label fingerprints. Assignment labels
-and metadata are checked again before mutation. Assigned computers retain
-their current disks. Use the existing per-gateway `gw replace-computer` command
-for an explicitly selected assigned computer.
+The first command previews the artifact and the planned change. The second
+journals publication, advances the TEST family, and marks stale unassigned
+warm-pool members for Cowboy to replace using their observed label
+fingerprints. Assignment labels and metadata are checked again before
+mutation. Assigned computers retain their current disks. Use the existing
+per-gateway `gw replace-computer` command for an explicitly selected assigned
+computer.
 
 For PROD, select `--env=prod`: Fleet copies the tested image from TEST into the
 PROD image project, verifies the copy's source image ID, then publishes it.
 It does not rebuild. An older manifest can be selected to roll back the family.
-Manifests predating desktop artifacts cannot publish a desktop image.
-Platform deployment remains independent of desktop and gateway publication.
+Manifests predating desktop artifacts cannot publish a desktop image, so a
+platform release of such a SHA fails at its desktop-image job.
 
 CI uses the existing GitHub WIF authentication. The TEST Terraform environment
 owns its temporary-compute permissions, dedicated builder service account, and
-image-bucket access. CI has no new Compute authority over the CENTRAL project
-that hosts assigned computers, and no image-family update permission.
+image-bucket access. Release publication additionally needs image-family
+update and PROD image-copy permissions, plus warm-pool instance list/get/label
+and boot-disk read in the CENTRAL `octogee` project that hosts computers.
 The builder has a 60-minute deadline and acceptance a 15-minute deadline.
 CI VMs also have a two-hour GCE automatic deletion limit, independent of the
 runner. An always-running cleanup step deletes this run's temporary VMs; the next

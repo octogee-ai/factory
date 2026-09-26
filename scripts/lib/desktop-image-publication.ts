@@ -13,22 +13,46 @@ export interface DesktopPublicationDeps {
   getImage(project: string, name: string): Promise<DesktopCloudImage | null>;
   copyImage(sourceProject: string, name: string, targetProject: string, sourceSha: string): Promise<void>;
   setFamily(project: string, name: string): Promise<void>;
+  resolveFamily(project: string): Promise<string | null>;
+  staleWarmPool(environment: 'test' | 'prod', project: string, name: string): Promise<string[]>;
   retirePool(environment: 'test' | 'prod', project: string, name: string): Promise<string[]>;
+}
+
+function desktopImageProject(environment: 'test' | 'prod'): string {
+  return environment === 'test' ? 'octogee-test' : 'octogee';
+}
+
+export interface DesktopPublicationPlan {
+  project: string; image: string; familyImage: string | null; staleWarmPool: string[]; unchanged: boolean;
+}
+
+function assertDestinationCopy(copy: DesktopCloudImage | null, artifact: ReturnType<typeof validateDesktopImage>): void {
+  if (copy?.status !== 'READY' || copy.sourceImageId !== artifact.id || copy.labels?.source !== artifact.sourceSha) throw new Error('destination is not a copy of the tested desktop image');
+}
+
+export async function planDesktopPublication(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps): Promise<DesktopPublicationPlan> {
+  const artifact = validateDesktopImage(value);
+  assertDesktopImageIdentity(artifact, await deps.getImage(artifact.project, artifact.name));
+  const project = desktopImageProject(environment);
+  const familyImage = await deps.resolveFamily(project);
+  if (familyImage === artifact.name && project !== artifact.project) assertDestinationCopy(await deps.getImage(project, artifact.name), artifact);
+  const staleWarmPool = await deps.staleWarmPool(environment, project, artifact.name);
+  return { project, image: artifact.name, familyImage, staleWarmPool, unchanged: familyImage === artifact.name && staleWarmPool.length === 0 };
 }
 
 export async function publishDesktopArtifact(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps) {
   const artifact = validateDesktopImage(value);
   assertDesktopImageIdentity(artifact, await deps.getImage(artifact.project, artifact.name));
-  const targetProject = environment === 'test' ? 'octogee-test' : 'octogee';
+  const targetProject = desktopImageProject(environment);
   if (targetProject !== artifact.project) {
     let copy = await deps.getImage(targetProject, artifact.name);
     if (!copy) {
       await deps.copyImage(artifact.project, artifact.name, targetProject, artifact.sourceSha);
       copy = await deps.getImage(targetProject, artifact.name);
     }
-    if (copy?.status !== 'READY' || copy.sourceImageId !== artifact.id || copy.labels?.source !== artifact.sourceSha) throw new Error('destination is not a copy of the tested desktop image');
+    assertDestinationCopy(copy, artifact);
   }
-  await deps.setFamily(targetProject, artifact.name);
+  if (await deps.resolveFamily(targetProject) !== artifact.name) await deps.setFamily(targetProject, artifact.name);
   const retiring = await deps.retirePool(environment, targetProject, artifact.name);
   return { project: targetProject, image: artifact.name, retiring };
 }
@@ -83,32 +107,44 @@ function unassigned(vm: DesktopPoolVm, environment: string): boolean {
     && !vm.labels['octogee-owner-uid'] && !vm.labels['octogee-gateway-id']
     && !metadata['gateway-id'] && !metadata['octogee-owner-uid'];
 }
-export async function retireDesktopPool(environment: string, project: string, imageName: string, members: DesktopPoolMember[], deps: DesktopPoolDeps): Promise<string[]> {
-  const retiring: string[] = [];
+export async function staleDesktopPool(environment: string, project: string, imageName: string, members: DesktopPoolMember[], deps: Omit<DesktopPoolDeps, 'markRetiring'>): Promise<Array<{ member: DesktopPoolMember; vm: DesktopPoolVm }>> {
+  const stale: Array<{ member: DesktopPoolMember; vm: DesktopPoolVm }> = [];
   for (const member of members) {
-    const { name } = member;
     const vm = await deps.readVm(member);
     if (!unassigned(vm, environment)) continue;
     if (!vm.labelFingerprint) throw new Error('warm-pool label fingerprint missing');
     const disk = vm.disks.find(entry => entry.boot);
     if (!disk) throw new Error('warm-pool boot disk missing');
     const image = (await deps.readDisk(disk.source)).sourceImage;
-    if (image?.endsWith(`/projects/${project}/global/images/${imageName}`)) continue;
-    try { await deps.markRetiring(member, vm); retiring.push(name); }
+    if (!image?.endsWith(`/projects/${project}/global/images/${imageName}`)) stale.push({ member, vm });
+  }
+  return stale;
+}
+export async function retireDesktopPool(environment: string, project: string, imageName: string, members: DesktopPoolMember[], deps: DesktopPoolDeps): Promise<string[]> {
+  const retiring: string[] = [];
+  for (const { member, vm } of await staleDesktopPool(environment, project, imageName, members, deps)) {
+    try { await deps.markRetiring(member, vm); retiring.push(member.name); }
     catch (error) {
       if ((error as { response?: { status?: number } }).response?.status !== 412) throw error;
-      console.warn(`desktop image: preserved concurrently changed VM ${name}`);
+      console.warn(`desktop image: preserved concurrently changed VM ${member.name}`);
     }
   }
   return retiring;
 }
 
-function createDesktopPublicationCloud(): DesktopPublicationDeps {
-  const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps {
   const base = 'https://compute.googleapis.com/compute/v1/projects';
+  const compute = `${base}/octogee`;
   async function request<T>(url: string, data?: object, method = 'POST'): Promise<T> {
     const client = await auth.getClient();
     return (await client.request<T>({ url, method: data ? method as 'POST' | 'PATCH' : 'GET', ...(data ? { data } : {}), timeout: 30_000 })).data;
+  }
+  async function requestOrNull<T>(url: string): Promise<T | null> {
+    try { return await request<T>(url); }
+    catch (error) {
+      if ((error as { response?: { status?: number } }).response?.status === 404) return null;
+      throw error;
+    }
   }
   async function waitOperation(project: string, operation: { name: string }, scope = 'global') {
     const deadline = Date.now() + 10 * 60_000;
@@ -120,17 +156,24 @@ function createDesktopPublicationCloud(): DesktopPublicationDeps {
     }
     throw new Error('desktop image operation timed out');
   }
+  function poolMembers(environment: string) {
+    return listDesktopPoolMembers(environment, (filter, pageToken) => {
+      const page = pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '';
+      return request(`${compute}/aggregated/instances?filter=${encodeURIComponent(filter)}${page}`);
+    });
+  }
+  const poolReads = {
+    readVm: (member: DesktopPoolMember) => request<DesktopPoolVm>(`${compute}/zones/${member.zone}/instances/${member.name}`),
+    readDisk: (url: string) => request<{ sourceImage?: string }>(url),
+  };
   return {
-    async getImage(project, name) {
-      try { return await request<DesktopCloudImage>(`${base}/${project}/global/images/${name}`); }
-      catch (error) {
-        if ((error as { response?: { status?: number } }).response?.status === 404) return null;
-        throw error;
-      }
-    },
+    getImage: (project, name) => requestOrNull<DesktopCloudImage>(`${base}/${project}/global/images/${name}`),
     async copyImage(sourceProject, name, project, sourceSha) {
       const operation = await request<{ name: string }>(`${base}/${project}/global/images`, { name, sourceImage: `${base}/${sourceProject}/global/images/${name}`, labels: { source: sourceSha, purpose: 'octogee-computer' } });
       await waitOperation(project, operation);
+    },
+    async resolveFamily(project) {
+      return (await requestOrNull<{ name: string }>(`${base}/${project}/global/images/family/octogee-computer`))?.name ?? null;
     },
     async setFamily(project, name) {
       const images = `${base}/${project}/global/images`;
@@ -151,15 +194,12 @@ function createDesktopPublicationCloud(): DesktopPublicationDeps {
         resolveFamily: () => request(`${images}/family/octogee-computer`),
       });
     },
+    async staleWarmPool(environment, project, name) {
+      return (await staleDesktopPool(environment, project, name, await poolMembers(environment), poolReads)).map(({ member }) => member.name);
+    },
     async retirePool(environment, project, name) {
-      const compute = `${base}/octogee`;
-      const members = await listDesktopPoolMembers(environment, (filter, pageToken) => {
-        const page = pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '';
-        return request(`${compute}/aggregated/instances?filter=${encodeURIComponent(filter)}${page}`);
-      });
-      return retireDesktopPool(environment, project, name, members, {
-        readVm: member => request(`${compute}/zones/${member.zone}/instances/${member.name}`),
-        readDisk: url => request(url),
+      return retireDesktopPool(environment, project, name, await poolMembers(environment), {
+        ...poolReads,
         async markRetiring(member, vm) {
           const operation = await request<{ name: string }>(`${compute}/zones/${member.zone}/instances/${member.name}/setLabels`, { labelFingerprint: vm.labelFingerprint, labels: { ...vm.labels, 'octogee-pool': 'retiring' } });
           await waitOperation('octogee', operation, `zones/${member.zone}`);
@@ -169,22 +209,37 @@ function createDesktopPublicationCloud(): DesktopPublicationDeps {
   };
 }
 
-export async function runDesktopImagePublication(input: { environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; db: Firestore }) {
+export async function runDesktopImagePublication(input: {
+  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth;
+}) {
   if (!/^[a-f0-9]{40}$/.test(input.sourceSha)) throw new Error('desktop-image publish requires --sha=<full-main-sha>');
+  const auth = input.auth ?? new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
   const target = deploymentEnvironmentSettings(input.environment);
-  const manifest = await createCentralReleaseAuthority({ project: target.artifactRegistryProjectId, location: target.artifactRegistryLocation, repository: target.artifactRegistryName }).resolveManifest(input.sourceSha);
-  const artifact = validateDesktopImage(manifest.desktopImage);
-  const cloud = createDesktopPublicationCloud();
-  assertDesktopImageIdentity(artifact, await cloud.getImage(artifact.project, artifact.name));
-  const plan = { environment: input.environment, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest, desktopImage: artifact };
+  const manifest = await createCentralReleaseAuthority(
+    { project: target.artifactRegistryProjectId, location: target.artifactRegistryLocation, repository: target.artifactRegistryName },
+    {
+      async getAccessToken() {
+        const token = await auth.getAccessToken();
+        if (!token) throw new Error('desktop image: Google auth returned no access token');
+        return token;
+      },
+    },
+  ).resolveManifest(input.sourceSha);
+  const cloud = createDesktopPublicationCloud(auth);
+  const publication = await planDesktopPublication(manifest.desktopImage, input.environment, cloud);
+  const plan = { environment: input.environment, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest, desktopImage: manifest.desktopImage, publication };
   console.log(JSON.stringify(plan, null, 2));
   if (!input.apply) return;
+  if (publication.unchanged) {
+    console.log(`desktop image: ${publication.project} family already serves ${publication.image} and no warm spare is stale; nothing to publish`);
+    return;
+  }
   await runWithOperationAuditIntent(input.db, {
-    actor: input.actor, forced: false, what: 'Publish desktop image', why: 'Operator selected a tested immutable desktop image manifest',
+    actor: input.actor, forced: false, what: 'Publish desktop image', why: input.why,
     target: { environment: input.environment }, preActionStatus: plan,
     mutation: { action: 'publish-desktop-image', retireUnassignedWarmPool: true },
     idempotencyKey: `desktop-image:${input.environment}:${manifest.manifestDigest}:${randomUUID()}`,
   }, { claimId: randomUUID() }, async () => {
-    console.log(JSON.stringify(await publishDesktopArtifact(artifact, input.environment, cloud)));
+    console.log(JSON.stringify(await publishDesktopArtifact(manifest.desktopImage, input.environment, cloud)));
   });
 }
