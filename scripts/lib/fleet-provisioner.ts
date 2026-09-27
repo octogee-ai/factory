@@ -1844,6 +1844,7 @@ async function attachConfiguredBuilderBeforeOpenClaw(input: {
     reclaimExistingSshKey: true,
     onWorkSettled: input.onWorkSettled,
   });
+  input.adapter.recordAppliedFingerprint?.(slug, NEEDS_FULL_ATTACH_FINGERPRINT);
   if (result.pendingProjectClones.length > 0) {
     input.log?.(
       `[surge-handoff] configured Builder project checkouts still pending for ${slug}; ` +

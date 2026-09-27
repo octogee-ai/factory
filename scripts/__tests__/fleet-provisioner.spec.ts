@@ -713,6 +713,59 @@ describe("configured Builder surge release", () => {
     expect(readDesiredFingerprints).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves a prelaunch-attached Builder stale so the reconcile loop runs its deferred runtime reconciliation", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const events: string[] = [];
+      const { adapter } = configuredBuilderLifecycleAdapter();
+      const applied = new Map([["ceckert-test", "fp-restored"]]);
+      adapter.recordAppliedFingerprint = (slug, fingerprint) => {
+        applied.set(slug, fingerprint);
+      };
+      adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => ({
+        elapsedMs: 0,
+        appliedFingerprint: "fp-restored",
+      }));
+      const processGate = {
+        status: vi.fn(async () => ({
+          version: 1 as const,
+          podUid: "target-pod",
+          role: "normal" as const,
+          mode: "held" as const,
+          phase: "held" as const,
+        })),
+        permitNormal: vi.fn(async () => {
+          events.push("permit");
+        }),
+        holdNormal: vi.fn(),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate,
+        surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        waitForGatewayReady: async () => {
+          events.push("ready");
+        },
+        log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+        configuredBuilderAssigned: async () => true,
+      });
+
+      await wiring.selfRelease("target-pod");
+
+      expect(events).toEqual(["permit", "ready"]);
+      expect(adapter.reconcileConfiguredBuilderProjectAgents).not.toHaveBeenCalled();
+      expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
+      const pending = new Map<string, string>();
+      const desired = new Map([["ceckert-test", "fp-restored"]]);
+      expect(selectStableContentStale(["ceckert-test"], desired, applied, pending)).toEqual([]);
+      expect(selectStableContentStale(["ceckert-test"], desired, applied, pending)).toEqual(["ceckert-test"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps an unassigned prelaunch empty until canonical migration reserves it", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
