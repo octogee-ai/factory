@@ -825,7 +825,11 @@ export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: s
     defaults.authInheritance = { agentId: SAFE_DEFAULT_AGENT_ID };
     defaultsChanged = true;
   }
-  defaultsChanged = repointAgentDefault(defaults, "systemAgent", LEGACY_IMPLICIT_AGENT_ID, coachId) || defaultsChanged;
+  const systemAgent = asRecord(defaults.systemAgent) ?? {};
+  if (systemAgent.agentId !== coachId) {
+    defaults.systemAgent = { ...systemAgent, agentId: coachId };
+    defaultsChanged = true;
+  }
   defaultsChanged = repointAgentDefault(config, "talk", LEGACY_IMPLICIT_AGENT_ID, coachId) || defaultsChanged;
 
   const after = JSON.stringify({ ownership: agents.ownership, ids: ordered.map((item) => item.id) });

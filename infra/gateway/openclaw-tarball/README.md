@@ -110,10 +110,11 @@ Newer full runs were failed or pending; their fast-green push runs were not used
 This is a main snapshot with package version `2026.9.6`, not the GA tag's bytes.
 
 **Exact overlay:** `ceckert/openclaw:codex/openclaw-slim-main-sept26`,
-[`88748c5a10ff8baf4086c84a2ce146b49f77c079`](https://github.com/ceckert/openclaw/commit/88748c5a10ff8baf4086c84a2ce146b49f77c079),
-fast-forwarded from `51df909` by the two held-database commits (`bcbfa47`, `7fbe0bb`)
-and the channel-authority/computer-target commit (`88748c5`).
-The clean build's source matches. Its 31 commits include fixture corrections,
+[`bff2282dbcd5211e4d87ecf59825be234238849f`](https://github.com/ceckert/openclaw/commit/bff2282dbcd5211e4d87ecf59825be234238849f),
+fast-forwarded from `51df909` by the two held-database commits (`bcbfa47`, `7fbe0bb`),
+the channel-authority/computer-target commit (`88748c5`) and the agent-less cron
+retired-fence commit (`bff2282`).
+The clean build's source matches. Its 32 commits include fixture corrections,
 test reductions, resource-cleanup follow-ups and regenerated Workboard assets;
 commit count is not a count of distinct runtime features.
 
@@ -129,7 +130,7 @@ commit count is not a count of distinct runtime features.
 | Explicit grants, initial sharing-worker entries, channel-member grants and `sessions.channel.sync` (`011c128` through `a755482`) | gateway-edge membership sync | A native sync seam preserves personal grants, removals and tenant isolation. |
 | Member-authorized icons and browser-auth retry (`5da10e7`, `4319b26`) | Shared-session Control UI | Native icons use session membership and recover after browser authentication. |
 | Live tool requester, reviewer guard and native execution recheck (`3dcea82`, `e0c557f`, `45948ed`) | `octogee-access-tools` computer approval | Native hooks retain live requester/reviewer authority through approval and execution. |
-| Durable scheduled-agent migration (`33a9735`) | Cowboy Shared/Builder handoff | Native cron transfer supports fenced ownership and scoped partial migration. |
+| Durable scheduled-agent migration (`33a9735`), with agent-less jobs held only by in-flight fences (`bff2282`) | Cowboy Shared/Builder handoff; memory-core dreaming on former migration sources | Native cron transfer supports fenced ownership and scoped partial migration, and retired source fences do not hold agent-less jobs. |
 | Superseded hot-reload tail handoff (`f0087d3`) | Back-to-back mount/config writes | Native successors inherit unfinished scope without waiting for stale work or losing failures. |
 | Model-catalog generation release (`71540de`) | Long-lived gateways | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
 | Workspace-only Gateway registry reuse (`9907538`, narrowed by `a8a5ce9`) | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent is in the selected base; config/environment/metadata checks remain. |
@@ -203,6 +204,22 @@ no client authority or tool-caller identity. Its computer-tool case resolves
 explicit `gateway` on a provider-less Gateway to the sole paired node. Both files
 pass (19 tests).
 
+The agent-less cron commit `bff2282` stops retired migration fences from
+holding agent-less jobs: retire keeps a moved agent's fence as a permanent
+source-side marker, so every former migration source refused memory-core's
+managed dreaming job every minute (`Cron agent … is held for migration …`).
+Agent-less mutations are now held only by fences whose migration is held,
+exported or staged (or has no migration row); owned jobs still check their own
+agent's fence, retired or not. Two kernel regressions (red before the fix) pass
+with the file's 17 tests; the full `src/cron` suite (3,554 tests), `pnpm tsgo:core`
+and the cron core-test type shard pass. Only this fork change is pinned; no
+upstream PR was filed.
+
+For `bff2282`: the clean `pnpm build` (build-info matches HEAD), both maintained
+packers and isolated root/Mattermost installation (`OpenClaw 2026.9.6 (bff2282)`)
+pass. The Mattermost pack is again byte-identical to `4ee09605` and its
+uncompressed tar matches the pinned `77619145`, which is kept.
+
 For `88748c5`: the clean `pnpm build` (build-info matches HEAD), both
 maintained packers, native archive integrity and isolated root/Mattermost
 installation (`OpenClaw 2026.9.6 (88748c5)`) pass; the tree stays clean. The
@@ -224,7 +241,7 @@ verified by reading the objects back:
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-5f0285e5.tgz` | `5f0285e5d2d2d57494190975234d395f1964218a5b2d09a15a2d538053811352` | `1790480036980534` |
+| `openclaw-fork-18db1218.tgz` | `18db121891a2ba2513dacdc44819eb0ec79f3ea1155eb522d21d921314078388` | `1790537332605344` |
 | `openclaw-mattermost-77619145.tgz` (kept) | `776191456b764d679e3dd8a17a8e90d2c1d94bd1285e4622d69efc88aa52928f` | `1790445510528027` |
 
 The selected source uses **shared-state schema 20 / agent schema 23**. Preserve

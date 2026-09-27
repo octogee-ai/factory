@@ -337,6 +337,7 @@ describe("system_config restore", () => {
     });
     expect(seeded.agents.entries["octogee-unmatched-route"]).toMatchObject({ heartbeat: { every: "0m" } });
     expect(seeded.agents.defaults.authInheritance).toEqual({ agentId: "octogee-unmatched-route" });
+    expect(seeded.agents.defaults.systemAgent).toEqual({ agentId: "octogee-robert-coach" });
     expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
   });
 
@@ -413,6 +414,7 @@ describe("system_config restore", () => {
     const seeded = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
     expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
     expect(seeded.gateway.controlUi.basePath).toBeUndefined();
+    expect(seeded.agents.defaults?.systemAgent).toBeUndefined();
   });
 
   it("does not report a seeded durable config until its initial commit is pushed", async () => {
