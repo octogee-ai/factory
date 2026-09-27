@@ -1940,6 +1940,43 @@ describe("customer OAuth runtime purge", () => {
     }
   });
 
+  it("leaves plugin token paths that already resolve to their placeholder out of the purge patch", async () => {
+    vi.stubEnv("OCTOGEE_API_SA_TOKEN_PATH", "/var/run/secrets/octogee-gateway-broker/token");
+    const oc = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-purge-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-home-"));
+    seedAgent(oc, "octogee-tester-70-coach");
+    const config = {
+      agents: { list: [] },
+      plugins: { entries: {
+        "octogee-chat-tools": { config: { tokenPath: "/var/run/secrets/octogee-gateway-broker/token" } },
+        "octogee-board-tools": { config: { tokenPath: "/tmp/other-token" } },
+      } },
+    };
+    const patches: any[] = [];
+    try {
+      await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+        config,
+        openclawDir: oc,
+        homeDir: home,
+        rpc: {
+          sessionsList: vi.fn(async () => ({ sessions: [] })),
+          sessionsReset: vi.fn(async () => ({ ok: true as const })),
+          close: vi.fn(async () => {}),
+        },
+        applyConfigPatch: async (args) => {
+          patches.push(args.buildPatch(config));
+          return { mode: "rpc", attempts: 1, noop: true };
+        },
+      });
+      expect(patches[0].plugins.entries["octogee-chat-tools"].config).not.toHaveProperty("tokenPath");
+      expect(patches[0].plugins.entries["octogee-board-tools"].config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(oc, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("purges owned disk artifacts, patches config, and resets coach plus project sessions", async () => {
     const oc = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-purge-"));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "customer-oauth-home-"));

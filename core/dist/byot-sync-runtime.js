@@ -1060,7 +1060,7 @@ function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAl
     };
 }
 export function customerOauthRuntimeConfigPatch(current, slug, safeModelRef, opts) {
-    return customerOauthRuntimeConfigPlan(current, slug, safeModelRef, opts?.forceSafeAll === true).patch;
+    return customerOauthRuntimeConfigPlan(current, slug, safeModelRef, opts?.forceSafeAll === true, opts?.gatewayEnv).patch;
 }
 export function customerMountConfigPatch(current, mountPatch, slug, safeModelRef, gatewayEnv) {
     const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
@@ -1098,7 +1098,10 @@ function customerAgentIds(slug, config) {
 }
 async function applyCustomerOauthPurgeConfig(slug, safeModelRef, forceSafeAll, applyConfigPatchFn) {
     return applyConfigPatchFn({
-        buildPatch: (current) => customerOauthRuntimeConfigPatch(current, slug, safeModelRef, { forceSafeAll }),
+        buildPatch: (current) => customerOauthRuntimeConfigPatch(current, slug, safeModelRef, {
+            forceSafeAll,
+            gatewayEnv: process.env,
+        }),
         buildReplacePaths: customerSecurityProjectionReplacePaths,
         logPrefix: `[customer-oauth-purge:${slug}]`,
         skipIfAlreadyApplied: true,

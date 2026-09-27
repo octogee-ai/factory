@@ -1416,13 +1416,14 @@ export function customerOauthRuntimeConfigPatch(
   current: unknown,
   slug: string,
   safeModelRef: string,
-  opts?: { forceSafeAll?: boolean },
+  opts?: { forceSafeAll?: boolean; gatewayEnv?: GatewayResolutionEnv },
 ): Record<string, unknown> {
   return customerOauthRuntimeConfigPlan(
     current,
     slug,
     safeModelRef,
     opts?.forceSafeAll === true,
+    opts?.gatewayEnv,
   ).patch;
 }
 
@@ -1488,7 +1489,10 @@ async function applyCustomerOauthPurgeConfig(
   return applyConfigPatchFn(
     {
       buildPatch: (current) =>
-        customerOauthRuntimeConfigPatch(current, slug, safeModelRef, { forceSafeAll }),
+        customerOauthRuntimeConfigPatch(current, slug, safeModelRef, {
+          forceSafeAll,
+          gatewayEnv: process.env,
+        }),
       buildReplacePaths: customerSecurityProjectionReplacePaths,
       logPrefix: `[customer-oauth-purge:${slug}]`,
       skipIfAlreadyApplied: true,

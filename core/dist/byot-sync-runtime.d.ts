@@ -84,6 +84,7 @@ export type GatewayResolutionEnv = Readonly<Record<string, string | undefined>>;
 export declare function customerSecurityProjectionReplacePaths(current: unknown): string[];
 export declare function customerOauthRuntimeConfigPatch(current: unknown, slug: string, safeModelRef: string, opts?: {
     forceSafeAll?: boolean;
+    gatewayEnv?: GatewayResolutionEnv;
 }): Record<string, unknown>;
 export declare function customerMountConfigPatch(current: unknown, mountPatch: Record<string, unknown>, slug: string, safeModelRef: string, gatewayEnv?: GatewayResolutionEnv): Record<string, unknown>;
 type PurgeCustomerOauthRuntimeDeps = {
