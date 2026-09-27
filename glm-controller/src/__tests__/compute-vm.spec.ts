@@ -150,6 +150,7 @@ describe("createGatewayVmClient.create", () => {
       metadata: {},
       metadataFingerprint: null,
       creationTimestamp: null,
+      lastStartedAt: null,
       serviceAccounts: [],
     });
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
@@ -400,6 +401,7 @@ describe("createGatewayVmClient pool primitives", () => {
     name: "octogee-pool-ab12cd34",
     status: "RUNNING",
     creationTimestamp: "2026-09-05T10:00:00.000-07:00",
+    lastStartTimestamp: "2026-09-05T10:01:00.000-07:00",
     networkInterfaces: [{ networkIP: "10.138.0.20" }],
     scheduling: { provisioningModel: "SPOT" },
     labels: { "octogee-pool": "warm", "octogee-environment": "test" },
@@ -407,7 +409,7 @@ describe("createGatewayVmClient pool primitives", () => {
     metadata: { fingerprint: "mf-1", items: [{ key: "octogee-environment", value: "test" }] },
   };
 
-  it("describe surfaces labels, metadata, both fingerprints, and the creation time", async () => {
+  it("describe surfaces labels, metadata, both fingerprints, and the creation and last start times", async () => {
     const { request } = fakeCompute(() => ({ status: 200, data: pooled }));
     const { client } = clientWith(request);
 
@@ -424,6 +426,7 @@ describe("createGatewayVmClient pool primitives", () => {
       metadata: { "octogee-environment": "test" },
       metadataFingerprint: "mf-1",
       creationTimestamp: "2026-09-05T10:00:00.000-07:00",
+      lastStartedAt: Date.parse("2026-09-05T17:01:00.000Z"),
       serviceAccounts: [],
     });
   });
@@ -710,5 +713,48 @@ describe("createGatewayVmClient.lastPreemptedAt", () => {
     const { request } = fakeCompute(() => http(403));
 
     await expect(clientWith(request).client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a")).rejects.toThrow(/http 403/);
+  });
+});
+
+describe("createGatewayVmClient boot image currency", () => {
+  const IMAGES = "https://www.googleapis.com/compute/v1/projects/octogee/global/images";
+
+  it("reads the image the boot disk was created from, not the home disk's", async () => {
+    const { request, calls } = fakeCompute((call) => {
+      if (call.url === `${BASE}/zones/us-west1-b/instances/${input.instanceName}`) {
+        return instance({ disks: [
+          { boot: false, source: `${BASE}/zones/us-west1-b/disks/${input.instanceName}-home` },
+          { boot: true, source: `${BASE}/zones/us-west1-b/disks/${input.instanceName}` },
+        ] });
+      }
+      if (call.url === `${BASE}/zones/us-west1-b/disks/${input.instanceName}`) {
+        return { status: 200, data: { sourceImage: `${IMAGES}/octogee-computer-20260914`, sourceImageId: "111" } };
+      }
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    });
+
+    expect(await clientWith(request).client.readBootImage(input.instanceName, "us-west1-b")).toEqual({ name: "octogee-computer-20260914", id: "111" });
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("refuses to answer for a boot disk that records no source image", async () => {
+    const { request } = fakeCompute((call) => call.url.includes("/disks/")
+      ? { status: 200, data: {} }
+      : instance({ disks: [{ boot: true, source: `${BASE}/zones/us-west1-b/disks/boot` }] }));
+
+    await expect(clientWith(request).client.readBootImage(input.instanceName, "us-west1-b")).rejects.toThrow(/records no source image/);
+  });
+
+  it("resolves an image family's current member in the named project, defaulting to the client's", async () => {
+    const { request, calls } = fakeCompute(() => ({ status: 200, data: { name: "octogee-computer-20260927", id: "222" } }));
+    const { client } = clientWith(request);
+
+    expect(await client.readFamilyImage("octogee-computer", "octogee")).toEqual({ name: "octogee-computer-20260927", id: "222" });
+    await client.readFamilyImage("octogee-computer");
+
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://compute.googleapis.com/compute/v1/projects/octogee/global/images/family/octogee-computer",
+      `${BASE}/global/images/family/octogee-computer`,
+    ]);
   });
 });

@@ -328,7 +328,7 @@ import {
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
 import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
-import { FinalHomeCheckpointPendingError } from "./vm-computer-lifecycle.js";
+import { FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -3453,12 +3453,7 @@ async function buildHandlers(
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ "vmHome.checkpointRequestedAt": FieldValue.delete() });
     },
     clearVmForReplacement: async (gatewayId) => {
-      await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({
-        vm: null,
-        vmInstance: FieldValue.delete(),
-        vmSpec: FieldValue.delete(),
-        "vmHome.checkpointRequestedAt": FieldValue.delete(),
-      });
+      await clearReplacedComputer({ db, log: logFn }, gatewayId);
     },
     readParkedComputer: (ownerUid) => readParkedComputer(db, ownerUid),
     clearParkedComputer: (ownerUid) => clearParkedComputer(db, ownerUid),

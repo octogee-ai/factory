@@ -42,6 +42,7 @@ export interface GatewayVmDescription {
   metadata: Record<string, string>;
   metadataFingerprint: string | null;
   creationTimestamp: string | null;
+  lastStartedAt: number | null;
   serviceAccounts: Array<{ email: string; scopes: string[] }>;
 }
 
@@ -58,6 +59,11 @@ export interface StartGatewayVmResult {
 export interface BindGatewayVmInput {
   labels: Record<string, string>;
   metadata: Record<string, string>;
+}
+
+export interface ComputeImageRef {
+  name: string;
+  id: string;
 }
 
 export interface CreateGatewayVmResult {
@@ -81,6 +87,8 @@ export interface GatewayVmClient {
   start(instanceName: string, zone: string): Promise<StartGatewayVmResult>;
   delete(instanceName: string, zone: string): Promise<boolean>;
   lastPreemptedAt(instanceName: string, zone: string): Promise<number | null>;
+  readBootImage(instanceName: string, zone: string): Promise<ComputeImageRef>;
+  readFamilyImage(family: string, project?: string): Promise<ComputeImageRef>;
 }
 
 export class ComputeOperationError extends Error {
@@ -122,12 +130,24 @@ interface ComputeInstance {
   zone?: string;
   status?: string;
   creationTimestamp?: string;
+  lastStartTimestamp?: string;
   networkInterfaces?: Array<{ networkIP?: string }>;
   scheduling?: { provisioningModel?: string };
   labels?: Record<string, string>;
   labelFingerprint?: string;
   metadata?: { fingerprint?: string; items?: ComputeMetadataItem[] };
   serviceAccounts?: Array<{ email?: string; scopes?: string[] }>;
+  disks?: Array<{ boot?: boolean; source?: string }>;
+}
+
+interface ComputeDisk {
+  sourceImage?: string;
+  sourceImageId?: string;
+}
+
+interface ComputeImage {
+  name?: string;
+  id?: string;
 }
 
 interface ComputeOperationList {
@@ -176,6 +196,11 @@ function nonEmpty(value: string | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function timestampOf(value: string | undefined): number | null {
+  const at = Date.parse(value ?? "");
+  return Number.isFinite(at) ? at : null;
+}
+
 export function labelFilter(labels: Record<string, string>): string {
   return Object.entries(labels).map(([key, value]) => `(labels.${key} = ${JSON.stringify(value)})`).join(" AND ");
 }
@@ -222,6 +247,7 @@ function describeInstance(instance: ComputeInstance, instanceName: string, zone:
     metadata,
     metadataFingerprint: nonEmpty(instance.metadata?.fingerprint),
     creationTimestamp: nonEmpty(instance.creationTimestamp),
+    lastStartedAt: timestampOf(instance.lastStartTimestamp),
     serviceAccounts: (instance.serviceAccounts ?? []).map((account) => ({
       email: account.email ?? "", scopes: account.scopes ?? [],
     })),
@@ -335,6 +361,26 @@ async function readLastPreemptedAt(request: ComputeRequest, base: string, instan
     pageToken = nonEmpty(page.nextPageToken) ?? undefined;
   } while (pageToken);
   return latest;
+}
+
+async function readBootImage(request: ComputeRequest, base: string, instanceName: string, zone: string): Promise<ComputeImageRef> {
+  const instance = ((await request({ url: `${base}/zones/${zone}/instances/${instanceName}`, method: "GET" })).data ?? {}) as ComputeInstance;
+  const diskName = instance.disks?.find((disk) => disk.boot)?.source?.split("/").at(-1);
+  if (!diskName) throw new Error(`boot image of ${instanceName}: compute returned no boot disk`);
+  const disk = ((await request({ url: `${base}/zones/${zone}/disks/${diskName}`, method: "GET" })).data ?? {}) as ComputeDisk;
+  const name = nonEmpty(disk.sourceImage?.split("/").at(-1));
+  const id = nonEmpty(disk.sourceImageId);
+  if (!name || !id) throw new Error(`boot image of ${instanceName}: boot disk ${diskName} records no source image`);
+  return { name, id };
+}
+
+async function readFamilyImage(request: ComputeRequest, family: string, project: string): Promise<ComputeImageRef> {
+  const res = await request({ url: `https://compute.googleapis.com/compute/v1/projects/${project}/global/images/family/${family}`, method: "GET" });
+  const image = (res.data ?? {}) as ComputeImage;
+  const name = nonEmpty(image.name);
+  const id = nonEmpty(image.id);
+  if (!name || !id) throw new Error(`image family ${project}/${family}: compute returned no current image`);
+  return { name, id };
 }
 
 export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClient {
@@ -551,5 +597,6 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
     start,
     delete: remove, lastPreemptedAt: (instanceName, zone) => readLastPreemptedAt(deps.request, base, instanceName, zone),
+    readBootImage: (name, zone) => readBootImage(deps.request, base, name, zone), readFamilyImage: (family, project = deps.projectId) => readFamilyImage(deps.request, family, project),
   };
 }
