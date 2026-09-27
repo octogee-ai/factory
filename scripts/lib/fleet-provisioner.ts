@@ -5,6 +5,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import { agentIdsFromConfig } from "./byosub-restore.js";
 import { readOpenClawConfig } from "./config.js";
+import { withCustomerRemoval } from "./customer-removal-exclusion.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
@@ -1300,7 +1301,13 @@ async function evictSlugOnlyCustomer(
   return "deleted-user";
 }
 
-export async function evictLocalCustomer(
+export function evictLocalCustomer(
+  input: EvictLocalCustomerInput,
+): Promise<UnmountOutcome> {
+  return withCustomerRemoval(input.slug, () => evictLocalCustomerNow(input));
+}
+
+async function evictLocalCustomerNow(
   input: EvictLocalCustomerInput,
 ): Promise<UnmountOutcome> {
   if (configuredBuilderOverlayIsOwned(input.adapter, input.slug)) {

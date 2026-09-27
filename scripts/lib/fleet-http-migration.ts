@@ -80,6 +80,7 @@ import {
   restoreCustomerRuntimeFromSnapshot,
   type UserSnapshot,
 } from "./customer-lifecycle.js";
+import { withCustomerRemoval } from "./customer-removal-exclusion.js";
 import {
   MIGRATION_ACTIVATION_DIR,
   writeActivationManifest,
@@ -315,7 +316,7 @@ async function removeCustomerWithSystemConfigWatchPaused<T extends { wasMounted:
   remove: () => Promise<T>;
 }): Promise<T> {
   await pauseSystemConfigWatchForBuilder(input.deps, input.slug);
-  return input.remove();
+  return withCustomerRemoval(input.slug, input.remove);
 }
 
 async function resumeSystemConfigWatchAfterConvergence(
