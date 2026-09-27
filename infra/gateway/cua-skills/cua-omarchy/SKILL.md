@@ -17,6 +17,8 @@ Read the `cua-driver` skill first for the observe-act-verify loop and the
 
 - Omarchy on Hyprland with one visible output. The Builder can watch and take
   over the same screen from the Computer pane.
+- The desktop is the paired node `octogee-desktop`: call `computer` with
+  `target: "node"` and `node: "octogee-desktop"`, never `target: "gateway"`.
 - Chromium on this desktop is the same profile the `browser` tool drives.
 - The platform manages the Cua Driver and its desktop node. Do not install,
   update, or reconfigure Cua Driver or the Cua Hyprland plugin, do not run

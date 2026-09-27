@@ -21,6 +21,14 @@ and do not shell out to input or window tools (`wtype`, `ydotool`,
 The snapshot-before-and-verify-after rule below is not optional. Skipping it is
 the most common way a GUI action silently fails.
 
+## Target on this computer
+
+Every `computer` call targets the paired desktop node: pass `target: "node"`
+and `node: "octogee-desktop"`. The Gateway itself has no desktop, so never pass
+`target: "gateway"`. The session host name shown in the OpenClaw Control UI
+(for example `octogee-computer`) is not a node id; `nodes` with
+`action: "status"` lists the real node.
+
 ## Vocabulary
 
 Cua documentation elsewhere uses driver names. On this computer:
