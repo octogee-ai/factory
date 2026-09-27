@@ -110,9 +110,10 @@ Newer full runs were failed or pending; their fast-green push runs were not used
 This is a main snapshot with package version `2026.9.6`, not the GA tag's bytes.
 
 **Exact overlay:** `ceckert/openclaw:codex/openclaw-slim-main-sept26`,
-[`7fbe0bbc9ab8ace568b835b10d2c76893245053d`](https://github.com/ceckert/openclaw/commit/7fbe0bbc9ab8ace568b835b10d2c76893245053d),
-fast-forwarded from `51df909` by the two held-database commits (`bcbfa47`, `7fbe0bb`).
-The clean build's source matches. Its 30 commits include fixture corrections,
+[`88748c5a10ff8baf4086c84a2ce146b49f77c079`](https://github.com/ceckert/openclaw/commit/88748c5a10ff8baf4086c84a2ce146b49f77c079),
+fast-forwarded from `51df909` by the two held-database commits (`bcbfa47`, `7fbe0bb`)
+and the channel-authority/computer-target commit (`88748c5`).
+The clean build's source matches. Its 31 commits include fixture corrections,
 test reductions, resource-cleanup follow-ups and regenerated Workboard assets;
 commit count is not a count of distinct runtime features.
 
@@ -133,6 +134,8 @@ commit count is not a count of distinct runtime features.
 | Model-catalog generation release (`71540de`) | Long-lived gateways | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
 | Workspace-only Gateway registry reuse (`9907538`, narrowed by `a8a5ce9`) | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent is in the selected base; config/environment/metadata checks remain. |
 | Deleted-agent model/auth/secrets/memory cleanup and per-isolate reader registry (`fb99ee1`, `0ed4358`, `1a84c2d`, `bcbfa47`, `7fbe0bb`) | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes native owners, and every isolate's cached database readers, without disrupting surviving agents. |
+| Channel accounts start detached from the calling RPC's plugin-runtime request scope and tool-caller identity (`88748c5`) | Mattermost Coach turns after `config.patch`/`config.apply` hot reload | [#159396](https://github.com/openclaw/openclaw/pull/159396) or equivalent is merged into the selected base: channel monitors restarted by a config RPC keep the Gateway binding but not the closed client's authority. |
+| Explicit computer target `gateway` falls through to the sole paired node when the Gateway has no computer provider (`88748c5`) | Coach `computer` tool on the octogee-desktop node | An upstream PR (not yet filed) or equivalent is merged into the selected base: a provider-less Gateway resolves `gateway` to its one paired node. |
 
 The deletion fix uses the native memory-manager close API. Its proof establishes
 a retained manager/provider lifetime; do not assume the current implementation
@@ -193,9 +196,18 @@ The build reports a 371,762-byte startup gzip against a 371,332-byte budget;
 the unchanged-UI upstream-only contribution build reports 371,784 bytes.
 The warning was not suppressed and no budget was raised.
 
-For `7fbe0bb`: the clean `pnpm build` (build-info matches HEAD), both
+The channel-authority/computer-target commit `88748c5` adds a channel-manager
+regression (`src/gateway/server-channels.request-scope.test.ts`): an account
+started inside a config RPC's plugin-runtime scope keeps the Gateway binding but
+no client authority or tool-caller identity. Its computer-tool case resolves
+explicit `gateway` on a provider-less Gateway to the sole paired node. Both files
+pass (19 tests).
+
+For `88748c5`: the clean `pnpm build` (build-info matches HEAD), both
 maintained packers, native archive integrity and isolated root/Mattermost
-installation (`OpenClaw 2026.9.6 (7fbe0bb)`) pass. The Mattermost pack is
+installation (`OpenClaw 2026.9.6 (88748c5)`) pass; the tree stays clean. The
+build again reports the startup JS gzip budget violation (363.1 KiB against
+362.6 KiB) with no UI change in the commit. The Mattermost pack is
 byte-identical to the already-published `4ee09605` archive and its uncompressed
 tar is byte-identical to the pinned `77619145` (same source, different gzip
 bytes), so the pinned Mattermost object is kept. For `51df909`, the actual
@@ -212,7 +224,7 @@ verified by reading the objects back:
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-b2b1a177.tgz` | `b2b1a1779fed54e6ea0e535145c24ffa696d8d024ece222340cfc073f61a2d2a` | `1790469001151721` |
+| `openclaw-fork-5f0285e5.tgz` | `5f0285e5d2d2d57494190975234d395f1964218a5b2d09a15a2d538053811352` | `1790480036980534` |
 | `openclaw-mattermost-77619145.tgz` (kept) | `776191456b764d679e3dd8a17a8e90d2c1d94bd1285e4622d69efc88aa52928f` | `1790445510528027` |
 
 The selected source uses **shared-state schema 20 / agent schema 23**. Preserve
