@@ -1,3 +1,4 @@
+import { withLogContext } from "@octogee/shared/server/service-logger";
 import * as crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { auth, db } from "../lib/db.js";
@@ -112,7 +113,7 @@ function attachAuthContext(req: Request, res: Response, next: NextFunction): voi
     } catch {
       req.isAdmin = false;
     }
-    next();
+    withLogContext(req.workspaceSlug ? { builderSlug: req.workspaceSlug } : {}, next);
   })().catch((err) => {
     logger.warn(`Auth lookup failed: ${err.message}`);
     res.status(503).json({ error: "Authentication lookup unavailable" });

@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("vm-gateway-agent");
 import { chown, mkdir, statfs, writeFile } from "node:fs/promises";
 import { runVmGatewayAgent } from "../lib/vm-gateway-agent/agent.js";
 import { createDockerEngine } from "../lib/vm-gateway-agent/docker-engine.js";
@@ -11,7 +13,7 @@ function requireEnv(name: string): string {
   return value;
 }
 
-const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
+const log = runtimeLogger.info;
 const stateRoot = process.env.VM_STATE_ROOT?.trim() || "/srv/octogee";
 await runVmGatewayAgent(
   {

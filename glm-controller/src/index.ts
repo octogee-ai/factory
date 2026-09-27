@@ -343,7 +343,6 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 
 const logger = createLogger({
-  color: process.env.NO_COLOR == null,
   debug: debugFromEnv(),
 });
 const log = (msg: string) => logger.legacy(msg);

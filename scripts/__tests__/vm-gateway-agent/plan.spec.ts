@@ -61,6 +61,32 @@ describe("planBundle", () => {
     expect((edge.config.HostConfig as { RestartPolicy: { Name: string } }).RestartPolicy).toEqual({ Name: "unless-stopped" });
   });
 
+  it("labels dedicated Builder container logs with the configured slug", () => {
+    const bundle = bundleFixture();
+    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
+    const plan = planBundle(bundle, ctx);
+    for (const spec of [plan.init, ...plan.services]) {
+      expect(spec!.config.Labels).toMatchObject({ "ai.octogee.builder-slug": "alice" });
+      expect((spec!.config.HostConfig as { LogConfig: { Config: { labels: string } } }).LogConfig.Config.labels).toContain("ai.octogee.builder-slug");
+    }
+  });
+
+  it("replaces sidecars when their logged Builder identity changes", () => {
+    const bundle = bundleFixture();
+    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
+    const before = planBundle(bundle, ctx);
+    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "bob";
+    const after = planBundle(bundle, ctx);
+    expect(specVersion(before.services[1])).not.toBe(specVersion(after.services[1]));
+  });
+
+  it("rejects conflicting Builder identities instead of mislabelling logs", () => {
+    const bundle = bundleFixture();
+    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
+    bundle.containers[1].env.GATEWAY_BUILDER_SLUG = "bob";
+    expect(() => planBundle(bundle, ctx)).toThrow(/conflicting/);
+  });
+
   it("ships every container's logs to Cloud Logging tagged with its gateway and namespace", () => {
     const plan = planBundle(bundleFixture(), ctx);
 

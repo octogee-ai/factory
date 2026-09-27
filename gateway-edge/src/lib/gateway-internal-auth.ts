@@ -1,3 +1,4 @@
+import { logger } from "../middleware/logging.js";
 import * as crypto from "crypto";
 import { readFileSync } from "node:fs";
 import { builderGatewayServiceAccountName } from "@octogee/shared/types/glm";
@@ -67,7 +68,7 @@ export function createGatewayInternalAuthReviewer(
       namespace: expectedNamespace(env),
       verify: deps.verify,
       onRejected: deps.onComputerTokenRejected ?? ((reason) => {
-        console.warn(JSON.stringify({ severity: "WARNING", message: `Builder computer identity token rejected — ${reason}` }));
+        logger.warn(`Builder computer identity token rejected — ${reason}`);
       }),
     }),
   });

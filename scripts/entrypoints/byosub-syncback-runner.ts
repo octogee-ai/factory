@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("byosub-syncback-runner");
 
 
 import * as fs from "fs";
@@ -23,10 +25,7 @@ const OPENCLAW_DIR = openClawDir();
 const CONFIG_PATH = openClawConfigPath();
 const INTERVAL_MS = Number(process.env.BYOSUB_SYNCBACK_INTERVAL_MS) || 300_000;
 
-function log(msg: string): void {
-  const ts = new Date().toISOString().replace("Z", "+00:00");
-  console.log(`${ts} [byosub-syncback] ${msg}`);
-}
+const log = runtimeLogger.info;
 
 async function loadTargets(): Promise<SyncBackTarget[]> {
   if ((process.env.GATEWAY_CLASS ?? "") === "shared") return [];
@@ -94,7 +93,7 @@ const isEntrypoint =
 if (isEntrypoint) {
   
   main().catch((err) => {
-    console.error(`[byosub-syncback] fatal: ${err.message}`);
+    runtimeLogger.error(`[byosub-syncback] fatal: ${err.message}`);
     process.exit(0);
   });
 }

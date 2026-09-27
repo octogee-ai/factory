@@ -76,7 +76,7 @@ export { chatProxyOwnsHttpPath } from "./http-paths.js";
 
 if (process.env.NODE_ENV !== "test") {
   if (!process.env.MM_INTERNAL_URL) {
-    console.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
+    logger.error("FATAL: MM_INTERNAL_URL is required (in-cluster Mattermost URL, e.g. http://mattermost.<ns>.svc.cluster.local:8065)");
     process.exit(1);
   }
 }
@@ -343,7 +343,7 @@ function watchBrokerGatewayIdChange(
 
 if (!getApps().length) {
   initializeApp({ projectId: FIREBASE_PROJECT });
-  console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
+  logger.info(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
 }
 const db = getFirestore();
 
@@ -375,7 +375,7 @@ export async function verifyAuth(req: http.IncomingMessage): Promise<string | nu
       ? decoded.uid
       : null;
   } catch (error) {
-    console.error(`[proxy] auth failed: ${authFailureMessage(error)}`);
+    logger.error(`[proxy] auth failed: ${authFailureMessage(error)}`);
     return null;
   }
 }
@@ -521,7 +521,7 @@ export async function establishUpstreamWithRotation(
   gatewayId: string,
 ): Promise<UpstreamOutcome> {
   if (!process.env.GATEWAY_ID || process.env.GATEWAY_ID !== gatewayId) {
-    console.error("[proxy] OC WS: redeemed gateway does not match the local gateway");
+    logger.error("[proxy] OC WS: redeemed gateway does not match the local gateway");
     return { ok: false, httpStatus: "403 Forbidden" };
   }
   const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_OPENCLAW_GATEWAY_URL;
@@ -547,7 +547,7 @@ async function fetchInitialGatewayAuth(gatewayId: string): Promise<GatewayAuthOu
     return { ok: true, auth };
   } catch (e) {
     if (!(e instanceof GatewayTokenError)) throw e;
-    console.error(`[proxy] OC WS: gateway auth fetch failed — ${e.code}: ${e.message}`);
+    logger.error(`[proxy] OC WS: gateway auth fetch failed — ${e.code}: ${e.message}`);
     return { ok: false, httpStatus: "503 Service Unavailable" };
   }
 }
@@ -558,7 +558,7 @@ async function fetchGatewayAuthAfterRotation(gatewayId: string): Promise<Gateway
     return { ok: true, auth };
   } catch (fetchErr) {
     const fetchCode = fetchErr instanceof GatewayTokenError ? fetchErr.code : "unknown";
-    console.error(`[proxy] OC WS: gateway auth re-fetch during rotation failed — ${fetchCode}`);
+    logger.error(`[proxy] OC WS: gateway auth re-fetch during rotation failed — ${fetchCode}`);
     ocWsHandshakeTotal.inc({ outcome: `fail:refetch:${fetchCode}` });
     return { ok: false, httpStatus: "503 Service Unavailable" };
   }
@@ -707,7 +707,7 @@ function handleOpenClawWsUpgrade(
           gatewayId,
           (newGatewayId) => {
             const destination = newGatewayId ?? "not-assigned-here";
-            console.log(
+            logger.info(
               `[proxy] OC WS: gatewayId changed for uid=${uid}: ${gatewayId} → ${destination}; forcing reconnect`,
             );
             try {
@@ -764,7 +764,7 @@ function handleOpenClawWsUpgrade(
             } else if (now - last >= FRAME_DROP_LOG_WINDOW_MS) {
               lastFrameDropLogByUid.set(uid, now);
               const counts = drainFilteredFrameCounts(uid);
-              console.info(
+              logger.info(
                 `[proxy] OC WS fan-out filtered frames uid=${uid} window=${FRAME_DROP_LOG_WINDOW_MS}ms counts=${counts} (correct per-user routing, not lost messages)`,
               );
             }
@@ -786,7 +786,7 @@ function handleOpenClawWsUpgrade(
         upstream.on("error", () => clientWs.close());
       });
     } catch (e) {
-      console.error(`[proxy] OC WS error: ${e instanceof Error ? e.message : String(e)}`);
+      logger.error(`[proxy] OC WS error: ${e instanceof Error ? e.message : String(e)}`);
       socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
       socket.destroy();
     }
@@ -860,7 +860,7 @@ export function attachChatProxyWsUpgrade(
     mmInternalUrl: MM_INTERNAL_URL,
     createVad: () => SileroVad.create(),
     registry: chatProxyMetricsRegistry,
-    log: (message, fields) => console.log(`[voice] ${message}`, fields ?? {}),
+    log: (message, fields) => logger.info(`[voice] ${message}`, fields ?? {}),
   });
 
   server.on("upgrade", (req, socket, head) => {
@@ -1006,15 +1006,15 @@ function startCoachFinalNotifications(
   void reconcile();
   const timer = setInterval(() => void reconcile(), COACH_RECONCILE_INTERVAL_MS);
   timer.unref();
-  console.log("[chat-proxy] Mattermost final-post notifications started");
+  logger.info("[chat-proxy] Mattermost final-post notifications started");
 }
 
 export async function startChatProxyBackground(): Promise<void> {
   warnIfWsOriginsMisconfigured(logger.warn);
-  console.log(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
+  logger.info(`[chat-proxy] MM internal URL (data path): ${MM_INTERNAL_URL}`);
   const gatewayId = process.env.GATEWAY_ID?.trim();
   if (!gatewayId) {
-    console.error("[chat-proxy] background services disabled: GATEWAY_ID is missing");
+    logger.error("[chat-proxy] background services disabled: GATEWAY_ID is missing");
     return;
   }
   const runtimeBroker = getOpenClawRuntimeBroker();

@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("configured-builder-bootstrap");
 import { pathToFileURL } from "node:url";
 
 import { hydrateConfiguredBuilderBootstrap } from "../lib/configured-builder-bootstrap.js";
@@ -37,7 +39,7 @@ export async function runConfiguredBuilderBootstrap(
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runConfiguredBuilderBootstrap().catch((error) => {
-    console.error(
+    runtimeLogger.error(
       `[configured-builder-bootstrap] Fatal: ${error instanceof Error ? error.message : String(error)}`,
     );
     process.exit(1);

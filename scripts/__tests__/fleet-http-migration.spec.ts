@@ -2247,7 +2247,7 @@ describe("queued-rsync migration control handlers", () => {
       expect(adapter.onUnmounted).not.toHaveBeenCalled();
       expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(
         outcome === "failed" ? "supervisor unavailable" : "process is permitted",
-      ));
+      ), { status: "failed" });
     } else {
       expect(adapter.onUnmounted).toHaveBeenCalledWith("chris");
       expect(adapter.clearMountMarker).toHaveBeenCalledWith("chris");
@@ -3629,13 +3629,13 @@ describe("destination migration progress", () => {
     await createMigrationProgressHandler(mkDeps())(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), res, vi.fn());
     expect(getStatus()).toBe(200);
   });
-  it.each([["running", "🟡"], ["pending", "🟡"], ["done", "🟢"], ["failed", "🔴"]])("logs %s with its outcome color", async (status, icon) => {
+  it.each(["running", "pending", "done", "failed"])("logs %s as structured progress", async (status) => {
     const body = { migrationId: "mig-1", slug: "chris", source: "gw-old", phase: "quiesce-source", status, elapsedMs: 123 };
     const deps = mkDeps();
     const { res, getStatus } = mkResponse();
     await createMigrationProgressHandler(deps)(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), res, vi.fn());
     expect(getStatus()).toBe(200);
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(`${icon} [migration] migrationId=mig-1 builder=chris source=gw-old target=gw-a phase=quiesce-source status=${status} elapsedMs=123`));
+    expect(deps.log).toHaveBeenCalledWith("Migration quiesce-source", expect.objectContaining({ builderSlug: "chris", operationId: "mig-1", sourceGateway: "gw-old", gatewayId: "gw-a", phase: "quiesce-source", status, durationMs: 123 }));
   });
   it.each([{ status: "green" }, { phase: "x\ninjected" }, { elapsedMs: -1 }, { source: "x\ninjected" }])("rejects malformed progress %j", async (invalid) => {
     const body = { migrationId: "mig-1", slug: "chris", source: "gw-old", phase: "copy", status: "done", elapsedMs: 1, ...invalid };

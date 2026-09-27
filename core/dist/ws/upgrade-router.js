@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const logger = createServiceLogger("gateway-edge");
 import * as WsPkg from "ws";
 export class WsUpgradeAuthorizationError extends Error {
     statusCode;
@@ -54,7 +56,7 @@ export class WsUpgradeRouter {
                 writeStatusAndDestroy(socket, err.statusCode, upgradeFailureStatusText(err.statusCode), { "x-octogee-ws-error": safeWsErrorCode(err.errorCode) });
                 return;
             }
-            console.error("WsUpgradeRouter route failed", err);
+            logger.error("WsUpgradeRouter route failed", { error: err });
             writeStatusAndDestroy(socket, 503, "Service Unavailable");
         });
         return true;

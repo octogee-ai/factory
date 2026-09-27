@@ -1,4 +1,6 @@
 #!/usr/bin/env tsx
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("runner-metrics-exporter");
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
@@ -70,7 +72,7 @@ export function createRunnerMetricsServer(
 export function startRunnerMetricsExporter(options: RunnerMetricsExporterOptions = {}): Server {
   const port = options.port ?? Number(process.env.OCTOGEE_RUNNER_METRICS_PORT ?? 9092);
   const dir = options.dir ?? process.env.OCTOGEE_RUNNER_HEARTBEAT_DIR ?? DEFAULT_HEARTBEAT_DIR;
-  const warn = options.warn ?? console.warn;
+  const warn = options.warn ?? runtimeLogger.warn;
   const server = createRunnerMetricsServer({ ...options, dir });
 
   server.listen(port, () => {

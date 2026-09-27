@@ -1,187 +1,111 @@
 import { describe, expect, it } from "vitest";
-import {
-  FLEET_LOGS_FORMAT,
-  FLEET_LOGS_TAIL_ENV,
-  SOURCE_COLORS,
-  buildFleetLogsFilter,
-  fleetLogsTailArgs,
-  parseFleetLogsLine,
-  renderFleetLogLine,
-  sourceColorCode,
-} from "../lib/fleet-logs";
+import { buildFleetLogsFilter, normalizeFleetLog, matchesFleetLog, renderFleetLogLine, parseFleetLogsOptions, createFleetLogsParser, fleetLogsTailArgs } from "../lib/fleet-logs.js";
 
-describe("buildFleetLogsFilter", () => {
-  it("spans pods and VM containers in one filter, scoped to the environment's namespace", () => {
-    expect(buildFleetLogsFilter({ namespace: "octogee-test" })).toBe(
-      '((resource.type="k8s_container" AND resource.labels.namespace_name="octogee-test")' +
-        ' OR (resource.type="gce_instance" AND jsonPayload.container.metadata."ai.octogee.namespace"="octogee-test"))',
-    );
+const pod = (payload: Record<string, unknown> = {}) => ({
+  timestamp: "2026-09-27T15:19:59.365123Z", severity: "INFO", insertId: "one",
+  resource: { type: "k8s_container", labels: { namespace_name: "octogee", pod_name: "octogee-gateway-shared-abc-123-xyz", container_name: "gateway" } },
+  jsonPayload: { message: "Target verified", service: "provisioner", builderSlug: "alice", gatewayId: "shared-abc", status: "succeeded", durationMs: 163, ...payload },
+});
+
+describe("fleet log records", () => {
+  it("keeps structured identity and details instead of flattening them away", () => {
+    const entry = normalizeFleetLog(pod());
+    expect(entry).toMatchObject({ severity: "INFO", service: "provisioner", builderSlug: "alice", gatewayId: "shared-abc", instance: "octogee-gateway-shared-abc-123-xyz", message: "Target verified", details: { durationMs: 163 } });
+    expect(renderFleetLogLine(entry, { color: false })).toBe("15:19:59.365Z INFO provisioner shared-abc/xyz builder=alice 🟢 Target verified durationMs=163");
   });
 
-  it("matches one gateway on either runtime without excluding the other's entries", () => {
-    const filter = buildFleetLogsFilter({ namespace: "octogee", gatewayId: "shared-0" });
-
-    expect(filter).toContain(
-      ' AND (resource.labels.pod_name:"shared-0"' +
-        ' OR jsonPayload.container.metadata."ai.octogee.gateway-id"="shared-0")',
-    );
+  it("reads gcloud live tail's protobuf field names as well as history REST names", () => {
+    const { jsonPayload, ...entry } = pod();
+    expect(normalizeFleetLog({ ...entry, severity: 200, json_payload: jsonPayload })).toMatchObject({ service: "provisioner", builderSlug: "alice", message: "Target verified" });
+    expect(normalizeFleetLog({ ...entry, text_payload: "plain stdout" }).message).toBe("plain stdout");
   });
 
-  it("matches a container by the same name on both runtimes", () => {
-    expect(buildFleetLogsFilter({ namespace: "octogee", container: "gateway-edge" })).toContain(
-      ' AND (resource.labels.container_name="gateway-edge"' +
-        ' OR jsonPayload.container.metadata."ai.octogee.container"="gateway-edge")',
-    );
+  it("distinguishes old and replacement pods serving the same gateway", () => {
+    const old = pod();
+    const next = { ...old, resource: { ...old.resource, labels: { ...old.resource.labels, pod_name: "octogee-gateway-shared-abc-456-new" } } };
+    expect(renderFleetLogLine(normalizeFleetLog(old), { color: false })).not.toBe(renderFleetLogLine(normalizeFleetLog(next), { color: false }));
   });
 
-  it("raises the severity floor when asked", () => {
-    expect(buildFleetLogsFilter({ namespace: "octogee", minSeverity: "ERROR" })).toContain(
-      " AND severity>=ERROR",
-    );
+  it("unwraps Docker gcplogs JSON and trusts emitted severity over DEFAULT", () => {
+    const entry = normalizeFleetLog({ timestamp: "2026-09-27T15:19:59Z", severity: 0, resource: { type: "gce_instance" }, jsonPayload: {
+      instance: { name: "octogee-pool-abcd" }, container: { name: "/octogee-gateway-edge", metadata: { "ai.octogee.gateway-id": "alice-s-123", "ai.octogee.container": "gateway-edge" } },
+      message: JSON.stringify({ severity: "ERROR", service: "gateway-edge", builderSlug: "alice", message: "Request failed", err: { message: "upstream unavailable" } }),
+    } });
+    expect(entry).toMatchObject({ severity: "ERROR", service: "gateway-edge", builderSlug: "alice", gatewayId: "alice-s-123", instance: "octogee-pool-abcd", message: "Request failed" });
+    expect(matchesFleetLog(entry, { level: "WARNING", services: ["gateway-edge"], builders: ["alice"] })).toBe(true);
   });
 
-  it("refuses values that would escape the filter expression", () => {
-    expect(() => buildFleetLogsFilter({ namespace: 'octogee" OR "a"="a' })).toThrow(/namespace/);
-    expect(() => buildFleetLogsFilter({ namespace: "octogee", gatewayId: "a b" })).toThrow(/gateway/);
-    expect(() => buildFleetLogsFilter({ namespace: "octogee", container: "../x" })).toThrow(/container/);
-    expect(() => buildFleetLogsFilter({ namespace: "octogee", minSeverity: "LOUD" })).toThrow(/severity/);
+  it("never invents Builder identity from an instance or incidental message text", () => {
+    const entry = normalizeFleetLog(pod({ builderSlug: undefined, message: "Looking up alice; slug=alice" }));
+    expect(entry.builderSlug).toBeUndefined();
+    expect(matchesFleetLog(entry, { builders: ["alice"] })).toBe(false);
+  });
+
+  it("distinguishes application numeric levels from Cloud Logging numeric severity", () => {
+    expect(normalizeFleetLog(pod({ level: 50 })).severity).toBe("ERROR");
+    expect(normalizeFleetLog({ ...pod(), jsonPayload: { message: "failure" }, severity: 500 }).severity).toBe("ERROR");
+  });
+
+  it("keeps unknown severity visible at info but excludes it from warning/error filters", () => {
+    const entry = normalizeFleetLog({ ...pod(), severity: undefined, jsonPayload: { message: "plain text" } });
+    expect(entry.severity).toBe("DEFAULT");
+    expect(matchesFleetLog(entry, { level: "INFO" })).toBe(true);
+    expect(matchesFleetLog(entry, { level: "WARNING" })).toBe(false);
+  });
+
+  it("combines filters with AND and list values with OR, matching slugs exactly", () => {
+    const entry = normalizeFleetLog(pod());
+    expect(matchesFleetLog(entry, { services: ["api", "provisioner"], builders: ["alice"] })).toBe(true);
+    expect(matchesFleetLog(entry, { services: ["api"], builders: ["alice"] })).toBe(false);
+    expect(matchesFleetLog(entry, { builders: ["ali"] })).toBe(false);
+    expect(matchesFleetLog(entry, { levelExact: ["WARNING", "ERROR"] })).toBe(false);
+  });
+
+  it("removes producer ANSI and duplicate timestamps, escaping multiline text for one-line output", () => {
+    const entry = normalizeFleetLog({ ...pod(), jsonPayload: undefined, textPayload: "\u001b[31m2026-09-27T15:19:59.365+00:00 [ws] connected\u001b[0m\nnext\tline" });
+    const line = renderFleetLogLine(entry, { color: false, timestamps: "full" });
+    expect(line).toContain("2026-09-27T15:19:59.365Z INFO gateway");
+    expect(line).toContain("[ws] connected\\nnext\\tline");
+    expect(line).not.toContain("\u001b");
+  });
+
+  it("preserves third-party structured context and unknown payloads", () => {
+    expect(normalizeFleetLog({ ...pod(), jsonPayload: { msg: "Received HTTP request", level: "debug", request_id: "r1", url: "/api/v4/users" } })).toMatchObject({ severity: "DEBUG", details: { request_id: "r1", url: "/api/v4/users" } });
+    expect(normalizeFleetLog({ ...pod(), jsonPayload: { diagnostic: "why" } }).details).toEqual({ diagnostic: "why" });
   });
 });
 
-describe("fleetLogsTailArgs", () => {
-  it("tails the cluster project, where both runtimes write, ordering by arrival window", () => {
-    expect(fleetLogsTailArgs({ projectId: "octogee", filter: 'resource.type="gce_instance"' })).toEqual([
-      "alpha",
-      "logging",
-      "tail",
-      'resource.type="gce_instance"',
-      "--project=octogee",
-      "--buffer-window=2s",
-      `--format=${FLEET_LOGS_FORMAT}`,
-    ]);
+describe("fleet logs CLI", () => {
+  it("accepts comma lists and validates standard options", () => {
+    expect(parseFleetLogsOptions(["--env=prod", "logs", "--level", "warn", "--service=api,cowboy", "--builder=alice,bob", "--no-follow", "--since=30m"])).toMatchObject({ environment: "prod", level: "WARNING", services: ["api", "cowboy"], builders: ["alice", "bob"], follow: false, since: "30m" });
   });
-});
-
-describe("FLEET_LOGS_TAIL_ENV", () => {
-  it("unbuffers gcloud's python so a piped tail streams instead of stalling", () => {
-    expect(FLEET_LOGS_TAIL_ENV).toEqual({ PYTHONUNBUFFERED: "1" });
+  it.each([["--levle=warn"], ["--service"], ["--level=loud"], ["--builder=alice,"], ["--since=forever"], ["--format=xml"], ["--level=warn", "--level-exact=error"], ["--limit=0"], ["--service=api", "--service=gateway"]])("rejects invalid options %j", (...extra) => {
+    expect(() => parseFleetLogsOptions(["--env=prod", "logs", ...extra])).toThrow();
   });
-});
-
-describe("parseFleetLogsLine", () => {
-  const fields = (...v: string[]) => v.join("\t");
-
-  it("reads a pod entry as pod/container", () => {
-    const parsed = parseFleetLogsLine(
-      fields("2026-09-17T12:00:00Z", "INFO", "octogee-gw-shared-0-abc", "gateway", "", "", "boot complete", "", ""),
-    );
-
-    expect(parsed).toEqual({
-      timestamp: "2026-09-17T12:00:00Z",
-      severity: "INFO",
-      source: "octogee-gw-shared-0-abc/gateway",
-      message: "boot complete",
-    });
+  it("does not push severity or Builder filtering ahead of VM JSON normalization", () => {
+    expect(buildFleetLogsFilter({ namespace: "octogee" })).toContain('jsonPayload.container.metadata."ai.octogee.namespace"="octogee"');
+    expect(fleetLogsTailArgs({ projectId: "octogee", filter: "filter" })).toContain("--format=json");
   });
-
-  it("reads a VM entry as instance/container, dropping Docker's leading slash", () => {
-    const parsed = parseFleetLogsLine(
-      fields("2026-09-17T12:00:01Z", "ERROR", "", "", "ceckert-m-5a5e", "/octogee-gateway", "", "", "probe failed"),
-    );
-
-    expect(parsed).toEqual({
-      timestamp: "2026-09-17T12:00:01Z",
-      severity: "ERROR",
-      source: "ceckert-m-5a5e/octogee-gateway",
-      message: "probe failed",
-    });
+  it("includes revisioned gateway pods without matching a different gateway", () => {
+    const filter = buildFleetLogsFilter({ namespace: "octogee", gatewayId: "shared-a" });
+    const pattern = new RegExp(filter.match(/pod_name=~"([^"]+)"/)![1]);
+    expect(pattern.test("octogee-gateway-shared-a-abc123-xyz12")).toBe(true);
+    expect(pattern.test("octogee-gateway-shared-a-r2-abc123-xyz12")).toBe(true);
+    expect(pattern.test("octogee-gateway-shared-a-r12-abc123-xyz12")).toBe(true);
+    expect(pattern.test("octogee-gateway-shared-ab-r2-abc123-xyz12")).toBe(false);
   });
-
-  it("reads the one populated text field, whichever it is, keeping tabs inside the line", () => {
-    const at = (i: number, value: string) => {
-      const row = ["t", "INFO", "p", "c", "", "", "", "", ""];
-      row[i] = value;
-      return fields(...row);
-    };
-
-    expect(parseFleetLogsLine(at(6, "pod stdout line"))?.message).toBe("pod stdout line");
-    expect(parseFleetLogsLine(at(7, "Received HTTP request"))?.message).toBe("Received HTTP request");
-    expect(parseFleetLogsLine(at(8, "vm driver line"))?.message).toBe("vm driver line");
-    expect(parseFleetLogsLine(at(8, "a\tb"))?.message).toBe("a\tb");
+  it("streams complete records before the array closes and handles split UTF-8", () => {
+    const seen: unknown[] = [];
+    const parser = createFleetLogsParser(value => seen.push(value));
+    const bytes = Buffer.from('[{"message":"🟢 ready"},');
+    for (const byte of bytes) parser.write(Buffer.from([byte]));
+    expect(seen).toEqual([{ message: "🟢 ready" }]);
+    parser.write('{"message":"done"}]');
+    if (!parser.isEnded) parser.end();
+    expect(seen).toHaveLength(2);
   });
-
-  it("names the numeric severity that tail emits, and passes through read's string form", () => {
-    const withSeverity = (value: string) =>
-      parseFleetLogsLine(fields("t", value, "p", "c", "", "", "line", "", ""))?.severity;
-
-    expect(withSeverity("200")).toBe("INFO");
-    expect(withSeverity("100")).toBe("DEBUG");
-    expect(withSeverity("400")).toBe("WARNING");
-    expect(withSeverity("500")).toBe("ERROR");
-    expect(withSeverity("800")).toBe("EMERGENCY");
-    expect(withSeverity("ERROR")).toBe("ERROR");
-    expect(withSeverity("")).toBe("DEFAULT");
-  });
-
-  it("skips gcloud's progress chatter rather than rendering it as a log line", () => {
-    expect(parseFleetLogsLine("")).toBeNull();
-    expect(parseFleetLogsLine("Waiting for log entries...")).toBeNull();
-    expect(parseFleetLogsLine("Initializing tail session.")).toBeNull();
-  });
-});
-
-describe("renderFleetLogLine", () => {
-  it("leads with the clock time and the source so the two runtimes line up", () => {
-    expect(
-      renderFleetLogLine(
-        { timestamp: "2026-09-17T12:00:01.5Z", severity: "ERROR", source: "vm-1/octogee-gateway", message: "boom" },
-        { color: false },
-      ),
-    ).toBe("12:00:01 ERROR vm-1/octogee-gateway boom");
-  });
-
-  it("paints the source, dims the clock, and reddens an error's message", () => {
-    const line = renderFleetLogLine(
-      { timestamp: "2026-09-17T12:00:01.5Z", severity: "ERROR", source: "vm-1/gw", message: "boom" },
-      { color: true },
-    );
-
-    expect(line).toBe(
-      `\x1b[2m12:00:01\x1b[0m \x1b[1;31mERROR\x1b[0m ` +
-        `\x1b[38;5;${sourceColorCode("vm-1/gw")}mvm-1/gw\x1b[0m \x1b[31mboom\x1b[0m`,
-    );
-  });
-
-  it("leaves a non-error message unpainted so the source stays the eye's anchor", () => {
-    const line = renderFleetLogLine(
-      { timestamp: "2026-09-17T12:00:01Z", severity: "INFO", source: "pod-a/gw", message: "ready" },
-      { color: true },
-    );
-
-    expect(line.endsWith(" ready")).toBe(true);
-  });
-});
-
-describe("sourceColorCode", () => {
-  it("gives one source the same color every run, so a stream stays trackable", () => {
-    expect(sourceColorCode("octogee-gw-shared-0-abc/gateway")).toBe(
-      sourceColorCode("octogee-gw-shared-0-abc/gateway"),
-    );
-    expect(SOURCE_COLORS).toContain(sourceColorCode("anything"));
-  });
-
-  it("spreads the fleet's real sources across the palette rather than clumping", () => {
-    const sources = [
-      "octogee-api-77d5fd4447-z4zqs/octogee-api",
-      "mattermost-7fc4f959-v594s/mattermost",
-      "octogee-gitea-7b875c8865-75gpq/gitea",
-      "octogee-gw-shared-0-abc/gateway",
-      "octogee-gw-shared-0-abc/gateway-edge",
-      "ceckert-m-5a5e/octogee-gateway",
-      "ceckert-m-5a5e/octogee-gateway-edge",
-      "octogee-vm-bridge-6dfb467764-d79kt/nginx",
-    ];
-
-    expect(new Set(sources.map(sourceColorCode)).size).toBeGreaterThanOrEqual(7);
+  it("fails visibly on malformed transport JSON", () => {
+    const parser = createFleetLogsParser(() => {});
+    expect(() => parser.write('[{"message": INVALID}]')).toThrow();
   });
 });

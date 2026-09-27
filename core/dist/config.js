@@ -1,3 +1,4 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -34,16 +35,16 @@ export const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 export const GITHUB_ORG = process.env.GIT_ORG || process.env.GITHUB_ORG || "octogee";
 export const BLOB_SYNC_MAX_CONCURRENT = 10;
 export const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
-export function log(msg) {
-    const ts = new Date().toISOString().replace("Z", "+00:00");
-    console.log(`${ts} [provisioner] ${msg}`);
+const provisionerLogger = createServiceLogger("provisioner");
+export function log(msg, fields) {
+    const level = fields?.status === "failed" ? "error" : "info";
+    provisionerLogger[level](msg, fields);
 }
 export function logLevel() {
     return (process.env.LOG_LEVEL ?? "info").toLowerCase();
 }
-export function dlog(msg) {
-    if (logLevel() === "debug")
-        log(msg);
+export function dlog(msg, fields) {
+    provisionerLogger.debug(msg, fields);
 }
 export function bootBanner(component) {
     return (`boot ${component} sha=${process.env.BUILD_SHA ?? "unknown"}` +

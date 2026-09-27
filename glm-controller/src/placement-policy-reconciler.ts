@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const eventLogger = createServiceLogger("cowboy");
 import type {
   Firestore,
   QueryDocumentSnapshot,
@@ -2617,7 +2619,7 @@ export interface GatewayPodReplacementRecord {
 export const UNATTRIBUTED_NODE_IDENTITY = "unknown";
 
 function emitGatewayPodReplacementRecord(value: GatewayPodReplacementRecord): void {
-  console.log(JSON.stringify(value));
+  eventLogger.info("Gateway pod replaced", { ...value });
 }
 
 function storedPodPlacements(

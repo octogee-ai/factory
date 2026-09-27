@@ -1,3 +1,4 @@
+import { logger } from "../middleware/logging.js";
 export type BridgeLogSeverity = "info" | "warn";
 
 export type BridgeLog = (message: string, severity?: BridgeLogSeverity) => void;
@@ -10,8 +11,8 @@ export interface BridgeLogDependencies {
 
 export function createBridgeLog(deps: BridgeLogDependencies = {}): BridgeLog {
   const now = deps.now ?? (() => new Date());
-  const info = deps.info ?? ((message: string) => console.log(message));
-  const warn = deps.warn ?? ((message: string) => console.warn(message));
+  const info = deps.info ?? ((message: string) => logger.info(message));
+  const warn = deps.warn ?? ((message: string) => logger.warn(message));
 
   return (message: string, severity: BridgeLogSeverity = "info"): void => {
     const formatted = `${now().toISOString()} ${message}`;

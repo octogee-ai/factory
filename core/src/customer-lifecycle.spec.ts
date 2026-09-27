@@ -2861,3 +2861,22 @@ describe("cloneMissingProjects — GitHub checkouts hydrate only on the owner's 
     expect(result).toEqual({ steps: ["project-clone"], pending: ["octogee"], deferred: [] });
   });
 });
+
+describe("lifecycle log identity", () => {
+  it("binds each concurrent removal's canonical Builder slug and clears it afterwards", async () => {
+    const { createServiceLogger } = await import("@octogee/shared/server/service-logger");
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      const logger = createServiceLogger("provisioner");
+      await Promise.all(["alice", "bob"].map(async slug => {
+        const adapter = makeAdapter(makeState(snap({ uid: slug, slug }), emptyDisk()));
+        adapter.log = message => logger.info(message);
+        await removeCustomerFromGateway(adapter, slug);
+      }));
+      expect(lines.map(line => JSON.parse(line).builderSlug).sort()).toEqual(["alice", "bob"]);
+      logger.info("Shared work");
+      expect(JSON.parse(lines.at(-1)!).builderSlug).toBeUndefined();
+    } finally { spy.mockRestore(); }
+  });
+});

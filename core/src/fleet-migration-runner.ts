@@ -1,3 +1,4 @@
+import { withLogContext } from "@octogee/shared/server/service-logger";
 
 
 import {
@@ -339,11 +340,13 @@ export async function runMigration(
   input: MigrationRunnerInput,
   deps: MigrationRunnerDeps,
 ): Promise<MigrationRunnerResult> {
-  const execution = createMigrationExecution(input, deps);
-  while (true) {
-    const result = await runNextMigrationStep(execution);
-    if (result) return result;
-  }
+  return withLogContext({ builderSlug: input.slug, operationId: input.migrationId, category: "migration", sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId }, async () => {
+    const execution = createMigrationExecution(input, deps);
+    while (true) {
+      const result = await runNextMigrationStep(execution);
+      if (result) return result;
+    }
+  });
 }
 
 interface MigrationExecution {

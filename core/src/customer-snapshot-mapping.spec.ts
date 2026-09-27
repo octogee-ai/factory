@@ -362,7 +362,7 @@ describe("collectProjectAgentStates", () => {
       expect(states).toHaveLength(2);
       expect(states[0]).toEqual({ projectId: "broken", enabled: true, mmUserId: "bot-broken", token: "pat-broken", status: "error", activationId: null });
       expect(states[1]).toMatchObject({ projectId: "healthy", identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } });
-      expect(error).toHaveBeenCalledWith("Project agent identity rejected", { projectId: "broken", error: "Invalid project agent identity" });
+      expect(JSON.parse(String(error.mock.calls[0][0]))).toMatchObject({ severity: "ERROR", message: "Project agent identity rejected", projectId: "broken", error: "Invalid project agent identity" });
     } finally { error.mockRestore(); }
   });
 

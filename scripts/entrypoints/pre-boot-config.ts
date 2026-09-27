@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("pre-boot-config");
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
@@ -27,10 +29,7 @@ import { parseAgentId } from "@octogee/shared/types/identity";
 
 const CONFIG_PATH = openClawConfigPath();
 
-function log(msg: string): void {
-  const ts = new Date().toISOString().replace("Z", "+00:00");
-  console.log(`${ts} [pre-boot] ${msg}`);
-}
+const log = runtimeLogger.info;
 
 // Builders reach platform credits through the LLM broker exactly like Barns;
 // only BYOSUB bypasses it, and no gateway class ever holds a provider key.
@@ -807,7 +806,7 @@ async function main(): Promise<void> {
 
 const isEntrypoint = process.argv[1] && process.argv[1].endsWith("pre-boot-config.ts") || process.argv[1]?.endsWith("pre-boot-config.js");
 function exitPreBootWithError(error: unknown): never {
-  console.error(`[pre-boot] Fatal: ${error instanceof Error ? error.message : String(error)}`);
+  runtimeLogger.error(`[pre-boot] Fatal: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 }
 

@@ -1,3 +1,4 @@
+import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { Router, type Request, type Response } from "express";
 import { db } from "../../../gateway-edge/src/lib/db.js";
 import { requireAuth } from "../../../gateway-edge/src/middleware/auth.js";
@@ -66,7 +67,7 @@ async function getMmCreds(uid: string): Promise<GetMmCredsResult> {
 
     return { ok: true, mmToken, mmUserId };
   } catch (e) {
-    console.error(
+    logger.error(
       `[mm-proxy] failed to load MM creds for ${uid}: ${e instanceof Error ? e.message : String(e)}`,
     );
     return { ok: false, reason: "lookup-error" };
@@ -77,7 +78,7 @@ export const mattermostMintRoutes = Router();
 mattermostMintRoutes.post("/", requireAuth, async (req: Request, res: Response) => {
 
 if (!API_PUBLIC_URL) {
-    console.error("[mm-proxy] API_PUBLIC_URL unset — refusing to mint with empty mmUrl");
+    logger.error("[mm-proxy] API_PUBLIC_URL unset — refusing to mint with empty mmUrl");
     res.status(503).json({ error: "Chat service misconfigured" });
     return;
   }
@@ -101,12 +102,12 @@ if (!API_PUBLIC_URL) {
 export function mmRestProxyHandler(req: Request, res: Response): void {
   
   if (!MM_INTERNAL_URL) {
-    console.error("[mm-proxy] MM_INTERNAL_URL unset — cannot proxy MM REST");
+    logger.error("[mm-proxy] MM_INTERNAL_URL unset — cannot proxy MM REST");
     res.status(502).json({ error: "Chat service misconfigured" });
     return;
   }
   forwardMmRest(
-    { mmInternalUrl: MM_INTERNAL_URL, log: (msg) => console.warn(msg) },
+    { mmInternalUrl: MM_INTERNAL_URL, log: (msg) => logger.warn(msg) },
     req,
     res,
   );

@@ -8,8 +8,7 @@ import {
 } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
-import { spawn, spawnSync } from "node:child_process";
-import * as readline from "node:readline";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -56,13 +55,7 @@ import {
 
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
 import { addCustomerAssignmentRefusal } from "../lib/fleet-add-customer.js";
-import {
-  FLEET_LOGS_TAIL_ENV,
-  buildFleetLogsFilter,
-  fleetLogsTailArgs,
-  parseFleetLogsLine,
-  renderFleetLogLine,
-} from "../lib/fleet-logs.js";
+import { runFleetLogsCommand } from "../lib/fleet-logs-command.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -166,13 +159,15 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "logs",
     summary: "Tail Shared (GKE) and Builder (GCE VM) gateway logs together, live.",
-    args: "[--gateway=<gw-id>] [--container=<name>] [--severity=<level>] [--buffer-window=<dur>]",
+    args: "[--level=<level>] [--service=<names>] [--builder=<slugs>] [options]",
     description:
-      "Streams `gcloud alpha logging tail` over both runtimes at once: pods in the environment's namespace and VM containers carrying that namespace's label. --gateway and --container match the same way on either runtime.\nNeeds the alpha component and its live-tailing prerequisites: https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing",
+      "Streams Cloud Logging from GKE and Builder VMs using your gcloud credentials.\n--level=<level> Minimum severity (default info); --level-exact=<levels> selects exact levels.\n--service=<names> and --builder=<slugs> accept comma lists (OR within a list, AND between filters).\nServices: api, cowboy, gateway, gateway-edge, provisioner, mattermost, gitea, nginx, or emitted service name.\nBuilder filtering matches structured builderSlug or explicit dedicated VM labels; untagged events are excluded.\n--gateway=<id> / --container=<name> narrow the Cloud Logging query.\n--no-follow reads recent history; --since=10m and --limit=1000 control the fetched records, before local filters.\n--format=pretty|json (JSON Lines); --timestamps=short|full; --color=auto|always|never.\n--buffer-window=2s sets live arrival ordering (0s–60s). DEFAULT entries remain visible at info.\nLive tail requires gcloud alpha and its gRPC prerequisites: https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing",
     examples: [
       "fleet --env=prod logs",
       "fleet --env=prod logs --gateway=shared-0",
-      "fleet --env=test logs --container=gateway-edge --severity=ERROR",
+      "fleet --env=test logs --service=api,gateway-edge --level=warn",
+      "fleet --env=prod logs --builder=ceckert",
+      "fleet --env=prod logs --no-follow --since=30m --format=json",
     ],
     writes: false,
   },
@@ -435,7 +430,15 @@ const VALUE_FLAGS = new Set([
   "idempotency-key",
   "sha",
   "container",
-  "severity",
+  "level",
+  "level-exact",
+  "service",
+  "builder",
+  "since",
+  "limit",
+  "format",
+  "timestamps",
+  "color",
   "buffer-window",
 ]);
 
@@ -969,7 +972,8 @@ function initializeFleetCli(argv: string[]): void {
   }
 
   if (args.positional.length === 0 || args.flags.help === true) {
-    console.log(renderTopHelp());
+    const verb = resolveFleetVerb(args);
+    console.log(verb ? renderVerbHelp(verb) : renderTopHelp());
     process.exit(args.positional.length === 0 ? 1 : 0);
   }
 
@@ -1005,6 +1009,7 @@ function initializeFleetCli(argv: string[]): void {
   }
 
   const target = resolveFleetDeploymentTarget(args.env);
+  if (args.positional[0] === "logs") return;
   const projectId = target.projectId;
   const applicationDefaultServiceAccount = applicationDefaultServiceAccountCredential(
     process.env.GOOGLE_APPLICATION_CREDENTIALS,
@@ -1026,7 +1031,6 @@ function initializeFleetCli(argv: string[]): void {
   db = getFirestore();
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
-  CLUSTER_PROJECT = target.clusterProjectId;
 }
 
 export function resolveFleetOperatorUidFromUserConfigs(
@@ -1103,7 +1107,6 @@ function fleetAdminClient(): AdminFleetClient {
 
 let KUBE_CONTEXT = resolveFleetDeploymentTarget("test").kubeContext;
 let KUBE_NS = resolveFleetDeploymentTarget("test").namespace;
-let CLUSTER_PROJECT = resolveFleetDeploymentTarget("test").clusterProjectId;
 
 type FirestoreTs = { toMillis(): number };
 
@@ -1535,52 +1538,6 @@ async function releaseStatus(): Promise<void> {
   console.log(table(releaseStatusRows(status)));
 }
 
-async function runFleetLogs(): Promise<void> {
-  const filter = buildFleetLogsFilter({
-    namespace: KUBE_NS,
-    gatewayId: stringFlag(args, "gateway"),
-    container: stringFlag(args, "container"),
-    minSeverity: stringFlag(args, "severity"),
-  });
-  const gcloudArgs = fleetLogsTailArgs({
-    projectId: CLUSTER_PROJECT,
-    filter,
-    bufferWindow: stringFlag(args, "buffer-window"),
-  });
-
-  console.error(dim(`  tailing ${CLUSTER_PROJECT}: pods in ${KUBE_NS} + Builder VM containers labelled for it`));
-  console.error(dim(`  filter: ${filter}`));
-
-  const child = spawn(
-    // eslint-disable-next-line sonarjs/no-os-command-from-path
-    "gcloud",
-    gcloudArgs,
-    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...FLEET_LOGS_TAIL_ENV } },
-  );
-  const stderr: string[] = [];
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => stderr.push(chunk));
-  readline.createInterface({ input: child.stdout }).on("line", (line) => {
-    const entry = parseFleetLogsLine(line);
-    if (entry) console.log(renderFleetLogLine(entry, { color: COLOR_ENABLED }));
-  });
-
-  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.on("error", reject);
-      child.on("close", (code, signal) => resolve({ code, signal }));
-    },
-  );
-
-  if (exit.code === 0 || exit.signal === "SIGINT" || exit.signal === "SIGTERM") return;
-  const detail = stderr.join("").trim();
-  console.error(red(`${CROSS} gcloud alpha logging tail exited ${exit.code ?? exit.signal}`));
-  if (detail) console.error(dim(detail));
-  console.error(dim(`  Live tailing needs the alpha component and its gRPC prerequisites:`));
-  console.error(dim(`  https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing`));
-  process.exit(1);
-}
-
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
@@ -1834,7 +1791,7 @@ async function main(): Promise<void> {
     case "release status":
       return releaseStatus();
     case "logs":
-      return runFleetLogs();
+      return runFleetLogsCommand(process.argv.slice(2));
     case "gw restart":
       return runFleetGatewayRestart();
   }

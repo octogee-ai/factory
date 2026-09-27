@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("system-config-watch");
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -74,7 +76,7 @@ export function runSystemConfigWatch(options: RunSystemConfigWatchOptions = {}):
         }
         return (options.sync ?? syncSystemConfigForSlug)(plan.slug, {
           openclawDir,
-          log: (message) => console.log(message),
+          log: (message) => runtimeLogger.info(message),
           durablePolicy: true,
           env,
           source: "auto-watch",
@@ -90,7 +92,7 @@ export function runSystemConfigWatch(options: RunSystemConfigWatchOptions = {}):
       }
       return (options.audit ?? auditSystemConfigForSlug)(plan.slug);
     },
-    log: (message) => console.error(message),
+    log: (message) => runtimeLogger.error(message),
     onStatusChange: (status) => {
       const current = readSystemConfigStatus(openclawDir);
       const at = new Date().toISOString();
@@ -119,7 +121,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     runSystemConfigWatch({ env: process.env });
   } catch (error) {
-    console.error(`[system_config] watcher fatal: ${error instanceof Error ? error.message : String(error)}`);
+    runtimeLogger.error(`[system_config] watcher fatal: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 }

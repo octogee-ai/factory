@@ -366,10 +366,10 @@ const r = await attempt(port, "/k", {
     const result = await attempt(port, "/dashboard", { origin: "https://api.example" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.status).toBe(503);
-    expect(errorSpy).toHaveBeenCalledWith(
-      "WsUpgradeRouter route failed",
-      expect.any(Error),
-    );
+    expect(JSON.parse(String(errorSpy.mock.calls[0][0]))).toMatchObject({
+      severity: "ERROR", message: "WsUpgradeRouter route failed",
+      error: { name: "Error", message: "broker unavailable" },
+    });
     errorSpy.mockRestore();
   });
 

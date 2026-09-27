@@ -50,7 +50,9 @@ describe("core firebase bootstrap", () => {
     });
     expect(mocks.getFirestore).toHaveBeenCalledTimes(1);
     expect(module.db).toEqual({ kind: "firestore" });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("[provisioner] Firebase:"));
+    expect(JSON.parse(String(log.mock.calls[0][0]))).toMatchObject({
+      service: "provisioner", severity: "INFO", message: expect.stringContaining("Firebase:"),
+    });
   });
 
   it("reuses an existing admin app and resolves prod from GCLOUD_PROJECT", async () => {

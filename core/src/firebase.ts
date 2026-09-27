@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const logger = createServiceLogger("provisioner");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
@@ -14,14 +16,14 @@ if (!getApps().length) {
     options.projectId = FIREBASE_PROJECT_ID;
   }
   initializeApp(options);
-  console.log(
-    `${new Date().toISOString().replace("Z", "+00:00")} [provisioner] Firebase: Application Default Credentials (Workload Identity)`,
+  logger.info(
+    `Firebase: Application Default Credentials (Workload Identity)`,
   );
 }
 
 export const OCTOGEE_ENV = deploymentEnvironmentForProject(FIREBASE_PROJECT_ID);
 
-console.log(`${new Date().toISOString().replace("Z", "+00:00")} [provisioner] Environment: ${OCTOGEE_ENV} (${FIREBASE_PROJECT_ID})`);
+logger.info(`Environment: ${OCTOGEE_ENV} (${FIREBASE_PROJECT_ID})`);
 
 export const db = getFirestore();
 

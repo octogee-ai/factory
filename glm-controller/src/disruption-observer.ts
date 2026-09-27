@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const eventLogger = createServiceLogger("cowboy");
 import type { Firestore } from "firebase-admin/firestore";
 import type { KubectlSubprocess } from "./lib/kube-ops.js";
 import {
@@ -355,7 +357,8 @@ async function gatewayRecords(
 }
 
 function emitRecord(record: DisruptionRecord): void {
-  console.log(JSON.stringify(record));
+  const level = ({ CRITICAL: "fatal", WARNING: "warn", INFO: "info" } as const)[record.severity];
+  eventLogger[level]("Gateway disruption observed", { ...record });
 }
 
 // eslint-disable-next-line complexity, sonarjs/cognitive-complexity

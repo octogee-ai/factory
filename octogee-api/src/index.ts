@@ -4,7 +4,8 @@ import express, { Request, Response, type RequestHandler } from "express";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
 
 import { corsMiddleware } from "../../gateway-edge/src/middleware/cors.js";
-import { requestLogger, logger } from "../../gateway-edge/src/middleware/logging.js";
+import { requestLogger, logger, setLogService } from "../../gateway-edge/src/middleware/logging.js";
+
 import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware } from "../../gateway-edge/src/middleware/security.js";
 
@@ -153,6 +154,8 @@ import {
   PROJECT_HOSTING_RETIREMENT_AUDIENCE,
   requireProjectPublishService,
 } from "./lib/project-publish/service-auth.js";
+
+setLogService("api");
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const TENANT_BOUND_API_ROUTES = new Set([

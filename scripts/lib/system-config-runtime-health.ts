@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("system-config-runtime-health");
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -150,13 +152,13 @@ export async function probeOpenClawHealth(
   try {
     const response = await fetch(healthUrl, { signal });
     await response.body?.cancel();
-    if (!response.ok) console.warn("[openclaw-health] probe failed", {
+    if (!response.ok) runtimeLogger.warn("[openclaw-health] probe failed", {
       failure: "http-error", status: response.status,
       durationMs: Math.round(performance.now() - startedAt),
     });
     return response.ok;
   } catch {
-    console.warn("[openclaw-health] probe failed", {
+    runtimeLogger.warn("[openclaw-health] probe failed", {
       failure: signal.aborted ? "timeout" : "request-failed",
       durationMs: Math.round(performance.now() - startedAt),
     });
@@ -210,7 +212,7 @@ export async function refreshSystemConfigRuntimeHealth(
 export function createSystemConfigStatusPublisher(options: SystemConfigStatusPublisherOptions) {
   const intervalMs = options.intervalMs ?? 5_000;
   const heartbeatMs = options.heartbeatMs ?? SYSTEM_CONFIG_STATUS_PUBLISH_HEARTBEAT_MS;
-  const log = options.log ?? console.error;
+  const log = options.log ?? runtimeLogger.info;
   let lastPublishedFingerprint = "";
   let lastPublishedAt = Number.NEGATIVE_INFINITY;
   let publishing = false;

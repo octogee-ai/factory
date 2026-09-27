@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("builder-toolchain-hydrator");
 import { spawn } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -419,7 +421,7 @@ export async function writeToolchainStatus(
       await options.publishStatus(status);
     } catch (error) {
       const type = error instanceof Error ? error.name : typeof error;
-      (options.log ?? console.error)(
+      (options.log ?? runtimeLogger.info)(
         `[builder-toolchain] status publication failed (${type}) status=${status.status} error=${errorMessage(error)}`,
       );
     }
@@ -556,7 +558,7 @@ function resolveHydrationRuntime(options: HydrateBuilderToolchainOptions): Hydra
     ),
     installDependencies: options.installDependencies ?? installBuilderToolchainDependencies,
     lockStaleMs: options.lockStaleMs ?? DEFAULT_LOCK_STALE_MS,
-    log: options.log ?? console.error,
+    log: options.log ?? runtimeLogger.info,
     now: options.now ?? (() => new Date()),
     nowMs: options.nowMs ?? Date.now,
   };
@@ -1114,7 +1116,7 @@ function resolveHydrationLoopRuntime(options: RunBuilderToolchainHydrationLoopOp
     initialBackoffMs: options.initialBackoffMs ?? 5_000,
     maxBackoffMs: options.maxBackoffMs ?? 5 * 60_000,
     shouldStop: options.shouldStop ?? (() => false),
-    log: options.log ?? console.error,
+    log: options.log ?? runtimeLogger.info,
     waitForShutdown: options.waitForShutdown ?? waitForever,
   };
 }

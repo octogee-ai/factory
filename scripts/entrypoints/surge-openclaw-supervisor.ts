@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("surge-openclaw-supervisor");
 import { beginWorkspaceIdentityBoot } from "@octogee/core/openclaw-workspace-bootstrap";
 import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -711,7 +713,7 @@ async function main(): Promise<void> {
     throw new Error("GATEWAY_IMAGE_TAG or BUILD_SHA is required for the surge OpenClaw supervisor");
   }
   const openclawDir = process.env.OPENCLAW_DIR?.trim() || "/home/node/.openclaw";
-  const log = (message: string) => console.error(message);
+  const log = runtimeLogger.info;
   const bootWatcher = createOpenClawBootWatcher({
     client: createFleetBrokerClient(gatewayId, revisionId),
     releaseKey,
@@ -723,7 +725,7 @@ async function main(): Promise<void> {
     log,
     bootWatcher,
     onUnexpectedChildExit: () => {
-      console.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");
+      runtimeLogger.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");
       process.exit(1);
     },
   });
@@ -731,7 +733,7 @@ async function main(): Promise<void> {
     supervisor.stop().then(
       () => process.exit(0),
       (error) => {
-        console.error(`[surge-openclaw] supervisor stop failed: ${errorMessage(error)}`);
+        runtimeLogger.error(`[surge-openclaw] supervisor stop failed: ${errorMessage(error)}`);
         process.exit(1);
       },
     );
@@ -742,7 +744,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    console.error(`[surge-openclaw] supervisor fatal: ${errorMessage(error)}`);
+    runtimeLogger.error(`[surge-openclaw] supervisor fatal: ${errorMessage(error)}`);
     process.exit(1);
   });
 }

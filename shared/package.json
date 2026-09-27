@@ -245,6 +245,10 @@
     "./types/workspace-migration": {
       "types": "./dist/types/workspace-migration.d.ts",
       "default": "./dist/types/workspace-migration.js"
+    },
+    "./server/service-logger": {
+      "types": "./dist/server/service-logger.d.ts",
+      "default": "./dist/server/service-logger.js"
     }
   },
   "typesVersions": {
@@ -410,6 +414,9 @@
       ],
       "types/workspace-migration": [
         "dist/types/workspace-migration.d.ts"
+      ],
+      "server/service-logger": [
+        "dist/server/service-logger.d.ts"
       ]
     }
   },
@@ -443,5 +450,8 @@
     "vitest": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "pino": "10.3.1"
   }
 }

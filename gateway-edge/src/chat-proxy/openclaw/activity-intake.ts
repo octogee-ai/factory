@@ -1,3 +1,4 @@
+import { logger } from "../../middleware/logging.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { open, unlink, type FileHandle } from "node:fs/promises";
@@ -1099,7 +1100,7 @@ async function disposeParsedAttachment(
   try {
     await parsed?.attachment?.dispose?.();
   } catch (error) {
-    (log ?? ((event, meta) => console.error(event, meta)))(
+    (log ?? ((event, meta) => logger.error(event, meta)))(
       "activity_attachment_cleanup_error",
       { error: error instanceof Error ? error.message : String(error) },
     );
@@ -1148,7 +1149,7 @@ export function createActivityIntakeHttpHandler(
     } catch (error) {
       const intakeError = normalizeHttpIntakeError(error);
       const log = deps.log ?? ((event: string, meta: Record<string, unknown>) => {
-        console.error(event, meta);
+        logger.error(event, meta);
       });
       log("activity_intake_error", {
         code: intakeError.code,

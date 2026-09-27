@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("github-cli-auth-hydrate");
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { GithubCliAuthError, hydrateGithubCliAuth } from "../lib/github-cli-auth-hydrate.js";
@@ -11,8 +13,8 @@ export async function runGithubCliAuthConvergence(opts: {
 }): Promise<void> {
   const hydrate = opts.hydrate ?? hydrateGithubCliAuth;
   const wait = opts.wait ?? ((signal) => sleep(60_000, undefined, { signal }));
-  const log = opts.log ?? console.log;
-  const warn = opts.warn ?? console.error;
+  const log = opts.log ?? runtimeLogger.info;
+  const warn = opts.warn ?? runtimeLogger.error;
   let lastResult: string | undefined;
   while (!opts.signal.aborted) {
     try {

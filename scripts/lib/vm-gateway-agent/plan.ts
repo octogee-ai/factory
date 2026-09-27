@@ -17,10 +17,20 @@ export const GATEWAY_ID_LABEL = "ai.octogee.gateway-id";
 export const NAMESPACE_LABEL = "ai.octogee.namespace";
 export const CONTAINER_NAME_LABEL = "ai.octogee.container";
 export const CONTAINER_ROLE_LABEL = "ai.octogee.role";
+export const BUILDER_SLUG_LABEL = "ai.octogee.builder-slug";
 export const LOGGED_LABELS = [GATEWAY_ID_LABEL, NAMESPACE_LABEL, CONTAINER_NAME_LABEL, CONTAINER_ROLE_LABEL] as const;
 
-export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace">): string[] {
-  return LOGGED_LABELS.filter((label) => label !== NAMESPACE_LABEL || Boolean(bundle.namespace));
+function bundleBuilderSlug(bundle: Pick<GatewayVmRuntimeBundle, "containers" | "init">): string | undefined {
+  const slugs = new Set([bundle.init, ...bundle.containers].flatMap(container => container?.env.GATEWAY_BUILDER_SLUG ? [container.env.GATEWAY_BUILDER_SLUG] : []));
+  if (slugs.size > 1) throw new Error("VM bundle contains conflicting Builder slugs");
+  return [...slugs][0];
+}
+
+export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace" | "containers" | "init">): string[] {
+  return [
+    ...LOGGED_LABELS.filter(label => label !== NAMESPACE_LABEL || Boolean(bundle.namespace)),
+    ...(bundleBuilderSlug(bundle) ? [BUILDER_SLUG_LABEL] : []),
+  ];
 }
 export const RUNTIME_UID = "1000:1000";
 export const TOKEN_FILE = "token";
@@ -81,8 +91,9 @@ export function envFor(bundle: GatewayVmRuntimeBundle, container: GatewayVmRunti
 }
 
 export function containerSpecVersion(config: Record<string, unknown>): string {
-  const { Labels: _labels, ...spec } = config;
-  return createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 16);
+  const { Labels, ...spec } = config;
+  const builderSlug = (Labels as Record<string, string> | undefined)?.[BUILDER_SLUG_LABEL];
+  return createHash("sha256").update(JSON.stringify({ ...spec, ...(builderSlug ? { builderSlug } : {}) })).digest("hex").slice(0, 16);
 }
 
 export function planContainer(
@@ -123,12 +134,13 @@ export function planContainer(
   };
   config.Labels = {
     [BUNDLE_VERSION_LABEL]: bundle.version,
-    [CONTAINER_SPEC_LABEL]: containerSpecVersion(config),
     [GATEWAY_ID_LABEL]: bundle.gatewayId,
+    ...(bundleBuilderSlug(bundle) ? { [BUILDER_SLUG_LABEL]: bundleBuilderSlug(bundle) } : {}),
     ...(bundle.namespace ? { [NAMESPACE_LABEL]: bundle.namespace } : {}),
     [CONTAINER_NAME_LABEL]: container.name,
     [CONTAINER_ROLE_LABEL]: role,
   };
+  (config.Labels as Record<string, string>)[CONTAINER_SPEC_LABEL] = containerSpecVersion(config);
   return { name: containerName(container), config };
 }
 

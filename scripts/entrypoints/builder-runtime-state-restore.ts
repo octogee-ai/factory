@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("builder-runtime-state-restore");
 import { pathToFileURL } from "node:url";
 
 import {
@@ -7,9 +9,7 @@ import {
 } from "../lib/builder-runtime-state.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 
-function log(message: string): void {
-  console.log(`${new Date().toISOString()} [runtime-state] ${message}`);
-}
+const log = runtimeLogger.info;
 
 export async function runBuilderRuntimeStateRestore(
   env: NodeJS.ProcessEnv = process.env,
@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   try {
     await runBuilderRuntimeStateRestore();
   } catch (error) {
-    console.error(`[runtime-state] restore failed: ${error instanceof Error ? error.message : String(error)}`);
+    runtimeLogger.error(`[runtime-state] restore failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = isFatalBuilderRuntimeStateRestoreError(error) ? 2 : 1;
   }
 }

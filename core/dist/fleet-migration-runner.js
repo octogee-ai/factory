@@ -1,3 +1,4 @@
+import { withLogContext } from "@octogee/shared/server/service-logger";
 import { advancePhase, nextMigrationStep, rollbackPlan, } from "./fleet-migration.js";
 import { MigrationRpcError } from "./fleet-migration-client.js";
 const RELEASE_ATTEMPTS = 3;
@@ -179,12 +180,14 @@ function isPostCutoverSourceCleanup(state, step) {
         step.role === "source");
 }
 export async function runMigration(input, deps) {
-    const execution = createMigrationExecution(input, deps);
-    while (true) {
-        const result = await runNextMigrationStep(execution);
-        if (result)
-            return result;
-    }
+    return withLogContext({ builderSlug: input.slug, operationId: input.migrationId, category: "migration", sourceGateway: input.fromGatewayId, targetGateway: input.toGatewayId }, async () => {
+        const execution = createMigrationExecution(input, deps);
+        while (true) {
+            const result = await runNextMigrationStep(execution);
+            if (result)
+                return result;
+        }
+    });
 }
 function createMigrationExecution(input, deps) {
     if (input.stageSchedulesAfterCutover && !deps.recordSchedulesStaged) {

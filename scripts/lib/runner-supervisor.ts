@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("runner-supervisor");
 import {
   DEFAULT_HEARTBEAT_DIR,
   writeHeartbeat,
@@ -59,7 +61,7 @@ export async function superviseRunner(opts: SuperviseOptions): Promise<void> {
     sleep = defaultSleep,
     scheduler = realScheduler,
     writeHb = writeHeartbeat,
-    log = (line) => console.warn(line),
+    log = (line) => runtimeLogger.warn(line),
     shouldStop = () => false,
   } = opts;
 

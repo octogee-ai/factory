@@ -1,3 +1,4 @@
+import { withLogContext, setLogContext } from "@octogee/shared/server/service-logger";
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult, CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type {
@@ -424,9 +425,11 @@ export async function addCustomerToGateway(
   uid: string,
   opts: AddCustomerOptions = {},
 ): Promise<AddCustomerResult> {
-  return runUidMountExclusive(uid, opts, (signal, markStep) =>
-    addCustomerToGatewayInner(adapter, uid, { ...opts, signal, markStep }),
-  );
+  return withLogContext({}, async () => {
+    return runUidMountExclusive(uid, opts, (signal, markStep) =>
+      addCustomerToGatewayInner(adapter, uid, { ...opts, signal, markStep }),
+    );
+  });
 }
 
 export async function restoreCustomerRuntimeFromSnapshot(
@@ -434,9 +437,12 @@ export async function restoreCustomerRuntimeFromSnapshot(
   snapshot: UserSnapshot,
   opts: AddCustomerOptions = {},
 ): Promise<RestoreCustomerRuntimeResult> {
-  return runUidMountExclusive(snapshot.uid, opts, (signal, markStep) =>
-    restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, { ...opts, signal, markStep }),
-  );
+  return withLogContext({}, async () => {
+    setLogContext({ builderSlug: snapshot.slug, category: "lifecycle" });
+    return runUidMountExclusive(snapshot.uid, opts, (signal, markStep) =>
+      restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, { ...opts, signal, markStep }),
+    );
+  });
 }
 
 async function runUidMountExclusive<T>(
@@ -775,6 +781,7 @@ async function addCustomerToGatewayInner(
   let snapshot = prepared.snapshot;
   const { ctx, newCustomer } = prepared;
   const { slug } = snapshot;
+  setLogContext({ builderSlug: slug, category: "lifecycle" });
 
   if (configuredBuilderOverlayIsReady(adapter, snapshot)) {
     if (!adapter.configuredBuilderOverlayPresent?.(slug)) {
@@ -1439,47 +1446,50 @@ export async function removeCustomerFromGateway(
     currentEvictionBatch?: () => Promise<readonly string[]>;
   } = {},
 ): Promise<RemoveCustomerResult> {
-  const steps: RemoveCustomerStep[] = [];
-  const snapshot = await adapter.loadUserSnapshot(uid);
-  if (!snapshot) {
-    throw new Error(`[remove:${uid}] user doc not found in Firestore`);
-  }
-  const { slug } = snapshot;
-  const wasMounted =
-    adapter.hasCustomerDir(slug) || snapshot.status === "complete";
-  if (!wasMounted) {
-    adapter.log(`[remove:${slug}] nothing to do (no dir, status=${snapshot.status})`);
-    return { wasMounted: false, steps };
-  }
+  return withLogContext({}, async () => {
+    const steps: RemoveCustomerStep[] = [];
+    const snapshot = await adapter.loadUserSnapshot(uid);
+    if (!snapshot) {
+      throw new Error(`[remove:${uid}] user doc not found in Firestore`);
+    }
+    const { slug } = snapshot;
+    setLogContext({ builderSlug: slug, category: "lifecycle" });
+    const wasMounted =
+      adapter.hasCustomerDir(slug) || snapshot.status === "complete";
+    if (!wasMounted) {
+      adapter.log(`[remove:${slug}] nothing to do (no dir, status=${snapshot.status})`);
+      return { wasMounted: false, steps };
+    }
 
-  if (adapter.isBuilderGateway?.() && adapter.isConfiguredBuilderCustomer?.(slug)) {
-    return retainConfiguredBuilderOverlay(adapter, slug, steps);
-  }
+    if (adapter.isBuilderGateway?.() && adapter.isConfiguredBuilderCustomer?.(slug)) {
+      return retainConfiguredBuilderOverlay(adapter, slug, steps);
+    }
 
-  const remaining = await adapter.applyRemoveCustomerConfigPatch(
-    slug,
-    `octogee-${slug}-coach`,
-    opts.evictionBatch,
-    opts.currentEvictionBatch,
-  );
-  steps.push("config-patch-remove");
-  adapter.log(`[remove:${slug}] removed from openclaw config`);
+    const remaining = await adapter.applyRemoveCustomerConfigPatch(
+      slug,
+      `octogee-${slug}-coach`,
+      opts.evictionBatch,
+      opts.currentEvictionBatch,
+    );
+    steps.push("config-patch-remove");
+    adapter.log(`[remove:${slug}] removed from openclaw config`);
 
-  if (await evictionWasCancelled(slug, remaining, opts.currentEvictionBatch)) {
-    adapter.cancelPendingEviction?.(slug);
-    return { wasMounted: true, steps, retained: true };
-  }
+    if (await evictionWasCancelled(slug, remaining, opts.currentEvictionBatch)) {
+      adapter.cancelPendingEviction?.(slug);
+      return { wasMounted: true, steps, retained: true };
+    }
 
-  if (adapter.hasCustomerDir(slug)) {
-    await adapter.deleteCustomerDir(slug);
-    steps.push("delete-dir");
-    adapter.log(`[remove:${slug}] customer dir deleted`);
-  }
+    if (adapter.hasCustomerDir(slug)) {
+      await adapter.deleteCustomerDir(slug);
+      steps.push("delete-dir");
+      adapter.log(`[remove:${slug}] customer dir deleted`);
+    }
 
-  if (await releaseUnmountedGiteaKey(adapter, slug)) steps.push("release-gitea-key");
+    if (await releaseUnmountedGiteaKey(adapter, slug)) steps.push("release-gitea-key");
 
-  if (adapter.onUnmounted) adapter.onUnmounted(slug);
-  return { wasMounted: true, steps };
+    if (adapter.onUnmounted) adapter.onUnmounted(slug);
+    return { wasMounted: true, steps };
+  });
 }
 
 async function releaseUnmountedGiteaKey(

@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("provisioner");
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import {
   AGENT_PREFIX,
@@ -394,5 +396,5 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => { console.error("Fatal:", err); process.exit(1); });
+  main().catch((err) => { runtimeLogger.error("Fatal:", { error: err }); process.exit(1); });
 }

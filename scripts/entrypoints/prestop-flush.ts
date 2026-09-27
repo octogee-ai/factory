@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("prestop-flush");
 import { flushCustomerFiles, flushAllCustomerFiles } from "../lib/customer-file-state.js";
 import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import {
@@ -210,7 +212,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
-    console.error("prestop-flush fatal:", err);
+    runtimeLogger.error("prestop-flush fatal:", { error: err });
     process.exit(1);
   });
 }

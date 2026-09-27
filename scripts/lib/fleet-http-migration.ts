@@ -1,3 +1,5 @@
+import { log as provisionerLog } from "@octogee/core/config";
+import { withLogContext, setLogContext, type LogContext } from "@octogee/shared/server/service-logger";
 
 
 import type { Request, Response, RequestHandler } from "express";
@@ -117,7 +119,7 @@ export interface MigrationHandlerDeps {
   gatewayId: string;
   adapter: CustomerLifecycleAdapter;
 
-  log?: (msg: string) => void;
+  log?: (msg: string, fields?: LogContext) => void;
 
   now?: () => number;
 
@@ -167,7 +169,7 @@ async function releaseAgentForImport(
   deps: MigrationHandlerDeps,
   activation: ConfiguredBuilderActivation | null,
   agentId: string,
-  log: (message: string) => void,
+  log: (message: string, fields?: LogContext) => void,
 ): Promise<void> {
   if (activation) {
     if (!deps.surgeTargetOpenClawHeld) {
@@ -342,7 +344,7 @@ function parseAndVerifyJsonBody<T extends MigrationRequestBody>(
   req: Request,
   res: Response,
   deps: Pick<MigrationHandlerDeps, "publicKey" | "gatewayId">,
-  log: (msg: string) => void,
+  log: (msg: string, fields?: LogContext) => void,
 ): T | null {
   const rawBody: string = (req as unknown as { rawBody?: string }).rawBody ?? "";
   let body: T;
@@ -367,11 +369,12 @@ const sigValid = verifyFleetRequest(
     sigHeader ?? undefined,
   );
   if (!sigValid) {
-    log(`[migration-http] 🔴 bad signature migrationId=${body.migrationId} slug=${body.slug}`);
+    log(`[migration-http] 🔴 bad signature migrationId=${body.migrationId} slug=${body.slug}`, { status: "failed" });
     res.status(401).json({ error: "invalid signature" });
     return null;
   }
   if (rejectMisaddressedGateway(req, res, deps.gatewayId, log)) return null;
+  setLogContext({ builderSlug: body.slug, operationId: body.migrationId, category: "migration", gatewayId: deps.gatewayId });
   return body;
 }
 
@@ -379,7 +382,7 @@ function parseAndVerifySurgeBody(
   req: Request,
   res: Response,
   deps: Pick<MigrationHandlerDeps, "publicKey" | "gatewayId">,
-  log: (msg: string) => void,
+  log: (msg: string, fields?: LogContext) => void,
 ): CompleteSurgeHandoffRequestBody | null {
   const rawBody: string = (req as unknown as { rawBody?: string }).rawBody ?? "";
   let body: CompleteSurgeHandoffRequestBody;
@@ -417,8 +420,8 @@ function parseAndVerifySurgeBody(
 export function createCompleteSurgeHandoffHandler(
   deps: MigrationHandlerDeps,
 ): RequestHandler {
-  const log = deps.log ?? ((message) => console.log(message));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifySurgeBody(req, res, deps, log);
     if (!body) return;
     if (!deps.releaseSurgeReadiness) {
@@ -434,13 +437,13 @@ export function createCompleteSurgeHandoffHandler(
       res.status(200).json({ released: true, targetPodUid: body.targetPodUid });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log(`🔴 [surge-handoff] readiness release failed: ${message}`);
+      log(`🔴 [surge-handoff] readiness release failed: ${message}`, { status: "failed" });
       res.status(500).json({
         error: "surge readiness release failed",
         message,
       });
     }
-  };
+  });
 }
 
 
@@ -449,8 +452,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function createMigrationProgressHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? console.log;
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<MigrationProgressRequestBody>(req, res, deps, log);
     if (!body) return;
     const icons = { pending: "🟡", running: "🟡", done: "🟢", failed: "🔴", skipped: "🟡" };
@@ -464,10 +467,13 @@ export function createMigrationProgressHandler(deps: MigrationHandlerDeps): Requ
       res.status(400).json({ error: "invalid migration progress" });
       return;
     }
-    const elapsed = body.elapsedMs === undefined ? "" : " elapsedMs=" + body.elapsedMs;
-    log(`${icons[body.status]} [migration] migrationId=${body.migrationId} builder=${body.slug} source=${body.source} target=${deps.gatewayId} phase=${body.phase} status=${body.status}${elapsed}`);
+    log(`Migration ${body.phase}`, {
+      category: "migration", builderSlug: body.slug, operationId: body.migrationId,
+      sourceGateway: body.source, gatewayId: deps.gatewayId, phase: body.phase,
+      status: body.status, ...(body.elapsedMs === undefined ? {} : { durationMs: body.elapsedMs }),
+    });
     res.status(200).json({ ok: true });
-  };
+  });
 }
 
 const SCHEDULER_MIGRATION_PHASES = ["hold", "export", "stage", "activate", "resume", "retire", "abort"];
@@ -483,8 +489,8 @@ function isSchedulerMigrationRequest(body: SchedulerMigrationRequestBody): boole
 }
 
 export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? console.log;
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<SchedulerMigrationRequestBody>(req, res, deps, log);
     if (!body) return;
     if (!isSchedulerMigrationRequest(body)) {
@@ -504,12 +510,12 @@ export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): Req
       log(`[migration-http] scheduler ${body.phase} failed slug=${body.slug}: ${message}`);
       res.status(500).json({ error: "scheduler migration failed", message });
     }
-  };
+  });
 }
 
 export function createSchedulerReadyHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? console.log;
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
     if (!body) return;
     try {
@@ -520,12 +526,12 @@ export function createSchedulerReadyHandler(deps: MigrationHandlerDeps): Request
       log(`[migration-http] scheduler readiness failed migrationId=${body.migrationId}: ${message}`);
       res.status(500).json({ error: "scheduler readiness failed", message });
     }
-  };
+  });
 }
 
 export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? console.log;
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
     if (!body) return;
     try {
@@ -536,12 +542,12 @@ export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler 
       log(`[migration-http] resume failed slug=${body.slug}: ${message}`);
       res.status(500).json({ error: "resume failed", message });
     }
-  };
+  });
 }
 
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<QuiesceRequestBody>(req, res, deps, log);
     if (!body) return;
 
@@ -570,19 +576,19 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
       res.status(result.drained ? 200 : 408).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 quiesce migrationId=${body.migrationId} slug=${body.slug} failed: ${message}`);
+      log(`[migration-http] 🔴 quiesce migrationId=${body.migrationId} slug=${body.slug} failed: ${message}`, { status: "failed" });
       res.status(500).json({ error: "quiesce failed", message });
     }
-  };
+  });
 }
 
-function logFlushResult(ok: boolean, log: (message: string) => void, message: string): void {
+function logFlushResult(ok: boolean, log: (message: string, fields?: LogContext) => void, message: string): void {
   (ok ? dlog : log)(`${ok ? "🟢" : "🔴"} [migration-http] flush ${message}`);
 }
 
 export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<FlushGatewayRequestBody>(req, res, deps, log);
     if (!body) return;
 
@@ -636,10 +642,10 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
       res.status(result.ok ? 200 : 500).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 flush migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`[migration-http] 🔴 flush migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({ error: "flush failed", message });
     }
-  };
+  });
 }
 
 function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapshot | null {
@@ -676,8 +682,8 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
 }
 
 export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<RestoreMigrationRequestBody>(
       req,
       res,
@@ -721,15 +727,15 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
       res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 restore migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`[migration-http] 🔴 restore migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({ error: "restore failed", message });
     }
-  };
+  });
 }
 
 export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<ExportPathsRequestBody>(
       req,
       res,
@@ -762,18 +768,18 @@ export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHan
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `[migration-http] 🔴 export-paths migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+        `[migration-http] 🔴 export-paths migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" },
       );
       res.status(500).json({ error: "export-paths failed", message });
     }
-  };
+  });
 }
 
 export function createActivationManifestExportHandler(
   deps: MigrationHandlerDeps,
 ): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<ActivationManifestExportRequestBody>(
       req,
       res,
@@ -812,16 +818,16 @@ export function createActivationManifestExportHandler(
       }
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `[migration-http] 🔴 activation-manifest migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+        `[migration-http] 🔴 activation-manifest migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" },
       );
       res.status(500).json({ error: "activation-manifest failed", message });
     }
-  };
+  });
 }
 
 export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<PrepareImportRequestBody>(
       req,
       res,
@@ -849,16 +855,16 @@ export function createPrepareImportHandler(deps: MigrationHandlerDeps): RequestH
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `[migration-http] 🔴 prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+        `[migration-http] 🔴 prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" },
       );
       res.status(500).json({ error: "prepare-import failed", message });
     }
-  };
+  });
 }
 
 export function createActivateImportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<ActivateImportRequestBody>(
       req,
       res,
@@ -890,11 +896,11 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `[migration-http] 🔴 activate-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+        `[migration-http] 🔴 activate-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" },
       );
       res.status(500).json({ error: "activate-import failed", message });
     }
-  };
+  });
 }
 
 async function maybeMaterializeActivationManifest(
@@ -1412,7 +1418,7 @@ function parseRsyncPhaseRequest<
   res: Response,
   deps: MigrationHandlerDeps,
   phase: RsyncMigrationRpcPhase,
-  log: (msg: string) => void,
+  log: (msg: string, fields?: LogContext) => void,
 ): RsyncPhaseRequest<T> | null {
   const body = parseAndVerifyJsonBody<T>(req, res, deps, log);
   if (!body) return null;
@@ -1442,7 +1448,7 @@ async function startRsyncTransport(input: {
   configPath: string;
   publicPort: number;
   sourcePodIp?: string;
-  log: (msg: string) => void;
+  log: (msg: string, fields?: LogContext) => void;
 }): Promise<{ child: ReturnType<typeof spawn>; transport: MigrationTlsEndpoint }> {
   const { deps } = input;
   const daemonPort = await (deps.reserveLoopbackPort ?? reserveLoopbackPort)();
@@ -1469,8 +1475,8 @@ async function startRsyncTransport(input: {
 }
 
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const parsed = parseRsyncPhaseRequest<PrepareRsyncImportRequestBody>(
       req,
       res,
@@ -1539,7 +1545,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       });
       child.on("error", (err) => {
         log(
-          `[migration-rsync] 🔴 rsync daemon error migrationId=${body.migrationId} slug=${body.slug}: ${err.message}`,
+          `[migration-rsync] 🔴 rsync daemon error migrationId=${body.migrationId} slug=${body.slug}: ${err.message}`, { status: "failed" },
         );
       });
       const response: PrepareRsyncImportResponse = {
@@ -1564,11 +1570,11 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       }
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `[migration-rsync] 🔴 prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`,
+        `[migration-rsync] 🔴 prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" },
       );
       res.status(500).json({ error: "prepare-rsync-import failed", message });
     }
-  };
+  });
 }
 
 function validateRsyncPushTarget(body: PushRsyncStateRequestBody, res: Response): {
@@ -1592,9 +1598,9 @@ function validateRsyncPushTarget(body: PushRsyncStateRequestBody, res: Response)
 }
 
 export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
+  const log = deps.log ?? provisionerLog;
   const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
-  return async (req, res) => {
+  return (req, res) => withLogContext({}, async () => {
     const parsed = parseRsyncPhaseRequest<PushRsyncStateRequestBody>(
       req,
       res,
@@ -1685,13 +1691,13 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-rsync] 🔴 push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`[migration-rsync] 🔴 push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({ error: "push-rsync-state failed", message });
     } finally {
       await cleanupActivationManifest();
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     }
-  };
+  });
 }
 
 async function validateStagedGitMetadata(stageDir: string, slug: string): Promise<string | null> {
@@ -1717,7 +1723,7 @@ async function validateStagedRsyncImport(
   slug: string,
   mode: MigrationTransferMode,
   configTransferMode: MigrationConfigTransferMode,
-  log: (message: string) => void,
+  log: (message: string, fields?: LogContext) => void,
 ): Promise<string | null> {
   const unsafeGitMetadata = await validateStagedGitMetadata(session.stageDir, slug);
   if (unsafeGitMetadata !== null) return unsafeGitMetadata;
@@ -1811,7 +1817,7 @@ async function activateConfiguredBuilderImport(
       throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
     }
   } catch (error) {
-    (deps.log ?? console.log)(
+    (deps.log ?? provisionerLog)(
       `[migration-rsync] Builder activation failed migrationId=${request.migrationId} slug=${request.slug}: ` +
       `${error instanceof Error ? error.message : String(error)}`,
     );
@@ -1863,7 +1869,7 @@ async function deliverStagedImport(input: {
   mode: MigrationTransferMode;
   activation: ConfiguredBuilderActivation | null;
   signal: AbortSignal;
-  log: (msg: string) => void;
+  log: (msg: string, fields?: LogContext) => void;
 }): Promise<void> {
   const { deps, session, log } = input;
   const prepared = input.mode === "final"
@@ -1888,8 +1894,8 @@ async function deliverStagedImport(input: {
 }
 
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const parsed = parseRsyncPhaseRequest<FinishRsyncImportRequestBody>(
       req,
       res,
@@ -1923,7 +1929,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       const rejection = await validateStagedRsyncImport(session, body.slug, mode, configTransferMode, log);
       if (rejection !== null) {
         log(
-          `[migration-rsync] 🔴 finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${rejection}`,
+          `[migration-rsync] 🔴 finish-import migrationId=${body.migrationId} slug=${body.slug} rejected: ${rejection}`, { status: "failed" },
         );
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
@@ -1962,18 +1968,18 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-rsync] 🔴 finish-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`[migration-rsync] 🔴 finish-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       respondImportFailure(res, controller.signal, err);
     } finally {
       detach();
       await stopRsyncSession(session).catch(() => undefined);
     }
-  };
+  });
 }
 
 export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<AbortRsyncImportRequestBody>(
       req,
       res,
@@ -1998,7 +2004,7 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log(`🔴 [migration-rsync] abort-import failed migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`🔴 [migration-rsync] abort-import failed migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({ error: "abort-import failed", message });
       return;
     }
@@ -2009,7 +2015,7 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     }
     log(`🟢 [migration-rsync] abort-import migrationId=${body.migrationId} slug=${body.slug}`);
     res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
-  };
+  });
 }
 
 function configuredBuilderVerifyChecks(
@@ -2091,8 +2097,8 @@ async function verifyMigrationResponse(
 }
 
 export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<VerifyMigrationRequestBody>(
       req,
       res,
@@ -2118,22 +2124,22 @@ export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler 
       log(
         `${response.ready ? "🟢" : "🔴"} [migration-http] verify migrationId=${body.migrationId} slug=${body.slug} ` +
         `mode=${response.configTransferMode ?? ACTIVATION_MANIFEST_TRANSFER} ` +
-        `ready=${response.ready} checks=${JSON.stringify(response.checks)}`,
+        `ready=${response.ready} checks=${JSON.stringify(response.checks)}`, { status: "failed" },
       );
       res.status(response.ready ? 200 : 409).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 verify migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`[migration-http] 🔴 verify migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({ error: "verify failed", message });
     }
-  };
+  });
 }
 
 function attachImportDisconnectHandlers(
   res: Response,
   migrationId: string,
   slug: string,
-  log: (msg: string) => void,
+  log: (msg: string, fields?: LogContext) => void,
 ): { controller: AbortController; detach: () => void } {
 
 const controller = new AbortController();
@@ -2265,8 +2271,8 @@ function matchesAllowedMigrationPath(raw: string, entry: string, allowedPrefix: 
 }
 
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
-  const log = deps.log ?? ((msg) => console.log(msg));
-  return async (req, res) => {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<UnmountRequestBody>(req, res, deps, log);
     if (!body) return;
 
@@ -2322,14 +2328,14 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
       res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(`[migration-http] 🔴 unmount migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
+      log(`[migration-http] 🔴 unmount migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({
         error: "unmount failed",
         message,
         ...(err instanceof OpenclawWireError ? { code: err.code } : {}),
       });
     }
-  };
+  });
 }
 
 export function customerCoachAgentId(slug: string): string {

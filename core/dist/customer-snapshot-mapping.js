@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const logger = createServiceLogger("provisioner");
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
@@ -69,7 +71,7 @@ export function mapProjectAgentState(projectId, projectData, secretData) {
     catch (error) {
         if (!(error instanceof ProjectAgentIdentityError))
             throw error;
-        console.error("Project agent identity rejected", { projectId, error: error.message });
+        logger.error("Project agent identity rejected", { projectId, error: error.message });
         return { projectId, enabled, mmUserId, token, status: "error", activationId: null };
     }
 }

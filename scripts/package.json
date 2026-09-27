@@ -33,9 +33,11 @@
   "dependencies": {
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
+    "@streamparser/json": "0.0.26",
     "express": "^5.2.1",
     "firebase-admin": "^14.3.0",
     "google-auth-library": "^11.0.2",
+    "picocolors": "1.1.1",
     "stripe": "^22.6.2",
     "tsx": "^4.23.13",
     "ws": "^8.21.3",

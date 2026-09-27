@@ -12,6 +12,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["types/**/*.ts"],
+  "include": ["types/**/*.ts", "server/**/*.ts"],
   "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/fixtures/**"]
 }

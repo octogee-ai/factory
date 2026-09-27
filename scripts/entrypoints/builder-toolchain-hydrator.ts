@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("builder-toolchain-hydrator");
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -196,7 +198,7 @@ export async function runBuilderToolchainHydrator(input: {
   registryCredentialsProvider?: () => Promise<FleetBrokerNpmRegistryCredentials>;
 }): Promise<void> {
   const signal = input.signal ?? new AbortController().signal;
-  const log = input.log ?? console.error;
+  const log = input.log ?? runtimeLogger.info;
   const client = guardRetiredRuntimeBrokerClient(
     input.client ?? createFleetBrokerClient(input.config.gatewayId),
     log,
@@ -268,7 +270,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    console.error(`[builder-toolchain] fatal runner error (${error instanceof Error ? error.name : typeof error})`);
+    runtimeLogger.error(`[builder-toolchain] fatal runner error (${error instanceof Error ? error.name : typeof error})`);
     process.exit(1);
   });
 }

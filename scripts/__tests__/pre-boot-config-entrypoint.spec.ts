@@ -36,7 +36,11 @@ describe("pre-boot config entrypoint", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("[pre-boot] Fatal:");
+    expect(JSON.parse(result.stderr.trim())).toMatchObject({
+      service: "pre-boot-config", severity: "ERROR",
+      timestamp: expect.stringMatching(/^\d{4}-.*Z$/),
+      message: expect.stringContaining("[pre-boot] Fatal:"),
+    });
   });
 
   it("patches the config without initializing Firebase, whatever credentials the pod carries", () => {

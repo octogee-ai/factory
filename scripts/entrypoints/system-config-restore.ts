@@ -1,10 +1,9 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const runtimeLogger = createServiceLogger("system-config-restore");
 import { restoreSystemConfigForSlug } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
 
-function log(msg: string): void {
-  const ts = new Date().toISOString().replace("Z", "+00:00");
-  console.log(`${ts} [system_config] ${msg}`);
-}
+const log = runtimeLogger.info;
 
 export type SystemConfigRestorePlan =
   | { action: "restore"; gatewayClass: string; slug: string }
@@ -64,7 +63,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
-    console.error(`[system_config] Fatal: ${err instanceof Error ? err.message : String(err)}`);
+    runtimeLogger.error(`[system_config] Fatal: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   });
 }

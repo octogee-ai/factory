@@ -1,3 +1,5 @@
+import { createServiceLogger } from "@octogee/shared/server/service-logger";
+const logger = createServiceLogger("gateway-edge");
 
 
 import type { IncomingMessage, Server } from "node:http";
@@ -108,7 +110,7 @@ export class WsUpgradeRouter {
         );
         return;
       }
-      console.error("WsUpgradeRouter route failed", err);
+      logger.error("WsUpgradeRouter route failed", { error: err });
       writeStatusAndDestroy(socket, 503, "Service Unavailable");
     });
     return true;
