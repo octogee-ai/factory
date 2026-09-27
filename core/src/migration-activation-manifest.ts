@@ -437,6 +437,16 @@ export async function removeActivationManifest(
   await fs.rm(manifestDir, { recursive: true, force: true });
 }
 
+type OwnerCommandsPatch = (current: unknown) => { ownerAllowFrom: string[] } | undefined;
+
+function ownerCommandsSection(
+  ownerCommandsPatch: OwnerCommandsPatch | undefined,
+  current: unknown,
+): { commands?: { ownerAllowFrom: string[] } } {
+  const commands = ownerCommandsPatch?.(current);
+  return commands ? { commands } : {};
+}
+
 export async function applyOpenClawActivationManifest(
   manifest: MigrationActivationManifest,
   opts: {
@@ -450,6 +460,7 @@ export async function applyOpenClawActivationManifest(
       agentId: string;
       agent: Record<string, unknown>;
     };
+    ownerCommandsPatch?: OwnerCommandsPatch;
   },
 ): Promise<{
   elapsedMs: number;
@@ -537,6 +548,7 @@ export async function applyOpenClawActivationManifest(
           rebindPlatformEmbeddingRefs(orderedAgents),
         );
         return {
+          ...ownerCommandsSection(opts.ownerCommandsPatch, current),
           // openclaw rejects a multi-agent roster that declares no ownership.
           agents: {
             ...rosterPatch,

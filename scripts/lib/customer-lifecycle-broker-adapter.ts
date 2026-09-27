@@ -7,6 +7,7 @@ import {
   configuredBuilderManagedProjectIds,
   configuredBuilderOwnerAuthorityPatch,
   configuredBuilderProjectAgentPatch,
+  validOwnerMmUserId,
 } from "./configured-builder-project-agents.js";
 import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
 import * as fs from "node:fs";
@@ -1488,6 +1489,10 @@ async function activateImportedCustomer(
   opts: { signal?: AbortSignal } | undefined,
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  const configuredBuilder = isConfiguredGatewayBuilder(slug);
+  const ownerMmUserId = configuredBuilder
+    ? validOwnerMmUserId(slug, (await snapshotForSlug(ctx, slug))?.customerMmUserId)
+    : undefined;
   const secretMaterial = createSecretMaterialLedger();
   const { manifest: safeManifest, secretsChanged } = await materializeActivationManifestSecret(
     OPENCLAW_DIR,
@@ -1547,12 +1552,13 @@ async function activateImportedCustomer(
     signal: opts?.signal,
     log: ctx.log,
     gatewayClass: ctx.isBuilderGateway() ? "builder" : "shared",
-    ...(isConfiguredGatewayBuilder(slug)
+    ...(configuredBuilder
       ? {
         authInheritanceAnchor: {
           agentId: SAFE_DEFAULT_AGENT_ID,
           agent: buildSafeDefaultAgent(),
         },
+        ownerCommandsPatch: (current: unknown) => builderOwnerCommandsPatch(current, slug, ownerMmUserId),
       }
       : {}),
     onRoutingActivationRequired: (accountIds) => {
@@ -1571,7 +1577,7 @@ async function activateImportedCustomer(
     patch,
     secretMaterial,
     signal: opts?.signal,
-    configuredBuilderRouting: isConfiguredGatewayBuilder(slug)
+    configuredBuilderRouting: configuredBuilder
       ? { accountIds, baseline: routingActivationBaseline }
       : undefined,
   });

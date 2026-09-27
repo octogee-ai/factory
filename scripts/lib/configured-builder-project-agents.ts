@@ -56,7 +56,7 @@ function record(value: unknown): ConfigEntry {
 
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 
-function validOwnerMmUserId(slug: string, ownerMmUserId: string | null | undefined): string {
+export function validOwnerMmUserId(slug: string, ownerMmUserId: string | null | undefined): string {
   if (typeof ownerMmUserId !== "string" || !MATTERMOST_ID_RE.test(ownerMmUserId)) {
     throw new Error(`owner Mattermost id is unavailable for ${slug}`);
   }

@@ -315,6 +315,10 @@ export async function removeActivationManifest(openclawDir, slug) {
     const manifestDir = path.join(openclawDir, MIGRATION_ACTIVATION_DIR, slug);
     await fs.rm(manifestDir, { recursive: true, force: true });
 }
+function ownerCommandsSection(ownerCommandsPatch, current) {
+    const commands = ownerCommandsPatch?.(current);
+    return commands ? { commands } : {};
+}
 export async function applyOpenClawActivationManifest(manifest, opts) {
     const authInheritanceAnchor = opts.authInheritanceAnchor;
     const reconcileAgent = opts.gatewayClass === "builder"
@@ -361,6 +365,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                 : nextAgents;
             const rosterPatch = customerAgentRosterPatch(current, manifest.slug, rebindPlatformEmbeddingRefs(orderedAgents));
             return {
+                ...ownerCommandsSection(opts.ownerCommandsPatch, current),
                 // openclaw rejects a multi-agent roster that declares no ownership.
                 agents: {
                     ...rosterPatch,

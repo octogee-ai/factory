@@ -407,6 +407,56 @@ describe("migration activation manifest", () => {
     };
     expect(patch.agents.ownership).toBe("explicit");
     expect(patch.agents.defaults).toBeUndefined();
+    expect(patch).not.toHaveProperty("commands");
+  });
+
+  it("writes the owner commands in the same activation patch, derived from the config it patches", async () => {
+    const current = {
+      agents: { entries: {} },
+      channels: { mattermost: { accounts: {} } },
+      bindings: [],
+    };
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({ hash: "h1", config: current })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+    const ownerCommandsPatch = vi.fn(() => ({ ownerAllowFrom: ["mattermost:owner"] }));
+
+    await applyOpenClawActivationManifest(manifest(), {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+      ownerCommandsPatch,
+    });
+
+    expect(configPatch).toHaveBeenCalledTimes(1);
+    expect(ownerCommandsPatch).toHaveBeenCalledWith(current);
+    expect(configPatch.mock.calls[0]?.[0]).toMatchObject({
+      commands: { ownerAllowFrom: ["mattermost:owner"] },
+    });
+  });
+
+  it("leaves commands out of the activation patch when the owner commands are already present", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: { agents: { entries: {} }, channels: { mattermost: { accounts: {} } }, bindings: [] },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+
+    await applyOpenClawActivationManifest(manifest(), {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+      ownerCommandsPatch: () => undefined,
+    });
+
+    expect(configPatch.mock.calls[0]?.[0]).not.toHaveProperty("commands");
   });
 
   it("anchors Builder auth inheritance while retaining the coach routing default", async () => {

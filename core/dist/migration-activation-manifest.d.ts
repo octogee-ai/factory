@@ -40,6 +40,9 @@ export declare function writeActivationManifest(rootDir: string, manifest: Migra
 }>;
 export declare function readActivationManifest(openclawDir: string, slug: string): Promise<MigrationActivationManifest>;
 export declare function removeActivationManifest(openclawDir: string, slug: string): Promise<void>;
+type OwnerCommandsPatch = (current: unknown) => {
+    ownerAllowFrom: string[];
+} | undefined;
 export declare function applyOpenClawActivationManifest(manifest: MigrationActivationManifest, opts: {
     rpc: GatewayRpcClient;
     cache?: ConfigCache;
@@ -51,9 +54,11 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
         agentId: string;
         agent: Record<string, unknown>;
     };
+    ownerCommandsPatch?: OwnerCommandsPatch;
 }): Promise<{
     elapsedMs: number;
     routingActivationRequired: boolean;
     restartExistingAccountIds: string[];
     configNoop: boolean;
 }>;
+export {};

@@ -314,6 +314,12 @@ function aliceSnapshot(
   };
 }
 
+function configuredBuilderClient(): FleetBrokerClient {
+  return mkClient({
+    userSnapshot: vi.fn(async () => aliceSnapshot({ uid: "uid-tester10", slug: "tester10" })),
+  });
+}
+
 describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
   const originalLogLevel = process.env.LOG_LEVEL;
@@ -668,6 +674,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect.objectContaining({ slug: "tester10", appliedFingerprint: "fp-tester10" }),
       expect.objectContaining({ rpc, signal }),
     );
+    expect(mocks.applyOpenClawActivationManifest.mock.calls[0]?.[1]).not.toHaveProperty(
+      "ownerCommandsPatch",
+    );
     expect(gitMocks.setRepoSshCommand).toHaveBeenCalledWith(
       expect.stringContaining("/customers/tester10"),
       "tester10",
@@ -1000,7 +1009,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         agentsCreate: rosterRpc().agentsCreate,
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
-      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn() });
 
       await adapter.activateImportedCustomer("tester10", {});
 
@@ -1013,6 +1022,54 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           },
         }),
       );
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
+  it("grants the configured Builder owner authority in its import activation patch", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    try {
+      const rpc = {
+        channelsStatus: vi.fn(async () => ({
+          channelAccounts: {
+            mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+          },
+        })),
+        configGet: vi.fn(async () => configSnapshot({})),
+        agentsCreate: rosterRpc().agentsCreate,
+        secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn() });
+
+      await adapter.activateImportedCustomer("tester10", {});
+
+      const ownerCommandsPatch = mocks.applyOpenClawActivationManifest.mock.calls[0]?.[1]
+        ?.ownerCommandsPatch as ((current: unknown) => unknown) | undefined;
+      expect(ownerCommandsPatch?.({})).toEqual({ ownerAllowFrom: [`mattermost:${ALICE_OWNER_MM_ID}`] });
+      expect(ownerCommandsPatch?.({ commands: { ownerAllowFrom: ["mattermost:other"] } })).toBeUndefined();
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
+  it("refuses a configured Builder import activation whose owner Mattermost id is unavailable", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    try {
+      const rpc = {
+        configGet: vi.fn(async () => configSnapshot({})),
+        agentsCreate: rosterRpc().agentsCreate,
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+      await expect(adapter.activateImportedCustomer("tester10", {})).rejects.toThrow(
+        /owner Mattermost id is unavailable for tester10/,
+      );
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
     } finally {
       if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
       else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
@@ -1039,6 +1096,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
       expect(mocks.applyOpenClawActivationManifest.mock.calls[0]?.[1]).not.toHaveProperty(
         "authInheritanceAnchor",
+      );
+      expect(mocks.applyOpenClawActivationManifest.mock.calls[0]?.[1]).not.toHaveProperty(
+        "ownerCommandsPatch",
       );
     } finally {
       if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
@@ -1243,7 +1303,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
       const adapter = buildBrokeredLifecycleAdapter({
-        client: mkClient(),
+        client: configuredBuilderClient(),
         rpc,
         log: vi.fn(),
         isBuilderGateway: () => true,
@@ -1324,7 +1384,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
       } as unknown as GatewayRpcClient;
       const adapter = buildBrokeredLifecycleAdapter({
-        client: mkClient(),
+        client: configuredBuilderClient(),
         rpc,
         log: vi.fn(),
         isBuilderGateway: () => true,
