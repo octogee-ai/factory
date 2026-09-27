@@ -110,8 +110,9 @@ Newer full runs were failed or pending; their fast-green push runs were not used
 This is a main snapshot with package version `2026.9.6`, not the GA tag's bytes.
 
 **Exact overlay:** `ceckert/openclaw:codex/openclaw-slim-main-sept26`,
-[`51df909dd54b134f7b237a4046ce1b7b61986dd4`](https://github.com/ceckert/openclaw/commit/51df909dd54b134f7b237a4046ce1b7b61986dd4).
-The clean build's source matches. Its 28 commits include fixture corrections,
+[`7fbe0bbc9ab8ace568b835b10d2c76893245053d`](https://github.com/ceckert/openclaw/commit/7fbe0bbc9ab8ace568b835b10d2c76893245053d),
+fast-forwarded from `51df909` by the two held-database commits (`bcbfa47`, `7fbe0bb`).
+The clean build's source matches. Its 30 commits include fixture corrections,
 test reductions, resource-cleanup follow-ups and regenerated Workboard assets;
 commit count is not a count of distinct runtime features.
 
@@ -131,11 +132,20 @@ commit count is not a count of distinct runtime features.
 | Superseded hot-reload tail handoff (`f0087d3`) | Back-to-back mount/config writes | Native successors inherit unfinished scope without waiting for stale work or losing failures. |
 | Model-catalog generation release (`71540de`) | Long-lived gateways | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
 | Workspace-only Gateway registry reuse (`9907538`, narrowed by `a8a5ce9`) | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent is in the selected base; config/environment/metadata checks remain. |
-| Deleted-agent model/auth/secrets/memory cleanup (`fb99ee1`, `0ed4358`, `1a84c2d`) | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes native owners without disrupting surviving agents. |
+| Deleted-agent model/auth/secrets/memory cleanup and per-isolate reader registry (`fb99ee1`, `0ed4358`, `1a84c2d`, `bcbfa47`, `7fbe0bb`) | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes native owners, and every isolate's cached database readers, without disrupting surviving agents. |
 
 The deletion fix uses the native memory-manager close API. Its proof establishes
 a retained manager/provider lifetime; do not assume the current implementation
 necessarily retains the older query-only/WAL reader.
+
+One surviving WAL reader anywhere in the process defers SQLite's release of the
+closed writer's descriptors. Every agent-database reader cache (auth-profile
+pools, cached read-only scopes) therefore registers a closer with a per-isolate
+registry; served task-pool workers, including the shared model-catalog and
+session-transcript workers, apply reader requests between tasks, and the live
+pool registry fans one request out to every worker. Deletion issues it last and
+tombstones the deleted database paths so no isolate reopens them until the
+roster admits the agent again (`agents.create` or roster hot reload).
 
 Cron migration consolidates the prior three patches. It validates incoming
 snapshot shape/size and replaces matching target-projected system monitors
@@ -169,28 +179,41 @@ means the overlay can be dropped.
 
 ### Qualification and artifacts
 
-The exact source passes the full native build, core/UI/extension production
+The held-database gateway harness
+(`src/gateway/server.agents-delete-database-handles.test.ts`) runs two agents
+through chat, memory, cron, catalog refresh, secrets reload and hot reload,
+deletes one, and asserts no process descriptor remains for its database, WAL or
+shared memory, none reopens after a further reload, and re-creation readmits it.
+It fails on `bcbfa47` (13 held descriptors) and passes on `7fbe0bb`.
+
+The `51df909` source passes the full native build, core/UI/extension production
 types and 1,099 focused tests across 58 files. Browser auth-recovery coverage
 also passes (four cases). No aggregate `pnpm check` success is claimed.
 The build reports a 371,762-byte startup gzip against a 371,332-byte budget;
 the unchanged-UI upstream-only contribution build reports 371,784 bytes.
 The warning was not suppressed and no budget was raised.
 
-Both maintained packers, native archive integrity, isolated root/Mattermost
-installation and the actual Linux arm64 full-plugin-installer target pass.
-The image verifies 156 identical Codex runtime files with bundled trust and
-three native-hook imports. Local image ID:
-`sha256:8b55510deed40364279159d65001d5fc643963c5d555c2000258ecd6140d0361`.
-The final Octogee artifact/base-image tests pass (114 + 19). This is local
-installer proof, not a published gateway image family or rollout claim.
+For `7fbe0bb`: the clean `pnpm build` (build-info matches HEAD), both
+maintained packers, native archive integrity and isolated root/Mattermost
+installation (`OpenClaw 2026.9.6 (7fbe0bb)`) pass. The Mattermost pack is
+byte-identical to the already-published `4ee09605` archive and its uncompressed
+tar is byte-identical to the pinned `77619145` (same source, different gzip
+bytes), so the pinned Mattermost object is kept. For `51df909`, the actual
+Linux arm64 full-plugin-installer target passed:
+156 identical Codex runtime files with bundled trust and three native-hook
+imports, local image ID
+`sha256:8b55510deed40364279159d65001d5fc643963c5d555c2000258ecd6140d0361`,
+and Octogee artifact/base-image tests (114 + 19). This pin reruns the focused
+pin specs (26). This is local proof, not a published gateway image family or
+rollout claim.
 
 Published with generation-zero preconditions; both complete SHA-256 values were
 verified by reading the objects back:
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-a93003cd.tgz` | `a93003cdcfcbe841e9e5eee1fcd9e23de256a99261ecb153ef12f39b5b17b76f` | `1790445507547949` |
-| `openclaw-mattermost-77619145.tgz` | `776191456b764d679e3dd8a17a8e90d2c1d94bd1285e4622d69efc88aa52928f` | `1790445510528027` |
+| `openclaw-fork-b2b1a177.tgz` | `b2b1a1779fed54e6ea0e535145c24ffa696d8d024ece222340cfc073f61a2d2a` | `1790469001151721` |
+| `openclaw-mattermost-77619145.tgz` (kept) | `776191456b764d679e3dd8a17a8e90d2c1d94bd1285e4622d69efc88aa52928f` | `1790445510528027` |
 
 The selected source uses **shared-state schema 20 / agent schema 23**. Preserve
 native migration backups and roll forward; older images may refuse migrated
