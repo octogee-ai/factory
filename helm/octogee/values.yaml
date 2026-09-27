@@ -399,11 +399,11 @@ opsAgent:
   resources:
     requests:
       cpu: 250m
-      memory: 512Mi
+      memory: 1Gi
       ephemeral-storage: 256Mi
     limits:
       cpu: "2"
-      memory: 2Gi
+      memory: 3Gi
       ephemeral-storage: 1Gi
 
 # ── Service Account ──────────────────────────────────────────────────────────
