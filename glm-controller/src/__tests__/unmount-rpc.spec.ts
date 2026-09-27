@@ -167,7 +167,6 @@ describe("buildGatewayHeartbeatPollerDeps", () => {
       builderAccess: null,
       ownerUid: gatewayClass === "shared" ? null : "uid-bender",
       builderSlug: gatewayClass === "shared" ? null : "bender",
-      openclawOverrides: null,
       modelBrokerLimits: null,
       preemption: null,
     });
@@ -339,7 +338,6 @@ describe("gateway heartbeat poll — a converged poll reads nothing", () => {
     builderAccess: null,
     ownerUid: "uid-bender",
     builderSlug: "bender",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   };

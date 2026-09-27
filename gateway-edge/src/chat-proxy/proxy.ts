@@ -2,7 +2,7 @@ import http from "node:http";
 import * as fs from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { Registry, Counter, Gauge } from "prom-client";
@@ -83,7 +83,6 @@ if (process.env.NODE_ENV !== "test") {
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "https://mm-test.invalid";
 const DEFAULT_OPENCLAW_GATEWAY_URL = "http://127.0.0.1:18789";
 const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT || "octogee";
-const SA_KEY_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.SA_KEY_PATH;
 const COACH_RECONCILE_CUSTOMERS_DIR = process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers";
 const COACH_RECONCILE_OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
 const COACH_RECONCILE_INTERVAL_MS = 60_000;
@@ -343,15 +342,8 @@ function watchBrokerGatewayIdChange(
 }
 
 if (!getApps().length) {
-  if (SA_KEY_PATH) {
-    const fs = await import("node:fs");
-    const sa = JSON.parse(fs.readFileSync(SA_KEY_PATH, "utf-8"));
-    initializeApp({ credential: cert(sa), projectId: FIREBASE_PROJECT });
-    console.log(`[chat-proxy] Using SA key: ${SA_KEY_PATH}`);
-  } else {
-    initializeApp({ projectId: FIREBASE_PROJECT });
-    console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
-  }
+  initializeApp({ projectId: FIREBASE_PROJECT });
+  console.log(`[chat-proxy] Using ADC for project: ${FIREBASE_PROJECT}`);
 }
 const db = getFirestore();
 

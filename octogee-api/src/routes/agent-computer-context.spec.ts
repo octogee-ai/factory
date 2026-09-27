@@ -29,7 +29,6 @@ function gatewayRoot() {
     builderAccess: { controlUiEnabled: true },
     ownerUid: "owner",
     builderSlug: "alex",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   };

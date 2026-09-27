@@ -42,7 +42,6 @@ function gatewayDoc() {
     builderAccess: null,
     ownerUid: "uid-alice",
     builderSlug: "alice",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   };

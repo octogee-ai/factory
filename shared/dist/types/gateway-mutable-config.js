@@ -157,7 +157,6 @@ export function isGatewayMutableConfig(value) {
         isNullableBuilderAccess(value.builderAccess) &&
         isNullableString(value.ownerUid) &&
         isNullableString(value.builderSlug) &&
-        isNullableRecord(value.openclawOverrides) &&
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
         (value.preemption === undefined || value.preemption === null) &&
         isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&

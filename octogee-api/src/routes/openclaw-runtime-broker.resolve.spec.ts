@@ -29,7 +29,6 @@ function desiredDoc(extra: Record<string, unknown> = {}): Record<string, unknown
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...extra,

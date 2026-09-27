@@ -37,7 +37,6 @@ export interface GatewayDesiredState {
         at: number;
         message: string;
     } | null;
-    openclawOverrides?: Record<string, unknown>;
     ownerUid?: string;
     builderSlug?: string;
     sizingTier?: SizingTier;

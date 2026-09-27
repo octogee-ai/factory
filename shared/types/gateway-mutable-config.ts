@@ -43,7 +43,6 @@ export interface GatewayMutableConfig {
   builderAccess: BuilderGatewayAccessSpec | null;
   ownerUid: string | null;
   builderSlug: string | null;
-  openclawOverrides: Record<string, unknown> | null;
   modelBrokerLimits: GatewayModelBrokerLimits | null;
   preemption?: null;
   allocation?: DisposableBuilderGatewayAllocation | null;
@@ -223,7 +222,6 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableBuilderAccess(value.builderAccess) &&
     isNullableString(value.ownerUid) &&
     isNullableString(value.builderSlug) &&
-    isNullableRecord(value.openclawOverrides) &&
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
     (value.preemption === undefined || value.preemption === null) &&
     isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&

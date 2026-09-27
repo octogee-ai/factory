@@ -43,7 +43,6 @@ function gatewayDoc(overrides: Record<string, unknown> = {}): Record<string, unk
     builderAccess: null,
     ownerUid: "uid-bob",
     builderSlug: "bob",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

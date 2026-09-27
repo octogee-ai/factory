@@ -23,7 +23,6 @@ function validConfig(
     builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-owner",
     builderSlug: "owner",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     allocation: null,
@@ -82,6 +81,23 @@ describe("gateway mutable config", () => {
       expect(
         isGatewayMutableConfigForGateway(
           { ...validConfig(), computeClass: residue },
+          "owner",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("accepts a durable root that carries no openclawOverrides", () => {
+    const config = validConfig();
+    expect(Object.prototype.hasOwnProperty.call(config, "openclawOverrides")).toBe(false);
+    expect(isGatewayMutableConfigForGateway(config, "owner")).toBe(true);
+  });
+
+  it("treats residual openclawOverrides from the retired admin knob as inert", () => {
+    for (const residue of [null, { session: { dmScope: "per-channel-peer" } }]) {
+      expect(
+        isGatewayMutableConfigForGateway(
+          { ...validConfig(), openclawOverrides: residue },
           "owner",
         ),
       ).toBe(true);

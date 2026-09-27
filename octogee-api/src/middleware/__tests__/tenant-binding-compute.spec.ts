@@ -44,7 +44,7 @@ const docs = {
     liveRevisionId: "b-x-r1", trafficRevisionId: "b-x-r1", desiredStatus: "running", roll: null, configSchemaVersion: 1,
     profile: "builder", gatewayClass: "builder", imageProfile: "builder", sizingTier: null, gcpProject: null,
     gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null, builderAccess: null,
-    ownerUid: "UidA", builderSlug: "mama", openclawOverrides: null, modelBrokerLimits: null, preemption: null,
+    ownerUid: "UidA", builderSlug: "mama", modelBrokerLimits: null, preemption: null,
   },
   "glmGateways/b-x": {
     docKind: "runtime", gatewayId: "b-x", release: 1, lifecycle: "serving", runtime: "gce-vm",

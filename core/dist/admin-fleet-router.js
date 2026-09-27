@@ -1215,7 +1215,6 @@ export function projectGatewayControl(root, glmData) {
         serviceAccountName: orNull(root.serviceAccountName),
         builderAccess: orNull(root.builderAccess),
         modelBrokerLimits: orNull(root.modelBrokerLimits),
-        openclawOverrides: orNull(root.openclawOverrides),
         vm: recordOrNull(glmData?.vm),
     };
 }
@@ -1891,7 +1890,6 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
     "builderAccess",
     "ownerUid",
     "builderSlug",
-    "openclawOverrides",
     "modelBrokerLimits",
 ];
 function mutableConfigPatchFromBody(body) {
@@ -1938,7 +1936,6 @@ function buildCreateGatewayConfig(args) {
         builderAccess: null,
         ownerUid: null,
         builderSlug: null,
-        openclawOverrides: null,
         modelBrokerLimits: null,
     };
 }

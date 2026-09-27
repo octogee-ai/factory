@@ -47,7 +47,6 @@ function durableRoot(gatewayId: string, overrides: Record<string, unknown> = {})
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

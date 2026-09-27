@@ -294,7 +294,6 @@ export function mergeGatewayConfigWithArtifact(
     builderAccess: config.builderAccess,
     ownerUid: config.ownerUid,
     builderSlug: config.builderSlug,
-    openclawOverrides: config.openclawOverrides,
     modelBrokerLimits: config.modelBrokerLimits,
     ...artifact,
   };

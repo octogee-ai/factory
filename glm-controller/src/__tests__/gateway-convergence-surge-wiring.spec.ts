@@ -36,7 +36,6 @@ function gateway(): DurableGateway {
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   } as DurableGateway;

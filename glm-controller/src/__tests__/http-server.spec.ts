@@ -51,7 +51,6 @@ function durableBuilderGateway(
     builderAccess: null,
     ownerUid: "uid-alice",
     builderSlug: "alice",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   };
@@ -81,7 +80,6 @@ function durableSharedGateway(gatewayId: string): Record<string, unknown> {
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   };

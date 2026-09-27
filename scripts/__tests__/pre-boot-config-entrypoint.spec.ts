@@ -30,7 +30,6 @@ describe("pre-boot config entrypoint", () => {
         ...process.env,
         GATEWAY_CLASS: "shared",
         HOME: openclawDir,
-        OCTOGEE_PREBOOT_FIRESTORE: "false",
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_DIR: openclawDir,
       },
@@ -38,5 +37,31 @@ describe("pre-boot config entrypoint", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("[pre-boot] Fatal:");
+  });
+
+  it("patches the config without initializing Firebase, whatever credentials the pod carries", () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-preboot-dbless-"));
+    temporaryDirectories.push(openclawDir);
+    const configPath = path.join(openclawDir, "openclaw.json");
+    fs.writeFileSync(configPath, "{}", "utf8");
+    const credentialPath = path.join(openclawDir, "service-account.json");
+    fs.writeFileSync(credentialPath, "{}", "utf8");
+
+    const result = spawnSync(tsx, [entrypoint], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GOOGLE_APPLICATION_CREDENTIALS: credentialPath,
+        HOME: openclawDir,
+        OCTOGEE_PREBOOT_FIRESTORE: "true",
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DIR: openclawDir,
+        SA_KEY_PATH: credentialPath,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("Firebase");
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.defaults.typingMode).toBe("instant");
   });
 });

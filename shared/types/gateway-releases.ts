@@ -509,7 +509,6 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "builderAccess",
   "ownerUid",
   "builderSlug",
-  "openclawOverrides",
   "modelBrokerLimits",
   "allocation",
   "desiredStatus",

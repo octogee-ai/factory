@@ -29,7 +29,6 @@ function gatewayRoot(
     builderAccess: null,
     ownerUid: owned ? "uid-alice" : null,
     builderSlug: owned ? "alice" : null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     allocation,

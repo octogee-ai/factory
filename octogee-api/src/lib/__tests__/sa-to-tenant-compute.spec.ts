@@ -40,7 +40,7 @@ function durableGateway(gatewayId: string, overrides: Record<string, unknown> = 
     profile: "builder", gatewayClass: "builder", imageProfile: "builder", sizingTier: null,
     gcpProject: null, gatewayContainerSecurityContext: null, serviceAccountName: null,
     serviceAccount: null, builderAccess: null, ownerUid: "UidA", builderSlug: "mama",
-    openclawOverrides: null, modelBrokerLimits: null, preemption: null,
+    modelBrokerLimits: null, preemption: null,
     ...overrides,
   };
 }

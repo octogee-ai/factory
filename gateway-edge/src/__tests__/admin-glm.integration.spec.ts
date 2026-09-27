@@ -463,7 +463,6 @@ function seedDurableGateway(
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...options.root,

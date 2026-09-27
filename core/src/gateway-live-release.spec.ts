@@ -185,7 +185,6 @@ function mutableConfig(
     builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-ceckert",
     builderSlug: "ceckert",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

@@ -18,11 +18,6 @@ import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-bro
 import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import {
-  isBareGatewayId,
-  readGatewayAuthorization,
-  type GatewayAuthorization,
-} from "@octogee/core/gateway-live-release";
-import {
   OPENAI_PLATFORM_PROVIDER_ID,
   OPENROUTER_PLATFORM_PROVIDER_ID,
   platformModelRefs,
@@ -625,93 +620,14 @@ export function applyPreBootPatches(
   ].some(Boolean);
 }
 
-const SECRET_BEARING_KEYS = new Set([
-  "apiKey",
-  "key",
-  "token",
-  "secret",
-  "password",
-  "botToken",
-]);
-
-const SECRETREF_OBJECT_KEYS = new Set(["keyRef", "tokenRef"]);
-
 const PROTO_POLLUTION_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
-  });
-  return Promise.race([p.finally(() => clearTimeout(timer)), timeout]);
-}
-
-function stripInlineSecrets(
-  node: unknown,
-  pathLabel: string,
-  logFn: (msg: string) => void,
-): void {
-  if (!isPlainObject(node)) return;
-  for (const key of Object.keys(node)) {
-    if (PROTO_POLLUTION_KEYS.has(key)) {
-      Reflect.deleteProperty(node, key);
-      logFn(`dropped unsafe key ${pathLabel}.${key} (prototype pollution)`);
-      continue;
-    }
-    const val = Reflect.get(node, key);
-    const secretBearing =
-      SECRET_BEARING_KEYS.has(key) || SECRETREF_OBJECT_KEYS.has(key);
-    if (secretBearing && typeof val === "string") {
-      Reflect.deleteProperty(node, key);
-      logFn(
-        `dropped inline plaintext secret at ${pathLabel}.${key} — per-gateway overrides must reference Secret Manager via keyRef/tokenRef/SecretRef`,
-      );
-      continue;
-    }
-    if (val && typeof val === "object") {
-      stripInlineSecrets(val, `${pathLabel}.${key}`, logFn);
-    }
-  }
-}
-
 function valueEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function deepMergeInto(
-  target: Record<string, unknown>,
-  source: Record<string, unknown>,
-): boolean {
-  let changed = false;
-  for (const [key, sv] of Object.entries(source)) {
-    if (PROTO_POLLUTION_KEYS.has(key)) continue;
-    const tv = Reflect.get(target, key);
-    if (isPlainObject(sv) && isPlainObject(tv)) {
-      if (deepMergeInto(tv, sv)) changed = true;
-    } else if (!Reflect.has(target, key) || !valueEqual(tv, sv)) {
-      Reflect.set(target, key, sv);
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-export function applyGatewayOverrides(
-  config: Record<string, unknown>,
-  overrides: unknown,
-  logFn: (msg: string) => void = () => {},
-): boolean {
-  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
-    return false;
-  }
-  const sanitized = structuredClone(overrides) as Record<string, unknown>;
-  stripInlineSecrets(sanitized, "openclawOverrides", logFn);
-  if (Object.keys(sanitized).length === 0) return false;
-  return deepMergeInto(config, sanitized);
 }
 
 const FALLBACK_NAME = "Octogee Builder";
@@ -732,7 +648,7 @@ export function pickSoleTenantSlug(agentIds: readonly string[]): string | null {
   return slugs.size === 1 ? [...slugs][0] : null;
 }
 
-// eslint-disable-next-line no-control-regex -- matching control chars is the entire point: strip them to prevent gitconfig section injection via \n in displayName.
+// eslint-disable-next-line no-control-regex -- matching control chars is the entire point: strip them to prevent gitconfig section injection via the tenant slug.
 const SAFE_GITCONFIG_VALUE_RE = /[\x00-\x1F\x7F]/g;
 
 function safeOrNull(v: string | undefined | null): string | null {
@@ -741,20 +657,11 @@ function safeOrNull(v: string | undefined | null): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function resolveGitIdentity(input: {
-  user: { displayName?: string; email?: string } | null;
-  slug: string | null;
-}): { name: string; email: string } {
-  const cleanName = safeOrNull(input.user?.displayName);
-  const cleanEmail = safeOrNull(input.user?.email);
-  const cleanSlug = safeOrNull(input.slug);
-  const name = cleanName ?? cleanSlug ?? FALLBACK_NAME;
-  const email =
-    cleanEmail ??
-    (cleanSlug
-      ? `${cleanSlug}@${FALLBACK_EMAIL_DOMAIN}`
-      : `${FALLBACK_GENERIC_LOCAL}@${FALLBACK_EMAIL_DOMAIN}`);
-  return { name, email };
+function resolveGitIdentity(slug: string | null): { name: string; email: string } {
+  const cleanSlug = safeOrNull(slug);
+  return cleanSlug
+    ? { name: cleanSlug, email: `${cleanSlug}@${FALLBACK_EMAIL_DOMAIN}` }
+    : { name: FALLBACK_NAME, email: `${FALLBACK_GENERIC_LOCAL}@${FALLBACK_EMAIL_DOMAIN}` };
 }
 
 export function buildGitconfigContent(identity: {
@@ -775,19 +682,16 @@ export function buildGitconfigContent(identity: {
   ].join("\n");
 }
 
-export async function hydrateGitIdentity(deps: {
+export function hydrateGitIdentity(deps: {
   gitconfigPath: string;
   agentIds: readonly string[];
-  fetchUserBySlug: (
-    slug: string,
-  ) => Promise<{ displayName?: string; email?: string } | null>;
   fileExists: (p: string) => boolean;
   writeFile: (p: string, content: string) => void;
   logFn?: (msg: string) => void;
-}): Promise<boolean> {
+}): boolean {
   const log = deps.logFn ?? (() => {});
 
-let alreadyPresent = false;
+  let alreadyPresent = false;
   try {
     alreadyPresent = deps.fileExists(deps.gitconfigPath);
   } catch (e) {
@@ -800,18 +704,7 @@ let alreadyPresent = false;
   }
 
   const slug = pickSoleTenantSlug(deps.agentIds);
-  let user: { displayName?: string; email?: string } | null = null;
-  if (slug) {
-    try {
-      user = await deps.fetchUserBySlug(slug);
-    } catch (e) {
-      log(
-        `gitconfig: firestore lookup for slug=${slug} failed, using fallback identity — ${(e as Error).message}`,
-      );
-    }
-  }
-
-  const identity = resolveGitIdentity({ user, slug });
+  const identity = resolveGitIdentity(slug);
   const content = buildGitconfigContent(identity);
 
   try {
@@ -825,78 +718,6 @@ let alreadyPresent = false;
   } catch (e) {
     log(
       `WARN: failed to write ${deps.gitconfigPath} — ${(e as Error).message} (boot continues)`,
-    );
-    return false;
-  }
-}
-
-export function preBootFirestoreEnabled(
-  env: NodeJS.ProcessEnv,
-  fileExists: (p: string) => boolean = fs.existsSync,
-): boolean {
-  if (env.OCTOGEE_PREBOOT_FIRESTORE === "true") return true;
-  if (env.OCTOGEE_PREBOOT_FIRESTORE === "false") return false;
-
-  const candidates = [
-    env.GOOGLE_APPLICATION_CREDENTIALS,
-    env.SA_KEY_PATH,
-  ].filter((p): p is string => typeof p === "string" && p.trim().length > 0);
-
-  return candidates.some((p) => {
-    try {
-      return fileExists(p);
-    } catch {
-      return false;
-    }
-  });
-}
-
-export async function applyGatewayRootConfig(
-  config: Record<string, unknown>,
-  deps: {
-    gatewayId: string | undefined;
-    readAuthorization: (gatewayId: string) => Promise<GatewayAuthorization | null>;
-    logFn?: (msg: string) => void;
-  },
-): Promise<boolean> {
-  const logFn = deps.logFn ?? (() => undefined);
-  const gatewayId = deps.gatewayId;
-  if (!isBareGatewayId(gatewayId)) {
-    logFn(`WARN: refusing non-bare gateway config selector ${String(gatewayId)}`);
-    return false;
-  }
-  const authorization = await deps.readAuthorization(gatewayId);
-  if (!authorization) {
-    logFn(`WARN: durable root config unavailable for gateways/${gatewayId}`);
-    return false;
-  }
-  if (!authorization.config.openclawOverrides) return false;
-  const overridesChanged = applyGatewayOverrides(
-    config,
-    authorization.config.openclawOverrides,
-    logFn,
-  );
-  if (overridesChanged) {
-    logFn(`applied openclawOverrides from gateways/${gatewayId}`);
-  }
-  return overridesChanged;
-}
-
-async function applyGatewayRootConfigFromFirestore(
-  config: Record<string, unknown>,
-  logFn: (msg: string) => void,
-): Promise<boolean> {
-  const gatewayId = process.env.GATEWAY_ID;
-  try {
-    const { db } = await import("../lib/firebase.js");
-    return await applyGatewayRootConfig(config, {
-      gatewayId,
-      readAuthorization: (id) => withTimeout(readGatewayAuthorization(db, id), 4000),
-      logFn,
-    });
-  } catch (e) {
-    logFn(
-      `WARN: could not fetch/apply gateways/${String(gatewayId)} root config — booting on template + policy only: ${(e as Error).message}`,
     );
     return false;
   }
@@ -917,8 +738,7 @@ export function writeConfigAtomically(configPath: string, config: unknown): void
 }
 
 async function main(): Promise<void> {
-
-let configRaw: string;
+  let configRaw: string;
   try {
     configRaw = fs.readFileSync(CONFIG_PATH, "utf-8");
   } catch (e) {
@@ -930,19 +750,9 @@ let configRaw: string;
   }
   const config = JSON.parse(configRaw);
 
-  const firestoreEnabled = preBootFirestoreEnabled(process.env);
-  const overridesChanged = firestoreEnabled
-    ? await applyGatewayRootConfigFromFirestore(config, log)
-    : false;
-  if (!firestoreEnabled) {
-    log("Firestore-backed pre-boot state skipped (db-less gateway); applying env/runtime patches only");
-  }
-
-  const policyChanged = applyPreBootPatches(config, process.env, log);
-
-  if (overridesChanged || policyChanged) {
+  if (applyPreBootPatches(config, process.env, log)) {
     writeConfigAtomically(CONFIG_PATH, config);
-    log("openclaw.json patched (per-gateway overrides / env / stale-key cleanup)");
+    log("openclaw.json patched (env / stale-key cleanup)");
   } else {
     log("no changes needed");
   }
@@ -972,36 +782,11 @@ let configRaw: string;
     }
   }
 
-try {
+  try {
     const homeDir = process.env.HOME ?? "/home/node";
-    const gitconfigPath = path.join(homeDir, ".gitconfig");
-    const db = firestoreEnabled ? (await import("../lib/firebase.js")).db : null;
-    await hydrateGitIdentity({
-      gitconfigPath,
+    hydrateGitIdentity({
+      gitconfigPath: path.join(homeDir, ".gitconfig"),
       agentIds: agentIdsFromConfig(config),
-      fetchUserBySlug: async (slug) => {
-        if (!db) return null;
-
-const tryByField = async (
-          field: string,
-        ): Promise<{ displayName?: string; email?: string } | null> => {
-          const snap = await withTimeout(
-            db.collection("users").where(field, "==", slug).limit(1).get(),
-            4000,
-          );
-          if (snap.empty) return null;
-          const d = snap.docs[0].data() as Record<string, unknown>;
-          return {
-            displayName:
-              typeof d.displayName === "string" ? d.displayName : undefined,
-            email: typeof d.email === "string" ? d.email : undefined,
-          };
-        };
-        return (
-          (await tryByField("provisioning.openclaw.slug")) ??
-          (await tryByField("username"))
-        );
-      },
       fileExists: (p) => {
         try {
           fs.statSync(p);

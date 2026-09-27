@@ -212,9 +212,9 @@ Mattermost defaults to `streaming.mode: "block"` with
 `streaming.preview.toolProgress: true`: completed text and tool-activity blocks
 remain visible, and final text follows the tool activity. Both gateway templates
 seed these preferences. The pre-boot fix-up fills only missing channel-level
-fields after gateway overrides are merged, so existing gateways gain the defaults
-on their next boot. Builders can set another mode (`off`, `partial`, or `progress`)
-or disable preview tool progress; those explicit values survive subsequent boots.
+fields, so existing gateways gain the defaults on their next boot. Builders can
+set another mode (`off`, `partial`, or `progress`) or disable preview tool
+progress; those explicit values survive subsequent boots.
 Accounts without a `streaming` override inherit the channel preferences. An explicit
 `channels.mattermost.accounts.<accountId>.streaming` object remains untouched and
 replaces the channel's streaming object under native OpenClaw account resolution.

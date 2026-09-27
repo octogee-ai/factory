@@ -1965,7 +1965,6 @@ export interface AdminGatewayControlProjection {
   serviceAccountName: string | null;
   builderAccess: Record<string, unknown> | null;
   modelBrokerLimits: Record<string, unknown> | null;
-  openclawOverrides: Record<string, unknown> | null;
   vm: GatewayVmState | null;
 }
 
@@ -1993,7 +1992,6 @@ export function projectGatewayControl(
     serviceAccountName: orNull(root.serviceAccountName),
     builderAccess: orNull(root.builderAccess as Record<string, unknown> | null | undefined),
     modelBrokerLimits: orNull(root.modelBrokerLimits as Record<string, unknown> | null | undefined),
-    openclawOverrides: orNull(root.openclawOverrides),
     vm: recordOrNull(glmData?.vm) as GatewayVmState | null,
   };
 }
@@ -2930,7 +2928,6 @@ const GATEWAY_MUTABLE_CONFIG_FIELDS = [
   "builderAccess",
   "ownerUid",
   "builderSlug",
-  "openclawOverrides",
   "modelBrokerLimits",
 ] as const satisfies ReadonlyArray<keyof Omit<GatewayMutableConfig, "configSchemaVersion">>;
 
@@ -2984,7 +2981,6 @@ function buildCreateGatewayConfig(args: {
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
   };
 }

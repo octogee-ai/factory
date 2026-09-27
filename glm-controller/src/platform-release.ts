@@ -109,7 +109,6 @@ export function sharedSlotMutableConfig(): GatewayMutableConfig {
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
   };
 }

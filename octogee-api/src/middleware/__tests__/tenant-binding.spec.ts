@@ -71,7 +71,6 @@ function gatewayRoot(serviceAccountName: string | null = null): Record<string, u
     builderAccess: null,
     ownerUid: "uid-bender",
     builderSlug: "bender",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
   };

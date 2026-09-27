@@ -310,7 +310,6 @@ function seedNewSchemaGateway(
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     coOwnerUids: [],
@@ -1176,6 +1175,16 @@ describe("durable config PATCHes", () => {
     expect(root.ownerUid).toBe("uid-1");
     expect(root.builderSlug).toBe("chris");
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/bench`)?.builderAccess).toBeUndefined();
+  });
+
+  it("rejects an openclawOverrides PATCH because no gateway applies it", async () => {
+    const { app, store } = mkApp(seedNewSchemaGateway("beta", sharedPayload()));
+    const res = await request(app)
+      .patch("/gateways/beta")
+      .send({ openclawOverrides: { session: { dmScope: "per-channel-peer" } } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("no updatable fields provided");
+    expect(store.get("gateways/beta")?.updatedAt).toBe(1000);
   });
 
   it("applies explicit null-clears to the root without a release", async () => {

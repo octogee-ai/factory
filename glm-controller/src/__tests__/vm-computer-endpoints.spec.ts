@@ -113,7 +113,7 @@ describe("first-boot VM gateway handoff", () => {
     gatewayId: "b-x", latestRelease: 1, desiredStatus: "running", desiredRelease: 1, liveRelease: null, configSchemaVersion: 1,
     profile: "builder", gatewayClass: "builder", imageProfile: "builder", sizingTier: null, gcpProject: null,
     gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null, builderAccess: null,
-    ownerUid: "UidA", builderSlug: "mama", openclawOverrides: null, modelBrokerLimits: null, preemption: null,
+    ownerUid: "UidA", builderSlug: "mama", modelBrokerLimits: null, preemption: null,
     allocation: { kind: "disposable-builder", schemaVersion: 1, leaseId: "lease-1", generation: 1, claimedByUid: "UidA" },
   } as unknown as DurableGateway;
 

@@ -599,7 +599,6 @@ describe("assign-customer-gateway root config", () => {
       builderAccess: null,
       ownerUid: builder ? "uid-builder" : null,
       builderSlug: builder ? "builder" : null,
-      openclawOverrides: null,
       modelBrokerLimits: null,
       preemption: null,
     };
@@ -653,7 +652,6 @@ describe("fleet force gateway restart", () => {
       builderAccess: null,
       ownerUid: null,
       builderSlug: null,
-      openclawOverrides: null,
       modelBrokerLimits: null,
       preemption: null,
     };

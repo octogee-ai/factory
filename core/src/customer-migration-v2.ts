@@ -64,7 +64,6 @@ function mutableConfigHash(config: GatewayMutableConfig): string {
     builderAccess: config.builderAccess,
     ownerUid: config.ownerUid,
     builderSlug: config.builderSlug,
-    openclawOverrides: config.openclawOverrides,
     modelBrokerLimits: config.modelBrokerLimits,
   });
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");

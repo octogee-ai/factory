@@ -107,7 +107,6 @@ describe("customerMigrationV2GatewayRootFence", () => {
     builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-1",
     builderSlug: "alice",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     allocation: null,

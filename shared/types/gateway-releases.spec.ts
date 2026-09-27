@@ -254,7 +254,6 @@ describe("classifyGatewayField", () => {
 
   it("classifies all former release policy fields as gateway-mutable", () => {
     expect(classifyGatewayField("builderAccess")).toBe("gateway-mutable");
-    expect(classifyGatewayField("openclawOverrides")).toBe("gateway-mutable");
     expect(classifyGatewayField("allocation")).toBe("gateway-mutable");
   });
 });
@@ -351,7 +350,6 @@ describe("commitPlacementAtomic", () => {
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

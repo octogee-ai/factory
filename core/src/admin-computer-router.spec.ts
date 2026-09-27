@@ -13,7 +13,7 @@ const gateway = {
   configSchemaVersion: 1, profile: "builder", gatewayClass: "builder", imageProfile: "builder",
   sizingTier: "s", gcpProject: "octogee-test", gatewayContainerSecurityContext: null,
   serviceAccountName: null, serviceAccount: null, builderAccess: null,
-  ownerUid: OWNER, builderSlug: "fixture", openclawOverrides: null, modelBrokerLimits: null,
+  ownerUid: OWNER, builderSlug: "fixture", modelBrokerLimits: null,
 };
 const vm = { instanceName: "octo-fixture", zone: "us-central1-a", instanceId: "123", status: "RUNNING" };
 const parked = { ...vm, gatewayId: GATEWAY, parkedAt: 100, checkpoint: { outcome: "fresh", requestedAt: 90, completedAt: 95 } };

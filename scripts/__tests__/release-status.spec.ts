@@ -38,7 +38,6 @@ function gatewayRoot(
     builderAccess: null,
     ownerUid: null,
     builderSlug: null,
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

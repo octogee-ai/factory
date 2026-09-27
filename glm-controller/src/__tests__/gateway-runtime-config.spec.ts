@@ -17,7 +17,6 @@ function builderConfig(overrides: Partial<GatewayMutableConfig> = {}): GatewayMu
     builderAccess: { controlUiEnabled: true },
     ownerUid: "uid-builder",
     builderSlug: "builder",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

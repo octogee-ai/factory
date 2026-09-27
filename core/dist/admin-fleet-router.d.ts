@@ -203,7 +203,6 @@ export interface AdminGatewayControlProjection {
     serviceAccountName: string | null;
     builderAccess: Record<string, unknown> | null;
     modelBrokerLimits: Record<string, unknown> | null;
-    openclawOverrides: Record<string, unknown> | null;
     vm: GatewayVmState | null;
 }
 export declare function projectGatewayControl(root: DurableGatewayRoot, glmData: Record<string, unknown> | undefined): AdminGatewayControlProjection;

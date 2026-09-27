@@ -169,7 +169,6 @@ function isolatedGateway(overrides: Record<string, unknown> = {}) {
     builderAccess: null,
     ownerUid: "owner-bender",
     builderSlug: "acme",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

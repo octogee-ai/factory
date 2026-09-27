@@ -219,7 +219,6 @@ function configuredBender(overrides: Record<string, unknown> = {}) {
     builderAccess: null,
     ownerUid: "owner-bender",
     builderSlug: "victim",
-    openclawOverrides: null,
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,

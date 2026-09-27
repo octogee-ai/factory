@@ -14,7 +14,6 @@ export interface GatewayMutableConfig {
     builderAccess: BuilderGatewayAccessSpec | null;
     ownerUid: string | null;
     builderSlug: string | null;
-    openclawOverrides: Record<string, unknown> | null;
     modelBrokerLimits: GatewayModelBrokerLimits | null;
     preemption?: null;
     allocation?: DisposableBuilderGatewayAllocation | null;
