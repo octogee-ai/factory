@@ -303,6 +303,12 @@ export const EDGES: readonly ScopeEdge[] = [
       "tests/specs imports app/src source directly (app-route-helpers.spec.ts → routes/appRoutes, context-channel-selection.spec.ts → lib/contextChannelSelection, deferred-action.spec.ts → lib/deferredAction, sizing-cost-lockstep.spec.ts → lib/sizing, activity-wire-contract.spec.ts → hooks/useActivityChannel + activity-rows/ActivityRow)",
   },
   {
+    when: "app/openclaw-",
+    jobs: [JOBS.tests],
+    reason:
+      "tests/specs/openclaw-native-islands-pin.spec.ts digests the island adapter sources under app/openclaw-*/ against the committed vendor provenance",
+  },
+  {
     when: "app/public/",
     jobs: [JOBS.tests],
     reason:

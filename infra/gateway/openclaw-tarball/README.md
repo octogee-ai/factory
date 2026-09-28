@@ -89,9 +89,23 @@ gcloud storage cp --if-generation-match=0 "$MATTERMOST_TGZ" \
 Never overwrite an object or use retired `*-main.tgz` names. If an object
 already exists, verify its complete hash before reuse; an eight-character
 name is not proof. Read back published generations and hashes. Set
-`upstreamRef`, `openclawObject` and `mattermostObject` in `current.json`, and
-mirror the names in root `cloudbuild-base.yaml`. Push the exact overlay branch;
-use `--force-with-lease` only when rewriting a previously published branch.
+`upstreamRef`, `sourceSha`, `openclawObject` and `mattermostObject` in
+`current.json`, and mirror the names in root `cloudbuild-base.yaml`. Push the
+exact overlay branch; use `--force-with-lease` only when rewriting a previously
+published branch.
+
+The hosted UI islands ship from the same source. Regenerate them from the same
+clean, built checkout before publishing, so `sourceSha` pins the gateway objects
+and the committed bundles together:
+
+```bash
+node app/openclaw-islands/build.mjs /path/to/openclaw "$(git -C /path/to/openclaw rev-parse HEAD)"
+```
+
+`tests/specs/openclaw-native-islands-pin.spec.ts` fails a PR whose committed
+islands do not match `sourceSha`, and the build prints the upstream changes to
+the islands' input files since the previous pin (see
+[app/openclaw-islands/README.md](../../../app/openclaw-islands/README.md)).
 
 Update the Current overlay assessment below in the same Octogee PR. This README
 is deliberately a gateway build input, including for artifact-only recuts.

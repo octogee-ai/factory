@@ -1,5 +1,19 @@
 {
   "source": "8512ad6e924a80af029c3acf012e0713d0b31bc2",
+  "inputs": {
+    "sha256": "e46e7833a887cbc5df9a2f15abe8679d57387fa390039e42465c46b6c7bd4d40",
+    "files": [
+      "octogee/app/openclaw-browser/entry.ts",
+      "octogee/app/openclaw-browser/media.ts",
+      "octogee/app/openclaw-browser/resources.ts",
+      "octogee/app/openclaw-computer/entry.ts",
+      "octogee/app/openclaw-islands/build.mjs",
+      "octogee/app/openclaw-islands/i18n.ts",
+      "octogee/app/openclaw-model-picker/entry.ts",
+      "octogee/app/openclaw-workbench/entry.ts",
+      "octogee/app/openclaw-workbench/theme-bootstrap.template.js"
+    ]
+  },
   "entry": "ui/src/lib/chat/browser-tab-preview.ts",
   "packages": [
     "@noble/ed25519@3.2.0",
