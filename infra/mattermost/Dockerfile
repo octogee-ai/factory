@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS build
 ADD --checksum=sha256:ffab0b532d2f0265e542edd83886ebd6bde065de1f0e478adc9867176b385d75 https://codeload.github.com/ceckert/mattermost/tar.gz/e749bbd1c1d4eb0c9d58551dde56bd535a71e06a /tmp/source.tar.gz
 RUN mkdir /src && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
 WORKDIR /src/server
