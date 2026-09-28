@@ -117,7 +117,7 @@ RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/bundled-extensions/octog
 # up Ready with fewer plugins than configured and only `openclaw` CLI output
 # names the missing module. Load each bundle here, where a failure can still
 # stop the image from being pushed, and refuse any leftover node_modules.
-RUN node /octogee/infra/gateway/verify-extension-bundles.mjs /octogee/extensions
+RUN node /octogee/infra/gateway/verify-extension-bundles.mjs /octogee/extensions /usr/local/lib/node_modules/openclaw
 
 # Keep full devDependency installs, compiler inputs, npm caches, and deleted
 # extension TypeScript sources out of the deliverable image. COPY transfers the

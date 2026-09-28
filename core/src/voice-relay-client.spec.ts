@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVoiceRelayClient } from "./relay-client.js";
+import { createVoiceRelayClient } from "./voice-relay-client.js";
 
 function streamOf(chunks: Buffer[]): Response {
   const body = new ReadableStream<Uint8Array>({

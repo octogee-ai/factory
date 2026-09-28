@@ -234,6 +234,37 @@ describe("OpenClaw Dashboard HTTP surface", () => {
     expect(response.headers.location).toBe(`/g/bender/openclaw/${page}`);
   });
 
+  it("redeems the same authenticated ticket directly into native Talk settings", async () => {
+    const redeem = vi.fn(async (input) => ({
+      uid: "uid-owner", gatewayId: input.gatewayId, workspaceSlug: "alice", revisionId: input.revisionId,
+      expiresAt: 3_601_000,
+    }));
+    const response = await request(appWith({ env: env(), sessions: sessions(), redeem }))
+      .get(`/api/g/bender/openclaw/launch/${"a".repeat(43)}?page=talk-settings`);
+    expect(response.status).toBe(303);
+    expect(response.headers.location).toBe("/g/bender/openclaw/settings/talk");
+    expect(response.headers["set-cookie"]?.[0]).toContain("HttpOnly");
+    expect(redeem).toHaveBeenCalledOnce();
+  });
+
+  it.each(["page=https://example.com", "page=../config", "page=talk-settings&page=other", "next=settings/talk"])("rejects unknown launch destinations before ticket consumption: %s", async (query) => {
+    const redeem = vi.fn();
+    const response = await request(appWith({ env: env(), sessions: sessions(), redeem }))
+      .get(`/api/g/bender/openclaw/launch/${"a".repeat(43)}?${query}`);
+    expect(response.status).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(redeem).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass ticket authorization when opening native voice settings", async () => {
+    const response = await request(appWith({ env: env(), sessions: sessions(), redeem: async () => null }))
+      .get(`/api/g/bender/openclaw/launch/${"a".repeat(43)}?page=talk-settings`);
+    expect(response.status).toBe(401);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers["set-cookie"]).toBeUndefined();
+  });
+
   it("returns a branded relaunch document only to an unauthenticated Dashboard navigation", async () => {
     const manager = sessions();
     const application = express().use(dashboardAssetRateLimit).use(appWith({ env: env(), sessions: manager }));

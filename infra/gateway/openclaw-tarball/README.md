@@ -109,14 +109,12 @@ The September 26 selection uses the newest completed full-green main run found:
 Newer full runs were failed or pending; their fast-green push runs were not used.
 This is a main snapshot with package version `2026.9.6`, not the GA tag's bytes.
 
-**Exact overlay:** `ceckert/openclaw:codex/openclaw-slim-main-sept26`,
-[`bff2282dbcd5211e4d87ecf59825be234238849f`](https://github.com/ceckert/openclaw/commit/bff2282dbcd5211e4d87ecf59825be234238849f),
-fast-forwarded from `51df909` by the two held-database commits (`bcbfa47`, `7fbe0bb`),
-the channel-authority/computer-target commit (`88748c5`) and the agent-less cron
-retired-fence commit (`bff2282`).
-The clean build's source matches. Its 32 commits include fixture corrections,
-test reductions, resource-cleanup follow-ups and regenerated Workboard assets;
-commit count is not a count of distinct runtime features.
+**Exact overlay:** `ceckert/openclaw:codex/octogee-voice-adapter`,
+[`8512ad6e924a80af029c3acf012e0713d0b31bc2`](https://github.com/ceckert/openclaw/commit/8512ad6e924a80af029c3acf012e0713d0b31bc2).
+This extends the selected `bff2282` overlay with native hosted Talk/channel
+consults, acknowledged narration, and Browser/Computer operator input custody.
+[Native PR #5](https://github.com/ceckert/openclaw/pull/5) isolates those additions.
+Generated hosted UI and resource validators use the same exact source.
 
 ### What remains and when it can go
 
@@ -137,6 +135,9 @@ commit count is not a count of distinct runtime features.
 | Deleted-agent model/auth/secrets/memory cleanup and per-isolate reader registry (`fb99ee1`, `0ed4358`, `1a84c2d`, `bcbfa47`, `7fbe0bb`) | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes native owners, and every isolate's cached database readers, without disrupting surviving agents. |
 | Channel accounts start detached from the calling RPC's plugin-runtime request scope and tool-caller identity (`88748c5`) | Mattermost Coach turns after `config.patch`/`config.apply` hot reload | [#159396](https://github.com/openclaw/openclaw/pull/159396) or equivalent is merged into the selected base: channel monitors restarted by a config RPC keep the Gateway binding but not the closed client's authority. |
 | Explicit computer target `gateway` falls through to the sole paired node when the Gateway has no computer provider (`88748c5`) | Coach `computer` tool on the octogee-desktop node | An upstream PR (not yet filed) or equivalent is merged into the selected base: a provider-less Gateway resolves `gateway` to its one paired node. |
+
+| Native channel consult adoption and acknowledged Talk narration (`6676e0f`) | Hosted Builder voice through the existing Mattermost channel and speech broker | Upstream exposes equivalent authenticated ingress, exact-run custody/cancellation, and speech-segment playback acknowledgements. |
+| Connection-owned Browser lease and native Computer input fences (`6676e0f`) | Human takeover of shared gateway tools | Upstream provides equivalent lease ownership, input yield, and fresh-observation requirements across host/node/worker execution. |
 
 The deletion fix uses the native memory-manager close API. Its proof establishes
 a retained manager/provider lifetime; do not assume the current implementation
@@ -183,66 +184,34 @@ means the overlay can be dropped.
 
 ### Qualification and artifacts
 
-The held-database gateway harness
-(`src/gateway/server.agents-delete-database-handles.test.ts`) runs two agents
-through chat, memory, cron, catalog refresh, secrets reload and hot reload,
-deletes one, and asserts no process descriptor remains for its database, WAL or
-shared memory, none reopens after a further reload, and re-creation readmits it.
-It fails on `bcbfa47` (13 held descriptors) and passes on `7fbe0bb`.
+The exact clean `8512ad6` source passes the canonical full `pnpm build`, production
+and affected test typechecks, focused control/voice regressions, type-aware lint,
+protocol generation, channel metadata, and SDK export/API checks. No aggregate
+`pnpm check` success is claimed. The startup JS gzip warning remains visible:
+371,784 bytes against a 371,332-byte budget, matching the previously documented
+upstream-only contribution build. The budget was not changed.
 
-The `51df909` source passes the full native build, core/UI/extension production
-types and 1,099 focused tests across 58 files. Browser auth-recovery coverage
-also passes (four cases). No aggregate `pnpm check` success is claimed.
-The build reports a 371,762-byte startup gzip against a 371,332-byte budget;
-the unchanged-UI upstream-only contribution build reports 371,784 bytes.
-The warning was not suppressed and no budget was raised.
+Both maintained packers ran sequentially against that final build. Native root
+archive integrity, isolated npm installation of the exact root/Mattermost pair,
+and the hosted voice plugin's real installed-SDK load pass. The installed CLI
+reports `OpenClaw 2026.9.6 (8512ad6)`. Packaging used unchanged committed Octogee
+build inputs while unrelated app/layout edits were in progress.
 
-The channel-authority/computer-target commit `88748c5` adds a channel-manager
-regression (`src/gateway/server-channels.request-scope.test.ts`): an account
-started inside a config RPC's plugin-runtime scope keeps the Gateway binding but
-no client authority or tool-caller identity. Its computer-tool case resolves
-explicit `gateway` on a provider-less Gateway to the sole paired node. Both files
-pass (19 tests).
-
-The agent-less cron commit `bff2282` stops retired migration fences from
-holding agent-less jobs: retire keeps a moved agent's fence as a permanent
-source-side marker, so every former migration source refused memory-core's
-managed dreaming job every minute (`Cron agent … is held for migration …`).
-Agent-less mutations are now held only by fences whose migration is held,
-exported or staged (or has no migration row); owned jobs still check their own
-agent's fence, retired or not. Two kernel regressions (red before the fix) pass
-with the file's 17 tests; the full `src/cron` suite (3,554 tests), `pnpm tsgo:core`
-and the cron core-test type shard pass. Only this fork change is pinned; no
-upstream PR was filed.
-
-For `bff2282`: the clean `pnpm build` (build-info matches HEAD), both maintained
-packers and isolated root/Mattermost installation (`OpenClaw 2026.9.6 (bff2282)`)
-pass. The Mattermost pack is again byte-identical to `4ee09605` and its
-uncompressed tar matches the pinned `77619145`, which is kept.
-
-For `88748c5`: the clean `pnpm build` (build-info matches HEAD), both
-maintained packers, native archive integrity and isolated root/Mattermost
-installation (`OpenClaw 2026.9.6 (88748c5)`) pass; the tree stays clean. The
-build again reports the startup JS gzip budget violation (363.1 KiB against
-362.6 KiB) with no UI change in the commit. The Mattermost pack is
-byte-identical to the already-published `4ee09605` archive and its uncompressed
-tar is byte-identical to the pinned `77619145` (same source, different gzip
-bytes), so the pinned Mattermost object is kept. For `51df909`, the actual
-Linux arm64 full-plugin-installer target passed:
-156 identical Codex runtime files with bundled trust and three native-hook
-imports, local image ID
-`sha256:8b55510deed40364279159d65001d5fc643963c5d555c2000258ecd6140d0361`,
-and Octogee artifact/base-image tests (114 + 19). This pin reruns the focused
-pin specs (26). This is local proof, not a published gateway image family or
-rollout claim.
+The actual Linux arm64 `openclaw-full-plugin-installer` target passes registry
+refresh, bundled trust, all 156 Codex source-match files, three native-hook
+imports, and the patched CUA doctor. A network-disabled installed-image check
+verifies the exact build SHA, Linux arm64 Node 26.10.0, functioning koffi 3.3.0
+and esbuild 0.28.2, and the real channel-consult SDK export. Local image ID:
+`sha256:f6b844dc7ee3b61acd86a78350bac30ce87764edd9b6fbe86ac5d48dbc6986a1`.
+This is installed-image proof, not an environment rollout.
 
 Published with generation-zero preconditions; both complete SHA-256 values were
 verified by reading the objects back:
 
 | Write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-18db1218.tgz` | `18db121891a2ba2513dacdc44819eb0ec79f3ea1155eb522d21d921314078388` | `1790537332605344` |
-| `openclaw-mattermost-77619145.tgz` (kept) | `776191456b764d679e3dd8a17a8e90d2c1d94bd1285e4622d69efc88aa52928f` | `1790445510528027` |
+| `openclaw-fork-09ad36fe.tgz` | `09ad36fe0e25fef24465c140330a3578be3373c0ecf863b621f07c1e4415e0bd` | `1790614009664709` |
+| `openclaw-mattermost-fc42f59c.tgz` | `fc42f59c06799269e0bc6e123eef23d32b1dc5eabbd28064f81186b00c75f640` | `1790614018138418` |
 
 The selected source uses **shared-state schema 20 / agent schema 23**. Preserve
 native migration backups and roll forward; older images may refuse migrated

@@ -3,6 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership, workspacePermissionsEnabled } from "@octogee/core/gateway-principal-access";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
+import { resolveWorkspaceConversation, type WorkspaceConversationDeps } from "../lib/workspace-conversation.js";
 import { principalAccess, workspaceScopeFor, type DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
 
 function workspaceAccessClaim(req: Request): { gatewayId: string; targetUid?: string } | null {
@@ -39,6 +40,32 @@ export function createWorkspaceNativeAccessRoutes({ db }: { db: Firestore }): Ro
         res.status(404).json({ error: "member_not_found" }); return;
       }
       res.set("cache-control", "no-store").json({ uid: req.uid, gatewayId, workspaceSlug: scope.workspaceSlug, ...(targetUid ? { targetUid } : {}) });
+    } catch (error) { next(error); }
+  });
+  return router;
+}
+
+interface ToolConversationClaim { gatewayId: string; uid: string; channelId: string }
+function toolConversationClaim(req: Request): ToolConversationClaim | null {
+  const { gatewayId, uid, channelId } = req.body ?? {};
+  if (req.boundTenant?.kind !== "gateway" || req.boundTenant.gatewayId !== gatewayId || !isValidGatewayId(gatewayId)) return null;
+  if (typeof uid !== "string" || !uid || uid.length > 128 || uid.includes("/")) return null;
+  if (typeof channelId !== "string" || !/^[a-z0-9]{26}$/u.test(channelId)) return null;
+  if (Object.keys(req.body).some(key => !["gatewayId", "uid", "channelId"].includes(key))) return null;
+  return { gatewayId, uid, channelId };
+}
+async function toolConversation(deps: WorkspaceConversationDeps, claim: ToolConversationClaim) {
+  const resolved = await resolveWorkspaceConversation(deps, claim);
+  return resolved?.scope.nativeAccess ? resolved.context : null;
+}
+export function createToolConversationRoutes(deps: WorkspaceConversationDeps): Router {
+  const router = Router();
+  router.post("/tool-conversation", async (req: Request, res, next) => {
+    try {
+      const claim = toolConversationClaim(req);
+      const context = claim ? await toolConversation(deps, claim) : null;
+      if (!context) { res.status(403).json({ error: "forbidden" }); return; }
+      res.set("cache-control", "no-store").json(context);
     } catch (error) { next(error); }
   });
   return router;

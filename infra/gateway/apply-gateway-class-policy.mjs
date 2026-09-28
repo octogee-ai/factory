@@ -437,11 +437,21 @@ function enablePlatformPlugin(config, id, builder) {
 // visibility, config-mutation locks) stays customer-only, which is why a
 // builder gateway converges additively: new platform capabilities arrive and
 // the Builder's own profile, allow, deny and extra tools survive untouched.
+function addBuilderToolCapabilities(config, capabilities) {
+  config.tools ??= {};
+  const alsoAllow = Array.isArray(config.tools.alsoAllow) ? config.tools.alsoAllow : [];
+  if (Array.isArray(config.tools.allow) && config.tools.allow.length > 0) {
+    config.tools.allow = [...new Set([...config.tools.allow, ...alsoAllow, ...capabilities])];
+    delete config.tools.alsoAllow;
+  } else {
+    config.tools.alsoAllow = [...new Set([...alsoAllow, ...capabilities])];
+  }
+}
+
 function convergePlatformCapabilities(config, builder) {
   config.tools ??= {};
   if (builder) {
-    const owned = Array.isArray(config.tools.alsoAllow) ? config.tools.alsoAllow : [];
-    config.tools.alsoAllow = [...new Set([...owned, ...OCTOGEE_WORKFLOW_TOOLS])];
+    addBuilderToolCapabilities(config, OCTOGEE_WORKFLOW_TOOLS);
   } else {
     config.tools.profile = "coding";
     delete config.tools.allow;
@@ -1468,11 +1478,25 @@ function applyBuilderPolicy(config, openclawDir, env) {
   applyControlIdentityPolicy(config, env);
 }
 
+function applyBuilderTalkDefaults(config) {
+  addBuilderToolCapabilities(config, ["screen", "talk_voice"]);
+  config.plugins.entries["octogee-voice-tools"] ??= {
+    enabled: true,
+    config: { brokerUrl: FLEET_BROKER_URL_TEMPLATE, tokenPath: API_SA_TOKEN_PATH_TEMPLATE },
+  };
+  config.talk ??= {};
+  config.talk.realtime ??= {
+    provider: "octogee", providers: { octogee: {} },
+    mode: "realtime", transport: "gateway-relay", brain: "agent-consult", consultRouting: "provider-direct",
+  };
+}
+
 function applyControlIdentityPolicy(config, env) {
   config.plugins ??= {};
   config.plugins.entries ??= {};
   config.plugins.entries["octogee-identity-tools"] = { enabled: isPerUserControlIdentity(env) };
   if (isPerUserControlIdentity(env)) {
+    applyBuilderTalkDefaults(config);
     config.gateway ??= {};
     config.gateway.auth ??= {};
     const auth = config.gateway.auth;
@@ -1488,7 +1512,7 @@ function applyControlIdentityPolicy(config, env) {
     // materializing a list here would narrow the gateway to this single entry
     // and drop the platform capability plugins convergence just enabled.
     if (Array.isArray(config.plugins.allow)) {
-      config.plugins.allow = [...new Set([...config.plugins.allow, "octogee-identity-tools"])];
+      config.plugins.allow = [...new Set([...config.plugins.allow, "octogee-identity-tools", "octogee-voice-tools", "talk-voice"])];
     }
     return;
   }

@@ -5,7 +5,6 @@ import {
   type FeaturePolicy,
   type FeatureSubject,
 } from "@octogee/shared/types/feature-flags";
-import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   TALK_TICKET_PURPOSE,
   VOICE_TALK_FLAG,
@@ -31,6 +30,7 @@ export interface VoiceCatalogPort {
 export interface VoiceRoutesDeps {
   featurePolicy?: FeaturePolicy;
   catalog?: VoiceCatalogPort;
+  resolveConversation?: (uid: string, channelId: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string } | null>;
 }
 
 const VOICE_PREVIEW_NAME_MAX = 60;
@@ -79,7 +79,7 @@ function catalogStatus(err: unknown): number | null {
   return typeof status === "number" && status >= 400 && status < 600 ? status : null;
 }
 
-export function createVoiceRoutes({ featurePolicy, catalog }: VoiceRoutesDeps = {}): Router {
+export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation }: VoiceRoutesDeps = {}): Router {
   const router = Router();
 
   const gate = (context: string) => async (req: Request, res: Response, next: NextFunction) => {
@@ -98,15 +98,17 @@ export function createVoiceRoutes({ featurePolicy, catalog }: VoiceRoutesDeps = 
   router.post("/ticket", requireAuth, gate("voice-ticket"), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = req.uid!;
-      const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
-      const rawGatewayId = provisioning?.openclaw?.gatewayId;
-      if (!isValidGatewayId(rawGatewayId)) {
-        res.status(409).json({ error: "gateway_not_assigned" });
-        return;
+      const body = req.body ?? {};
+      if (typeof body.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(body.channelId) || Object.keys(body).some(key => key !== "channelId")) {
+        res.status(400).json({ error: "invalid_voice_conversation" }); return;
       }
-      const ticket = await mintTicket({ uid, gatewayId: rawGatewayId, purpose: TALK_TICKET_PURPOSE });
+      if (!resolveConversation) { res.status(503).json({ error: "voice_conversation_unavailable" }); return; }
+      const scope = await resolveConversation(uid, body.channelId);
+      if (!scope) { res.status(403).json({ error: "voice_conversation_forbidden" }); return; }
+      const { gatewayId, ...payload } = scope;
+      const ticket = await mintTicket({ uid, gatewayId, purpose: TALK_TICKET_PURPOSE, payload });
       const proxyUrl = process.env.API_PUBLIC_URL || "";
-      res.json({ wsTicket: ticket.ticket, proxyUrl, gatewayId: rawGatewayId });
+      res.json({ wsTicket: ticket.ticket, proxyUrl, gatewayId });
     } catch (err) {
       if (err instanceof TicketCapExceededError) {
         logger.warn("[voice] ticket cap exceeded", { uid: err.uid, cap: err.cap });

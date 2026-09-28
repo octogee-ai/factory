@@ -50,6 +50,7 @@ export interface WorkspaceChannelCandidate {
 
 export interface ChannelAuthorizationOptions {
   requireActiveLedger?: boolean;
+  workspaceConversation?: boolean;
   signal?: AbortSignal;
 }
 
@@ -251,6 +252,14 @@ async function resolveCoachTarget(
   };
 }
 
+function workspaceConversationLedger(channel: { id: string; data(): FirebaseFirestore.DocumentData | undefined }, scope: ChannelScope, channelId: string): boolean {
+  if (scope.projectId || channel.id === "admin") return false;
+  const data = record(channel.data());
+  if (!data || data.archivedAt != null) return false;
+  const expectedKind = channel.id === "general" || channel.id === "coach-dm" ? channel.id : "session";
+  return data.kind === expectedKind && record(data.mattermost)?.channelId === channelId;
+}
+
 async function resolveTarget(
   channelId: string,
   expectedWorkspaceSlug: string | undefined,
@@ -265,6 +274,7 @@ async function resolveTarget(
   const channel = channels.docs[0];
   const scope = pathScope(channel.ref.path);
   if (!scope) return null;
+  if (options.workspaceConversation && !workspaceConversationLedger(channel, scope, channelId)) return null;
   if (
     expectedWorkspaceSlug !== undefined &&
     scope.workspaceSlug !== expectedWorkspaceSlug

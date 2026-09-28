@@ -3,14 +3,16 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import { Counter, Gauge, type Registry } from "prom-client";
 import { internalFetch } from "@octogee/core/internal-fetch";
-import { TALK_CAPABILITIES_DEFAULT, type TalkCapabilities, type TalkErrorCode, type TalkServerEvent } from "@octogee/shared/types/voice";
-import { createActivityMmClientFactory } from "../chat-proxy/openclaw/mm-client.js";
+import { parseTalkClientMessage, TALK_CAPABILITIES_DEFAULT, type TalkCapabilities, type TalkErrorCode, type TalkServerEvent } from "@octogee/shared/types/voice";
 import type { OpenClawRuntimeBroker } from "../chat-proxy/openclaw/runtime-broker.js";
 import type { RollRosterUpgradeGate } from "../roll-roster.js";
 import { createMattermostBrain, type AgentEventSource } from "./brain.js";
-import { createVoiceRelayClient, type VoiceRelayClient } from "./relay-client.js";
+import { createVoiceRelayClient, type VoiceRelayClient } from "@octogee/core/voice-relay-client";
 import type { SpeechProbabilityModel } from "./silero-vad.js";
+import { NativeTalkSession } from "./native-session.js";
 import { TalkSession } from "./talk-session.js";
+import { postVoiceTurn, resolveVoiceConversation, type VoiceConversation } from "@octogee/core/voice-conversation";
+import { interruptNativeVoiceRun } from "./native-control.js";
 
 export const VOICE_WS_PATH_RE = /\/api\/voice\/ws\/([a-f0-9-]{36})$/;
 const MAX_CLIENT_AUDIO_FRAME_BYTES = 64 * 1024;
@@ -30,9 +32,12 @@ export interface VoiceWsRouteDeps {
   isAllowedWsOrigin: (origin: string | undefined) => boolean;
   stripGatewayPrefix: (urlPath: string) => string;
   relayBaseUrl: string;
-  mmInternalUrl: string;
   createVad: () => Promise<SpeechProbabilityModel>;
+  nativeVoiceEnabled?: boolean;
   fetchImpl?: typeof fetch;
+  resolveConversation?: typeof resolveVoiceConversation;
+  postTurn?: typeof postVoiceTurn;
+  conversationCheckMs?: number;
   createRelayClient?: (gatewayId: string) => VoiceRelayClient;
   registry?: Registry;
   log?: (message: string, fields?: Record<string, unknown>) => void;
@@ -48,6 +53,7 @@ interface RedeemedVoiceTicket {
   uid: string;
   gatewayId: string;
   expectedAgentId: string;
+  voiceConversation: { ownerUid: string; workspaceSlug: string; channelId: string };
 }
 
 function refuse(socket: Duplex, status: string): void {
@@ -114,7 +120,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
     const redeemed = await redeem(ticket, socket);
     if (!redeemed) return null;
     if (deps.upgradeGate) {
-      const verdict = deps.upgradeGate.checkUid(redeemed.uid);
+      const verdict = deps.upgradeGate.checkUid(redeemed.voiceConversation.ownerUid);
       if (!verdict.allow) {
         handshakes.inc({ outcome: "fail:roster" });
         deps.upgradeGate.refuse(socket, verdict);
@@ -127,7 +133,11 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
   const redeem = async (ticket: string, socket: Duplex): Promise<RedeemedVoiceTicket | null> => {
     try {
       const outcome = await deps.runtimeBroker.redeemOpenClawWs(ticket, "voice-ws");
-      if (outcome.kind === "redeemed") return outcome.redeemed;
+      if (outcome.kind === "redeemed") {
+        const { voiceConversation } = outcome.redeemed;
+        if (!voiceConversation) throw new Error("Voice ticket conversation scope is missing");
+        return { ...outcome.redeemed, voiceConversation };
+      }
       const unauthorized = outcome.kind === "unauthorized";
       handshakes.inc({ outcome: unauthorized ? "fail:unauthorized" : "fail:revision-unavailable" });
       refuse(socket, unauthorized ? "401 Unauthorized" : "503 Service Unavailable");
@@ -182,9 +192,10 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
     const engines = status.engines;
     const capabilities = status.capabilities ?? TALK_CAPABILITIES_DEFAULT;
 
-    let vad: SpeechProbabilityModel;
+    const nativeVoiceEnabled = deps.nativeVoiceEnabled ?? (process.env.GATEWAY_CLASS === "builder" && process.env.OPENCLAW_CONTROL_IDENTITY === "per-user");
+    let vad: SpeechProbabilityModel | undefined;
     try {
-      vad = await deps.createVad();
+      if (!nativeVoiceEnabled) vad = await deps.createVad();
     } catch (err) {
       log("voice ws vad load failed", { error: err instanceof Error ? err.message : String(err) });
       refuseWithError(req, socket, head, "fail:vad", { code: "internal", message: VOICE_ENGINE_FAILED_MESSAGE });
@@ -193,86 +204,169 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
 
     wss.handleUpgrade(req, socket, head, (client) => {
       handshakes.inc({ outcome: "ok" });
-      active.inc();
-      const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
-      const relay = deps.createRelayClient?.(redeemed.gatewayId)
-        ?? createVoiceRelayClient({ baseUrl: deps.relayBaseUrl, gatewayId: redeemed.gatewayId, fetchImpl: deps.fetchImpl });
-      const mmClients = createActivityMmClientFactory({
-        baseUrl: deps.mmInternalUrl,
-        ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-      });
-      const send = (event: TalkServerEvent) => {
-        if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(event));
-      };
-      const sessionLog = (message: string, fields?: Record<string, unknown>) =>
-        log(message, { uid: redeemed.uid, gatewayId: redeemed.gatewayId, ...fields });
-      const session = new TalkSession({
-        send,
-        sendAudio: (pcm) => {
-          if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true });
-        },
-        relay,
-        createBrain: (mmToken) => createMattermostBrain({ posts: mmClients(mmToken), events, log: sessionLog }),
-        vad,
-        engines,
-        capabilities,
-        log: sessionLog,
-      });
-      log("voice ws session open", { uid: redeemed.uid, gatewayId: redeemed.gatewayId, sessionId: session.sessionId });
-
-      let closed = false;
-      const agentReadinessPollMs = Math.max(100, Math.floor(deps.agentReadinessPollMs ?? 1_000));
-      let agentReadinessTimer: ReturnType<typeof setInterval> | null = null;
-      const teardown = (reason: string) => {
-        if (closed) return;
-        closed = true;
-        if (agentReadinessTimer) clearInterval(agentReadinessTimer);
-        active.dec();
-        session.close();
-        try {
-          client.close(1000, reason);
-        } catch {
-          /* already closed */
-        }
-        log("voice ws session closed", { uid: redeemed.uid, sessionId: session.sessionId, reason });
-      };
-      agentReadinessTimer = setInterval(() => {
-        if (deps.isAgentReady(redeemed.expectedAgentId)) return;
-        send({ type: "error", code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE, recoverable: false });
-        teardown("agent-unavailable");
-      }, agentReadinessPollMs);
-      agentReadinessTimer.unref?.();
-
-      const onFrame = (data: WebSocket.RawData, isBinary: boolean) => {
-        const buf = rawDataToBuffer(data);
-        if (isBinary) {
-          if (buf.length > MAX_CLIENT_AUDIO_FRAME_BYTES) {
-            send({ type: "error", code: "bad_message", message: "audio frame too large", recoverable: false });
-            teardown("frame-too-large");
-            return;
-          }
-          session.handleAudio(buf);
-          return;
-        }
-        if (buf.length > MAX_CLIENT_TEXT_FRAME_BYTES) {
-          send({ type: "error", code: "bad_message", message: "message too large", recoverable: false });
-          teardown("message-too-large");
-          return;
-        }
-        session.handleText(buf.toString("utf8"));
-        if (session.currentState === "closed") teardown("session-ended");
-      };
-      client.on("message", (data, isBinary) => {
-        try {
-          onFrame(data, isBinary);
-        } catch (err) {
-          log("voice ws session failed", { uid: redeemed.uid, sessionId: session.sessionId, error: err instanceof Error ? err.stack ?? err.message : String(err) });
-          send({ type: "error", code: "internal", message: "the voice engine hit an error; please reconnect", recoverable: false });
-          teardown("session-error");
-        }
-      });
-      client.on("close", () => teardown("client-closed"));
-      client.on("error", () => teardown("client-error"));
+      attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, vad, active, log });
     });
   };
+}
+
+interface VoiceClientContext {
+  deps: VoiceWsRouteDeps;
+  client: WebSocket;
+  redeemed: RedeemedVoiceTicket;
+  engines: { stt: string; tts: string };
+  capabilities: TalkCapabilities;
+  nativeVoiceEnabled: boolean;
+  vad: SpeechProbabilityModel | undefined;
+  active: Gauge;
+  log: NonNullable<VoiceWsRouteDeps['log']>;
+}
+
+function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, vad, active, log }: VoiceClientContext): void {
+  active.inc();
+  const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
+  const relay = deps.createRelayClient?.(redeemed.gatewayId)
+    ?? createVoiceRelayClient({ baseUrl: deps.relayBaseUrl, gatewayId: redeemed.gatewayId, fetchImpl: deps.fetchImpl });
+  const send = (event: TalkServerEvent) => {
+    if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(event));
+  };
+  const sessionLog = (message: string, fields?: Record<string, unknown>) =>
+    log(message, { uid: redeemed.uid, gatewayId: redeemed.gatewayId, ...fields });
+  let conversation: VoiceConversation | null = null;
+  let bindingStarted = false;
+  let checkingConversation = false;
+  const resolveConversation = deps.resolveConversation ?? resolveVoiceConversation;
+  const reauthorize = async () => {
+    if (!conversation) throw new Error("Voice conversation is not bound");
+    const current = await resolveConversation({ ...redeemed, channelId: conversation.channelId });
+    if (current.sessionKey !== conversation.sessionKey || current.agentId !== conversation.agentId || current.callerMmUserId !== conversation.callerMmUserId) throw new Error("Voice conversation changed");
+    if (nativeVoiceEnabled && !current.nativeInterrupt) throw new Error("Native voice control is no longer authorized");
+    return current;
+  };
+  const sessionCapabilities = { ...capabilities, interrupt: false };
+  let session: TalkSession | NativeTalkSession | null = null;
+  const createLegacySession = () => new TalkSession({
+    send,
+    sendAudio: (pcm) => {
+      if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true });
+    },
+    relay,
+    createBrain: () => {
+      if (!conversation) throw new Error("Voice conversation is not bound");
+      return createMattermostBrain({
+        posts: { createPost: async (input) => {
+          const current = await reauthorize();
+          const post = await (deps.postTurn ?? postVoiceTurn)({ uid: current.uid, gatewayId: current.gatewayId, channelId: input.channelId, text: input.text, turnId: input.turnId, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
+          return { id: post.postId };
+        } },
+        events,
+        expectedSessionKey: conversation.sessionKey,
+        ...(conversation.nativeInterrupt ? { interruptRun: async (target: { runId: string; sessionKey: string }) => {
+          const current = await reauthorize();
+          if (!current.nativeInterrupt || target.sessionKey !== current.sessionKey) throw new Error("Agent interruption is no longer available");
+          return interruptNativeVoiceRun({ ...current, ...target });
+        } } : {}),
+        log: sessionLog,
+      });
+    },
+    vad: vad!,
+    engines,
+    capabilities: sessionCapabilities,
+    log: sessionLog,
+  });
+  log("voice ws session open", { uid: redeemed.uid, gatewayId: redeemed.gatewayId });
+
+  let closed = false;
+  const agentReadinessPollMs = Math.max(100, Math.floor(deps.agentReadinessPollMs ?? 1_000));
+  let conversationTimer: ReturnType<typeof setInterval> | null = null;
+  let agentReadinessTimer: ReturnType<typeof setInterval> | null = null;
+  const teardown = (reason: string) => {
+    if (closed) return;
+    closed = true;
+    if (agentReadinessTimer) clearInterval(agentReadinessTimer);
+    if (conversationTimer) clearInterval(conversationTimer);
+    active.dec();
+    session?.close();
+    try {
+      client.close(1000, reason);
+    } catch {
+      /* already closed */
+    }
+    log("voice ws session closed", { uid: redeemed.uid, sessionId: session?.sessionId, reason });
+  };
+  agentReadinessTimer = setInterval(() => {
+    if (deps.isAgentReady(redeemed.expectedAgentId)) return;
+    send({ type: "error", code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE, recoverable: false });
+    teardown("agent-unavailable");
+  }, agentReadinessPollMs);
+  agentReadinessTimer.unref?.();
+
+  conversationTimer = setInterval(() => {
+    if (!conversation || checkingConversation || closed) return;
+    checkingConversation = true;
+    void reauthorize().catch((error) => {
+      sessionLog("voice conversation revoked", { error: String(error) });
+      send({ type: "error", code: "internal", message: "This voice conversation is no longer available. Reconnect from your current conversation.", recoverable: false });
+      teardown("conversation-revoked");
+    }).finally(() => { checkingConversation = false; });
+  }, deps.conversationCheckMs ?? 10_000);
+  conversationTimer.unref?.();
+
+  const bindConversation = async (channelId: string): Promise<boolean> => {
+    bindingStarted = true;
+    try {
+      if (channelId !== redeemed.voiceConversation.channelId) throw new Error("Voice ticket channel does not match session startup");
+      const resolved = await resolveConversation({ ...redeemed, channelId });
+      if (closed) return false;
+      conversation = resolved;
+      sessionCapabilities.interrupt = resolved.nativeInterrupt;
+      if (nativeVoiceEnabled) {
+        if (!resolved.nativeInterrupt) throw new Error("Native voice requires current native conversation authority");
+        session = new NativeTalkSession({ conversation: resolved, send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
+      } else session = createLegacySession();
+      return true;
+    } catch (error) {
+      sessionLog("voice conversation refused", { error: String(error) });
+      send({ type: "error", code: "internal", message: "This voice conversation is not available. Reconnect from your current conversation.", recoverable: false });
+      teardown("conversation-refused");
+      return false;
+    }
+  };
+
+  const onFrame = async (data: WebSocket.RawData, isBinary: boolean) => {
+    const buf = rawDataToBuffer(data);
+    if (isBinary) {
+      if (buf.length > MAX_CLIENT_AUDIO_FRAME_BYTES) {
+        send({ type: "error", code: "bad_message", message: "audio frame too large", recoverable: false });
+        teardown("frame-too-large");
+        return;
+      }
+      session?.handleAudio(buf);
+      return;
+    }
+    if (buf.length > MAX_CLIENT_TEXT_FRAME_BYTES) {
+      send({ type: "error", code: "bad_message", message: "message too large", recoverable: false });
+      teardown("message-too-large");
+      return;
+    }
+    const raw = buf.toString("utf8");
+    const message = parseTalkClientMessage(raw);
+    if (message?.type === "session.start" && !bindingStarted) {
+      if (!await bindConversation(message.channelId)) return;
+    } else if (!conversation) {
+      if (message?.type === "session.end") teardown("session-ended");
+      else send({ type: "error", code: "session_not_started", message: "Voice is still connecting.", recoverable: true });
+      return;
+    }
+    await session?.handleText(raw);
+    if (session?.currentState === "closed") teardown("session-ended");
+  };
+  client.on("message", (data, isBinary) => {
+    void onFrame(data, isBinary).catch((err) => {
+      log("voice ws session failed", { uid: redeemed.uid, sessionId: session?.sessionId, error: err instanceof Error ? err.stack ?? err.message : String(err) });
+      send({ type: "error", code: "internal", message: "the voice engine hit an error; please reconnect", recoverable: false });
+      teardown("session-error");
+    });
+  });
+  client.on("close", () => teardown("client-closed"));
+  client.on("error", () => teardown("client-error"));
 }

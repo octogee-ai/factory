@@ -107,6 +107,7 @@ export async function openProxyIdentitySocket(args: {
   timeoutMs: number;
   identity?: DeviceIdentity;
   onScopes?: (scopes: string[]) => void;
+  caps?: readonly string[];
 }): Promise<WebSocket> {
   const ws = new WebSocket(args.url, { headers: args.headers });
   ws.on("error", () => {});
@@ -130,6 +131,7 @@ export async function openProxyIdentitySocket(args: {
           mode: "backend",
         },
         role: "operator",
+        ...(args.caps ? { caps: [...args.caps] } : {}),
         ...(args.identity ? { scopes, device: signConnectDevice({ identity: args.identity,
           clientId: OPENCLAW_CONTROL_UI_CLIENT_ID, clientMode: "backend", role: "operator", scopes, nonce, platform: process.platform }) } : {}),
       },

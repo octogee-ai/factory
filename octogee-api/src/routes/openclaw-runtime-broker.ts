@@ -1,3 +1,4 @@
+import { resolveWorkspaceConversationScope } from "../lib/workspace-conversation.js";
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -896,6 +897,23 @@ export async function resolveRedeemGatewayUrl(input: {
   return { url };
 }
 
+async function redeemWsIdentity(db: Firestore, tx: Transaction, ticket: Record<string, unknown>, uid: string, gatewayId: string) {
+  if (ticket.gatewayId !== gatewayId) return null;
+  if (ticket.purpose === "voice-ws") {
+    const payload = ticket.payload as Record<string, unknown> | undefined;
+    if (!payload || Object.keys(payload).some(key => !["workspaceSlug", "ownerUid", "channelId"].includes(key)) ||
+      typeof payload.channelId !== "string" || !MATTERMOST_ID_RE.test(payload.channelId) ||
+      typeof payload.workspaceSlug !== "string" || typeof payload.ownerUid !== "string") return null;
+    const { workspaceSlug, ownerUid, channelId } = payload;
+    const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid });
+    return scope ? { expectedAgentId: `octogee-${workspaceSlug}-coach`, voiceConversation: { workspaceSlug, ownerUid, channelId } } : null;
+  }
+  const user = await tx.get(db.doc(`users/${uid}`));
+  const userData = user.data() ?? {};
+  if (readPath(userData, "provisioning.openclaw.gatewayId") !== gatewayId) return null;
+  return { expectedAgentId: deriveExpectedAgentId(uid, userData) };
+}
+
 function mountUserAndWsRoutes(router: Router, db: Firestore): void {
   router.post("/previews/authorize", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -966,13 +984,10 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
         return { status: 401, body: { error: "unauthorized" } };
       }
 
-      const userRef = db.doc(`users/${uid}`);
-      const userSnap = await tx.get(userRef);
-      const userData = userSnap.data() ?? {};
-      const gatewayId = readPath(userData, "provisioning.openclaw.gatewayId");
-      if (gatewayId !== bound.gatewayId) {
-        return { status: 403, body: FORBIDDEN };
-      }
+      let identity: Awaited<ReturnType<typeof redeemWsIdentity>>;
+      try { identity = await redeemWsIdentity(db, tx, ticket, uid, bound.gatewayId); }
+      catch { return { status: 502, body: { error: "expected-agent-unresolved" } }; }
+      if (!identity) return { status: 403, body: FORBIDDEN };
       const gwRef = db.doc(`gateways/${bound.gatewayId}`);
       const gwSnap = await tx.get(gwRef);
       const urlResult = await resolveRedeemGatewayUrl({
@@ -993,16 +1008,10 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
         };
       }
       const gatewayUrl = urlResult.url;
-      let expectedAgentId: string;
-      try {
-        expectedAgentId = deriveExpectedAgentId(uid, userData);
-      } catch {
-        return { status: 502, body: { error: "expected-agent-unresolved" } };
-      }
       tx.delete(ticketRef);
       return {
         status: 200,
-        body: { uid, gatewayId: bound.gatewayId, gatewayUrl, expectedAgentId },
+        body: { uid, gatewayId: bound.gatewayId, gatewayUrl, ...identity },
       };
     });
     res.status(result.status).json(result.body);

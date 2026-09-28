@@ -127,6 +127,27 @@ describe("terminal locality route — ticket boundary", () => {
     expect(tickets.redeem(res.body.ticket)).toBeNull();
   });
 
+  it("binds a channel ticket to the server conversation and rechecks that identity", async () => {
+    const tickets = createWsTicketStore<TerminalSession>();
+    const resolveConversation = vi.fn().mockResolvedValue({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
+    const channelId = "a".repeat(26);
+    const res = await request(appFor({ tickets, resolveConversation })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId });
+    expect(res.status).toBe(200);
+    expect(resolveConversation).toHaveBeenCalledWith({ uid: OWNER, gatewayId: GATEWAY, channelId });
+    const session = tickets.redeem(res.body.ticket)!;
+    expect(session.conversation).toEqual({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
+    expect(await session.reauthorize()).toBe(true);
+    resolveConversation.mockResolvedValue({ agentId: "coach", sessionKey: "foreign" });
+    expect(await session.reauthorize()).toBe(false);
+  });
+
+  it("rejects a client-supplied terminal owner before issuing a ticket", async () => {
+    const tickets = createWsTicketStore<TerminalSession>();
+    const issue = vi.spyOn(tickets, "issue");
+    const res = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ sessionKey: "foreign" });
+    expect(res.status).toBe(400); expect(issue).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["lost admin scope", ACCESS.member],
     ["expired identity token", { kind: "unauthenticated" }],

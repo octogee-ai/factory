@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -71,11 +71,16 @@ function writePluginSdkStub(root, imports) {
   }
 }
 
-function loadBundle(dir) {
+function loadBundle(dir, openclawRoot) {
   const root = mkdtempSync(path.join(os.tmpdir(), `${path.basename(dir)}-load-`));
   try {
     const source = readFileSync(path.join(dir, "index.js"), "utf8");
-    writePluginSdkStub(root, pluginSdkImports(source));
+    if (openclawRoot) {
+      mkdirSync(path.join(root, "node_modules"));
+      symlinkSync(path.resolve(openclawRoot), path.join(root, "node_modules", "openclaw"), "dir");
+    } else {
+      writePluginSdkStub(root, pluginSdkImports(source));
+    }
     const entry = path.join(root, "index.mjs");
     copyFileSync(path.join(dir, "index.js"), entry);
     const probe =
@@ -95,7 +100,7 @@ function loadBundle(dir) {
   }
 }
 
-export function verifyExtensionBundle(dir) {
+export function verifyExtensionBundle(dir, openclawRoot) {
   const problems = [];
   if (!existsSync(path.join(dir, "index.js"))) problems.push("index.js is missing");
   if (existsSync(path.join(dir, "node_modules"))) problems.push("node_modules is still present");
@@ -107,7 +112,7 @@ export function verifyExtensionBundle(dir) {
   if (problems.length > 0) return problems;
   const foreign = foreignSpecifiers(readFileSync(path.join(dir, "index.js"), "utf8"));
   if (foreign.length > 0) problems.push(`index.js imports outside the bundle: ${foreign.join(", ")}`);
-  const loadFailure = loadBundle(dir);
+  const loadFailure = loadBundle(dir, openclawRoot);
   if (loadFailure) problems.push(`index.js failed to load: ${loadFailure}`);
   return problems;
 }
@@ -119,7 +124,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url
   let failed = false;
   for (const dir of directories) {
     const name = path.basename(dir);
-    const problems = verifyExtensionBundle(dir);
+    const problems = verifyExtensionBundle(dir, process.argv[3]);
     if (problems.length === 0) {
       console.error(`[extension-bundles] ok: ${name}`);
       continue;

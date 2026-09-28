@@ -369,6 +369,18 @@
     "./openclaw-workspace-bootstrap": {
       "types": "./dist/openclaw-workspace-bootstrap.d.ts",
       "default": "./dist/openclaw-workspace-bootstrap.js"
+    },
+    "./voice-relay-client": {
+      "types": "./dist/voice-relay-client.d.ts",
+      "default": "./dist/voice-relay-client.js"
+    },
+    "./trusted-broker-url": {
+      "types": "./dist/trusted-broker-url.d.ts",
+      "default": "./dist/trusted-broker-url.js"
+    },
+    "./voice-conversation": {
+      "types": "./dist/voice-conversation.d.ts",
+      "default": "./dist/voice-conversation.js"
     }
   },
   "typesVersions": {
@@ -630,6 +642,15 @@
       ],
       "openclaw-workspace-bootstrap": [
         "dist/openclaw-workspace-bootstrap.d.ts"
+      ],
+      "voice-relay-client": [
+        "dist/voice-relay-client.d.ts"
+      ],
+      "trusted-broker-url": [
+        "dist/trusted-broker-url.d.ts"
+      ],
+      "voice-conversation": [
+        "dist/voice-conversation.d.ts"
       ]
     }
   },

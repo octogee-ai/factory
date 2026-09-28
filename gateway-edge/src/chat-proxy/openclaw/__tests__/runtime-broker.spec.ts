@@ -48,6 +48,16 @@ describe("redeemOpenClawWs outcome", () => {
     });
   });
 
+  it("preserves authoritative workspace voice scope for gateway admission and channel startup", async () => {
+    const voiceConversation = { ownerUid: "owner", workspaceSlug: "alice", channelId: "c".repeat(26) };
+    const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation });
+    expect(await broker.redeemOpenClawWs("ticket", "voice-ws")).toMatchObject({ kind: "redeemed", redeemed: { uid: "member", voiceConversation } });
+  });
+  it.each([undefined, { ownerUid: "owner", workspaceSlug: "alice", channelId: "bad" }, { ownerUid: "owner", workspaceSlug: "other", channelId: "c".repeat(26) }])("refuses malformed or mismatched voice scope %j", async voiceConversation => {
+    const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation });
+    await expect(broker.redeemOpenClawWs("ticket", "voice-ws")).rejects.toThrow("malformed redeem response");
+  });
+
   it("401 → unauthorized", async () => {
     const broker = brokerWithRedeemStatus(401, { error: "unauthorized" });
     expect(await broker.redeemOpenClawWs("ticket")).toEqual({ kind: "unauthorized" });

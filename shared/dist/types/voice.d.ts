@@ -6,6 +6,8 @@ export declare const TALK_TICKET_PURPOSE: "voice-ws";
 export type TalkMode = "converse" | "dictate";
 export interface TalkCapabilities {
     speed: boolean;
+    interrupt?: boolean;
+    bargeIn?: boolean;
 }
 export declare const TALK_CAPABILITIES_DEFAULT: TalkCapabilities;
 export type TalkState = "idle" | "listening" | "thinking" | "speaking" | "error";
@@ -45,7 +47,6 @@ export type TalkClientMessage = {
     protocol: typeof TALK_PROTOCOL_VERSION;
     mode: TalkMode;
     channelId: string;
-    mmToken: string;
     settings?: TalkSettings;
     client?: {
         platform?: string;
@@ -60,8 +61,14 @@ export type TalkClientMessage = {
 } | {
     type: "speak.cancel";
 } | {
+    type: "agent.interrupt";
+    requestId: string;
+} | {
     type: "playback.done";
     turnId: string;
+} | {
+    type: "playback.mark";
+    name: string;
 } | {
     type: "replay";
 } | {
@@ -88,7 +95,7 @@ export type TalkServerEvent = {
     sessionId: string;
     protocol: typeof TALK_PROTOCOL_VERSION;
     input: {
-        sampleRate: typeof TALK_INPUT_SAMPLE_RATE;
+        sampleRate: typeof TALK_INPUT_SAMPLE_RATE | 24000;
     };
     output: {
         sampleRate: typeof TALK_OUTPUT_SAMPLE_RATE;
@@ -100,6 +107,25 @@ export type TalkServerEvent = {
     /** What the speech engine can do itself; the client compensates for the rest (speed → playback rate). */
     capabilities: TalkCapabilities;
     settings: ResolvedTalkSettings;
+} | {
+    type: "ui.command";
+    payload: Record<string, unknown>;
+} | {
+    type: "audio.mark";
+    name: string;
+} | {
+    type: "agent.interrupting";
+    requestId: string;
+} | {
+    type: "agent.interrupted";
+    requestId: string;
+    status: "aborted" | "no-active-run";
+    runId?: string;
+} | {
+    type: "agent.interrupted";
+    requestId: string;
+    status: "failed";
+    message: string;
 } | {
     type: "state";
     state: TalkState;

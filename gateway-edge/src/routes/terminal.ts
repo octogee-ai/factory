@@ -17,7 +17,11 @@ import {
   monitorSessionAuthorization,
 } from "../lib/ws-session-authorization.js";
 
+import { WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
+import { TerminalConversationScope, type TerminalConversation } from "./terminal-conversation.js";
+
 export interface TerminalSession {
+  conversation?: TerminalConversation;
   uid: string;
   gatewayId: string;
   workspaceSlug: string;
@@ -33,6 +37,7 @@ export interface TerminalRouterDeps {
   available: boolean;
   resolveAccess(input: { gatewayId: string; authorization: string | undefined }): Promise<NativeAdminAccessOutcome>;
   tickets: WsTicketStore<TerminalSession>;
+  resolveConversation?(input: { uid: string; gatewayId: string; channelId: string }): Promise<TerminalConversation>;
 }
 
 type TerminalRequest = Request & { terminalAccess?: NativeAdminAccess };
@@ -79,18 +84,30 @@ export function createTerminalRouter(deps: TerminalRouterDeps): Router {
   router.use(requireAuthenticatedUid);
   router.use(requireTerminalAccess(deps));
 
-  router.post("/ticket", (req: TerminalRequest, res) => {
+  router.post("/ticket", async (req: TerminalRequest, res) => {
+    try {
+    const channelId = req.body?.channelId;
+    if (req.body && (Object.keys(req.body).some(key => key !== "channelId") || (channelId !== undefined && (typeof channelId !== "string" || !/^[a-z0-9]{26}$/u.test(channelId))))) { res.status(400).json({ error: "invalid_conversation" }); return; }
+    if (channelId && !deps.resolveConversation) { res.status(503).json({ error: "conversation_unavailable" }); return; }
     const { gatewayId, workspaceSlug } = req.terminalAccess!;
     const authorization = req.headers.authorization;
+    const conversation = channelId ? await deps.resolveConversation!({ uid: req.uid!, gatewayId, channelId }) : undefined;
     const { ticket, expiresAt } = deps.tickets.issue({
       uid: req.uid!,
       gatewayId,
       workspaceSlug,
+      ...(conversation ? { conversation } : {}),
       reauthorize: async () => {
         const current = await deps.resolveAccess({ gatewayId, authorization });
-        return current.kind === "allowed"
-          && current.gatewayId === gatewayId
-          && current.workspaceSlug === workspaceSlug;
+        if (current.kind !== "allowed" || current.gatewayId !== gatewayId || current.workspaceSlug !== workspaceSlug) return false;
+        if (!conversation) return true;
+        try {
+          const next = await deps.resolveConversation!({ uid: req.uid!, gatewayId, channelId });
+          return next.agentId === conversation.agentId && next.sessionKey === conversation.sessionKey;
+        } catch (error) {
+          if (error instanceof WorkspaceNativeAccessError && error.status < 500) return false;
+          throw error;
+        }
       },
     });
     res.status(200).set("cache-control", "no-store").json({
@@ -98,6 +115,10 @@ export function createTerminalRouter(deps: TerminalRouterDeps): Router {
       expiresAt: new Date(expiresAt).toISOString(),
       expiresInMs: WS_TICKET_TTL_MS,
     });
+    } catch (error) {
+      logger.warn("terminal conversation unavailable", { error: error instanceof Error ? error.message : String(error) });
+      res.status(error instanceof WorkspaceNativeAccessError ? error.status : 503).json({ error: "conversation_unavailable" });
+    }
   });
 
   return router;
@@ -246,6 +267,7 @@ function bridgeTerminal(
 ): void {
   const { log } = options;
   const queued: string[] = [];
+  const scope = session.conversation ? new TerminalConversationScope(session.conversation) : null;
   let upstream: WebSocket | null = null;
   let closed = false;
 
@@ -309,7 +331,7 @@ function bridgeTerminal(
       closeBoth(1008, "text frames only");
       return;
     }
-    const decision = decideTerminalRequest(raw, { defaultAgentId: options.defaultAgentId });
+    const decision = decideTerminalRequest(raw, { defaultAgentId: session.conversation?.agentId ?? options.defaultAgentId });
     if (!decision.allowed) {
       if (decision.reason === "invalid-frame" && decision.id === null) {
         closeBoth(1008, "invalid frame");
@@ -318,7 +340,9 @@ function bridgeTerminal(
       toBrowser(terminalPolicyError(decision.id, decision.reason));
       return;
     }
-    toGateway(decision.outbound);
+    const outbound = scope ? scope.request(decision.outbound) : decision.outbound;
+    if (!outbound) { toBrowser(terminalPolicyError(JSON.parse(decision.outbound).id, "conversation-owner")); return; }
+    toGateway(outbound);
   });
   browser.on("close", (code, reason) => closeBoth(closeCodeForPeer(code), reason.toString()));
   browser.on("error", (err) => relayFailure("browser", err));
@@ -339,7 +363,8 @@ function bridgeTerminal(
       if (closed) return;
       const raw = rawDataText(data, isBinary);
       if (raw === null || !terminalServerFrameAllowed(raw)) return;
-      toBrowser(raw);
+      const scoped = scope ? scope.response(raw) : raw;
+      if (scoped) toBrowser(scoped);
     });
     ws.on("close", (code, reason) => closeBoth(closeCodeForPeer(code), reason.toString()));
     ws.on("error", (err) => relayFailure("gateway", err));

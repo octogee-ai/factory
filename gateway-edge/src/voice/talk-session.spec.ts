@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TalkServerEvent } from "@octogee/shared/types/voice";
 import { TALK_PROTOCOL_VERSION } from "@octogee/shared/types/voice";
 import type { BrainReplyHandlers } from "./brain.js";
-import type { SttStream, SttStreamEvents, TtsRequest } from "./relay-client.js";
+import type { SttStream, SttStreamEvents, TtsRequest } from "@octogee/core/voice-relay-client";
 import { TalkSession } from "./talk-session.js";
 import { VAD_FRAME_SAMPLES } from "./silero-vad.js";
 
@@ -53,6 +53,7 @@ class FakeBrain {
   holdNext = false;
   release: ((post: { id: string }) => void) | null = null;
   dispose = vi.fn();
+  interrupt = vi.fn(async () => ({ status: "aborted" as const, runId: "run-1" }));
   async ask(input: { channelId: string; text: string; turnId: string }, handlers: BrainReplyHandlers) {
     if (this.failNext) {
       this.failNext = false;
@@ -63,9 +64,9 @@ class FakeBrain {
     if (this.holdNext) {
       this.holdNext = false;
       const post = await new Promise<{ id: string }>((resolve) => (this.release = resolve));
-      return { postId: post.id, cancel };
+      return { postId: post.id, cancel, interrupt: this.interrupt };
     }
-    return { postId: `post-${this.asks.length}`, cancel };
+    return { postId: `post-${this.asks.length}`, cancel, interrupt: this.interrupt };
   }
   get last() {
     return this.asks[this.asks.length - 1];
@@ -108,7 +109,7 @@ function setup(opts: { handsFreeMs?: number; mode?: "converse" | "dictate"; spee
     createBrain: createBrain as never,
     vad,
     engines: { stt: "fake-stt", tts: "fake-tts" },
-    ...(opts.speedControl === undefined ? {} : { capabilities: { speed: opts.speedControl } }),
+    capabilities: { speed: opts.speedControl ?? true, interrupt: true },
   });
   session.handleText(
     JSON.stringify({
@@ -116,7 +117,6 @@ function setup(opts: { handsFreeMs?: number; mode?: "converse" | "dictate"; spee
       protocol: TALK_PROTOCOL_VERSION,
       mode: opts.mode ?? "converse",
       channelId: "chan1",
-      mmToken: "mm-token",
       settings: { handsFreeMs: opts.handsFreeMs ?? 0, speed: 0.9 },
     }),
   );
@@ -131,6 +131,44 @@ describe("TalkSession", () => {
   beforeEach(() => vi.useFakeTimers({ now: 100_000 }));
   afterEach(() => vi.useRealTimers());
 
+  it('acknowledges agent interruption only after the native run abort completes', async () => {
+    const { session, brain, relay, events } = setup();
+    session.handleText(JSON.stringify({ type: 'listen.start' }));
+    relay.last.events.onFinal?.('Do something');
+    await settle();
+    let acknowledge!: (value: { status: 'aborted'; runId: string }) => void;
+    brain.interrupt.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+    session.handleText(JSON.stringify({ type: 'agent.interrupt', requestId: 'request-1' }));
+    await settle();
+    expect(events).toContainEqual({ type: 'agent.interrupting', requestId: 'request-1' });
+    expect(events.some(event => event.type === 'agent.interrupted')).toBe(false);
+    acknowledge({ status: 'aborted', runId: 'run-1' });
+    await settle();
+    expect(events).toContainEqual({ type: 'agent.interrupted', requestId: 'request-1', status: 'aborted', runId: 'run-1' });
+    expect(session.currentState).toBe('idle');
+  });
+
+  it('reports an unbound run as a failed interruption instead of claiming to stop it', async () => {
+    const { session, events } = setup();
+    session.handleText(JSON.stringify({ type: 'agent.interrupt', requestId: 'request-1' }));
+    await settle();
+    expect(events).toContainEqual(expect.objectContaining({ type: 'agent.interrupted', requestId: 'request-1', status: 'failed' }));
+  });
+
+  it('keeps native run control available after stopping only speech', async () => {
+    const { session, brain, relay, events } = setup();
+    session.handleText(JSON.stringify({ type: 'listen.start' }));
+    relay.last.events.onFinal?.('Do something');
+    await settle();
+    session.handleText(JSON.stringify({ type: 'speak.cancel' }));
+    expect(brain.interrupt).not.toHaveBeenCalled();
+    session.handleText(JSON.stringify({ type: 'agent.interrupt', requestId: 'request-1' }));
+    await settle();
+    expect(brain.interrupt).toHaveBeenCalledOnce();
+    expect(events).toContainEqual(expect.objectContaining({ type: 'agent.interrupted', status: 'aborted' }));
+  });
+
+
   it("announces readiness with engines and resolved settings, then idles", () => {
     const { events, createBrain } = setup();
     expect(events[0]).toMatchObject({
@@ -141,7 +179,7 @@ describe("TalkSession", () => {
       settings: { speed: 0.9, handsFreeMs: 0, endpointing: "normal" },
     });
     expect(states(events)).toEqual(["idle"]);
-    expect(createBrain).toHaveBeenCalledWith("mm-token");
+    expect(createBrain).toHaveBeenCalledWith();
   });
 
   it("rejects malformed messages and refuses control before session.start", () => {

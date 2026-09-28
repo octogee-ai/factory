@@ -88,7 +88,7 @@ function parseSessionStart(value) {
         return null;
     if (!TALK_MODES.includes(value.mode))
         return null;
-    if (!nonEmptyString(value.channelId) || !nonEmptyString(value.mmToken))
+    if (!nonEmptyString(value.channelId) || "mmToken" in value)
         return null;
     const settings = value.settings === undefined ? undefined : parseTalkSettings(value.settings);
     if (value.settings !== undefined && settings === null)
@@ -99,7 +99,6 @@ function parseSessionStart(value) {
         protocol: TALK_PROTOCOL_VERSION,
         mode: value.mode,
         channelId: value.channelId,
-        mmToken: value.mmToken,
         ...(settings ? { settings } : {}),
         ...(client ? { client } : {}),
     };
@@ -111,6 +110,18 @@ function parseClientInfo(value) {
         ...(typeof value.platform === "string" ? { platform: value.platform } : {}),
         ...(typeof value.userAgent === "string" ? { userAgent: value.userAgent } : {}),
     };
+}
+function parseIdentifiedControl(value) {
+    if (value.type === "agent.interrupt") {
+        return nonEmptyString(value.requestId) && value.requestId.length <= 128 ? { type: "agent.interrupt", requestId: value.requestId } : null;
+    }
+    if (value.type === "playback.mark") {
+        return nonEmptyString(value.name) && value.name.length <= 256 ? { type: "playback.mark", name: value.name } : null;
+    }
+    if (value.type === "playback.done") {
+        return nonEmptyString(value.turnId) ? { type: "playback.done", turnId: value.turnId } : null;
+    }
+    return null;
 }
 /** Parse a client text frame. Returns null for anything that is not a well-formed message. */
 export function parseTalkClientMessage(raw) {
@@ -129,9 +140,9 @@ export function parseTalkClientMessage(raw) {
         const settings = parseTalkSettings(value.settings);
         return settings ? { type: "settings.update", settings } : null;
     }
-    if (value.type === "playback.done") {
-        return nonEmptyString(value.turnId) ? { type: "playback.done", turnId: value.turnId } : null;
-    }
+    const identified = parseIdentifiedControl(value);
+    if (identified)
+        return identified;
     if (BARE_CONTROL_TYPES.has(value.type)) {
         return { type: value.type };
     }

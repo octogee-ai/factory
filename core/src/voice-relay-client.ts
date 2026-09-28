@@ -4,7 +4,7 @@ import {
   DEFAULT_PROJECTED_API_TOKEN_PATH,
   K8S_SA_TOKEN_HEADER,
   internalFetch,
-} from "@octogee/core/internal-fetch";
+} from "./internal-fetch.js";
 
 export const VOICE_RELAY_TTS_TIMEOUT_MS = 30_000;
 const STT_CONNECT_TIMEOUT_MS = 10_000;
@@ -72,12 +72,6 @@ function toWsBase(baseUrl: string): string {
   return trimmed.startsWith("https://") ? `wss://${trimmed.slice("https://".length)}` : `ws://${trimmed.replace(/^http:\/\//, "")}`;
 }
 
-/**
- * gateway-edge side of the voice relay: streams microphone audio to
- * octogee-api's `/internal/voice/stt` and pulls speech from `/internal/voice/tts`.
- * The projected service-account token identifies this pod; provider keys never
- * come here.
- */
 export function createVoiceRelayClient(options: VoiceRelayClientOptions): VoiceRelayClient {
   const baseUrl = trimTrailingSlashes(options.baseUrl);
   const tokenPath = options.tokenPath ?? process.env.OCTOGEE_API_SA_TOKEN_PATH ?? DEFAULT_PROJECTED_API_TOKEN_PATH;

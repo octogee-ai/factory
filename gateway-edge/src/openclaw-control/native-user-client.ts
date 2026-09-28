@@ -8,7 +8,7 @@ import { openClawControlUpstreamBase } from "./surface.js";
 
 export interface NativeUserSocket { ws: WebSocket; scopes: Set<string> }
 
-export async function openNativeUserSocket(uid: string, gatewayId: string, env: NodeJS.ProcessEnv = process.env): Promise<NativeUserSocket> {
+export async function openNativeUserSocket(uid: string, gatewayId: string, env: NodeJS.ProcessEnv = process.env, options: { caps?: readonly string[] } = {}): Promise<NativeUserSocket> {
   if (env.OPENCLAW_CONTROL_IDENTITY !== "per-user" || env.GATEWAY_CLASS !== "builder" || env.GATEWAY_ID !== gatewayId) {
     throw new Error("Native workspace permissions require the local per-user Builder gateway");
   }
@@ -21,6 +21,7 @@ export async function openNativeUserSocket(uid: string, gatewayId: string, env: 
   const ws = await openProxyIdentitySocket({ url, headers: headers(uid), timeoutMs: 5000,
     identity: deriveDeviceIdentity({ secret, subject: openClawDeviceSubject(gatewayId, uid) }),
     onScopes: value => { scopes = value; },
+    caps: options.caps,
   });
   return { ws, scopes: new Set(scopes) };
 }

@@ -703,6 +703,11 @@ function defaultProxyIdentity(env: NodeJS.ProcessEnv): OpenClawControlProxyIdent
 
 
 
+function dashboardLaunchPage(query: Request["query"]): string | null {
+  if (Object.keys(query).length === 0) return "new";
+  return Object.keys(query).length === 1 && query.page === "talk-settings" ? "settings/talk" : null;
+}
+
 // eslint-disable-next-line max-lines-per-function -- launch and asset proxy routes share one session, policy, and metrics closure.
 export function createOpenClawControlHttpRouter(
   options: CreateOpenClawControlHttpRouterOptions,
@@ -744,6 +749,13 @@ export function createOpenClawControlHttpRouter(
         unauthorized(req, res, frameAncestor);
         return;
       }
+      const page = dashboardLaunchPage(req.query);
+      if (!page) {
+        outcome = "policy_denied";
+        securityHeaders(res, frameAncestor);
+        res.status(400).json({ error: "invalid-dashboard-page" });
+        return;
+      }
       const sessionId = randomUUID();
       const redeemed = await redeem({ ticket, sessionId, gatewayId, revisionId, env });
       if (!redeemed || redeemed.gatewayId !== gatewayId || redeemed.revisionId !== revisionId) {
@@ -764,7 +776,6 @@ export function createOpenClawControlHttpRouter(
       });
       securityHeaders(res, frameAncestor);
       res.setHeader("set-cookie", issued.cookie);
-      const page = "new";
       res.setHeader("location", `/g/${gatewayId}/openclaw/${page}`);
       outcome = "ok";
       res.status(303).end();

@@ -118,6 +118,9 @@ function app(opts: {
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/profile", enforcement, handler);
+  a.post("/internal/openclaw-control/tool-conversation", enforcement, handler);
+  a.post("/internal/voice/conversation", enforcement, handler);
+  a.post("/internal/voice/turn", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/channels", enforcement, handler);
   a.post("/internal/openclaw/activity/session-context", enforcement, handler);
@@ -767,13 +770,27 @@ const STILL_ON_SHARED = {
   });
 
   it("delegates exact OpenClaw Control routes only for the bound gateway tenant", async () => {
-    for (const route of ["redeem", "authorize", "profile", "mattermost/authorize", "mattermost/channels"]) {
+    for (const route of ["redeem", "authorize", "profile", "tool-conversation", "mattermost/authorize", "mattermost/channels"]) {
       const ownedGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/openclaw-control/${route}`)
         .send({ gatewayId: "bender", uid: "victim" });
       const foreignGateway = await request(app({ boundTenant: BENDER }))
         .post(`/internal/openclaw-control/${route}`)
         .send({ gatewayId: "other" });
+
+      expect(ownedGateway.status, route).toBe(200);
+      expect(foreignGateway.status, route).toBe(403);
+    }
+  });
+
+  it("delegates voice conversation and turn brokering only for the bound gateway tenant", async () => {
+    for (const route of ["conversation", "turn"]) {
+      const ownedGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/voice/${route}`)
+        .send({ gatewayId: "bender", uid: "victim", channelId: "c".repeat(26), text: "hello" });
+      const foreignGateway = await request(app({ boundTenant: BENDER }))
+        .post(`/internal/voice/${route}`)
+        .send({ gatewayId: "other", uid: "victim", channelId: "c".repeat(26), text: "hello" });
 
       expect(ownedGateway.status, route).toBe(200);
       expect(foreignGateway.status, route).toBe(403);

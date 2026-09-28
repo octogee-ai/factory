@@ -236,3 +236,25 @@ describe("channel session authorization discovery", () => {
     expect(h.createClientCalls).toBe(0);
   });
 });
+
+
+describe("workspace conversation channel authority", () => {
+  it.each([["general", "general"], ["coach-dm", "coach-dm"], ["planning", "session"]])("accepts workspace %s with its exact channel identity", async (id, kind) => {
+    h.channelLedger = { id, path: `workspaces/alice/channels/${id}`, data: { kind, mattermost: { channelId } } };
+    await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toMatchObject({ target: { workspaceSlug: "alice", agentId: "octogee-alice-coach" } });
+  });
+  it.each([
+    ["admin", "workspaces/alice/channels/admin", "admin"],
+    ["general", "workspaces/alice/projects/project/channels/general", "general"],
+    ["general", "community/channels/general", "general"],
+    ["coach-dm", "workspaces/alice/channels/coach-dm", "session"],
+  ])("rejects unrelated or malformed workspace conversations %s %s", async (id, path, kind) => {
+    h.channelLedger = { id, path, data: { kind, mattermost: { channelId } } };
+    await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toBeNull();
+    expect(h.createClientCalls).toBe(0);
+  });
+  it("rejects archived workspace conversation ledgers", async () => {
+    Object.assign(h.channelLedger.data, { archivedAt: 100 });
+    await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toBeNull();
+  });
+});

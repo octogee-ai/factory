@@ -1,3 +1,5 @@
+import type { VoiceRunInterruption } from "./native-control.js";
+
 export interface BrainAgentEvent {
   kind: "agent";
   runId: string;
@@ -24,8 +26,8 @@ export interface AgentEventSource {
 export interface BrainPostClient {
   createPost(input: {
     channelId: string;
-    message: string;
-    props?: Record<string, unknown>;
+    text: string;
+    turnId: string;
   }): Promise<{ id: string }>;
 }
 
@@ -40,11 +42,14 @@ export interface BrainReplyHandlers {
 export interface BrainTurnHandle {
   postId: string;
   cancel(): void;
+  interrupt(): Promise<VoiceRunInterruption>;
 }
 
 export interface MattermostBrainOptions {
   posts: BrainPostClient;
   events: AgentEventSource;
+  expectedSessionKey?: string;
+  interruptRun?: (target: { runId: string; sessionKey: string }) => Promise<VoiceRunInterruption>;
   setTimeoutImpl?: typeof setTimeout;
   clearTimeoutImpl?: typeof clearTimeout;
   /** How long to wait for the Agent to pick the post up and start answering before giving up. */
@@ -57,13 +62,6 @@ export interface MattermostBrainOptions {
 export const BRAIN_REPLY_START_TIMEOUT_MS = 25_000;
 export const BRAIN_REPLY_MAX_MS = 180_000;
 export const BRAIN_PENDING_EVENT_CAP = 512;
-export const VOICE_TURN_POST_KIND = "voice-turn";
-export const VOICE_TURN_MARKER = "🎙";
-
-export function voiceTurnMessage(transcript: string): string {
-  return `${VOICE_TURN_MARKER} ${transcript.trim()}`;
-}
-
 const LIFECYCLE_END_STATUS: Record<string, BrainReplyStatus | undefined> = {
   end: "complete",
   abort: "aborted",
@@ -176,6 +174,13 @@ export function createMattermostBrain(options: MattermostBrainOptions) {
         handlers.onDone({ text: replyText, status, runId: phase.name === "adopted" ? phase.runId : null });
       };
       const cancel = () => finish("aborted");
+      const interrupt = async (): Promise<VoiceRunInterruption> => {
+        if (!options.interruptRun) throw new Error("Agent interruption is not available on this gateway.");
+        if (phase.name !== "adopted") throw new Error("The agent run is not identified yet. Try interrupting again.");
+        const result = await options.interruptRun({ runId: phase.runId, sessionKey: phase.sessionKey });
+        finish("aborted");
+        return result;
+      };
 
       const adopt = (run: ActiveRun, sessionKey: string, steered: boolean) => {
         phase = { name: "adopted", runId: run.runId, sessionKey, steered };
@@ -191,6 +196,11 @@ export function createMattermostBrain(options: MattermostBrainOptions) {
 
       const onInbound = ({ event, activeAtInbound }: Observation & { event: BrainInboundEvent }) => {
         if (phase.name !== "await-inbound" || event.messageId !== postId) return;
+        if (options.expectedSessionKey && event.sessionKey !== options.expectedSessionKey) {
+          log("voice inbound session mismatch", { expectedSessionKey: options.expectedSessionKey, sessionKey: event.sessionKey });
+          finish("error");
+          return;
+        }
         if (activeAtInbound) adopt(activeAtInbound, event.sessionKey, true);
         else phase = { name: "await-start", sessionKey: event.sessionKey };
       };
@@ -249,18 +259,14 @@ export function createMattermostBrain(options: MattermostBrainOptions) {
 
       let post: { id: string };
       try {
-        post = await options.posts.createPost({
-          channelId: input.channelId,
-          message: voiceTurnMessage(input.text),
-          props: { octogee: { kind: VOICE_TURN_POST_KIND, turnId: input.turnId } },
-        });
+        post = await options.posts.createPost({ channelId: input.channelId, text: input.text, turnId: input.turnId });
       } catch (err) {
         done = true;
         inFlight.delete(finish);
         unsubscribe();
         throw err;
       }
-      if (done) return { postId: post.id, cancel };
+      if (done) return { postId: post.id, cancel, interrupt };
       postId = post.id;
       startTimer = setTimer(() => {
         log("voice turn reply did not start", { postId, turnId: input.turnId, phase: phase.name });
@@ -271,7 +277,7 @@ export function createMattermostBrain(options: MattermostBrainOptions) {
         handle(observation);
       }
 
-      return { postId: post.id, cancel };
+      return { postId: post.id, cancel, interrupt };
     },
 
     /** Ends every in-flight turn and stops following the event stream. */

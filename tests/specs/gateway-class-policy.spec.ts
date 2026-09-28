@@ -782,8 +782,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
     expect(out.tools).toEqual({
       profile: "research",
-      allow: ["read", "discord_send", "exec", "browser"],
-      alsoAllow: ["discord_admin", "exec", "browser", ...workflowTools],
+      allow: ["read", "discord_send", "exec", "browser", "discord_admin", ...workflowTools],
       deny: ["builder-tool"],
       exec: { mode: "unrestricted", keep: true },
       fs: { workspaceOnly: false },
@@ -829,10 +828,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
     });
 
-    expect(out.tools.alsoAllow).toEqual(expect.arrayContaining(workflowTools));
-    expect(out.tools.alsoAllow).toContain("discord_admin");
+    expect(out.tools.allow).toEqual(expect.arrayContaining(workflowTools));
+    expect(out.tools.allow).toContain("discord_admin");
     expect(out.tools.profile).toBe("research");
-    expect(out.tools.allow).toEqual(["read", "exec"]);
+    expect(out.tools.allow).toEqual(expect.arrayContaining(["read", "exec"]));
+    expect(out.tools.alsoAllow).toBeUndefined();
     expect(out.tools.deny).toEqual(["builder-tool"]);
     expect(out.plugins.allow).toEqual(expect.arrayContaining([
       "octogee-board-tools",
@@ -1822,6 +1822,70 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       writeFileSync(native, "operator-secret");
     });
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
+  });
+
+  it("enables tenant speech through native Talk on an authenticated Builder without replacing their chosen provider", () => {
+    const env = { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" };
+    const out = runPolicyWithDir("builder", {}, undefined, env).config;
+    expect(out.plugins.entries["octogee-voice-tools"]).toMatchObject({ enabled: true, config: brokerPluginConfig });
+    expect(out.talk.realtime).toMatchObject({ provider: "octogee", brain: "agent-consult", transport: "gateway-relay" });
+    const custom = { provider: "google", providers: { google: {} }, transport: "provider-websocket" };
+    const preserved = runPolicyWithDir("builder", { talk: { realtime: custom } }, undefined, env).config;
+    expect(preserved.talk.realtime).toEqual(custom);
+    const shared = runPolicy("shared", {});
+    expect(shared.plugins.entries["octogee-voice-tools"]?.enabled).not.toBe(true);
+  });
+
+  it("makes native presentation and narration reachable through an existing Builder allowlist", () => {
+    const out = runPolicyWithDir("builder", {
+      plugins: { allow: ["mattermost"] },
+      tools: { profile: "coding" },
+    }, undefined, {
+      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe",
+    }).config;
+
+    expect(out.plugins.allow).toEqual(expect.arrayContaining(["mattermost", "talk-voice", "octogee-voice-tools"]));
+    expect(out.plugins.allow).not.toContain("screen");
+    expect(out.tools.alsoAllow).toEqual(expect.arrayContaining(["screen", "talk_voice"]));
+    expect(out.plugins.entries["talk-voice"]?.enabled).not.toBe(false);
+  });
+
+  it("keeps native Builder plugin and tool opt-outs while adding hosted voice defaults", () => {
+    const config = {
+      plugins: {
+        enabled: false,
+        allow: ["mattermost"],
+        deny: ["talk-voice"],
+        entries: {
+          "talk-voice": { enabled: false, config: {} },
+          "octogee-voice-tools": { enabled: false, config: { custom: true } },
+        },
+      },
+      tools: { profile: "minimal", allow: ["read"], deny: ["screen", "talk_voice"] },
+      agents: { entries: { "octogee-jefe-coach": { tools: { allow: ["read"], deny: ["talk_voice"] } } } },
+    };
+    const out = runPolicyWithDir("builder", config, undefined, {
+      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe",
+    }).config;
+
+    expect(out.plugins.enabled).toBe(false);
+    expect(out.plugins.deny).toEqual(config.plugins.deny);
+    expect(out.plugins.entries["talk-voice"]).toEqual(config.plugins.entries["talk-voice"]);
+    expect(out.plugins.entries["octogee-voice-tools"]).toEqual(config.plugins.entries["octogee-voice-tools"]);
+    expect(out.tools.profile).toBe("minimal");
+    expect(out.tools.deny).toEqual(config.tools.deny);
+    expect(out.tools.allow).toEqual(expect.arrayContaining(["read", "screen", "talk_voice", ...workflowTools]));
+    expect(out.tools.alsoAllow).toBeUndefined();
+    expect(out.agents.entries).toEqual(config.agents.entries);
+  });
+
+  it("does not add native voice defaults to shared or operator-only gateways", () => {
+    for (const gatewayClass of ["builder", "shared"]) {
+      const out = runPolicy(gatewayClass, {});
+      expect(out.plugins.allow ?? []).not.toContain("talk-voice");
+      expect(out.tools.alsoAllow ?? []).not.toContain("talk_voice");
+      expect(out.tools.alsoAllow ?? []).not.toContain("screen");
+    }
   });
 
   it("switches a per-user Builder gateway to trusted-proxy auth with authenticated identities for services and the owner", () => {

@@ -18,6 +18,8 @@ export type TalkMode = "converse" | "dictate";
 
 export interface TalkCapabilities {
   speed: boolean;
+  interrupt?: boolean;
+  bargeIn?: boolean;
 }
 export const TALK_CAPABILITIES_DEFAULT: TalkCapabilities = { speed: true };
 export type TalkState = "idle" | "listening" | "thinking" | "speaking" | "error";
@@ -75,7 +77,6 @@ export type TalkClientMessage =
       protocol: typeof TALK_PROTOCOL_VERSION;
       mode: TalkMode;
       channelId: string;
-      mmToken: string;
       settings?: TalkSettings;
       client?: { platform?: string; userAgent?: string };
     }
@@ -83,7 +84,9 @@ export type TalkClientMessage =
   | { type: "listen.stop" }
   | { type: "turn.commit" }
   | { type: "speak.cancel" }
+  | { type: "agent.interrupt"; requestId: string }
   | { type: "playback.done"; turnId: string }
+  | { type: "playback.mark"; name: string }
   | { type: "replay" }
   | { type: "settings.update"; settings: TalkSettings }
   | { type: "session.end" };
@@ -118,13 +121,18 @@ export type TalkServerEvent =
       type: "session.ready";
       sessionId: string;
       protocol: typeof TALK_PROTOCOL_VERSION;
-      input: { sampleRate: typeof TALK_INPUT_SAMPLE_RATE };
+      input: { sampleRate: typeof TALK_INPUT_SAMPLE_RATE | 24000 };
       output: { sampleRate: typeof TALK_OUTPUT_SAMPLE_RATE };
       engines: { stt: string; tts: string };
       /** What the speech engine can do itself; the client compensates for the rest (speed → playback rate). */
       capabilities: TalkCapabilities;
       settings: ResolvedTalkSettings;
     }
+  | { type: "ui.command"; payload: Record<string, unknown> }
+  | { type: "audio.mark"; name: string }
+  | { type: "agent.interrupting"; requestId: string }
+  | { type: "agent.interrupted"; requestId: string; status: "aborted" | "no-active-run"; runId?: string }
+  | { type: "agent.interrupted"; requestId: string; status: "failed"; message: string }
   | { type: "state"; state: TalkState; turnId?: string }
   | { type: "vad"; speaking: boolean }
   | { type: "transcript.delta"; turnId: string; text: string }
@@ -195,7 +203,7 @@ const BARE_CONTROL_TYPES = new Set(["listen.start", "listen.stop", "turn.commit"
 function parseSessionStart(value: Record<string, unknown>): TalkClientMessage | null {
   if (value.protocol !== TALK_PROTOCOL_VERSION) return null;
   if (!TALK_MODES.includes(value.mode as TalkMode)) return null;
-  if (!nonEmptyString(value.channelId) || !nonEmptyString(value.mmToken)) return null;
+  if (!nonEmptyString(value.channelId) || "mmToken" in value) return null;
   const settings = value.settings === undefined ? undefined : parseTalkSettings(value.settings);
   if (value.settings !== undefined && settings === null) return null;
   const client = parseClientInfo(value.client);
@@ -204,7 +212,6 @@ function parseSessionStart(value: Record<string, unknown>): TalkClientMessage | 
     protocol: TALK_PROTOCOL_VERSION,
     mode: value.mode as TalkMode,
     channelId: value.channelId,
-    mmToken: value.mmToken,
     ...(settings ? { settings } : {}),
     ...(client ? { client } : {}),
   };
@@ -216,6 +223,19 @@ function parseClientInfo(value: unknown): { platform?: string; userAgent?: strin
     ...(typeof value.platform === "string" ? { platform: value.platform } : {}),
     ...(typeof value.userAgent === "string" ? { userAgent: value.userAgent } : {}),
   };
+}
+
+function parseIdentifiedControl(value: Record<string, unknown>): TalkClientMessage | null {
+  if (value.type === "agent.interrupt") {
+    return nonEmptyString(value.requestId) && value.requestId.length <= 128 ? { type: "agent.interrupt", requestId: value.requestId } : null;
+  }
+  if (value.type === "playback.mark") {
+    return nonEmptyString(value.name) && value.name.length <= 256 ? { type: "playback.mark", name: value.name } : null;
+  }
+  if (value.type === "playback.done") {
+    return nonEmptyString(value.turnId) ? { type: "playback.done", turnId: value.turnId } : null;
+  }
+  return null;
 }
 
 /** Parse a client text frame. Returns null for anything that is not a well-formed message. */
@@ -232,9 +252,8 @@ export function parseTalkClientMessage(raw: string): TalkClientMessage | null {
     const settings = parseTalkSettings(value.settings);
     return settings ? { type: "settings.update", settings } : null;
   }
-  if (value.type === "playback.done") {
-    return nonEmptyString(value.turnId) ? { type: "playback.done", turnId: value.turnId } : null;
-  }
+  const identified = parseIdentifiedControl(value);
+  if (identified) return identified;
   if (BARE_CONTROL_TYPES.has(value.type)) {
     return { type: value.type as Extract<TalkClientMessage, { type: string }>["type"] } as TalkClientMessage;
   }

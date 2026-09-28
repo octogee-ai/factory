@@ -39,14 +39,45 @@ describe("createMattermostBrain", () => {
     return { events, posts, brain, handlers };
   }
 
+  it("interrupts only the correlated native run and waits for its acknowledgement", async () => {
+    const events = new FakeEvents();
+    const posts = { createPost: vi.fn(async () => ({ id: "post-1" })) };
+    let confirm!: (value: { status: "aborted"; runId: string }) => void;
+    const interruptRun = vi.fn<(target: { runId: string; sessionKey: string }) => Promise<{ status: "aborted"; runId: string }>>().mockImplementation(() => new Promise((resolve) => { confirm = resolve; }));
+    const brain = createMattermostBrain({ posts, events, interruptRun });
+    const handlers = { onDelta: vi.fn(), onDone: vi.fn() };
+    const turn = await brain.ask({ channelId: "chan1", text: "Open the news", turnId: "turn1" }, handlers);
+    await expect(turn.interrupt()).rejects.toThrow("not identified");
+    expect(interruptRun).not.toHaveBeenCalled();
+    events.emit(received("post-1"));
+    events.emit(lifecycle("run-1", "start"));
+    const result = turn.interrupt();
+    expect(interruptRun).toHaveBeenCalledWith({ runId: "run-1", sessionKey: SESSION });
+    expect(handlers.onDone).not.toHaveBeenCalled();
+    confirm({ status: "aborted", runId: "run-1" });
+    await expect(result).resolves.toEqual({ status: "aborted", runId: "run-1" });
+    expect(handlers.onDone).toHaveBeenCalledWith({ text: "", status: "aborted", runId: "run-1" });
+    brain.dispose();
+  });
+
+  it("keeps observation alive when native interruption fails", async () => {
+    const events = new FakeEvents();
+    const posts = { createPost: vi.fn(async () => ({ id: "post-1" })) };
+    const brain = createMattermostBrain({ posts, events, interruptRun: async () => { throw new Error("native refused"); } });
+    const handlers = { onDelta: vi.fn(), onDone: vi.fn() };
+    const turn = await brain.ask({ channelId: "chan1", text: "Open the news", turnId: "turn1" }, handlers);
+    events.emit(received("post-1"));
+    events.emit(lifecycle("run-1", "start"));
+    await expect(turn.interrupt()).rejects.toThrow("native refused");
+    events.emit(assistant("run-1", { delta: "Still running." }));
+    expect(handlers.onDelta).toHaveBeenCalledWith("Still running.");
+    brain.dispose();
+  });
+
   it("posts the transcript as the Builder and speaks only the run that starts after OpenClaw received that post", async () => {
     const { events, posts, brain, handlers } = setup();
     const turn = await brain.ask({ channelId: "chan1", text: "What's on my calendar?", turnId: "t1" }, handlers);
-    expect(posts.createPost).toHaveBeenCalledWith({
-      channelId: "chan1",
-      message: "🎙 What's on my calendar?",
-      props: { octogee: { kind: "voice-turn", turnId: "t1" } },
-    });
+    expect(posts.createPost).toHaveBeenCalledWith({ channelId: "chan1", text: "What's on my calendar?", turnId: "t1" });
     expect(turn.postId).toBe("post-1");
 
     events.emit(lifecycle("run-before-receipt", "start"));

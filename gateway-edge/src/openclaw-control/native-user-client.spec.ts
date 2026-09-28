@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { OPENCLAW_FULL_OPERATOR_SCOPES } from "@octogee/shared/types/openclaw-proxy-identity";
-import { openNativeUserClient } from "./native-user-client.js";
+import { openNativeUserClient, openNativeUserSocket } from "./native-user-client.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map(close => close())); });
@@ -16,14 +16,14 @@ async function gateway() {
   const wss = new WebSocketServer({ server });
   const state = {
     scopes: ["operator.read", "operator.write"] as string[] | undefined,
-    connects: [] as Array<{ uid: string; device: { id: string }; scopes: string[] }>,
+    connects: [] as Array<{ uid: string; device: { id: string }; scopes: string[]; caps?: string[] }>,
   };
   wss.on("connection", (ws, req) => {
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
     ws.on("message", raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.method === "connect") {
-        state.connects.push({ uid: String(req.headers["x-octogee-user"]), device: frame.params.device, scopes: frame.params.scopes });
+        state.connects.push({ uid: String(req.headers["x-octogee-user"]), device: frame.params.device, scopes: frame.params.scopes, ...(frame.params.caps ? { caps: frame.params.caps } : {}) });
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok", auth: { scopes: state.scopes } } }));
       } else {
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { message: "native role denied" } }));
@@ -62,6 +62,13 @@ describe("native user RPC identity", () => {
     expect(state.connects[0].device.id).not.toBe(state.connects[2].device.id);
     expect(state.connects.map(connect => connect.uid)).toEqual(["alice", "alice", "bob"]);
     expect(state.connects.every(connect => JSON.stringify(connect.scopes) === JSON.stringify(OPENCLAW_FULL_OPERATOR_SCOPES))).toBe(true);
+  });
+
+  it("advertises explicit native observation capabilities without changing identity", async () => {
+    const { state, env } = await gateway();
+    const native = await openNativeUserSocket("alice", "b-alice", env, { caps: ["session-scoped-events"] });
+    expect(state.connects[0]).toMatchObject({ uid: "alice", caps: ["session-scoped-events"] });
+    native.ws.close();
   });
 
   it("fails closed when native effective scopes are unavailable", async () => {

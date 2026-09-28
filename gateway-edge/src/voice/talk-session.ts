@@ -16,9 +16,9 @@ import {
   type TalkState,
   type TalkTurnMetrics,
 } from "@octogee/shared/types/voice";
-import type { BrainReplyStatus, MattermostBrain } from "./brain.js";
+import type { BrainReplyStatus, BrainTurnHandle, MattermostBrain } from "./brain.js";
 import { ENDPOINTER_PROFILES, Endpointer } from "./endpointer.js";
-import type { SttStream, VoiceRelayClient } from "./relay-client.js";
+import type { SttStream, VoiceRelayClient } from "@octogee/core/voice-relay-client";
 import { VadFramer, type SpeechProbabilityModel } from "./silero-vad.js";
 import { SentenceChunker, prepareSpeechText } from "./speech-text.js";
 
@@ -38,7 +38,7 @@ export interface TalkSessionDeps {
   send: (event: TalkServerEvent) => void;
   sendAudio: (pcm16le24k: Buffer) => void;
   relay: Pick<VoiceRelayClient, "openStt" | "tts">;
-  createBrain: (mmToken: string) => MattermostBrain;
+  createBrain: () => MattermostBrain;
   vad: SpeechProbabilityModel;
   engines: { stt: string; tts: string };
   capabilities?: TalkCapabilities;
@@ -59,6 +59,7 @@ interface Turn {
   firstAudioAt: number | null;
   /** Set when the user moved on (interrupt, new utterance, close): agent callbacks for this turn are ignored. */
   abandoned: boolean;
+  speechSuppressed?: boolean;
 }
 
 interface SentenceJob {
@@ -97,7 +98,9 @@ export class TalkSession {
   private listenIdleTimer: ReturnType<typeof setTimeout> | null = null;
 
   private turn: Turn | null = null;
-  private brainTurn: { cancel(): void } | null = null;
+  private brainTurn: BrainTurnHandle | null = null;
+  private interruptibleTurn: BrainTurnHandle | null = null;
+  private interruptRequest: string | null = null;
   private replyDone = false;
   private chunker = new SentenceChunker();
   private speakQueue: SentenceJob[] = [];
@@ -162,6 +165,9 @@ export class TalkSession {
       case "turn.commit":
         this.commitTurn();
         return;
+      case "agent.interrupt":
+        void this.interruptAgent(message.requestId);
+        return;
       case "speak.cancel":
         this.cancelSpeaking();
         return;
@@ -211,6 +217,7 @@ export class TalkSession {
     this.abortSpeaking();
     this.abandonBrainTurn();
     this.brain?.dispose();
+    this.interruptibleTurn = null;
     this.state = "closed";
   }
 
@@ -239,7 +246,7 @@ export class TalkSession {
     this.channelId = message.channelId;
     this.settings = resolveTalkSettings(message.settings);
     this.endpointer.setProfile(ENDPOINTER_PROFILES[this.settings.endpointing]);
-    this.brain = this.deps.createBrain(message.mmToken);
+    this.brain = this.deps.createBrain();
     this.deps.send({
       type: "session.ready",
       sessionId: this.sessionId,
@@ -401,12 +408,13 @@ export class TalkSession {
       this.sendError("session_not_started", "session has no agent binding", false);
       return;
     }
+    this.interruptibleTurn = null;
     this.replyDone = false;
     this.chunker = new SentenceChunker();
     this.speakQueue = [];
     this.setState("thinking");
     const live = () => this.turn === turn && !turn.abandoned && !this.isClosed();
-    let handle: { cancel(): void };
+    let handle: BrainTurnHandle;
     try {
       handle = await this.brain.ask(
         { channelId: this.channelId, text, turnId: turn.id },
@@ -416,17 +424,17 @@ export class TalkSession {
             if (turn.firstDeltaAt === null) turn.firstDeltaAt = this.now();
             turn.reply += piece;
             this.deps.send({ type: "reply.delta", turnId: turn.id, text: piece });
-            for (const sentence of this.chunker.push(piece)) this.enqueueSentence(turn, sentence);
+            if (!turn.speechSuppressed) for (const sentence of this.chunker.push(piece)) this.enqueueSentence(turn, sentence);
           },
           onDone: ({ text: replyText, status }) => {
             if (!live()) return;
             this.brainTurn = null;
-            for (const sentence of this.chunker.flush()) this.enqueueSentence(turn, sentence);
+            if (!turn.speechSuppressed) for (const sentence of this.chunker.flush()) this.enqueueSentence(turn, sentence);
             this.replyDone = true;
             this.notifySpeaker?.();
             this.deps.send({ type: "reply.final", turnId: turn.id, text: replyText });
             if (replyText.trim()) this.lastReplyText = replyText;
-            this.onReplyDone(turn, status);
+            if (!(status === "aborted" && this.interruptRequest)) this.onReplyDone(turn, status);
           },
         },
       );
@@ -442,6 +450,7 @@ export class TalkSession {
       return;
     }
     this.brainTurn = handle;
+    this.interruptibleTurn = handle;
   }
 
   private onReplyDone(turn: Turn, status: BrainReplyStatus): void {
@@ -574,6 +583,41 @@ export class TalkSession {
       this.playbackGraceTimer = null;
     }
     this.afterTurn();
+  }
+
+  private async interruptAgent(requestId: string): Promise<void> {
+    if (this.interruptRequest) {
+      this.deps.send({ type: "agent.interrupted", requestId, status: "failed", message: "An interruption is already awaiting confirmation." });
+      return;
+    }
+    const handle = this.interruptibleTurn;
+    if (!this.capabilities.interrupt || !handle) {
+      this.deps.send({ type: "agent.interrupted", requestId, status: "failed", message: !this.capabilities.interrupt ? "Agent interruption is not available on this gateway." : "The agent run is not identified yet. Try interrupting again." });
+      return;
+    }
+    this.interruptRequest = requestId;
+    this.deps.send({ type: "agent.interrupting", requestId });
+    const turn = this.turn;
+    if (turn) turn.speechSuppressed = true;
+    const hadAudio = this.audioStarted;
+    this.abortSpeaking();
+    if (hadAudio && turn) this.deps.send({ type: "audio.end", turnId: turn.id, cancelled: true });
+    try {
+      const result = await handle.interrupt();
+      if (this.isClosed()) return;
+      if (this.turn === turn) {
+        this.abandonBrainTurn();
+        this.stopListening();
+        this.setState("idle");
+      }
+      if (this.interruptibleTurn === handle) this.interruptibleTurn = null;
+      this.deps.send({ type: "agent.interrupted", requestId, ...result });
+    } catch (error) {
+      this.log("talk native interruption failed", { error: String(error) });
+      if (!this.isClosed()) this.deps.send({ type: "agent.interrupted", requestId, status: "failed", message: error instanceof Error ? error.message : "The gateway did not confirm that the agent stopped." });
+    } finally {
+      this.interruptRequest = null;
+    }
   }
 
   private cancelSpeaking(): void {

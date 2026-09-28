@@ -62,17 +62,13 @@ import {
 } from "./openclaw-control/broker.js";
 import { installGatewayEdgeUnhandledRejectionPolicy } from "./process-rejection-policy.js";
 import {
-  attachComputerVncWsRoute,
-  createComputerRouter,
-  resolveComputerEndpoints,
-  type ComputerSession,
-} from "./routes/computer.js";
-import {
   attachTerminalWsRoute,
   createTerminalRouter,
   terminalAvailable,
   type TerminalSession,
 } from "./routes/terminal.js";
+import { createToolSurface } from "./routes/tool-surface.js";
+import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
 import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
@@ -95,8 +91,8 @@ let chatProxyModulePromise: Promise<ChatProxyModule> | null = null;
 let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
-const computerTickets = createWsTicketStore<ComputerSession>();
 const terminalTickets = createWsTicketStore<TerminalSession>();
+const toolSurface = createToolSurface();
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -274,20 +270,15 @@ function mountSidecarLocalitySurface(app: Express, options: {
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
   mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
-  const computer = resolveComputerEndpoints(process.env);
-  mountApi(app, "/computer", createComputerRouter({
-    localGatewayId: () => process.env.GATEWAY_ID ?? null,
-    resolveAccess: resolveNativeAdminAccess,
-    computer,
-    tickets: computerTickets,
-  }));
   mountApi(app, "/terminal", createTerminalRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
     available: terminalAvailable(process.env),
     resolveAccess: resolveNativeAdminAccess,
     tickets: terminalTickets,
+    resolveConversation: resolveToolConversationForUid,
   }));
-  if (computer) {
+  mountApi(app, "/tools", toolSurface.router);
+  if (process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm") {
     startDesktopNodePairing({
       invoke: (method, params) => invokeLocalOpenClaw(method, params),
       log: (message, fields) => logger.info(message, fields),
@@ -441,16 +432,7 @@ if (process.env.NODE_ENV !== "test") {
   loadChatProxyModule().then((chatProxy) => {
     chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
     mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
-  const computer = resolveComputerEndpoints(process.env);
-    if (computer) {
-      attachComputerVncWsRoute({
-        router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
-        tickets: computerTickets,
-        vncUrl: computer.vncUrl,
-        isAllowedOrigin: isAllowedWsOrigin,
-        log: (message, meta) => logger.warn(message, meta),
-      });
-    }
+    toolSurface.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
     if (terminalAvailable(process.env)) {
       attachTerminalWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,

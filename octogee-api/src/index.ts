@@ -43,7 +43,8 @@ import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
-import { createWorkspaceNativeAccessRoutes } from "./routes/workspace-native-access.js";
+import { createVoiceConversationRoutes } from "./routes/voice-conversation.js";
+import { createToolConversationRoutes, createWorkspaceNativeAccessRoutes } from "./routes/workspace-native-access.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
@@ -64,6 +65,7 @@ import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builde
 import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing/index.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
+import { resolveWorkspaceConversation } from "./lib/workspace-conversation.js";
 import { createVoiceRoutes } from "../../gateway-edge/src/routes/voice.js";
 import { createProductivityApprovalRoutes } from "../../gateway-edge/src/routes/productivity-approvals.js";
 import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
@@ -368,7 +370,10 @@ function clusterRouteOverrides(
     sharingRoutes: createSharingRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
-    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog }),
+    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveConversation: async (uid, channelId) => {
+      const result = await resolveWorkspaceConversation({ db }, { uid, channelId });
+      return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId } : null;
+    } }),
     productivityApprovalRoutes: express.Router()
       .use(requireAuth)
       .use(createProductivityApprovalRoutes({ db })),
@@ -791,6 +796,8 @@ export function createApp(opts: CreateAppOptions = {}) {
     requireAuthenticatedUid,
     createAutomationAuthorizationBrokerRoutes({ db }),
   );
+  app.use("/internal/voice", createVoiceConversationRoutes({ db }));
+  app.use("/internal/openclaw-control", createToolConversationRoutes({ db }));
   app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ db }));
   app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ db }));
   app.use(

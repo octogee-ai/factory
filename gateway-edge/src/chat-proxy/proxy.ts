@@ -868,7 +868,6 @@ export function attachChatProxyWsUpgrade(
     isAllowedWsOrigin,
     stripGatewayPrefix,
     relayBaseUrl: process.env.OPENCLAW_RUNTIME_BROKER_URL ?? "",
-    mmInternalUrl: MM_INTERNAL_URL,
     createVad: () => SileroVad.create(),
     registry: chatProxyMetricsRegistry,
     log: (message, fields) => logger.info(`[voice] ${message}`, fields ?? {}),

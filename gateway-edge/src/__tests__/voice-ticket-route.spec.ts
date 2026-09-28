@@ -5,6 +5,7 @@ import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 
 const h = vi.hoisted(() => ({
   mintTicket: vi.fn(),
+  resolveConversation: vi.fn(),
   evaluate: vi.fn(),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -44,6 +45,7 @@ function app(caller: { isAdmin?: boolean; gatewayId?: string | null; noPolicy?: 
   instance.use(
     "/api/voice",
     createVoiceRoutes({
+      resolveConversation: h.resolveConversation,
       ...(caller.noPolicy ? {} : { featurePolicy }),
       ...(caller.noCatalog ? {} : { catalog }),
     }),
@@ -55,6 +57,7 @@ const paul = { id: "en_paul_neutral", name: "Paul - Neutral", language: "en_us",
 const jane = { id: "gb_jane_confident", name: "Jane - Confident", language: "en_gb", gender: "female" };
 
 beforeEach(() => {
+  h.resolveConversation.mockReset().mockResolvedValue({ gatewayId: "gw-workspace", workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26) });
   h.mintTicket.mockReset().mockResolvedValue({ ticket: "t-1", uid: "uid-parent", gatewayId: "gw-mom", purpose: "voice-ws" });
   h.evaluate.mockReset().mockResolvedValue({ state: "enabled", value: true });
   catalog.list.mockReset().mockResolvedValue({ configured: true, default: paul, voices: [paul, jane] });
@@ -63,11 +66,12 @@ beforeEach(() => {
 });
 
 describe("POST /api/voice/ticket", () => {
-  it("mints a voice-ws ticket for the caller's gateway when the flag is enabled", async () => {
-    const res = await request(app()).post("/api/voice/ticket").send({});
+  it("mints a voice-ws ticket for the selected workspace gateway when the flag is enabled", async () => {
+    const res = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ wsTicket: "t-1", proxyUrl: "https://api-test.octogee.com", gatewayId: "gw-mom" });
-    expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-mom", purpose: "voice-ws" });
+    expect(res.body).toEqual({ wsTicket: "t-1", proxyUrl: "https://api-test.octogee.com", gatewayId: "gw-workspace" });
+    expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-workspace", purpose: "voice-ws", payload: { workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26) } });
+    expect(h.resolveConversation).toHaveBeenCalledWith("uid-parent", "c".repeat(26));
     expect(h.evaluate).toHaveBeenCalledWith(
       "release-voice-talk",
       expect.objectContaining({ uid: "uid-parent", isAdmin: false, workspaceSlug: "mom", planTier: "free" }),
@@ -77,7 +81,7 @@ describe("POST /api/voice/ticket", () => {
 
   it("refuses with 403 when the flag is disabled and never mints", async () => {
     h.evaluate.mockResolvedValue({ state: "disabled", value: false });
-    const res = await request(app()).post("/api/voice/ticket").send({});
+    const res = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: "voice_talk_disabled" });
     expect(h.mintTicket).not.toHaveBeenCalled();
@@ -85,35 +89,41 @@ describe("POST /api/voice/ticket", () => {
 
   it("fails closed with 503 when flag evaluation is unavailable", async () => {
     h.evaluate.mockResolvedValue({ state: "unavailable", value: false, reason: "timeout" });
-    const res = await request(app()).post("/api/voice/ticket").send({});
+    const res = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ error: "feature_evaluation_unavailable" });
   });
 
   it("lets admins through the bypass without consulting the policy", async () => {
     h.evaluate.mockResolvedValue({ state: "disabled", value: false });
-    const res = await request(app({ isAdmin: true })).post("/api/voice/ticket").send({});
+    const res = await request(app({ isAdmin: true })).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(res.status).toBe(200);
     expect(h.evaluate).not.toHaveBeenCalled();
   });
 
   it("is disabled when no policy is wired (the standalone cluster-route default)", async () => {
-    const res = await request(app({ noPolicy: true })).post("/api/voice/ticket").send({});
+    const res = await request(app({ noPolicy: true })).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(res.status).toBe(403);
   });
 
-  it("returns 409 when the Builder has no gateway assigned yet", async () => {
-    const res = await request(app({ gatewayId: null })).post("/api/voice/ticket").send({});
-    expect(res.status).toBe(409);
-    expect(res.body).toEqual({ error: "gateway_not_assigned" });
+  it("refuses a channel the caller cannot access", async () => {
+    h.resolveConversation.mockResolvedValue(null);
+    const res = await request(app({ gatewayId: null })).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "voice_conversation_forbidden" });
+    expect(h.mintTicket).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { channelId: "bad" }, { channelId: "c".repeat(26), gatewayId: "foreign" }, { channelId: "c".repeat(26), sessionKey: "forged" }])("refuses incomplete or client-assigned scope %j", async body => {
+    expect((await request(app()).post("/api/voice/ticket").send(body)).status).toBe(400);
     expect(h.mintTicket).not.toHaveBeenCalled();
   });
 
   it("maps ticket caps and quotas to 429", async () => {
     h.mintTicket.mockRejectedValueOnce(new TicketCapExceededError("uid-parent", "voice-ws", 5));
-    expect((await request(app()).post("/api/voice/ticket").send({})).status).toBe(429);
+    expect((await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26) })).status).toBe(429);
     h.mintTicket.mockRejectedValueOnce(new HourlyMintQuotaExceededError("uid-parent", "voice-ws", 120, 3_600_000));
-    const quota = await request(app()).post("/api/voice/ticket").send({});
+    const quota = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(quota.status).toBe(429);
     expect(quota.headers["retry-after"]).toBe("300");
   });

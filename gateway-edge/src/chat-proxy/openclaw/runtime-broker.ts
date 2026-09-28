@@ -19,11 +19,22 @@ import {
   type ActivityWriteReceiptBrokerPort,
 } from "./activity-write-receipt-broker.js";
 
+function voiceRedeemScope(body: Record<string, unknown> | null, expectedAgentId: string): RedeemedOpenClawWs["voiceConversation"] {
+  const scope = body?.voiceConversation as Record<string, unknown> | undefined;
+  if (!scope || typeof scope.ownerUid !== "string" || !scope.ownerUid || scope.ownerUid.length > 128 || scope.ownerUid.includes("/") ||
+    typeof scope.workspaceSlug !== "string" || !/^[a-z0-9-]{1,64}$/u.test(scope.workspaceSlug) ||
+    typeof scope.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(scope.channelId) || expectedAgentId !== `octogee-${scope.workspaceSlug}-coach`) {
+    throw new OpenClawRuntimeBrokerError(502, "malformed redeem response");
+  }
+  return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId };
+}
+
 export interface RedeemedOpenClawWs {
   uid: string;
   gatewayId: string;
   gatewayUrl: string;
   expectedAgentId: string;
+  voiceConversation?: { ownerUid: string; workspaceSlug: string; channelId: string };
 }
 
 // Redeem is a three-way outcome, not a nullable success. `revision-unavailable`
@@ -309,7 +320,7 @@ export function createOpenClawRuntimeBroker(opts: {
       }
       return {
         kind: "redeemed",
-        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId },
+        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId, ...(purpose === "voice-ws" ? { voiceConversation: voiceRedeemScope(body, expectedAgentId) } : {}) },
       };
     },
     async authorizePreviewAccess(

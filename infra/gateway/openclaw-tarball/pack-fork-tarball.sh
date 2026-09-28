@@ -34,9 +34,12 @@
 # Prints the tarball path on success. ALWAYS run the Step 7 install-verify after.
 set -euo pipefail
 
+PACKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 FORK_DIR="${1:-$HOME/workspace/openclaw/openclaw}"
 OUT_DIR="${2:-/tmp/openclaw-fork}"
 cd "$FORK_DIR"
+FORK_DIR="$(pwd -P)"
 
 if [ -e vendor ] || [ -L vendor ]; then
   echo "FATAL: fork source has a pre-existing ignored vendor path — move it before packing" >&2
@@ -47,6 +50,8 @@ if [ "${OPENCLAW_SKIP_BUILD:-0}" != "1" ]; then
   echo "  building fork source" >&2
   pnpm build >&2
 fi
+
+node "$PACKER_DIR/../verify-voice-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/openclaw-[0-9]*.tgz
