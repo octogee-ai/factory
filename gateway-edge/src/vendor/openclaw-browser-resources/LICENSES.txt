@@ -1,4 +1,4 @@
-OpenClaw source 8512ad6e924a80af029c3acf012e0713d0b31bc2
+OpenClaw source 1131e06f20f89de036549e908df3a4b5e6931474
 
 MIT License
 
@@ -1096,7 +1096,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-typebox@1.3.33
+typebox@1.3.34
 
 TypeBox
 

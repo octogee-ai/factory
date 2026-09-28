@@ -115,53 +115,65 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 ## Current overlay
 
-The selected artifacts currently contain main
-[`b458b9f1c6bc60389c7f88161262e5d39e23dcce`](https://github.com/openclaw/openclaw/commit/b458b9f1c6bc60389c7f88161262e5d39e23dcce)
-plus overlay
-[`8512ad6e924a80af029c3acf012e0713d0b31bc2`](https://github.com/ceckert/openclaw/commit/8512ad6e924a80af029c3acf012e0713d0b31bc2),
-with package version `2026.9.6`. These are main-snapshot bytes, not the GA tag.
-They include the native Talk and operator-takeover additions from
-[fork PR #5](https://github.com/ceckert/openclaw/pull/5), selected by Octogee #4135.
+Upstream: main
+[`7d11bc907771fd54c6de23b7ed4950ac906536d2`](https://github.com/openclaw/openclaw/commit/7d11bc907771fd54c6de23b7ed4950ac906536d2).
+Exact overlay:
+[`1131e06f20f89de036549e908df3a4b5e6931474`](https://github.com/ceckert/openclaw/commit/1131e06f20f89de036549e908df3a4b5e6931474),
+pushed to `ceckert/openclaw:codex/openclaw-main-sept28`.
+Package version is `2026.9.6`; these are September 28 main-snapshot bytes,
+not a GA tag. [Full CI 36458666798](https://github.com/openclaw/openclaw/actions/runs/36458666798)
+qualified the locked upstream with 151 successful jobs and seven intentional
+skips across all 158 jobs, including a successful `openclaw/ci-gate`.
+The skipped lanes were PR fail-fast/check planning, Node 24 compatibility,
+iOS release E2E and screenshot lanes, and the full-release child evidence seal.
+
+The overlay includes the adapted native Talk/operator-takeover work from
+[fork PR #5](https://github.com/ceckert/openclaw/pull/5) and cron system-job
+classification from [fork PR #6](https://github.com/ceckert/openclaw/pull/6).
+Octogee #4143's voice grants use the exact live authenticated voice-session SDK
+getter in this source. Both runtime objects and all committed hosted UI islands
+come from this same clean, built checkout.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-09ad36fe.tgz` | `09ad36fe0e25fef24465c140330a3578be3373c0ecf863b621f07c1e4415e0bd` | `1790614009664709` |
-| `openclaw-mattermost-fc42f59c.tgz` | `fc42f59c06799269e0bc6e123eef23d32b1dc5eabbd28064f81186b00c75f640` | `1790614018138418` |
+| `openclaw-fork-1d9ace2d.tgz` | `1d9ace2dae6b3533278a3c76b9316458a146d95b4fdd6aa779740e5fd6b404d8` | `1790627330955546` |
+| `openclaw-mattermost-b364f8ab.tgz` | `b364f8ab90ddafdd217b01950d34f75718fe3b079abc4f602f1f9c8a27d8af08` | `1790627334836010` |
 
 Shared-state schema is 20; agent schema is 23. Preserve native backups and
 roll forward, not an image-only downgrade or reset.
 
-### Pending v2026.9.7 recut
+### Qualification
 
-The prepared overlay is on `ceckert/openclaw:codex/openclaw-main-sept28`,
-[`543a4b4ab8480ff82900982b08c33677409d52a8`](https://github.com/ceckert/openclaw/commit/543a4b4ab8480ff82900982b08c33677409d52a8),
-rebased onto full-green main
-[`a58d7709797ae6a9816576f86987af68b0b1ef99`](https://github.com/openclaw/openclaw/commit/a58d7709797ae6a9816576f86987af68b0b1ef99).
-[Full CI 36410528009](https://github.com/openclaw/openclaw/actions/runs/36410528009)
-completed September 28 at 11:04 UTC: 152 successful jobs, seven skips, and a
-successful `openclaw/ci-gate`. Skips were `pr-fail-fast`, `check-plan`,
-`checks-node-compat-node24`, `ios-release-e2e`, `ios-screenshot-evidence`,
-the iOS screenshot matrix placeholder, and `Seal full release child evidence`.
+The exact-source `pnpm build` passed and records build ID
+`2026.9.6-1131e06f20f8-2026-09-28T20-01-42.677Z`. Both maintained packers ran
+sequentially. Native archive integrity, isolated matched installation, and the
+actual Linux arm64 `openclaw-full-plugin-installer` target passed. The latter
+verified 155 byte-identical bundled Codex files, native bundled trust and all
+three native-hook imports. Local installer image:
+`sha256:b1dfc2162b6e0d1cf11f5d772ba1c374069c37ad78012d1c207a43139092984b`.
+This is package qualification, not the later Build main gateway image identity.
+Both published objects were read back and their full SHA-256 values verified.
 
-This branch is preparation, not a newly selected runtime. Production types and
-238 focused tests across 19 files pass: 156 boundary tests plus 82 cron tests.
-Cron's final 11-file run took 72.49 seconds after real SQLite RED controls proved
-abort data loss, nonportable-grant handling and target collision/grant defects.
-Core types, scoped typed lint, formatting and the native line-cap ratchet pass
-for the correction. Native protocol generation caught and repaired the missing
-Kotlin `cron.migration` enum entry; protocol, config metadata/baselines, Kysely
-declarations and native schema parity checks pass.
-The final exact-source build, matched-pair qualification, artifact publication,
-and pointer switch remain pending the release tag. Prior trial archives and
-builds are not evidence for this prepared head.
+Focused native checks passed: the initial 493-test combined suite, 240 tests
+after the completion-owner extraction, 22 browser-owner tests, and a final
+243-test cron/tenant-boundary suite across 19 files. These runs overlap; they
+are not a unique-test total. Production core/extensions/UI types, scoped typed
+lint, formatting, native line caps, protocol/config generation, Kysely/schema
+parity and SDK export checks passed. The merged voice consumer's strict SDK
+contract check passed against this exact source. The broader SDK API-diff
+command stopped at its managed-process-group guard; it is not a passing gate,
+and no aggregate `pnpm check` success is claimed.
 
-When the tag is published, record its tag object and peeled SHA, compare it
-with this prepared base, rebase only the still-required overlay, rerun affected
-checks and review, then follow the package procedure above. A release branch is
-not a stable tag; do not substitute its moving tip or claim release qualification
-from main CI. Keep the Octogee PR draft until those steps are complete.
+Scoped Astra review findings were evaluated; the browser observation-owner
+defect was fixed with a failing two-tool control and passing regression.
+Native Control UI E2E passed five tests, with genuine pre-change comparisons
+and [desktop/mobile screenshot proof](https://github.com/octogee-ai/octogee/pull/4102#issuecomment-5877442438).
+The hosted-island input audit retained the native entry points, adopted the
+shared fullscreen owner and selected-model visibility improvement, and aligned
+the generator's package paths, import preservation and browser redactor with
+upstream. No local redaction implementation or Node polyfill is substituted.
 
-### Patch assessment for the pending recut
+### Patch assessment
 
 | Behavior | Current consumer | Removal condition |
 | --- | --- | --- |
@@ -174,6 +186,8 @@ from main CI. Keep the Octogee PR draft until those steps are complete.
 | Member-authorized workspace icons and browser-auth retry | Shared-session Control UI | Native icons use session membership and recover after authentication. |
 | Live requester/reviewer and execution-time authority | `octogee-access-tools` native computer/connector approvals | Native plugin hooks carry and recheck the same authority; approval roles alone do not replace this contract. |
 | Durable per-agent cron handoff | Cowboy Shared/Builder migration | Native transfer preserves ownership, partial handoff, rollback, retained jobs and scratch state without blocking unrelated system jobs. |
+| Native Talk consults and live voice-session binding | Octogee #4143 ticket-derived voice grants | Native channel consults expose the same authenticated live-session identity and cancellation boundary. |
+| Browser observation ownership during operator takeover | Coach browser tool and shared native panels | Native lazy tools retain per-owner observation generations so another agent cannot authorize stale input. |
 | Release superseded model-catalog generations | Long-lived gateway reloads | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
 | Reuse unchanged Gateway plugin registries across workspaces | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent preserves config, environment and metadata invalidation. |
 | Close deleted-agent owners and every isolate's database readers | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes descriptors without disturbing survivors or reopening deleted paths. |
@@ -207,6 +221,8 @@ cannot reconstruct target data already discarded by the old staging behavior.
   and cron reservation ownership. Removed the old reservation adapter and its
   test-helper/import churn.
 - Did not restore removed Tasks/TaskFlow APIs or generated Workboard overrides.
+- Kept main's native computer takeover transport unchanged; the overlay does
+  not carry the obsolete fork implementation of that worker.
 - Dropped explicit computer `target: gateway` fallback. Octogee already selects
   native `target: node` with `node: octogee-desktop`.
 - Removed the 336-line recurring real-Gateway descriptor harness and 32-line
@@ -215,13 +231,12 @@ cannot reconstruct target data already discarded by the old staging behavior.
 - Removed unused reader-close exports. Kept native invalidation for
   resolved-secret and plugin-config changes.
 
-Against the selected current overlay, the prepared diff touches 201 rather than
-203 files. Non-test net additions fall from 3,321 to 3,312 lines; test/support
-additions rise from 5,449 to 5,481 after fixing and proving the cron data-loss
-and approval cases. Total net additions are 8,793 versus 8,770: this is not an
-overall line-count reduction. Counts use `git diff --no-renames --numstat` and
-native topology test/support classification; necessary resource and authority
-coverage stays.
+Compared with the prior `8512ad6` overlay on `b458b9f`, the selected overlay
+touches 265 rather than 261 files. Non-test net additions are 4,566 versus 4,498;
+test/support additions are 6,932 versus 6,637. Adoption removed obsolete owners,
+but the combined Talk, cron and authority work means this is not an overall
+line-count reduction. Counts use `git diff --no-renames --numstat` against each
+overlay's own upstream and native topology test/support classification.
 
 Upstream contributions carry separate local and hosted evidence. The catalog
 and registry PRs have green hosted gates. Cleanup's final local proof includes
@@ -230,7 +245,7 @@ hosted checks and maintainer sensitive-path approval remain separate gates.
 The channel-authority PR's session-title fixture failure remains unresolved.
 Check exact-head adoption and feedback before dropping any patch.
 
-### Base-image inputs prepared with this recut
+### Base-image inputs
 
 Claude Code moves to 2.1.283 and Codex CLI to 0.157.1, with matching Builder
 locks and install-script approvals. Node 26.10.0, npm 12.1.0 and Rust 1.98.1
@@ -247,9 +262,8 @@ dependencies. This does not claim every transitive dependency is registry-latest
 Native package verification uses a fresh disposable `OPENCLAW_STATE_DIR` in
 the same image-build instruction. Reopening an inherited Docker-layer SQLite
 database changes its birth time during copy-up and trips native admission.
-The recipe correction passed actual Linux arm64 image proof with the earlier
-trial pair and its 19-test regression suite. Native guards and live state remain
-unchanged; the release pair must repeat that image proof before publication.
+The recipe correction and this selected pair passed actual Linux arm64 image
+proof. Native guards and live state remain unchanged.
 
 CUA remains the matched 0.28.2 package plus the native modifier backport below.
 Published 0.30.2 predates that fix; the upstream adoption issue tracks removal.
