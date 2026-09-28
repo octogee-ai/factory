@@ -30,7 +30,7 @@ export interface VoiceCatalogPort {
 export interface VoiceRoutesDeps {
   featurePolicy?: FeaturePolicy;
   catalog?: VoiceCatalogPort;
-  resolveConversation?: (uid: string, channelId: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string } | null>;
+  resolveConversation?: (uid: string, channelId: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; sessionKey: string } | null>;
 }
 
 const VOICE_PREVIEW_NAME_MAX = 60;

@@ -2,7 +2,6 @@ import type { Firestore } from "firebase-admin/firestore";
 import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { isCanonicalWorkspaceMembership, workspacePermissionsEnabled } from "@octogee/core/gateway-principal-access";
-import { VOICE_TURN_POST_KIND, voiceTurnMessage, type VoiceTurnPost, type VoiceTurnRequest } from "@octogee/core/voice-conversation";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId, resolveGatewayClass } from "@octogee/shared/types/glm";
 import type { DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
@@ -14,10 +13,6 @@ export interface WorkspaceConversationDeps {
   createPost?: (token: string, body: Record<string, unknown>) => Promise<unknown>;
 }
 export interface WorkspaceConversationScopeClaim { uid: string; workspaceSlug: string; ownerUid: string; gatewayId?: string }
-export class VoiceTurnPostError extends Error {
-  constructor(message: string) { super(message); this.name = "VoiceTurnPostError"; }
-}
-const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -63,9 +58,6 @@ async function mattermostClient(token: string) {
 async function readMattermostChannel(token: string, id: string): Promise<unknown> {
   return (await mattermostClient(token)).getJson(["channels", id]);
 }
-async function createMattermostPost(token: string, body: Record<string, unknown>): Promise<unknown> {
-  return (await mattermostClient(token)).postJson(["posts"], body);
-}
 export async function resolveWorkspaceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; gatewayId?: string }) {
   const authorize = deps.authorize ?? (await import("../../../gateway-edge/src/lib/channel-session-authorization.js")).authorizeChannelCredentials;
   const access = await authorize(claim.uid, claim.channelId, undefined, { workspaceConversation: true });
@@ -82,18 +74,4 @@ export async function resolveWorkspaceConversation(deps: WorkspaceConversationDe
     sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}`,
     callerMmUserId: access.callerMmUserId,
   } };
-}
-export async function postWorkspaceVoiceTurn(deps: WorkspaceConversationDeps, request: VoiceTurnRequest): Promise<VoiceTurnPost | null> {
-  const resolved = await resolveWorkspaceConversation(deps, { uid: request.uid, channelId: request.channelId, gatewayId: request.gatewayId });
-  if (!resolved) return null;
-  const props = {
-    octogee: { kind: VOICE_TURN_POST_KIND, ...(request.turnId !== undefined ? { turnId: request.turnId } : {}) },
-    ...(request.ingressToken !== undefined ? { openclaw_consult_ingress: request.ingressToken } : {}),
-  };
-  const post = record(await (deps.createPost ?? createMattermostPost)(resolved.token, { channel_id: request.channelId, message: voiceTurnMessage(request.text), props }));
-  const { callerMmUserId } = resolved.context;
-  if (!post || typeof post.id !== "string" || !MATTERMOST_ID_RE.test(post.id) || post.channel_id !== request.channelId || post.user_id !== callerMmUserId) {
-    throw new VoiceTurnPostError("Mattermost attributed the voice turn to a different sender or conversation");
-  }
-  return { postId: post.id, channelId: request.channelId, userId: callerMmUserId };
 }

@@ -23,10 +23,11 @@ function voiceRedeemScope(body: Record<string, unknown> | null, expectedAgentId:
   const scope = body?.voiceConversation as Record<string, unknown> | undefined;
   if (!scope || typeof scope.ownerUid !== "string" || !scope.ownerUid || scope.ownerUid.length > 128 || scope.ownerUid.includes("/") ||
     typeof scope.workspaceSlug !== "string" || !/^[a-z0-9-]{1,64}$/u.test(scope.workspaceSlug) ||
-    typeof scope.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(scope.channelId) || expectedAgentId !== `octogee-${scope.workspaceSlug}-coach`) {
+    typeof scope.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(scope.channelId) || expectedAgentId !== `octogee-${scope.workspaceSlug}-coach` ||
+    !["channel", "group"].some(kind => scope.sessionKey === `agent:${expectedAgentId}:mattermost:${kind}:${scope.channelId}`)) {
     throw new OpenClawRuntimeBrokerError(502, "malformed redeem response");
   }
-  return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId };
+  return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId, sessionKey: scope.sessionKey as string };
 }
 
 export interface RedeemedOpenClawWs {
@@ -34,7 +35,17 @@ export interface RedeemedOpenClawWs {
   gatewayId: string;
   gatewayUrl: string;
   expectedAgentId: string;
-  voiceConversation?: { ownerUid: string; workspaceSlug: string; channelId: string };
+  voiceConversation?: { ownerUid: string; workspaceSlug: string; channelId: string; sessionKey: string };
+  voiceGrant?: string;
+  voiceGrantExpiresAt?: number;
+}
+
+function voiceRedeemCustody(body: Record<string, unknown> | null, expectedAgentId: string) {
+  if (typeof body?.voiceGrant !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(body.voiceGrant) ||
+    typeof body.voiceGrantExpiresAt !== "number" || !Number.isSafeInteger(body.voiceGrantExpiresAt) || body.voiceGrantExpiresAt <= Date.now()) {
+    throw new OpenClawRuntimeBrokerError(502, "malformed redeem response");
+  }
+  return { voiceGrant: body.voiceGrant, voiceGrantExpiresAt: body.voiceGrantExpiresAt, voiceConversation: voiceRedeemScope(body, expectedAgentId) };
 }
 
 // Redeem is a three-way outcome, not a nullable success. `revision-unavailable`
@@ -320,7 +331,7 @@ export function createOpenClawRuntimeBroker(opts: {
       }
       return {
         kind: "redeemed",
-        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId, ...(purpose === "voice-ws" ? { voiceConversation: voiceRedeemScope(body, expectedAgentId) } : {}) },
+        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId, ...(purpose === "voice-ws" ? voiceRedeemCustody(body, expectedAgentId) : {}) },
       };
     },
     async authorizePreviewAccess(

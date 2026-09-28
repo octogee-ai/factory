@@ -1,17 +1,63 @@
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
+import { isResponseFrame } from '@octogee/shared/types/openclaw-wire-core';
 import { parseTalkClientMessage, resolveTalkSettings, TALK_PROTOCOL_VERSION, TALK_OUTPUT_SAMPLE_RATE, type ResolvedTalkSettings, type TalkClientMessage, type TalkServerEvent } from '@octogee/shared/types/voice';
 import { openNativeUserSocket, type NativeUserSocket } from '../openclaw-control/native-user-client.js';
 import { attachUpstreamRpcClient, type UpstreamRpcClient } from '../chat-proxy/openclaw/bridge-upstream-rpc.js';
 
 interface NativeTalkOptions {
+  voiceGrant: string;
+  voiceGrantExpiresAt: number;
   conversation: { uid: string; gatewayId: string; agentId: string; sessionKey: string };
   send: (event: TalkServerEvent) => void;
   sendAudio: (audio: Buffer) => void;
   reauthorize: () => Promise<unknown>;
+  onClose?: () => void;
   log: (message: string, fields?: Record<string, unknown>) => void;
   open?: typeof openNativeUserSocket;
   attachRpc?: typeof attachUpstreamRpcClient;
+}
+
+function nativeRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Native voice sent a malformed frame');
+  }
+  return value as Record<string, unknown>;
+}
+
+function nativeEventFrame(value: unknown): { event: string; payload: unknown } | null {
+  if (isResponseFrame(value)) return null;
+  const frame = nativeRecord(value);
+  if (frame.type !== 'event' || typeof frame.event !== 'string' || !frame.event) {
+    throw new Error('Native voice sent a malformed frame');
+  }
+  return { event: frame.event, payload: frame.payload };
+}
+
+function validTalkEventFields(event: Record<string, unknown>): boolean {
+  switch (event.type) {
+    case 'transcript': return typeof event.text === 'string' &&
+      (event.role === 'user' || event.role === 'assistant') && typeof event.final === 'boolean' &&
+      (event.textMode === undefined || event.textMode === 'snapshot');
+    case 'audio': return typeof event.audioBase64 === 'string';
+    case 'mark': return typeof event.markName === 'string' && event.markName.length > 0;
+    default: return true;
+  }
+}
+
+function nativeTalkPayload(value: unknown): Record<string, unknown> {
+  const event = nativeRecord(value);
+  if (typeof event.relaySessionId !== 'string' || !event.relaySessionId ||
+    typeof event.type !== 'string' || !event.type || !validTalkEventFields(event)) {
+    throw new Error('Native voice sent a malformed Talk frame');
+  }
+  if (event.talkEvent !== undefined) {
+    const talk = nativeRecord(event.talkEvent);
+    if (talk.turnId !== undefined && (typeof talk.turnId !== 'string' || !talk.turnId)) {
+      throw new Error('Native voice sent a malformed Talk frame');
+    }
+  }
+  return event;
 }
 
 export class NativeTalkSession {
@@ -33,6 +79,10 @@ export class NativeTalkSession {
   private readonly earlyEvents: Record<string, unknown>[] = [];
   constructor(private readonly options: NativeTalkOptions) {}
 
+  get boundNativeSessionId(): string | undefined { return this.nativeId; }
+  private safeError(error: unknown): string {
+    return (error instanceof Error ? error.message : String(error)).replaceAll(this.options.voiceGrant, '[redacted]');
+  }
   private isClosed(): boolean { return this.currentState === 'closed'; }
   private async call<T = Record<string, unknown>>(method: string, params: Record<string, unknown>): Promise<T> {
     if (!this.rpc) throw new Error('Native voice is not connected');
@@ -45,30 +95,38 @@ export class NativeTalkSession {
     this.options.send({ type: 'state', state, ...(this.outputTurn ? { turnId: this.outputTurn } : {}) });
   }
   private fail(error: unknown): void {
-    this.options.log('native voice transport failed', { error: String(error) });
-    this.options.send({ type: 'error', code: 'internal', message: error instanceof Error ? error.message : 'Native voice transport failed', recoverable: false });
+    if (this.isClosed()) return;
+    this.options.log('native voice transport failed', { error: this.safeError(error) });
+    this.options.send({ type: 'error', code: 'internal', message: this.safeError(error), recoverable: false });
     this.close();
   }
   private readonly onMessage = (data: WebSocket.RawData) => {
-    let frame: { type?: string; event?: string; payload?: Record<string, unknown> };
-    try { frame = JSON.parse(data.toString()); } catch { this.fail(new Error('Native voice sent a malformed frame')); return; }
-    if (frame.type !== 'event' || !frame.payload || this.currentState === 'closed') return;
-    if (frame.event === 'ui.command') { this.forwardUiCommand(frame.payload); return; }
-    if (frame.event !== 'talk.event') return;
-    if (!this.nativeId) {
-      if (this.earlyEvents.length >= 100) { this.fail(new Error('Native voice startup event limit exceeded')); return; }
-      this.earlyEvents.push(frame.payload); return;
+    if (this.isClosed()) return;
+    try {
+      const frame = nativeEventFrame(JSON.parse(data.toString()));
+      if (!frame) return;
+      if (frame.event === 'ui.command') { this.forwardUiCommand(nativeRecord(frame.payload)); return; }
+      if (frame.event !== 'talk.event') return;
+      const event = nativeTalkPayload(frame.payload);
+      if (!this.nativeId) {
+        if (this.earlyEvents.length >= 100) throw new Error('Native voice startup event limit exceeded');
+        this.earlyEvents.push(event); return;
+      }
+      this.handleNativeEvent(event);
+    } catch (error) {
+      this.fail(error instanceof SyntaxError ? new Error('Native voice sent a malformed frame') : error);
     }
-    this.handleNativeEvent(frame.payload);
   };
   private forwardUiCommand(payload: Record<string, unknown>): void {
+    if (!this.nativeId) { this.options.log('native voice UI command rejected before grant binding'); return; }
     const target = this.options.conversation;
-    const command = payload.command;
-    const commandSessionKey = typeof command === 'object' && command !== null ? (command as { sessionKey?: unknown }).sessionKey : undefined;
+    const command = nativeRecord(payload.command);
+    const commandSessionKey = command.sessionKey;
+    const explicitScope = payload.sessionKey === target.sessionKey || commandSessionKey === target.sessionKey;
     const boundScope = (payload.agentId === undefined || payload.agentId === target.agentId) &&
       (payload.sessionKey === undefined || payload.sessionKey === target.sessionKey) &&
       (commandSessionKey === undefined || commandSessionKey === target.sessionKey);
-    if (typeof command !== 'object' || command === null || !boundScope) {
+    if (!explicitScope || !boundScope) {
       this.options.log('native voice UI command rejected outside bound conversation');
       return;
     }
@@ -104,7 +162,7 @@ export class NativeTalkSession {
     this.outputTurn ||= this.nativeId!;
   }
   private handleNativeEvent(event: Record<string, unknown>): void {
-    if (event.relaySessionId !== this.nativeId) return;
+    if (this.isClosed() || event.relaySessionId !== this.nativeId) return;
     this.selectOutputTurn(event);
     switch (event.type) {
       case 'ready':
@@ -129,6 +187,7 @@ export class NativeTalkSession {
     if (this.started) throw new Error('Voice session already started');
     this.started = true;
     if (message.mode !== 'converse') throw new Error('Native Talk requires conversation mode');
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(this.options.voiceGrant) || this.options.voiceGrantExpiresAt <= Date.now()) throw new Error('Native voice grant is unavailable');
     this.settings = { ...resolveTalkSettings(message.settings), endpointing: 'normal' };
     await this.options.reauthorize();
     const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'] });
@@ -139,9 +198,26 @@ export class NativeTalkSession {
     connection.ws.on('close', () => { if (this.currentState !== 'closed') this.fail(new Error('Native voice connection closed')); });
     connection.ws.on('error', (error) => this.fail(error));
     const created = await this.call<{ sessionId: string; relaySessionId: string }>('talk.session.create', { sessionKey: this.options.conversation.sessionKey, mode: 'realtime', transport: 'gateway-relay', brain: 'agent-consult', provider: 'octogee', ...(this.settings.voice ? { voice: this.settings.voice } : {}), silenceDurationMs: 700 });
+    if (this.isClosed()) return;
     if (typeof created.sessionId !== 'string' || created.sessionId !== created.relaySessionId) throw new Error('Native voice returned an invalid session');
+    await this.bindCreatedSession(created.sessionId);
+    if (this.isClosed()) return;
     this.nativeId = created.sessionId;
     for (const event of this.earlyEvents.splice(0)) this.handleNativeEvent(event);
+  }
+  private async bindCreatedSession(sessionId: string): Promise<void> {
+    try {
+      const bound = await this.call('octogee.voice.bind', { voiceGrant: this.options.voiceGrant, sessionId });
+      if (bound.sessionId !== sessionId || bound.sessionKey !== this.options.conversation.sessionKey ||
+        typeof bound.expiresAt !== 'number' || !Number.isFinite(bound.expiresAt) ||
+        bound.expiresAt <= Date.now() || bound.expiresAt > this.options.voiceGrantExpiresAt) {
+        throw new Error('Native voice grant binding does not match');
+      }
+    } catch {
+      const error = new Error('Native voice grant binding failed');
+      this.fail(error);
+      throw error;
+    }
   }
   private async interruptAgent(requestId: string): Promise<void> {
     const wasAwaitingRun = this.currentState === 'thinking';
@@ -153,7 +229,7 @@ export class NativeTalkSession {
       if (result.reason === 'no_active_run' && wasAwaitingRun) throw new Error('The native agent has not confirmed an active run yet. Try interrupting again.');
       if (result.sessionKey !== this.options.conversation.sessionKey || (!result.aborted && result.reason !== 'no_active_run')) throw new Error(typeof result.message === 'string' ? result.message : 'Native agent did not confirm interruption');
       this.options.send({ type: 'agent.interrupted', requestId, status: result.aborted ? 'aborted' : 'no-active-run' });
-    } catch (error) { this.options.send({ type: 'agent.interrupted', requestId, status: 'failed', message: error instanceof Error ? error.message : String(error) }); }
+    } catch (error) { this.options.send({ type: 'agent.interrupted', requestId, status: 'failed', message: this.safeError(error) }); }
   }
   private updateSettings(settings: Extract<TalkClientMessage, { type: 'settings.update' }>['settings']): void {
     const next = resolveTalkSettings(this.settings, settings);
@@ -204,5 +280,6 @@ export class NativeTalkSession {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed'; this.marks.clear();
     this.rpc?.dispose(); this.connection?.ws.off('message', this.onMessage); this.connection?.ws.close();
+    this.options.onClose?.();
   }
 }

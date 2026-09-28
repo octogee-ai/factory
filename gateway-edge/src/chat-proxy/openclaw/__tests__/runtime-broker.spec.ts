@@ -49,13 +49,31 @@ describe("redeemOpenClawWs outcome", () => {
   });
 
   it("preserves authoritative workspace voice scope for gateway admission and channel startup", async () => {
-    const voiceConversation = { ownerUid: "owner", workspaceSlug: "alice", channelId: "c".repeat(26) };
-    const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation });
-    expect(await broker.redeemOpenClawWs("ticket", "voice-ws")).toMatchObject({ kind: "redeemed", redeemed: { uid: "member", voiceConversation } });
+    const voiceConversation = { ownerUid: "owner", workspaceSlug: "alice", channelId: "c".repeat(26), sessionKey: `agent:octogee-alice-coach:mattermost:group:${"c".repeat(26)}` };
+    const voiceGrant = "g".repeat(43);
+    const voiceGrantExpiresAt = Date.now() + 60_000;
+    const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation, voiceGrant, voiceGrantExpiresAt });
+    expect(await broker.redeemOpenClawWs("ticket", "voice-ws")).toMatchObject({ kind: "redeemed", redeemed: { uid: "member", voiceConversation, voiceGrant, voiceGrantExpiresAt } });
   });
   it.each([undefined, { ownerUid: "owner", workspaceSlug: "alice", channelId: "bad" }, { ownerUid: "owner", workspaceSlug: "other", channelId: "c".repeat(26) }])("refuses malformed or mismatched voice scope %j", async voiceConversation => {
     const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation });
     await expect(broker.redeemOpenClawWs("ticket", "voice-ws")).rejects.toThrow("malformed redeem response");
+  });
+
+  it.each([
+    {}, { voiceGrant: 'bad', voiceGrantExpiresAt: Date.now() + 60_000 },
+    { voiceGrant: 'g'.repeat(43), voiceGrantExpiresAt: 1 },
+    { voiceGrant: 'g'.repeat(43), voiceGrantExpiresAt: 'later' },
+  ])('refuses missing or malformed voice grant custody: %j', async custody => {
+    const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-alice-coach',
+      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), sessionKey: `agent:octogee-alice-coach:mattermost:group:${'c'.repeat(26)}` }, ...custody });
+    await expect(broker.redeemOpenClawWs('ticket', 'voice-ws')).rejects.toThrow('malformed redeem response');
+  });
+  it('rejects a voice ticket with a different canonical native session', async () => {
+    const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-alice-coach',
+      voiceGrant: 'g'.repeat(43), voiceGrantExpiresAt: Date.now() + 60_000,
+      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), sessionKey: 'agent:other:main' } });
+    await expect(broker.redeemOpenClawWs('ticket', 'voice-ws')).rejects.toThrow('malformed redeem response');
   });
 
   it("401 → unauthorized", async () => {

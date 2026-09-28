@@ -57,7 +57,7 @@ const paul = { id: "en_paul_neutral", name: "Paul - Neutral", language: "en_us",
 const jane = { id: "gb_jane_confident", name: "Jane - Confident", language: "en_gb", gender: "female" };
 
 beforeEach(() => {
-  h.resolveConversation.mockReset().mockResolvedValue({ gatewayId: "gw-workspace", workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26) });
+  h.resolveConversation.mockReset().mockResolvedValue({ gatewayId: "gw-workspace", workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}` });
   h.mintTicket.mockReset().mockResolvedValue({ ticket: "t-1", uid: "uid-parent", gatewayId: "gw-mom", purpose: "voice-ws" });
   h.evaluate.mockReset().mockResolvedValue({ state: "enabled", value: true });
   catalog.list.mockReset().mockResolvedValue({ configured: true, default: paul, voices: [paul, jane] });
@@ -70,7 +70,7 @@ describe("POST /api/voice/ticket", () => {
     const res = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26) });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ wsTicket: "t-1", proxyUrl: "https://api-test.octogee.com", gatewayId: "gw-workspace" });
-    expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-workspace", purpose: "voice-ws", payload: { workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26) } });
+    expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-workspace", purpose: "voice-ws", payload: { workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}` } });
     expect(h.resolveConversation).toHaveBeenCalledWith("uid-parent", "c".repeat(26));
     expect(h.evaluate).toHaveBeenCalledWith(
       "release-voice-talk",

@@ -26,12 +26,21 @@ export interface VoiceConversation {
   nativeInterrupt: boolean;
 }
 
-export interface VoiceTurnRequest {
-  uid: string;
-  gatewayId: string;
-  channelId: string;
+export interface VoiceGrantRequest {
+  voiceGrant: string;
+  sessionId: string;
+}
+export interface VoiceGrantEndRequest {
+  voiceGrant: string;
+  sessionId?: string;
+}
+export interface VoiceGrantBinding extends VoiceConversation {
+  sessionId: string;
+  expiresAt: number;
+}
+export interface VoiceTurnRequest extends VoiceGrantRequest {
   text: string;
-  turnId?: string;
+  turnId: string;
   ingressToken?: string;
 }
 
@@ -53,15 +62,26 @@ function validTurnText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= VOICE_TURN_TEXT_MAX;
 }
 
-const VOICE_TURN_REQUEST_KEYS = ['uid', 'gatewayId', 'channelId', 'text', 'turnId', 'ingressToken'];
-
-export function isVoiceTurnRequest(value: unknown): value is VoiceTurnRequest {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+function requestRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const body = value as Record<string, unknown>;
-  return Object.keys(body).every(key => VOICE_TURN_REQUEST_KEYS.includes(key)) &&
-    boundedId(body.uid) && boundedId(body.gatewayId) && matches(MATTERMOST_ID_RE, body.channelId) && validTurnText(body.text) &&
-    (body.turnId === undefined || matches(TURN_ID_RE, body.turnId)) &&
-    (body.ingressToken === undefined || matches(INGRESS_TOKEN_RE, body.ingressToken));
+  return Object.keys(body).every(key => keys.includes(key)) ? body : null;
+}
+function validGrant(value: unknown): value is string {
+  return matches(/^[A-Za-z0-9_-]{43}$/u, value);
+}
+export function isVoiceGrantRequest(value: unknown): value is VoiceGrantRequest {
+  const body = requestRecord(value, ['voiceGrant', 'sessionId']);
+  return Boolean(body && validGrant(body.voiceGrant) && boundedId(body.sessionId));
+}
+export function isVoiceGrantEndRequest(value: unknown): value is VoiceGrantEndRequest {
+  const body = requestRecord(value, ['voiceGrant', 'sessionId']);
+  return Boolean(body && validGrant(body.voiceGrant) && (body.sessionId === undefined || boundedId(body.sessionId)));
+}
+export function isVoiceTurnRequest(value: unknown): value is VoiceTurnRequest {
+  const body = requestRecord(value, ['voiceGrant', 'sessionId', 'turnId', 'text', 'ingressToken']);
+  return Boolean(body && validGrant(body.voiceGrant) && boundedId(body.sessionId) && matches(TURN_ID_RE, body.turnId) && validTurnText(body.text) &&
+    (body.ingressToken === undefined || matches(INGRESS_TOKEN_RE, body.ingressToken)));
 }
 
 function validateConversationIdentity(body: Partial<VoiceConversation>, args: { uid: string; gatewayId: string; channelId: string; expectedAgentId?: string }): void {
@@ -88,7 +108,7 @@ async function brokerPost(path: string, body: Record<string, unknown>, options: 
   const response = await internalFetch(`${base}${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error', body: JSON.stringify(body),
   }, { fetchImpl: options.fetchImpl, requireProjectedToken: true, timeoutMs: 5000 });
-  if (!response.ok) throw new VoiceConversationAccessError([401, 403, 404].includes(response.status) ? response.status : 503, 'Voice conversation unavailable');
+  if (!response.ok) throw new VoiceConversationAccessError([401, 403, 404, 409, 429, 502].includes(response.status) ? response.status : 503, 'Voice conversation unavailable');
   return response.json();
 }
 
@@ -103,17 +123,35 @@ export async function resolveVoiceConversation(args: {
   return { uid, gatewayId, workspaceSlug, channelId, agentId, sessionKey, callerMmUserId, nativeInterrupt };
 }
 
-export async function postVoiceTurn(args: VoiceTurnRequest & { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch }): Promise<VoiceTurnPost> {
+type VoiceBrokerOptions = { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch };
+
+export async function bindVoiceGrant(args: VoiceGrantRequest & VoiceBrokerOptions): Promise<VoiceGrantBinding> {
+  const request = { voiceGrant: args.voiceGrant, sessionId: args.sessionId };
+  if (!isVoiceGrantRequest(request)) throw new Error('Voice grant request is malformed');
+  const body = await brokerPost('/internal/voice/bind', request, args) as Partial<VoiceGrantBinding>;
+  if (!boundedId(body.uid) || !boundedId(body.gatewayId) || !matches(MATTERMOST_ID_RE, body.channelId) || body.sessionId !== args.sessionId ||
+    typeof body.expiresAt !== 'number' || !Number.isFinite(body.expiresAt) || body.expiresAt <= Date.now()) throw new Error('Voice grant broker returned an invalid binding');
+  validateConversationIdentity(body, { uid: body.uid, gatewayId: body.gatewayId, channelId: body.channelId });
+  validateConversationParticipant(body);
+  const { uid, gatewayId, workspaceSlug, channelId, agentId, sessionKey, callerMmUserId, nativeInterrupt, sessionId, expiresAt } = body as VoiceGrantBinding;
+  return { uid, gatewayId, workspaceSlug, channelId, agentId, sessionKey, callerMmUserId, nativeInterrupt, sessionId, expiresAt };
+}
+export async function endVoiceGrant(args: VoiceGrantEndRequest & VoiceBrokerOptions): Promise<{ revoked: true }> {
+  const request = { voiceGrant: args.voiceGrant, ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }) };
+  if (!isVoiceGrantEndRequest(request)) throw new Error('Voice grant end request is malformed');
+  const body = await brokerPost('/internal/voice/end', request, args) as { revoked?: unknown };
+  if (body.revoked !== true) throw new Error('Voice grant broker did not confirm revocation');
+  return { revoked: true };
+}
+export async function postVoiceTurn(args: VoiceTurnRequest & VoiceBrokerOptions): Promise<VoiceTurnPost> {
   const request: VoiceTurnRequest = {
-    uid: args.uid, gatewayId: args.gatewayId, channelId: args.channelId, text: args.text,
-    ...(args.turnId !== undefined ? { turnId: args.turnId } : {}),
+    voiceGrant: args.voiceGrant, sessionId: args.sessionId, turnId: args.turnId, text: args.text,
     ...(args.ingressToken !== undefined ? { ingressToken: args.ingressToken } : {}),
   };
   if (!isVoiceTurnRequest(request)) throw new Error('Voice turn request is malformed');
   const body = await brokerPost('/internal/voice/turn', { ...request }, args) as Partial<VoiceTurnPost>;
-  if (typeof body.postId !== 'string' || !MATTERMOST_ID_RE.test(body.postId) || body.channelId !== args.channelId ||
-    typeof body.userId !== 'string' || !MATTERMOST_ID_RE.test(body.userId)) {
-    throw new Error('Voice turn broker returned a post outside the requested conversation');
+  if (!matches(MATTERMOST_ID_RE, body.postId) || !matches(MATTERMOST_ID_RE, body.channelId) || !matches(MATTERMOST_ID_RE, body.userId)) {
+    throw new Error('Voice turn broker returned an invalid post');
   }
   return { postId: body.postId, channelId: body.channelId, userId: body.userId };
 }

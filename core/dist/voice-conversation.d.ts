@@ -16,12 +16,21 @@ export interface VoiceConversation {
     callerMmUserId: string;
     nativeInterrupt: boolean;
 }
-export interface VoiceTurnRequest {
-    uid: string;
-    gatewayId: string;
-    channelId: string;
+export interface VoiceGrantRequest {
+    voiceGrant: string;
+    sessionId: string;
+}
+export interface VoiceGrantEndRequest {
+    voiceGrant: string;
+    sessionId?: string;
+}
+export interface VoiceGrantBinding extends VoiceConversation {
+    sessionId: string;
+    expiresAt: number;
+}
+export interface VoiceTurnRequest extends VoiceGrantRequest {
     text: string;
-    turnId?: string;
+    turnId: string;
     ingressToken?: string;
 }
 export interface VoiceTurnPost {
@@ -29,6 +38,8 @@ export interface VoiceTurnPost {
     channelId: string;
     userId: string;
 }
+export declare function isVoiceGrantRequest(value: unknown): value is VoiceGrantRequest;
+export declare function isVoiceGrantEndRequest(value: unknown): value is VoiceGrantEndRequest;
 export declare function isVoiceTurnRequest(value: unknown): value is VoiceTurnRequest;
 export declare function resolveVoiceConversation(args: {
     uid: string;
@@ -38,7 +49,13 @@ export declare function resolveVoiceConversation(args: {
     env?: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
 }): Promise<VoiceConversation>;
-export declare function postVoiceTurn(args: VoiceTurnRequest & {
+type VoiceBrokerOptions = {
     env?: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
-}): Promise<VoiceTurnPost>;
+};
+export declare function bindVoiceGrant(args: VoiceGrantRequest & VoiceBrokerOptions): Promise<VoiceGrantBinding>;
+export declare function endVoiceGrant(args: VoiceGrantEndRequest & VoiceBrokerOptions): Promise<{
+    revoked: true;
+}>;
+export declare function postVoiceTurn(args: VoiceTurnRequest & VoiceBrokerOptions): Promise<VoiceTurnPost>;
+export {};

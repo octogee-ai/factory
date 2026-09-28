@@ -1,3 +1,4 @@
+import { createVoicePostingGrant } from "../lib/voice-posting-grant.js";
 import { resolveWorkspaceConversationScope } from "../lib/workspace-conversation.js";
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
@@ -901,12 +902,13 @@ async function redeemWsIdentity(db: Firestore, tx: Transaction, ticket: Record<s
   if (ticket.gatewayId !== gatewayId) return null;
   if (ticket.purpose === "voice-ws") {
     const payload = ticket.payload as Record<string, unknown> | undefined;
-    if (!payload || Object.keys(payload).some(key => !["workspaceSlug", "ownerUid", "channelId"].includes(key)) ||
+    if (!payload || Object.keys(payload).some(key => !["workspaceSlug", "ownerUid", "channelId", "sessionKey"].includes(key)) ||
       typeof payload.channelId !== "string" || !MATTERMOST_ID_RE.test(payload.channelId) ||
       typeof payload.workspaceSlug !== "string" || typeof payload.ownerUid !== "string") return null;
-    const { workspaceSlug, ownerUid, channelId } = payload;
+    const { workspaceSlug, ownerUid, channelId, sessionKey } = payload;
+    if (typeof sessionKey !== "string" || !["channel", "group"].some(kind => sessionKey === `agent:octogee-${workspaceSlug}-coach:mattermost:${kind}:${channelId}`)) return null;
     const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid });
-    return scope ? { expectedAgentId: `octogee-${workspaceSlug}-coach`, voiceConversation: { workspaceSlug, ownerUid, channelId } } : null;
+    return scope ? { expectedAgentId: `octogee-${workspaceSlug}-coach`, voiceConversation: { workspaceSlug, ownerUid, channelId, sessionKey } } : null;
   }
   const user = await tx.get(db.doc(`users/${uid}`));
   const userData = user.data() ?? {};
@@ -980,7 +982,7 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
       const uid = typeof ticket.uid === "string" ? ticket.uid : "";
       const purpose = ticket.purpose;
       const expiresAt = ticket.expiresAt;
-      if (!uid || purpose !== requestedPurpose || typeof expiresAt !== "number" || expiresAt < Date.now()) {
+      if (!uid || purpose !== requestedPurpose || typeof expiresAt !== "number" || expiresAt <= Date.now()) {
         return { status: 401, body: { error: "unauthorized" } };
       }
 
@@ -1008,13 +1010,15 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
         };
       }
       const gatewayUrl = urlResult.url;
+      const grant = identity.voiceConversation ? createVoicePostingGrant({ uid, gatewayId: bound.gatewayId, agentId: identity.expectedAgentId, ...identity.voiceConversation }) : null;
+      if (grant) tx.set(db.doc(grant.path), grant.document);
       tx.delete(ticketRef);
       return {
         status: 200,
-        body: { uid, gatewayId: bound.gatewayId, gatewayUrl, ...identity },
+        body: { uid, gatewayId: bound.gatewayId, gatewayUrl, ...identity, ...(grant ? { voiceGrant: grant.voiceGrant, voiceGrantExpiresAt: grant.voiceGrantExpiresAt } : {}) },
       };
     });
-    res.status(result.status).json(result.body);
+    res.set("Cache-Control", "no-store").status(result.status).json(result.body);
   });
 }
 

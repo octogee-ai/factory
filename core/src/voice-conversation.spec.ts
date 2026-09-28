@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('./internal-fetch.js', () => ({ internalFetch: h.fetch }));
-import { isVoiceTurnRequest, postVoiceTurn, resolveVoiceConversation, voiceTurnMessage } from './voice-conversation.js';
+import { bindVoiceGrant, endVoiceGrant, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest, postVoiceTurn, resolveVoiceConversation, voiceTurnMessage } from './voice-conversation.js';
 const channelId = 'a'.repeat(26);
 const env = { OPENCLAW_RUNTIME_BROKER_URL: 'http://octogee-api:3001' };
 const args = { uid: 'u', gatewayId: 'b-alice', channelId, expectedAgentId: 'octogee-alice-coach', env };
@@ -31,17 +31,17 @@ describe('voice conversation broker', () => {
   });
 });
 describe('server-posted voice turns', () => {
-  const turn = { uid: 'u', gatewayId: 'b-alice', channelId, text: 'Open the news', env };
+  const turn = { voiceGrant: 'g'.repeat(43), sessionId: 'native-session', turnId: 'turn-1', text: 'Open the news', env };
   const posted = { postId: 'p'.repeat(26), channelId, userId: 'b'.repeat(26) };
   it('asks the broker to post the turn and returns the verified post identity', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(posted)));
     await expect(postVoiceTurn({ ...turn, ingressToken: 'native-token', turnId: 'turn-1' })).resolves.toEqual(posted);
-    expect(brokerCall()).toMatchObject({ path: '/internal/voice/turn', body: { uid: 'u', gatewayId: 'b-alice', channelId, text: 'Open the news', ingressToken: 'native-token', turnId: 'turn-1' }, options: { requireProjectedToken: true } });
+    expect(brokerCall()).toMatchObject({ path: '/internal/voice/turn', body: { voiceGrant: turn.voiceGrant, sessionId: turn.sessionId, text: 'Open the news', ingressToken: 'native-token', turnId: 'turn-1' }, options: { requireProjectedToken: true } });
     expect(brokerCall().body).not.toHaveProperty('mmToken');
   });
-  it.each([{ channelId: 'z'.repeat(26) }, { postId: 'short' }, { userId: null }])('rejects a post reported outside the requested conversation %j', async (patch) => {
+  it.each([{ channelId: 'short' }, { postId: 'short' }, { userId: null }])('rejects malformed post identities %j', async (patch) => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify({ ...posted, ...patch })));
-    await expect(postVoiceTurn(turn)).rejects.toThrow('outside the requested conversation');
+    await expect(postVoiceTurn(turn)).rejects.toThrow('invalid post');
   });
   it('surfaces revoked authority as an access error', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response('{}', { status: 403 }));
@@ -56,17 +56,48 @@ describe('server-posted voice turns', () => {
     expect(voiceTurnMessage('  Open the news ')).toBe('🎙 Open the news');
   });
   it.each([
-    [{ uid: 'u', gatewayId: 'g', channelId, text: 'hi' }, true],
-    [{ uid: 'u', gatewayId: 'g', channelId, text: 'hi', turnId: 'turn_1', ingressToken: 'tok-1' }, true],
-    [{ uid: 'u', gatewayId: 'g', channelId, text: '' }, false],
-    [{ uid: 'u', gatewayId: 'g', channelId, text: 'x'.repeat(8001) }, false],
-    [{ uid: 'u', gatewayId: 'g', channelId: 'short', text: 'hi' }, false],
-    [{ uid: 'a/b', gatewayId: 'g', channelId, text: 'hi' }, false],
-    [{ uid: 'u', gatewayId: 'g', channelId, text: 'hi', turnId: 'bad turn' }, false],
-    [{ uid: 'u', gatewayId: 'g', channelId, text: 'hi', ingressToken: 'has space' }, false],
-    [{ uid: 'u', gatewayId: 'g', channelId, text: 'hi', mmToken: 'forged' }, false],
+    [{ voiceGrant: 'g'.repeat(43), sessionId: 'native', turnId: 'turn-1', text: 'hi' }, true],
+    [{ voiceGrant: 'g'.repeat(43), sessionId: 'native', turnId: 'turn-1', text: 'hi', ingressToken: 'tok-1' }, true],
+    [{ uid: 'u', gatewayId: 'g', channelId, text: 'hi' }, false],
+    [{ ...turn, env: undefined }, false],
+    [{ voiceGrant: 'short', sessionId: 'native', turnId: 'turn-1', text: 'hi' }, false],
+    [{ voiceGrant: 'g'.repeat(43), sessionId: 'native', text: 'hi' }, false],
+    [{ voiceGrant: 'g'.repeat(43), sessionId: 'native', turnId: 'bad turn', text: 'hi' }, false],
+    [{ voiceGrant: 'g'.repeat(43), sessionId: 'native', turnId: 'turn-1', text: 'x'.repeat(8001) }, false],
+    [{ voiceGrant: 'g'.repeat(43), sessionId: 'native', turnId: 'turn-1', text: 'hi', ingressToken: 'has space' }, false],
     [null, false],
   ])('validates turn request shape %j → %s', (value, expected) => {
     expect(isVoiceTurnRequest(value)).toBe(expected);
+  });
+});
+
+
+describe('voice posting grant client', () => {
+  const grant = { voiceGrant: 'g'.repeat(43), sessionId: 'native-session', env };
+  it('binds the opaque grant and returns only verified conversation metadata', async () => {
+    const binding = { ...answer, sessionId: grant.sessionId, expiresAt: Date.now() + 10000 };
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify({ ...binding, mmToken: 'private', voiceGrant: grant.voiceGrant })));
+    await expect(bindVoiceGrant(grant)).resolves.toEqual(binding);
+    expect(brokerCall()).toMatchObject({ path: '/internal/voice/bind', body: { voiceGrant: grant.voiceGrant, sessionId: grant.sessionId } });
+  });
+  it.each([{ sessionId: 'foreign' }, { expiresAt: 0 }, { sessionKey: 'foreign' }, { callerMmUserId: 'short' }])('rejects malformed grant bindings %j', async patch => {
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify({ ...answer, sessionId: grant.sessionId, expiresAt: Date.now() + 10000, ...patch })));
+    await expect(bindVoiceGrant(grant)).rejects.toThrow();
+  });
+  it('requires an acknowledged grant revocation and permits cleanup before native startup', async () => {
+    h.fetch.mockReset(); h.fetch.mockResolvedValueOnce(new Response('{"revoked":true}')).mockResolvedValueOnce(new Response('{"revoked":false}'));
+    await expect(endVoiceGrant({ voiceGrant: grant.voiceGrant, env })).resolves.toEqual({ revoked: true });
+    expect(brokerCall().body).toEqual({ voiceGrant: grant.voiceGrant });
+    await expect(endVoiceGrant(grant)).rejects.toThrow('confirm revocation');
+  });
+  it('rejects caller-shaped or malformed grant requests', () => {
+    expect(isVoiceGrantRequest({ voiceGrant: grant.voiceGrant, sessionId: 'native' })).toBe(true);
+    expect(isVoiceGrantRequest({ voiceGrant: grant.voiceGrant, sessionId: 'native', uid: 'forged' })).toBe(false);
+    expect(isVoiceGrantEndRequest({ voiceGrant: grant.voiceGrant })).toBe(true);
+    expect(isVoiceGrantEndRequest({ voiceGrant: 'bad' })).toBe(false);
+  });
+  it.each([409, 429, 502])('preserves posting failure status %s', async status => {
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response('{}', { status }));
+    await expect(postVoiceTurn({ ...grant, turnId: 'turn', text: 'Hello' })).rejects.toMatchObject({ status });
   });
 });

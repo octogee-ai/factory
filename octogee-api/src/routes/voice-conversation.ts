@@ -1,7 +1,8 @@
 import { Router, type Request } from 'express';
 import { isValidGatewayId } from '@octogee/shared/types/glm';
-import { isVoiceTurnRequest } from '@octogee/core/voice-conversation';
-import { postWorkspaceVoiceTurn, resolveWorkspaceConversation, VoiceTurnPostError, type WorkspaceConversationDeps } from '../lib/workspace-conversation.js';
+import { isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest } from '@octogee/core/voice-conversation';
+import { bindWorkspaceVoiceGrant, endWorkspaceVoiceGrant, postWorkspaceVoiceTurn, VoicePostingGrantError } from '../lib/voice-posting-grant.js';
+import { resolveWorkspaceConversation, type WorkspaceConversationDeps } from '../lib/workspace-conversation.js';
 
 interface VoiceConversationRequest {
   gatewayId: string;
@@ -20,6 +21,22 @@ function isVoiceConversationRequest(req: Request, body: VoiceConversationRequest
     Object.keys(body).every(key => ['gatewayId', 'uid', 'channelId'].includes(key));
 }
 
+function mountGrantOperation<T>(router: Router, deps: WorkspaceConversationDeps, path: string,
+  validate: (body: unknown) => body is T,
+  execute: (dependencies: WorkspaceConversationDeps, gatewayId: string, request: T) => Promise<unknown>): void {
+  router.post(path, async (req: Request, res, next) => {
+    try {
+      const gatewayId = req.boundTenant?.kind === 'gateway' ? req.boundTenant.gatewayId : null;
+      const body: unknown = req.body;
+      if (!gatewayId || !validate(body)) { res.status(403).json({ error: 'voice_grant_forbidden' }); return; }
+      res.set('cache-control', 'no-store').json(await execute(deps, gatewayId, body));
+    } catch (error) {
+      if (error instanceof VoicePostingGrantError) { res.status(error.status).json({ error: error.code }); return; }
+      next(error);
+    }
+  });
+}
+
 export function createVoiceConversationRoutes(deps: WorkspaceConversationDeps): Router {
   const router = Router();
   router.post('/conversation', async (req: Request, res, next) => {
@@ -35,17 +52,8 @@ export function createVoiceConversationRoutes(deps: WorkspaceConversationDeps): 
       });
     } catch (error) { next(error); }
   });
-  router.post('/turn', async (req: Request, res, next) => {
-    try {
-      const body: unknown = req.body ?? {};
-      if (!isVoiceTurnRequest(body) || !boundToGateway(req, body.gatewayId)) { res.status(403).json({ error: 'forbidden' }); return; }
-      const post = await postWorkspaceVoiceTurn(deps, body);
-      if (!post) { res.status(403).json({ error: 'forbidden' }); return; }
-      res.set('cache-control', 'no-store').json(post);
-    } catch (error) {
-      if (error instanceof VoiceTurnPostError) { res.status(502).json({ error: 'voice_turn_unverified' }); return; }
-      next(error);
-    }
-  });
+  mountGrantOperation(router, deps, '/bind', isVoiceGrantRequest, bindWorkspaceVoiceGrant);
+  mountGrantOperation(router, deps, '/end', isVoiceGrantEndRequest, endWorkspaceVoiceGrant);
+  mountGrantOperation(router, deps, '/turn', isVoiceTurnRequest, postWorkspaceVoiceTurn);
   return router;
 }

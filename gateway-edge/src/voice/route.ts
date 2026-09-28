@@ -11,7 +11,7 @@ import { createVoiceRelayClient, type VoiceRelayClient } from "@octogee/core/voi
 import type { SpeechProbabilityModel } from "./silero-vad.js";
 import { NativeTalkSession } from "./native-session.js";
 import { TalkSession } from "./talk-session.js";
-import { postVoiceTurn, resolveVoiceConversation, type VoiceConversation } from "@octogee/core/voice-conversation";
+import { bindVoiceGrant, endVoiceGrant, postVoiceTurn, resolveVoiceConversation, type VoiceConversation, type VoiceGrantBinding } from "@octogee/core/voice-conversation";
 import { interruptNativeVoiceRun } from "./native-control.js";
 
 export const VOICE_WS_PATH_RE = /\/api\/voice\/ws\/([a-f0-9-]{36})$/;
@@ -37,6 +37,8 @@ export interface VoiceWsRouteDeps {
   fetchImpl?: typeof fetch;
   resolveConversation?: typeof resolveVoiceConversation;
   postTurn?: typeof postVoiceTurn;
+  bindGrant?: typeof bindVoiceGrant;
+  endGrant?: typeof endVoiceGrant;
   conversationCheckMs?: number;
   createRelayClient?: (gatewayId: string) => VoiceRelayClient;
   registry?: Registry;
@@ -53,7 +55,38 @@ interface RedeemedVoiceTicket {
   uid: string;
   gatewayId: string;
   expectedAgentId: string;
-  voiceConversation: { ownerUid: string; workspaceSlug: string; channelId: string };
+  voiceConversation: { ownerUid: string; workspaceSlug: string; channelId: string; sessionKey: string };
+  voiceGrant: string;
+  voiceGrantExpiresAt: number;
+}
+
+function nativeVoiceEnabled(deps: VoiceWsRouteDeps): boolean {
+  return deps.nativeVoiceEnabled ?? (process.env.GATEWAY_CLASS === "builder" && process.env.OPENCLAW_CONTROL_IDENTITY === "per-user");
+}
+
+function grantOptions(deps: VoiceWsRouteDeps) {
+  return deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {};
+}
+
+function grantRevoker(deps: VoiceWsRouteDeps, ticket: RedeemedVoiceTicket, log: NonNullable<VoiceWsRouteDeps['log']>): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  return () => pending ??= (deps.endGrant ?? endVoiceGrant)({ voiceGrant: ticket.voiceGrant, ...grantOptions(deps) })
+    .then(() => undefined).catch(() => { log('voice grant revocation failed', { gatewayId: ticket.gatewayId }); });
+}
+
+function assertConversationScope(conversation: VoiceConversation, ticket: RedeemedVoiceTicket): void {
+  const scope = ticket.voiceConversation;
+  if (conversation.uid !== ticket.uid || conversation.gatewayId !== ticket.gatewayId || conversation.agentId !== ticket.expectedAgentId ||
+    conversation.channelId !== scope.channelId || conversation.workspaceSlug !== scope.workspaceSlug || conversation.sessionKey !== scope.sessionKey) {
+    throw new Error('Voice conversation does not match its grant');
+  }
+}
+
+function assertGrantBinding(binding: VoiceGrantBinding, ticket: RedeemedVoiceTicket, sessionId: string): void {
+  assertConversationScope(binding, ticket);
+  if (binding.sessionId !== sessionId || !Number.isFinite(binding.expiresAt) || binding.expiresAt <= Date.now() || binding.expiresAt > ticket.voiceGrantExpiresAt) {
+    throw new Error('Voice grant binding is invalid');
+  }
 }
 
 function refuse(socket: Duplex, status: string): void {
@@ -124,6 +157,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
       if (!verdict.allow) {
         handshakes.inc({ outcome: "fail:roster" });
         deps.upgradeGate.refuse(socket, verdict);
+        await grantRevoker(deps, redeemed, log)();
         return null;
       }
     }
@@ -134,9 +168,12 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
     try {
       const outcome = await deps.runtimeBroker.redeemOpenClawWs(ticket, "voice-ws");
       if (outcome.kind === "redeemed") {
-        const { voiceConversation } = outcome.redeemed;
-        if (!voiceConversation) throw new Error("Voice ticket conversation scope is missing");
-        return { ...outcome.redeemed, voiceConversation };
+        const { voiceConversation, voiceGrant, voiceGrantExpiresAt } = outcome.redeemed;
+        if (!voiceConversation?.sessionKey || typeof voiceGrant !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(voiceGrant) ||
+          typeof voiceGrantExpiresAt !== "number" || !Number.isSafeInteger(voiceGrantExpiresAt) || voiceGrantExpiresAt <= Date.now()) {
+          throw new Error("Voice ticket grant custody is missing");
+        }
+        return { ...outcome.redeemed, voiceConversation, voiceGrant, voiceGrantExpiresAt };
       }
       const unauthorized = outcome.kind === "unauthorized";
       handshakes.inc({ outcome: unauthorized ? "fail:unauthorized" : "fail:revision-unavailable" });
@@ -172,40 +209,51 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
   return async (req: http.IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
     const redeemed = await admit(req, socket);
     if (!redeemed) return;
-    if (!deps.isAgentReady(redeemed.expectedAgentId)) {
-      refuseWithError(req, socket, head, "fail:agent-unavailable", {
-        code: "internal",
-        message: VOICE_AGENT_UNAVAILABLE_MESSAGE,
-      });
-      return;
-    }
-
-    const status = await readRelayStatus(deps, redeemed.gatewayId);
-    if (!status) {
-      refuseWithError(req, socket, head, "fail:relay-unreachable", { code: "internal", message: VOICE_RELAY_UNAVAILABLE_MESSAGE });
-      return;
-    }
-    if (!status.configured || !status.engines) {
-      refuseWithError(req, socket, head, "fail:not-configured", { code: "not_configured", message: VOICE_NOT_CONFIGURED_MESSAGE });
-      return;
-    }
-    const engines = status.engines;
-    const capabilities = status.capabilities ?? TALK_CAPABILITIES_DEFAULT;
-
-    const nativeVoiceEnabled = deps.nativeVoiceEnabled ?? (process.env.GATEWAY_CLASS === "builder" && process.env.OPENCLAW_CONTROL_IDENTITY === "per-user");
-    let vad: SpeechProbabilityModel | undefined;
+    const revokeGrant = grantRevoker(deps, redeemed, log);
+    let attached = false;
+    const deadline = setTimeout(() => { socket.destroy(); void revokeGrant(); }, Math.max(0, redeemed.voiceGrantExpiresAt - Date.now()));
+    deadline.unref?.();
     try {
-      if (!nativeVoiceEnabled) vad = await deps.createVad();
-    } catch (err) {
-      log("voice ws vad load failed", { error: err instanceof Error ? err.message : String(err) });
-      refuseWithError(req, socket, head, "fail:vad", { code: "internal", message: VOICE_ENGINE_FAILED_MESSAGE });
-      return;
-    }
+      if (!deps.isAgentReady(redeemed.expectedAgentId)) {
+        refuseWithError(req, socket, head, "fail:agent-unavailable", {
+          code: "internal",
+          message: VOICE_AGENT_UNAVAILABLE_MESSAGE,
+        });
+        return;
+      }
 
-    wss.handleUpgrade(req, socket, head, (client) => {
-      handshakes.inc({ outcome: "ok" });
-      attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, vad, active, log });
-    });
+      const status = await readRelayStatus(deps, redeemed.gatewayId);
+      if (!status) {
+        refuseWithError(req, socket, head, "fail:relay-unreachable", { code: "internal", message: VOICE_RELAY_UNAVAILABLE_MESSAGE });
+        return;
+      }
+      if (!status.configured || !status.engines) {
+        refuseWithError(req, socket, head, "fail:not-configured", { code: "not_configured", message: VOICE_NOT_CONFIGURED_MESSAGE });
+        return;
+      }
+      const engines = status.engines;
+      const capabilities = status.capabilities ?? TALK_CAPABILITIES_DEFAULT;
+
+      const useNativeVoice = nativeVoiceEnabled(deps);
+      let vad: SpeechProbabilityModel | undefined;
+      try {
+        if (!useNativeVoice) vad = await deps.createVad();
+      } catch (err) {
+        log("voice ws vad load failed", { error: err instanceof Error ? err.message : String(err) });
+        refuseWithError(req, socket, head, "fail:vad", { code: "internal", message: VOICE_ENGINE_FAILED_MESSAGE });
+        return;
+      }
+
+      if (socket.destroyed || redeemed.voiceGrantExpiresAt <= Date.now()) return;
+      wss.handleUpgrade(req, socket, head, (client) => {
+        attached = true;
+        clearTimeout(deadline);
+        handshakes.inc({ outcome: "ok" });
+        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, vad, active, log, revokeGrant });
+      });
+    } finally {
+      if (!attached) { clearTimeout(deadline); await revokeGrant(); }
+    }
   };
 }
 
@@ -219,9 +267,10 @@ interface VoiceClientContext {
   vad: SpeechProbabilityModel | undefined;
   active: Gauge;
   log: NonNullable<VoiceWsRouteDeps['log']>;
+  revokeGrant: () => Promise<void>;
 }
 
-function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, vad, active, log }: VoiceClientContext): void {
+function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, vad, active, log, revokeGrant }: VoiceClientContext): void {
   active.inc();
   const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
   const relay = deps.createRelayClient?.(redeemed.gatewayId)
@@ -230,14 +279,20 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(event));
   };
   const sessionLog = (message: string, fields?: Record<string, unknown>) =>
-    log(message, { uid: redeemed.uid, gatewayId: redeemed.gatewayId, ...fields });
+    log(message, { uid: redeemed.uid, gatewayId: redeemed.gatewayId, ...Object.fromEntries(Object.entries(fields ?? {}).map(([key, value]) => [key, typeof value === "string" ? value.replaceAll(redeemed.voiceGrant, "[redacted]") : value])) });
   let conversation: VoiceConversation | null = null;
   let bindingStarted = false;
+  let admitted = false;
   let checkingConversation = false;
   const resolveConversation = deps.resolveConversation ?? resolveVoiceConversation;
   const reauthorize = async () => {
     if (!conversation) throw new Error("Voice conversation is not bound");
-    const current = await resolveConversation({ ...redeemed, channelId: conversation.channelId });
+    const sessionId = session instanceof NativeTalkSession ? session.boundNativeSessionId : session?.sessionId;
+    const current = sessionId
+      ? await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId, ...grantOptions(deps) })
+      : await resolveConversation({ uid: redeemed.uid, gatewayId: redeemed.gatewayId, channelId: redeemed.voiceConversation.channelId, expectedAgentId: redeemed.expectedAgentId });
+    assertConversationScope(current, redeemed);
+    if (sessionId) assertGrantBinding(current as VoiceGrantBinding, redeemed, sessionId);
     if (current.sessionKey !== conversation.sessionKey || current.agentId !== conversation.agentId || current.callerMmUserId !== conversation.callerMmUserId) throw new Error("Voice conversation changed");
     if (nativeVoiceEnabled && !current.nativeInterrupt) throw new Error("Native voice control is no longer authorized");
     return current;
@@ -255,7 +310,9 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
       return createMattermostBrain({
         posts: { createPost: async (input) => {
           const current = await reauthorize();
-          const post = await (deps.postTurn ?? postVoiceTurn)({ uid: current.uid, gatewayId: current.gatewayId, channelId: input.channelId, text: input.text, turnId: input.turnId, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
+          if (!session || input.channelId !== current.channelId) throw new Error("Voice turn is outside its bound conversation");
+          const post = await (deps.postTurn ?? postVoiceTurn)({ voiceGrant: redeemed.voiceGrant, sessionId: session.sessionId, text: input.text, turnId: input.turnId, ...grantOptions(deps) });
+          if (post.channelId !== current.channelId || post.userId !== current.callerMmUserId) throw new Error("Voice post does not match its authorized sender");
           return { id: post.postId };
         } },
         events,
@@ -284,6 +341,8 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     closed = true;
     if (agentReadinessTimer) clearInterval(agentReadinessTimer);
     if (conversationTimer) clearInterval(conversationTimer);
+    clearTimeout(expiryTimer);
+    void revokeGrant();
     active.dec();
     session?.close();
     try {
@@ -293,6 +352,11 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     }
     log("voice ws session closed", { uid: redeemed.uid, sessionId: session?.sessionId, reason });
   };
+  const expiryTimer = setTimeout(() => {
+    send({ type: "error", code: "internal", message: "This voice session expired. Start voice again.", recoverable: false });
+    teardown("grant-expired");
+  }, Math.max(0, redeemed.voiceGrantExpiresAt - Date.now()));
+  expiryTimer.unref?.();
   agentReadinessTimer = setInterval(() => {
     if (deps.isAgentReady(redeemed.expectedAgentId)) return;
     send({ type: "error", code: "internal", message: VOICE_AGENT_UNAVAILABLE_MESSAGE, recoverable: false });
@@ -301,7 +365,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
   agentReadinessTimer.unref?.();
 
   conversationTimer = setInterval(() => {
-    if (!conversation || checkingConversation || closed) return;
+    if (!conversation || !admitted || checkingConversation || closed) return;
     checkingConversation = true;
     void reauthorize().catch((error) => {
       sessionLog("voice conversation revoked", { error: String(error) });
@@ -315,14 +379,22 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     bindingStarted = true;
     try {
       if (channelId !== redeemed.voiceConversation.channelId) throw new Error("Voice ticket channel does not match session startup");
-      const resolved = await resolveConversation({ ...redeemed, channelId });
+      const resolved = await resolveConversation({ uid: redeemed.uid, gatewayId: redeemed.gatewayId, channelId, expectedAgentId: redeemed.expectedAgentId });
+      assertConversationScope(resolved, redeemed);
       if (closed) return false;
       conversation = resolved;
       sessionCapabilities.interrupt = resolved.nativeInterrupt;
       if (nativeVoiceEnabled) {
         if (!resolved.nativeInterrupt) throw new Error("Native voice requires current native conversation authority");
-        session = new NativeTalkSession({ conversation: resolved, send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
-      } else session = createLegacySession();
+        session = new NativeTalkSession({ voiceGrant: redeemed.voiceGrant, voiceGrantExpiresAt: redeemed.voiceGrantExpiresAt, conversation: resolved, onClose: () => teardown('native-session-closed'), send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
+      } else {
+        session = createLegacySession();
+        const bound = await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId: session.sessionId, ...grantOptions(deps) });
+        if (closed) return false;
+        assertGrantBinding(bound, redeemed, session.sessionId);
+        conversation = bound;
+      }
+      admitted = true;
       return true;
     } catch (error) {
       sessionLog("voice conversation refused", { error: String(error) });
@@ -332,17 +404,19 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     }
   };
 
-  const onFrame = async (data: WebSocket.RawData, isBinary: boolean) => {
-    const buf = rawDataToBuffer(data);
-    if (isBinary) {
-      if (buf.length > MAX_CLIENT_AUDIO_FRAME_BYTES) {
-        send({ type: "error", code: "bad_message", message: "audio frame too large", recoverable: false });
-        teardown("frame-too-large");
-        return;
-      }
-      session?.handleAudio(buf);
+  const onAudioFrame = (buf: Buffer) => {
+    if (buf.length > MAX_CLIENT_AUDIO_FRAME_BYTES) {
+      send({ type: "error", code: "bad_message", message: "audio frame too large", recoverable: false });
+      teardown("frame-too-large");
       return;
     }
+    if (admitted) session?.handleAudio(buf);
+  };
+
+  const onFrame = async (data: WebSocket.RawData, isBinary: boolean) => {
+    if (closed) return;
+    const buf = rawDataToBuffer(data);
+    if (isBinary) { onAudioFrame(buf); return; }
     if (buf.length > MAX_CLIENT_TEXT_FRAME_BYTES) {
       send({ type: "error", code: "bad_message", message: "message too large", recoverable: false });
       teardown("message-too-large");
@@ -352,7 +426,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     const message = parseTalkClientMessage(raw);
     if (message?.type === "session.start" && !bindingStarted) {
       if (!await bindConversation(message.channelId)) return;
-    } else if (!conversation) {
+    } else if (!admitted) {
       if (message?.type === "session.end") teardown("session-ended");
       else send({ type: "error", code: "session_not_started", message: "Voice is still connecting.", recoverable: true });
       return;
@@ -362,7 +436,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
   };
   client.on("message", (data, isBinary) => {
     void onFrame(data, isBinary).catch((err) => {
-      log("voice ws session failed", { uid: redeemed.uid, sessionId: session?.sessionId, error: err instanceof Error ? err.stack ?? err.message : String(err) });
+      sessionLog("voice ws session failed", { sessionId: session?.sessionId, error: err instanceof Error ? err.stack ?? err.message : String(err) });
       send({ type: "error", code: "internal", message: "the voice engine hit an error; please reconnect", recoverable: false });
       teardown("session-error");
     });

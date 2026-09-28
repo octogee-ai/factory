@@ -82,6 +82,8 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw-control/tool-conversation",
   "/internal/voice/conversation",
   "/internal/voice/turn",
+  "/internal/voice/bind",
+  "/internal/voice/end",
   "/internal/openclaw-control/mattermost/authorize",
   "/internal/openclaw-control/mattermost/channels",
   "/internal/workspace-git/authorize",
