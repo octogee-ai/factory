@@ -1,6 +1,7 @@
 import type { DocumentData, DocumentReference, Firestore } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION, type SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
+import { MigrationRpcError } from "@octogee/core/fleet-migration-client";
 
 export interface SchedulerHandoffReleaseDeps {
   db: Firestore;
@@ -12,6 +13,8 @@ export interface SchedulerHandoffReleaseDeps {
   log: (msg: string) => void;
   now: () => number;
 }
+
+export const STAGE_AFTER_CUTOVER_DEADLINE_MS = 15 * 60_000;
 
 function isHandoff(value: unknown): value is SchedulerHandoffState {
   if (!value || typeof value !== "object") return false;
@@ -38,41 +41,58 @@ function handoffProgress(operation: DocumentData): HandoffProgress {
   return steps.some((step) => step.name === "final-sync-state" || step.name === "stage-scheduler") ? "staged" : "held";
 }
 
+type StageOutcome = { staged: true } | { staged: false; lost: string };
+
 async function stageOnReleasedTarget(
   deps: SchedulerHandoffReleaseDeps,
   ref: DocumentReference,
   handoff: SchedulerHandoffState,
-): Promise<boolean> {
-  if (!handoff.stageAfterCutover || handoff.stagedAt !== undefined) return true;
+  cutoverCommittedAt: number,
+): Promise<StageOutcome> {
+  if (!handoff.stageAfterCutover || handoff.stagedAt !== undefined) return { staged: true };
   const request = { migrationId: handoff.migrationId, slug: handoff.slug };
   const missing = [];
   for (const gatewayId of [handoff.fromGatewayId, handoff.toGatewayId]) {
     if (!await deps.gatewayExists(gatewayId)) missing.push(gatewayId);
   }
   if (missing.length > 0) {
-    deps.log(
-      `[scheduler-handoff-release] ❌ ${handoff.migrationId} slug=${handoff.slug}: ${missing.join(", ")} gone before the post-cutover stage; ` +
-        `the schedules exported on ${handoff.fromGatewayId} are lost`,
-    );
-    return false;
+    const lost = `${missing.join(", ")} gone before the post-cutover stage; the schedules exported on ${handoff.fromGatewayId} are lost`;
+    deps.log(`[scheduler-handoff-release] ❌ ${handoff.migrationId} slug=${handoff.slug}: ${lost}`);
+    return { staged: false, lost };
   }
   const exported = await deps.scheduler(handoff.fromGatewayId, { ...request, phase: "export" });
-  await deps.scheduler(handoff.toGatewayId, {
-    ...request, phase: "stage", agentIds: exported.agentIds, snapshot: exported.snapshot, retainNonportable: true,
-  });
+  try {
+    await deps.scheduler(handoff.toGatewayId, {
+      ...request, phase: "stage", agentIds: exported.agentIds, snapshot: exported.snapshot, retainNonportable: true,
+    });
+  } catch (error) {
+    const sinceCutoverMs = deps.now() - cutoverCommittedAt;
+    if (!(error instanceof MigrationRpcError) || sinceCutoverMs < STAGE_AFTER_CUTOVER_DEADLINE_MS) throw error;
+    const lost =
+      `${handoff.toGatewayId} still refused the staged copy ${Math.round(sinceCutoverMs / 60_000)}m after cutover ` +
+      `(${error instanceof Error ? error.message : String(error)}); retiring ${handoff.fromGatewayId} without it ` +
+      `so the source can release the moved agent; the schedules exported on ${handoff.fromGatewayId} are lost`;
+    deps.log(`[scheduler-handoff-release] ❌ ${handoff.migrationId} slug=${handoff.slug}: ${lost}`);
+    return { staged: false, lost };
+  }
   await ref.update({ "schedulerHandoff.stagedAt": deps.now() });
-  return true;
+  return { staged: true };
 }
 
 async function completeHandoff(
   deps: SchedulerHandoffReleaseDeps,
   ref: DocumentReference,
   handoff: SchedulerHandoffState,
-): Promise<void> {
+  cutoverCommittedAt: number,
+): Promise<string | undefined> {
   const request = { migrationId: handoff.migrationId, slug: handoff.slug };
-  const staged = await stageOnReleasedTarget(deps, ref, handoff);
+  const outcome = await stageOnReleasedTarget(deps, ref, handoff, cutoverCommittedAt);
   if (await deps.gatewayExists(handoff.fromGatewayId)) await deps.scheduler(handoff.fromGatewayId, { ...request, phase: "retire" });
-  if (staged && await deps.gatewayExists(handoff.toGatewayId)) await deps.scheduler(handoff.toGatewayId, { ...request, phase: "activate" });
+  if (outcome.staged) {
+    if (await deps.gatewayExists(handoff.toGatewayId)) await deps.scheduler(handoff.toGatewayId, { ...request, phase: "activate" });
+    return undefined;
+  }
+  return outcome.lost;
 }
 
 async function rollBackHandoff(
@@ -97,14 +117,16 @@ export async function releaseAbandonedSchedulerHandoffs(
     .get();
   let released = 0;
   for (const doc of pending.docs) {
-    const handoff = doc.data().schedulerHandoff;
+    const operation = doc.data();
+    const handoff = operation.schedulerHandoff;
     if (!isHandoff(handoff)) {
       deps.log(`[scheduler-handoff-release] ⚠ ${doc.id} has no valid scheduler handoff; leaving it pending`);
       continue;
     }
-    const progress = handoffProgress(doc.data());
+    const progress = handoffProgress(operation);
+    let lost: string | undefined;
     try {
-      if (progress === "cut-over") await completeHandoff(deps, doc.ref, handoff);
+      if (progress === "cut-over") lost = await completeHandoff(deps, doc.ref, handoff, operation.cutoverCommittedAt as number);
       else if (progress !== "never-held") await rollBackHandoff(deps, handoff, progress);
     } catch (error) {
       deps.log(
@@ -113,7 +135,11 @@ export async function releaseAbandonedSchedulerHandoffs(
       );
       continue;
     }
-    await doc.ref.update({ schedulerHandoffReleased: true, schedulerHandoffReleasedAt: deps.now() });
+    await doc.ref.update({
+      schedulerHandoffReleased: true,
+      schedulerHandoffReleasedAt: deps.now(),
+      ...(lost === undefined ? {} : { schedulerHandoffLost: lost }),
+    });
     deps.log(
       `[scheduler-handoff-release] ${progress === "cut-over" ? "completed" : "released"} (${progress}) ${handoff.migrationId} slug=${handoff.slug} ` +
         `source=${handoff.fromGatewayId} target=${handoff.toGatewayId} op=${doc.id}`,

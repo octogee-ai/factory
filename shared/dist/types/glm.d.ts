@@ -361,6 +361,7 @@ export interface Operation {
     schedulerHandoff?: SchedulerHandoffState;
     schedulerHandoffReleased?: boolean;
     schedulerHandoffReleasedAt?: number;
+    schedulerHandoffLost?: string;
     cutoverCommittedAt?: number;
 }
 export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "freshSourceQuiesced" | "freshCutoverReady" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";

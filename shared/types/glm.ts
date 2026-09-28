@@ -835,6 +835,7 @@ export interface Operation {
   schedulerHandoff?: SchedulerHandoffState;
   schedulerHandoffReleased?: boolean;
   schedulerHandoffReleasedAt?: number;
+  schedulerHandoffLost?: string;
   cutoverCommittedAt?: number;
 }
 
