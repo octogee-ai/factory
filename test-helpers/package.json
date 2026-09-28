@@ -40,10 +40,10 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.2",
     "firebase-admin": "^14.4.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "overrides": {
     "fast-xml-parser": "^5.10.1",
