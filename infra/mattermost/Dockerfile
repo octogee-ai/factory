@@ -1,5 +1,5 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS build
-ADD --checksum=sha256:ffab0b532d2f0265e542edd83886ebd6bde065de1f0e478adc9867176b385d75 https://codeload.github.com/ceckert/mattermost/tar.gz/e749bbd1c1d4eb0c9d58551dde56bd535a71e06a /tmp/source.tar.gz
+ADD --checksum=sha256:129c090e3697af20bc69f437584f890b3abf8ecd112c93bfc45c9722fcb6c8dd https://codeload.github.com/ceckert/mattermost/tar.gz/0c674acd999793775c9bfb5e1334623228cab3eb /tmp/source.tar.gz
 RUN mkdir /src && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
 WORKDIR /src/server
 ARG TARGETOS
@@ -8,9 +8,9 @@ ENV GOTOOLCHAIN=local
 RUN go work init . ./public
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -buildvcs=false -trimpath \
-    -ldflags='-s -w -X github.com/mattermost/mattermost/server/public/model.BuildNumber=11.11.0-octogee.e749bbd -X github.com/mattermost/mattermost/server/public/model.BuildHash=e749bbd1c1d4eb0c9d58551dde56bd535a71e06a -X github.com/mattermost/mattermost/server/public/model.BuildEnterpriseReady=false' \
+    -ldflags='-s -w -X github.com/mattermost/mattermost/server/public/model.BuildNumber=11.11.1-octogee.0c674ac -X github.com/mattermost/mattermost/server/public/model.BuildHash=0c674acd999793775c9bfb5e1334623228cab3eb -X github.com/mattermost/mattermost/server/public/model.BuildEnterpriseReady=false' \
     -o /out/mattermost ./cmd/mattermost
-FROM mattermost/mattermost-team-edition:11.11.0@sha256:335db2833330323d9a9f43313429f4b16b497067644660acfdfc2424ab04d2de
+FROM mattermost/mattermost-team-edition:11.11.1@sha256:6ad5912b45875ef2fafc41886b5a70a3ec1b6c17ec706e0492566e8a2fd8aa85
 COPY --from=build --chown=2000:2000 /out/mattermost /mattermost/bin/mattermost
 LABEL org.opencontainers.image.source="https://github.com/ceckert/mattermost" \
-      org.opencontainers.image.revision="e749bbd1c1d4eb0c9d58551dde56bd535a71e06a"
+      org.opencontainers.image.revision="0c674acd999793775c9bfb5e1334623228cab3eb"
