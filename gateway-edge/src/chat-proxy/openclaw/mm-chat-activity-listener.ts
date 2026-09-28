@@ -1,14 +1,6 @@
 import type { WebSocket } from "ws";
 import type { BridgeLog } from "../bridge-log.js";
 
-export interface CoachDmEventPayload {
-  coachMmUserId: string;
-  channelId: string;
-  postId: string;
-  message: string;
-  createdAt: number;
-}
-
 interface ChatActivityBase {
   coachMmUserId: string;
   channelId: string;
@@ -25,24 +17,20 @@ export interface CoachWsSubject {
   coachToken: string;
 }
 
-export interface MmFinalNotificationListenerDeps {
+export interface MmChatActivityListenerDeps {
   log: BridgeLog;
   openWebSocket: () => WebSocket;
-  onCoachDm: (payload: CoachDmEventPayload) => void;
   onChatActivity: (payload: ChatActivityPayload) => void;
   backoffSchedule?: ReadonlyArray<number>;
-  postSettleMs?: number;
 }
 
-export interface MmFinalNotificationListenerManager {
+export interface MmChatActivityListenerManager {
   addCoach(subject: CoachWsSubject): void;
   removeCoach(coachMmUserId: string): void;
   stop(): void;
 }
 
 const DEFAULT_BACKOFF = [1_000, 5_000, 15_000, 30_000] as const;
-const DEFAULT_POST_SETTLE_MS = 750;
-const MAX_TRACKED_POSTS = 500;
 
 interface CoachConnection {
   token: string;
@@ -50,10 +38,6 @@ interface CoachConnection {
   attempt: number;
   currentWs: WebSocket | null;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
-}
-
-interface BufferedCoachPost extends CoachDmEventPayload {
-  fingerprint: string;
 }
 
 function parseMattermostPost(data: unknown): Record<string, unknown> | null {
@@ -71,28 +55,6 @@ function parseMattermostPost(data: unknown): Record<string, unknown> | null {
 function stringField(post: Record<string, unknown>, field: string): string {
   const value = post[field];
   return typeof value === "string" ? value : "";
-}
-
-function parseCoachPost(data: unknown, coachMmUserId: string): BufferedCoachPost | null {
-  const post = parseMattermostPost(data);
-  if (!post) return null;
-  const props = post.props;
-  if (props !== null && typeof props === "object" && "octogee" in props) return null;
-  const postId = stringField(post, "id");
-  const channelId = stringField(post, "channel_id");
-  const authorId = stringField(post, "user_id");
-  if (!postId || !channelId || authorId !== coachMmUserId) return null;
-  const message = stringField(post, "message");
-  const createdAt = typeof post.create_at === "number" ? post.create_at : Date.now();
-  const updatedAt = typeof post.update_at === "number" ? post.update_at : createdAt;
-  return {
-    coachMmUserId,
-    channelId,
-    postId,
-    message,
-    createdAt,
-    fingerprint: `${updatedAt}:${message}`,
-  };
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
@@ -147,46 +109,12 @@ function safeToString(data: unknown): string {
   return typeof data === "string" ? data : "";
 }
 
-export function startMmFinalNotificationListeners(
-  deps: MmFinalNotificationListenerDeps,
-): MmFinalNotificationListenerManager {
+export function startMmChatActivityListeners(
+  deps: MmChatActivityListenerDeps,
+): MmChatActivityListenerManager {
   const backoff = deps.backoffSchedule ?? DEFAULT_BACKOFF;
-  const settleMs = deps.postSettleMs ?? DEFAULT_POST_SETTLE_MS;
   const connections = new Map<string, CoachConnection>();
-  const posts = new Map<string, BufferedCoachPost>();
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  const notifiedPostIds = new Set<string>();
   let managerStopped = false;
-
-  const cancelPost = (postId: string): void => {
-    const timer = timers.get(postId);
-    if (timer) clearTimeout(timer);
-    timers.delete(postId);
-  };
-
-  const flushPost = (postId: string, fingerprint: string): void => {
-    timers.delete(postId);
-    const post = posts.get(postId);
-    if (!post || post.fingerprint !== fingerprint || notifiedPostIds.has(postId)) return;
-    if (!post.message.trim()) return;
-    notifiedPostIds.add(postId);
-    try {
-      deps.onCoachDm({
-        coachMmUserId: post.coachMmUserId,
-        channelId: post.channelId,
-        postId: post.postId,
-        message: post.message,
-        createdAt: post.createdAt,
-      });
-    } catch (error) {
-      deps.log(
-        `[mm-event-listener] onCoachDm handler threw: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        "warn",
-      );
-    }
-  };
 
   const reportChatActivity = (activity: ChatActivityPayload | null): void => {
     if (!activity) return;
@@ -200,29 +128,6 @@ export function startMmFinalNotificationListeners(
         "warn",
       );
     }
-  };
-
-  const rememberPost = (data: unknown, coachMmUserId: string): void => {
-    const post = parseCoachPost(data, coachMmUserId);
-    if (!post || notifiedPostIds.has(post.postId)) return;
-    cancelPost(post.postId);
-    posts.delete(post.postId);
-    posts.set(post.postId, post);
-    while (posts.size > MAX_TRACKED_POSTS) {
-      const oldestPostId = posts.keys().next().value as string | undefined;
-      if (!oldestPostId) break;
-      cancelPost(oldestPostId);
-      posts.delete(oldestPostId);
-      notifiedPostIds.delete(oldestPostId);
-    }
-    if (!post.message.trim()) return;
-    if (settleMs <= 0) {
-      flushPost(post.postId, post.fingerprint);
-      return;
-    }
-    const timer = setTimeout(() => flushPost(post.postId, post.fingerprint), settleMs);
-    timer.unref?.();
-    timers.set(post.postId, timer);
   };
 
   const scheduleReconnect = (coachMmUserId: string, conn: CoachConnection): void => {
@@ -279,9 +184,6 @@ export function startMmFinalNotificationListeners(
         if (envelope.event === "reaction_added") {
           reportChatActivity(reactionChatActivity(envelope, coachMmUserId));
         }
-        if (envelope.event === "posted" || envelope.event === "post_edited") {
-          rememberPost(envelope.data, coachMmUserId);
-        }
       } catch {
         return;
       }
@@ -325,19 +227,9 @@ export function startMmFinalNotificationListeners(
       if (!conn) return;
       teardown(conn);
       connections.delete(coachMmUserId);
-      for (const [postId, post] of posts) {
-        if (post.coachMmUserId !== coachMmUserId) continue;
-        cancelPost(postId);
-        posts.delete(postId);
-        notifiedPostIds.delete(postId);
-      }
     },
     stop() {
       managerStopped = true;
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-      posts.clear();
-      notifiedPostIds.clear();
       for (const conn of connections.values()) teardown(conn);
       connections.clear();
     },

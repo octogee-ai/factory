@@ -54,7 +54,7 @@ import {
   VOICE_EVENT_RELAY_PATH,
 } from "./http-paths.js";
 import { createMattermostInteractionProxyHandler } from "./openclaw/mattermost-interaction-proxy.js";
-import { startMmFinalNotificationListeners } from "./openclaw/mm-final-notification-listener.js";
+import { startMmChatActivityListeners } from "./openclaw/mm-chat-activity-listener.js";
 import { makeChatActivityDemandHandler } from "./openclaw/chat-activity-demand.js";
 import { createProductionActivityIntakeHandler } from "./openclaw/activity-intake.js";
 import {
@@ -63,7 +63,7 @@ import {
 } from "./openclaw/activity-binding-registry.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { createDirectActivityTargetHandler } from "./openclaw/direct-activity-target.js";
-import { makeCoachDmHandler } from "../notifications/chat-notifier.js";
+import { makeCommittedAnswerNotifier } from "../notifications/chat-notifier.js";
 import {
   createBrokeredFanOutNotification,
   notificationBrokerBaseUrlFromEnv,
@@ -194,6 +194,8 @@ function getActivityIntakeHandler():
   if (activityIntakeHandler) return activityIntakeHandler;
   const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   if (!gatewayToken) return null;
+  const gatewayId = process.env.GATEWAY_ID?.trim();
+  if (!gatewayId) throw new Error("GATEWAY_ID is required for Activity intake");
   const broker = getOpenClawRuntimeBroker();
   const registry = createActivityBindingRegistry({
     resolveAgentIdentity: (agentId) => broker.resolveAgentIdentity(agentId),
@@ -217,6 +219,15 @@ function getActivityIntakeHandler():
     registry,
     receiptsFor: (binding) => broker.activityWriteReceiptsFor(binding.channelDocPath),
     mmClientFor,
+    onPersisted: makeCommittedAnswerNotifier({
+      mmClientFor,
+      resolveOwnerUid: (channelId) => broker.resolveChannelOwnerUid(channelId),
+      fanOut: createBrokeredFanOutNotification({
+        baseUrl: notificationBrokerBaseUrlFromEnv(),
+        gatewayId,
+      }),
+      log: bridgeLog,
+    }),
     leaseOwner: `${process.env.GATEWAY_ID?.trim() || "gateway-edge"}:${process.pid}`,
     log: (event, meta) => logger.warn(`[activity-intake] ${event}`, meta),
   });
@@ -946,25 +957,16 @@ async function readMountedCoachCustomers(): Promise<readonly string[] | null> {
   );
 }
 
-function startCoachFinalNotifications(
-  gatewayId: string,
+function startCoachChatActivity(
   runtimeBroker: OpenClawRuntimeBroker,
 ): void {
   const chatActivityDemand = makeChatActivityDemandHandler({
     broker: runtimeBroker,
     log: bridgeLog,
   });
-  const manager = startMmFinalNotificationListeners({
+  const manager = startMmChatActivityListeners({
     log: bridgeLog,
     openWebSocket: () => new WebSocket(MM_INTERNAL_WS_URL),
-    onCoachDm: makeCoachDmHandler({
-      resolveOwnerUid: (channelId) => runtimeBroker.resolveChannelOwnerUid(channelId),
-      fanOut: createBrokeredFanOutNotification({
-        baseUrl: notificationBrokerBaseUrlFromEnv(),
-        gatewayId,
-      }),
-      log: bridgeLog,
-    }),
     onChatActivity: (activity) => {
       void chatActivityDemand(activity);
     },
@@ -1006,7 +1008,7 @@ function startCoachFinalNotifications(
   void reconcile();
   const timer = setInterval(() => void reconcile(), COACH_RECONCILE_INTERVAL_MS);
   timer.unref();
-  logger.info("[chat-proxy] Mattermost final-post notifications started");
+  logger.info("[chat-proxy] Mattermost chat activity listeners started");
 }
 
 export async function startChatProxyBackground(): Promise<void> {
@@ -1023,5 +1025,5 @@ export async function startChatProxyBackground(): Promise<void> {
     routerPublicKey: process.env.AGENT_CONTROL_ROUTER_PUBLIC_KEY ?? "",
     log: (message, meta) => logger.error(message, meta),
   });
-  startCoachFinalNotifications(gatewayId, runtimeBroker);
+  startCoachChatActivity(runtimeBroker);
 }

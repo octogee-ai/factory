@@ -24,7 +24,7 @@ afterEach(async () => {
 
 async function startServer() {
   process.env.OPENCLAW_GATEWAY_TOKEN = "gateway-token";
-  process.env.OPENCLAW_RUNTIME_BROKER_URL = "http://broker.test";
+  process.env.OPENCLAW_RUNTIME_BROKER_URL = "http://127.0.0.1:3001";
   process.env.GATEWAY_ID = "gateway-1";
   vi.resetModules();
   const { chatProxyHandleRequest } = await import("../proxy.js");

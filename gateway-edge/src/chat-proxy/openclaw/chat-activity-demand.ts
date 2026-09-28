@@ -1,5 +1,5 @@
 import type { BridgeLog } from "../bridge-log.js";
-import type { ChatActivityPayload } from "./mm-final-notification-listener.js";
+import type { ChatActivityPayload } from "./mm-chat-activity-listener.js";
 import type { ChatActivityReport, OpenClawRuntimeBroker } from "./runtime-broker.js";
 
 const DEFAULT_WINDOW_MS = 5 * 60_000;
