@@ -12,7 +12,6 @@ export interface UserSnapshot {
     agentIds: string[];
     repoUrl: string;
     mattermostUserId: string | null;
-    greetingPosted: boolean;
     channels: CustomerSnapshot["channels"];
     ownerName: string;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
@@ -101,7 +100,7 @@ export interface CustomerLifecycleAdapter {
     /** True iff the slug's mount-completion marker is present — the LAST step a successful
      *  ensure writes, AFTER the customer is fully provisioned (not merely coach-wired). The
      *  reconcile's mount direction keys off this, so a coach-wired-but-incomplete mount
-     *  (config patch landed, then greeting / mark-complete failed) is re-ensured rather than
+     *  (config patch landed, then mark-complete failed) is re-ensured rather than
      *  silently treated as done. */
     customerMountMarked?: (slug: string) => boolean;
     /** Stamp the mount-completion marker for the slug — the final step of a successful mount. */
@@ -120,13 +119,6 @@ export interface CustomerLifecycleAdapter {
     setProvisioningStatus: (uid: string, status: "provisioning" | "complete") => Promise<void>;
     setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;
     setMattermostFields: (uid: string, fields: MmUpdate) => Promise<void>;
-    setGreetingResult: (uid: string, result: {
-        ok: true;
-        jobId: string;
-    } | {
-        ok: false;
-        error: string;
-    }) => Promise<void>;
     setAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
     hasCustomerDir: (slug: string) => boolean;
     hasWorkspaceGitDir: (slug: string) => boolean;
@@ -164,28 +156,6 @@ export interface CustomerLifecycleAdapter {
      * fresh MM-provisioning event.
      */
     reconcileCommunityMembership?: (ctx: CustomerContext) => Promise<void>;
-    scheduleBootGreetingCron: (params: {
-        slug: string;
-        agentId: string;
-        accountId: string;
-    }) => Promise<{
-        jobId: string;
-    }>;
-    /**
-     * Detached, non-blocking, non-fatal safety net for the boot greeting.
-     * After the agent-greeting cron is scheduled, this waits a grace delay,
-     * re-checks the coach DM channel, and posts a static greeting AS THE COACH
-     * if the agent turn failed to land one (so the onboarding `agentPosted`
-     * gate flips true). Optional so test/other adapters don't have to implement
-     * it. Implementations MUST be fire-and-forget (resolve immediately, do the
-     * work in the background) and MUST NOT throw — the orchestrator does not
-     * await it. The prod adapter resolves coachUserId, channelId, and the coach
-     * PAT from Firestore internally; the orchestrator only knows {slug, uid}.
-     */
-    ensureBootGreetingFallback?: (params: {
-        slug: string;
-        uid: string;
-    }) => void;
     applyAddCustomerConfigPatch: (snapshot: UserSnapshot, mmUpdate: MmUpdate | null, opts?: {
         signal?: AbortSignal;
         byosActive?: boolean;
@@ -248,7 +218,7 @@ export interface CustomerLifecycleAdapter {
     releaseAgent?: (agentId: string) => Promise<void>;
 }
 export type CustomerStateImportMode = "pre" | "final" | "default";
-export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "verify-channel-ready" | "schedule-greeting-cron" | "mark-complete" | "notify-ops";
+export type AddCustomerStep = "claim-slot" | "ensure-dir" | "write-templates" | "clone-workspace-repo" | "init-workspace-repo" | "ssh-key" | "ssh-key-resync" | "blob-sync" | "byosub-restore" | "byot-reassert" | "context-files-reassert" | "project-clone" | "mattermost-provision" | "community-membership" | "config-patch" | "verify-channel-ready" | "mark-complete" | "notify-ops";
 export interface AddCustomerResult {
     newCustomer: boolean;
     steps: AddCustomerStep[];

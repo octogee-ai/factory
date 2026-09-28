@@ -4,13 +4,6 @@ import type { AssignmentState } from "./gateway-releases.js";
 import type { ProjectRepoSource } from "./project.js";
 export type FleetBrokerProvisioningStatus = "" | "provisioning" | "complete";
 export type FleetBrokerMattermostUpdate = Record<string, unknown>;
-export type FleetBrokerGreetingResult = {
-    ok: true;
-    jobId: string;
-} | {
-    ok: false;
-    error: string;
-};
 export interface FleetBrokerChannelBinding {
     scope: "workspace" | "project";
     kind: string;
@@ -184,7 +177,6 @@ export interface FleetBrokerUserSnapshot {
     repoUrl: string;
     mattermostUserId: string | null;
     customerMmUserId: string | null;
-    greetingPosted: boolean;
     channels: FleetBrokerChannelBinding[];
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     projects: FleetBrokerProjectRestore[];

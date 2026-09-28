@@ -5,6 +5,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import {
+  CUSTOMER_WORKFLOW_TOOLS,
+  PROJECT_AGENT_ALLOWED_TOOLS,
   platformInvariantViolations,
   reconcilePlatformInvariants,
 } from "../../core/dist/system-config-invariants.js";
@@ -14,65 +16,7 @@ import { openClawOperatorRoles } from "../../shared/dist/types/openclaw-proxy-id
 
 const repoRoot = path.resolve(__dirname, "../..");
 const script = path.join(repoRoot, "infra/gateway/apply-gateway-class-policy.mjs");
-const workflowTools = [
-  "automations",
-  "message",
-  "octogee_project_create",
-  "octogee_project_delegate",
-  "octogee_project_commit",
-  "octogee_project_list",
-  "octogee_project_set_recipe",
-  "octogee_project_capability",
-  "octogee_project_build",
-  "octogee_project_test",
-  "octogee_project_preview",
-  "octogee_project_run_status",
-  "octogee_project_publish",
-  "octogee_board_list",
-  "octogee_board_card_read",
-  "octogee_board_card_create",
-  "octogee_board_card_update",
-  "octogee_board_card_move",
-  "octogee_board_card_comment",
-  "workspace_commit",
-  "brave_search",
-  "tavily_search",
-  "tavily_extract",
-  "octogee_chat_search",
-  "octogee_chat_history",
-  "octogee_chat_set_identity",
-  "octogee_status",
-  "octogee_ask_ops",
-  "octogee_google_calendar_events",
-  "octogee_google_calendar_create",
-  "octogee_google_calendar_create_approved",
-  "octogee_google_calendar_update",
-  "octogee_google_calendar_update_approved",
-  "octogee_google_calendar_delete",
-  "octogee_google_calendar_delete_approved",
-  "octogee_google_gmail_search",
-  "octogee_google_gmail_get",
-  "octogee_google_gmail_triage",
-  "octogee_google_gmail_triage_approved",
-  "octogee_google_gmail_draft_create",
-  "octogee_google_gmail_draft_create_approved",
-  "octogee_google_gmail_draft_send",
-  "octogee_google_gmail_draft_send_approved",
-  "octogee_google_drive_read",
-  "octogee_google_docs_read",
-  "octogee_google_docs_write",
-  "octogee_google_contacts_read",
-  "octogee_google_tasks_lists",
-  "octogee_google_tasks_list",
-  "octogee_google_tasks_add",
-  "octogee_google_tasks_add_approved",
-  "octogee_google_tasks_update",
-  "octogee_google_tasks_update_approved",
-  "octogee_google_sheets_read",
-  "octogee_google_sheets_write",
-  "octogee_obsidian_read",
-  "octogee_obsidian_write",
-];
+const workflowTools = [...CUSTOMER_WORKFLOW_TOOLS];
 const customerStructuredTools = [
   "automations",
   "workspace_commit",
@@ -196,6 +140,14 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
 }
 
 describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
+  it("keeps the boot workflow and project policies identical to the runtime invariants", () => {
+    const result = spawnSync("node", ["--input-type=module", "-e", `import { OCTOGEE_WORKFLOW_TOOLS } from ${JSON.stringify(script)}; console.log(JSON.stringify(OCTOGEE_WORKFLOW_TOOLS));`], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(CUSTOMER_WORKFLOW_TOOLS);
+    const out = runPolicy("shared", { agents: { list: [{ id: "octogee-acme-proj-site-coach" }] } });
+    expect(out.agents.list[0].tools.alsoAllow).toEqual(PROJECT_AGENT_ALLOWED_TOOLS);
+  });
+
   it("keeps the broad catalog and popular choices after the boot policy runs", () => {
     const agentId = "octogee-acme-coach";
     const astra = "platform-openai/gpt-6-astra";

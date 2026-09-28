@@ -25,7 +25,6 @@ export interface UserSnapshot {
   agentIds: string[];
   repoUrl: string;
   mattermostUserId: string | null;
-  greetingPosted: boolean;
   channels: CustomerSnapshot["channels"];
   ownerName: string;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
@@ -127,7 +126,7 @@ export interface CustomerLifecycleAdapter {
   /** True iff the slug's mount-completion marker is present — the LAST step a successful
    *  ensure writes, AFTER the customer is fully provisioned (not merely coach-wired). The
    *  reconcile's mount direction keys off this, so a coach-wired-but-incomplete mount
-   *  (config patch landed, then greeting / mark-complete failed) is re-ensured rather than
+   *  (config patch landed, then mark-complete failed) is re-ensured rather than
    *  silently treated as done. */
   customerMountMarked?: (slug: string) => boolean;
 
@@ -154,10 +153,6 @@ export interface CustomerLifecycleAdapter {
   setProvisioningStatus: (uid: string, status: "provisioning" | "complete") => Promise<void>;
   setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;
   setMattermostFields: (uid: string, fields: MmUpdate) => Promise<void>;
-  setGreetingResult: (
-    uid: string,
-    result: { ok: true; jobId: string } | { ok: false; error: string },
-  ) => Promise<void>;
   setAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
 
   hasCustomerDir: (slug: string) => boolean;
@@ -224,25 +219,6 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
    * fresh MM-provisioning event.
    */
   reconcileCommunityMembership?: (ctx: CustomerContext) => Promise<void>;
-  scheduleBootGreetingCron: (params: {
-    slug: string;
-    agentId: string;
-    accountId: string;
-  }) => Promise<{ jobId: string }>;
-
-  /**
-   * Detached, non-blocking, non-fatal safety net for the boot greeting.
-   * After the agent-greeting cron is scheduled, this waits a grace delay,
-   * re-checks the coach DM channel, and posts a static greeting AS THE COACH
-   * if the agent turn failed to land one (so the onboarding `agentPosted`
-   * gate flips true). Optional so test/other adapters don't have to implement
-   * it. Implementations MUST be fire-and-forget (resolve immediately, do the
-   * work in the background) and MUST NOT throw — the orchestrator does not
-   * await it. The prod adapter resolves coachUserId, channelId, and the coach
-   * PAT from Firestore internally; the orchestrator only knows {slug, uid}.
-   */
-  ensureBootGreetingFallback?: (params: { slug: string; uid: string }) => void;
-
   applyAddCustomerConfigPatch: (
     snapshot: UserSnapshot,
     mmUpdate: MmUpdate | null,
@@ -335,7 +311,6 @@ export type AddCustomerStep =
   | "community-membership"
   | "config-patch"
   | "verify-channel-ready"
-  | "schedule-greeting-cron"
   | "mark-complete"
   | "notify-ops";
 
@@ -844,9 +819,8 @@ async function addCustomerToGatewayInner(
 
   markStep("finalize");
   adapter.log(
-    `✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms — scheduling greeting next`,
+    `✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms`,
   );
-  steps.push(...(await scheduleGreetingIfNeeded(adapter, uid, snapshot)));
   steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
 
   markStep("community-membership");
@@ -1343,47 +1317,7 @@ async function verifyChannelReady(
     );
   }
   adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
-  // The coach is running, so openclaw has created its store — retry the broker
-  // profiles the mount deferred, BEFORE the greeting turn needs them.
   await adapter.materializeBrokerProfiles?.(slug);
-}
-
-async function scheduleGreetingIfNeeded(
-  adapter: CustomerLifecycleAdapter,
-  uid: string,
-  snapshot: UserSnapshot,
-): Promise<AddCustomerStep[]> {
-  if (snapshot.greetingPosted) return [];
-  const { slug } = snapshot;
-  const accountId = `${slug}-coach`;
-  const agentId = `octogee-${slug}-coach`;
-  adapter.log(
-    `[add:${slug}] greeting-cron: scheduling boot-greeting via cron.add (agentId=${agentId} accountId=${accountId})`,
-  );
-  const startedAt = Date.now();
-  try {
-    const result = await adapter.scheduleBootGreetingCron({ slug, agentId, accountId });
-    const elapsed = Date.now() - startedAt;
-    await adapter.setGreetingResult(uid, { ok: true, jobId: result.jobId });
-    adapter.log(
-      `[add:${slug}] ✅ greeting-cron: scheduled (jobId=${result.jobId} elapsedMs=${elapsed}) — agent turn will fire shortly; check gateway logs for 'cron: job created' and the eventual announce delivery`,
-    );
-    try {
-      adapter.ensureBootGreetingFallback?.({ slug, uid });
-    } catch (fallbackError) {
-      adapter.log(
-        `[add:${slug}] ⚠ greeting fallback failed (non-fatal): ${String(fallbackError)}`,
-      );
-    }
-    return ["schedule-greeting-cron"];
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    adapter.log(
-      `[add:${slug}] ❌ greeting-cron: scheduleBootGreetingCron FAILED (fatal — mount will retry; provisioning stays incomplete): ${message}`,
-    );
-    await adapter.setGreetingResult(uid, { ok: false, error: message });
-    throw err;
-  }
 }
 
 async function markCompleteIfNeeded(

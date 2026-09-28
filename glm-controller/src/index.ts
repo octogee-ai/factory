@@ -2957,9 +2957,6 @@ export async function readMigrationUserSnapshot(
     repoUrl: stringAt(data, "provisioning.git.repoUrl"),
     mattermostUserId: stringAt(data, "mattermost.userId") || null,
     customerMmUserId: stringAt(data, "mattermost.userId") || null,
-    greetingPosted: Boolean(
-      (readPath(data, "provisioning.openclaw.greeting") as { ok?: unknown } | undefined)?.ok,
-    ),
     channels,
     projectCheckoutScope,
     projects,

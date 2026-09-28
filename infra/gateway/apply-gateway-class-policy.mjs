@@ -83,6 +83,7 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_chat_search",
   "octogee_chat_history",
   "octogee_chat_set_identity",
+  "octogee_connection_request",
   "octogee_status",
   "octogee_ask_ops",
   "octogee_google_calendar_events",
@@ -119,6 +120,7 @@ const PRODUCTIVITY_TOOL_NAMES = OCTOGEE_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 const PROJECT_AGENT_ALLOWED_TOOLS = [
   "octogee_chat_set_identity",
+  "octogee_connection_request",
   "octogee_ask_ops",
   "message",
   "read",

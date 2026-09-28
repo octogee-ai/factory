@@ -197,7 +197,6 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     provisionMattermost: vi.fn(async () => ({})),
     setMattermostFields: vi.fn(async () => undefined),
     ensureCommunityMembership: vi.fn(async () => undefined),
-    setGreetingResult: vi.fn(async () => undefined),
     setAgentIds: vi.fn(async () => undefined),
     setMounted: vi.fn(async () => undefined),
     reportProjectAgentReadiness: vi.fn(async () => undefined),
@@ -304,7 +303,6 @@ function aliceSnapshot(
     repoUrl: "",
     mattermostUserId: ALICE_OWNER_MM_ID,
     customerMmUserId: ALICE_OWNER_MM_ID,
-    greetingPosted: false,
     channels: [],
     projects: [],
     ownerName: "Alice",
@@ -2415,7 +2413,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [
         { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
       ],
@@ -2445,7 +2442,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Alice",
@@ -2799,7 +2795,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [
         { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" },
       ],
@@ -2844,7 +2839,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Alice",
@@ -2915,7 +2909,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Alice",
@@ -2966,7 +2959,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Alice",
@@ -3021,7 +3013,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Alice",
@@ -3124,7 +3115,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: FRESH_OWNER_MM_ID,
       customerMmUserId: FRESH_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Fresh",
@@ -3221,7 +3211,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: FRESH_OWNER_MM_ID,
       customerMmUserId: FRESH_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Fresh",
@@ -3540,7 +3529,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: FIRST_OWNER_MM_ID,
       customerMmUserId: FIRST_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       projectAgents: [
@@ -3655,7 +3643,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "https://gitea.test/octogee/alice-workspace.git",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [{ scope: "coach", kind: "direct", channelId: "dm-alice" }],
       projects: [],
       ownerName: "Alice",
@@ -3694,7 +3681,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Alice",
@@ -3750,7 +3736,6 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       repoUrl: "",
       mattermostUserId: null,
       customerMmUserId: null,
-      greetingPosted: false,
       channels: [],
       projects: [],
       ownerName: "Tester",
@@ -4097,7 +4082,6 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
       repoUrl: "",
       mattermostUserId: ALICE_OWNER_MM_ID,
       customerMmUserId: ALICE_OWNER_MM_ID,
-      greetingPosted: false,
       channels: [
         { scope: "workspace", kind: "general", channelId: "ws-1" },
         { scope: "project", projectId: "orbit", kind: "general", channelId: "po-1" },
@@ -4176,62 +4160,8 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
   });
 });
 
-describe("boot greeting scheduling", () => {
-  it("opens a greeting window on the reload gate before adding the cron job", async () => {
-    const order: string[] = [];
-    const window = { scheduled: vi.fn(() => { order.push("scheduled"); }), close: vi.fn() };
-    const reloadGate = {
-      withReload: vi.fn(async <T,>(run: () => Promise<T>) => run()),
-      openGreetingWindow: vi.fn(async () => { order.push("window"); return window; }),
-      greetingWindowCount: () => 0,
-    };
-    const rpc = mkGatewayRpc({
-      cronAdd: vi.fn(async () => { order.push("cron.add"); return { id: "job-1" }; }),
-    } as Partial<GatewayRpcClient>);
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient({ userSnapshot: vi.fn(async () => aliceSnapshot({
-        channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
-      })) }),
-      rpc,
-      log: vi.fn(),
-      reloadGate,
-    });
-    await expect(adapter.scheduleBootGreetingCron({
-      slug: "alice",
-      agentId: "octogee-alice-coach",
-      accountId: "alice-coach",
-    })).resolves.toEqual({ jobId: "job-1" });
-    expect(reloadGate.openGreetingWindow).toHaveBeenCalledWith("alice");
-    expect(order).toEqual(["window", "cron.add", "scheduled"]);
-    expect(window.close).not.toHaveBeenCalled();
-  });
+describe("credential runtime reload", () => {
 
-  it("closes the greeting window when cron.add fails", async () => {
-    const window = { scheduled: vi.fn(), close: vi.fn() };
-    const reloadGate = {
-      withReload: vi.fn(async <T,>(run: () => Promise<T>) => run()),
-      openGreetingWindow: vi.fn(async () => window),
-      greetingWindowCount: () => 0,
-    };
-    const rpc = mkGatewayRpc({
-      cronAdd: vi.fn(async () => { throw new Error("cron.add rejected"); }),
-    } as Partial<GatewayRpcClient>);
-    const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient({ userSnapshot: vi.fn(async () => aliceSnapshot({
-        channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
-      })) }),
-      rpc,
-      log: vi.fn(),
-      reloadGate,
-    });
-    await expect(adapter.scheduleBootGreetingCron({
-      slug: "alice",
-      agentId: "octogee-alice-coach",
-      accountId: "alice-coach",
-    })).rejects.toThrow("cron.add rejected");
-    expect(window.close).toHaveBeenCalledOnce();
-    expect(window.scheduled).not.toHaveBeenCalled();
-  });
 
   it("routes the credential re-assert's secrets reload through the adapter rpc", async () => {
     const rpc = mkGatewayRpc({

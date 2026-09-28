@@ -5,7 +5,6 @@ import type {
   FleetBrokerBuilderRuntimeStateSnapshotUrls,
   BuilderRuntimeStateRecoveryTier,
   FleetBrokerConfiguredBuilderBootstrap,
-  FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerNpmRegistryCredentials,
   FleetBrokerOpenClawBootClaim,
@@ -121,7 +120,6 @@ export interface FleetBrokerClient {
   provisionMattermost(uid: string): Promise<FleetBrokerMattermostUpdate>;
   setMattermostFields(uid: string, mmUpdate: FleetBrokerMattermostUpdate): Promise<void>;
   ensureCommunityMembership(uid: string): Promise<void>;
-  setGreetingResult(uid: string, result: FleetBrokerGreetingResult): Promise<void>;
   setAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
   reportProjectAgentReadiness(uid: string, projects: FleetBrokerProjectAgentReadiness[]): Promise<void>;
@@ -374,13 +372,6 @@ export function createFleetBrokerClient(
     },
     ensureCommunityMembership(uid) {
       return postNoContent("/internal/fleet/ensure-community-membership", { gatewayId, uid });
-    },
-    setGreetingResult(uid, result) {
-      return postNoContent("/internal/fleet/set-greeting-result", {
-        gatewayId,
-        uid,
-        result,
-      });
     },
     setAgentIds(uid, agentIds) {
       return postNoContent("/internal/fleet/set-agent-ids", { gatewayId, uid, agentIds });

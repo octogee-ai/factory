@@ -60,7 +60,6 @@ import type {
   FleetBrokerConfiguredBuilderBootstrap,
   FleetBrokerConfiguredBuilderProjectCredential,
   FleetBrokerCustomerRuntimeReset,
-  FleetBrokerGreetingResult,
   FleetBrokerMattermostUpdate,
   FleetBrokerNpmRegistryCredentials,
   FleetBrokerPreStopFlushEvent,
@@ -655,14 +654,6 @@ function isDurableGatewayRoot(
 
 function isProvisioningStatus(value: unknown): value is Exclude<FleetBrokerProvisioningStatus, ""> {
   return value === "provisioning" || value === "complete";
-}
-
-function isGreetingResult(value: unknown): value is FleetBrokerGreetingResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const v = value as Record<string, unknown>;
-  if (v.ok === true) return typeof v.jobId === "string" && v.jobId.length > 0;
-  if (v.ok === false) return typeof v.error === "string" && v.error.length > 0;
-  return false;
 }
 
 function validAgentIds(value: unknown): string[] | null {
@@ -1482,10 +1473,6 @@ function snapshotOnboardingVibe(data: Record<string, unknown>): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function snapshotGreetingPosted(data: Record<string, unknown>): boolean {
-  const greeting = readPath(data, "provisioning.openclaw.greeting");
-  return Boolean((greeting as { ok?: unknown } | undefined)?.ok);
-}
 
 type StoredRuntimeReset = FleetBrokerCustomerRuntimeReset | (
   Omit<FleetBrokerCustomerRuntimeReset, "status"> & {
@@ -1578,7 +1565,6 @@ function snapshotBaseFields(
     mattermostUserId,
     customerMmUserId: mattermostUserId,
     ...pickPlanInputs(data),
-    greetingPosted: snapshotGreetingPosted(data),
     ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
     email: stringAt(data, "email"),
     displayName: stringAt(data, "displayName"),
@@ -2468,25 +2454,6 @@ function installProvisioningRoutes(
       if (mmUserId) {
         await ensureCommunityMembership({ mmUserId });
       }
-      res.status(204).end();
-    });
-  });
-
-  router.post("/set-greeting-result", async (req, res) => {
-    const assigned = await requireAssignedUser(db, req, res);
-    if (!assigned) return;
-    const result = objectBody(req).result;
-    if (!isGreetingResult(result)) {
-      res.status(400).json({ error: "invalid_greeting_result" });
-      return;
-    }
-    const greeting = result.ok
-      ? { ok: true, jobId: result.jobId, at: FieldValue.serverTimestamp() }
-      : { ok: false, error: result.error, at: FieldValue.serverTimestamp() };
-    await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.openclaw.greeting": greeting,
-      });
       res.status(204).end();
     });
   });

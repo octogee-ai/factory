@@ -41,7 +41,6 @@ function snapshot(projects: FleetBrokerProjectRestore[]): FleetBrokerUserSnapsho
     repoUrl: "",
     mattermostUserId: null,
     customerMmUserId: null,
-    greetingPosted: false,
     channels: [],
     projects,
     ownerName: "Alice",

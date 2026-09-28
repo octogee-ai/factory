@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { realpathSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -304,7 +304,7 @@ function fixture() {
 }
 
 function run(root: string, gatewayClass: "shared" | "builder", scriptPath = script) {
-  return spawnSync("node", [scriptPath], {
+  return spawnSync("node", [realpathSync(scriptPath)], {
     encoding: "utf8",
     env: { ...process.env, OPENCLAW_DIR: root, GATEWAY_CLASS: gatewayClass },
   });

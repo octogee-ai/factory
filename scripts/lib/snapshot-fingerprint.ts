@@ -23,7 +23,7 @@ import { projectCheckoutEnabled } from "../../shared/types/project.js";
 // and a repo RENAME is not: cloneProjectRepo skips any path that already has a .git, so
 // calling a rename "drift" would only record a fresh fingerprint over a stale checkout.
 //
-// Deliberately EXCLUDES fields the ensure never reads (status, greeting, repoUrl,
+// Deliberately EXCLUDES fields the ensure never reads (status, repoUrl,
 // email, ownerName, …) so routine snapshot churn does not trigger needless re-ensures.
 
 function compareStrings(a: string, b: string): number {

@@ -24,7 +24,6 @@ const SNAPSHOT: FleetBrokerUserSnapshot = {
   repoUrl: "git@gitea:octogee/alice.git",
   mattermostUserId: "mm-alice",
   customerMmUserId: "mm-alice",
-  greetingPosted: true,
   channels: [],
   projects: [],
   ownerName: "Alice",

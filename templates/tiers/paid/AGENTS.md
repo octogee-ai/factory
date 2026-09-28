@@ -156,7 +156,7 @@ Skills describe tools.
   `octogee_project_preview`, `octogee_project_run_status`.
 - Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
 - Delivery: `workspace_commit`; `octogee_project_publish` successful builds after Builder approval.
-- Account: `octogee_status`.
+- Account: `octogee_status`; `octogee_connection_request` offers owner-only connection setup.
 - Google (bearer-blind): `octogee_google_calendar_events`/`octogee_google_calendar_create`/`octogee_google_calendar_create_approved`/`octogee_google_calendar_update`/`octogee_google_calendar_update_approved`/`octogee_google_calendar_delete`/`octogee_google_calendar_delete_approved`,
   `octogee_google_gmail_search`/`octogee_google_gmail_get`/`octogee_google_gmail_triage`/`octogee_google_gmail_triage_approved`/`octogee_google_gmail_draft_create`/`octogee_google_gmail_draft_create_approved`/`octogee_google_gmail_draft_send`/`octogee_google_gmail_draft_send_approved`, `octogee_google_drive_read`,
   `octogee_google_docs_read`/`octogee_google_docs_write`,

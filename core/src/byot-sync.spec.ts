@@ -928,6 +928,7 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
         "octogee_chat_search",
         "octogee_chat_history",
         "octogee_chat_set_identity",
+        "octogee_connection_request",
         "octogee_ask_ops",
         "octogee_google_calendar_events",
         "octogee_google_calendar_create",

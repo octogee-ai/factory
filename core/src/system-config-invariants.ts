@@ -231,6 +231,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
   "octogee_chat_search",
   "octogee_chat_history",
   "octogee_chat_set_identity",
+  "octogee_connection_request",
   "octogee_status",
   "octogee_ask_ops",
   "octogee_google_calendar_events",
@@ -269,6 +270,7 @@ export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) =>
 
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
   "octogee_chat_set_identity",
+  "octogee_connection_request",
   "octogee_ask_ops",
   "message",
   "read",

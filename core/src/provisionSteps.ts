@@ -322,7 +322,7 @@ export async function markProvisioningComplete(
   mmUpdate: MmUpdate,
   allAgentIds: string[],
 ): Promise<void> {
-  const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds, mmUpdate);
+  const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds);
 
   await writeSystemConfig(ctx);
   await writeUserOperationalFields(ctx, provisioningObj, mmUpdate);
@@ -337,7 +337,6 @@ export async function markProvisioningComplete(
 function buildProvisioningSnapshot(
   ctx: ProvisioningContext,
   allAgentIds: string[],
-  mmUpdate: MmUpdate,
 ): Record<string, unknown> {
   const provisioningObj: Record<string, unknown> = {
     status: "complete",
@@ -348,9 +347,6 @@ function buildProvisioningSnapshot(
     customerDir: ctx.customerDir,
     provisionedAt: FieldValue.serverTimestamp(),
   };
-
-  const greeting = mmUpdate["provisioning.openclaw.greeting"];
-  if (greeting) provisioningObj.greeting = greeting;
 
   return provisioningObj;
 }

@@ -14,7 +14,6 @@ import {
   OPENCLAW_DIR,
 } from "../lib/config.js";
 import { createGatewayRpc } from "../lib/gateway-rpc.js";
-import { gateRuntimeReloads, processRuntimeReloadGate } from "../lib/runtime-reload-gate.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import { flushCustomerFiles } from "../lib/customer-file-state.js";
 import {
@@ -275,10 +274,7 @@ export function createFleetControllerMutationGatedRpc(
         callTimeoutMs: FLEET_CONTROLLER_MUTATION_CALL_TIMEOUT_MS,
         connectTimeoutMs: CONFIG_RELOAD_DEADLINE_MS,
       });
-  return gateRuntimeReloads(
-    createSystemConfigMutationGatedRpc(runtimeRpc, openclawDir),
-    processRuntimeReloadGate,
-  );
+  return createSystemConfigMutationGatedRpc(runtimeRpc, openclawDir);
 }
 
 async function main(): Promise<void> {
@@ -298,7 +294,6 @@ async function main(): Promise<void> {
     client: brokerClient,
     rpc,
     log,
-    reloadGate: processRuntimeReloadGate,
     isBuilderGateway,
     projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
   });

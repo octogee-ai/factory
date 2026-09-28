@@ -199,22 +199,7 @@ expect(user?.provisioning?.openclaw?.status).toBe("provisioning");
     });
   });
 
-  it("writes provisioning.openclaw.greeting onto the user doc when present", async () => {
-    const { uid, slug } = freshIds();
-    await seedUser(uid, { username: slug });
 
-    await markProvisioningComplete(
-      baseCtx(uid, slug),
-      {
-        ...fullMmUpdate(slug),
-        "provisioning.openclaw.greeting": { ok: true, postId: "post-1", at: 1700000000000 },
-      },
-      [],
-    );
-
-    const user = await readDoc(`users/${uid}`);
-    expect(user?.provisioning?.openclaw?.greeting).toMatchObject({ ok: true, postId: "post-1" });
-  });
 });
 
 describe("markProvisioningComplete — workspace doc + channels + members", () => {

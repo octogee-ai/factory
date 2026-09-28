@@ -182,7 +182,7 @@ export function wireCoachMattermostBindings(config, coachAgentId, slug, mmUpdate
     }
 }
 export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
-    const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds, mmUpdate);
+    const provisioningObj = buildProvisioningSnapshot(ctx, allAgentIds);
     await writeSystemConfig(ctx);
     await writeUserOperationalFields(ctx, provisioningObj, mmUpdate);
     await writeWorkspaceDoc(ctx, mmUpdate);
@@ -192,7 +192,7 @@ export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
     registerAgentIds(ctx.uid, allAgentIds);
     await updateUserWorkspaceEntry(ctx, provisioningObj);
 }
-function buildProvisioningSnapshot(ctx, allAgentIds, mmUpdate) {
+function buildProvisioningSnapshot(ctx, allAgentIds) {
     const provisioningObj = {
         status: "complete",
         version: "v1",
@@ -202,9 +202,6 @@ function buildProvisioningSnapshot(ctx, allAgentIds, mmUpdate) {
         customerDir: ctx.customerDir,
         provisionedAt: FieldValue.serverTimestamp(),
     };
-    const greeting = mmUpdate["provisioning.openclaw.greeting"];
-    if (greeting)
-        provisioningObj.greeting = greeting;
     return provisioningObj;
 }
 async function writeSystemConfig(ctx) {

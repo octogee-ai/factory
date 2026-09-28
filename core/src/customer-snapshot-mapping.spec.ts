@@ -39,7 +39,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
             gatewayId: "gw-3",
             status: "complete",
             agentIds: ["octogee-acme-coach"],
-            greeting: { ok: true },
           },
           git: { repoUrl: "git@x:acme.git" },
         },
@@ -55,7 +54,6 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
       agentIds: ["octogee-acme-coach"],
       repoUrl: "git@x:acme.git",
       mattermostUserId: "mm-1",
-      greetingPosted: true,
       channels: ch,
       ownerName: "Acme Inc",
       byotActive: false,
@@ -80,20 +78,15 @@ describe("mapUserDocToSnapshot — users/{uid} doc → UserSnapshot", () => {
     expect(mapUserDocToSnapshot("u", { provisioning: { openclaw: { slug: "sluggy" } } }, ch).ownerName).toBe("sluggy");
   });
 
-  it("defaults: gatewayId '', status '', agentIds [], repoUrl '', mattermostUserId null, greetingPosted false", () => {
+  it("defaults: gatewayId '', status '', agentIds [], repoUrl '', mattermostUserId null", () => {
     const s = mapUserDocToSnapshot("u", { username: "a" }, ch);
     expect(s.gatewayId).toBe("");
     expect(s.status).toBe("");
     expect(s.agentIds).toEqual([]);
     expect(s.repoUrl).toBe("");
     expect(s.mattermostUserId).toBeNull();
-    expect(s.greetingPosted).toBe(false);
   });
 
-  it("greetingPosted is Boolean(openclaw.greeting.ok) — false when ok:false or absent", () => {
-    expect(mapUserDocToSnapshot("u", { username: "a", provisioning: { openclaw: { greeting: { ok: false } } } }, ch).greetingPosted).toBe(false);
-    expect(mapUserDocToSnapshot("u", { username: "a", provisioning: { openclaw: { greeting: {} } } }, ch).greetingPosted).toBe(false);
-  });
 
   it("passes channels through unchanged and throws on no-slug", () => {
     const channels = [{ scope: "workspace" as const, kind: "general", channelId: "C1" }];

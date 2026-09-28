@@ -158,7 +158,7 @@ export function deriveSlug(uid: string, data: Record<string, unknown>): string {
 
 function snapshotProvisioning(data: Record<string, unknown>): Pick<
   UserSnapshot,
-  "gatewayId" | "status" | "agentIds" | "repoUrl" | "greetingPosted"
+  "gatewayId" | "status" | "agentIds" | "repoUrl"
 > {
   const oc = (data.provisioning as { openclaw?: Record<string, unknown> } | undefined)?.openclaw;
   const git = (data.provisioning as { git?: Record<string, unknown> } | undefined)?.git;
@@ -167,7 +167,6 @@ function snapshotProvisioning(data: Record<string, unknown>): Pick<
     status: ((oc?.status as string | undefined) ?? "") as UserSnapshot["status"],
     agentIds: (oc?.agentIds as string[] | undefined) ?? [],
     repoUrl: (git?.repoUrl as string | undefined) ?? "",
-    greetingPosted: Boolean((oc?.greeting as { ok?: boolean } | undefined)?.ok),
   };
 }
 

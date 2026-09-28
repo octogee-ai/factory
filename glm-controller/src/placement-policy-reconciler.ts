@@ -2104,13 +2104,6 @@ async function reconcilePlacementUser(
   await reconcileEligibleBuilder(context, user, eligibility.slug);
 }
 
-function coachGreetingDelivered(data: Record<string, unknown>): boolean {
-  return record(record(record(data.provisioning)?.openclaw)?.greeting)?.ok === true;
-}
-
-// `greeting.ok` is the scheduling receipt, not delivery; the cron fires and retries
-// within about a minute, so a Builder is settled once the greeting was scheduled AND
-// its assignment has been serving for the stability window.
 function settledSharedAssignment(
   assignment: PlacementPolicyAssignment,
   now: number,
@@ -2126,7 +2119,7 @@ function sharedRebalanceBuilder(
   scheduled: ReadonlySet<string>,
 ): { uid: string; builderSlug: string; sourceAssignmentEpoch: number; settledAt: number } | null {
   if (scheduled.has(user.uid) || currentGatewayId(user.data) !== fromGatewayId) return null;
-  if (!coachGreetingDelivered(user.data)) return null;
+  if (record(record(user.data.provisioning)?.openclaw)?.status !== "complete") return null;
   const lease = builderActivationLease(user.data);
   if (lease && LIVE_LEASE_STATUSES.has(lease.status)) return null;
   const eligibility = resolveOnboardingPlacementEligibility(user.data);

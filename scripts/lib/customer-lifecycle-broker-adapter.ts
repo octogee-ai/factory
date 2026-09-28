@@ -134,8 +134,6 @@ import {
   rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
-import { scheduleBootGreetingCron as scheduleBootGreetingCronImpl } from "./boot-greeting-cron.js";
-import { processRuntimeReloadGate, type RuntimeReloadGate } from "./runtime-reload-gate.js";
 import { createSurgeOpenClawProcessSupervisorClient } from "./surge-openclaw-process-gate.js";
 import {
   customerMountConfigPatch,
@@ -246,14 +244,12 @@ interface BuildBrokeredLifecycleAdapterOptions {
   log: (msg: string) => void;
   isBuilderGateway?: () => boolean;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
-  reloadGate?: RuntimeReloadGate;
   procRoot?: string;
 }
 
 interface BrokerCtx {
   client: FleetBrokerClient;
   rpc: GatewayRpcClient;
-  reloadGate: RuntimeReloadGate;
   log: (msg: string) => void;
   isBuilderGateway: () => boolean;
   configCache: ConfigCache;
@@ -464,7 +460,6 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     agentIds: snapshot.agentIds,
     repoUrl: snapshot.repoUrl,
     mattermostUserId: snapshot.mattermostUserId,
-    greetingPosted: snapshot.greetingPosted,
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
     projectCheckoutScope: snapshot.projectCheckoutScope,
@@ -1290,31 +1285,6 @@ async function logActivatedCoachModel(ctx: BrokerCtx, slug: string): Promise<voi
   }
 }
 
-async function scheduleBootGreetingCron(
-  ctx: BrokerCtx,
-  params: { slug: string; agentId: string; accountId: string },
-): Promise<{ jobId: string }> {
-  const snapshot = await snapshotForSlug(ctx, params.slug);
-  const channelId = snapshot?.channels.find(
-    (ch) => ch.scope === "workspace" && ch.kind === "coach-dm",
-  )?.channelId;
-  if (!channelId) {
-    throw new Error(`[cron.add:${params.slug}] fleet broker snapshot has no coach-dm channel`);
-  }
-  const greetingWindow = await ctx.reloadGate.openGreetingWindow(params.slug);
-  try {
-    const scheduled = await scheduleBootGreetingCronImpl(
-      { ...params, channelId },
-      { rpc: ctx.rpc, log: ctx.log },
-    );
-    greetingWindow.scheduled();
-    return scheduled;
-  } catch (error) {
-    greetingWindow.close();
-    throw error;
-  }
-}
-
 async function quiesceCustomer(
   ctx: BrokerCtx,
   slug: string,
@@ -1757,7 +1727,6 @@ export function buildBrokeredLifecycleAdapter(
   const ctx: BrokerCtx = {
     client: opts.client,
     rpc: opts.rpc,
-    reloadGate: opts.reloadGate ?? processRuntimeReloadGate,
     log: opts.log,
     isBuilderGateway: opts.isBuilderGateway ?? (() => false),
     configCache: { current: undefined, hash: "" },
@@ -1824,10 +1793,6 @@ export function buildBrokeredLifecycleAdapter(
       await opts.client.setMattermostFields(uid, mmUpdate);
       invalidateSnapshot(ctx, uid);
     },
-    setGreetingResult: async (uid, result) => {
-      await opts.client.setGreetingResult(uid, result);
-      invalidateSnapshot(ctx, uid);
-    },
     setAgentIds: async (uid, agentIds) => {
       await opts.client.setAgentIds(uid, agentIds);
       invalidateSnapshot(ctx, uid);
@@ -1879,7 +1844,6 @@ export function buildBrokeredLifecycleAdapter(
     },
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
-    scheduleBootGreetingCron: (params) => scheduleBootGreetingCron(ctx, params),
     applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
       applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts),
     reconcileConfiguredBuilderProjectAgents: (snapshot, options) =>

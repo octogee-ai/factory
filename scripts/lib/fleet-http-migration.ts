@@ -664,7 +664,6 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     repoUrl: typeof snapshot.repoUrl === "string" ? snapshot.repoUrl : "",
     mattermostUserId:
       typeof snapshot.mattermostUserId === "string" ? snapshot.mattermostUserId : null,
-    greetingPosted: snapshot.greetingPosted === true,
     channels: Array.isArray(snapshot.channels) ? snapshot.channels as UserSnapshot["channels"] : [],
     ownerName: typeof snapshot.ownerName === "string" ? snapshot.ownerName : body.slug,
     projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],

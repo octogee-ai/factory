@@ -128,7 +128,6 @@ function snapshotProvisioning(data) {
         status: (oc?.status ?? ""),
         agentIds: oc?.agentIds ?? [],
         repoUrl: git?.repoUrl ?? "",
-        greetingPosted: Boolean(oc?.greeting?.ok),
     };
 }
 function snapshotIdentity(data, slug) {

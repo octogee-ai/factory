@@ -16,7 +16,6 @@ function snap(over: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnaps
     repoUrl: "https://gitea/alice",
     mattermostUserId: "mm-alice",
     customerMmUserId: "mm-alice",
-    greetingPosted: true,
     channels: [
       { scope: "workspace", kind: "general", channelId: "wsgen" },
       { scope: "project", kind: "general", channelId: "projgen", projectId: "camp" },
@@ -43,7 +42,6 @@ describe("snapshotConfigFingerprint", () => {
 
   it("ignores fields that do not affect the generated gateway config", () => {
     const base = snapshotConfigFingerprint(snap());
-    expect(snapshotConfigFingerprint(snap({ greetingPosted: false }))).toBe(base);
     expect(snapshotConfigFingerprint(snap({ status: "provisioning" }))).toBe(base);
     expect(snapshotConfigFingerprint(snap({ repoUrl: "https://other" }))).toBe(base);
     expect(snapshotConfigFingerprint(snap({ email: "new@example.com" }))).toBe(base);

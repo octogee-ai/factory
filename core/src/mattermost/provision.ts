@@ -357,12 +357,6 @@ async function createCoachBot(input: {
     return { coachUserId: coachMmUser.id, personalToken: null };
   }
   log(`[mattermost] coach PAT minted and persisted for ${coachUsername}`);
-  // NOTE: The onboarding greeting used to post HERE, inline after the PAT
-  // mint. That ordering was wrong — it fired before the coach agent was bound
-  // in openclaw.json, so any reply the Builder sent to the greeting hit an
-  // unmounted coach. The post + its outcome mirror are now owned by
-  // `provisionCustomer` (workspace.ts), which runs them AFTER `applyConfigPatch`
-  // lands the binding. Guarded by provisioner-greeting-ordering.spec.ts.
   return { coachUserId: coachMmUser.id, personalToken: coachToken.token };
 }
 
@@ -427,12 +421,6 @@ function buildResultMap(args: {
     "mattermost.proxyUrl": process.env.API_PUBLIC_URL || "",
     ...(coach.coachUserId ? { "mattermost.coachUserId": coach.coachUserId } : {}),
     ...(coach.personalToken ? { _coachPersonalToken: coach.personalToken } : {}),
-    // The boot-greeting outcome key is owned by the customer-lifecycle
-    // orchestrator — it schedules the cron AFTER verify-channel-ready passes
-    // and persists the cron jobId. Letting the schedule live here would
-    // re-open the ordering race the cron cutover closed (greeting fires before
-    // the coach agent is bound). See the regression guard in
-    // scripts/__tests__/provisioner-greeting-ordering.spec.ts.
   };
 }
 

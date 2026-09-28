@@ -370,7 +370,6 @@ export {
 export type {
   FleetBrokerProvisioningStatus,
   FleetBrokerMattermostUpdate,
-  FleetBrokerGreetingResult,
   FleetBrokerChannelBinding,
   FleetBrokerProjectCheckoutScope,
   FleetBrokerProjectRestore,

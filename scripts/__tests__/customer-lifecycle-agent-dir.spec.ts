@@ -37,7 +37,6 @@ const userSnapshot: UserSnapshot = {
   agentIds: [],
   repoUrl: "",
   mattermostUserId: ALICE_MM_USER_ID,
-  greetingPosted: false,
   channels: [],
   ownerName: "Alice",
 };
@@ -60,7 +59,6 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
     setRepoUrl: vi.fn(async () => undefined),
     provisionMattermost: vi.fn(async () => ({})),
     setMattermostFields: vi.fn(async () => undefined),
-    setGreetingResult: vi.fn(async () => undefined),
     setAgentIds: vi.fn(async () => undefined),
     setMounted: vi.fn(async () => undefined),
     recordReconcileError: vi.fn(async () => undefined),

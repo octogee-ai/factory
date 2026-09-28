@@ -69,9 +69,6 @@ giteaReleaseShouldFail?: boolean;
   cloneProjectThrows?: boolean;
   cloneProjectLands?: boolean;
 
-  lastGreetingCronParams: unknown;
-  
-  greetingCronShouldFail: boolean;
 }
 
 function deferredFlag(): { value: boolean } {
@@ -95,8 +92,6 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     setProvisioningStatus: async (_uid, status) => write("provisioning.openclaw.status", status),
     setRepoUrl: async (_uid, repoUrl) => write("provisioning.git.repoUrl", repoUrl),
     setMattermostFields: async (_uid, fields) => write("mattermost.*", fields),
-    setGreetingResult: async (_uid, result) =>
-      write("provisioning.openclaw.greeting", result),
     setAgentIds: async (_uid, agentIds) =>
       write("provisioning.openclaw.agentIds", agentIds),
 
@@ -228,15 +223,6 @@ return "ssh-pubkey";
       };
       return update;
     },
-    scheduleBootGreetingCron: async (params) => {
-      record("scheduleBootGreetingCron");
-      state.lastGreetingCronParams = params;
-      if (state.greetingCronShouldFail) {
-        throw new Error("cron.add rejected: simulated failure");
-      }
-      return { jobId: "cron-job-abc" };
-    },
-
     applyAddCustomerConfigPatch: async (_snap, _mm, opts) => {
       record("applyAddCustomerConfigPatch");
       state.lastConfigPatchOpts = opts;
@@ -283,7 +269,6 @@ function snap(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
     agentIds: [],
     repoUrl: "",
     mattermostUserId: null,
-    greetingPosted: false,
     channels: [],
     ownerName: "Test User",
     projectCheckoutScope: "workspace-and-projects",
@@ -320,8 +305,6 @@ function makeState(snapshot: UserSnapshot | null, disk: DiskState): MockState {
     cloneProjectCalls: [],
     configPatchWithoutProjectIds: [],
     logs: [],
-    lastGreetingCronParams: undefined,
-    greetingCronShouldFail: false,
   };
 }
 
@@ -346,7 +329,6 @@ function mountedSnapshot(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
     status: "complete",
     repoUrl: "http://gitea/octogee/test-workspace",
     mattermostUserId: "mm-user",
-    greetingPosted: true,
     ...overrides,
   });
 }
@@ -355,6 +337,13 @@ describe("addCustomerToGateway — first-time provisioning", () => {
   let state: MockState;
   beforeEach(() => {
     state = makeState(snap({ status: "" }), emptyDisk());
+  });
+
+  it("completes a new workspace after channel verification without posting a greeting", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(state.writes).toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
+    expect(state.writes.some((write) => write.field.includes("greeting"))).toBe(false);
   });
 
   it("runs the full first-time flow and writes Firestore in canonical order", async () => {
@@ -372,7 +361,6 @@ expect(result.steps).toEqual([
       "verify-channel-ready",
       "byot-reassert",
       "context-files-reassert",
-      "schedule-greeting-cron",
       "mark-complete",
       "blob-sync",
       "notify-ops",
@@ -390,7 +378,7 @@ expect(result.steps).toEqual([
     expect(reassertIndex).toBeGreaterThan(verifyIndex);
   });
 
-  it("greets and marks the Builder complete before community membership, blob sync and the ops notice", async () => {
+  it("marks the Builder complete before community membership, blob sync and the ops notice", async () => {
     const adapter = {
       ...makeAdapter(state),
       reconcileCommunityMembership: async () => {
@@ -399,13 +387,13 @@ expect(result.steps).toEqual([
     };
     await addCustomerToGateway(adapter, "uid-test");
 
-    const greetingIdx = state.calls.indexOf("scheduleBootGreetingCron");
+    const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
     const completeIdx = state.calls.indexOf("write:provisioning.openclaw.status");
     const completeAt = state.calls.lastIndexOf("write:provisioning.openclaw.status");
     expect(state.writes.filter((w) => w.field === "provisioning.openclaw.status").map((w) => w.value))
       .toEqual(["provisioning", "complete"]);
-    expect(completeIdx).toBeLessThan(greetingIdx);
-    expect(completeAt).toBeGreaterThan(greetingIdx);
+    expect(completeIdx).toBeLessThan(verifyIdx);
+    expect(completeAt).toBeGreaterThan(verifyIdx);
     for (const later of ["reconcileCommunityMembership", "blobSyncForSlug", "notifyOpsOfSignup"]) {
       expect(state.calls.indexOf(later), later).toBeGreaterThan(completeAt);
     }
@@ -499,19 +487,15 @@ expect(result.steps).toEqual([
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 
-  // The mount's first materialization can run before openclaw has created the
-  // agent store, so it may defer. Retrying here — after the coach reports
-  // running+connected — is what gets the broker profile in place before the
-  // greeting turn resolves its model.
-  it("retries the deferred broker profiles once the coach is verified, before the greeting", async () => {
+  it("retries the deferred broker profiles once the coach is verified, before marking the workspace complete", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
     const materializeIdx = state.calls.lastIndexOf("materializeBrokerProfiles");
-    const greetingIdx = state.calls.indexOf("scheduleBootGreetingCron");
+    const completeIdx = state.calls.lastIndexOf("write:provisioning.openclaw.status");
 
     expect(materializeIdx).toBeGreaterThan(verifyIdx);
-    expect(greetingIdx).toBeGreaterThan(materializeIdx);
+    expect(completeIdx).toBeGreaterThan(materializeIdx);
   });
 
   it("ensures the per-workspace Gitea org BEFORE the workspace repo (#963)", async () => {
@@ -725,74 +709,14 @@ it("re-mount over a healthy on-disk cred: byosActive stays true (no model clobbe
     expect(state.writes.find((w) => w.field === "provisioning.git.repoUrl")).toBeUndefined();
   });
 
-  it("schedules the boot-greeting cron once and persists the job id", async () => {
-    await addCustomerToGateway(makeAdapter(state), "uid-test");
-
-    expect(state.calls).toContain("scheduleBootGreetingCron");
-    expect(state.lastGreetingCronParams).toMatchObject({
-      slug: "test",
-      agentId: "octogee-test-coach",
-      accountId: "test-coach",
-    });
-    const greetWrite = state.writes.find(
-      (w) => w.field === "provisioning.openclaw.greeting",
-    );
-    expect(greetWrite?.value).toMatchObject({ ok: true, jobId: "cron-job-abc" });
-  });
-
-  it("only schedules the greeting cron AFTER the channel reports ready", async () => {
-    await addCustomerToGateway(makeAdapter(state), "uid-test");
-
-    const verifyIdx = state.calls.indexOf("waitForAccountHealthy");
-    const cronIdx = state.calls.indexOf("scheduleBootGreetingCron");
-    expect(verifyIdx).toBeGreaterThan(-1);
-    expect(cronIdx).toBeGreaterThan(verifyIdx);
-  });
-
-  it("keeps a successful greeting schedule non-fatal when its fallback throws", async () => {
-    const adapter = {
-      ...makeAdapter(state),
-      ensureBootGreetingFallback: () => {
-        throw new Error("fallback failed");
-      },
-    };
-
-    const result = await addCustomerToGateway(adapter, "uid-test");
-
-    expect(result.steps).toContain("schedule-greeting-cron");
-    expect(
-      state.writes.find(
-        (w) => w.field === "provisioning.openclaw.status" && w.value === "complete",
-      ),
-    ).toBeDefined();
-    expect(
-      state.writes.find((w) => w.field === "provisioning.openclaw.greeting")?.value,
-    ).toMatchObject({ ok: true, jobId: "cron-job-abc" });
-  });
-
   it("aborts loudly if the channel never reaches running+connected (no half-mounts)", async () => {
     state.healthy = false;
     await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
       /didn't reach running\+connected/,
     );
     expect(state.calls).toContain("waitForAccountHealthy");
-    expect(state.calls).not.toContain("scheduleBootGreetingCron");
     
     expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
-  });
-
-  it("throws on greeting cron failure so the fleet retries the whole mount", async () => {
-    state.greetingCronShouldFail = true;
-    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow(
-      /cron\.add rejected/,
-    );
-
-    const greetWrite = state.writes.find(
-      (w) => w.field === "provisioning.openclaw.greeting",
-    );
-    expect(greetWrite?.value).toMatchObject({ ok: false });
-    expect(state.writes.find((w) => w.field === "provisioning.openclaw.status" && w.value === "complete")).toBeUndefined();
-    expect(state.calls).not.toContain("notifyOpsOfSignup");
   });
 
   it("notifies ops on first-time provision only", async () => {
@@ -811,7 +735,6 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       emptyDisk(),
     );
@@ -832,11 +755,10 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     expect(state.calls).toContain("writeCustomerTemplateFiles");
   });
 
-  it("does NOT re-provision Mattermost or re-schedule the greeting cron", async () => {
+  it("does NOT re-provision Mattermost", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(state.calls).not.toContain("provisionMattermostUser");
-    expect(state.calls).not.toContain("scheduleBootGreetingCron");
     expect(state.calls).not.toContain("notifyOpsOfSignup");
   });
 
@@ -900,7 +822,6 @@ if (ensureIdx !== -1) {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       });
       return result;
     };
@@ -922,7 +843,6 @@ const state = makeState(
         agentIds: ["octogee-test-coach"],
         repoUrl: "",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: false },
     );
@@ -943,7 +863,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: false },
     );
@@ -965,7 +884,6 @@ const state = makeState(
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       emptyDisk(),
     );
@@ -990,7 +908,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
       agentIds: ["octogee-test-coach"],
       repoUrl: "http://gitea/octogee/test-workspace",
       mattermostUserId: "mm-user-existing",
-      greetingPosted: true,
       projectAgents: [{ projectId: "launchroom", enabled: true, mmUserId: "project-bot", token: "project-pat" }],
     }), {
       customerDir: true,
@@ -1081,7 +998,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1118,7 +1034,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1159,7 +1074,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1192,7 +1106,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1226,7 +1139,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1263,7 +1175,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1296,7 +1207,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1340,7 +1250,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       emptyDisk(),
     );
@@ -1364,7 +1273,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       emptyDisk(), // fresh PVC — no SSH key, no workspace, nothing
     );
@@ -1390,7 +1298,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       emptyDisk(),
     );
@@ -1412,7 +1319,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1445,7 +1351,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1474,7 +1379,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1506,7 +1410,6 @@ describe("addCustomerToGateway — idempotent re-add", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user-existing",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -1527,7 +1430,6 @@ describe("addCustomerToGateway — idempotent re-add", () => {
     expect(result.steps).not.toContain("init-workspace-repo");
     expect(result.steps).not.toContain("ssh-key");
     expect(result.steps).not.toContain("mattermost-provision");
-    expect(result.steps).not.toContain("schedule-greeting-cron");
     expect(result.steps).not.toContain("notify-ops");
     expect(result.steps).toContain("blob-sync");
     expect(result.steps).toContain("config-patch");
@@ -1543,7 +1445,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       emptyDisk(),
     );
@@ -1594,7 +1495,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -1624,7 +1524,6 @@ expect(state.calls).toContain("createGiteaUser");
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -1652,7 +1551,6 @@ expect(state.calls).toContain("createGiteaUser");
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -1677,7 +1575,6 @@ expect(state.calls).toContain("createGiteaUser");
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -1704,7 +1601,6 @@ expect(state.calls).toContain("createGiteaUser");
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -1759,7 +1655,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -1874,7 +1769,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
         projectCheckoutScope: "workspace-only",
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
@@ -1894,7 +1788,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
     );
@@ -1913,7 +1806,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
     );
@@ -1939,7 +1831,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
     );
@@ -1962,7 +1853,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
     );
@@ -1981,7 +1871,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true },
     );
@@ -2000,7 +1889,6 @@ const state = makeState(
         status: "complete",
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         ...emptyDisk(),
@@ -2037,7 +1925,6 @@ describe("removeCustomerFromGateway", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -2166,7 +2053,6 @@ describe("unmount + re-add round trip", () => {
         agentIds: ["octogee-test-coach"],
         repoUrl: "http://gitea/octogee/test-workspace",
         mattermostUserId: "mm-user",
-        greetingPosted: true,
       }),
       {
         customerDir: true,
@@ -2187,7 +2073,6 @@ describe("unmount + re-add round trip", () => {
 
     expect(reAdd.steps).toContain("clone-workspace-repo");
     expect(reAdd.steps).not.toContain("init-workspace-repo");
-    expect(reAdd.steps).not.toContain("schedule-greeting-cron");
     expect(reAdd.steps).not.toContain("mattermost-provision");
     expect(reAdd.steps).not.toContain("notify-ops");
   });
@@ -2232,7 +2117,7 @@ releaseFirst();
     const state = makeState(snap({ status: "" }), emptyDisk());
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    const state2 = makeState(snap({ status: "complete", agentIds: ["octogee-test-coach"], repoUrl: "http://gitea/octogee/test-workspace", mattermostUserId: "mm-x", greetingPosted: true }), { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true, repoHasCommits: true });
+    const state2 = makeState(snap({ status: "complete", agentIds: ["octogee-test-coach"], repoUrl: "http://gitea/octogee/test-workspace", mattermostUserId: "mm-x" }), { ...emptyDisk(), customerDir: true, workspaceGitDir: true, gitRemote: true, sshKey: true, repoHasCommits: true });
     const result = await addCustomerToGateway(makeAdapter(state2), "uid-test");
     expect(result.steps).toContain("verify-channel-ready");
   });
@@ -2647,7 +2532,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     setProvisioningStatus: false,
     setRepoUrl: false,
     setMattermostFields: false,
-    setGreetingResult: false,
     setAgentIds: false,
     hasCustomerDir: false,
     hasWorkspaceGitDir: false,
@@ -2668,7 +2552,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     restoreByosubForAgent: false,
     listProjectsNeedingClone: false,
     provisionMattermostUser: false,
-    scheduleBootGreetingCron: false,
     applyAddCustomerConfigPatch: false,
     applyRemoveCustomerConfigPatch: false,
     waitForAccountHealthy: false,
@@ -2704,7 +2587,6 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
       agentIds: ["octogee-test-coach"],
       repoUrl: "http://gitea/octogee/test-workspace",
       mattermostUserId: "mm-user",
-      greetingPosted: true,
       ...over,
     });
 
