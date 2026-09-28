@@ -20,8 +20,8 @@
       "enabled": true,
       "delivery": "npm",
       "npmPackages": {
-        "@anthropic-ai/claude-code": "2.1.282",
-        "@openai/codex": "0.157.0"
+        "@anthropic-ai/claude-code": "2.1.283",
+        "@openai/codex": "0.157.1"
       },
       "commands": ["claude", "codex"]
     },
@@ -84,7 +84,6 @@
         "bash-completion",
         "bc",
         "cloc",
-        "fd-find",
         "file",
         "fzf",
         "less",

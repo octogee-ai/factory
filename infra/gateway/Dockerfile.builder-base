@@ -62,7 +62,6 @@ RUN set -eu; \
     apt-get update; \
     apt-get install -y --no-install-recommends $DEBIAN_PACKAGES; \
     pip3 install --break-system-packages --no-cache-dir $PYTHON_PACKAGES; \
-    ln -sf /usr/bin/fdfind /usr/local/bin/fd; \
     git lfs install --system; \
     rm -rf /var/lib/apt/lists/*
 

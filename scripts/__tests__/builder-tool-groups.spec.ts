@@ -37,8 +37,8 @@ describe("Builder tool groups", () => {
       manifest.groups.flatMap((group) => Object.entries(group.npmPackages ?? {})),
     );
     expect(npmPackages).toEqual({
-      "@anthropic-ai/claude-code": "2.1.282",
-      "@openai/codex": "0.157.0",
+      "@anthropic-ai/claude-code": "2.1.283",
+      "@openai/codex": "0.157.1",
       "@sparticuz/chromium": "153.0.0",
       "firebase-tools": "15.31.0",
       "npm-check-updates": "23.1.0",
@@ -52,7 +52,7 @@ describe("Builder tool groups", () => {
     );
     expect(debianPackages).toEqual(new Set([
       "bash-completion", "bc", "build-essential", "cloc", "cmake", "dbus-bin", "dnsutils",
-      "fd-find", "ffmpeg", "file", "fonts-liberation", "fonts-noto-color-emoji",
+      "ffmpeg", "file", "fonts-liberation", "fonts-noto-color-emoji",
       "fzf", "git-lfs", "htop", "imagemagick", "iproute2", "iputils-ping", "less", "lsof",
       "make", "nano", "net-tools", "netcat-openbsd", "pandoc", "pipx", "pkg-config",
       "postgresql-client", "procps", "psmisc", "python3", "python3-pip", "python3-venv",

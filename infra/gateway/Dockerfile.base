@@ -9,10 +9,6 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
-    && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
-    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
-    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion" \
     && npm cache clean --force \
     && install -d -o node -g node /home/node/.npm
 
@@ -21,8 +17,8 @@ ENV HOME=/home/node
 FROM gateway-core-system AS gateway-system
 
 ARG FD_VERSION=10.5.0
-ARG CLAUDE_CODE_VERSION=2.1.282
-ARG CODEX_VERSION=0.157.0
+ARG CLAUDE_CODE_VERSION=2.1.283
+ARG CODEX_VERSION=0.157.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
@@ -158,6 +154,8 @@ RUN set -e; \
       || { echo "FATAL: source-matched Codex dependencies failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     cp "$CODEX_VENDORED/package/package.json" "$CODEX_BUNDLED_DIR/package.json"; \
     test ! -e "$CODEX_BUNDLED_DIR/node_modules/openclaw"; \
+    OPENCLAW_STATE_DIR="$(mktemp -d)"; \
+    export OPENCLAW_STATE_DIR; \
     openclaw plugins registry --refresh > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: bundled plugin registry refresh failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     openclaw plugins inspect codex --json > /tmp/oc-codex-inspect.json 2>/tmp/oc-plugin.log \
@@ -166,6 +164,7 @@ RUN set -e; \
     node /tmp/verify-codex-native-hook-runtime.mjs "$CODEX_BUNDLED_DIR/package.json"; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .; \
     rm -rf "$CODEX_VENDORED"; \
+    rm -rf "$OPENCLAW_STATE_DIR"; \
     rm -f /tmp/oc-plugin.log /tmp/oc-codex-inspect.json; \
     npm cache clean --force
 

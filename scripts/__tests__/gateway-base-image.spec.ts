@@ -111,8 +111,8 @@ describe("gateway base image", () => {
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
 
     expect(packageJson.dependencies).toEqual({
-      "@anthropic-ai/claude-code": "2.1.282",
-      "@openai/codex": "0.157.0",
+      "@anthropic-ai/claude-code": "2.1.283",
+      "@openai/codex": "0.157.1",
       "@sparticuz/chromium": "153.0.0",
       "firebase-tools": "15.31.0",
       "npm-check-updates": "23.1.0",
@@ -121,18 +121,18 @@ describe("gateway base image", () => {
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
-      "@anthropic-ai/claude-code@2.1.282": true,
+      "@anthropic-ai/claude-code@2.1.283": true,
       "esbuild@0.28.2": true,
       "pnpm@12.6.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
-      version: "2.1.282",
+      version: "2.1.283",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@openai/codex"]).toMatchObject({
-      version: "0.157.0",
+      version: "0.157.1",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@sparticuz/chromium"]).toMatchObject({
@@ -382,12 +382,17 @@ describe("gateway base image", () => {
     const omitDev = dockerfile.indexOf('delete pkg.devDependencies;');
     const install = dockerfile.indexOf('npm install --prefix "$CODEX_BUNDLED_DIR" --omit=dev --include=optional --ignore-scripts --package-lock=false');
     const restore = dockerfile.indexOf('cp "$CODEX_VENDORED/package/package.json" "$CODEX_BUNDLED_DIR/package.json"');
+    const profile = dockerfile.indexOf('OPENCLAW_STATE_DIR="$(mktemp -d)"');
     const refresh = dockerfile.indexOf('openclaw plugins registry --refresh');
     const inspect = dockerfile.indexOf('openclaw plugins inspect codex --json');
     expect(omitDev).toBeGreaterThan(-1);
     expect(install).toBeGreaterThan(omitDev);
     expect(restore).toBeGreaterThan(install);
-    expect(refresh).toBeGreaterThan(restore);
+    expect(profile).toBeGreaterThan(restore);
+    expect(refresh).toBeGreaterThan(profile);
+    const verification = runInstructionContaining(dockerfile, "openclaw plugins registry --refresh");
+    expect(verification).toContain("export OPENCLAW_STATE_DIR");
+    expect(verification).toContain('rm -rf "$OPENCLAW_STATE_DIR"');
     expect(inspect).toBeGreaterThan(refresh);
     expect(dockerfile).toContain('test ! -e "$CODEX_BUNDLED_DIR/node_modules/openclaw"');
     expect(dockerfile).toContain(
