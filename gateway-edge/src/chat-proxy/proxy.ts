@@ -50,6 +50,7 @@ import {
 } from "./openclaw/runtime-broker.js";
 import {
   ACTIVITY_INTAKE_PATH,
+  FINAL_REPLY_INTAKE_PATH,
   DIRECT_ACTIVITY_TARGET_PATH,
   VOICE_EVENT_RELAY_PATH,
 } from "./http-paths.js";
@@ -63,7 +64,8 @@ import {
 } from "./openclaw/activity-binding-registry.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { createDirectActivityTargetHandler } from "./openclaw/direct-activity-target.js";
-import { makeCommittedAnswerNotifier } from "../notifications/chat-notifier.js";
+import { notifyNativeFinalReply } from "../notifications/native-final-reply.js";
+import { createFinalReplyIntakeHandler } from "../notifications/final-reply-intake.js";
 import {
   createBrokeredFanOutNotification,
   notificationBrokerBaseUrlFromEnv,
@@ -194,8 +196,6 @@ function getActivityIntakeHandler():
   if (activityIntakeHandler) return activityIntakeHandler;
   const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   if (!gatewayToken) return null;
-  const gatewayId = process.env.GATEWAY_ID?.trim();
-  if (!gatewayId) throw new Error("GATEWAY_ID is required for Activity intake");
   const broker = getOpenClawRuntimeBroker();
   const registry = createActivityBindingRegistry({
     resolveAgentIdentity: (agentId) => broker.resolveAgentIdentity(agentId),
@@ -219,19 +219,45 @@ function getActivityIntakeHandler():
     registry,
     receiptsFor: (binding) => broker.activityWriteReceiptsFor(binding.channelDocPath),
     mmClientFor,
-    onPersisted: makeCommittedAnswerNotifier({
-      mmClientFor,
-      resolveOwnerUid: (channelId) => broker.resolveChannelOwnerUid(channelId),
-      fanOut: createBrokeredFanOutNotification({
-        baseUrl: notificationBrokerBaseUrlFromEnv(),
-        gatewayId,
-      }),
-      log: bridgeLog,
-    }),
     leaseOwner: `${process.env.GATEWAY_ID?.trim() || "gateway-edge"}:${process.pid}`,
     log: (event, meta) => logger.warn(`[activity-intake] ${event}`, meta),
   });
   return activityIntakeHandler;
+}
+
+let finalReplyIntakeHandler: ReturnType<typeof createFinalReplyIntakeHandler> | null = null;
+
+function getFinalReplyIntakeHandler(): ReturnType<typeof createFinalReplyIntakeHandler> | null {
+  if (finalReplyIntakeHandler) return finalReplyIntakeHandler;
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!gatewayToken) return null;
+  const gatewayId = process.env.GATEWAY_ID?.trim();
+  if (!gatewayId) throw new Error("GATEWAY_ID is required for final reply intake");
+  const broker = getOpenClawRuntimeBroker();
+  const deps = {
+    resolveAgentIdentity: (agentId: string) => broker.resolveAgentIdentity(agentId),
+    resolveConversationTarget: (agentId: string, channelId: string) => broker.resolveConversationTarget(agentId, channelId),
+    resolveDirectConversationTarget: (agentId: string, channelId: string, ownerId: string) =>
+      broker.resolveDirectConversationTarget(agentId, channelId, ownerId),
+    mmClientFor: createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL }),
+    resolveOwnerUid: (channelId: string) => broker.resolveChannelOwnerUid(channelId),
+    fanOut: createBrokeredFanOutNotification({ baseUrl: notificationBrokerBaseUrlFromEnv(), gatewayId }),
+  };
+  finalReplyIntakeHandler = createFinalReplyIntakeHandler({
+    gatewayToken,
+    notify: (input) => notifyNativeFinalReply(input, {
+      ...deps,
+      verifyChannel: (identity, target) => readMattermostChannelCreateAt({
+        baseUrl: MM_INTERNAL_URL, channelId: target.primaryChannelId, token: identity.coachToken,
+        ...(target.expectedChannelTeamId !== null ? { expectedTeamId: target.expectedChannelTeamId } : {}),
+        ...(target.expectedChannelName !== null ? { expectedName: target.expectedChannelName } : {}),
+        expectedType: target.expectedChannelType,
+        ...(target.expectedMemberIds ? { expectedMemberIds: target.expectedMemberIds } : {}),
+      }),
+    }),
+    log: (message, fields) => logger.warn(`[final-reply] ${message}`, fields),
+  });
+  return finalReplyIntakeHandler;
 }
 
 function getDirectActivityTargetHandler():
@@ -429,11 +455,27 @@ async function handleDirectActivityTargetRoute(
   }
 }
 
+async function handleFinalReplyRoute(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const handler = getFinalReplyIntakeHandler();
+    if (!handler) throw new Error("final reply intake is not configured");
+    await handler(req, res);
+  } catch (error) {
+    logger.error("[final-reply] initialization failed", { error: error instanceof Error ? error.message : String(error) });
+    res.writeHead(503, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "reply_notification_unavailable", retryable: true }));
+  }
+}
+
 async function handleLocalInternalRoute(
   path: string,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<boolean> {
+  if (path === FINAL_REPLY_INTAKE_PATH) {
+    await handleFinalReplyRoute(req, res);
+    return true;
+  }
   if (path === DIRECT_ACTIVITY_TARGET_PATH) {
     await handleDirectActivityTargetRoute(req, res);
     return true;
