@@ -52,6 +52,7 @@ import {
   GATEWAY_RELEASES_SUBCOLLECTION,
   commitPlacementAtomic,
   customerRestoreFencePresent,
+  customerRuntimeMutationFenced,
   isReleasePayload,
   isGatewayRuntimeDoc,
   type AssignmentDoc,
@@ -107,6 +108,7 @@ import { requestBuilderActivationLease } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
 import {
   GatewayRetirementConflictError,
+  assertGatewayRuntimeMutationUnfenced,
   claimGatewayRetirementAtomic,
 } from "./gateway-retirement-claim.js";
 import {
@@ -3334,7 +3336,7 @@ async function claimCustomerDeletion(opts: {
     const userSnap = await transaction.get(userRef);
     if (!userSnap.exists) return { kind: "not-found" };
     const userData = userSnap.data() ?? {};
-    if (customerRestoreFencePresent(userData)) {
+    if (customerRuntimeMutationFenced(userData)) {
       return { kind: "conflict", deletionId: null, operationId: null };
     }
     const lifecycle = isPlainRecord(userData.accountLifecycle)
@@ -5405,6 +5407,12 @@ router.post(
                 error: `customer migration is in flight for gateway ${id}`,
               };
             }
+            try {
+              await assertGatewayRuntimeMutationUnfenced(db, txn, id);
+            } catch (error) {
+              if (!(error instanceof GatewayRetirementConflictError)) throw error;
+              return { ok: false as const, error: error.message };
+            }
             txn.update(rootRef, {
               ...built.ok.patch,
               updatedAt: Date.now(),
@@ -5955,8 +5963,9 @@ router.get(
           if (!userSnap.exists) {
             return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
           }
-          if (customerRestoreFencePresent(userSnap.data())) {
-            return { status: 409, body: { error: "customer restore outcome is unresolved — cannot unassign", uid } };
+          if (customerRuntimeMutationFenced(userSnap.data())) {
+            const action = customerRestoreFencePresent(userSnap.data()) ? "restore" : "source transfer";
+            return { status: 409, body: { error: `customer ${action} outcome is unresolved — cannot unassign`, uid } };
           }
           const currentGatewayId = readUserGatewayId(
             userSnap.data() as Record<string, unknown> | undefined,

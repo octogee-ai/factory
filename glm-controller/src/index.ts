@@ -1,3 +1,8 @@
+import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
+import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
+import { withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
+import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/retained-source-transfer.js';
+import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
 import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
@@ -236,7 +241,7 @@ import {
   customerMigrationV2GatewayRootFence,
   isCustomerMigrationV2Transition,
 } from "@octogee/core/customer-migration-v2";
-import { createRsyncMigrationTransfer } from "./lib/migration-rsync-transfer.js";
+import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner } from "./lib/migration-rsync-transfer.js";
 import {
   beginCustomerRestore,
   acknowledgeCustomerRestore,
@@ -462,22 +467,13 @@ function createGatewayPersistentVolumeClaimDeleter(
 }
 
 function createGatewayDeploymentRestarter(
+  db: Firestore,
   runKubectl: KubectlSubprocess,
   logFn: (msg: string) => void,
 ): (revisionId: string) => Promise<void> {
-  return async (revisionId) => {
-    const name = deploymentNameForInstance(revisionId);
-    const result = await runKubectl([
-      "-n",
-      NAMESPACE,
-      "rollout",
-      "restart",
-      `deploy/${name}`,
-    ]);
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || result.stdout.trim());
-    }
-    logFn(`[glm-controller] rollout restart deploy/${name} after model-key secret change`);
+  return async gatewayId => {
+    await restartGatewayDeployment({db,namespace:NAMESPACE,runKubectl},gatewayId);
+    logFn(`[glm-controller] deployment restart completed gateway=${gatewayId}`);
   };
 }
 
@@ -1787,6 +1783,7 @@ async function attemptClaimOrQueueOperation(
       const data = fresh.data() as unknown;
       if (!data || isOperationAuditRow(data)) return { outcome: "skipped" as const };
       const freshOperation = data as Operation;
+      if (freshOperation.kind === 'migrate-customer') await assertMigrationRestartUnfenced(deps.db,txn,freshOperation.input);
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
       if (isSeriallyExclusiveKind(op.kind)) {
@@ -1989,9 +1986,9 @@ async function runClaimedOperation(
   deps: ControllerDeps,
 ): Promise<void> {
   const { ctx, steps } = createOperationContext({
-    assertActiveClaim: async () => {
+    assertActiveClaim: async (allowCancelled) => {
       const fresh = await ref.get();
-      assertActiveOperationClaim(op, fresh.exists ? fresh.data() as Operation : null);
+      assertActiveOperationClaim(op, fresh.exists ? fresh.data() as Operation : null, allowCancelled);
     },
     customerRestore: {
       assertSettled: async () => {
@@ -2048,9 +2045,9 @@ async function runClaimedOperation(
       await deps.db.runTransaction(async (txn) => {
         const fresh = await txn.get(ref);
         const data = fresh.exists ? fresh.data() as Operation : null;
-        if (data?.status !== "running") {
-          throw new Error("customer migration V2 operation is no longer running");
-        }
+        assertActiveOperationClaim(op,data,true);
+        if (!data) throw new Error("customer migration V2 operation unavailable");
+        if (sourceTransferBlocksRelease(data.sourceTransferExecution) && state.phase !== "sourceQuiesced") throw new Error("source transfer termination not observed");
         const current = data.customerMigrationV2;
         if (current) {
           if (
@@ -2099,6 +2096,7 @@ async function runClaimedOperation(
         attemptHistory: freshOp?.attemptHistory,
         startedAt: freshOp?.startedAt,
         customerMigrationV2: freshOp?.customerMigrationV2,
+        sourceTransferExecution: freshOp?.sourceTransferExecution,
       },
       result,
       steps,
@@ -2722,7 +2720,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     kubeOps,
     modelKeySourceIssuer,
     modelKeySecretEnsurer,
-    restartGatewayDeployment: createGatewayDeploymentRestarter(runKubectl, log),
+    restartGatewayDeployment: createGatewayDeploymentRestarter(db,runKubectl, log),
     reconcileImagePins,
     handlers,
     log,
@@ -2846,17 +2844,29 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
   deps.log("[glm-controller] legacy Helm bootstrap disabled; durable roots and revisions own recovery");
 }
 
+function retainedSourceRunner(db: Firestore, context: RetainedSourceContext) {
+  const artifact = platformGatewayArtifactFromEnvironment();
+  const digest = artifact.imageTag.split('@')[1];
+  if (!digest) throw new Error('retained source helper image has no digest');
+  return createRetainedSourceTransfer({db,namespace:NAMESPACE,image:`${artifact.imageRepository}@${digest}`,runCommand:createSubprocessCommandRunner(),now:Date.now},context);
+}
+
+async function cleanupRetainedSource(db: Firestore, privateKey:string, context:RetainedSourceContext): Promise<void> {
+  await abortRetainedSourceImport({db,namespace:NAMESPACE,privateKey,fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:()=>'',resolveGatewayVm:transportId=>readGatewayVmAddress(db,transportId),retainedSource:retainedSourceRunner(db,context)}, {migrationId:context.state.migrationId,slug:context.state.slug,toGatewayId:context.state.targetGatewayId});
+}
+
 function createMigrationClientBuilder(
   db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
 ) {
-  return (resolveSync: (gatewayId: string) => string) => {
+  return (resolveSync: (gatewayId: string) => string, retainedSource?: RetainedSourceContext) => {
     return createMigrationClient({
       privateKey,
       resolveGatewayUrl: resolveSync,
       log: logFn,
       transferState: createRsyncMigrationTransfer({
+        ...(retainedSource ? {retainedSource: retainedSourceRunner(db,retainedSource)} : {}),
         db,
         namespace: NAMESPACE,
         privateKey,
@@ -3144,6 +3154,15 @@ async function buildHandlers(
       );
     },
     resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
+    observeSourceTransfer: async (op) => {
+      const fresh = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(op.id).get()).data() as Operation | undefined;
+      if (!fresh?.customerMigrationV2) return undefined;
+      const context={op,state:fresh.customerMigrationV2};
+      const observed=await retainedSourceRunner(db,context).observe();
+      if (observed?.status==='failed' && observed.targetCleanup==='pending') await cleanupRetainedSource(db,privateKey,context);
+      return retainedSourceRunner(db,context).observe();
+    },
+    cleanupSourceTransfer: (op,state)=>cleanupRetainedSource(db,privateKey,{op,state}),
     buildClient: createMigrationClientBuilder(
       db,
       privateKey,
@@ -3204,6 +3223,7 @@ async function buildHandlers(
             updatedByOperationId: input.operationId,
           },
           customerMigrationV2Fence: {
+            ...(input.claimStartedAt !== undefined ? {claimStartedAt:input.claimStartedAt} : {}),
             strategy: input.strategy,
             operationId: input.operationId,
             migrationId: input.migrationId,
@@ -3387,7 +3407,7 @@ async function buildHandlers(
       return vmRuntime.readDeploymentPrerequisiteError(gatewayId);
     },
     activateDesiredRelease: async ({ gatewayId, targetRelease, operationId }) =>
-      db.runTransaction(async (transaction) => {
+      withGatewayRuntimeMutation(db,gatewayId,async (transaction) => {
         const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
         const snapshot = await transaction.get(gatewayRef);
         const gateway = durableRolloutGateway(
@@ -3434,7 +3454,11 @@ async function buildHandlers(
   const eraseCustomer = buildEraseCustomerHandler(db, logFn);
 
   const restartGateway = createRestartGatewayHandler({
-    kubeOps,
+    kubeOps: {...kubeOps,restartOpenClawInPlace: async ({name}) => {
+      const gatewayId=name.slice('octogee-gateway-'.length);
+      if(name!==deploymentNameForInstance(gatewayId))throw new Error('gateway restart deployment identity mismatch');
+      await restartGatewayProcess({db,namespace:NAMESPACE,runKubectl:spawnKubectl},gatewayId);
+    }},
     namespace: NAMESPACE,
     resolveLiveRevisionId: async (gatewayId) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -3457,10 +3481,11 @@ async function buildHandlers(
       return authorization ? authorization.gateway.desiredStatus : null;
     },
     setDesiredStatus: async (gatewayId, status) => {
-      await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).set(
-        { desiredStatus: status, updatedAt: Date.now(), updatedBy: "cowboy-recycle-gateway" },
-        { merge: true },
-      );
+      await withGatewayRuntimeMutation(db,gatewayId,async transaction => {
+        transaction.set(db.collection(GATEWAYS_COLLECTION).doc(gatewayId),
+          { desiredStatus: status, updatedAt: Date.now(), updatedBy: "cowboy-recycle-gateway" },
+          { merge: true });
+      });
     },
     readServingRevisionId: async (gatewayId) => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();

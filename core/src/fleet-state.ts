@@ -11,6 +11,7 @@ import {
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   customerRestoreFencePresent,
+  customerRuntimeMutationFenced,
   hasFreshReadyKubernetesObservation,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
@@ -93,6 +94,7 @@ export interface CustomerRestoreInput {
 
 function assertRestoreUnfenced(user: unknown): void {
   if (customerRestoreFencePresent(user)) throw new Error("customer restore outcome is unresolved");
+  if (customerRuntimeMutationFenced(user)) throw new Error("customer source transfer outcome is unresolved");
 }
 
 function assertCustomerRestoreInput(input: CustomerRestoreInput): void {
@@ -222,6 +224,7 @@ export interface CutoverCommitParams {
     updatedByOperationId: string | null;
   } | null;
   customerMigrationV2Fence?: {
+    claimStartedAt?: number;
     strategy: "migrate-state" | "provision-fresh";
     operationId: string;
     migrationId: string;
@@ -255,8 +258,14 @@ function customerMigrationV2FenceIsExact(
   const cutoverReady = fence.strategy === "provision-fresh"
     ? state.phase === "freshCutoverReady"
     : state.phase === "targetVerified";
+  const claimBound = recordOrEmpty(operation?.input).sourceTransferMode === "retained-pod" || fence.claimStartedAt !== undefined;
+  const claimCurrent = !claimBound || (
+    Number.isSafeInteger(fence.claimStartedAt) && (fence.claimStartedAt ?? 0) > 0 &&
+    operation?.startedAt === fence.claimStartedAt && operation?.cancellationRequestedAt === undefined
+  );
   return [
     operation?.status === "running",
+    claimCurrent,
     cutoverReady,
     stateStrategy === fence.strategy,
     state.operationId === fence.operationId,

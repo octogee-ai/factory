@@ -611,6 +611,7 @@ export interface CommitPlacementParams {
 export type PlacementRejectReason =
   | "account-not-interactive"
   | "restore-in-progress"
+  | "source-transfer-in-progress"
   | "gateway-root-invalid"
   | "gateway-not-running"
   | "gateway-not-serving"
@@ -728,6 +729,13 @@ export function customerRestoreFencePresent(user: unknown): boolean {
   return isPlainRecord(openclaw) && openclaw.restoreFence !== undefined;
 }
 
+export function customerRuntimeMutationFenced(user: unknown): boolean {
+  if (customerRestoreFencePresent(user)) return true;
+  if (!isPlainRecord(user) || !isPlainRecord(user.provisioning)) return false;
+  const openclaw = user.provisioning.openclaw;
+  return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;
+}
+
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
@@ -744,8 +752,8 @@ export async function commitPlacementAtomic(
       userRef,
       params,
     );
-    if (customerRestoreFencePresent(userData)) {
-      return { kind: "rejected", reason: "restore-in-progress" };
+    if (customerRuntimeMutationFenced(userData)) {
+      return { kind: "rejected", reason: customerRestoreFencePresent(userData) ? "restore-in-progress" : "source-transfer-in-progress" };
     }
     if (!accountAllowsInteractiveAccess(userData)) {
       return { kind: "rejected", reason: "account-not-interactive" };

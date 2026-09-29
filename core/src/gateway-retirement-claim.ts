@@ -9,6 +9,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import {
+  customerRuntimeMutationFenced,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
@@ -249,6 +250,28 @@ function claimableGatewayRetirementRoot(
   };
 }
 
+export async function assertGatewayRuntimeMutationUnfenced(
+  db: Firestore,
+  transaction: Transaction,
+  gatewayId: string,
+): Promise<void> {
+  const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
+  if (root.data()?.runtimeRestartFence !== undefined) {
+    throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
+  }
+  const [retainedTransfers, transferTargets, mirroredUsers] = await Promise.all([
+    transaction.get(db.collection("users")
+      .where("provisioning.openclaw.sourceTransferFence.sourceGatewayId", "==", gatewayId)),
+    transaction.get(db.collection("users")
+      .where("provisioning.openclaw.sourceTransferFence.targetGatewayId", "==", gatewayId)),
+    transaction.get(db.collection("users")
+      .where("provisioning.openclaw.gatewayId", "==", gatewayId)),
+  ]);
+  if (retainedTransfers.size > 0 || transferTargets.size > 0 || mirroredUsers.docs.some(doc => customerRuntimeMutationFenced(doc.data()))) {
+    throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
+  }
+}
+
 export async function claimGatewayRetirementAtomic(
   input: ClaimGatewayRetirementInput,
 ): Promise<{ version: number }> {
@@ -288,6 +311,8 @@ export async function claimGatewayRetirementAtomic(
         `customer migration is in flight for gateway ${input.gatewayId}`,
       );
     }
+
+    await assertGatewayRuntimeMutationUnfenced(input.db, transaction, input.gatewayId);
 
     let liveRuntimeIdentity: LiveRuntimeIdentity = null;
     if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
@@ -372,6 +397,12 @@ export async function verifyGatewayRetirementClaimAtomic(
         ok: false,
         error: `gateway ${input.gatewayId} desiredStatus left retired during retirement`,
       };
+    }
+    try {
+      await assertGatewayRuntimeMutationUnfenced(input.db, transaction, input.gatewayId);
+    } catch (error) {
+      if (!(error instanceof GatewayRetirementConflictError)) throw error;
+      return { ok: false, error: error.message };
     }
     return { ok: true };
   });

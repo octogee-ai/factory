@@ -157,7 +157,7 @@ export interface KubectlSubprocessResult {
 
 export type KubectlSubprocess = (
   args: string[],
-  opts?: { stdin?: string },
+  opts?: { stdin?: string; timeoutMs?:number },
 ) => Promise<KubectlSubprocessResult>;
 
 export interface SyncEdgeIngressResult {
@@ -276,19 +276,21 @@ const DEFAULT_KUBECTL_BIN = "/usr/local/bin/kubectl";
 
 export function spawnKubectl(
   args: string[],
-  opts: { stdin?: string } = {},
+  opts: { stdin?: string; timeoutMs?:number } = {},
 ): Promise<KubectlSubprocessResult> {
   const bin = process.env.KUBECTL_BIN ?? DEFAULT_KUBECTL_BIN;
   return new Promise<KubectlSubprocessResult>((resolve, reject) => {
     const proc = spawn(bin, args, {
       stdio: [opts.stdin ? "pipe" : "ignore", "pipe", "pipe"],
     });
+    const timer=opts.timeoutMs?setTimeout(()=>{proc.kill("SIGKILL");reject(new Error("kubectl request timed out"));},opts.timeoutMs):undefined;
     let stdout = "";
     let stderr = "";
     proc.stdout!.on("data", (chunk) => { stdout += chunk.toString(); });
     proc.stderr!.on("data", (chunk) => { stderr += chunk.toString(); });
-    proc.on("error", reject);
+    proc.on("error", error=>{clearTimeout(timer);reject(error);});
     proc.on("close", (code, signal) => {
+      clearTimeout(timer);
       if (signal !== null) {
         resolve({
           stdout,
@@ -300,6 +302,7 @@ export function spawnKubectl(
       resolve({ stdout, stderr, code: code ?? 1 });
     });
     if (opts.stdin) {
+      proc.stdin!.on("error",error=>{proc.kill("SIGKILL");clearTimeout(timer);reject(error);});
       proc.stdin!.write(opts.stdin);
       proc.stdin!.end();
     }

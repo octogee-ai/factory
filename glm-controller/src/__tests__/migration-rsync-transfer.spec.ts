@@ -1,3 +1,4 @@
+import type {SourceTransferExecution} from "@octogee/shared/types/glm";
 import { describe, expect, it } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
@@ -692,5 +693,31 @@ describe("createRsyncMigrationTransfer with a VM target", () => {
       migrationId: "to-vm-unready", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final",
     })).rejects.toThrow("target octogee-gw-gw-to did not become Ready: ECONNREFUSED");
     expect(calls.some((url) => url.includes("/abort-rsync-import/"))).toBe(true);
+  });
+});
+
+
+describe("retained source final transfer",()=>{
+  it.each(["pending","complete","stale"])("keeps normal target protocol without lease or source push when helper is %s",async outcome=>{
+    const store:Store={};const calls:string[]=[];const commands:Array<{command:string;args:string[]}>=[];
+    const transfer=createRsyncMigrationTransfer({
+      db:makeDb(store),namespace:"octogee-test",privateKey:FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:id=>`http://${id}`,
+      fetch:makeFetch(calls),runCommand:makeCommandRunner(commands),
+      retainedSource:{assertActiveClaim:async()=>{if(outcome==="stale")throw new Error("active claim changed");},settledTarget:async()=>undefined,acknowledgeCleanup:async record=>record,observe:async()=>undefined,execute:async ({target,prepare})=>{
+        const push=await prepare(SOURCE_POD_IP);
+        expect(push).toMatchObject({mode:"final",includeActivationManifest:true,targetCertificatePem:TARGET_CERTIFICATE_PEM});
+        if(outcome==="pending")throw new Error("source transfer observation pending");
+        return {status:"transferred",targetGatewayId:"gw-to",targetName:target.name,targetIp:target.podIP,targetVm:target.vm} as SourceTransferExecution;
+      }},
+    });
+    const result=transfer({migrationId:"retained-1",fromGatewayId:"gw-from",toGatewayId:"gw-to",slug:"alice",mode:"final",includeActivationManifest:true});
+    if(outcome==="pending")await expect(result).rejects.toThrow("observation pending");
+    else if(outcome==="stale")await expect(result).rejects.toThrow("active claim changed");
+    else await expect(result).resolves.toMatchObject({imported:true});
+    expect(store).toEqual({});
+    expect(calls.some(url=>url.includes("/push-rsync-state/")||url.includes("/abort-rsync-import/"))).toBe(false);
+    expect(calls.filter(url=>url.includes("/finish-rsync-import/"))).toHaveLength(outcome==="complete"?1:0);
+    expect(commands.some(command=>command.args.some(arg=>arg.includes("gateway-instance=gw-from")))).toBe(false);
   });
 });

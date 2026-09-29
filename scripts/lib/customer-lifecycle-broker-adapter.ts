@@ -1,3 +1,4 @@
+import { sharedMigrationAgentIds, sharedMigrationExportPaths } from "./source-transfer-plan.js";
 import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
 import { quiesceCustomerSessionsBounded, sessionStoreForPath } from "./customer-session-quiesce.js";
 import { customerFileStatePaths } from "./customer-file-state.js";
@@ -33,7 +34,7 @@ import {
   MIGRATION_QUIESCE_GRACE_MS,
   MIGRATION_QUIESCE_STOP_RECHECK_MS,
 } from "../../shared/types/workspace-migration.js";
-import { agentIdBelongsToSlug, catalogEntryForModelRef } from "../../shared/types/agent-models.js";
+import { catalogEntryForModelRef } from "../../shared/types/agent-models.js";
 import { projectCheckoutEnabled, projectRepoSourceFromDoc } from "../../shared/types/project.js";
 import {
   applyConfigPatch,
@@ -1329,10 +1330,6 @@ function sessionPathsForMigration(slug: string): string[] {
     path.join(stateDir, "agents", agentId, "sessions", "sessions.json"));
 }
 
-function stateDirectoryEntries(directory: string): fs.Dirent[] {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true });
-}
 
 function agentIdsForMigration(slug: string): string[] {
   const stateDir = resolveOpenClawStateDir();
@@ -1341,14 +1338,7 @@ function agentIdsForMigration(slug: string): string[] {
     assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
     return plan.agentIds;
   }
-  const agentIds = new Set([customerCoachAgentId(slug)]);
-  const addIfOwned = (agentId: string): void => {
-    if (agentIdBelongsToSlug(agentId, slug)) agentIds.add(agentId);
-  };
-  for (const entry of stateDirectoryEntries(path.join(stateDir, "agents"))) {
-    if (entry.isDirectory()) addIfOwned(entry.name);
-  }
-  return [...agentIds].sort();
+  return sharedMigrationAgentIds(stateDir, slug);
 }
 
 interface AgentStateRelease {
@@ -1378,6 +1368,7 @@ async function listExportPaths(slug: string): Promise<Array<{ cwd: string; path:
     ? configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir)
     : null;
   if (builderPlan) assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
+  if (!builderPlan && stateDir === OPENCLAW_DIR) return sharedMigrationExportPaths(stateDir, slug);
   const candidates = [
     ...(builderPlan
       ? builderPlan.paths

@@ -322,6 +322,14 @@ export function customerRestoreFencePresent(user) {
     const openclaw = user.provisioning.openclaw;
     return isPlainRecord(openclaw) && openclaw.restoreFence !== undefined;
 }
+export function customerRuntimeMutationFenced(user) {
+    if (customerRestoreFencePresent(user))
+        return true;
+    if (!isPlainRecord(user) || !isPlainRecord(user.provisioning))
+        return false;
+    const openclaw = user.provisioning.openclaw;
+    return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;
+}
 export async function commitPlacementAtomic(db, params) {
     const userRef = db.collection("users").doc(params.uid);
     const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
@@ -330,8 +338,8 @@ export async function commitPlacementAtomic(db, params) {
         .doc(params.uid);
     return db.runTransaction(async (txn) => {
         const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
-        if (customerRestoreFencePresent(userData)) {
-            return { kind: "rejected", reason: "restore-in-progress" };
+        if (customerRuntimeMutationFenced(userData)) {
+            return { kind: "rejected", reason: customerRestoreFencePresent(userData) ? "restore-in-progress" : "source-transfer-in-progress" };
         }
         if (!accountAllowsInteractiveAccess(userData)) {
             return { kind: "rejected", reason: "account-not-interactive" };

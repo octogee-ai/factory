@@ -1497,3 +1497,28 @@ describe("migrate-customer — preempted computers", () => {
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403/));
   });
 });
+
+
+describe("retained source cancellation", () => {
+  it("does not resume or advance a saved migration from a stale claim", async () => {
+    const h=mkDeps({durable:true,sourceGatewayId:"shared-one"});
+    h.ctx.assertActiveClaim=vi.fn(async()=>{throw new Error("operation claim changed");});
+    h.deps.observeSourceTransfer=vi.fn(async()=>undefined);
+    const state={phase:"sourceQuiesced",operationId:"op-1",migrationId:"mig-op-1",uid:"uid-alice",slug:"alice",sourceGatewayId:"shared-one",sourceRelease:1,sourceEpoch:4,sourceAssignmentMode:"assigned",sourceRootFence:gatewayRootFence("shared-one"),targetGatewayId:"gw-green",targetRelease:2,targetRootFence:gatewayRootFence("gw-green",2)} as NonNullable<Operation["customerMigrationV2"]>;
+    await expect(createMigrateCustomerHandler(h.deps)(mkOp({input:{uid:"uid-alice",fromGatewayId:"shared-one",toGatewayId:"gw-green",sourceTransferMode:"retained-pod"},customerMigrationV2:state}),h.ctx)).rejects.toThrow("operation claim changed");
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.persisted).toEqual([]);
+  });
+  it("keeps source quiescent and skips abort when cancellation races an unobserved helper", async () => {
+    const h=mkDeps({durable:true,sourceGatewayId:"shared-one"});
+    h.ctx.assertActiveClaim=vi.fn(async()=>{});
+    h.deps.observeSourceTransfer=vi.fn(async()=>({status:"reserved"} as NonNullable<Operation["sourceTransferExecution"]>));
+    h.ctx.cancellationRequested=vi.fn(async()=>true);
+    const state={phase:"sourceQuiesced",operationId:"op-1",migrationId:"mig-op-1",uid:"uid-alice",slug:"alice",sourceGatewayId:"shared-one",sourceRelease:1,sourceEpoch:4,sourceAssignmentMode:"assigned",sourceRootFence:gatewayRootFence("shared-one"),targetGatewayId:"gw-green",targetRelease:2,targetRootFence:gatewayRootFence("gw-green",2)} as NonNullable<Operation["customerMigrationV2"]>;
+    const result=await createMigrateCustomerHandler(h.deps)(mkOp({input:{uid:"uid-alice",fromGatewayId:"shared-one",toGatewayId:"gw-green",sourceTransferMode:"retained-pod"},customerMigrationV2:state}),h.ctx);
+    expect(result).toMatchObject({success:false,rolledBack:false,error:expect.stringContaining("observation pending")});
+    expect(h.client.resume).not.toHaveBeenCalled();expect(h.client.unmount).not.toHaveBeenCalled();expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+    expect(h.persisted).toEqual([]);
+  });
+});

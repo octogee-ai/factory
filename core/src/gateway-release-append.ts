@@ -15,7 +15,7 @@ import {
   type GatewayMutableConfig,
 } from "@octogee/shared/types/gateway-mutable-config";
 import { gatewayArtifactFromReleasePayload, type GatewayArtifact } from "./gateway-live-release.js";
-import { GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
+import { assertGatewayRuntimeMutationUnfenced, GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
 
 export type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
 
@@ -123,6 +123,7 @@ export async function appendGatewayRelease(
   const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
   return db.runTransaction(async (transaction) => {
     const current = await currentRootForAppend(transaction, gatewayRef, args);
+    await assertGatewayRuntimeMutationUnfenced(db, transaction, args.gateway.gatewayId);
     const release = current.latestRelease + 1;
     const releaseRef = gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
     await assertReleaseIsNew(transaction, gatewayRef, args.gateway.gatewayId, release);

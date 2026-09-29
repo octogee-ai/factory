@@ -1,6 +1,6 @@
 import { GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, resolveUserGatewayControlState, } from "@octogee/shared/types/glm";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, customerRestoreFencePresent, hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, customerRestoreFencePresent, customerRuntimeMutationFenced, hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { customerMigrationV2GatewayRootFenceEqual, customerMigrationV2GatewayRootFenceMatches, } from "./customer-migration-v2.js";
@@ -18,6 +18,8 @@ function clearWorkspaceMigrationMarker(txn, deps, uid) {
 function assertRestoreUnfenced(user) {
     if (customerRestoreFencePresent(user))
         throw new Error("customer restore outcome is unresolved");
+    if (customerRuntimeMutationFenced(user))
+        throw new Error("customer source transfer outcome is unresolved");
 }
 function assertCustomerRestoreInput(input) {
     if (![input.uid, input.slug, input.gatewayId, input.fromGatewayId, input.operationId, input.attemptId].every(value => typeof value === "string" && value.length > 0) ||
@@ -126,8 +128,12 @@ function customerMigrationV2FenceIsExact(operation, fence) {
     const cutoverReady = fence.strategy === "provision-fresh"
         ? state.phase === "freshCutoverReady"
         : state.phase === "targetVerified";
+    const claimBound = recordOrEmpty(operation?.input).sourceTransferMode === "retained-pod" || fence.claimStartedAt !== undefined;
+    const claimCurrent = !claimBound || (Number.isSafeInteger(fence.claimStartedAt) && (fence.claimStartedAt ?? 0) > 0 &&
+        operation?.startedAt === fence.claimStartedAt && operation?.cancellationRequestedAt === undefined);
     return [
         operation?.status === "running",
+        claimCurrent,
         cutoverReady,
         stateStrategy === fence.strategy,
         state.operationId === fence.operationId,

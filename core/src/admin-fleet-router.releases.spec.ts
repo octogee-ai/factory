@@ -780,6 +780,36 @@ describe("admin target resolution", () => {
 });
 
 describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from release n's payload", () => {
+  it.each([
+    { fence: { sourceGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
+    { fence: { sourceGatewayId: "source", targetGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
+    { fence: null, mirror: "gamma" },
+    { fence: false, mirror: "gamma" },
+    { fence: {}, mirror: "gamma" },
+  ])("rejects rollback append with retained source fence $fence after operation failure", async ({ fence, mirror }) => {
+    const seed = seedNewSchemaGateway("gamma", sharedPayload());
+    seed["gateways/gamma"].latestRelease = 2;
+    seed["gateways/gamma"].desiredRelease = 2;
+    seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
+      gatewayId: "gamma", release: 2, sourceRelease: 1, note: null,
+      payloadHash: releasePayloadHash(sharedPayload({ imageTag: "deadbee" })),
+      payload: sharedPayload({ imageTag: "deadbee" }),
+    };
+    seed["users/u1"] = { provisioning: { openclaw: { gatewayId: mirror, sourceTransferFence: fence } } };
+    seed[`${GLM_OPERATIONS_COLLECTION}/transfer-1`] = {
+      kind: "migrate-customer", status: "failed",
+      input: { uid: "u1", fromGatewayId: "gamma", toGatewayId: "other" },
+    };
+    const { app, store } = mkApp(seed);
+    const original = structuredClone(store.get("gateways/gamma"));
+    const response = await request(app).post("/gateways/gamma/releases/1/rollback").send({});
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/source transfer outcome is unresolved/);
+    expect(store.get("gateways/gamma")).toEqual(original);
+    expect(store.has(`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/3`)).toBe(false);
+    expect([...store.values()].filter(doc => doc.kind === "rollout")).toHaveLength(0);
+  });
+
   it("cuts release 3 whose payload equals release 1, never mutating history", async () => {
     // Seed gateway at release 2 (tag deadbee), with release 1 = abc1234 retained.
     const seed = seedNewSchemaGateway("gamma", sharedPayload({ imageTag: "deadbee" }));
@@ -865,11 +895,43 @@ describe("GET /gateways/:id/releases — lists retained release docs", () => {
 
 
 describe("PATCH /gateways/:id — updates durable lifecycle", () => {
+  it.each([null, false, {}, { attemptId: "restart-1" }])("rejects PATCH while a runtime restart fence remains: %j", async (runtimeRestartFence) => {
+    const seed = seedNewSchemaGateway("zeta", sharedPayload());
+    seed["gateways/zeta"].runtimeRestartFence = runtimeRestartFence;
+    const { app, store } = mkApp(seed);
+    const original = structuredClone(store.get("gateways/zeta"));
+    const response = await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/runtime restart outcome is unresolved/);
+    expect(store.get("gateways/zeta")).toEqual(original);
+  });
+
   it("pauses only the durable root", async () => {
     const { app, store } = mkApp(seedNewSchemaGateway("zeta", sharedPayload()));
     await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" }).expect(202);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zeta`)).toBeUndefined();
     expect(store.get("gateways/zeta")?.desiredStatus).toBe("paused");
+  });
+
+  it.each([
+    { fence: { sourceGatewayId: "zeta", executionId: "transfer-1" }, mirror: "other" },
+    { fence: { sourceGatewayId: "source", targetGatewayId: "zeta", executionId: "transfer-1" }, mirror: "other" },
+    { fence: null, mirror: "zeta" },
+    { fence: false, mirror: "zeta" },
+    { fence: {}, mirror: "zeta" },
+  ])("blocks root PATCH with a retained transfer fence $fence after operation failure", async ({ fence, mirror }) => {
+    const seed = seedNewSchemaGateway("zeta", sharedPayload());
+    seed["users/u1"] = { provisioning: { openclaw: { gatewayId: mirror, sourceTransferFence: fence } } };
+    seed[`${GLM_OPERATIONS_COLLECTION}/transfer-1`] = {
+      kind: "migrate-customer", status: "failed",
+      input: { uid: "u1", fromGatewayId: "zeta", toGatewayId: "other" },
+    };
+    const original = structuredClone(seed["gateways/zeta"]);
+    const { app, store } = mkApp(seed);
+    const response = await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/source transfer outcome is unresolved/);
+    expect(store.get("gateways/zeta")).toEqual(original);
   });
 
   it("rejects direct ownership PATCHes so they cannot create a standing owner gateway", async () => {

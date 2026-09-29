@@ -36,6 +36,7 @@ WORKDIR /octogee/scripts
 RUN npm install --no-audit --no-fund
 
 COPY --chown=node:node scripts/entrypoints/ /octogee/scripts/entrypoints/
+COPY --chown=node:node scripts/libexec/ /octogee/scripts/libexec/
 COPY --chown=node:node scripts/secret-resolver.mjs /octogee/scripts/
 COPY --chown=node:node scripts/publish-gateway-token.mjs /octogee/scripts/
 COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
@@ -72,6 +73,10 @@ COPY --chown=node:node shared/ /octogee/shared/
 # The devDeps are pruned together with scripts/'s devDeps at the
 # combined prune step below.
 RUN cd /octogee/shared && npm ci --no-audit --no-fund
+
+RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/entrypoints/source-transfer-stage.ts \
+      --bundle --platform=node --format=esm --packages=external \
+      --outfile=/octogee/scripts/source-transfer-stage.mjs
 
 # ── Type-check provisioner (catches errors at build time) ───────────────────
 # Then prune the dev tree — nothing in scripts/ devDependencies is needed

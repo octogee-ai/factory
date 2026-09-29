@@ -71,6 +71,7 @@ export interface CutoverCommitParams {
         updatedByOperationId: string | null;
     } | null;
     customerMigrationV2Fence?: {
+        claimStartedAt?: number;
         strategy: "migrate-state" | "provision-fresh";
         operationId: string;
         migrationId: string;

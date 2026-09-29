@@ -214,7 +214,7 @@ export interface CommitPlacementParams {
     automatic?: boolean;
     validateTarget?: (context: PlacementTargetValidationContext) => Promise<PlacementRejectReason | null>;
 }
-export type PlacementRejectReason = "account-not-interactive" | "restore-in-progress" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
+export type PlacementRejectReason = "account-not-interactive" | "restore-in-progress" | "source-transfer-in-progress" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {
@@ -227,4 +227,5 @@ export type CommitPlacementResult = {
     reason: PlacementRejectReason;
 };
 export declare function customerRestoreFencePresent(user: unknown): boolean;
+export declare function customerRuntimeMutationFenced(user: unknown): boolean;
 export declare function commitPlacementAtomic(db: PlacementFirestore, params: CommitPlacementParams): Promise<CommitPlacementResult>;

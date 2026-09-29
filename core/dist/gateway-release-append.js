@@ -3,7 +3,7 @@ import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayDesiredDoc, isReleasePayload, releasePayloadHash, } from "@octogee/shared/types/gateway-releases";
 import { projectGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
 import { gatewayArtifactFromReleasePayload } from "./gateway-live-release.js";
-import { GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
+import { assertGatewayRuntimeMutationUnfenced, GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
 export function asDurableGatewayRoot(data, gatewayId) {
     if (!isGatewayDesiredDoc(data) || data.gatewayId !== gatewayId)
         return null;
@@ -67,6 +67,7 @@ export async function appendGatewayRelease(db, args) {
     const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
     return db.runTransaction(async (transaction) => {
         const current = await currentRootForAppend(transaction, gatewayRef, args);
+        await assertGatewayRuntimeMutationUnfenced(db, transaction, args.gateway.gatewayId);
         const release = current.latestRelease + 1;
         const releaseRef = gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
         await assertReleaseIsNew(transaction, gatewayRef, args.gateway.gatewayId, release);

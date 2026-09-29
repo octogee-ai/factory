@@ -1,3 +1,6 @@
+import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js';
+import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
+import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
@@ -45,6 +48,7 @@ import {
 } from "../roll-state-migration.js";
 
 const MIGRATE_STATE = "migrate-state";
+const RETAINED_POD = "retained-pod";
 const PROVISION_FRESH = "provision-fresh";
 const COACH_ATTACH_POLL_MS = 5_000;
 
@@ -91,7 +95,9 @@ export interface MigrateCustomerDeps {
 
   resolveGatewayUrl: (gatewayId: string) => Promise<string>;
 
-  buildClient: (resolveSync: (gatewayId: string) => string) => MigrationClient;
+  buildClient: (resolveSync: (gatewayId: string) => string, retainedSource?: RetainedSourceContext) => MigrationClient;
+  observeSourceTransfer?: (op: Operation) => Promise<SourceTransferExecution | undefined>;
+  cleanupSourceTransfer?: (op:Operation,state:CustomerMigrationV2State) => Promise<void>;
 
   resolveSourcePlacement: (uid: string, currentGatewayId: string) => Promise<SourcePlacement | null>;
   resolveTargetPlacement: (toGatewayId: string) => Promise<PlacementResolution | null>;
@@ -115,6 +121,7 @@ export interface MigrateCustomerDeps {
     uid: string;
     slug: string;
     automatic?: boolean;
+    claimStartedAt?: number;
   }) => Promise<void>;
 
   // Durable (V2) migration for Builder gateways; the legacy runner
@@ -286,6 +293,7 @@ async function cancellationResult(
 ): Promise<OperationResult | null> {
   const { ctx, deps } = execution.input;
   const state = execution.state;
+  if (sourceTransferBlocksRelease(await deps.observeSourceTransfer?.(execution.input.op))) return {steps:[],success:false,error:"source transfer observation pending: status 503",rolledBack:false};
   if (isAbortPhase(state.phase) || isCustomerMigrationV2PostIntent(state)) return null;
   if (!await ctx.cancellationRequested?.()) return null;
   if (state.phase === "initialized") {
@@ -304,6 +312,11 @@ async function ordinaryV2IterationFailure(
   execution: OrdinaryV2Execution,
   error: unknown,
 ): Promise<OperationResult | "continue"> {
+  try {
+    if (sourceTransferBlocksRelease(await execution.input.deps.observeSourceTransfer?.(execution.input.op))) return {steps:[],success:false,error:"source transfer observation pending: status 503",rolledBack:false};
+  } catch {
+    if (execution.input.op.input.sourceTransferMode === RETAINED_POD) return {steps:[],success:false,error:"source transfer observation unavailable: status 503",rolledBack:false};
+  }
   const retryable = classifyCustomerMigrationV2Error(error) === "retry";
   if (retryable && !requiresSourceResumeBeforeRetry(execution.state.phase)) {
     return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
@@ -349,6 +362,10 @@ function requiresSourceResumeBeforeRetry(
 async function runOrdinaryV2Iteration(
   execution: OrdinaryV2Execution,
 ): Promise<OperationResult | "continue" | "stop"> {
+  if (execution.input.op.input.sourceTransferMode === RETAINED_POD) {
+    if (!execution.input.ctx.assertActiveClaim) throw new Error('retained source requires active claim verification');
+    await execution.input.ctx.assertActiveClaim(true);
+  }
   let phase = execution.state.phase;
   await execution.progress.report(phase, "running");
   try {
@@ -365,9 +382,14 @@ async function runOrdinaryV2Iteration(
     if (execution.state.phase === "initialized") {
       await assertV2InitialBindings(execution.state, execution.input.deps);
     }
+    if (isAbortPhase(execution.state.phase) && execution.input.op.input.sourceTransferMode===RETAINED_POD) {
+      if (!execution.input.deps.cleanupSourceTransfer) throw new Error('retained source cleanup unavailable');
+      await execution.input.deps.cleanupSourceTransfer(execution.input.op,execution.state);
+    }
     const driverDeps = await buildV2DriverDeps(
       execution.state,
       execution.input.deps,
+      execution.input.op,
       resolveOperationOrigin(execution.input.op.origin) === "automatic",
     );
     const next = await advanceCustomerMigrationV2(execution.state, driverDeps);
@@ -439,11 +461,18 @@ function v2PhaseTransportIds(state: CustomerMigrationV2State): string[] {
   return V2_TARGET_TRANSPORT_PHASES.has(state.phase) ? [state.targetGatewayId] : [];
 }
 
+function requiredClaimStartedAt(op: Operation): number {
+  if (typeof op.startedAt !== 'number' || !Number.isSafeInteger(op.startedAt) || op.startedAt <= 0) throw new Error('retained source requires a current claim timestamp');
+  return op.startedAt;
+}
+
 async function buildV2DriverDeps(
   state: CustomerMigrationV2State,
   deps: MigrateCustomerDeps,
+  op: Operation,
   automatic: boolean,
 ) {
+  const claimFence = op.input.sourceTransferMode === RETAINED_POD ? {claimStartedAt: requiredClaimStartedAt(op)} : {};
   const transportIds = new Set([
     ...v2PhaseTransportIds(state),
     // Every source-driven push resolves the target URL too.
@@ -459,7 +488,7 @@ async function buildV2DriverDeps(
       throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     }
     return url;
-  });
+  }, op.input.sourceTransferMode === RETAINED_POD ? {op,state} : undefined);
   return {
     client,
     setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
@@ -474,7 +503,7 @@ async function buildV2DriverDeps(
         automatic,
       }),
     commitCutover: (fence: CustomerMigrationV2CutoverFence) =>
-      deps.commitV2Cutover({ ...fence, uid: state.uid, slug: state.slug, automatic }),
+      deps.commitV2Cutover({ ...fence, uid: state.uid, slug: state.slug, automatic, ...claimFence }),
     now: deps.now,
     log: deps.log,
     wait: deps.sleep,
@@ -1382,6 +1411,10 @@ async function recoverCommittedMigration(
   return convergence ? { steps: [], success: true, rolledBack: false } : null;
 }
 
+function assertRetainedMigrationStrategy(op: Operation, durable: boolean, stateMigration: RollStateMigrationDecision, nativeReturn: NativeComputerReturn | null): void {
+  if (op.input.sourceTransferMode === RETAINED_POD && (!durable || stateMigration.strategy === PROVISION_FRESH || nativeReturn)) throw new Error('retained source transfer requires an ordinary durable migration');
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1442,6 +1475,7 @@ async function prepareMigration(
       user.currentGatewayId,
       request.toGatewayId,
     );
+    assertRetainedMigrationStrategy(op,durable,stateMigration,nativeReturn);
     if (stateMigration.strategy === PROVISION_FRESH) {
       return {
         result: await executeProvisionFresh({
@@ -1702,6 +1736,9 @@ async function attributePreemption(
 }
 
 export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): OperationHandler {
-  return async (op: Operation, ctx: OperationContext): Promise<OperationResult> =>
-    attributePreemption(deps, op, await runMigrateCustomer(deps, op, ctx));
+  return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
+    if (op.input.sourceTransferMode !== undefined && op.input.sourceTransferMode !== RETAINED_POD) throw new Error('unsupported source transfer mode');
+    if (op.input.sourceTransferMode === RETAINED_POD && (!deps.observeSourceTransfer || (typeof op.input.fromGatewayId !== 'string' || !op.input.fromGatewayId.startsWith('shared-')))) throw new Error('retained source transfer requires a Shared source');
+    return attributePreemption(deps, op, await runMigrateCustomer(deps, op, ctx));
+  };
 }

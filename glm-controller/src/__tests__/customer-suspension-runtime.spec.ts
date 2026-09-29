@@ -54,6 +54,12 @@ describe("releaseCustomerPlacement", () => {
     expect(writes).toEqual([]);
   });
 
+  it.each([null, false, { phase: "dispatched", claimStartedAt: 1 }])("preserves all assignments while a source transfer fence remains: %j", async (sourceTransferFence) => {
+    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", sourceTransferFence } } });
+    await expect(releaseCustomerPlacement(db as never, "uid-1", "shared-0")).rejects.toThrow("customer source transfer is in progress");
+    expect(writes).toEqual([]);
+  });
+
   it("deletes the assignment and clears the user mirror that still points at the gateway", async () => {
     const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-0", slug: "alice" } } });
 

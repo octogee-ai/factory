@@ -196,14 +196,14 @@ describe("runStuckOpReaperTick", () => {
     expect(ops[0].updated).not.toHaveProperty("output.configCleanup");
   });
 
-  it("leaves the legacy operation and assignment unchanged while restore is unresolved", async () => {
+  it.each(["restoreFence", "sourceTransferFence"])("leaves the legacy operation and assignment unchanged while %s is unresolved", async (fence) => {
     const ops: FakeOpDoc[] = [{ id: "placement-owned", data: {
       status: "running", kind: "migrate-customer", startedAt: NOW - 20 * 60_000,
       input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     } }];
     const assignment = { uid: "uid-mike", gatewayId: "shared-a", state: "quiescing", source: "migrate-customer", updatedByOperationId: "placement-owned" };
     const db = makeFakeDb(ops, {
-      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a", restoreFence: null } } } },
+      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a", [fence]: null } } } },
       assignments: { "shared-a/uid-mike": assignment },
     });
     const log = vi.fn();

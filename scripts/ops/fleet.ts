@@ -34,12 +34,6 @@ import {
   type NormalFleetMutationInput,
 } from "@octogee/core/normal-fleet-mutation";
 import {
-  type MigrationState,
-  fullPlan,
-  rollbackPlan,
-  describeStep,
-} from "../lib/fleet-migration.js";
-import {
   enqueueOperation,
   awaitOperation,
   type OperationsDb,
@@ -278,10 +272,10 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "migrate-customer",
-    summary: "Move a customer between gateways via the four-step migration state machine.",
-    args: "<slug> --to=<gw-id> [--apply]",
+    summary: "Move a customer between gateways through a journaled migration.",
+    args: "<slug> --to=<gw-id> [--source-transfer=retained-pod] [--apply]",
     description:
-      "Plans (or executes with --apply) the four-step migration: quiesce source → transfer state → cutover Firestore → unmount source. The state machine in scripts/lib/fleet-migration.ts owns the safety boundaries; rollback is automatic on per-step failure (un-quiesce pre-cutover; reverse cutover + unmount target post-cutover).\n\nDry-run by default — pass --apply to execute. Migration runs server-side in glm-controller; the CLI just enqueues the operation and streams its reported steps.",
+      "Plans (or executes with --apply) a journaled migration: prepare target → quiesce source → transfer and verify state → commit placement → release source. Before cutover, the controller can safely abort; after cutover it recovers forward using the same handoff.\n\nDry-run by default — pass --apply to execute. Migration runs server-side in glm-controller; the CLI just enqueues the operation and streams its reported steps. --source-transfer=retained-pod explicitly selects the bounded transfer helper on a retained Shared pod; ambiguous target preparation or helper execution keeps the durable safety fence until its outcome is proven.",
     examples: [
       "fleet --env=test migrate-customer ceckert --to=canary",
       "fleet --env=test migrate-customer ceckert --to=canary --apply",
@@ -1619,6 +1613,7 @@ async function migrateCustomerPlan(
   slug: string,
   toGatewayId: string,
   apply: boolean,
+  sourceTransferMode?: "retained-pod",
 ): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
@@ -1651,49 +1646,41 @@ async function migrateCustomerPlan(
     process.exit(1);
   }
 
-  const initial: MigrationState = {
-    phase: "initial",
-    slug,
-    uid: user.uid,
-    fromGatewayId,
-    toGatewayId,
-  };
-
-  const forward = fullPlan(initial);
-
   console.log(bold(`MIGRATE-CUSTOMER ${slug}`) + dim(`  ${fromGatewayId} ${ARROW} ${toGatewayId}`));
   console.log(`  uid  ${user.uid}`);
+  if (sourceTransferMode) console.log(`  source transfer  ${sourceTransferMode}`);
 
-  console.log("\n" + bold(`FORWARD PLAN`));
-  forward.forEach((step, i) => {
-    console.log(`  ${cyan(`${i + 1}.`)} ${describeStep(step)}`);
-  });
-
-  console.log("\n" + bold(`ROLLBACK SAFETY NET`) + dim(`  recovery if forward fails at any phase`));
-  console.log(dim(`  Pre-cutover (initial / source-quiesced / state-transferred):`));
-  console.log(dim(`    Source still owns; un-quiesce + leave target leak for lazy cleanup.`));
-  const postCutover = rollbackPlan({ ...initial, phase: "cutover-done" });
-  console.log(yellow(`  Post-cutover (cutover-done):`));
-  postCutover.forEach((step) => {
-    console.log(`    ${ARROW} ${describeStep(step)}`);
-  });
+  console.log("\n" + bold("FORWARD PLAN"));
+  console.log(dim("  Prepare target → quiesce source → transfer and verify → commit placement → release source."));
+  console.log("\n" + bold("RECOVERY"));
+  console.log(dim("  Before cutover: abort only when in-flight work is proven stopped; then resume source."));
+  console.log(dim("  After cutover: recover forward using the same durable handoff."));
+  console.log(dim("  Ambiguous target preparation or helper execution remains fenced."));
 
   if (!apply) {
     console.log("\n" + dim(`--- PLAN ONLY (re-run with --apply to execute) ---`));
     return;
   }
 
-  await executeMigration(slug, user.uid, fromGatewayId, toGatewayId);
+  await executeMigration(slug, user.uid, fromGatewayId, toGatewayId, sourceTransferMode);
 }
 
 const MIGRATION_OP_TIMEOUT_MS = 30 * 60_000;
+
+export function resolveFleetSourceTransferMode(value: unknown): "retained-pod" | undefined {
+  if (value === undefined) return undefined;
+  if (value !== "retained-pod") throw new Error("migration transfer requires --source-transfer=retained-pod");
+  return value;
+}
 
 export function buildFleetMigrateOperationInput(
   uid: string,
   fromGatewayId: string,
   toGatewayId: string,
-): { uid: string; fromGatewayId: string; toGatewayId: string } {
-  return { uid, fromGatewayId, toGatewayId };
+  sourceTransferMode?: unknown,
+): { uid: string; fromGatewayId: string; toGatewayId: string; sourceTransferMode?: "retained-pod" } {
+  const mode = resolveFleetSourceTransferMode(sourceTransferMode);
+  return { uid, fromGatewayId, toGatewayId, ...(mode ? { sourceTransferMode: mode } : {}) };
 }
 
 async function executeMigration(
@@ -1701,11 +1688,12 @@ async function executeMigration(
   uid: string,
   fromGatewayId: string,
   toGatewayId: string,
+  sourceTransferMode?: "retained-pod",
 ): Promise<void> {
   const opsDb = db as unknown as OperationsDb;
   const opId = await enqueueOperation(opsDb, {
     kind: "migrate-customer",
-    input: buildFleetMigrateOperationInput(uid, fromGatewayId, toGatewayId),
+    input: buildFleetMigrateOperationInput(uid, fromGatewayId, toGatewayId, sourceTransferMode),
     createdBy: `fleet-cli:${process.env.USER ?? "operator"}`,
   });
 
@@ -1813,7 +1801,7 @@ const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
         return missingArg("migrate-customer");
       }
-      return migrateCustomerPlan(args.positional[1], to, apply);
+      return migrateCustomerPlan(args.positional[1], to, apply, resolveFleetSourceTransferMode(args.flags["source-transfer"]));
     }
   }
 

@@ -1,3 +1,5 @@
+import { sourceTransferRsyncArgs } from "./source-transfer-rsync.js";
+import { sourcesForPushMode } from "./source-transfer-plan.js";
 import { log as provisionerLog } from "@octogee/core/config";
 import { withLogContext, setLogContext, type LogContext } from "@octogee/shared/server/service-logger";
 
@@ -32,7 +34,6 @@ import {
   type PrepareRsyncImportResponse,
   type PrepareImportRequestBody,
   type PushRsyncStateRequestBody,
-  type PushStateRequestBody,
   type QuiesceRequestBody,
   type QuiesceResponse,
   type RsyncMigrationRpcPhase,
@@ -52,14 +53,12 @@ import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
 import {
   findUnreadableStore,
   listSqliteStores,
-  SQLITE_CARRY_EXCLUDE_ARGS,
 } from "./agent-store-carry.js";
 import {
   exportAgentStoreSnapshots,
   findStagedLiveAgentStores,
   installPreparedAgentStores,
   isAgentSnapshotArtifact,
-  LIVE_AGENT_STORE_EXCLUDE_ARGS,
   prepareAgentStoreSnapshots,
 } from "./agent-store-snapshot.js";
 import {
@@ -930,18 +929,6 @@ async function maybeMaterializeActivationManifest(
 
 type MigrationImportMode = "keys" | "pre" | "final" | "default";
 
-function sourcesForPushMode(
-  sources: Array<{ cwd: string; path: string }>,
-  slug: string,
-  mode: PushStateRequestBody["mode"],
-): Array<{ cwd: string; path: string }> {
-  const keyPath = path.join("customer-keys", slug);
-  if (mode === "keys") return sources.filter((source) => source.path === keyPath);
-  if (mode === "pre" || mode === "final") {
-    return sources.filter((source) => source.path !== keyPath);
-  }
-  return sources;
-}
 
 const RSYNC_IMPORT_MODULE = "state";
 const RSYNC_READY_TIMEOUT_MS = 5_000;
@@ -1100,11 +1087,7 @@ function trimTrailingSlash(value: string): string {
   return value.slice(0, end);
 }
 
-function posixRel(value: string): string {
-  let start = 0;
-  while (start < value.length && value.charCodeAt(start) === 47) start += 1;
-  return value.slice(start).split("\\").join("/");
-}
+
 
 function rsyncPortFromDeps(deps: MigrationHandlerDeps): number {
   if (deps.migrationRsyncPort) return deps.migrationRsyncPort;
@@ -1223,9 +1206,6 @@ async function stopConflictingRsyncSession(migrationId: string, port: number): P
   }
 }
 
-function rsyncSourceArg(source: { cwd: string; path: string }): string {
-  return `${trimTrailingSlash(source.cwd)}/./${posixRel(source.path)}`;
-}
 
 async function runSpawnChecked(
   command: string,
@@ -1655,21 +1635,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       );
       await runSpawnChecked(
         RSYNC_BIN,
-        [
-          "-a",
-          "--relative",
-          ...(mode === "final" ? ["--delete-delay"] : []),
-          "--ignore-missing-args",
-          "--compress",
-          "--compress-choice=zstd",
-          "--checksum-choice=xxh128",
-          ...LIVE_AGENT_STORE_EXCLUDE_ARGS,
-          ...SQLITE_CARRY_EXCLUDE_ARGS,
-          "--password-file",
-          passwordFile,
-          ...sources.map((source) => rsyncSourceArg(source)),
-          destination,
-        ],
+        sourceTransferRsyncArgs(sources, passwordFile, destination, mode),
         {
           timeoutMs,
           label: "rsync push-state",

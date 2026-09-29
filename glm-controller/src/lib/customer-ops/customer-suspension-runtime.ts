@@ -6,7 +6,7 @@ import {
 } from "@octogee/shared/types/model-broker-usage";
 import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { customerRestoreFencePresent, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
+import { customerRestoreFencePresent, customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 
 const TERMINAL_STRIPE_SUBSCRIPTION_STATUSES = new Set(["canceled", "incomplete_expired"]);
 const FIRESTORE_VISIBILITY_BATCH_SIZE = 400;
@@ -75,6 +75,7 @@ export async function assertCustomerRestoreNotInProgress(
 ): Promise<void> {
   const user = await db.collection("users").doc(uid).get();
   if (customerRestoreFencePresent(user.data())) throw new Error("customer restore is in progress");
+  if (customerRuntimeMutationFenced(user.data())) throw new Error("customer source transfer is in progress");
 }
 
 export async function releaseCustomerPlacement(
@@ -91,6 +92,7 @@ export async function releaseCustomerPlacement(
   await db.runTransaction(async (txn) => {
     const user = await txn.get(userRef);
     if (customerRestoreFencePresent(user.data())) throw new Error("customer restore is in progress");
+    if (customerRuntimeMutationFenced(user.data())) throw new Error("customer source transfer is in progress");
     const provisioning = user.data()?.provisioning as Record<string, unknown> | undefined;
     const openclaw = provisioning?.openclaw as Record<string, unknown> | undefined;
     const currentGatewayId = typeof openclaw?.gatewayId === "string" ? openclaw.gatewayId : null;

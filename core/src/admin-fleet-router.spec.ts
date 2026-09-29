@@ -2913,6 +2913,35 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(remaining.u1.accountLifecycle).toBeUndefined();
   });
 
+  it.each(["failed", "succeeded"])("refuses unassignment after a source transfer operation is %s while its fence remains", async (status) => {
+    const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", sourceTransferFence: { operationId: "restore-1", phase: "dispatched" } } } };
+    const assignmentPath = "gateways/shared-1/assignments/u1";
+    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-customer", state: "serving", epoch: 3, createdAt: 1, updatedAt: 2, updatedByOperationId: null };
+    const { app, calls, remaining, otherDocs } = makeDeleteApp({ u1: user }, {
+      [assignmentPath]: assignment,
+      "glmOperations/restore-1": { kind: "migrate-customer", status, inputUid: "u1", input: { uid: "u1" } },
+    });
+
+    const response = await request(app).post("/customers/u1/unassign");
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/source transfer/);
+    expect(remaining.u1).toEqual(user);
+    expect(otherDocs[assignmentPath]).toEqual(assignment);
+    expect(calls).not.toContain("batch:update:users/u1");
+    expect(calls).not.toContain(`batch:delete:${assignmentPath}`);
+  });
+
+  it("refuses suspension while an ambiguous source transfer holds customer authority", async () => {
+    const { app, calls, remaining } = makeDeleteApp({
+      u1: { username: "alice", provisioning: { openclaw: { sourceTransferFence: { phase: "dispatched" }, gatewayId: "shared-1" } } },
+    });
+    await request(app).post("/customer/u1/delete").expect(409);
+    expect(calls).not.toContain("suspend-auth:u1");
+    expect(calls).not.toContain("revoke:u1");
+    expect(remaining.u1.accountLifecycle).toBeUndefined();
+  });
+
   it("schedules retention for a pre-provisioning account instead of deleting inline", async () => {
     const { app, calls } = makeDeleteApp({ u1: { email: "a@b.co" } });
 

@@ -195,6 +195,12 @@ describe("active operation claim", () => {
     expect(() => assertActiveOperationClaim(claimed, { ...claimed })).not.toThrow();
   });
 
+  it("allows current cancellation cleanup but rejects another claimant's phase persistence", () => {
+    const cancelled = {...claimed,cancellationRequestedAt:102};
+    expect(() => assertActiveOperationClaim(claimed,cancelled,true)).not.toThrow();
+    expect(() => assertActiveOperationClaim(claimed,{...cancelled,startedAt:101},true)).toThrow("operation claim");
+  });
+
   it.each([
     null,
     { ...claimed, status: "completed" },

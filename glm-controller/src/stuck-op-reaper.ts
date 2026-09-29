@@ -5,7 +5,7 @@ import {
   type Operation,
 } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { customerRestoreFencePresent, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
+import { customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
 import { MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
 
@@ -102,8 +102,8 @@ function legacyReapAdmission(input: {
   if (!input.operationSnapshot.exists) return { reaped: false };
   const operation = { ...input.operationSnapshot.data(), id: input.operationId } as Operation;
   if (!input.stillReapable(operation)) return { reaped: false };
-  if (customerRestoreFencePresent(input.userSnapshot?.data())) {
-    return { reaped: false, gateMessage: `[${input.logLabel}] source assignment recovery blocked by unresolved customer restore` };
+  if (customerRuntimeMutationFenced(input.userSnapshot?.data())) {
+    return { reaped: false, gateMessage: `[${input.logLabel}] source assignment recovery blocked by unresolved customer restore or source transfer` };
   }
   return { operation };
 }

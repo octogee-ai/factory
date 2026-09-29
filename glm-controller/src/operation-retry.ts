@@ -1,3 +1,5 @@
+import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
+import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import type {
   CustomerMigrationV2State,
@@ -102,6 +104,7 @@ export function operationFirstStartedAt(op: Pick<Operation,
 export function operationNeedsDurableCustomerMigrationV2Resume(op: {
   kind?: string;
   customerMigrationV2?: CustomerMigrationV2State;
+  sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
   return op.kind === "migrate-customer" && op.customerMigrationV2 !== undefined;
 }
@@ -112,8 +115,9 @@ export function operationNeedsDurableRestartResume(op: {
   origin?: string;
   input?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
+  sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
-  return op.kind === "suspend-customer" ||
+  return sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
     op.kind === "erase-customer" ||
     isLevelTriggeredBuilderReturn(op) ||
     operationNeedsDurableCustomerMigrationV2Resume(op);
@@ -122,7 +126,9 @@ export function operationNeedsDurableRestartResume(op: {
 export function supersededRollMigrationAction(op: {
   status: string;
   output?: Record<string, unknown>;
+  sourceTransferExecution?: SourceTransferExecution;
 }): "cancel" | "wait" | "done" {
+  if (sourceTransferBlocksRelease(op.sourceTransferExecution)) return "wait";
   if (op.status === "running") return "wait";
   if (op.status === "pending") {
     const cleanup = op.output?.configCleanup;
@@ -141,6 +147,7 @@ export interface OperationCompletionInput {
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
     customerMigrationV2?: CustomerMigrationV2State;
+  sourceTransferExecution?: SourceTransferExecution;
   };
   result: OperationResult;
   steps: OperationStep[];
@@ -331,6 +338,10 @@ export function buildOperationCompletionUpdate(
   const { op, result, steps } = input;
   const persistedSteps = steps.length > 0 ? steps : result.steps;
   const attempts = (op.attempts ?? 0) + 1;
+  if (sourceTransferBlocksRelease(op.sourceTransferExecution)) return {
+    status:'pending',startedAt:null,completedAt:null,expireAt:FieldValue.delete(),steps:persistedSteps,
+    nextAttemptAt:input.now+30_000,lastProgressAt:input.now,error:'source transfer termination not observed',
+  };
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);

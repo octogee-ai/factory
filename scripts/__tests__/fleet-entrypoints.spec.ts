@@ -24,6 +24,7 @@ import {
 } from "../ops/assign-customer-gateway.js";
 import {
   buildFleetMigrateOperationInput,
+  resolveFleetSourceTransferMode,
   executeFleetGatewayMutation,
   parseForceRestartPodList,
   parseFleetArgs,
@@ -981,6 +982,23 @@ describe("fleet CLI args", () => {
       fromGatewayId: "bender",
       toGatewayId: "operator-green",
     });
+  });
+
+  it("admits retained-pod transfer only through the explicit operator flag", () => {
+    const args = parseFleetArgs(["--env=test", "migrate-customer", "alice", "--to=shared-2", "--source-transfer=retained-pod"]);
+    const mode = resolveFleetSourceTransferMode(args.flags["source-transfer"]);
+    expect(buildFleetMigrateOperationInput("uid-alice", "shared-1", "shared-2", mode)).toEqual({
+      uid: "uid-alice",
+      fromGatewayId: "shared-1",
+      toGatewayId: "shared-2",
+      sourceTransferMode: "retained-pod",
+    });
+    expect(resolveFleetSourceTransferMode(undefined)).toBeUndefined();
+  });
+
+  it.each([true, false, "", "auto", "retained", " retained-pod", null])("rejects invalid source-transfer mode %j before enqueue", (mode) => {
+    expect(() => resolveFleetSourceTransferMode(mode)).toThrow("--source-transfer=retained-pod");
+    expect(() => buildFleetMigrateOperationInput("uid-alice", "shared-1", "shared-2", mode)).toThrow("--source-transfer=retained-pod");
   });
 
   it("parses value flags in both equals and split forms", () => {

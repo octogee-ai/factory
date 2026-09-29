@@ -1,6 +1,6 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, } from "@octogee/shared/types/glm";
-import { isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
+import { customerRuntimeMutationFenced, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { findActiveGatewayMigration } from "./fleet-operation-lock.js";
 // Retirement under the simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): claim the
 // gateway atomically (guarding mounted customers + in-flight migrations), flip
@@ -164,6 +164,23 @@ function claimableGatewayRetirementRoot(gatewayId, value) {
         root,
     };
 }
+export async function assertGatewayRuntimeMutationUnfenced(db, transaction, gatewayId) {
+    const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
+    if (root.data()?.runtimeRestartFence !== undefined) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
+    }
+    const [retainedTransfers, transferTargets, mirroredUsers] = await Promise.all([
+        transaction.get(db.collection("users")
+            .where("provisioning.openclaw.sourceTransferFence.sourceGatewayId", "==", gatewayId)),
+        transaction.get(db.collection("users")
+            .where("provisioning.openclaw.sourceTransferFence.targetGatewayId", "==", gatewayId)),
+        transaction.get(db.collection("users")
+            .where("provisioning.openclaw.gatewayId", "==", gatewayId)),
+    ]);
+    if (retainedTransfers.size > 0 || transferTargets.size > 0 || mirroredUsers.docs.some(doc => customerRuntimeMutationFenced(doc.data()))) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
+    }
+}
 export async function claimGatewayRetirementAtomic(input) {
     const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
     const operationRef = input.db
@@ -190,6 +207,7 @@ export async function claimGatewayRetirementAtomic(input) {
         if (migrationConflict) {
             throw new GatewayRetirementConflictError(`customer migration is in flight for gateway ${input.gatewayId}`);
         }
+        await assertGatewayRuntimeMutationUnfenced(input.db, transaction, input.gatewayId);
         let liveRuntimeIdentity = null;
         if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
             const runtimeSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId));
@@ -250,6 +268,14 @@ export async function verifyGatewayRetirementClaimAtomic(input) {
                 ok: false,
                 error: `gateway ${input.gatewayId} desiredStatus left retired during retirement`,
             };
+        }
+        try {
+            await assertGatewayRuntimeMutationUnfenced(input.db, transaction, input.gatewayId);
+        }
+        catch (error) {
+            if (!(error instanceof GatewayRetirementConflictError))
+                throw error;
+            return { ok: false, error: error.message };
         }
         return { ok: true };
     });

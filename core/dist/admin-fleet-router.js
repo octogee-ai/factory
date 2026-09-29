@@ -4,7 +4,7 @@ import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, customerRestoreFencePresent, isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, customerRestoreFencePresent, customerRuntimeMutationFenced, isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
 import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
@@ -18,7 +18,7 @@ import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-contro
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { requestBuilderActivationLease } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
-import { GatewayRetirementConflictError, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
+import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfenced, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError, } from "./gateway-release-append.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
 import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
@@ -2213,7 +2213,7 @@ async function claimCustomerDeletion(opts) {
         if (!userSnap.exists)
             return { kind: "not-found" };
         const userData = userSnap.data() ?? {};
-        if (customerRestoreFencePresent(userData)) {
+        if (customerRuntimeMutationFenced(userData)) {
             return { kind: "conflict", deletionId: null, operationId: null };
         }
         const lifecycle = isPlainRecord(userData.accountLifecycle)
@@ -3906,6 +3906,14 @@ export function addAdminFleetRoutes(router, deps) {
                             error: `customer migration is in flight for gateway ${id}`,
                         };
                     }
+                    try {
+                        await assertGatewayRuntimeMutationUnfenced(db, txn, id);
+                    }
+                    catch (error) {
+                        if (!(error instanceof GatewayRetirementConflictError))
+                            throw error;
+                        return { ok: false, error: error.message };
+                    }
                     txn.update(rootRef, {
                         ...built.ok.patch,
                         updatedAt: Date.now(),
@@ -4417,8 +4425,9 @@ export function addAdminFleetRoutes(router, deps) {
                     if (!userSnap.exists) {
                         return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
                     }
-                    if (customerRestoreFencePresent(userSnap.data())) {
-                        return { status: 409, body: { error: "customer restore outcome is unresolved — cannot unassign", uid } };
+                    if (customerRuntimeMutationFenced(userSnap.data())) {
+                        const action = customerRestoreFencePresent(userSnap.data()) ? "restore" : "source transfer";
+                        return { status: 409, body: { error: `customer ${action} outcome is unresolved — cannot unassign`, uid } };
                     }
                     const currentGatewayId = readUserGatewayId(userSnap.data());
                     if (!currentGatewayId) {

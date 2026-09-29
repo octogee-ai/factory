@@ -2,7 +2,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { customerRestoreFencePresent, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
+import { customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -84,7 +84,7 @@ async function pruneOne(input: {
         transaction.get(operationRef),
       ]);
     if (!assignmentSnapshot.exists) return true;
-    if (customerRestoreFencePresent(userSnapshot.data())) return "restore-fenced";
+    if (customerRuntimeMutationFenced(userSnapshot.data())) return "restore-fenced";
     const stored = record(assignmentSnapshot.data());
     if (
       !stored ||

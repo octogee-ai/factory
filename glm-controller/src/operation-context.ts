@@ -7,7 +7,7 @@ export interface PersistFn {
 }
 
 export interface CreateOperationContextDeps {
-  assertActiveClaim?: () => Promise<void>;
+  assertActiveClaim?: (allowCancelled?: boolean) => Promise<void>;
   customerRestore?: {
     assertSettled: () => Promise<void>;
     begin: (input: Parameters<NonNullable<OperationContext["withCustomerRestoreFence"]>>[0]) => Promise<() => Promise<void>>;
@@ -75,10 +75,11 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
 export function assertActiveOperationClaim(
   claimed: Operation,
   fresh: (Operation & { cancellationRequestedAt?: unknown }) | null,
+  allowCancelled = false,
 ): void {
   if (claimed.status !== "running" || typeof claimed.startedAt !== "number" ||
       !fresh || fresh.status !== "running" || fresh.startedAt !== claimed.startedAt ||
-      fresh.cancellationRequestedAt !== undefined || fresh.kind !== claimed.kind ||
+      (!allowCancelled && fresh.cancellationRequestedAt !== undefined) || fresh.kind !== claimed.kind ||
       fresh.input.uid !== claimed.input.uid || fresh.input.fromGatewayId !== claimed.input.fromGatewayId ||
       fresh.input.toGatewayId !== claimed.input.toGatewayId) {
     throw new Error("operation claim is no longer active for this migration attempt");

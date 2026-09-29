@@ -1,3 +1,4 @@
+import type { Operation } from "@octogee/shared/types/glm";
 import { describe, expect, it } from "vitest";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
@@ -795,5 +796,19 @@ describe("buildOperationCompletionUpdate", () => {
 
       expect(update.status).toBe("failed");
     });
+  });
+});
+
+
+describe("retained source execution completion", () => {
+  const execution = {status:"reserved"} as NonNullable<Operation["sourceTransferExecution"]>;
+  it.each([true,false])("keeps unobserved helper pending when handler success=%s", success => {
+    const update = buildOperationCompletionUpdate({op:{sourceTransferExecution:execution,attempts:100},result:{success,steps:[],error:"terminal failure"},steps:[],now:1000});
+    expect(update).toMatchObject({status:"pending",completedAt:null,nextAttemptAt:31000});
+    expect(update).not.toHaveProperty("rolledBack");
+  });
+  it("protects unresolved execution from reaper and superseded pending cancellation",()=>{
+    expect(operationNeedsDurableRestartResume({sourceTransferExecution:execution})).toBe(true);
+    expect(supersededRollMigrationAction({status:"pending",sourceTransferExecution:execution})).toBe("wait");
   });
 });

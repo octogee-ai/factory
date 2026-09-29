@@ -798,6 +798,32 @@ export interface SchedulerHandoffState {
   stagedAt?: number;
 }
 
+export interface SourceTransferAuthority {
+  targetIdentity: string;
+  targetGatewayId: string;
+  targetName: string;
+  targetIp: string;
+  targetVm: boolean;
+  operationId: string;
+  claimStartedAt: number;
+  migrationId: string;
+  uid: string;
+  slug: string;
+  sourceGatewayId: string;
+  assignmentEpoch: number;
+  namespace: string;
+  podName: string;
+  podUid: string;
+  image: string;
+}
+export interface SourceTransferExecution extends SourceTransferAuthority {
+  executionId: string;
+  status: 'reserved' | 'preparing' | 'prepared' | 'dispatched' | 'transferred' | 'failed' | 'unresolved';
+  exitCode?: number;
+  failureReason?: 'not-dispatched';
+  targetCleanup?: 'pending' | 'complete';
+}
+
 export interface Operation {
   id: string;
   kind: OperationKind;
@@ -835,6 +861,7 @@ export interface Operation {
   attemptHistory?: OperationAttemptRecord[];
   output?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
+  sourceTransferExecution?: SourceTransferExecution;
   schedulerHandoff?: SchedulerHandoffState;
   schedulerHandoffReleased?: boolean;
   schedulerHandoffReleasedAt?: number;
