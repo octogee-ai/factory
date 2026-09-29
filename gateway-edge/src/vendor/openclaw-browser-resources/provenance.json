@@ -1,7 +1,7 @@
 {
   "source": "99af6c4ba61dc2f8310d0147174bf46971d92770",
   "inputs": {
-    "sha256": "cc78ff387d657b93524c9bf9a90728c7f2e5095ce7154e87d97ad12119bdbd76",
+    "sha256": "356e8f5e18e782d2501d40cfbc8c442bdb0d99ea4225304947fc37578a498931",
     "files": [
       "octogee/app/openclaw-browser/entry.ts",
       "octogee/app/openclaw-browser/media.ts",
