@@ -116,112 +116,89 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream: main
-[`7d11bc907771fd54c6de23b7ed4950ac906536d2`](https://github.com/openclaw/openclaw/commit/7d11bc907771fd54c6de23b7ed4950ac906536d2).
+[`a15f3f72a6aabe4d51ce53426d717b4c65a4589e`](https://github.com/openclaw/openclaw/commit/a15f3f72a6aabe4d51ce53426d717b4c65a4589e).
 Exact overlay:
-[`c8a90061f685361811eb58df4b0075e290c2d7d0`](https://github.com/ceckert/openclaw/commit/c8a90061f685361811eb58df4b0075e290c2d7d0),
-pushed to `ceckert/openclaw:codex/fix-message-sent-scope-sept29`.
-Package version is `2026.9.6`; these are September 28 main-snapshot bytes,
-not a GA tag. [Full CI 36458666798](https://github.com/openclaw/openclaw/actions/runs/36458666798)
-qualified the locked upstream with 151 successful jobs and seven intentional
-skips across all 158 jobs, including a successful `openclaw/ci-gate`.
-The skipped lanes were PR fail-fast/check planning, Node 24 compatibility,
-iOS release E2E and screenshot lanes, and the full-release child evidence seal.
+[`06373977281e7b4006edeca49251b0011502659f`](https://github.com/ceckert/openclaw/commit/06373977281e7b4006edeca49251b0011502659f),
+pushed to `ceckert/openclaw:codex/octogee-main-sept29`.
+Package version is `2026.9.6`; these are September 29 main-snapshot bytes,
+not a GA tag. [Full CI 36575467514](https://github.com/openclaw/openclaw/actions/runs/36575467514)
+qualified the locked upstream with 197 successful jobs and 14 conditional skips
+across all 211 jobs. This is full-CI qualification, not a claim that upstream's
+separate release validation is green.
 
-The overlay includes the adapted native Talk/operator-takeover work from
-[fork PR #5](https://github.com/ceckert/openclaw/pull/5) and cron system-job
-classification from [fork PR #6](https://github.com/ceckert/openclaw/pull/6).
-Octogee #4143's voice grants use the exact live authenticated voice-session SDK
-getter in this source. Both runtime objects and all committed hosted UI islands
-come from this same clean, built checkout.
+The overlay retains fork PRs #5/#6, live voice-session grants, native approval
+authority, hosted Automations and final-reply observation. Runtime objects and
+all seven hosted UI provenance records come from the same clean, built source.
+The UI input audit retained the native entry points and adopted upstream's
+picker/layout simplification, desktop theme inheritance and browser-client
+changes; no replacement renderer or compatibility wrapper was added.
 
-The latest recut evaluates `message_sent` observer availability at delivery,
-not when a channel turn first creates its emitter. A tool turn can create that
-emitter inside a hookless prepared generation and deliver its final reply after
-leaving that scope. The native runner already resolves the current generation;
-the emitter must not retain an earlier absence. Generation isolation remains
-exclusive: this adds no root fallback, observer registration or delivery queue.
-The change addresses a reproduced missing-observation path; live notification
-recovery still needs deployment validation.
-
-The prior optional native Automations view capabilities remain: a hosted
-read-only explanation and per-job run-history access. Omitted props retain
-native behavior. Workspace Automations exposes tenant-filtered job inventory
-and run metadata, neither transcripts nor heartbeat scratch. The upstream lock,
-schemas, CUA and base toolchain remain unchanged.
+This rebase composes native auth-neutral reload skipping with pending refresh
+scope, carries process-bound restart preparation into its new native owner,
+and registers both native worker-pool construction paths for resource cleanup.
+A failing worker-cleanup control caught the construction change. Talk narration
+now preserves upstream's caller session key. Three unused SDK type re-exports
+were removed; their internal types remain.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-66abcdba.tgz` | `66abcdba0a66b6e32829ecd939b9cfa19c1e9fb84d1adc894900a02b7f4efcd0` | `1790661904172911` |
-| `openclaw-mattermost-b364f8ab.tgz` | `b364f8ab90ddafdd217b01950d34f75718fe3b079abc4f602f1f9c8a27d8af08` | `1790627334836010` |
+| `openclaw-fork-74d5699a.tgz` | `74d5699aa674db1182294d223f04a8f0c77857c05bec8eed8a17def8b2b7add9` | `1790698528730556` |
+| `openclaw-mattermost-f49c678c.tgz` | `f49c678c390c883b7b82863ce335f94dadb7a6ff0b43985b8c5f80cc70341e2e` | `1790698531739611` |
 
-Shared-state schema is 20; agent schema is 23. Preserve native backups and
-roll forward, not an image-only downgrade or reset.
+Shared-state schema remains 20; agent schema advances from 23 to 24. Preserve
+native backups and roll forward, not an image-only downgrade or reset.
 
 ### Qualification
 
-The exact-source `pnpm build` passed and records build ID
-`2026.9.6-c8a90061f685-2026-09-29T05-52-34.578Z`. Both maintained packers ran
-sequentially. Native archive integrity, isolated matched installation, and the
-actual Linux arm64 `openclaw-full-plugin-installer` target passed. The latter
-verified 155 byte-identical bundled Codex files, native bundled trust and all
-three native-hook imports. Local installer image:
-`sha256:19d703b40baee3181d8ddf3ea98fda25e65b44082993bb197fc466d5c28179cb`.
+The exact-source `pnpm build` passed in 9m 7.6s and records build ID
+`2026.9.6-06373977281e-2026-09-29T15-59-09.117Z`. Both maintained packers ran
+sequentially. Exact-source voice and activity consumer SDK checks passed.
+Native archive integrity and the isolated matched installation passed. The
+actual Linux arm64 `openclaw-full-plugin-installer` passed with 156 byte-identical
+Codex files, nine Parallel files, bundled trust and all three native-hook imports.
+Local installer image:
+`sha256:7627c58222787c73e534a4e86835b868a20f2b3e032de47fa4ef59002fa9e771`.
 This is package qualification, not the later Build main gateway image identity.
-Both published objects were read back and their full SHA-256 values verified.
-The newly packed Mattermost archive is byte-identical to the existing object;
-its original immutable generation is reused, not overwritten.
+Both write-once objects were read back and their full hashes verified.
 
-The observer-scope correction first failed the real native channel-turn control
-while three isolation controls passed. After the fix, 268 tests across five
-files passed, including root-final observation after scoped tool progress and
-no fallback from hookless final delivery. Production core types, scoped typed
-lint, formatting and native line caps passed; independent review found no
-actionable issue. This two-file change adds no Octogee-side notification engine.
-All seven UI provenance records were regenerated from this exact source; the
-input audit found no bundled native UI changes since the prior Automations pin.
-The final pin passed 135 artifact/provenance tests, 19 base-image tests and
-20 native-island, Automations and model-picker consumer tests. Generated
-JavaScript and CSS remain byte-identical to the prior pin.
+Focused native proof includes 150 worker/deletion/reload/Talk tests, 178
+cron/sharing/approval boundary tests, 49 final-reply channel-turn tests and five
+desktop/mobile UI E2E tests. These are separate suites, not an assertion that the
+entire upstream test suite ran. Additional catalog, registry, reader, channel,
+Mattermost and browser regressions passed. Production core/UI/extensions types,
+protocol/config/Kysely generation and native line-cap checks passed.
+Independent integration review found no actionable remaining regression.
+Scoped typed lint passed after packing stabilized generated companions.
+Octogee passed 135 artifact/provenance tests, 19 base-image tests, 45 native-island,
+model-picker and Automations consumer tests, and the PWA typecheck. Generated
+bundles changed with upstream and were regenerated together, not hand-edited.
 
-The hosted Automations seam passed five failing controls before implementation
-and 62 focused native tests across five files, UI types, scoped typed lint,
-i18n checks and the native line-cap ratchet. Independent review found no
-actionable production issue. The exact-source voice and notification consumer
-SDK checks passed. The island input audit inspected the changed native cron
-view and run-history owners; all seven provenance records were regenerated
-together. Automations shares the existing Lit/Web Awesome module graph, and its
-native CSS is scoped without changing surrounding PWA controls. Eleven island
-contract, coexistence and Automations tests passed. Desktop, narrow-mobile and
-native-dark browser rendering were checked; live broker acceptance remains a
-separate deployment check.
-
-The prior final-reply change passed a real native channel-turn RED/GREEN regression
-and 87 focused tests across five files (34.98 seconds including transform
-preparation), production core/UI/extensions types, scoped typed lint, SDK export
-consistency, formatting and line caps. Independent correctness/security review
-found no actionable issue. Its final-reply flag classifies successful delivery;
-it does not guarantee notification observer registration or live delivery.
-
-The underlying recut's focused native checks passed: the initial 493-test
-combined suite, 240 tests after the completion-owner extraction, 22 browser-owner tests, and a final
-243-test cron/tenant-boundary suite across 19 files. These runs overlap; they
-are not a unique-test total. Production core/extensions/UI types, scoped typed
-lint, formatting, native line caps, protocol/config generation, Kysely/schema
-parity and SDK export checks passed. The merged voice consumer's strict SDK
-contract check passed against this exact source. The broader SDK API-diff
-command stopped at its managed-process-group guard; it is not a passing gate,
-and no aggregate `pnpm check` success is claimed.
-
-Scoped Astra review findings were evaluated; the browser observation-owner
-defect was fixed with a failing two-tool control and passing regression.
-Native Control UI E2E passed five tests, with genuine pre-change comparisons
-and [desktop/mobile screenshot proof](https://github.com/octogee-ai/octogee/pull/4102#issuecomment-5877442438).
-The hosted-island input audit retained the native entry points, adopted the
-shared fullscreen owner and selected-model visibility improvement, and aligned
-the generator's package paths, import preservation and browser redactor with
-upstream. No local redaction implementation or Node polyfill is substituted.
+The unchanged upstream SDK size gate reports 4,597 exports against 4,594 and
+2,699 callables against 2,698 after removing three unused type exports.
+The retained surface has concrete approval, voice and packaged Mattermost
+consumers; the budget was not raised or bypassed. Export consistency passes.
+No aggregate `pnpm check` success is claimed.
 
 ### Patch assessment
+
+Rechecked against the selected `a15f3f72` base: none of the four contributed
+fixes is fully adopted. Native workspace registry reuse (#160658) does not cover
+the undefined-workspace metadata fallback. Whole-Gateway writer shutdown
+(#160201) does not close every isolate's readers during per-agent deletion.
+Auth-neutral reload skipping (#160274) does not detach a restarted channel
+monitor from its initiating RPC client's authority. Catalog retention is still
+unchanged. Keep the narrow behavioral coverage for these distinct boundaries.
+
+Native scoped Slack reviewers (#159525) cover approval routing and eligibility,
+not Octogee's live VM/run authority through execution. Native unknown-author
+attribution (#160257) fixes messages; the retained header patch resolves exact
+participant labels from the matching transcript. Worker computer takeover is
+already adopted: its transport has no diff from the selected upstream base.
+
+This is not an overall overlay reduction: the selected-base diff is 280 files,
+13,031 insertions and 1,153 deletions versus 12,958 insertions and 1,153 deletions
+at the prior base. Removed unused exports and duplicate/stale glue are offset
+by integration coverage and preserving resource ownership after upstream moves.
 
 | Behavior | Current consumer | Removal condition |
 | --- | --- | --- |
@@ -292,12 +269,11 @@ completion, authorization or a durable notification queue. The small follow-up
 changes 11 native files (141 insertions, nine deletions), mostly regression proof;
 it does not claim an overall overlay line-count reduction.
 
-Upstream contributions carry separate local and hosted evidence. The catalog
-and registry PRs have green hosted gates. Cleanup's final local proof includes
-actual descriptor release, custom-store recreation and failed-close ordering;
-hosted checks and maintainer sensitive-path approval remain separate gates.
-The channel-authority PR's session-title fixture failure remains unresolved.
-Check exact-head adoption and feedback before dropping any patch.
+Upstream contributions carry separate local and hosted evidence. #158986,
+#159002, #159013 and #159396 were all still open at this recut's inspection.
+Their hosted checks are not this overlay's qualification. Check exact-head
+adoption and feedback before dropping any patch; similarly named upstream
+cleanup is not evidence of equivalent behavior.
 
 ### Base-image inputs
 
