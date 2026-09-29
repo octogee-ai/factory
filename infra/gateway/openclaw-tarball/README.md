@@ -118,8 +118,8 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream: main
 [`7d11bc907771fd54c6de23b7ed4950ac906536d2`](https://github.com/openclaw/openclaw/commit/7d11bc907771fd54c6de23b7ed4950ac906536d2).
 Exact overlay:
-[`1131e06f20f89de036549e908df3a4b5e6931474`](https://github.com/ceckert/openclaw/commit/1131e06f20f89de036549e908df3a4b5e6931474),
-pushed to `ceckert/openclaw:codex/openclaw-main-sept28`.
+[`99af6c4ba61dc2f8310d0147174bf46971d92770`](https://github.com/ceckert/openclaw/commit/99af6c4ba61dc2f8310d0147174bf46971d92770),
+pushed to `ceckert/openclaw:codex/fix-message-sent-final-reply-sept28`.
 Package version is `2026.9.6`; these are September 28 main-snapshot bytes,
 not a GA tag. [Full CI 36458666798](https://github.com/openclaw/openclaw/actions/runs/36458666798)
 qualified the locked upstream with 151 successful jobs and seven intentional
@@ -134,9 +134,13 @@ Octogee #4143's voice grants use the exact live authenticated voice-session SDK
 getter in this source. Both runtime objects and all committed hosted UI islands
 come from this same clean, built checkout.
 
+The latest recut adds native final-reply classification for the notification
+consumer in Octogee #4153. It does not restore the removed Activity answer-commit
+projection. The upstream lock, schemas, CUA and base toolchain remain unchanged.
+
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-1d9ace2d.tgz` | `1d9ace2dae6b3533278a3c76b9316458a146d95b4fdd6aa779740e5fd6b404d8` | `1790627330955546` |
+| `openclaw-fork-8b05fff9.tgz` | `8b05fff9cc8745bcefabba731e8038f54f0d264fba2015334b92f0e298558d6a` | `1790646471096766` |
 | `openclaw-mattermost-b364f8ab.tgz` | `b364f8ab90ddafdd217b01950d34f75718fe3b079abc4f602f1f9c8a27d8af08` | `1790627334836010` |
 
 Shared-state schema is 20; agent schema is 23. Preserve native backups and
@@ -145,17 +149,28 @@ roll forward, not an image-only downgrade or reset.
 ### Qualification
 
 The exact-source `pnpm build` passed and records build ID
-`2026.9.6-1131e06f20f8-2026-09-28T20-01-42.677Z`. Both maintained packers ran
+`2026.9.6-99af6c4ba61d-2026-09-29T01-31-02.536Z`. Both maintained packers ran
 sequentially. Native archive integrity, isolated matched installation, and the
 actual Linux arm64 `openclaw-full-plugin-installer` target passed. The latter
 verified 155 byte-identical bundled Codex files, native bundled trust and all
 three native-hook imports. Local installer image:
-`sha256:b1dfc2162b6e0d1cf11f5d772ba1c374069c37ad78012d1c207a43139092984b`.
+`sha256:2e867898cdd49a573c206ad1da4416ce0f9e882bdf73a8f5ba564ed549c4aa31`.
 This is package qualification, not the later Build main gateway image identity.
 Both published objects were read back and their full SHA-256 values verified.
+The newly packed Mattermost archive is byte-identical to the existing object;
+its original immutable generation is reused, not overwritten.
 
-Focused native checks passed: the initial 493-test combined suite, 240 tests
-after the completion-owner extraction, 22 browser-owner tests, and a final
+The final-reply change passed a real native channel-turn RED/GREEN regression
+and 87 focused tests across five files (34.98 seconds including transform
+preparation), production core/UI/extensions types, scoped typed lint, SDK export
+consistency, formatting and line caps. Independent correctness/security review
+found no actionable issue. The exact-source voice and notification consumer SDK
+checks passed. The hosted-island input audit found no changed bundled inputs;
+all generated executable code and styles remain byte-identical, with all six
+provenance and license source records regenerated together.
+
+The underlying recut's focused native checks passed: the initial 493-test
+combined suite, 240 tests after the completion-owner extraction, 22 browser-owner tests, and a final
 243-test cron/tenant-boundary suite across 19 files. These runs overlap; they
 are not a unique-test total. Production core/extensions/UI types, scoped typed
 lint, formatting, native line caps, protocol/config generation, Kysely/schema
@@ -188,6 +203,7 @@ upstream. No local redaction implementation or Node polyfill is substituted.
 | Durable per-agent cron handoff | Cowboy Shared/Builder migration | Native transfer preserves ownership, partial handoff, rollback, retained jobs and scratch state without blocking unrelated system jobs. |
 | Native Talk consults and live voice-session binding | Octogee #4143 ticket-derived voice grants | Native channel consults expose the same authenticated live-session identity and cancellation boundary. |
 | Browser observation ownership during operator takeover | Coach browser tool and shared native panels | Native lazy tools retain per-owner observation generations so another agent cannot authorize stale input. |
+| Native final-reply classification in `message_sent` | Octogee #4153 final-reply notifications | Native opted-in channel settlement exposes terminal-final classification after provider finalization. |
 | Release superseded model-catalog generations | Long-lived gateway reloads | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
 | Reuse unchanged Gateway plugin registries across workspaces | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent preserves config, environment and metadata invalidation. |
 | Close deleted-agent owners and every isolate's database readers | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes descriptors without disturbing survivors or reopening deleted paths. |
@@ -231,12 +247,15 @@ cannot reconstruct target data already discarded by the old staging behavior.
 - Removed unused reader-close exports. Kept native invalidation for
   resolved-secret and plugin-config changes.
 
-Compared with the prior `8512ad6` overlay on `b458b9f`, the selected overlay
-touches 265 rather than 261 files. Non-test net additions are 4,566 versus 4,498;
-test/support additions are 6,932 versus 6,637. Adoption removed obsolete owners,
-but the combined Talk, cron and authority work means this is not an overall
-line-count reduction. Counts use `git diff --no-renames --numstat` against each
-overlay's own upstream and native topology test/support classification.
+Final-reply observers require `success === true` and `isFinalReply === true`.
+The existing native terminal-content predicate excludes progress, reasoning,
+commentary, status notices and supplemental audio, even in the final dispatch
+lane. One logical reply split across provider posts emits one observation with
+its representative message ID; multiple logical finals per run remain possible.
+Unclassified sends omit the flag. This is a best-effort observation, not run
+completion, authorization or a durable notification queue. The small follow-up
+changes 11 native files (141 insertions, nine deletions), mostly regression proof;
+it does not claim an overall overlay line-count reduction.
 
 Upstream contributions carry separate local and hosted evidence. The catalog
 and registry PRs have green hosted gates. Cleanup's final local proof includes
