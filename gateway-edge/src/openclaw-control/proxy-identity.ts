@@ -46,7 +46,7 @@ export interface OpenClawControlProxyIdentity {
   syncProfile(session: OpenClawControlProxyIdentitySession): Promise<void>;
 }
 
-interface OpenClawProfileListItem {
+export interface OpenClawProfileListItem {
   id: string;
   emails: string[];
   role?: string | null;
@@ -150,7 +150,7 @@ export async function openProxyIdentitySocket(args: {
   }
 }
 
-function profileFor(profiles: OpenClawProfileListItem[], uid: string): OpenClawProfileListItem | undefined {
+export function profileFor(profiles: OpenClawProfileListItem[], uid: string): OpenClawProfileListItem | undefined {
   const subject = uid.trim().toLowerCase();
   return profiles.find((profile) => profile.emails.some((email) => email === subject));
 }

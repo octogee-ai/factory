@@ -58,6 +58,7 @@ import {
   type OpenClawControlLease,
   type OpenClawControlResourceIdentity,
 } from "./limits.js";
+import { ChannelMembershipSyncError } from "./channel-membership-sync.js";
 import { OpenClawControlSessionManager, type OpenClawControlSession } from "./session.js";
 import { bridgeDesktopObserver, DesktopObserverTickets } from "./desktop-stream.js";
 import type { OpenClawControlMetrics, OpenClawControlMetricIdentity } from "./metrics.js";
@@ -923,6 +924,7 @@ export function createOpenClawControlHttpRouter(
         gatewayId: req.params.gatewayId,
         failure: outcome,
         errorType: error instanceof Error ? error.name : typeof error,
+        ...(error instanceof ChannelMembershipSyncError ? { channelSync: error.diagnostics } : {}),
       });
       if (!res.headersSent) {
         dashboardFailure(req, res, frameAncestor, 502, {

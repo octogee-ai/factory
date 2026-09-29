@@ -1836,6 +1836,20 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(shared.plugins.entries["octogee-voice-tools"]?.enabled).not.toBe(true);
   });
 
+  it("restores platform voice broker wiring from an existing native plugin config", () => {
+    const out = runPolicyWithDir("builder", {
+      plugins: { entries: { "octogee-voice-tools": { enabled: true, config: {
+        brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/customer-file",
+      } } } },
+      talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
+    }, undefined, {
+      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe",
+    }).config;
+
+    expect(out.plugins.entries["octogee-voice-tools"]).toEqual({ enabled: true, config: brokerPluginConfig });
+    expect(out.talk.realtime).toEqual({ provider: "google", providers: { google: { voice: "custom-voice" } } });
+  });
+
   it("makes native presentation and narration reachable through an existing Builder allowlist", () => {
     const out = runPolicyWithDir("builder", {
       plugins: { allow: ["mattermost"] },
@@ -1871,7 +1885,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.enabled).toBe(false);
     expect(out.plugins.deny).toEqual(config.plugins.deny);
     expect(out.plugins.entries["talk-voice"]).toEqual(config.plugins.entries["talk-voice"]);
-    expect(out.plugins.entries["octogee-voice-tools"]).toEqual(config.plugins.entries["octogee-voice-tools"]);
+    expect(out.plugins.entries["octogee-voice-tools"]).toEqual({ enabled: false, config: brokerPluginConfig });
     expect(out.tools.profile).toBe("minimal");
     expect(out.tools.deny).toEqual(config.tools.deny);
     expect(out.tools.allow).toEqual(expect.arrayContaining(["read", "screen", "talk_voice", ...workflowTools]));

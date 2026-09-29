@@ -1480,9 +1480,10 @@ function applyBuilderPolicy(config, openclawDir, env) {
 
 function applyBuilderTalkDefaults(config) {
   addBuilderToolCapabilities(config, ["screen", "talk_voice"]);
-  config.plugins.entries["octogee-voice-tools"] ??= {
-    enabled: true,
-    config: { brokerUrl: FLEET_BROKER_URL_TEMPLATE, tokenPath: API_SA_TOKEN_PATH_TEMPLATE },
+  config.plugins.entries["octogee-voice-tools"] ??= { enabled: true };
+  config.plugins.entries["octogee-voice-tools"].config = {
+    brokerUrl: FLEET_BROKER_URL_TEMPLATE,
+    tokenPath: API_SA_TOKEN_PATH_TEMPLATE,
   };
   config.talk ??= {};
   config.talk.realtime ??= {

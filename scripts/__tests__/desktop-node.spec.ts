@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,9 +8,9 @@ import { afterEach, expect, it } from "vitest";
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
-type LaunchOptions = { keyboard?: boolean; bus?: boolean; busFailures?: number; existing?: object };
+type LaunchOptions = { keyboard?: boolean; bus?: boolean; busFailures?: number; existing?: object; identityFails?: boolean; doctorFails?: boolean; stopNode?: boolean };
 
-function launch({ keyboard = true, bus = true, busFailures = 0, existing }: LaunchOptions = {}) {
+function launch({ keyboard = true, bus = true, busFailures = 0, existing, identityFails = false, doctorFails = false, stopNode = false }: LaunchOptions = {}) {
   const root = mkdtempSync(join(tmpdir(), "desktop-node-"));
   roots.push(root);
   const bin = join(root, "bin");
@@ -21,7 +22,7 @@ function launch({ keyboard = true, bus = true, busFailures = 0, existing }: Laun
     writeFileSync(join(root, ".openclaw/openclaw.json"), JSON.stringify(existing));
   }
   writeFileSync(join(runtime, "wayland-1"), "");
-  for (const name of ["mkdir", "ls", "grep", "head", "cat"]) {
+  for (const name of ["mkdir", "ls", "grep", "head", "cat", "rm"]) {
     const executable = spawnSync("/bin/sh", ["-c", `command -v ${name}`], { encoding: "utf8" });
     if (executable.status !== 0) throw new Error(`Missing test dependency: ${name}`);
     symlinkSync(executable.stdout.trim(), join(bin, name));
@@ -30,7 +31,29 @@ function launch({ keyboard = true, bus = true, busFailures = 0, existing }: Laun
   const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   stub("curl", "exit 0");
   stub("sleep", "exit 0");
-  stub("openclaw", 'printf "%s\\n" "$*"; printf "display=%s\\n" "$DISPLAY"; printf "bus=%s\\n" "$DBUS_SESSION_BUS_ADDRESS"');
+  const publicKey = Buffer.alloc(32, 1).toString('base64url');
+  const identity = { deviceId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex'), publicKey };
+  const identityPath = join(root, 'public-identity.json');
+  const capturedPath = join(root, 'captured-identity.json');
+  const stoppedPath = join(root, 'stopped');
+  writeFileSync(identityPath, JSON.stringify({ deviceId: 'stale' }));
+  stub("openclaw", `if [ "$1" = "doctor" ] && ${doctorFails}; then
+  echo "desktop driver unavailable" >&2
+  exit 23
+fi
+if [ "$*" = "node identity --json" ]; then
+  ${identityFails ? 'echo "native identity unavailable" >&2; exit 1' : `printf '%s\\n' '${JSON.stringify(identity)}'; exit 0`}
+fi
+printf "%s\\n" "$*"; printf "display=%s\\n" "$DISPLAY"; printf "bus=%s\\n" "$DBUS_SESSION_BUS_ADDRESS"
+if [ "$1 $2" = "node run" ]; then
+  while [ ! -s "$OCTOGEE_DESKTOP_NODE_IDENTITY_PATH" ]; do /bin/sleep 0.01; done
+  cat "$OCTOGEE_DESKTOP_NODE_IDENTITY_PATH" > "${capturedPath}"
+  if ${stopNode}; then
+    trap 'echo stopped > "${stoppedPath}"; exit 0' TERM
+    kill -TERM "$PPID"
+    while :; do /bin/sleep 0.01; done
+  fi
+fi`);
   if (keyboard) stub("wtype", "exit 0");
   if (bus) {
     writeFileSync(join(root, "bus-failures"), String(busFailures));
@@ -40,7 +63,7 @@ if [ "$remaining" -gt 0 ]; then echo $((remaining - 1)) > "${root}/bus-failures"
   }
   const result = spawnSync("/bin/bash", [resolve(__dirname, "../../infra/gateway/desktop-node.sh")], {
     encoding: "utf8", timeout: 2000,
-    env: { PATH: bin, HOME: root, XDG_RUNTIME_DIR: runtime, OCTOGEE_DESKTOP_NODE_NAME: "test-desktop", OPENCLAW_GATEWAY_PASSWORD: "fixture" },
+    env: { PATH: bin, HOME: root, XDG_RUNTIME_DIR: runtime, OCTOGEE_DESKTOP_NODE_NAME: "test-desktop", OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: identityPath, OPENCLAW_GATEWAY_PASSWORD: "fixture" },
   });
   const configPath = join(root, ".openclaw/openclaw.json");
   const busCallsPath = join(root, "bus-calls");
@@ -49,6 +72,10 @@ if [ "$remaining" -gt 0 ]; then echo $((remaining - 1)) > "${root}/bus-failures"
     config: existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : null,
     busCalls: existsSync(busCallsPath) ? readFileSync(busCallsPath, "utf8").trim().split("\n") : [],
     runtime,
+    identity,
+    capturedIdentity: existsSync(capturedPath) ? JSON.parse(readFileSync(capturedPath, "utf8")) : null,
+    identityRemains: existsSync(identityPath),
+    nodeStopped: existsSync(stoppedPath),
   };
 }
 
@@ -98,4 +125,33 @@ it("keeps the CUA driver stopped until the accessibility bus answers", () => {
   const waits = result.stdout.split("\n").filter((line) => line.includes("waiting for the accessibility bus (org.a11y.Bus)"));
   expect(waits).toHaveLength(2);
   expect(result.stdout.lastIndexOf(waits[1])).toBeLessThan(result.stdout.indexOf("doctor --lint"));
+});
+
+it("publishes the native public identity before serving and clears it when the node exits", () => {
+  const result = launch();
+  expect(result.status).toBe(0);
+  expect(result.capturedIdentity).toEqual(result.identity);
+  expect(result.identityRemains).toBe(false);
+});
+
+it("fails startup explicitly when the native node cannot publish its identity", () => {
+  const result = launch({ identityFails: true });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("desktop-node: native public identity was not available after startup");
+  expect(result.identityRemains).toBe(false);
+});
+
+it("removes the previous identity before dependency checks can fail", () => {
+  const result = launch({ doctorFails: true });
+  expect(result.status).toBe(23);
+  expect(result.stderr).toContain("desktop driver unavailable");
+  expect(result.stdout).not.toContain("node run");
+  expect(result.identityRemains).toBe(false);
+});
+
+it("terminates and waits for its native child when the container stops", () => {
+  const result = launch({ stopNode: true });
+  expect(result.status).toBe(143);
+  expect(result.nodeStopped).toBe(true);
+  expect(result.identityRemains).toBe(false);
 });

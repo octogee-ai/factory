@@ -48,10 +48,54 @@ describe("Mattermost native session membership projection", () => {
     expect(call.mock.calls.some(([method]) => method === "sessions.channel.sync")).toBe(false);
   });
 
+  it("keeps a rejected channel closed and records only bounded provenance diagnostics", async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "sessions.list") return { ok: true as const, result: { sessions: [] } };
+      if (method === "sessions.channel.sync") return { ok: false as const, reason: "session does not match channel provenance" };
+      return { ok: true as const, result: { session: { key: key("a"), createdVia: "operator", incognito: false, visibility: "private", origin: { provider: "mattermost", chatType: "group", nativeChannelId: "a".repeat(26) }, lastMessage: "private text" } } };
+    });
+    const rpc = { call: call as ChannelMembershipRpc["call"] };
+    const failure = await synchronizeChannelMemberships({ ...base, rpc, authorized: [{ key: key("a") }, { key: key("b") }] }).catch(error => error);
+    expect(failure.diagnostics).toEqual({ agentId: "octogee-alice-coach", channelId: "a".repeat(26), member: true,
+      metadataAvailable: true, channelCreated: false, creationSource: "operator", incognito: false, draft: false, matchingOrigin: true });
+    expect(failure.message).toBe("Native channel membership synchronization failed");
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["sessions.list", "sessions.channel.sync", "sessions.describe"]);
+    expect(call).toHaveBeenLastCalledWith("sessions.describe", { key: key("a"), agentId: "octogee-alice-coach", includeDerivedTitles: false, includeLastMessage: false });
+  });
+
+  it.each([
+    { createdVia: "talk", expected: "talk" },
+    { createdVia: undefined, expected: "missing" },
+    { createdVia: "private upstream details", expected: "other" },
+  ])("distinguishes missing and Talk provenance without exposing unexpected metadata: $expected", async ({ createdVia, expected }) => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "sessions.list") return { ok: true as const, result: { sessions: [] } };
+      if (method === "sessions.channel.sync") return { ok: false as const, reason: "provenance mismatch" };
+      return { ok: true as const, result: { session: { key: key("a"), createdVia } } };
+    });
+    const rpc = { call: call as ChannelMembershipRpc["call"] };
+    const failure = await synchronizeChannelMemberships({ ...base, rpc, authorized: [{ key: key("a") }] }).catch(error => error);
+    expect(failure.diagnostics.creationSource).toBe(expected);
+    expect(JSON.stringify(failure.diagnostics)).not.toContain("private upstream details");
+  });
+
+  it.each([false, true])("does not expose upstream failures when metadata is unavailable (throws: %s)", async throws => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "sessions.list") return { ok: true as const, result: { sessions: [] } };
+      if (method === "sessions.describe" && throws) throw new Error("private upstream details");
+      return { ok: false as const, reason: "private upstream details" };
+    });
+    const rpc = { call: call as ChannelMembershipRpc["call"] };
+    const failure = await synchronizeChannelMemberships({ ...base, rpc, authorized: [{ key: key("a") }] }).catch(error => error);
+    expect(failure.diagnostics).toEqual({ agentId: "octogee-alice-coach", channelId: "a".repeat(26), member: true, metadataAvailable: false });
+    expect(failure.message).toBe("Native channel membership synchronization failed");
+    expect(call.mock.calls.filter(([method]) => method === "sessions.channel.sync")).toHaveLength(1);
+  });
+
   it("stops before grants if revocation fails", async () => {
     const { rpc, call } = gateway({ keys: [key("a")], members: { [key("a")]: [member] }, fail: "sessions.channel.sync" });
     await expect(synchronizeChannelMemberships({ ...base, rpc, authorized: [{ key: key("b") }] })).rejects.toThrow();
     expect(call.mock.calls.filter(([method]) => method === "sessions.channel.sync")).toHaveLength(1);
-    expect(call.mock.calls.at(-1)?.[1].member).toBe(false);
+    expect(call.mock.calls.find(([method]) => method === "sessions.channel.sync")?.[1].member).toBe(false);
   });
 });

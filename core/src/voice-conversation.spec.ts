@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('./internal-fetch.js', () => ({ internalFetch: h.fetch }));
-import { bindVoiceGrant, endVoiceGrant, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest, postVoiceTurn, resolveVoiceConversation, voiceTurnMessage } from './voice-conversation.js';
+import { VoiceConversationConfigurationError, bindVoiceGrant, endVoiceGrant, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest, postVoiceTurn, resolveVoiceConversation, voiceTurnMessage } from './voice-conversation.js';
 const channelId = 'a'.repeat(26);
 const env = { OPENCLAW_RUNTIME_BROKER_URL: 'http://octogee-api:3001' };
 const args = { uid: 'u', gatewayId: 'b-alice', channelId, expectedAgentId: 'octogee-alice-coach', env };
@@ -16,6 +16,17 @@ describe('voice conversation broker', () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));
     await expect(resolveVoiceConversation(args)).resolves.toEqual(answer);
     expect(brokerCall()).toMatchObject({ origin: env.OPENCLAW_RUNTIME_BROKER_URL, path: '/internal/voice/conversation', body: { uid: 'u', gatewayId: 'b-alice', channelId }, redirect: 'error', options: { requireProjectedToken: true } });
+  });
+  it('uses an explicitly configured broker and token path without edge-only environment variables', async () => {
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));
+    await expect(resolveVoiceConversation({ ...args, env: {}, brokerUrl: 'http://localhost:3001', tokenPath: '/gateway/projected-token' })).resolves.toEqual(answer);
+    expect(brokerCall()).toMatchObject({ origin: 'http://localhost:3001', options: { tokenPath: '/gateway/projected-token', requireProjectedToken: true } });
+  });
+  it('fails before sending authority when the broker is unconfigured or untrusted', async () => {
+    h.fetch.mockReset();
+    await expect(resolveVoiceConversation({ ...args, env: {} })).rejects.toBeInstanceOf(VoiceConversationConfigurationError);
+    await expect(resolveVoiceConversation({ ...args, brokerUrl: 'https://foreign.example' })).rejects.toThrow('must target');
+    expect(h.fetch).not.toHaveBeenCalled();
   });
   it('never accepts a member credential from the broker context', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify({ ...answer, mmToken: 'm'.repeat(26) })));
