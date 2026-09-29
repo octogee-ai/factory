@@ -1548,6 +1548,11 @@ async function admittedRuntimeReset(
   return marker;
 }
 
+export function snapshotGreetingPosted(data: Record<string, unknown>): boolean {
+  const greeting = readPath(data, "provisioning.openclaw.greeting") as { ok?: unknown; jobId?: unknown } | undefined;
+  return greeting?.ok === true && typeof greeting.jobId === "string" && greeting.jobId.trim().length > 0;
+}
+
 function snapshotBaseFields(
   data: Record<string, unknown>,
   slug: string,
@@ -1608,7 +1613,7 @@ async function loadSnapshot(
   uid: string,
   data: Record<string, unknown>,
   options: LoadSnapshotOptions,
-): Promise<FleetBrokerUserSnapshot | null> {
+): Promise<(FleetBrokerUserSnapshot & { greetingPosted: boolean }) | null> {
   const { modelDials, projectCheckoutScope } = options;
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
@@ -1634,6 +1639,7 @@ async function loadSnapshot(
     uid,
     slug,
     ...baseFields,
+    greetingPosted: snapshotGreetingPosted(data),
     ...(runtimeReset ? { runtimeReset } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     freeTierModelRef: modelDials.freeTierModelRef,
