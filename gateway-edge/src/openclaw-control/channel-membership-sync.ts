@@ -23,6 +23,7 @@ interface ChannelSyncDiagnostics {
   member: boolean;
   metadataAvailable: boolean;
   channelCreated?: boolean;
+  creationSource?: "channel" | "talk" | "operator" | "missing" | "other";
   incognito?: boolean;
   draft?: boolean;
   matchingOrigin?: boolean;
@@ -35,7 +36,7 @@ export class ChannelMembershipSyncError extends Error {
   }
 }
 
-async function syncChannel(
+export async function synchronizeChannelMembership(
   rpc: ChannelMembershipRpc,
   route: NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>>,
   profileId: string,
@@ -61,6 +62,9 @@ async function syncChannel(
     if (session?.key === `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}`) {
       diagnostics.metadataAvailable = true;
       diagnostics.channelCreated = session.createdVia === "channel";
+      const via = session.createdVia;
+      if (via === "channel" || via === "talk" || via === "operator") diagnostics.creationSource = via;
+      else diagnostics.creationSource = via === undefined ? "missing" : "other";
       diagnostics.incognito = session.incognito === true;
       diagnostics.draft = session.visibility === "draft";
       if (session.origin) diagnostics.matchingOrigin = session.origin.provider === "mattermost" &&
@@ -103,10 +107,10 @@ export async function synchronizeChannelMemberships(input: {
   }
   for (const route of removals) {
     if (!route) continue;
-    await syncChannel(rpc, route, profileId, false);
+    await synchronizeChannelMembership(rpc, route, profileId, false);
   }
   for (const row of desired.values()) {
     const route = parseChannelScopedMattermostSessionRoute(row.key)!;
-    await syncChannel(rpc, route, profileId, true, row.displayName);
+    await synchronizeChannelMembership(rpc, route, profileId, true, row.displayName);
   }
 }
