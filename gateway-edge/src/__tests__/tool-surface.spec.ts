@@ -1,4 +1,8 @@
 import http from 'node:http';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import request from 'supertest';
@@ -12,15 +16,20 @@ import { createToolSurface } from '../routes/tool-surface.js';
 import { applyGatewayPrefixStripInPlace } from '../chat-proxy/gateway-prefix.js';
 import type { NativeAdminAccessOutcome } from '../lib/native-admin-access.js';
 const channelId = 'a'.repeat(26);
+const desktopPublicKey = Buffer.alloc(32, 1).toString('base64url');
+const desktopNodeId = createHash('sha256').update(Buffer.from(desktopPublicKey, 'base64url')).digest('hex');
 const context = { uid: 'owner', gatewayId: 'b-alice', workspaceSlug: 'alice', channelId, agentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${channelId}`, callerMmUserId: 'u'.repeat(26) };
 describe('hosted native Browser surface', () => {
-  let app: express.Express; let server: http.Server; let native: WebSocketServer; let base: string;
-  let scopes: Set<string>; const clients: WebSocket[] = []; const received: Array<Record<string, any>> = [];
+  let app: express.Express; let server: http.Server; let native: WebSocketServer; let base: string; let desktopIdentityRoot: string;
+  let scopes: Set<string>; const clients: WebSocket[] = []; const received: Array<Record<string, any>> = []; const history: unknown[] = [];
   const resolveAccess = vi.fn<() => Promise<NativeAdminAccessOutcome>>();
   const resolveConversation = vi.fn(async () => context);
   const fetchImpl = vi.fn(async () => new Response('image-data', { headers: { 'content-type': 'image/png' } }));
   beforeEach(async () => {
-    scopes = new Set(['operator.admin']); received.length = 0;
+    scopes = new Set(['operator.admin']); received.length = 0; history.length = 0;
+    desktopIdentityRoot = await mkdtemp(join(tmpdir(), 'tool-surface-desktop-'));
+    const desktopIdentityPath = join(desktopIdentityRoot, 'identity.json');
+    await writeFile(desktopIdentityPath, JSON.stringify({ deviceId: desktopNodeId, publicKey: desktopPublicKey }));
     resolveAccess.mockReset().mockResolvedValue({ kind: 'allowed', gatewayId: 'b-alice', workspaceSlug: 'alice', canControl: true });
     resolveConversation.mockClear(); fetchImpl.mockClear();
     native = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -32,10 +41,10 @@ describe('hosted native Browser surface', () => {
         const frame = JSON.parse(raw.toString()); received.push(frame);
         const path = frame.params.path;
         const payload = frame.method === 'sessions.messages.subscribe' ? { subscribed: true, key: context.sessionKey }
-          : frame.method === 'chat.history' ? { messages: [] }
+          : frame.method === 'chat.history' ? { messages: history }
           : frame.method === 'themes.list' ? { themes: [] }
           : frame.method === 'themes.get' ? { theme: { id: frame.params.id ?? 'claw' } }
-          : frame.method === 'node.list' ? {nodes:[{nodeId:'desktop-node',gatewayLocal:true,displayName:'octogee-desktop',remoteIp:'127.0.0.1',paired:true,connected:true,commands:['desktop.stream']}]}
+          : frame.method === 'node.list' ? {nodes:[{nodeId:desktopNodeId,displayName:'octogee-desktop',remoteIp:'127.0.0.1',paired:true,connected:true,commands:['desktop.stream']}]}
           : frame.method === 'environments.status' ? { id: frame.params.environmentId, type: 'node', status: 'available', desktop: true, desktopAvailability: { available: true } }
           : frame.method === 'desktop.observe' ? { transport: 'rfb', wsPath: '/desktop/observe?token=desktop-native', control: frame.params.control, audio: { wsPath: '/desktop/audio?token=audio-native', encoding: 'pcm-s16le', sampleRate: 48000, channels: 2 } }
           : frame.method === 'desktop.release' ? { released: true }
@@ -47,7 +56,7 @@ describe('hosted native Browser surface', () => {
       });
     });
     const nativeBase = `http://127.0.0.1:${(native.address() as AddressInfo).port}`;
-    const surface = createToolSurface({ env: { GATEWAY_ID: 'b-alice', GATEWAY_CLASS: 'builder', OPENCLAW_CONTROL_IDENTITY: 'per-user', OPENCLAW_GATEWAY_URL: nativeBase, API_PUBLIC_URL: 'https://api.example' }, resolveAccess, resolveConversation, fetchImpl, authorizationIntervalMs: 25, log: vi.fn(), openUpstream: async () => {
+    const surface = createToolSurface({ env: { GATEWAY_ID: 'b-alice', GATEWAY_CLASS: 'builder', OPENCLAW_CONTROL_IDENTITY: 'per-user', OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: desktopIdentityPath, OPENCLAW_GATEWAY_URL: nativeBase, API_PUBLIC_URL: 'https://api.example' }, resolveAccess, resolveConversation, fetchImpl, authorizationIntervalMs: 25, log: vi.fn(), openUpstream: async () => {
       const ws = new WebSocket(nativeBase.replace('http:', 'ws:')); await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); }); return { ws, scopes };
     } });
     app = express(); app.use(express.json()); app.use('/api/g/:gatewayId/tools', surface.router);
@@ -60,6 +69,7 @@ describe('hosted native Browser surface', () => {
     native.clients.forEach(client => client.terminate());
     await new Promise<void>(resolve => native.close(() => resolve()));
     await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(desktopIdentityRoot, { recursive: true, force: true });
   });
   const ticket = (body: unknown = { channelId, surface: 'browser' }) => request(app).post('/api/g/b-alice/tools/ticket').set('Authorization', 'Bearer owner').send(body);
   async function connect(surface: 'browser' | 'computer' | 'themes' = 'browser') {
@@ -83,10 +93,47 @@ describe('hosted native Browser surface', () => {
   it('preserves one native connection and forces the configured host profile', async () => {
     const connection = await connect(); expect(connection.frames[0].payload).toMatchObject({ sessionKey: context.sessionKey, profile: 'computer', canControl: true });
     expect((await call(connection, 'tabs', { method: 'GET', path: '/tabs' })).ok).toBe(true);
-    expect(received.at(-1)?.params).toEqual({ method: 'GET', path: '/tabs', target: 'host', query: { profile: 'computer' } });
+    expect(received.at(-1)?.params).toEqual({ method: 'GET', path: '/tabs', target: 'host', query: { profile: 'computer' }, tabScope: { sessionKey: context.sessionKey, referencedTabs: [] } });
     expect(native.clients.size).toBe(1);
     expect((await call(connection, 'foreign', { method: 'GET', path: '/tabs', query: { profile: 'other' } })).ok).toBe(false);
     expect(received.filter(frame => frame.method === 'browser.request')).toHaveLength(2);
+  });
+  it('accepts the native renderer tab scope and binds every operation to the admitted conversation', async () => {
+    const connection = await connect();
+    const tabScope = { sessionKey: context.sessionKey, referencedTabs: [] };
+    expect((await call(connection, 'native-tabs', { target: 'host', method: 'GET', path: '/tabs', tabScope })).ok).toBe(true);
+    expect(received.at(-1)?.params).toEqual({ method: 'GET', path: '/tabs', target: 'host', query: { profile: 'computer' }, tabScope });
+    expect((await call(connection, 'native-open', { method: 'POST', path: '/tabs/open', body: { url: 'https://example.com' }, tabScope: { sessionKey: context.sessionKey } })).ok).toBe(true);
+    expect(received.at(-1)?.params.tabScope).toEqual({ sessionKey: context.sessionKey });
+    const count = received.length;
+    for (const [index, scope] of [
+      { sessionKey: 'foreign', referencedTabs: [] },
+      { sessionKey: context.sessionKey, referencedTabs: [{ target: 'host', profile: 'computer', targetId: 'foreign' }] },
+      { sessionKey: context.sessionKey, referencedTabs: [{ target: 'node', node: 'foreign', targetId: 't1' }] },
+    ].entries()) {
+      expect((await call(connection, `untrusted-${index}`, { method: 'GET', path: '/tabs', tabScope: scope })).ok).toBe(false);
+    }
+    expect(received).toHaveLength(count);
+  });
+  it('admits reference hints only from this native session history and scoped live resources', async () => {
+    const tab = { target: 'host', profile: 'computer', targetId: 't1' };
+    const message = { role: 'toolResult', toolName: 'browser', toolCallId: 'call', content: [{ type: 'text', text: 'ok' }], details: { browserTab: tab } };
+    history.push(message);
+    const connection = await connect();
+    expect((await call(connection, 'history-ref', { method: 'GET', path: '/tabs', tabScope: { sessionKey: context.sessionKey, referencedTabs: [tab] } })).ok).toBe(true);
+    expect(received.at(-1)?.params.tabScope).toEqual({ sessionKey: context.sessionKey, referencedTabs: [tab] });
+    const liveTab = { ...tab, targetId: 't2' };
+    const payload = { agentId: context.agentId, sessionKey: context.sessionKey, messageId: 'live', message: { ...message, details: { browserTab: liveTab } } };
+    for (const ws of native.clients) {
+      ws.send(JSON.stringify({ type: 'event', event: 'session.message', payload: { ...payload, sessionKey: 'foreign', message: { ...message, details: { browserTab: { ...tab, targetId: 'foreign' } } } } }));
+      ws.send(JSON.stringify({ type: 'event', event: 'session.message', payload }));
+    }
+    await vi.waitFor(() => expect(connection.frames.some(frame => frame.event === 'tools.browser-tab')).toBe(true));
+    expect((await call(connection, 'live-ref', { method: 'GET', path: '/tabs', tabScope: { sessionKey: context.sessionKey, referencedTabs: [liveTab] } })).ok).toBe(true);
+    expect(received.at(-1)?.params.tabScope.referencedTabs).toEqual([liveTab]);
+    const count = received.length;
+    expect((await call(connection, 'foreign-event-ref', { method: 'GET', path: '/tabs', tabScope: { sessionKey: context.sessionKey, referencedTabs: [{ ...tab, targetId: 'foreign' }] } })).ok).toBe(false);
+    expect(received).toHaveLength(count);
   });
   it('only serves issued media to its authenticated owner and revokes it on disconnect', async () => {
     const connection = await connect(); const shot = await call(connection, 'shot', { method: 'POST', path: '/screenshot', body: { targetId: 't1', type: 'png' } });
@@ -113,9 +160,9 @@ describe('hosted native Browser surface', () => {
   });
   it('hosts the native paired gateway desktop and only releases its own observation', async () => {
     const connection = await connect('computer');
-    expect(connection.frames[0].payload.desktopSource).toBe('node:desktop-node');
-    expect(connection.frames[0].payload.environments).toEqual([{ id: 'node:desktop-node', type: 'node', status: 'available', desktop: true, desktopAvailability: { available: true } }]);
-    connection.ws.send(JSON.stringify({ type: 'req', id: 'observe', method: 'desktop.observe', params: { source: {kind: 'node',nodeId:'desktop-node'}, control: true } }));
+    expect(connection.frames[0].payload.desktopSource).toBe(`node:${desktopNodeId}`);
+    expect(connection.frames[0].payload.environments).toEqual([{ id: `node:${desktopNodeId}`, type: 'node', status: 'available', desktop: true, desktopAvailability: { available: true } }]);
+    connection.ws.send(JSON.stringify({ type: 'req', id: 'observe', method: 'desktop.observe', params: { source: {kind: 'node',nodeId:desktopNodeId}, control: true } }));
     await vi.waitFor(() => expect(connection.frames.some(frame => frame.id === 'observe')).toBe(true));
     const observation = connection.frames.find(frame => frame.id === 'observe')!.payload;
     expect(observation.wsPath).toMatch(/^\/g\/b-alice\/tools\/stream\//u);
@@ -129,7 +176,7 @@ describe('hosted native Browser surface', () => {
 
   it('preserves the native release association when the desktop stream disconnects first', async () => {
     const connection = await connect('computer');
-    connection.ws.send(JSON.stringify({ type: 'req', id: 'observe-close', method: 'desktop.observe', params: {source: {kind: 'node',nodeId:'desktop-node'}, control: true} }));
+    connection.ws.send(JSON.stringify({ type: 'req', id: 'observe-close', method: 'desktop.observe', params: {source: {kind: 'node',nodeId:desktopNodeId}, control: true} }));
     await vi.waitFor(() => expect(connection.frames.some(frame => frame.id === 'observe-close')).toBe(true));
     const observation = connection.frames.find(frame => frame.id === 'observe-close')!.payload;
     const stream = new WebSocket(`${base}${observation.wsPath.replace(/^\/g\//u, '/api/g/')}`, { headers: { origin: 'https://app.example' } }); clients.push(stream);
@@ -153,7 +200,7 @@ describe('hosted native Browser surface', () => {
       connection.ws.send(JSON.stringify({ type: 'req', id, method, params }));
     });
     for (let index = 0; index < 40; index++) {
-      const observation = await rpc(`observe-${index}`, 'desktop.observe', {source: {kind: 'node',nodeId:'desktop-node'}, control: index % 2 === 0});
+      const observation = await rpc(`observe-${index}`, 'desktop.observe', {source: {kind: 'node',nodeId:desktopNodeId}, control: index % 2 === 0});
       expect(observation.ok).toBe(true);
       const released = await rpc(`release-${index}`, 'desktop.release', {wsPath: observation.payload.wsPath});
       expect(released.ok).toBe(true);

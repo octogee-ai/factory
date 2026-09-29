@@ -9,6 +9,12 @@ describe('conversation-owned native terminals', () => {
     expect(JSON.parse(scope.request(req('1', 'terminal.open', { cols: 80, rows: 24 }))!)).toMatchObject({ params: { ...binding, cols: 80, rows: 24 } });
     expect(scope.request(req('2', 'terminal.open', { agentId: 'other', cols: 80, rows: 24 }))).toBeNull();
   });
+  it('projects the resolved workspace conversation onto the native terminal schema', () => {
+    const resolved = { ...binding, uid: 'builder-uid', gatewayId: 'builder-gateway', workspaceSlug: 'builder', channelId: 'channel', ownerUid: 'owner-uid' };
+    const scope = new TerminalConversationScope(resolved);
+    const opened = JSON.parse(scope.request(req('open', 'terminal.open', { cols: 80, rows: 24 }))!);
+    expect(opened.params).toEqual({ cols: 80, rows: 24, agentId: binding.agentId, sessionKey: binding.sessionKey });
+  });
   it('only lists and attaches shells owned by this exact native session', () => {
     const scope = new TerminalConversationScope(binding);
     scope.request(req('1', 'terminal.list'));

@@ -88,6 +88,36 @@ describe("system config platform invariants", () => {
     expect(platformInvariantViolations(config, context)).toEqual([]);
   });
 
+  it("pins native voice broker wiring while preserving Builder voice choices and opt-outs", () => {
+    const context = { ...builder, controlIdentity: "per-user" as const, ownerUid: "owner", workspaceSlug: "alice" };
+    const config = {
+      plugins: { entries: { "octogee-voice-tools": { enabled: false, config: {
+        brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/customer-file",
+      } } } },
+      talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
+    };
+    const talk = structuredClone(config.talk);
+
+    expect(platformInvariantViolations(config, context)).toEqual(expect.arrayContaining([
+      "plugins.entries.octogee-voice-tools.config",
+    ]));
+    reconcilePlatformInvariants(config, context);
+
+    expect(config.plugins.entries["octogee-voice-tools"]).toEqual({
+      enabled: false,
+      config: { brokerUrl: "${FLEET_BROKER_URL}", tokenPath: "${OCTOGEE_API_SA_TOKEN_PATH}" },
+    });
+    expect(config.talk).toEqual(talk);
+    expect(platformInvariantViolations(config, context)).toEqual([]);
+    expect(reconcilePlatformInvariants(config, context).changedPaths).toEqual([]);
+  });
+
+  it.each([barn, builder])("does not install native voice on gateways without per-user control identity", (context) => {
+    const config: Record<string, unknown> = {};
+    reconcilePlatformInvariants(config, context);
+    expect(config).not.toHaveProperty("plugins.entries.octogee-voice-tools");
+  });
+
   it("removes restored retired computer plugin config while preserving user plugins", () => {
     const config = {
       plugins: {

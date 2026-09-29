@@ -44,15 +44,37 @@ function operationValid(params: BrowserBody, profile: string): boolean {
     default: return false;
   }
 }
-export function browserRequestParams(value: unknown, profile: string): Record<string, unknown> {
+interface BrowserScope {
+  sessionKey: string;
+  referencedTabs: ReadonlyMap<string, { target: 'host'; profile: string; targetId: string }>;
+}
+function browserTabScope(value: unknown, listTabs: boolean, profile: string, binding: BrowserScope): Record<string, unknown> {
+  const scope = value === undefined ? { sessionKey: binding.sessionKey } : browserRecord(value);
+  if (!scope || !exact(scope, listTabs ? ['sessionKey', 'referencedTabs'] : ['sessionKey']) || scope.sessionKey !== binding.sessionKey) {
+    throw new Error('Browser session does not match');
+  }
+  if (!listTabs) return { sessionKey: binding.sessionKey };
+  const references = scope.referencedTabs === undefined ? [] : scope.referencedTabs;
+  if (!Array.isArray(references) || references.length > 64) throw new Error('Invalid Browser tab references');
+  const referencedTabs = references.map(value => {
+    const tab = browserRecord(value);
+    if (!tab || !exact(tab, ['target', 'profile', 'targetId']) || tab.target !== 'host' ||
+      (tab.profile !== undefined && tab.profile !== profile) || !text(tab.targetId)) throw new Error('Invalid Browser tab reference');
+    const admitted = binding.referencedTabs.get(tab.targetId);
+    if (!admitted || admitted.profile !== profile) throw new Error('Browser tab is not referenced by this session');
+    return admitted;
+  });
+  return { sessionKey: binding.sessionKey, referencedTabs };
+}
+export function browserRequestParams(value: unknown, profile: string, binding: BrowserScope): Record<string, unknown> {
   const p = browserRecord(value);
-  if (!p || !exact(p, ['method', 'path', 'body', 'query', 'target', 'timeoutMs']) ||
+  if (!p || !exact(p, ['method', 'path', 'body', 'query', 'target', 'timeoutMs', 'tabScope']) ||
     (p.target !== undefined && p.target !== 'host') ||
     (p.timeoutMs !== undefined && !number(p.timeoutMs, 150000))) throw new Error('Browser operation is unavailable');
   const query = p.query === undefined ? {} : browserRecord(p.query);
   if (!query || !exact(query, ['profile']) || (query.profile !== undefined && query.profile !== profile)) throw new Error('Browser profile does not match');
   if (!operationValid(p, profile)) throw new Error('Browser operation is unavailable');
-  return { ...p, target: 'host', query: { profile } };
+  return { ...p, target: 'host', query: { profile }, tabScope: browserTabScope(p.tabScope, p.method === 'GET' && p.path === '/tabs', profile, binding) };
 }
 export function browserStreamPath(value: unknown): string {
   const result = browserRecord(value);

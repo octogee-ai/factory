@@ -65,6 +65,38 @@ describe("native Dashboard permissions and managed configuration", () => {
 
 
 
+  it.each([
+    { brokerUrl: "http://127.0.0.1:9999" },
+    { tokenPath: "/home/node/customer-file" },
+  ])("rejects Admin native voice broker rewiring through config.patch: %j", (config) => {
+    const perUser = { ...invariantContext, controlIdentity: "per-user" as const, ownerUid: "owner", workspaceSlug: "alice" };
+    const current = {};
+    reconcilePlatformInvariants(current, perUser);
+    const frame = request("config.patch", {
+      baseHash: "h",
+      raw: JSON.stringify({ plugins: { entries: { "octogee-voice-tools": { config } } } }),
+    });
+    expect(evaluateOpenClawControlRpc(frame, policyContext({
+      invariantContext: perUser, currentConfig: { raw: current, hash: "h" },
+    }), true)).toMatchObject({ allowed: false, category: "config_mutation", reason: "platform-invariant" });
+  });
+
+  it("lets an Admin change native voice preferences and opt out without changing broker wiring", () => {
+    const perUser = { ...invariantContext, controlIdentity: "per-user" as const, ownerUid: "owner", workspaceSlug: "alice" };
+    const current = {};
+    reconcilePlatformInvariants(current, perUser);
+    const frame = request("config.patch", {
+      baseHash: "h",
+      raw: JSON.stringify({
+        talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
+        plugins: { entries: { "octogee-voice-tools": { enabled: false } } },
+      }),
+    });
+    expect(evaluateOpenClawControlRpc(frame, policyContext({
+      invariantContext: perUser, currentConfig: { raw: current, hash: "h" },
+    }), true)).toMatchObject({ allowed: true, category: "config_mutation", outbound: frame });
+  });
+
   it("keeps native optimistic hashes and replacePaths intact while checking the resulting config", () => {
     const current = validConfig({ agents: { list: [{ id: "main", name: "Main" }, { id: "coach", name: "Coach" }] } });
     const frame = request("config.patch", { baseHash: "native-hash", replacePaths: ["agents.list"], raw: JSON.stringify({ agents: { list: [{ id: "main", name: "New" }] } }) });

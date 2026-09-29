@@ -190,7 +190,7 @@ export class NativeTalkSession {
     if (!/^[A-Za-z0-9_-]{43}$/u.test(this.options.voiceGrant) || this.options.voiceGrantExpiresAt <= Date.now()) throw new Error('Native voice grant is unavailable');
     this.settings = { ...resolveTalkSettings(message.settings), endpointing: 'normal' };
     await this.options.reauthorize();
-    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'] });
+    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'], channelSessionKey: this.options.conversation.sessionKey });
     if (this.isClosed()) { connection.ws.close(); return; }
     this.connection = connection;
     this.rpc = (this.options.attachRpc ?? attachUpstreamRpcClient)(connection.ws, { timeoutMs: 15000 });

@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { OPENCLAW_FULL_OPERATOR_SCOPES } from "@octogee/shared/types/openclaw-proxy-identity";
+import { OPENCLAW_FULL_OPERATOR_SCOPES, OPENCLAW_EDGE_SERVICE_IDENTITY } from "@octogee/shared/types/openclaw-proxy-identity";
 import { openNativeUserClient, openNativeUserSocket } from "./native-user-client.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -16,9 +16,17 @@ async function gateway() {
   const wss = new WebSocketServer({ server });
   const state = {
     scopes: ["operator.read", "operator.write"] as string[] | undefined,
+    calls: [] as Array<{ uid: string; method: string; params: Record<string, unknown> }>,
+    closed: [] as string[],
+    profiles: [{ id: "native-alice", emails: ["alice"] }],
+    rejectSync: false,
+    closeUserBeforeProfiles: false,
+    userSocket: null as import("ws").WebSocket | null,
     connects: [] as Array<{ uid: string; device: { id: string }; scopes: string[]; caps?: string[] }>,
   };
   wss.on("connection", (ws, req) => {
+    if (req.headers["x-octogee-user"] === "alice") state.userSocket = ws;
+    ws.on("close", () => state.closed.push(String(req.headers["x-octogee-user"])));
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
     ws.on("message", raw => {
       const frame = JSON.parse(raw.toString());
@@ -26,7 +34,18 @@ async function gateway() {
         state.connects.push({ uid: String(req.headers["x-octogee-user"]), device: frame.params.device, scopes: frame.params.scopes, ...(frame.params.caps ? { caps: frame.params.caps } : {}) });
         ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok", auth: { scopes: state.scopes } } }));
       } else {
-        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { message: "native role denied" } }));
+        state.calls.push({ uid: String(req.headers["x-octogee-user"]), method: frame.method, params: frame.params });
+        if (frame.method === "users.list") {
+          const reply = () => ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { profiles: state.profiles } }));
+          if (state.closeUserBeforeProfiles && state.userSocket) {
+            state.userSocket.once("close", reply);
+            state.userSocket.close();
+          } else reply();
+        } else if (frame.method === "sessions.channel.sync" && !state.rejectSync) {
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { changed: true } }));
+        } else {
+          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { message: "native role denied" } }));
+        }
       }
     });
   });
@@ -62,6 +81,54 @@ describe("native user RPC identity", () => {
     expect(state.connects[0].device.id).not.toBe(state.connects[2].device.id);
     expect(state.connects.map(connect => connect.uid)).toEqual(["alice", "alice", "bob"]);
     expect(state.connects.every(connect => JSON.stringify(connect.scopes) === JSON.stringify(OPENCLAW_FULL_OPERATOR_SCOPES))).toBe(true);
+  });
+
+  it("initializes exactly one authorized channel using the service identity and native profile mapping", async () => {
+    const { state, env } = await gateway();
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
+    const native = await openNativeUserSocket("alice", "b-alice", env, { channelSessionKey });
+    expect(state.calls).toEqual([
+      { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, method: "users.list", params: {} },
+      { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, method: "sessions.channel.sync", params: {
+        agentId: "octogee-alice-coach", channel: "mattermost", peerKind: "group", peerId: "a".repeat(26), profileId: "native-alice", member: true,
+      } },
+    ]);
+    await vi.waitFor(() => expect(state.closed).toContain(OPENCLAW_EDGE_SERVICE_IDENTITY));
+    expect(native.ws.readyState).toBe(1);
+    native.ws.close();
+  });
+
+  it("does not adopt rejected provenance or retain either connection after native synchronization fails", async () => {
+    const { state, env } = await gateway();
+    state.rejectSync = true;
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
+    await expect(openNativeUserSocket("alice", "b-alice", env, { channelSessionKey })).rejects.toThrow("membership synchronization failed");
+    expect(state.calls.map(call => call.method)).toEqual(["users.list", "sessions.channel.sync", "sessions.describe"]);
+    await vi.waitFor(() => expect(state.closed).toEqual(expect.arrayContaining(["alice", OPENCLAW_EDGE_SERVICE_IDENTITY])));
+  });
+
+  it("closes the service connection without granting membership after the user disconnects during synchronization", async () => {
+    const { state, env } = await gateway();
+    state.closeUserBeforeProfiles = true;
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
+    await expect(openNativeUserSocket("alice", "b-alice", env, { channelSessionKey })).rejects.toThrow("connection closed during channel synchronization");
+    expect(state.calls.map(call => call.method)).toEqual(["users.list"]);
+    await vi.waitFor(() => expect(state.closed).toEqual(expect.arrayContaining(["alice", OPENCLAW_EDGE_SERVICE_IDENTITY])));
+  });
+
+  it("does not guess a native profile ID when the connected user's mapping is unavailable", async () => {
+    const { state, env } = await gateway();
+    state.profiles = [];
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
+    await expect(openNativeUserSocket("alice", "b-alice", env, { channelSessionKey })).rejects.toThrow("identity is not initialized");
+    expect(state.calls.map(call => call.method)).toEqual(["users.list"]);
+    await vi.waitFor(() => expect(state.closed).toEqual(expect.arrayContaining(["alice", OPENCLAW_EDGE_SERVICE_IDENTITY])));
+  });
+
+  it.each(["agent:main:main", `agent:octogee-alice-coach:mattermost:direct:${"a".repeat(26)}`, `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}:thread:${"b".repeat(26)}`])("rejects unsupported native channel identity %s before connecting", async channelSessionKey => {
+    const { state, env } = await gateway();
+    await expect(openNativeUserSocket("alice", "b-alice", env, { channelSessionKey })).rejects.toThrow("channel identity");
+    expect(state.connects).toEqual([]);
   });
 
   it("advertises explicit native observation capabilities without changing identity", async () => {

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { NativeTalkSession } from './native-session.js';
+import type { openNativeUserSocket } from '../openclaw-control/native-user-client.js';
 const grant = 'g'.repeat(43);
 const expiresAt = Date.now() + 60_000;
 const key = `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(26)}`;
@@ -9,12 +10,39 @@ function setup() {
   const rpc = { call: vi.fn<(method: string, params: Record<string, unknown>) => Promise<{ ok: true; result: Record<string, unknown> }>>().mockImplementation(async (method: string) => ({ ok: true, result: method === 'talk.session.create' ? { sessionId: 'native', relaySessionId: 'native' } : method === 'octogee.voice.bind' ? { sessionId: 'native', sessionKey: key, expiresAt } : { ok: true } })), dispose: vi.fn() };
   const send = vi.fn(); const audio = vi.fn(); const reauthorize = vi.fn<() => Promise<void>>().mockResolvedValue();
   const log = vi.fn();
-  const session = new NativeTalkSession({ voiceGrant: grant, voiceGrantExpiresAt: expiresAt, conversation: { uid: 'u', gatewayId: 'b-alice', sessionKey: key, agentId: 'octogee-alice-coach' }, send, sendAudio: audio, open: async () => ({ ws, scopes: new Set(['operator.talk']) }) as any, attachRpc: () => rpc as any, reauthorize, log });
+  const open = vi.fn<typeof openNativeUserSocket>().mockResolvedValue({ ws, scopes: new Set(['operator.talk']) } as any);
+  const session = new NativeTalkSession({ voiceGrant: grant, voiceGrantExpiresAt: expiresAt, conversation: { uid: 'u', gatewayId: 'b-alice', sessionKey: key, agentId: 'octogee-alice-coach' }, send, sendAudio: audio, open, attachRpc: () => rpc as any, reauthorize, log });
   const event = (payload: object) => ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', ...payload } })));
-  return { session, ws, rpc, send, audio, event, reauthorize, log };
+  return { session, ws, rpc, send, audio, event, reauthorize, log, open };
 }
 const start = JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'a'.repeat(26) });
 describe('native Talk transport', () => {
+  it('initializes only the authorized native channel before creating Talk', async () => {
+    const h = setup();
+    await h.session.handleText(start);
+    expect(h.open.mock.calls.map(([uid, gatewayId, , options]) => ({ uid, gatewayId, options }))).toEqual([{ uid: 'u', gatewayId: 'b-alice', options: { caps: ['ui-commands'], channelSessionKey: key } }]);
+    expect(h.reauthorize.mock.invocationCallOrder[0]).toBeLessThan(h.open.mock.invocationCallOrder[0]);
+    expect(h.open.mock.invocationCallOrder[0]).toBeLessThan(h.rpc.call.mock.invocationCallOrder[0]);
+    h.session.close();
+  });
+  it('does not create Talk when native channel provenance is rejected', async () => {
+    const h = setup();
+    h.open.mockRejectedValueOnce(new Error('Native channel membership synchronization failed'));
+    await expect(h.session.handleText(start)).rejects.toThrow('membership synchronization failed');
+    expect(h.rpc.call).not.toHaveBeenCalled();
+  });
+  it('closes a late native connection without creating Talk after ending during channel synchronization', async () => {
+    const h = setup();
+    let connected!: (value: Awaited<ReturnType<typeof openNativeUserSocket>>) => void;
+    h.open.mockReturnValueOnce(new Promise(resolve => { connected = resolve; }));
+    const opening = h.session.handleText(start);
+    await vi.waitFor(() => expect(h.open).toHaveBeenCalledOnce());
+    h.session.close();
+    connected({ ws: h.ws, scopes: new Set(['operator.talk']) } as any);
+    await opening;
+    expect(h.ws.close).toHaveBeenCalledOnce();
+    expect(h.rpc.call).not.toHaveBeenCalled();
+  });
   it('withholds readiness and audio until the exact native session grant is acknowledged', async () => {
     const h = setup();
     let bound!: (value: { ok: true; result: Record<string, unknown> }) => void;
