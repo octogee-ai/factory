@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { assertCarriedAgentSessionsDrained, listSqliteStores } from "./agent-store-carry.js";
+import { preflightAgentDatabase } from "./agent-store-preflight.js";
 import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
 import { assertNotHeld, matchFiles, sqliteFamily } from "./held-files.js";
 import { runOpenClaw, type OpenClawCommand, type OpenClawCommandResult } from "./openclaw-cli.js";
@@ -168,6 +171,53 @@ export async function findStagedLiveAgentStores(stageDir: string): Promise<strin
   return live.sort();
 }
 
+const SNAPSHOT_ARTIFACT_BASENAME = "database.sqlite";
+const SNAPSHOT_MANIFEST_BASENAME = "manifest.json";
+
+interface SnapshotManifestArtifact {
+  sha256: string;
+  sizeBytes: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function manifestArtifactFor(manifest: unknown, agentId: string): SnapshotManifestArtifact | null {
+  if (!isRecord(manifest) || manifest.schemaVersion !== 1) return null;
+  const { database, artifact } = manifest;
+  if (!isRecord(database) || database.role !== "agent" || database.agentId !== agentId) return null;
+  if (!isRecord(artifact) || artifact.path !== SNAPSHOT_ARTIFACT_BASENAME) return null;
+  if (typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(artifact.sha256)) return null;
+  if (typeof artifact.sizeBytes !== "number" || !Number.isSafeInteger(artifact.sizeBytes)) return null;
+  return { sha256: artifact.sha256, sizeBytes: artifact.sizeBytes };
+}
+
+async function sha256OfFile(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+async function landOlderSchemaSnapshot(snapshot: StagedAgentSnapshot, restoredPath: string): Promise<void> {
+  const mismatch = () => new Error(`carried snapshot of ${snapshot.agentId} does not match its manifest`);
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await fs.readFile(path.join(snapshot.snapshotDir, SNAPSHOT_MANIFEST_BASENAME), "utf8"));
+  } catch {
+    throw mismatch();
+  }
+  const expected = manifestArtifactFor(manifest, snapshot.agentId);
+  if (!expected) throw mismatch();
+  await fs.copyFile(path.join(snapshot.snapshotDir, SNAPSHOT_ARTIFACT_BASENAME), restoredPath, fs.constants.COPYFILE_EXCL);
+  await fs.chmod(restoredPath, 0o600);
+  const { size } = await fs.stat(restoredPath);
+  if (size !== expected.sizeBytes || await sha256OfFile(restoredPath) !== expected.sha256) {
+    await fs.rm(restoredPath, { force: true });
+    throw mismatch();
+  }
+}
+
 export interface PreparedAgentStore {
   agentId: string;
   restoredPath: string;
@@ -199,20 +249,26 @@ export async function prepareAgentStoreSnapshots(
   await fs.mkdir(landingRoot, { mode: 0o700 });
   const stores: PreparedAgentStore[] = [];
   for (const snapshot of snapshots) {
-    parseOkJson(
-      `verify of ${snapshot.agentId}`,
-      await run(["backup", "sqlite", "verify", snapshot.snapshotDir, "--json"], { env, signal: input.signal }),
-    );
     const restoredDir = path.join(landingRoot, ...snapshot.agentDir.split("/"));
     await fs.mkdir(restoredDir, { recursive: true, mode: 0o700 });
     const restoredPath = path.join(restoredDir, AGENT_STORE_BASENAME);
-    parseOkJson(
-      `restore of ${snapshot.agentId}`,
-      await run(
-        ["backup", "sqlite", "restore", snapshot.snapshotDir, "--target", restoredPath, "--json"],
-        { env, signal: input.signal },
-      ),
-    );
+    const artifact = path.join(snapshot.snapshotDir, SNAPSHOT_ARTIFACT_BASENAME);
+    const fit = await preflightAgentDatabase(artifact, snapshot.agentId, run, { env, signal: input.signal });
+    if (fit === "exact") {
+      parseOkJson(
+        `verify of ${snapshot.agentId}`,
+        await run(["backup", "sqlite", "verify", snapshot.snapshotDir, "--json"], { env, signal: input.signal }),
+      );
+      parseOkJson(
+        `restore of ${snapshot.agentId}`,
+        await run(
+          ["backup", "sqlite", "restore", snapshot.snapshotDir, "--target", restoredPath, "--json"],
+          { env, signal: input.signal },
+        ),
+      );
+    } else {
+      await landOlderSchemaSnapshot(snapshot, restoredPath);
+    }
     await fs.rm(path.dirname(snapshot.snapshotDir), { recursive: true, force: true });
     stores.push({
       agentId: snapshot.agentId,

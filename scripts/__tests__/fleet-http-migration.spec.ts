@@ -2769,6 +2769,12 @@ describe("agent sqlite stores across an rsync carry", () => {
         await fs.writeFile(path.join(snapshotPath, "database.sqlite"), "snapshot");
         return snapshotResult(true, { snapshotPath });
       }
+      if (args[0] === "database" && args[1] === "preflight-agent") {
+        return { code: 0, stdout: JSON.stringify({
+          schema: "openclaw.agent-schema-preflight.v1", databasePath: args[2], agentId: args[args.indexOf("--agent-id") + 1],
+          foundVersion: 24, targetVersion: 24, status: "exact",
+        }) };
+      }
       if (action === "verify") return snapshotResult(true);
       if (action === "restore") {
         await fs.copyFile(path.join(args[3]!, "database.sqlite"), args[args.indexOf("--target") + 1]!);
@@ -3086,10 +3092,12 @@ describe("agent sqlite stores across an rsync carry", () => {
 
     expect(getStatus()).toBe(200);
     const run = deps.runOpenClaw as ReturnType<typeof fakeOpenClaw>;
-    expect(run.mock.calls.map(([args]) => args.slice(0, 3).join(" "))).toEqual([
-      "backup sqlite verify",
-      "backup sqlite restore",
+    expect(run.mock.calls.map(([args]) => args.slice(0, 2).join(" "))).toEqual([
+      "database preflight-agent",
+      "backup sqlite",
+      "backup sqlite",
     ]);
+    expect(run.mock.calls.slice(1).map(([args]) => args[2])).toEqual(["verify", "restore"]);
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
     expect((await fs.stat(path.join(importDir, CARRIED_STORE))).mode & 0o777).toBe(0o600);
     expect(landedAtActivation).toEqual([true]);
