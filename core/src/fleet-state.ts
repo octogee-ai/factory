@@ -10,6 +10,7 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
+  customerRestoreFencePresent,
   hasFreshReadyKubernetesObservation,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
@@ -24,6 +25,8 @@ import {
   customerMigrationV2GatewayRootFenceEqual,
   customerMigrationV2GatewayRootFenceMatches,
 } from "./customer-migration-v2.js";
+
+import { slugFromAssignedUser } from "./assigned-roster.js";
 
 const MIGRATE_CUSTOMER_OPERATION_KIND = "migrate-customer" as const;
 
@@ -75,6 +78,101 @@ export interface FleetStateFirestore {
     doc: (id: string) => FleetStateDocRef;
   };
   runTransaction: <T>(body: (txn: FleetStateTxn) => Promise<T>) => Promise<T>;
+}
+
+export interface CustomerRestoreInput {
+  fromGatewayId: string;
+  uid: string;
+  slug: string;
+  gatewayId: string;
+  assignmentEpoch: number;
+  operationId: string;
+  claimStartedAt: number;
+  attemptId: string;
+}
+
+function assertRestoreUnfenced(user: unknown): void {
+  if (customerRestoreFencePresent(user)) throw new Error("customer restore outcome is unresolved");
+}
+
+function assertCustomerRestoreInput(input: CustomerRestoreInput): void {
+  if (![input.uid, input.slug, input.gatewayId, input.fromGatewayId, input.operationId, input.attemptId].every(value => typeof value === "string" && value.length > 0) ||
+      !Number.isSafeInteger(input.assignmentEpoch) || input.assignmentEpoch < 0 ||
+      !Number.isSafeInteger(input.claimStartedAt) || input.claimStartedAt <= 0) {
+    throw new Error("customer restore identity is invalid");
+  }
+}
+
+async function readCustomerRestoreAuthority(deps: FleetStateDeps, txn: FleetStateTxn, input: CustomerRestoreInput) {
+  assertCustomerRestoreInput(input);
+  const userRef = deps.db.collection("users").doc(input.uid);
+  const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId);
+  const [userSnapshot, operationSnapshot, assignmentSnapshot] = await Promise.all([
+    txn.get(userRef), txn.get(operationRef), txn.get(assignmentRef(deps.db, input.gatewayId, input.uid)),
+  ]);
+  const user = userSnapshot.data();
+  const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+  const operation = recordOrEmpty(operationSnapshot.data());
+  const operationInput = recordOrEmpty(operation.input);
+  const handoff = recordOrEmpty(operation.schedulerHandoff);
+  const assignment = recordOrEmpty(assignmentSnapshot.data());
+  const exact = [
+    userSnapshot.exists, operationSnapshot.exists, assignmentSnapshot.exists,
+    slugFromAssignedUser(user) === input.slug, accountAllowsInteractiveAccess(user),
+    openclaw.gatewayId === input.gatewayId, openclaw.status === "complete",
+    operation.kind === "migrate-customer", operation.status === "running",
+    operation.startedAt === input.claimStartedAt, operation.cancellationRequestedAt === undefined,
+    operationInput.uid === input.uid, operationInput.toGatewayId === input.gatewayId,
+    operationInput.fromGatewayId === input.fromGatewayId, input.fromGatewayId !== input.gatewayId,
+    typeof operation.cutoverCommittedAt === "number" && Number.isFinite(operation.cutoverCommittedAt) && operation.cutoverCommittedAt > 0,
+    handoff.uid === input.uid, handoff.slug === input.slug,
+    handoff.fromGatewayId === input.fromGatewayId, handoff.toGatewayId === input.gatewayId,
+    assignment.uid === input.uid, assignment.slug === input.slug,
+    assignment.gatewayId === input.gatewayId, assignment.epoch === input.assignmentEpoch,
+    assignment.state === "serving",
+  ].every(Boolean);
+  if (!exact) throw new Error("customer restore authority changed");
+  return { userRef, operationRef, user, openclaw, operation };
+}
+
+function hasPriorCustomerRestoreWork(operation: Record<string, unknown>): boolean {
+  const histories = Array.isArray(operation.attemptHistory) ? operation.attemptHistory : [];
+  const attempts = [operation, ...histories.map(recordOrEmpty)];
+  return attempts.some(attempt => Array.isArray(attempt.steps) &&
+    attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
+}
+
+export async function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void> {
+  await deps.db.runTransaction(async txn => {
+    const current = await readCustomerRestoreAuthority(deps, txn, input);
+    assertRestoreUnfenced(current.user);
+    if (current.operation.restoreAttempt !== undefined ||
+        hasPriorCustomerRestoreWork(current.operation)) {
+      throw new Error("customer restore was already dispatched or has unknown prior work");
+    }
+    const now = deps.now?.().getTime() ?? Date.now();
+    const intent = { ...input, phase: "dispatched", dispatchedAt: now };
+    txn.update(current.userRef, { "provisioning.openclaw.restoreFence": intent });
+    txn.update(current.operationRef, { restoreAttempt: intent, lastProgressAt: now });
+  });
+}
+
+export async function acknowledgeCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void> {
+  await deps.db.runTransaction(async txn => {
+    const current = await readCustomerRestoreAuthority(deps, txn, input);
+    for (const value of [current.openclaw.restoreFence, current.operation.restoreAttempt]) {
+      const intent = recordOrEmpty(value);
+      if (intent.phase !== "dispatched" || Object.entries(input).some(([key, expected]) => intent[key] !== expected)) {
+        throw new Error("customer restore acknowledgement does not own the dispatch intent");
+      }
+    }
+    const now = deps.now?.().getTime() ?? Date.now();
+    txn.update(current.userRef, { "provisioning.openclaw.restoreFence": deps.deleteField() });
+    txn.update(current.operationRef, {
+      restoreAttempt: { ...recordOrEmpty(current.operation.restoreAttempt), phase: "acknowledged", acknowledgedAt: now },
+      lastProgressAt: now,
+    });
+  });
 }
 
 export interface HeartbeatSnapshot {
@@ -191,6 +289,8 @@ export async function commitCutoverAtomic(
 ): Promise<void> {
   const nowMs = deps.now ? deps.now().getTime() : Date.now();
   await deps.db.runTransaction(async (txn) => {
+    const restoreOwner = await txn.get(deps.db.collection("users").doc(params.uid));
+    assertRestoreUnfenced(restoreOwner.data());
     const prior = await readPriorAssignment(txn, deps.db, params);
     const targetRootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(params.toGatewayId);
     const targetRootSnap = await txn.get(
@@ -795,6 +895,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(
     ]);
     const operation = operationSnapshot.exists ? operationSnapshot.data() : undefined;
     const user = userSnapshot.exists ? userSnapshot.data() : undefined;
+    assertRestoreUnfenced(user);
     const targetAssignment = targetAssignmentSnapshot.exists
       ? targetAssignmentSnapshot.data()
       : undefined;
@@ -1076,6 +1177,7 @@ export async function commitRecoveredDisposableRuntimeResetAtomic(
       txn.get(operation),
     ]);
     const user = userSnapshot.data();
+    assertRestoreUnfenced(user);
     const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
     const targetRoot = projectGatewayDesiredRootForGateway(
       targetRootSnapshot.data(),
@@ -1176,6 +1278,8 @@ export async function markAssignmentState(
   params: MarkAssignmentStateParams,
 ): Promise<void> {
   await deps.db.runTransaction(async (txn) => {
+    const restoreOwner = await txn.get(deps.db.collection("users").doc(params.uid));
+    assertRestoreUnfenced(restoreOwner.data());
     const ref = assignmentRef(deps.db, params.gatewayId, params.uid);
     const snap = await txn.get(ref);
     if (!snap.exists) {

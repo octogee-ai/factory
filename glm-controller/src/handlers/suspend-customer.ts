@@ -25,6 +25,7 @@ export interface CustomerSuspensionDeps {
     deletionId: string,
     cleanup: CustomerCleanupContext,
   ) => Promise<void>;
+  assertRestoreNotInProgress: (uid: string) => Promise<void>;
   suspendAuthUser: (uid: string) => Promise<void>;
   cancelCustomerMigrations: (uid: string) => Promise<void>;
   deactivateCustomerVisibility: (uid: string) => Promise<void>;
@@ -75,20 +76,44 @@ async function report(
   await ctx.reportStep({ completedAt: deps.now(), ...step });
 }
 
+function readSuspensionInput(input: SuspensionInput): { uid: string; deletionId: string } | null {
+  return typeof input.uid === "string" && input.uid.length > 0 &&
+    typeof input.deletionId === "string" && input.deletionId.length > 0
+    ? { uid: input.uid, deletionId: input.deletionId }
+    : null;
+}
+
+async function checkRestoreFence(
+  deps: CustomerSuspensionDeps,
+  ctx: OperationContext,
+  uid: string,
+  deletionId: string,
+): Promise<OperationResult | null> {
+  try {
+    await deps.assertRestoreNotInProgress(uid);
+    return null;
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await report(ctx, deps, { name: "restore-fence", status: "failed", error });
+    return { steps: [], success: false, error, output: { deletionCleanupRetry: { deletionId } } };
+  }
+}
+
 export function createSuspendCustomerHandler(
   deps: CustomerSuspensionDeps,
 ): OperationHandler {
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
-    const input = op.input as SuspensionInput;
-    const uid = typeof input.uid === "string" ? input.uid : null;
-    const deletionId = typeof input.deletionId === "string" ? input.deletionId : null;
-    if (!uid || !deletionId) {
+    const input = readSuspensionInput(op.input);
+    if (!input) {
       return { steps: [], success: false, error: "missing uid or deletionId in op.input" };
     }
+    const { uid, deletionId } = input;
     const job = await deps.loadDeletionJob(deletionId);
     if (!job || job.uid !== uid) {
       return { steps: [], success: false, error: `deletion job not found or mismatched: ${deletionId}` };
     }
+    const restoreFailure = await checkRestoreFence(deps, ctx, uid, deletionId);
+    if (restoreFailure) return restoreFailure;
     let cleanup = job.cleanupContext;
     if (!cleanup) {
       const loaded = await deps.loadCleanupContext(uid);

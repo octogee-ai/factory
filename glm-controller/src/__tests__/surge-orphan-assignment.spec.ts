@@ -54,6 +54,19 @@ describe("surge orphan assignment repair", () => {
   const validPath = "gateways/shared-a/assignments/uid-valid";
   const journalPath = "glmOperations/surge-prune-orphan-shared-a-uid-orphan-4";
 
+  it.each([null, { phase: "dispatched" }])("retains an orphan assignment while restore is unresolved: %j", async (restoreFence) => {
+    const { db, store } = fakeDb({
+      [orphanPath]: { ...orphan, gatewayId: "shared-a" },
+      "users/uid-orphan": { provisioning: { openclaw: { gatewayId: "shared-b", restoreFence } } },
+      "glmGateways/shared-a": runtime(now, []),
+    });
+    const log = vi.fn();
+    await expect(pruneSurgeOrphanAssignments({ db, gatewayId: "shared-a", assignments: [orphan], users: [], now, log })).resolves.toEqual([orphan]);
+    expect(store.has(orphanPath)).toBe(true);
+    expect(store.has(journalPath)).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("restore"));
+  });
+
   it("atomically removes and journals only the unmounted assignment whose user is absent", async () => {
     const { db, store } = fakeDb({
       [orphanPath]: { ...orphan, gatewayId: "shared-a" },

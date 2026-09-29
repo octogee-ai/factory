@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import type { OperationStep } from "@octogee/shared/types/glm";
-import { createOperationContext } from "../operation-context";
+import type { Operation, OperationStep } from "@octogee/shared/types/glm";
+import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext } from "../operation-context";
 
 function makeDeps() {
   const persistedSnapshots: OperationStep[][] = [];
@@ -17,6 +17,32 @@ function makeDeps() {
 }
 
 describe("createOperationContext", () => {
+  it.each(["RPC timed out", "restore response does not match"])("retains the durable fence when %s", async (message) => {
+    const acknowledge = vi.fn(async () => undefined);
+    const begin = vi.fn(async () => acknowledge);
+    const { ctx } = createOperationContext({ ...makeDeps(), customerRestore: {
+      begin, assertSettled: async () => undefined,
+    } });
+    await expect(ctx.withCustomerRestoreFence!({
+      uid: "u1", slug: "alice", gatewayId: "shared-1", fromGatewayId: "builder-1", assignmentEpoch: 4,
+    }, async () => { throw new Error(message); })).rejects.toThrow(message);
+    expect(begin).toHaveBeenCalledOnce();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges only the same completed restore and surfaces a lost acknowledgement", async () => {
+    const acknowledge = vi.fn(async () => { throw new Error("claim changed"); });
+    const work = vi.fn(async () => undefined);
+    const { ctx } = createOperationContext({ ...makeDeps(), customerRestore: {
+      begin: async () => acknowledge, assertSettled: async () => undefined,
+    } });
+    await expect(ctx.withCustomerRestoreFence!({
+      uid: "u1", slug: "alice", gatewayId: "shared-1", fromGatewayId: "builder-1", assignmentEpoch: 4,
+    }, work)).rejects.toThrow("claim changed");
+    expect(work).toHaveBeenCalledOnce();
+    expect(acknowledge).toHaveBeenCalledOnce();
+  });
+
   it("persists migration V2 state and exposes cancellation without swallowing errors", async () => {
     const persistCustomerMigrationV2 = vi.fn(async () => undefined);
     const cancellationRequested = vi.fn(async () => true);
@@ -156,5 +182,83 @@ describe("createOperationContext", () => {
 await ctx.reportStep({ name: "quiesce-source", status: "done", completedAt: 200 });
 
     expect(steps).toEqual([{ name: "quiesce-source", status: "done", completedAt: 200 }]);
+  });
+});
+
+describe("active operation claim", () => {
+  const claimed = {
+    id: "op-1", kind: "migrate-customer", status: "running", startedAt: 100,
+    input: { uid: "uid-alice", fromGatewayId: "source", toGatewayId: "target" },
+  } as Operation;
+
+  it("accepts the same running uncancelled migration attempt", () => {
+    expect(() => assertActiveOperationClaim(claimed, { ...claimed })).not.toThrow();
+  });
+
+  it.each([
+    null,
+    { ...claimed, status: "completed" },
+    { ...claimed, status: "pending" },
+    { ...claimed, startedAt: 101 },
+    { ...claimed, cancellationRequestedAt: 102 },
+    { ...claimed, kind: "restart-gateway" },
+    { ...claimed, input: { ...claimed.input, uid: "uid-other" } },
+    { ...claimed, input: { ...claimed.input, fromGatewayId: "other" } },
+    { ...claimed, input: { ...claimed.input, toGatewayId: "other" } },
+  ])("rejects stale, cancelled, or changed claims: %j", (fresh) => {
+    expect(() => assertActiveOperationClaim(claimed, fresh as Operation | null)).toThrow("operation claim");
+  });
+
+  it("exposes claim failures without swallowing them as progress-reporting errors", async () => {
+    const assertActiveClaim = vi.fn(async () => { throw new Error("operation re-claimed"); });
+    const { ctx } = createOperationContext({ ...makeDeps(), assertActiveClaim });
+    await expect(ctx.assertActiveClaim!()).rejects.toThrow("operation re-claimed");
+  });
+});
+
+
+describe("settled customer restore", () => {
+  const operation = {
+    id: "return-1", kind: "migrate-customer", startedAt: 900,
+    input: { uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1", builderSlug: "alice" },
+  } as Operation;
+  const acknowledged = {
+    phase: "acknowledged", operationId: "return-1", uid: "u1", fromGatewayId: "builder-1",
+    gatewayId: "shared-1", slug: "alice", attemptId: "attempt-1", assignmentEpoch: 4,
+    claimStartedAt: 100, dispatchedAt: 200, acknowledgedAt: 300,
+  };
+
+  it("allows no restore and a matching acknowledgement from a previous claim", () => {
+    expect(() => assertCustomerRestoreSettled(operation, undefined)).not.toThrow();
+    expect(() => assertCustomerRestoreSettled(operation, acknowledged)).not.toThrow();
+  });
+
+  it("allows a valid nonblank slug when the operation did not persist builderSlug", () => {
+    expect(() => assertCustomerRestoreSettled({ ...operation, input: {
+      uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1",
+    } }, acknowledged)).not.toThrow();
+  });
+
+  it.each([
+    null, false, [], "acknowledged", { phase: "acknowledged" },
+    { ...acknowledged, phase: "dispatched" },
+    { ...acknowledged, operationId: "other" },
+    { ...acknowledged, uid: "other" },
+    { ...acknowledged, fromGatewayId: "other" },
+    { ...acknowledged, gatewayId: "other" },
+    { ...acknowledged, slug: "other" },
+    { ...acknowledged, slug: " " },
+    { ...acknowledged, attemptId: " " },
+    { ...acknowledged, assignmentEpoch: -1 },
+    { ...acknowledged, assignmentEpoch: 0.5 },
+    { ...acknowledged, assignmentEpoch: Number.MAX_SAFE_INTEGER + 1 },
+    { ...acknowledged, claimStartedAt: 0 },
+    { ...acknowledged, claimStartedAt: Number.NaN },
+    { ...acknowledged, dispatchedAt: Number.POSITIVE_INFINITY },
+    { ...acknowledged, dispatchedAt: -1 },
+    { ...acknowledged, acknowledgedAt: 0 },
+    { ...acknowledged, acknowledgedAt: 199 },
+  ])("blocks unresolved or malformed restore receipt %j", (attempt) => {
+    expect(() => assertCustomerRestoreSettled(operation, attempt)).toThrow(/restore/);
   });
 });

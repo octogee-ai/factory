@@ -1,11 +1,13 @@
 import { gatewayScopedJobId, signFleetRequest } from "./fleet-signature.js";
 import { SIGNATURE_HEADER, MIGRATION_QUIESCE_TIMEOUT_MS, MIGRATION_TRANSFER_TIMEOUT_MS, MIGRATION_UNMOUNT_TIMEOUT_MS, MIGRATION_VERIFY_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
 export class MigrationRpcError extends Error {
+    details;
     status;
     code;
     constructor(message, options = {}) {
         super(message);
         this.name = "MigrationRpcError";
+        this.details = options.details;
         this.status = options.status;
         this.code = options.code;
     }
@@ -216,7 +218,7 @@ async function migrationRpcError(path, response) {
     catch {
         details = {};
     }
-    const options = { status: response.status };
+    const options = { status: response.status, details };
     if (typeof details.code === "string")
         options.code = details.code;
     return new MigrationRpcError(`${path}: ${response.status} ${text}`, options);

@@ -382,6 +382,18 @@ describe("commitPlacementAtomic", () => {
     )).toBeNull();
   });
 
+  it.each([null, false, "malformed", { phase: "dispatched", claimStartedAt: 1 }])("rejects placement while any restore fence remains: %j", async (restoreFence) => {
+    const original = { provisioning: { openclaw: { gatewayId: "source", restoreFence } } };
+    const { db, store } = mkDb({ "users/u1": original });
+    const result = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "default", source: "repair", now: 999_999_999,
+      mirrorPatch: mirror,
+    });
+    expect(result).toEqual({ kind: "rejected", reason: "restore-in-progress" });
+    expect(store.get("users/u1")).toEqual(original);
+    expect(store.size).toBe(1);
+  });
+
   it("un-backfilled gateway (no GatewayDoc): writes ONLY the mirror, byte-identical to today", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },

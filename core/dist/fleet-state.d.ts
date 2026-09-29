@@ -38,6 +38,18 @@ export interface FleetStateFirestore {
     };
     runTransaction: <T>(body: (txn: FleetStateTxn) => Promise<T>) => Promise<T>;
 }
+export interface CustomerRestoreInput {
+    fromGatewayId: string;
+    uid: string;
+    slug: string;
+    gatewayId: string;
+    assignmentEpoch: number;
+    operationId: string;
+    claimStartedAt: number;
+    attemptId: string;
+}
+export declare function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void>;
+export declare function acknowledgeCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void>;
 export interface HeartbeatSnapshot {
     gatewayId: string;
     status: GatewayStatus;

@@ -84,10 +84,12 @@ export interface MigrationClient {
     }): Promise<UnmountResponse>;
 }
 export interface MigrationRpcErrorOptions {
+    details?: unknown;
     status?: number;
     code?: string;
 }
 export declare class MigrationRpcError extends Error {
+    readonly details?: unknown;
     readonly status?: number;
     readonly code?: string;
     constructor(message: string, options?: MigrationRpcErrorOptions);

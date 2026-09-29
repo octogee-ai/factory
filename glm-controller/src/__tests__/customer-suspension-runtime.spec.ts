@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertCustomerRestoreNotInProgress,
   cancelCustomerMigrationsForSuspension,
   cancelStripeSubscription,
   deactivateCustomerVisibility,
@@ -35,7 +36,24 @@ function placementDb(user: Record<string, unknown> | null) {
   return { db, writes };
 }
 
+describe("assertCustomerRestoreNotInProgress", () => {
+  it.each([null, { phase: "dispatched" }])("rejects unresolved restore before suspension effects: %j", async (restoreFence) => {
+    const db = { collection: () => ({ doc: () => ({ get: async () => ({ data: () => ({ provisioning: { openclaw: { restoreFence } } }) }) }) }) };
+    await expect(assertCustomerRestoreNotInProgress(db as never, "uid-1")).rejects.toThrow("customer restore is in progress");
+  });
+  it.each([undefined, { provisioning: { openclaw: { gatewayId: "shared-1" } } }])("allows an unfenced account or completed cleanup retry", async (user) => {
+    const db = { collection: () => ({ doc: () => ({ get: async () => ({ data: () => user }) }) }) };
+    await expect(assertCustomerRestoreNotInProgress(db as never, "uid-1")).resolves.toBeUndefined();
+  });
+});
+
 describe("releaseCustomerPlacement", () => {
+  it.each([null, false, { phase: "dispatched", claimStartedAt: 1 }])("preserves all assignments while a restore fence remains: %j", async (restoreFence) => {
+    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", restoreFence } } });
+    await expect(releaseCustomerPlacement(db as never, "uid-1", "shared-0")).rejects.toThrow("customer restore is in progress");
+    expect(writes).toEqual([]);
+  });
+
   it("deletes the assignment and clears the user mirror that still points at the gateway", async () => {
     const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-0", slug: "alice" } } });
 

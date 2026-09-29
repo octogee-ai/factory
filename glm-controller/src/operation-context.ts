@@ -1,5 +1,5 @@
 import type { SchedulerHandoffState } from "@octogee/shared/types/glm";
-import type { CustomerMigrationV2State, OperationStep } from "@octogee/shared/types/glm";
+import type { CustomerMigrationV2State, Operation, OperationStep } from "@octogee/shared/types/glm";
 import type { OperationContext } from "./operation-router.js";
 
 export interface PersistFn {
@@ -7,6 +7,11 @@ export interface PersistFn {
 }
 
 export interface CreateOperationContextDeps {
+  assertActiveClaim?: () => Promise<void>;
+  customerRestore?: {
+    assertSettled: () => Promise<void>;
+    begin: (input: Parameters<NonNullable<OperationContext["withCustomerRestoreFence"]>>[0]) => Promise<() => Promise<void>>;
+  };
   
   persist: PersistFn;
   persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
@@ -25,6 +30,15 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
   const steps: OperationStep[] = [];
 
   const ctx: OperationContext = {
+    ...(deps.assertActiveClaim ? { assertActiveClaim: deps.assertActiveClaim } : {}),
+    ...(deps.customerRestore ? {
+      assertCustomerRestoreSettled: deps.customerRestore.assertSettled,
+      withCustomerRestoreFence: async (input, work) => {
+        const acknowledge = await deps.customerRestore!.begin(input);
+        await work();
+        await acknowledge();
+      },
+    } : {}),
     reportStep: async (step: OperationStep) => {
       const idx = steps.findIndex(
         (s) => s.name === step.name && (s.status === "running" || s.status === "pending"),
@@ -56,4 +70,49 @@ export function createOperationContext(deps: CreateOperationContextDeps): {
   };
 
   return { ctx, steps };
+}
+
+export function assertActiveOperationClaim(
+  claimed: Operation,
+  fresh: (Operation & { cancellationRequestedAt?: unknown }) | null,
+): void {
+  if (claimed.status !== "running" || typeof claimed.startedAt !== "number" ||
+      !fresh || fresh.status !== "running" || fresh.startedAt !== claimed.startedAt ||
+      fresh.cancellationRequestedAt !== undefined || fresh.kind !== claimed.kind ||
+      fresh.input.uid !== claimed.input.uid || fresh.input.fromGatewayId !== claimed.input.fromGatewayId ||
+      fresh.input.toGatewayId !== claimed.input.toGatewayId) {
+    throw new Error("operation claim is no longer active for this migration attempt");
+  }
+}
+
+function positiveRestoreTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function nonblankRestoreIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function assertCustomerRestoreSettled(operation: Operation, attempt: unknown): void {
+  if (attempt === undefined) return;
+  if (attempt === null || typeof attempt !== "object" || Array.isArray(attempt)) {
+    throw new Error("customer restore receipt is malformed; assignment fence retained");
+  }
+  const receipt = attempt as Record<string, unknown>;
+  const identifiers = [receipt.slug, receipt.attemptId, receipt.operationId, receipt.uid, receipt.fromGatewayId, receipt.gatewayId];
+  const exact = [
+    receipt.phase === "acknowledged",
+    identifiers.every(nonblankRestoreIdentifier),
+    receipt.operationId === operation.id,
+    receipt.uid === operation.input.uid,
+    receipt.fromGatewayId === operation.input.fromGatewayId,
+    receipt.gatewayId === operation.input.toGatewayId,
+    operation.input.builderSlug === undefined || receipt.slug === operation.input.builderSlug,
+    Number.isSafeInteger(receipt.assignmentEpoch) && (receipt.assignmentEpoch as number) >= 0,
+    positiveRestoreTimestamp(receipt.claimStartedAt),
+    positiveRestoreTimestamp(receipt.dispatchedAt),
+    positiveRestoreTimestamp(receipt.acknowledgedAt),
+    (receipt.acknowledgedAt as number) >= (receipt.dispatchedAt as number),
+  ].every(Boolean);
+  if (!exact) throw new Error("customer restore delivery remains ambiguous; assignment fence retained");
 }

@@ -51,6 +51,7 @@ import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   GATEWAY_RELEASES_SUBCOLLECTION,
   commitPlacementAtomic,
+  customerRestoreFencePresent,
   isReleasePayload,
   isGatewayRuntimeDoc,
   type AssignmentDoc,
@@ -3333,6 +3334,9 @@ async function claimCustomerDeletion(opts: {
     const userSnap = await transaction.get(userRef);
     if (!userSnap.exists) return { kind: "not-found" };
     const userData = userSnap.data() ?? {};
+    if (customerRestoreFencePresent(userData)) {
+      return { kind: "conflict", deletionId: null, operationId: null };
+    }
     const lifecycle = isPlainRecord(userData.accountLifecycle)
       ? userData.accountLifecycle
       : undefined;
@@ -5950,6 +5954,9 @@ router.get(
           const userSnap = await txn.get(userRef);
           if (!userSnap.exists) {
             return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+          }
+          if (customerRestoreFencePresent(userSnap.data())) {
+            return { status: 409, body: { error: "customer restore outcome is unresolved — cannot unassign", uid } };
           }
           const currentGatewayId = readUserGatewayId(
             userSnap.data() as Record<string, unknown> | undefined,

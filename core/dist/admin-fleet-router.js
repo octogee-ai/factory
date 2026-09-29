@@ -4,7 +4,7 @@ import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, customerRestoreFencePresent, isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
 import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
@@ -2213,6 +2213,9 @@ async function claimCustomerDeletion(opts) {
         if (!userSnap.exists)
             return { kind: "not-found" };
         const userData = userSnap.data() ?? {};
+        if (customerRestoreFencePresent(userData)) {
+            return { kind: "conflict", deletionId: null, operationId: null };
+        }
         const lifecycle = isPlainRecord(userData.accountLifecycle)
             ? userData.accountLifecycle
             : undefined;
@@ -4413,6 +4416,9 @@ export function addAdminFleetRoutes(router, deps) {
                     const userSnap = await txn.get(userRef);
                     if (!userSnap.exists) {
                         return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+                    }
+                    if (customerRestoreFencePresent(userSnap.data())) {
+                        return { status: 409, body: { error: "customer restore outcome is unresolved — cannot unassign", uid } };
                     }
                     const currentGatewayId = readUserGatewayId(userSnap.data());
                     if (!currentGatewayId) {

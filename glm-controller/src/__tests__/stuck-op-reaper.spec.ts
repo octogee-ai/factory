@@ -196,6 +196,23 @@ describe("runStuckOpReaperTick", () => {
     expect(ops[0].updated).not.toHaveProperty("output.configCleanup");
   });
 
+  it("leaves the legacy operation and assignment unchanged while restore is unresolved", async () => {
+    const ops: FakeOpDoc[] = [{ id: "placement-owned", data: {
+      status: "running", kind: "migrate-customer", startedAt: NOW - 20 * 60_000,
+      input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+    } }];
+    const assignment = { uid: "uid-mike", gatewayId: "shared-a", state: "quiescing", source: "migrate-customer", updatedByOperationId: "placement-owned" };
+    const db = makeFakeDb(ops, {
+      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a", restoreFence: null } } } },
+      assignments: { "shared-a/uid-mike": assignment },
+    });
+    const log = vi.fn();
+    await expect(runStuckOpReaperTick({ db: db as never, log, now: () => NOW, stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped: 0 });
+    expect(assignment.state).toBe("quiescing");
+    expect(ops[0].updated).toBeUndefined();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("restore"));
+  });
+
   it("atomically restores an operation-owned legacy migration gate before failing the stuck op", async () => {
     const ops: FakeOpDoc[] = [{
       id: "placement-owned",

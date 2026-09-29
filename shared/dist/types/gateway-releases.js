@@ -316,6 +316,12 @@ async function readServingRuntime(db, txn, gatewayId) {
     const runtime = runtimeSnap.data();
     return runtime ? { runtime } : { reason: "gateway-not-serving" };
 }
+export function customerRestoreFencePresent(user) {
+    if (!isPlainRecord(user) || !isPlainRecord(user.provisioning))
+        return false;
+    const openclaw = user.provisioning.openclaw;
+    return isPlainRecord(openclaw) && openclaw.restoreFence !== undefined;
+}
 export async function commitPlacementAtomic(db, params) {
     const userRef = db.collection("users").doc(params.uid);
     const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
@@ -324,6 +330,9 @@ export async function commitPlacementAtomic(db, params) {
         .doc(params.uid);
     return db.runTransaction(async (txn) => {
         const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
+        if (customerRestoreFencePresent(userData)) {
+            return { kind: "rejected", reason: "restore-in-progress" };
+        }
         if (!accountAllowsInteractiveAccess(userData)) {
             return { kind: "rejected", reason: "account-not-interactive" };
         }

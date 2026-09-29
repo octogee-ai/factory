@@ -2,7 +2,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
+import { customerRestoreFencePresent, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -64,7 +64,7 @@ async function pruneOne(input: {
   gatewayId: string;
   assignment: SurgeAssignment;
   now: number;
-}): Promise<boolean> {
+}): Promise<boolean | "restore-fenced"> {
   const { db, gatewayId, assignment, now } = input;
   const assignmentRef = db
     .collection(GATEWAYS_COLLECTION)
@@ -84,6 +84,7 @@ async function pruneOne(input: {
         transaction.get(operationRef),
       ]);
     if (!assignmentSnapshot.exists) return true;
+    if (customerRestoreFencePresent(userSnapshot.data())) return "restore-fenced";
     const stored = record(assignmentSnapshot.data());
     if (
       !stored ||
@@ -154,7 +155,10 @@ export async function pruneSurgeOrphanAssignments(input: {
       assignment,
       now: input.now,
     });
-    if (!removed) {
+    if (removed === "restore-fenced") {
+      input.log(`[surge-handoff] orphan assignment retained during unresolved restore gateway=${input.gatewayId} uid=${assignment.uid}`);
+    }
+    if (removed !== true) {
       retained.push(assignment);
       continue;
     }

@@ -346,6 +346,22 @@ describe("MigrationClient.unmount", () => {
   });
 });
 
+describe("MigrationClient verification errors", () => {
+  it("retains structured readiness details for scoped recovery without parsing error messages", async () => {
+    const details = {
+      migrationId: "m1", slug: "alice", ready: false,
+      checks: { customerDir: true, coachWired: true, mountMarked: false, accountHealthy: true },
+    };
+    const { fakeFetch } = captureFetch(() => new Response(JSON.stringify(details), { status: 409 }));
+    const client = createMigrationClient({
+      transferState: transferNotUnderTest, privateKey: PRIVATE_KEY,
+      resolveGatewayUrl: () => "https://fleet.example.com", fetch: fakeFetch,
+    });
+    await expect(client.verifyTarget({ migrationId: "m1", gatewayId: "gw-green", slug: "alice" }))
+      .rejects.toMatchObject({ status: 409, details });
+  });
+});
+
 describe("MigrationClient.restoreTarget", () => {
   it("POSTs the durable snapshot to /restore/{gatewayId} signed by the fleet controller key", async () => {
     const { calls, fakeFetch } = captureFetch(() =>

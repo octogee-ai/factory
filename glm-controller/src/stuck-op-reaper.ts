@@ -5,7 +5,7 @@ import {
   type Operation,
 } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
+import { customerRestoreFencePresent, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
 import { MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
 
@@ -92,6 +92,22 @@ interface ReapResult {
   gateMessage?: string;
 }
 
+function legacyReapAdmission(input: {
+  operationSnapshot: FirebaseFirestore.DocumentSnapshot;
+  userSnapshot: FirebaseFirestore.DocumentSnapshot | null;
+  operationId: string;
+  stillReapable: (operation: Operation) => boolean;
+  logLabel: string;
+}): { operation: Operation } | ReapResult {
+  if (!input.operationSnapshot.exists) return { reaped: false };
+  const operation = { ...input.operationSnapshot.data(), id: input.operationId } as Operation;
+  if (!input.stillReapable(operation)) return { reaped: false };
+  if (customerRestoreFencePresent(input.userSnapshot?.data())) {
+    return { reaped: false, gateMessage: `[${input.logLabel}] source assignment recovery blocked by unresolved customer restore` };
+  }
+  return { operation };
+}
+
 async function reapWithLegacyGateRecovery(input: {
   db: Firestore;
   doc: FirebaseFirestore.QueryDocumentSnapshot;
@@ -114,9 +130,15 @@ async function reapWithLegacyGateRecovery(input: {
       assignmentRef ? txn.get(assignmentRef) : null,
       userRef ? txn.get(userRef) : null,
     ]);
-    if (!operationSnap.exists) return { reaped: false };
-    const current = { ...operationSnap.data(), id: input.doc.id } as Operation;
-    if (!input.stillReapable(current)) return { reaped: false };
+    const admission = legacyReapAdmission({
+      operationSnapshot: operationSnap,
+      userSnapshot: userSnap,
+      operationId: input.doc.id,
+      stillReapable: input.stillReapable,
+      logLabel: input.logLabel,
+    });
+    if ("reaped" in admission) return admission;
+    const current = admission.operation;
     txn.update(input.doc.ref, {
       status: "failed",
       completedAt: input.now,

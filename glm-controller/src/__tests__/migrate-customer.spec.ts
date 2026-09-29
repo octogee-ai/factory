@@ -235,6 +235,165 @@ describe("native computer return", () => {
     expect(h.deps.readGatewayReleaseArtifact).not.toHaveBeenCalled();
   });
 
+  describe("interrupted Shared mount recovery", () => {
+    const missingMarker = {
+      migrationId: "mig-op-1", slug: "alice", ready: false,
+      checks: { customerDir: true, coachWired: true, mountMarked: false, accountHealthy: true },
+    };
+    const operation = () => mkOp({ cutoverCommittedAt: 100, input: {
+      uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+    } });
+    function recovery() {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      nativeReturn(h);
+      h.ctx.assertActiveClaim = vi.fn(async () => undefined);
+      h.ctx.withCustomerRestoreFence = vi.fn(async (_input, work) => work());
+      h.ctx.assertCustomerRestoreSettled = vi.fn(async () => undefined);
+      vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 7 });
+      vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, gatewayId: "gw-green" });
+      vi.mocked(h.client.verifyTarget).mockRejectedValueOnce(new MigrationRpcError("incomplete mount", {
+        status: 409, details: missingMarker,
+      }));
+      return h;
+    }
+
+    it("holds an assignment fence while restoring the interrupted mount before verifying again", async () => {
+      const h = recovery();
+      vi.mocked(h.client.restoreTarget).mockImplementation(async (request) => {
+        expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+        expect(h.ctx.assertActiveClaim).toHaveBeenCalled();
+        return { migrationId: request.migrationId, slug: request.slug, restored: true, steps: ["verify-channel-ready"] };
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: true });
+      expect(h.client.restoreTarget).toHaveBeenCalledWith({
+        migrationId: "mig-op-1", gatewayId: "gw-green", uid: "uid-alice", slug: "alice",
+        snapshot: { ...SNAPSHOT, gatewayId: "gw-green" },
+      });
+      expect(h.client.verifyTarget).toHaveBeenCalledTimes(2);
+      expect(h.ctx.withCustomerRestoreFence).toHaveBeenCalledWith({
+        uid: "uid-alice", slug: "alice", gatewayId: "gw-green", fromGatewayId: "gw-blue", assignmentEpoch: 7,
+      }, expect.any(Function));
+      expect(h.steps).toContainEqual(expect.objectContaining({ name: "restore-target", status: "done" }));
+      expect(h.client.transferState).not.toHaveBeenCalled();
+      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    });
+
+    it("never dispatches restore without durable coordination", async () => {
+      const h = recovery();
+      delete h.ctx.withCustomerRestoreFence;
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false });
+      expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    });
+
+    it("does not accept ready state after an ambiguous earlier restore", async () => {
+      const h = recovery();
+      const native = nativeReturn(h);
+      vi.mocked(h.client.verifyTarget).mockReset().mockResolvedValue({
+        migrationId: "mig-op-1", slug: "alice", ready: true,
+        checks: { customerDir: true, coachWired: true, mountMarked: true, accountHealthy: true },
+      });
+      vi.mocked(h.ctx.assertCustomerRestoreSettled!).mockRejectedValue(new Error("restore delivery remains ambiguous"));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({
+        success: false, error: expect.stringContaining("ambiguous"),
+      });
+      expect(h.client.verifyTarget).not.toHaveBeenCalled();
+      expect(h.client.restoreTarget).not.toHaveBeenCalled();
+      expect(native.release).not.toHaveBeenCalled();
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.client.scheduler).not.toHaveBeenCalled();
+    });
+
+    it("does not dispatch when placement or suspension wins the fence transaction", async () => {
+      const h = recovery();
+      vi.mocked(h.ctx.withCustomerRestoreFence!).mockRejectedValue(new Error("restore assignment changed"));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false });
+      expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      null,
+      { ...SNAPSHOT, gatewayId: "gw-other" },
+      { ...SNAPSHOT, gatewayId: "gw-green", uid: "uid-other" },
+      { ...SNAPSHOT, gatewayId: "gw-green", slug: "other" },
+      { ...SNAPSHOT, gatewayId: "gw-green", status: "provisioning" as const },
+    ])("refuses a snapshot that no longer proves the assigned complete owner: %j", async (snapshot) => {
+      const h = recovery();
+      vi.mocked(h.deps.readUserSnapshot).mockResolvedValue(snapshot);
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, rolledBack: false });
+      expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { ...missingMarker, migrationId: "another-operation" },
+      { ...missingMarker, slug: "another-owner" },
+      { ...missingMarker, checks: { ...missingMarker.checks, accountHealthy: false } },
+      { ...missingMarker, checks: { ...missingMarker.checks, coachWired: false } },
+      { ...missingMarker, checks: { ...missingMarker.checks, customerDir: false } },
+      { ...missingMarker, configTransferMode: "configured-builder-system-config" },
+      { ...missingMarker, code: "unknown" },
+      { ...missingMarker, checks: { ...missingMarker.checks, mountMarked: "false" } },
+      { ...missingMarker, checks: null },
+      { error: "unauthorized" },
+    ])("does not turn a different failure into mount recovery: %j", async (details) => {
+      const h = recovery();
+      vi.mocked(h.client.verifyTarget).mockReset().mockRejectedValue(new MigrationRpcError("not ready", { status: 409, details }));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, rolledBack: false });
+      expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    });
+
+    it("refuses recovery after losing the operation claim", async () => {
+      const h = recovery();
+      vi.mocked(h.ctx.assertActiveClaim!).mockRejectedValue(new Error("operation re-claimed"));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, error: expect.stringContaining("operation re-claimed") });
+      expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { migrationId: "other", slug: "alice", restored: true, steps: [] },
+      { migrationId: "mig-op-1", slug: "other", restored: true, steps: [] },
+      { migrationId: "mig-op-1", slug: "alice", restored: false, steps: [] },
+    ])("rejects an unconfirmed or mismatched restore receipt: %j", async (receipt) => {
+      const h = recovery();
+      vi.mocked(h.client.restoreTarget).mockResolvedValue(receipt);
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, rolledBack: false });
+      expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+    });
+
+    it("does not report restored readiness after assignment changes during the RPC", async () => {
+      const h = recovery();
+      vi.mocked(h.deps.readUser).mockResolvedValueOnce({ slug: "alice", currentGatewayId: "gw-green" })
+        .mockResolvedValue({ slug: "alice", currentGatewayId: "gw-other" });
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, error: expect.stringContaining("owner changed") });
+      expect(h.client.restoreTarget).toHaveBeenCalledOnce();
+      expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+    });
+
+    it("does not verify completion when the claim is lost during restore", async () => {
+      const h = recovery();
+      vi.mocked(h.ctx.assertActiveClaim!).mockResolvedValueOnce(undefined)
+        .mockRejectedValue(new Error("operation re-claimed"));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, error: expect.stringContaining("operation re-claimed") });
+      expect(h.client.restoreTarget).toHaveBeenCalledOnce();
+      expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+    });
+
+    it("leaves a busy restore pending without skipping verification or changing ownership", async () => {
+      const h = recovery();
+      vi.mocked(h.client.restoreTarget).mockRejectedValue(new Error("mount already in flight"));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("mount already in flight") });
+      expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+      expect(h.steps).toContainEqual(expect.objectContaining({ name: "restore-target", status: "failed" }));
+    });
+
+    it("does not claim success when verification remains incomplete after restore", async () => {
+      const h = recovery();
+      vi.mocked(h.client.verifyTarget).mockRejectedValue(new MigrationRpcError("incomplete mount", { status: 409, details: missingMarker }));
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, rolledBack: false });
+      expect(h.client.restoreTarget).toHaveBeenCalledOnce();
+      expect(h.client.verifyTarget).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("retries forward when Shared is still mounting without rolling back or declaring success", async () => {
     const h = mkDeps();
     nativeReturn(h);

@@ -16,6 +16,15 @@ export interface OperationResult {
 }
 
 export interface OperationContext {
+  assertActiveClaim?: () => Promise<void>;
+  assertCustomerRestoreSettled?: () => Promise<void>;
+  withCustomerRestoreFence?: (input: {
+    uid: string;
+    slug: string;
+    gatewayId: string;
+    fromGatewayId: string;
+    assignmentEpoch: number;
+  }, work: () => Promise<void>) => Promise<void>;
   reportStep: (step: OperationStep) => Promise<void> | void;
   persistSchedulerHandoff?: (state: SchedulerHandoffState) => Promise<void>;
   persistCustomerMigrationV2?: (state: CustomerMigrationV2State) => Promise<void>;

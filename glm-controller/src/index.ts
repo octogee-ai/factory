@@ -130,7 +130,7 @@ import {
   routeOperation,
   type OperationHandlers,
 } from "./operation-router.js";
-import { createOperationContext } from "./operation-context.js";
+import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext } from "./operation-context.js";
 import {
   decideOperationClaim,
   isSeriallyExclusiveKind,
@@ -238,6 +238,8 @@ import {
 } from "@octogee/core/customer-migration-v2";
 import { createRsyncMigrationTransfer } from "./lib/migration-rsync-transfer.js";
 import {
+  beginCustomerRestore,
+  acknowledgeCustomerRestore,
   commitCutoverAtomic,
   markAssignmentState,
   type FleetStateFirestore,
@@ -273,6 +275,7 @@ import {
 import { startHttpServer } from "./http-server.js";
 import { createConnectorSecretDecryptor } from "./connector-secret-decryption.js";
 import {
+  assertCustomerRestoreNotInProgress,
   cancelCustomerMigrationsForSuspension,
   cancelStripeSubscription,
   deactivateCustomerVisibility,
@@ -1863,7 +1866,7 @@ async function attemptClaimOrQueueOperation(
       // The completion write derives attempts/attemptHistory from the op the
       // handler ran with — hand back the transaction's fresh read so a stale
       // worker snapshot can't reset the retry cap or drop history.
-      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, startedAt: now, firstStartedAt } };
+      return { outcome: "claimed" as const, fresh: { ...freshOperation, id: op.id, status: "running", startedAt: now, firstStartedAt } };
     });
   } catch (err) {
     deps.log(
@@ -1986,6 +1989,30 @@ async function runClaimedOperation(
   deps: ControllerDeps,
 ): Promise<void> {
   const { ctx, steps } = createOperationContext({
+    assertActiveClaim: async () => {
+      const fresh = await ref.get();
+      assertActiveOperationClaim(op, fresh.exists ? fresh.data() as Operation : null);
+    },
+    customerRestore: {
+      assertSettled: async () => {
+        const fresh = await ref.get();
+        assertActiveOperationClaim(op, fresh.exists ? fresh.data() as Operation : null);
+        assertCustomerRestoreSettled(op, fresh.data()?.restoreAttempt);
+      },
+      begin: async (input) => {
+        if (typeof op.startedAt !== "number") throw new Error("customer restore requires an active claim");
+        const restore = {
+          ...input, operationId: op.id, claimStartedAt: op.startedAt, attemptId: randomUUID(),
+        };
+        const stateDeps = {
+          db: deps.db as unknown as FleetStateFirestore,
+          serverTimestamp: () => FieldValue.serverTimestamp(),
+          deleteField: () => FieldValue.delete(),
+        };
+        await beginCustomerRestore(stateDeps, restore);
+        return () => acknowledgeCustomerRestore(stateDeps, restore);
+      },
+    },
     persist: async (next) => {
       await deps.db.runTransaction(async (txn) => {
         const fresh = await txn.get(ref);
@@ -3752,6 +3779,7 @@ function buildSuspendCustomerHandler(
 ) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   return createSuspendCustomerHandler({
+    assertRestoreNotInProgress: (uid) => assertCustomerRestoreNotInProgress(db, uid),
     loadDeletionJob: async (deletionId) => {
       const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
       if (!snap.exists) return null;
