@@ -95,7 +95,7 @@ export async function exportAgentStoreSnapshots(
   try {
     await fs.writeFile(configPath, JSON.stringify({
       plugins: { enabled: false },
-      agents: { entries: Object.fromEntries(stores.map((store) => [store.agentId, { agentDir: store.sourceAgentDir }])) },
+      agents: { ownership: "explicit", entries: Object.fromEntries(stores.map((store) => [store.agentId, { agentDir: store.sourceAgentDir }])) },
     }), { mode: 0o600 });
     for (const store of stores) {
       input.signal?.throwIfAborted();
