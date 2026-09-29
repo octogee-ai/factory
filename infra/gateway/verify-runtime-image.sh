@@ -28,7 +28,9 @@ test -f "$global_root/openclaw/dist/extensions/mattermost/package.json" \
 test -f "$global_root/openclaw/dist/extensions/codex/package.json" \
   || fail "Codex is not bundled under $global_root/openclaw/dist/extensions"
 ! staged_plugin codex || fail "@openclaw/codex must not be staged under $runtime_root"
-staged_plugin parallel-plugin || fail "@openclaw/parallel-plugin is absent from $runtime_root"
+test -f "$global_root/openclaw/dist/extensions/parallel/package.json" \
+  || fail "Parallel is not bundled under $global_root/openclaw/dist/extensions"
+! staged_plugin parallel-plugin || fail "@openclaw/parallel-plugin must not be staged under $runtime_root"
 test -e "$global_root/@anthropic-ai/claude-code" || fail "@anthropic-ai/claude-code is absent from $global_root"
 test -e "$global_root/@openai/codex" || fail "@openai/codex is absent from $global_root"
 test -x "$tool_bin/claude" || fail "$tool_bin/claude is not executable"

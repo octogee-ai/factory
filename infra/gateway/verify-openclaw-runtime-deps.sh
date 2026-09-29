@@ -18,7 +18,9 @@ for package_name in "${required_packages[@]}"; do
   fi
   package_json="$(find "$runtime_root" -type f -path "*/node_modules/@openclaw/$package_name/package.json" -print -quit)"
   if [ -z "$package_json" ]; then
-    package_json="$bundled_root/$package_name/package.json"
+    bundled_name="$package_name"
+    if [ "$package_name" = parallel-plugin ]; then bundled_name=parallel; fi
+    package_json="$bundled_root/$bundled_name/package.json"
     if [ ! -f "$package_json" ]; then
       echo "FATAL: @openclaw/$package_name is absent from $runtime_root and $bundled_root" >&2
       exit 1

@@ -414,7 +414,8 @@ describe("gateway base image", () => {
 
     expect(cloudbuild).toContain("--build-arg=IMAGE_PROFILE=builder");
     expect(dockerfile).toContain('RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE"');
-    expect(gate).toContain('staged_plugin parallel-plugin || fail "@openclaw/parallel-plugin is absent');
+    expect(gate).toContain('! staged_plugin parallel-plugin');
+    expect(gate).toContain('openclaw/dist/extensions/parallel/package.json');
     expect(gate).toContain('"$global_root/openclaw/dist/extensions/codex/package.json"');
     expect(gate).toContain('! staged_plugin codex');
     expect(gate).toContain("! staged_plugin mattermost");
@@ -428,6 +429,10 @@ describe("gateway base image", () => {
     expect(gate).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
 
     const extraCloudbuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
+    expect(extraCloudbuild).toContain('openclaw/dist/extensions/parallel/package.json');
+    expect(extraCloudbuild).toContain(
+      '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/parallel-plugin"',
+    );
     expect(extraCloudbuild).toContain('openclaw/dist/extensions/codex/package.json');
     expect(extraCloudbuild).toContain(
       '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',

@@ -44,6 +44,15 @@ describe("standard gateway OpenClaw runtime dependencies", () => {
     expect(result.stdout).toContain("OpenClaw runtime dependency gate: PASS");
   });
 
+  it("finds the externalized Parallel package under its bundled plugin id", () => {
+    const root = runtimeTree([]);
+    const bundled = join(root, "bundled");
+    mkdirSync(join(bundled, "parallel"), { recursive: true });
+    writeFileSync(join(bundled, "parallel", "package.json"), JSON.stringify({ name: "@openclaw/parallel-plugin" }));
+    const result = spawnSync("bash", [verifier, "parallel-plugin"], { encoding: "utf8", env: { ...process.env, OPENCLAW_RUNTIME_DEPS_ROOT: root, OPENCLAW_BUNDLED_PLUGIN_ROOT: bundled } });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it.each(["mattermost", "parallel-plugin", "codex"])(
     "rejects a staged tree missing @openclaw/%s",
     (missing) => {

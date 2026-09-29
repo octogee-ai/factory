@@ -100,14 +100,29 @@ RUN set -e; \
 
 FROM openclaw-installer AS openclaw-core-plugin-installer
 
+COPY infra/gateway/verify-parallel-source-match.mjs /tmp/verify-parallel-source-match.mjs
 COPY infra/gateway/openclaw-tarball/openclaw-mattermost-fork.tgz /tmp/openclaw-mattermost-fork.tgz
 RUN set -e; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     OC_VENDOR="$OPENCLAW_ROOT/vendor"; \
     test -f "$OC_VENDOR/openclaw-parallel-plugin.tgz"; \
-    openclaw plugins install "npm-pack:$OC_VENDOR/openclaw-parallel-plugin.tgz" --force --accept-capabilities > /tmp/oc-plugin.log 2>&1 \
-      || { echo "FATAL: @openclaw/parallel-plugin install failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    PARALLEL_VENDORED="$(mktemp -d)"; \
+    tar -xzf "$OC_VENDOR/openclaw-parallel-plugin.tgz" -C "$PARALLEL_VENDORED"; \
+    PARALLEL_BUNDLED_DIR="$OPENCLAW_ROOT/dist/extensions/parallel"; \
+    test ! -e "$PARALLEL_BUNDLED_DIR"; \
+    cp -a "$PARALLEL_VENDORED/package" "$PARALLEL_BUNDLED_DIR"; \
+    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const pkg = JSON.parse(fs.readFileSync(file, "utf8")); delete pkg.devDependencies; fs.writeFileSync(file, JSON.stringify(pkg) + "\n");' "$PARALLEL_BUNDLED_DIR/package.json"; \
+    npm install --prefix "$PARALLEL_BUNDLED_DIR" --omit=dev --include=optional --ignore-scripts --package-lock=false --no-audit --no-fund > /tmp/oc-plugin.log 2>&1 \
+      || { echo "FATAL: source-matched Parallel dependencies failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    cp "$PARALLEL_VENDORED/package/package.json" "$PARALLEL_BUNDLED_DIR/package.json"; \
+    test ! -e "$PARALLEL_BUNDLED_DIR/node_modules/openclaw"; \
+    PARALLEL_STATE="$(mktemp -d)"; \
+    OPENCLAW_STATE_DIR="$PARALLEL_STATE" openclaw plugins list --json > /tmp/oc-parallel-list.json 2>/tmp/oc-plugin.log \
+      || { echo "FATAL: bundled Parallel discovery failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
+    node /tmp/verify-parallel-source-match.mjs "$PARALLEL_VENDORED/package" "$OPENCLAW_ROOT" /tmp/oc-parallel-list.json; \
+    rm -rf "$PARALLEL_VENDORED" "$PARALLEL_STATE"; \
+    rm -f /tmp/oc-parallel-list.json; \
     MATTERMOST_STAGE="$(mktemp -d)"; \
     tar -xzf /tmp/openclaw-mattermost-fork.tgz -C "$MATTERMOST_STAGE"; \
     MATTERMOST_PACKAGE="$MATTERMOST_STAGE/package"; \
@@ -119,18 +134,17 @@ RUN set -e; \
     cp -a "$MATTERMOST_PACKAGE" "$MATTERMOST_BUNDLED_DIR"; \
     rm -rf "$MATTERMOST_STAGE"; \
     rm -f /tmp/oc-plugin.log /tmp/openclaw-mattermost-fork.tgz; \
-    find /home/node/.openclaw/npm -type d -name _openclaw-pack-archives -prune -exec rm -rf '{}' +; \
-    mkdir -p /opt/openclaw-runtime-deps; \
-    cp -a /home/node/.openclaw/npm /opt/openclaw-runtime-deps/npm; \
+    mkdir -p /opt/openclaw-runtime-deps/npm; \
     chown -R node:node /opt/openclaw-runtime-deps; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/mattermost' | grep -q .; \
-    find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .; \
+    ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .
 
 FROM gateway-core-system AS gateway-core-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
 COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
+COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/parallel /usr/local/lib/node_modules/openclaw/dist/extensions/parallel
 RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
     && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
     && openclaw --version
@@ -172,6 +186,7 @@ FROM gateway-system AS gateway-runtime
 
 COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
 COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
+COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/parallel /usr/local/lib/node_modules/openclaw/dist/extensions/parallel
 COPY --from=openclaw-full-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/codex /usr/local/lib/node_modules/openclaw/dist/extensions/codex
 RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
     && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
