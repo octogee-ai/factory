@@ -87,10 +87,13 @@ import {
   type GatewayUpsertOpts,
   type ObservedHelmInstance,
 } from "./converge-gateway.js";
+import { disposableBuilderPrelaunchReserved, readDisposableBuilderPrelaunchRefresh, runtimeMatchesPrelaunchRelease } from "./disposable-builder-prelaunch.js";
+
 import {
   assertSurgeAssignmentCoverage,
   reconcileSurgeCustomerHandoff,
   type SurgeCustomerHandoffDeps,
+  type SurgeCustomerHandoffResult,
 } from "./surge-customer-handoff.js";
 import {
   decideRollStateMigration,
@@ -950,7 +953,7 @@ interface GatewayConvergencePassDeps {
     disposableBuilderGateway: boolean;
     ownerlessOperatorPrewarm: boolean;
     stateMigration: RollStateMigrationDecision;
-  }) => Promise<{ ready: boolean }>;
+  }) => Promise<SurgeCustomerHandoffResult>;
   log: (msg: string) => void;
 }
 
@@ -963,10 +966,16 @@ function isInitialDisposableBuilderPrelaunch(gateway: DurableGateway): boolean {
   return isDisposableBuilderGateway(gateway) && gateway.liveRelease === null;
 }
 
-export function shouldReconcileInitialDisposablePrelaunch(
+export async function shouldReconcileDisposablePrelaunch(
+  db: Firestore,
   gateway: DurableGateway | null,
-): boolean {
-  return gateway !== null && isInitialDisposableBuilderPrelaunch(gateway);
+): Promise<boolean> {
+  if (gateway === null) return false;
+  if (isInitialDisposableBuilderPrelaunch(gateway)) return true;
+  if (gateway.liveRelease === null || gateway.liveRelease >= gateway.desiredRelease ||
+    !(await disposableBuilderPrelaunchReserved({ db, gateway }))) return false;
+  const runtime = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).get();
+  return runtime.data()?.runtime === "gce-vm";
 }
 
 function runtimeReportsDesiredBuild(
@@ -1003,7 +1012,8 @@ function reconcileGatewaySurgeHandoff(input: {
   desiredOpenclawSourceSha: string | null;
   pendingArtifact: ReleasePayload | null;
   helmObserved: ObservedHelmInstance | null;
-}): Promise<{ ready: boolean }> {
+  prelaunchRefresh: boolean;
+}): Promise<SurgeCustomerHandoffResult> {
   const {
     passDeps,
     gateway,
@@ -1024,7 +1034,7 @@ function reconcileGatewaySurgeHandoff(input: {
   return passDeps.reconcileSurgeHandoff({
     gatewayId: gateway.gatewayId,
     desiredImageTag: desiredImage.imageTag,
-    requiresCustomerMigration: requiresSurgeCustomerMigration(gateway),
+    requiresCustomerMigration: !input.prelaunchRefresh && requiresSurgeCustomerMigration(gateway),
     disposableBuilderGateway: isDisposableBuilderGateway(gateway),
     ownerlessOperatorPrewarm: false,
     stateMigration: decideRollStateMigration({
@@ -1059,16 +1069,15 @@ export async function refineGatewayConvergenceAction(input: {
     desiredDeploymentIntentFingerprint,
     action,
   } = input;
-  const surgeEligible = gateway.desiredStatus === "running" || (
-    gateway.desiredStatus === "draining" && gateway.liveRelease !== gateway.desiredRelease
-  );
-  if (action.kind !== "steady" || !artifact || !surgeEligible) {
-    return action;
-  }
+  if (action.kind !== "steady" || !artifact) return action;
+  if (gateway.desiredStatus !== "running" && !requiresSurgeCustomerMigration(gateway)) return action;
   if (!(await gatewayDesiredRootPresent(passDeps.db, gateway.gatewayId))) {
     return { kind: "steady" };
   }
   const desiredImage = gatewayImageFor(gateway, artifact);
+  const prelaunchRefresh = await readDisposableBuilderPrelaunchRefresh({
+    db: passDeps.db, gateway, runtime, image: desiredImage, observedImage: helmObserved,
+  });
   const handoff = await reconcileGatewaySurgeHandoff({
     passDeps,
     gateway,
@@ -1077,7 +1086,11 @@ export async function refineGatewayConvergenceAction(input: {
     desiredOpenclawSourceSha: artifact.openclawSourceSha ?? null,
     pendingArtifact,
     helmObserved,
+    prelaunchRefresh,
   });
+  if (prelaunchRefresh && handoff.prelaunchHeld) {
+    return { kind: "mark-live", prelaunchRefresh: true };
+  }
   const desiredBuildReported = reportsDesiredBuildOrVerifiedInitialPrelaunch({
     runtime,
     desiredImageTag: desiredImage.imageTag,
@@ -1216,7 +1229,7 @@ async function convergeOneGateway(
       return;
     case "mark-live":
       if (!artifact) throw new Error(`gateway ${gateway.gatewayId} cannot mark a missing release live`);
-      await markGatewayLive(passDeps, gateway, artifact);
+      await markGatewayLive(passDeps, gateway, artifact, action.prelaunchRefresh);
       return;
   }
 }
@@ -1275,17 +1288,17 @@ async function upsertGateway(
   await helm.upsertInstance(desiredOpts);
 }
 
-async function markGatewayLive(
-  passDeps: GatewayConvergencePassDeps,
+export async function markGatewayLive(
+  passDeps: Pick<GatewayConvergencePassDeps, "db" | "log">,
   gateway: DurableGateway,
   artifact: ReleasePayload,
+  prelaunchRefresh = false,
 ): Promise<void> {
   const { db, log } = passDeps;
   const initialDisposablePrelaunch = isInitialDisposableBuilderPrelaunch(gateway);
   const imageTag = gatewayImageFor(gateway, artifact).imageTag;
   const now = Date.now();
-  log(`[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`);
-  await db.runTransaction(async (txn) => {
+  const markedLive = await db.runTransaction(async (txn) => {
     const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
     const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
     const rootSnap = await txn.get(rootRef);
@@ -1293,7 +1306,15 @@ async function markGatewayLive(
       rootSnap.exists ? rootSnap.data() : undefined,
       gateway.gatewayId,
     );
-    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) return;
+    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) return false;
+    if (prelaunchRefresh) {
+      const runtime = await txn.get(glmRef);
+      if (!root || !runtimeMatchesPrelaunchRelease(root, runtime.data(), gatewayImageFor(root, artifact)) ||
+        !(await disposableBuilderPrelaunchReserved({ db, gateway: root, transaction: txn, expectedGateway: gateway }))) {
+        log(`[converge-gateway] ${gateway.gatewayId} prelaunch reservation changed; deferring release`);
+        return false;
+      }
+    }
     txn.set(
       rootRef,
       { liveRelease: gateway.desiredRelease, updatedAt: now, updatedBy: "converge-gateway" },
@@ -1318,7 +1339,9 @@ async function markGatewayLive(
           : {}),
       }, { merge: true });
     }
+    return true;
   });
+  if (markedLive) log(`[converge-gateway] ${gateway.gatewayId} release ${gateway.desiredRelease} is live`);
 }
 
 function observedHelmInstance(
@@ -2208,7 +2231,7 @@ export function buildGatewayHeartbeatPollerDeps(
         snapshot.exists ? snapshot.data() : undefined,
         gatewayId,
       );
-      if (shouldReconcileInitialDisposablePrelaunch(gateway)) {
+      if (await shouldReconcileDisposablePrelaunch(db, gateway)) {
         requestReconcileTickRef.fire?.(gatewayId);
       }
     },

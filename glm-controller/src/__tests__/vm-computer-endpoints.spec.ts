@@ -150,7 +150,7 @@ describe("first-boot VM gateway handoff", () => {
     await expect(reconcileSurgeHandoff({
       gatewayId: "b-x", desiredImageTag: imageTag, requiresCustomerMigration: false, disposableBuilderGateway: true,
       ownerlessOperatorPrewarm: false, stateMigration: decideRollStateMigration({ sourceOpenclawVersion: undefined, targetOpenclawVersion: "2026.7.1" }),
-    })).resolves.toEqual({ ready: true });
+    })).resolves.toEqual({ ready: true, prelaunchHeld: true });
     expect(deps.readPodHealth).toHaveBeenCalledWith(expect.objectContaining({ uid: "octogee-gateway-b-x-vm-4242", podIP: "172.20.0.9" }), "b-x");
     expect(listPods).not.toHaveBeenCalled();
 

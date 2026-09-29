@@ -10,6 +10,10 @@ import type {
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 import type { RollStateMigrationDecision } from "./roll-state-migration.js";
 
+export type SurgeCustomerHandoffResult =
+  | { ready: boolean; prelaunchHeld?: never }
+  | { ready: true; prelaunchHeld: true };
+
 export interface SurgePod {
   uid: string;
   name: string;
@@ -1165,7 +1169,7 @@ async function settleOrGateTarget(
     ownedBy: string;
     observedPodUids: readonly string[];
   },
-): Promise<{ ready: boolean } | null> {
+): Promise<SurgeCustomerHandoffResult | null> {
   const { target, targetHealth, source, ownedBy, observedPodUids } = context;
   const heldPrelaunchTarget = configuredBuilderProcessGateRequired(input) &&
     prelaunchTransferEligible(targetHealth);
@@ -1174,7 +1178,7 @@ async function settleOrGateTarget(
     return settleReleasedTarget(deps, input, { source, target, targetHealth, ownedBy, observedPodUids });
   }
   if (await disposableBuilderPrelaunchReserved(deps, input, source, targetHealth)) {
-    return { ready: true };
+    return { ready: true, prelaunchHeld: true };
   }
   // A released marker beside a held prelaunch gate is rollback residue: the
   // release landed while the controller rolled the handoff back. The gate owns
@@ -1339,7 +1343,7 @@ async function observeSurgePass(
 export async function reconcileSurgeCustomerHandoff(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
-): Promise<{ ready: boolean }> {
+): Promise<SurgeCustomerHandoffResult> {
   const observation = await observeSurgePass(deps, input);
   if (!observation) return { ready: false };
   const { pods, observedPodUids, healthByUid, target, targetHealth } = observation;

@@ -133,7 +133,7 @@ export type GatewayConvergenceAction =
   | { kind: "hold-missing-release"; error: string }
   | { kind: "hold-unreleased-chart"; error: string }
   | { kind: "upsert"; replicas: number }
-  | { kind: "mark-live" }
+  | { kind: "mark-live"; prelaunchRefresh?: true }
   | { kind: "steady" };
 
 export function markLiveRuntimePatch(

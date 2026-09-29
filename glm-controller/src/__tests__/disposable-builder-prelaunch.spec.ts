@@ -1,0 +1,203 @@
+import { describe, expect, it, vi } from "vitest";
+import type { Firestore } from "firebase-admin/firestore";
+import type { GatewayRuntimeDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
+import type { DurableGateway } from "../converge-gateway.js";
+import { markGatewayLive, refineGatewayConvergenceAction, shouldReconcileDisposablePrelaunch } from "../index.js";
+import { reconcileSurgeCustomerHandoff, type SurgeCustomerHandoffDeps, type SurgePrelaunchState } from "../surge-customer-handoff.js";
+
+const repository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
+const imageTag = `f554548-oc2026.7.1@sha256:${"b".repeat(64)}`;
+const desiredImage = { imageRepository: repository, imageTag };
+const artifact: ReleasePayload = {
+  imageRepository: repository.replace(/-builder$/, ""),
+  imageTag: imageTag.replace(/b{64}$/, "a".repeat(64)),
+  profileImages: { builder: desiredImage },
+};
+
+function fixture() {
+  const gateway: DurableGateway = {
+    gatewayId: "jefe-run", createdAt: 1, createdBy: "test", updatedAt: 2, updatedBy: "test",
+    latestRelease: 2, desiredRelease: 2, liveRelease: 1, desiredStatus: "running",
+    configSchemaVersion: 1, profile: "builder", gatewayClass: "builder", imageProfile: "builder",
+    sizingTier: "s", gcpProject: null, gatewayContainerSecurityContext: null,
+    serviceAccountName: null, serviceAccount: null, builderAccess: null,
+    ownerUid: "uid-jefe", builderSlug: "jefe", modelBrokerLimits: null,
+    allocation: { kind: "disposable-builder", schemaVersion: 1, leaseId: "lease-67", generation: 67, claimedByUid: "uid-jefe" },
+  };
+  const lease = {
+    leaseId: "lease-67", generation: 67, status: "provisioning", targetGatewayId: gateway.gatewayId,
+    sourceGatewayId: "shared-blue", sourceAssignmentEpoch: 3, builderSlug: "jefe",
+  };
+  const user = { username: "jefe", provisioning: { openclaw: { gatewayId: "shared-blue", slug: "jefe", activationLease: lease } } };
+  const runtime = {
+    docKind: "runtime", gatewayId: gateway.gatewayId, release: 2, lifecycle: "serving", runtime: "gce-vm",
+    helm: { ...desiredImage },
+    heartbeat: { status: "booting", version: imageTag, mountedCustomers: [] },
+  } as unknown as GatewayRuntimeDoc & { runtime?: string };
+  const documents = new Map<string, unknown>([
+    ["gateways/jefe-run", gateway],
+    ["users/uid-jefe", user],
+    ["glmGateways/jefe-run", runtime],
+    ["gateways/shared-blue", { ...gateway, gatewayId: "shared-blue", gatewayClass: "shared", profile: "standard", imageProfile: "standard", allocation: null, ownerUid: null, builderSlug: null }],
+    ["gateways/shared-blue/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", gatewayId: "shared-blue", state: "serving", epoch: 3 }],
+  ]);
+  const snapshot = (path: string) => ({ exists: documents.has(path), data: () => documents.get(path) });
+  const collection = (path: string) => ({
+    doc: (id: string) => document(`${path}/${id}`),
+    limit: () => ({ get: async () => ({ empty: ![...documents.keys()].some((key) => key.startsWith(`${path}/`)) }) }),
+  });
+  const document = (path: string): object => ({ path, get: async () => snapshot(path), collection: (name: string) => collection(`${path}/${name}`) });
+  const writes = vi.fn((ref: { path: string }, patch: Record<string, unknown>) => {
+    documents.set(ref.path, { ...(documents.get(ref.path) as object), ...patch });
+  });
+  const db = {
+    collection, doc: document,
+    runTransaction: async (run: (txn: object) => Promise<void>) => run({
+      get: (ref: { get: () => Promise<unknown> }) => ref.get(), set: writes,
+    }),
+  } as unknown as Firestore;
+  const target = { uid: "vm-r2", name: "vm-r2", podIP: "10.0.0.1", ready: false, terminating: false, crashLooping: false };
+  const targetHealth = {
+    status: "booting" as "booting" | "ready", version: imageTag, fleetSignatureCapability: "gateway-scoped" as const,
+    handoffReleased: false, prelaunchState: "held" as SurgePrelaunchState, mountedCustomers: [] as string[],
+  };
+  const pods = [target];
+  const sourceHealth = { ...targetHealth, version: "ab10fce-oc2026.7.1" };
+  const releaseTarget = vi.fn();
+  const surgeDeps = {
+    listPods: async () => ({ pods, observedPodUids: pods.map((pod) => pod.uid) }),
+    readPodHealth: async (pod: { uid: string }) => pod.uid === target.uid ? targetHealth : sourceHealth,
+    readAssignments: async () => [],
+    releaseTarget,
+    log: vi.fn(),
+  } as unknown as SurgeCustomerHandoffDeps;
+  const reconcileSurgeHandoff = vi.fn((input) => reconcileSurgeCustomerHandoff(surgeDeps, input));
+  const refine = () => refineGatewayConvergenceAction({
+    passDeps: { db, reconcileSurgeHandoff }, gateway, artifact, runtime,
+    helmObserved: { ...desiredImage, replicas: 1, ownerUid: gateway.ownerUid, builderSlug: gateway.builderSlug },
+    action: { kind: "steady" },
+  });
+  const markLive = () => markGatewayLive({ db, log: vi.fn() }, gateway, artifact, true);
+  return { gateway, lease, user, runtime, documents, pods, targetHealth, releaseTarget, reconcileSurgeHandoff, refine, markLive, writes, db };
+}
+
+describe("disposable Builder prelaunch release refresh", () => {
+  it("converges release 2 while the exact release-1 allocation remains empty and held on Shared", async () => {
+    const h = fixture();
+    await expect(shouldReconcileDisposablePrelaunch(h.db, h.gateway)).resolves.toBe(true);
+    await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
+    expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: false }));
+    expect(h.releaseTarget).not.toHaveBeenCalled();
+    expect(h.lease.status).toBe("provisioning");
+    expect(h.user.provisioning.openclaw.gatewayId).toBe("shared-blue");
+  });
+});
+
+
+describe("prelaunch release admission boundaries", () => {
+  it.each(["cluster", undefined])("does not admit a %s runtime to the VM refresh exception", async (runtime) => {
+    const h = fixture();
+    h.runtime.runtime = runtime;
+    await expect(shouldReconcileDisposablePrelaunch(h.db, h.gateway)).resolves.toBe(false);
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+    expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: true }));
+    expect(h.releaseTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps two held cluster pods behind ordinary migration without releasing either process gate", async () => {
+    const h = fixture();
+    h.runtime.runtime = "cluster";
+    h.pods.unshift({ ...h.pods[0], uid: "pod-r1", name: "pod-r1", podIP: "10.0.0.2" });
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+    expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: true }));
+    expect(h.releaseTarget).not.toHaveBeenCalled();
+    expect(h.writes).not.toHaveBeenCalled();
+    expect(h.lease.status).toBe("provisioning");
+    expect(h.user.provisioning.openclaw.gatewayId).toBe("shared-blue");
+  });
+
+  it.each(["activating", "active", "returning", "failed"])("keeps a %s lease behind ordinary migration", async (status) => {
+    const h = fixture();
+    h.lease.status = status;
+    await expect(shouldReconcileDisposablePrelaunch(h.db, h.gateway)).resolves.toBe(false);
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+    expect(h.reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: true }));
+  });
+
+  it.each(["activationOperationId", "activatingAt", "activeAt"])("rejects provisioning records with %s history", async (field) => {
+    const h = fixture();
+    Object.assign(h.lease, { [field]: 1 });
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+  });
+
+  it.each([
+    ["a different allocation generation", (h: ReturnType<typeof fixture>) => { h.lease.generation++; }],
+    ["a different owner", (h: ReturnType<typeof fixture>) => { h.gateway.allocation!.claimedByUid = "someone-else"; }],
+    ["a foreign target", (h: ReturnType<typeof fixture>) => { h.lease.targetGatewayId = "other-target"; }],
+    ["an already-assigned owner", (h: ReturnType<typeof fixture>) => { h.user.provisioning.openclaw.gatewayId = h.gateway.gatewayId; }],
+    ["a moved source assignment", (h: ReturnType<typeof fixture>) => { h.lease.sourceAssignmentEpoch++; }],
+    ["a missing source assignment", (h: ReturnType<typeof fixture>) => { h.documents.delete("gateways/shared-blue/assignments/uid-jefe"); }],
+    ["an occupied target", (h: ReturnType<typeof fixture>) => { h.documents.set("gateways/jefe-run/assignments/uid-jefe", { state: "serving" }); }],
+  ])("rejects %s", async (_name, change) => {
+    const h = fixture();
+    change(h);
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+  });
+
+  it.each([
+    ["the previous runtime release", (h: ReturnType<typeof fixture>) => { h.runtime.release = 1; }],
+    ["a different runtime digest", (h: ReturnType<typeof fixture>) => { h.runtime.helm.imageTag = imageTag.replace(/b/g, "c"); }],
+    ["a stale heartbeat", (h: ReturnType<typeof fixture>) => { h.runtime.heartbeat.version = "ab10fce-oc2026.7.1"; }],
+    ["mounted runtime data", (h: ReturnType<typeof fixture>) => { h.runtime.heartbeat.mountedCustomers = ["jefe"]; }],
+  ])("rejects %s", async (_name, change) => {
+    const h = fixture();
+    change(h);
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+  });
+
+  it.each([
+    ["a hydrated process gate", (h: ReturnType<typeof fixture>) => { h.targetHealth.prelaunchState = "hydrated"; }],
+    ["a released readiness hold", (h: ReturnType<typeof fixture>) => { h.targetHealth.handoffReleased = true; }],
+    ["a mounted tenant", (h: ReturnType<typeof fixture>) => { h.targetHealth.mountedCustomers = ["jefe"]; }],
+    ["another image", (h: ReturnType<typeof fixture>) => { h.targetHealth.version = "ab10fce-oc2026.7.1"; }],
+  ])("requires direct empty held-target evidence despite %s", async (_name, change) => {
+    const h = fixture();
+    change(h);
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+    expect(h.releaseTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not treat general handoff readiness as a held prelaunch proof", async () => {
+    const h = fixture();
+    h.reconcileSurgeHandoff.mockResolvedValue({ ready: true });
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+  });
+});
+
+describe("prelaunch release commit fencing", () => {
+  it("marks only the release live while keeping the native heartbeat and provisioning lease", async () => {
+    const h = fixture();
+    await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
+    await h.markLive();
+    expect(h.documents.get("gateways/jefe-run")).toMatchObject({ liveRelease: 2 });
+    expect(h.documents.get("glmGateways/jefe-run")).toMatchObject({ release: 2, heartbeat: h.runtime.heartbeat });
+    expect(h.lease.status).toBe("provisioning");
+    expect(h.releaseTarget).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["lease advancement", (h: ReturnType<typeof fixture>) => { h.lease.status = "activating"; }],
+    ["retirement", (h: ReturnType<typeof fixture>) => { h.documents.set("gateways/jefe-run", { ...h.gateway, desiredStatus: "retired" }); }],
+    ["a superseding desired release", (h: ReturnType<typeof fixture>) => { h.documents.set("gateways/jefe-run", { ...h.gateway, desiredRelease: 3, latestRelease: 3 }); }],
+    ["a replaced allocation", (h: ReturnType<typeof fixture>) => { h.documents.set("gateways/jefe-run", { ...h.gateway, allocation: { ...h.gateway.allocation, generation: 68 } }); h.lease.generation = 68; }],
+    ["an assignment appearing", (h: ReturnType<typeof fixture>) => { h.documents.set("gateways/jefe-run/assignments/uid-jefe", { state: "serving" }); }],
+    ["runtime platform replacement", (h: ReturnType<typeof fixture>) => { h.runtime.runtime = "cluster"; }],
+    ["runtime replacement", (h: ReturnType<typeof fixture>) => { h.runtime.heartbeat.version = "other-version"; }],
+  ])("does not write after %s races with admission", async (_name, change) => {
+    const h = fixture();
+    await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
+    change(h);
+    await h.markLive();
+    expect(h.writes).not.toHaveBeenCalled();
+  });
+});

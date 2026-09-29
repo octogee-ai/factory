@@ -280,7 +280,7 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: false,
       disposableBuilderGateway: true,
       stateMigration: MIGRATE_STATE,
-    })).resolves.toEqual({ ready: true });
+    })).resolves.toEqual({ ready: true, prelaunchHeld: true });
 
     expect(h.events).toEqual([]);
     expect(h.deps.releaseTarget).not.toHaveBeenCalled();
