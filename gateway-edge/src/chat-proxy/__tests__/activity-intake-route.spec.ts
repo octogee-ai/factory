@@ -38,15 +38,18 @@ async function startServer() {
 }
 
 describe("chat proxy Activity intake route", () => {
-  it("installs the local producer intake and rejects an unauthenticated request before parsing", async () => {
+  it.each([
+    ["/internal/openclaw/activity/v1/events", { error: "unauthorized", retryable: false }],
+    ["/internal/openclaw/notifications/v1/final-reply", { error: "unauthorized" }],
+  ])("installs %s and rejects an unauthenticated request before parsing", async (path, error) => {
     const base = await startServer();
-    const response = await fetch(`${base}/internal/openclaw/activity/v1/events`, {
+    const response = await fetch(`${base}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
     });
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: "unauthorized", retryable: false });
+    expect(await response.json()).toEqual(error);
   });
 });

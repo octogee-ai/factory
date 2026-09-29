@@ -52,6 +52,7 @@ if [ "${OPENCLAW_SKIP_BUILD:-0}" != "1" ]; then
 fi
 
 node "$PACKER_DIR/../verify-voice-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
+node "$PACKER_DIR/../verify-activity-plugin-contract.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/openclaw-[0-9]*.tgz

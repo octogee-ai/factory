@@ -123,6 +123,7 @@ function app(opts: {
   a.post("/internal/voice/turn", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/channels", enforcement, handler);
+  a.post("/internal/openclaw/notifications/final-reply", enforcement, handler);
   a.post("/internal/openclaw/activity/session-context", enforcement, handler);
   a.post("/internal/openclaw/activity/dispatch-context", enforcement, handler);
   a.post("/internal/agent-support/ask", enforcement, handler);
@@ -561,6 +562,14 @@ const STILL_ON_SHARED = {
 
     expect(owned.status).toBe(200);
     expect(foreign.status).toBe(403);
+  });
+
+  it("admits only a bound gateway to the final reply route's own recipient authorization", async () => {
+    const path = "/internal/openclaw/notifications/final-reply";
+    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: "bender" })).status).toBe(200);
+    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: "other" })).status).toBe(403);
+    expect((await request(app({})).post(path).send({ gatewayId: "bender" })).status).toBe(403);
+    expect((await request(app({ boundTenant: { kind: "platform", actor: "cron" } })).post(path).send({ gatewayId: "bender" })).status).toBe(403);
   });
 
   it("does not let a matching gatewayId bypass foreign notification recipients", async () => {

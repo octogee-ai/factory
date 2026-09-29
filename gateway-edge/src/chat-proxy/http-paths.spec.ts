@@ -4,6 +4,9 @@ import { chatProxyOwnsHttpPath } from "./http-paths.js";
 describe("chatProxyOwnsHttpPath", () => {
   it("claims only health checks, Mattermost callbacks, and bare local producer intakes", () => {
     expect(chatProxyOwnsHttpPath("/healthz")).toBe(true);
+    expect(chatProxyOwnsHttpPath("/internal/openclaw/notifications/v1/final-reply")).toBe(true);
+    expect(chatProxyOwnsHttpPath("/internal/openclaw/notifications/v1/final-reply",
+      "/api/g/gw-1/internal/openclaw/notifications/v1/final-reply")).toBe(false);
     expect(chatProxyOwnsHttpPath("/internal/openclaw/mattermost/interactions/default")).toBe(true);
     expect(chatProxyOwnsHttpPath("/internal/openclaw/voice/v1/events")).toBe(true);
     expect(chatProxyOwnsHttpPath(

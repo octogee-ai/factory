@@ -771,7 +771,9 @@ describe("commitAndPushWorkspace remote convergence", () => {
     const originalGitSsh = process.env.GIT_SSH;
     await fs.mkdir(seed);
     git(root, ["init", "--bare", "--initial-branch=main", remote]);
+    git(remote, ["config", "maintenance.autoDetach", "false"]);
     git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "maintenance.autoDetach", "false"]);
     git(seed, ["config", "user.email", "seed@example.com"]);
     git(seed, ["config", "user.name", "seed"]);
     await fs.writeFile(path.join(seed, "README.md"), "seed\n");
@@ -779,8 +781,8 @@ describe("commitAndPushWorkspace remote convergence", () => {
     git(seed, ["commit", "-m", "seed"]);
     git(seed, ["remote", "add", "origin", remote]);
     git(seed, ["push", "-u", "origin", "main"]);
-    git(root, ["clone", remote, agent]);
-    git(root, ["clone", remote, canvas]);
+    git(root, ["clone", "--config", "maintenance.autoDetach=false", remote, agent]);
+    git(root, ["clone", "--config", "maintenance.autoDetach=false", remote, canvas]);
     await fs.writeFile(testSsh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");
     await fs.chmod(testSsh, 0o755);
     git(agent, ["remote", "set-url", "origin", `ssh://git@localhost${remote}`]);
@@ -908,7 +910,9 @@ describe("syncCleanWorkspaceToRemote", () => {
     const originalGitSsh = process.env.GIT_SSH;
     await fs.mkdir(seed);
     git(root, ["init", "--bare", "--initial-branch=main", remote]);
+    git(remote, ["config", "maintenance.autoDetach", "false"]);
     git(seed, ["init", "--initial-branch=main"]);
+    git(seed, ["config", "maintenance.autoDetach", "false"]);
     git(seed, ["config", "user.email", "seed@example.com"]);
     git(seed, ["config", "user.name", "seed"]);
     await fs.writeFile(path.join(seed, "README.md"), "before Canvas\n");
@@ -916,8 +920,8 @@ describe("syncCleanWorkspaceToRemote", () => {
     git(seed, ["commit", "-m", "seed"]);
     git(seed, ["remote", "add", "origin", remote]);
     git(seed, ["push", "-u", "origin", "main"]);
-    git(root, ["clone", remote, agent]);
-    git(root, ["clone", remote, canvas]);
+    git(root, ["clone", "--config", "maintenance.autoDetach=false", remote, agent]);
+    git(root, ["clone", "--config", "maintenance.autoDetach=false", remote, canvas]);
     await fs.writeFile(testSsh, "#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");
     await fs.chmod(testSsh, 0o755);
     git(agent, ["remote", "set-url", "origin", `ssh://git@localhost${remote}`]);

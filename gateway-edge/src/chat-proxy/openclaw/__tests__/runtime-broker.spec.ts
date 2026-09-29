@@ -473,3 +473,21 @@ describe("activity write receipts", () => {
       .rejects.toBeInstanceOf(ActivityReceiptLeaseError);
   });
 });
+
+
+describe("final reply notification broker", () => {
+  const input = { schemaVersion: 1 as const, accountId: "alice-coach", sessionKey: `agent:octogee-alice-coach:mattermost:direct:${"o".repeat(26)}`,
+    to: `user:${"o".repeat(26)}`, messageId: "p".repeat(26) };
+  it("forwards only the native delivery identifiers with the bound gateway", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ accepted: true }, { status: 202 }));
+    const broker = createOpenClawRuntimeBroker({ baseUrl: "http://octogee-api:3001", gatewayId: "gw-alice", fetchImpl });
+    await expect(broker.notifyFinalReply(input)).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledWith("http://octogee-api:3001/internal/openclaw/notifications/final-reply", expect.objectContaining({
+      body: JSON.stringify({ gatewayId: "gw-alice", ...input }),
+    }));
+  });
+  it("preserves a binding denial and upstream failure for local intake", async () => {
+    await expect(brokerWithRedeemStatus(403, { error: "reply_binding_denied" }).notifyFinalReply(input)).rejects.toThrow("reply_binding_denied");
+    await expect(brokerWithRedeemStatus(503, { error: "reply_notification_unavailable" }).notifyFinalReply(input)).rejects.toThrow();
+  });
+});
