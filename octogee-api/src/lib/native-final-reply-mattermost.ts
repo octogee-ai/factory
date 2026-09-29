@@ -18,12 +18,13 @@ function record(value: unknown): Record<string, unknown> {
 
 export async function readFinalReplyPost(identity: FinalReplyIdentity, postId: string): Promise<FinalReplyPost> {
   const post = record(await read(identity, ["posts", postId]));
+  const fileIds = post.file_ids === null ? [] : post.file_ids;
   if (typeof post.id !== "string" || typeof post.channel_id !== "string" || !/^[a-z0-9]{26}$/u.test(post.channel_id)
     || typeof post.root_id !== "string" || typeof post.user_id !== "string" || typeof post.message !== "string"
     || !Number.isSafeInteger(post.delete_at) || (post.delete_at as number) < 0
-    || !Array.isArray(post.file_ids) || !post.file_ids.every(id => typeof id === "string")) throw new ReplyBindingDeniedError();
+    || !Array.isArray(fileIds) || !fileIds.every(id => typeof id === "string")) throw new ReplyBindingDeniedError();
   return { id: post.id, channelId: post.channel_id, rootId: post.root_id, userId: post.user_id,
-    message: post.message, deleteAt: post.delete_at as number, fileIds: post.file_ids };
+    message: post.message, deleteAt: post.delete_at as number, fileIds };
 }
 
 async function verifyDirectMembers(identity: FinalReplyIdentity, target: FinalReplyTarget): Promise<void> {
