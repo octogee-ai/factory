@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { assertCarriedAgentSessionsDrained, listSqliteStores } from "./agent-store-carry.js";
 import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
@@ -17,6 +18,7 @@ export const LIVE_AGENT_STORE_EXCLUDE_ARGS = [
 export interface PortableAgentStore {
   agentId: string;
   agentDir: string;
+  sourceAgentDir: string;
 }
 
 interface SnapshotCommandContext {
@@ -47,11 +49,12 @@ export async function findPortableAgentStores(
         throw new Error(`unexpected OpenClaw SQLite store in agent state: ${relative}`);
       }
       const agentDir = path.posix.dirname(relative);
+      const sourceAgentDir = path.resolve(path.dirname(store));
       const existing = byAgent.get(agentId);
-      if (existing && existing.agentDir !== agentDir) {
-        throw new Error(`agent ${agentId} has more than one database: ${existing.agentDir}, ${agentDir}`);
+      if (existing && existing.sourceAgentDir !== sourceAgentDir) {
+        throw new Error(`agent ${agentId} has more than one database: ${existing.sourceAgentDir}, ${sourceAgentDir}`);
       }
-      byAgent.set(agentId, { agentId, agentDir });
+      byAgent.set(agentId, { agentId, agentDir, sourceAgentDir });
     }
   }
   return [...byAgent.values()].sort((left, right) => left.agentId.localeCompare(right.agentId));
@@ -74,31 +77,47 @@ function parseOkJson(label: string, result: OpenClawCommandResult): Record<strin
 }
 
 export async function exportAgentStoreSnapshots(
-  input: SnapshotCommandContext & {
+  input: Pick<SnapshotCommandContext, "run" | "signal"> & {
     sources: ReadonlyArray<{ cwd: string; path: string }>;
     exportRoot: string;
   },
 ): Promise<Array<{ cwd: string; path: string }>> {
   const run = input.run ?? runOpenClaw;
-  const env = input.env ?? process.env;
+  const stores = await findPortableAgentStores(input.sources);
+  if (stores.length === 0) return [];
+  const privateRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octogee-store-snapshot-")));
+  const configPath = path.join(privateRoot, "openclaw.json");
+  const env: NodeJS.ProcessEnv = {
+    PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1",
+    OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1",
+  };
   const carried: Array<{ cwd: string; path: string }> = [];
-  for (const store of await findPortableAgentStores(input.sources)) {
-    const repositoryRelative = path.posix.join(store.agentDir, AGENT_SNAPSHOT_DIRNAME);
-    const repository = path.join(input.exportRoot, ...repositoryRelative.split("/"));
-    await fs.mkdir(repository, { recursive: true, mode: 0o700 });
-    const result = parseOkJson(
-      `snapshot of ${store.agentId}`,
-      await run(
-        ["backup", "sqlite", "create", "--agent", store.agentId, "--repository", repository, "--json"],
-        { env, signal: input.signal },
-      ),
-    );
-    if (typeof result.snapshotPath !== "string" || path.dirname(result.snapshotPath) !== repository) {
-      throw new Error(`OpenClaw snapshot of ${store.agentId} was not published in ${repository}`);
+  try {
+    await fs.writeFile(configPath, JSON.stringify({
+      plugins: { enabled: false },
+      agents: { entries: Object.fromEntries(stores.map((store) => [store.agentId, { agentDir: store.sourceAgentDir }])) },
+    }), { mode: 0o600 });
+    for (const store of stores) {
+      input.signal?.throwIfAborted();
+      const repositoryRelative = path.posix.join(store.agentDir, AGENT_SNAPSHOT_DIRNAME);
+      const repository = path.join(input.exportRoot, ...repositoryRelative.split("/"));
+      await fs.mkdir(repository, { recursive: true, mode: 0o700 });
+      const result = parseOkJson(
+        `snapshot of ${store.agentId}`,
+        await run(
+          ["backup", "sqlite", "create", "--agent", store.agentId, "--repository", repository, "--json"],
+          { env, signal: input.signal },
+        ),
+      );
+      if (typeof result.snapshotPath !== "string" || path.dirname(result.snapshotPath) !== repository) {
+        throw new Error(`OpenClaw snapshot of ${store.agentId} was not published in ${repository}`);
+      }
+      carried.push({ cwd: input.exportRoot, path: repositoryRelative });
     }
-    carried.push({ cwd: input.exportRoot, path: repositoryRelative });
+    return carried;
+  } finally {
+    await fs.rm(privateRoot, { recursive: true, force: true });
   }
-  return carried;
 }
 
 export interface StagedAgentSnapshot {
