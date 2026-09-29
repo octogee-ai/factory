@@ -54,7 +54,15 @@ describe("attachUpstreamRpcClient", () => {
     const sentId = JSON.parse(ws.sent[0]).id;
     ws.simulateMessage({ type: "res", id: sentId, ok: false, error: { code: "NOT_FOUND", message: "no such approval" } });
     const result = await promise;
-    expect(result).toEqual({ ok: false, reason: expect.stringContaining("no such approval") });
+    expect(result).toEqual({ ok: false, reason: expect.stringContaining("no such approval"), error: { code: "NOT_FOUND", message: "no such approval" } });
+  });
+
+  it("retains native revision-conflict details for scoped mutation clients", async () => {
+    const promise = client.call("cron.update", { id: "job", expectedConfigRevision: "old", patch: { enabled: false } });
+    const id = JSON.parse(ws.sent[0]).id;
+    const error = { code: "INVALID_REQUEST", message: "Job changed", details: { code: "CRON_JOB_CHANGED", expectedConfigRevision: "old", actualConfigRevision: "new" } };
+    ws.simulateMessage({ type: "res", id, ok: false, error });
+    await expect(promise).resolves.toEqual({ ok: false, reason: "Job changed", error });
   });
 
   it("times out after the configured window if no response arrives", async () => {

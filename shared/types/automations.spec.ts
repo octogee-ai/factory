@@ -9,13 +9,17 @@ describe("automation request deadlines", () => {
     expect([
       "cron.list",
       "cron.runs",
-      "heartbeat.get",
+      "automations.context",
+      "cron.get",
+      "cron.status",
     ].every(hasAutomationReadClientDeadline)).toBe(true);
     expect([
       "cron.add",
       "cron.update",
       "cron.run",
+      "heartbeat.get",
       "heartbeat.update",
+      "cron.remove",
       "future.write",
     ].some(hasAutomationReadClientDeadline)).toBe(false);
   });

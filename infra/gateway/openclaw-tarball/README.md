@@ -118,8 +118,8 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream: main
 [`7d11bc907771fd54c6de23b7ed4950ac906536d2`](https://github.com/openclaw/openclaw/commit/7d11bc907771fd54c6de23b7ed4950ac906536d2).
 Exact overlay:
-[`99af6c4ba61dc2f8310d0147174bf46971d92770`](https://github.com/ceckert/openclaw/commit/99af6c4ba61dc2f8310d0147174bf46971d92770),
-pushed to `ceckert/openclaw:codex/fix-message-sent-final-reply-sept28`.
+[`31c2e715eab78bc201a802279de4694b3ecaf580`](https://github.com/ceckert/openclaw/commit/31c2e715eab78bc201a802279de4694b3ecaf580),
+pushed to `ceckert/openclaw:codex/automations-capability-view-sept29`.
 Package version is `2026.9.6`; these are September 28 main-snapshot bytes,
 not a GA tag. [Full CI 36458666798](https://github.com/openclaw/openclaw/actions/runs/36458666798)
 qualified the locked upstream with 151 successful jobs and seven intentional
@@ -134,13 +134,18 @@ Octogee #4143's voice grants use the exact live authenticated voice-session SDK
 getter in this source. Both runtime objects and all committed hosted UI islands
 come from this same clean, built checkout.
 
-The latest recut adds native final-reply classification for the notification
-consumer in Octogee #4153. It does not restore the removed Activity answer-commit
-projection. The upstream lock, schemas, CUA and base toolchain remain unchanged.
+The latest recut adds two optional native Automations view capabilities:
+a hosted read-only explanation and per-job run-history access. Omitted props
+retain native behavior. Workspace Automations is read-only; its broker filters
+job inventory and run metadata before projection. It exposes neither transcripts
+nor heartbeat scratch and creates no second cron store or operator authority.
+The prior final-reply classification remains, but this UI recut does not claim
+to fix the missing normal-DM notification observation. The upstream lock,
+schemas, CUA and base toolchain remain unchanged.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-8b05fff9.tgz` | `8b05fff9cc8745bcefabba731e8038f54f0d264fba2015334b92f0e298558d6a` | `1790646471096766` |
+| `openclaw-fork-5747f1f5.tgz` | `5747f1f5aea0290926f45590697dacbea0e996995a301b5bc1cbe495fcaab387` | `1790660416905137` |
 | `openclaw-mattermost-b364f8ab.tgz` | `b364f8ab90ddafdd217b01950d34f75718fe3b079abc4f602f1f9c8a27d8af08` | `1790627334836010` |
 
 Shared-state schema is 20; agent schema is 23. Preserve native backups and
@@ -149,25 +154,35 @@ roll forward, not an image-only downgrade or reset.
 ### Qualification
 
 The exact-source `pnpm build` passed and records build ID
-`2026.9.6-99af6c4ba61d-2026-09-29T01-31-02.536Z`. Both maintained packers ran
+`2026.9.6-31c2e715eab7-2026-09-29T05-21-36.815Z`. Both maintained packers ran
 sequentially. Native archive integrity, isolated matched installation, and the
 actual Linux arm64 `openclaw-full-plugin-installer` target passed. The latter
 verified 155 byte-identical bundled Codex files, native bundled trust and all
 three native-hook imports. Local installer image:
-`sha256:2e867898cdd49a573c206ad1da4416ce0f9e882bdf73a8f5ba564ed549c4aa31`.
+`sha256:20697f8d6fcab3fa2db94ed6673238f7b1f13e192fa28981ec5dd888096b987f`.
 This is package qualification, not the later Build main gateway image identity.
 Both published objects were read back and their full SHA-256 values verified.
 The newly packed Mattermost archive is byte-identical to the existing object;
 its original immutable generation is reused, not overwritten.
 
-The final-reply change passed a real native channel-turn RED/GREEN regression
+The hosted Automations seam passed five failing controls before implementation
+and 62 focused native tests across five files, UI types, scoped typed lint,
+i18n checks and the native line-cap ratchet. Independent review found no
+actionable production issue. The exact-source voice and notification consumer
+SDK checks passed. The island input audit inspected the changed native cron
+view and run-history owners; all seven provenance records were regenerated
+together. Automations shares the existing Lit/Web Awesome module graph, and its
+native CSS is scoped without changing surrounding PWA controls. Eleven island
+contract, coexistence and Automations tests passed. Desktop, narrow-mobile and
+native-dark browser rendering were checked; live broker acceptance remains a
+separate deployment check.
+
+The prior final-reply change passed a real native channel-turn RED/GREEN regression
 and 87 focused tests across five files (34.98 seconds including transform
 preparation), production core/UI/extensions types, scoped typed lint, SDK export
 consistency, formatting and line caps. Independent correctness/security review
-found no actionable issue. The exact-source voice and notification consumer SDK
-checks passed. The hosted-island input audit found no changed bundled inputs;
-all generated executable code and styles remain byte-identical, with all six
-provenance and license source records regenerated together.
+found no actionable issue. Its final-reply flag classifies successful delivery;
+it does not guarantee notification observer registration or live delivery.
 
 The underlying recut's focused native checks passed: the initial 493-test
 combined suite, 240 tests after the completion-owner extraction, 22 browser-owner tests, and a final
@@ -204,6 +219,7 @@ upstream. No local redaction implementation or Node polyfill is substituted.
 | Native Talk consults and live voice-session binding | Octogee #4143 ticket-derived voice grants | Native channel consults expose the same authenticated live-session identity and cancellation boundary. |
 | Browser observation ownership during operator takeover | Coach browser tool and shared native panels | Native lazy tools retain per-owner observation generations so another agent cannot authorize stale input. |
 | Native final-reply classification in `message_sent` | Octogee #4153 final-reply notifications | Native opted-in channel settlement exposes terminal-final classification after provider finalization. |
+| Optional read-only explanation and per-job run-history capability in the native Automations view | Hosted Workspace Automations | Native view supports the same tenant-filtered read-only projection without transcript or mutation authority. |
 | Release superseded model-catalog generations | Long-lived gateway reloads | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
 | Reuse unchanged Gateway plugin registries across workspaces | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent preserves config, environment and metadata invalidation. |
 | Close deleted-agent owners and every isolate's database readers | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes descriptors without disturbing survivors or reopening deleted paths. |

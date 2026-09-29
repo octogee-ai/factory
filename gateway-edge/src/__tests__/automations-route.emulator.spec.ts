@@ -95,6 +95,6 @@ describe("POST /api/g/:gatewayId/automations/rpc", () => {
       .send({ method: "config.patch" });
 
     expect(response.status).toBe(400);
-    expect(response.body).toEqual({ error: "unsupported automation operation" });
+    expect(response.body).toEqual({ error: "unsupported_automation_operation" });
   });
 });

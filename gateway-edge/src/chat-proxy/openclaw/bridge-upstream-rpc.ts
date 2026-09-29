@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import { isResponseFrame } from "@octogee/shared/types/openclaw-wire-core";
 
+export interface UpstreamRpcError { code: string; message: string; details?: unknown }
+export interface UpstreamRpcFailure { ok: false; reason: string; error?: UpstreamRpcError }
+
 export interface UpstreamRpcClient {
   call<T = unknown>(
     method: string,
     params: Record<string, unknown>,
-  ): Promise<{ ok: true; result: T } | { ok: false; reason: string }>;
+  ): Promise<{ ok: true; result: T } | UpstreamRpcFailure>;
   dispose(): void;
 }
 
@@ -15,7 +18,7 @@ export interface AttachUpstreamRpcOptions {
 }
 
 interface PendingCall {
-  resolve: (v: { ok: true; result: unknown } | { ok: false; reason: string }) => void;
+  resolve: (v: { ok: true; result: unknown } | UpstreamRpcFailure) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -57,7 +60,8 @@ export function attachUpstreamRpcClient(
     } else {
       const errMsg =
         typeof env.error?.message === "string" ? env.error.message : "rpc error";
-      pending.resolve({ ok: false, reason: errMsg });
+      const error = typeof env.error?.code === "string" && typeof env.error.message === "string" ? { code: env.error.code, message: env.error.message, ...(env.error.details !== undefined ? { details: env.error.details } : {}) } : undefined;
+      pending.resolve({ ok: false, reason: errMsg, ...(error ? { error } : {}) });
     }
   };
 
@@ -75,7 +79,7 @@ export function attachUpstreamRpcClient(
   const call = async <T = unknown>(
     method: string,
     params: Record<string, unknown>,
-  ): Promise<{ ok: true; result: T } | { ok: false; reason: string }> => {
+  ): Promise<{ ok: true; result: T } | UpstreamRpcFailure> => {
     if (disposed) {
       return { ok: false, reason: "client-disposed" };
     }

