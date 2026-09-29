@@ -64,12 +64,7 @@ import {
 } from "./openclaw/activity-binding-registry.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { createDirectActivityTargetHandler } from "./openclaw/direct-activity-target.js";
-import { notifyNativeFinalReply } from "../notifications/native-final-reply.js";
 import { createFinalReplyIntakeHandler } from "../notifications/final-reply-intake.js";
-import {
-  createBrokeredFanOutNotification,
-  notificationBrokerBaseUrlFromEnv,
-} from "../notifications/broker.js";
 import { createVoiceWsUpgradeHandler } from "../voice/route.js";
 import type { AgentEventSource } from "../voice/brain.js";
 import { SileroVad } from "../voice/silero-vad.js";
@@ -234,27 +229,9 @@ function getFinalReplyIntakeHandler(): ReturnType<typeof createFinalReplyIntakeH
   const gatewayId = process.env.GATEWAY_ID?.trim();
   if (!gatewayId) throw new Error("GATEWAY_ID is required for final reply intake");
   const broker = getOpenClawRuntimeBroker();
-  const deps = {
-    resolveAgentIdentity: (agentId: string) => broker.resolveAgentIdentity(agentId),
-    resolveConversationTarget: (agentId: string, channelId: string) => broker.resolveConversationTarget(agentId, channelId),
-    resolveDirectConversationTarget: (agentId: string, channelId: string, ownerId: string) =>
-      broker.resolveDirectConversationTarget(agentId, channelId, ownerId),
-    mmClientFor: createActivityMmClientFactory({ baseUrl: MM_INTERNAL_URL }),
-    resolveOwnerUid: (channelId: string) => broker.resolveChannelOwnerUid(channelId),
-    fanOut: createBrokeredFanOutNotification({ baseUrl: notificationBrokerBaseUrlFromEnv(), gatewayId }),
-  };
   finalReplyIntakeHandler = createFinalReplyIntakeHandler({
     gatewayToken,
-    notify: (input) => notifyNativeFinalReply(input, {
-      ...deps,
-      verifyChannel: (identity, target) => readMattermostChannelCreateAt({
-        baseUrl: MM_INTERNAL_URL, channelId: target.primaryChannelId, token: identity.coachToken,
-        ...(target.expectedChannelTeamId !== null ? { expectedTeamId: target.expectedChannelTeamId } : {}),
-        ...(target.expectedChannelName !== null ? { expectedName: target.expectedChannelName } : {}),
-        expectedType: target.expectedChannelType,
-        ...(target.expectedMemberIds ? { expectedMemberIds: target.expectedMemberIds } : {}),
-      }),
-    }),
+    notify: (input) => broker.notifyFinalReply(input),
     log: (message, fields) => logger.warn(`[final-reply] ${message}`, fields),
   });
   return finalReplyIntakeHandler;

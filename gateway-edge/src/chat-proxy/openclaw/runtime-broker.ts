@@ -1,3 +1,4 @@
+import { ReplyBindingDeniedError, type NativeFinalReply } from "@octogee/core/native-final-reply";
 import { internalFetch } from "../../lib/internal-fetch.js";
 import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type {
@@ -72,6 +73,7 @@ export type ChatActivityReport =
   | (ChatActivityReportBase & { kind: "reaction"; emojiName: string; createdAt: number });
 
 export interface OpenClawRuntimeBroker {
+  notifyFinalReply(input: NativeFinalReply): Promise<void>;
   redeemOpenClawWs(ticketId: string, purpose?: RedeemableWsTicketPurpose): Promise<RedeemOpenClawWsOutcome>;
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
   getUserGatewayId(uid: string): Promise<string | null>;
@@ -350,6 +352,10 @@ export function createOpenClawRuntimeBroker(opts: {
         throw new OpenClawRuntimeBrokerError(502, "malformed preview authorization response");
       }
       return body.authorized;
+    },
+    async notifyFinalReply(input: NativeFinalReply): Promise<void> {
+      const response = await post("/internal/openclaw/notifications/final-reply", { ...input }, new Set([202, 403]));
+      if (response.status === 403) throw new ReplyBindingDeniedError();
     },
     async getUserGatewayId(uid: string): Promise<string | null> {
       const body = await postJson(

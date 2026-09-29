@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createFinalReplyIntakeHandler } from "./final-reply-intake.js";
-import { ReplyBindingDeniedError } from "./native-final-reply.js";
+import { ReplyBindingDeniedError } from "@octogee/core/native-final-reply";
 
 const body = { schemaVersion: 1, accountId: "alice-coach",
   sessionKey: `agent:octogee-alice-coach:mattermost:channel:${"c".repeat(26)}`,

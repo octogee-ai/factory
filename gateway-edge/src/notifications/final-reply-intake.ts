@@ -1,21 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { ReplyBindingDeniedError, type NativeFinalReply } from "./native-final-reply.js";
+import { parseFinalReply, ReplyBindingDeniedError, type NativeFinalReply } from "@octogee/core/native-final-reply";
 
 const MAX_BODY_BYTES = 16 * 1024;
-const FIELDS = new Set(["schemaVersion", "accountId", "sessionKey", "to", "messageId"]);
-
-function parseFinalReply(value: unknown): NativeFinalReply | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const body = value as Record<string, unknown>;
-  if (Object.keys(body).some(key => !FIELDS.has(key)) || body.schemaVersion !== 1
-    || typeof body.accountId !== "string" || !/^[a-z0-9-]{1,128}$/u.test(body.accountId)
-    || typeof body.sessionKey !== "string" || body.sessionKey.length > 512 || !body.sessionKey
-    || typeof body.to !== "string" || !/^(?:channel|user):[a-z0-9]{26}$/u.test(body.to)
-    || typeof body.messageId !== "string" || !/^[a-z0-9]{26}$/u.test(body.messageId)) return null;
-  return { schemaVersion: 1, accountId: body.accountId, sessionKey: body.sessionKey,
-    to: body.to, messageId: body.messageId };
-}
 
 function authorized(req: IncomingMessage, token: string): boolean {
   const address = req.socket.remoteAddress?.replace(/^::ffff:/u, "");

@@ -1,3 +1,9 @@
+import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
+import { notifyNativeFinalReply, parseFinalReply, ReplyBindingDeniedError, type FinalReplyIdentity, type FinalReplyTarget } from "@octogee/core/native-final-reply";
+import { readFinalReplyPost, verifyFinalReplyChannel } from "../lib/native-final-reply-mattermost.js";
+import { buildCoachDmEvent } from "../../../gateway-edge/src/notifications/chat-notifier.js";
+import { fanOutNotification } from "../../../gateway-edge/src/notifications/pipeline.js";
+import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { createVoicePostingGrant } from "../lib/voice-posting-grant.js";
 import { resolveWorkspaceConversationScope } from "../lib/workspace-conversation.js";
 import { Router, type Request, type Response } from "express";
@@ -1288,6 +1294,85 @@ function mountActivityReceiptRoutes(router: Router, db: Firestore): void {
   });
 }
 
+async function activeReplyRecipient(db: Firestore, uid: string) {
+  if (!safeDocId(uid)) return null;
+  const recipient = await db.doc(`users/${uid}`).get();
+  const mmUserId = readPath(recipient.data() ?? {}, "mattermost.userId");
+  if (!recipient.exists || !accountAllowsInteractiveAccess(recipient.data()) || typeof mmUserId !== "string"
+    || !MATTERMOST_ID_RE.test(mmUserId)) return null;
+  return { uid, mmUserId };
+}
+
+async function finalReplyMembershipAuthorized(db: Firestore, target: AuthorizedConversationTarget, identity: FinalReplyIdentity, recipient: { uid: string; mmUserId: string }): Promise<boolean> {
+  const binding = boundChannelPath(target.channelDocPath);
+  if (!binding) return false;
+  if (binding.lane === "project") {
+    const [project, membership] = await Promise.all([
+      db.doc(binding.ownerPath).get(), db.doc(`${binding.ownerPath}/members/${recipient.uid}`).get(),
+    ]);
+    const member = membership.data();
+    return project.data()?.ownerUid === recipient.uid || (membership.exists && member?.id === recipient.uid
+      && (member.role === "owner" || member.role === "member"));
+  }
+  if (recipient.uid === identity.uid) return true;
+  const membership = await db.doc(`workspaces/${binding.workspaceSlug}/members/${recipient.uid}`).get();
+  return isCanonicalWorkspaceMembership(membership.data()) && membership.data()?.mattermostUserId === recipient.mmUserId;
+}
+
+async function resolveFinalReplyTarget(
+  db: Firestore,
+  gatewayId: string,
+  identity: FinalReplyIdentity,
+  channelId: string,
+  directPeerId?: string,
+): Promise<FinalReplyTarget | null> {
+  const owner = await activeReplyRecipient(db, identity.uid);
+  if (!owner) return null;
+  if (directPeerId !== undefined) {
+    if (parseAgentId(identity.agentId).kind !== "coach" || owner.mmUserId !== directPeerId || directPeerId === identity.coachMmUserId) return null;
+    return { primaryChannelId: channelId, expectedChannelType: "D", expectedChannelName: null, expectedChannelTeamId: null,
+      expectedMemberIds: [identity.coachMmUserId, directPeerId], recipientUid: identity.uid, recipientMmUserId: directPeerId };
+  }
+  const target = await resolveAuthorizedConversationTarget(db, gatewayId, identity.agentId, channelId);
+  if (!target || target === "forbidden") return null;
+  const recipientUid = await resolveChannelOwnerUid(db, gatewayId, channelId);
+  if (!recipientUid || recipientUid === "forbidden") return null;
+  const recipient = await activeReplyRecipient(db, recipientUid);
+  if (!recipient || recipient.mmUserId === identity.coachMmUserId || !await finalReplyMembershipAuthorized(db, target, identity, recipient)) return null;
+  return { ...target, recipientUid, recipientMmUserId: recipient.mmUserId };
+}
+
+function mountFinalReplyRoutes(router: Router, db: Firestore): void {
+  router.post("/notifications/final-reply", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const body = { ...req.body };
+    delete body.gatewayId;
+    const input = parseFinalReply(body);
+    if (!input) { res.status(422).json({ error: "invalid_final_reply" }); return; }
+    try {
+      await notifyNativeFinalReply(input, {
+        resolveAgentIdentity: async agentId => {
+          const identity = await resolveAgentIdentity(db, bound.gatewayId, agentId);
+          return identity === "forbidden" ? null : identity;
+        },
+        resolveReplyTarget: (identity, channelId, peerId) => resolveFinalReplyTarget(db, bound.gatewayId, identity, channelId, peerId),
+        getPost: readFinalReplyPost,
+        verifyChannel: verifyFinalReplyChannel,
+        notify: async (signal, uid) => {
+          const result = await fanOutNotification(buildCoachDmEvent({ ...signal, createdAt: 0 }), [uid]);
+          if (result.failed.length) throw new Error("final reply notification delivery failed");
+        },
+      });
+      res.status(202).json({ accepted: true });
+    } catch (error) {
+      if (error instanceof ReplyBindingDeniedError) { res.status(403).json({ error: "reply_binding_denied" }); return; }
+      logger.warn("Final reply notification failed", { messageId: input.messageId, error: error instanceof Error ? error.message : String(error) });
+      res.status(503).json({ error: "reply_notification_unavailable", retryable: true });
+    }
+  });
+}
+
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
 }): Router {
@@ -1295,5 +1380,6 @@ export function createOpenClawRuntimeBrokerRoutes(opts: {
   const { db } = opts;
   mountUserAndWsRoutes(router, db);
   mountActivityRoutes(router, db);
+  mountFinalReplyRoutes(router, db);
   return router;
 }
