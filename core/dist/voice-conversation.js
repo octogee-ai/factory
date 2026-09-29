@@ -8,6 +8,9 @@ export class VoiceConversationAccessError extends Error {
         this.name = 'VoiceConversationAccessError';
     }
 }
+export class VoiceConversationConfigurationError extends Error {
+    constructor() { super('Voice conversation broker is not configured'); this.name = 'VoiceConversationConfigurationError'; }
+}
 export const VOICE_TURN_POST_KIND = 'voice-turn';
 export const VOICE_TURN_MARKER = '🎙';
 export const VOICE_TURN_TEXT_MAX = 8000;
@@ -64,13 +67,13 @@ function validateConversationParticipant(body) {
 }
 async function brokerPost(path, body, options) {
     const env = options.env ?? process.env;
-    const rawBase = env.OPENCLAW_RUNTIME_BROKER_URL;
+    const rawBase = options.brokerUrl ?? env.OPENCLAW_RUNTIME_BROKER_URL;
     if (!rawBase)
-        throw new Error('OPENCLAW_RUNTIME_BROKER_URL is required');
+        throw new VoiceConversationConfigurationError();
     const base = trustedBrokerBaseUrl(rawBase, env);
     const response = await internalFetch(`${base}${path}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error', body: JSON.stringify(body),
-    }, { fetchImpl: options.fetchImpl, requireProjectedToken: true, timeoutMs: 5000 });
+    }, { fetchImpl: options.fetchImpl, tokenPath: options.tokenPath ?? env.OCTOGEE_API_SA_TOKEN_PATH, requireProjectedToken: true, timeoutMs: 5000 });
     if (!response.ok)
         throw new VoiceConversationAccessError([401, 403, 404, 409, 429, 502].includes(response.status) ? response.status : 503, 'Voice conversation unavailable');
     return response.json();

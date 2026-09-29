@@ -152,10 +152,26 @@ describe("renderVmRuntimeBundle", () => {
     });
     expect(node.mounts).toEqual([
       { volume: "desktop-node-state", mountPath: "/home/node/.openclaw", readOnly: false, subPath: null },
+      { volume: "desktop-node-identity", mountPath: "/run/octogee/desktop-node-identity", readOnly: false, subPath: null },
     ]);
     expect(bundle.volumes).toContainEqual({ name: "desktop-node-state", kind: "emptyDir" });
     expect(node.env.OPENCLAW_GATEWAY_PASSWORD).toBe(gateway.env.OPENCLAW_GATEWAY_TOKEN);
     expect(node.env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
+  });
+
+  it("shares only the native public desktop identity with the edge", async () => {
+    const bundle = await render();
+    const gateway = bundle.containers.find(container => container.name === 'gateway')!;
+    const edge = bundle.containers.find(container => container.name === 'gateway-edge')!;
+    const desktop = bundle.containers.find(container => container.name === 'desktop-node')!;
+    const identity = { volume: 'desktop-node-identity', mountPath: '/run/octogee/desktop-node-identity', subPath: null };
+    expect(bundle.volumes).toContainEqual({ name: identity.volume, kind: 'emptyDir' });
+    expect(desktop.mounts).toContainEqual({ ...identity, readOnly: false });
+    expect(edge.mounts).toContainEqual({ ...identity, readOnly: true });
+    expect(gateway.mounts.some(mount => mount.volume === identity.volume)).toBe(false);
+    expect(edge.mounts.some(mount => mount.volume === 'desktop-node-state')).toBe(false);
+    expect(desktop.env.OCTOGEE_DESKTOP_NODE_IDENTITY_PATH).toBe(`${identity.mountPath}/identity.json`);
+    expect(edge.env.OCTOGEE_DESKTOP_NODE_IDENTITY_PATH).toBe(desktop.env.OCTOGEE_DESKTOP_NODE_IDENTITY_PATH);
   });
 
   it("refuses to render a desktop node without the gateway secret", () => {

@@ -2,6 +2,9 @@ export declare class VoiceConversationAccessError extends Error {
     readonly status: number;
     constructor(status: number, message: string);
 }
+export declare class VoiceConversationConfigurationError extends Error {
+    constructor();
+}
 export declare const VOICE_TURN_POST_KIND = "voice-turn";
 export declare const VOICE_TURN_MARKER = "\uD83C\uDF99";
 export declare const VOICE_TURN_TEXT_MAX = 8000;
@@ -41,21 +44,20 @@ export interface VoiceTurnPost {
 export declare function isVoiceGrantRequest(value: unknown): value is VoiceGrantRequest;
 export declare function isVoiceGrantEndRequest(value: unknown): value is VoiceGrantEndRequest;
 export declare function isVoiceTurnRequest(value: unknown): value is VoiceTurnRequest;
+export interface VoiceBrokerOptions {
+    brokerUrl?: string;
+    tokenPath?: string;
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+}
 export declare function resolveVoiceConversation(args: {
     uid: string;
     gatewayId: string;
     channelId: string;
     expectedAgentId?: string;
-    env?: NodeJS.ProcessEnv;
-    fetchImpl?: typeof fetch;
-}): Promise<VoiceConversation>;
-type VoiceBrokerOptions = {
-    env?: NodeJS.ProcessEnv;
-    fetchImpl?: typeof fetch;
-};
+} & VoiceBrokerOptions): Promise<VoiceConversation>;
 export declare function bindVoiceGrant(args: VoiceGrantRequest & VoiceBrokerOptions): Promise<VoiceGrantBinding>;
 export declare function endVoiceGrant(args: VoiceGrantEndRequest & VoiceBrokerOptions): Promise<{
     revoked: true;
 }>;
 export declare function postVoiceTurn(args: VoiceTurnRequest & VoiceBrokerOptions): Promise<VoiceTurnPost>;
-export {};

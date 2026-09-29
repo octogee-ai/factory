@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${OCTOGEE_DESKTOP_NODE_IDENTITY_PATH:?OCTOGEE_DESKTOP_NODE_IDENTITY_PATH is required}"
+identity="$OCTOGEE_DESKTOP_NODE_IDENTITY_PATH"
+identity_pending="${identity}.pending"
+node_pid=""
+cleanup() {
+  rm -f -- "$identity" "$identity_pending"
+  if [ -n "$node_pid" ] && kill -0 "$node_pid" 2>/dev/null; then
+    kill -TERM "$node_pid"
+    wait "$node_pid" || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+rm -f -- "$identity" "$identity_pending"
+
 : "${OCTOGEE_DESKTOP_NODE_NAME:?OCTOGEE_DESKTOP_NODE_NAME is required}"
 : "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}"
 : "${OPENCLAW_GATEWAY_PASSWORD:?OPENCLAW_GATEWAY_PASSWORD is required}"
@@ -58,4 +74,29 @@ until curl -fsS --max-time 2 http://127.0.0.1:18789/healthz >/dev/null 2>&1; do
 done
 
 openclaw doctor --lint --only cua-computer/driver-artifacts
-exec openclaw node run --host 127.0.0.1 --port 18789 --display-name "$OCTOGEE_DESKTOP_NODE_NAME"
+openclaw node run --host 127.0.0.1 --port 18789 --display-name "$OCTOGEE_DESKTOP_NODE_NAME" &
+node_pid=$!
+attempt=0
+until openclaw node identity --json > "$identity_pending"; do
+  attempt=$((attempt + 1))
+  if ! kill -0 "$node_pid" 2>/dev/null || [ "$attempt" -ge 60 ]; then
+    echo "desktop-node: native public identity was not available after startup" >&2
+    exit 1
+  fi
+  sleep 2
+done
+node --input-type=module - "$identity_pending" "$identity" <<'JS'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+const pending = process.argv[2];
+const identity = JSON.parse(fs.readFileSync(pending, "utf8"));
+const { deviceId, publicKey } = identity;
+if (Object.keys(identity).sort().join(",") !== "deviceId,publicKey" ||
+  typeof deviceId !== "string" || !/^[a-f0-9]{64}$/u.test(deviceId) ||
+  typeof publicKey !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(publicKey)) throw new Error("desktop-node: invalid native public identity");
+const key = Buffer.from(publicKey, "base64url");
+if (key.toString("base64url") !== publicKey || createHash("sha256").update(key).digest("hex") !== deviceId) throw new Error("desktop-node: native public identity fingerprint mismatch");
+fs.chmodSync(pending, 0o644);
+fs.renameSync(pending, process.argv[3]);
+JS
+wait "$node_pid"

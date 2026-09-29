@@ -11,7 +11,7 @@ export class TerminalConversationScope {
     if (this.pending.size >= 64 || this.pending.has(frame.id)) return null;
     if (frame.method === 'terminal.open') {
       if ((params.agentId !== undefined && params.agentId !== this.binding.agentId) || params.sessionKey !== undefined) return null;
-      frame.params = { ...params, ...this.binding };
+      frame.params = { ...params, agentId: this.binding.agentId, sessionKey: this.binding.sessionKey };
     } else if (frame.method !== 'terminal.list' && !this.sessions.has(params.sessionId)) return null;
     this.pending.set(frame.id, frame.method);
     return JSON.stringify(frame);

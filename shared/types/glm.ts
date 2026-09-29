@@ -318,6 +318,9 @@ export function gatewayVmPodName(gatewayId: string, instanceId: string): string 
 export const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
 export const GATEWAY_DESKTOP_NODE_CONTAINER = "desktop-node";
 export const GATEWAY_DESKTOP_NODE_STATE_VOLUME = "desktop-node-state";
+export const GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME = "desktop-node-identity";
+export const GATEWAY_DESKTOP_NODE_IDENTITY_DIR = "/run/octogee/desktop-node-identity";
+export const GATEWAY_DESKTOP_NODE_IDENTITY_PATH = `${GATEWAY_DESKTOP_NODE_IDENTITY_DIR}/identity.json`;
 export const GATEWAY_DESKTOP_NODE_NAME = "octogee-desktop";
 export const GATEWAY_DESKTOP_RUNTIME_DIR = "/run/user/1000";
 const GCE_INSTANCE_NAME_MAX = 63;

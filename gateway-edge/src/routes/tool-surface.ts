@@ -19,7 +19,7 @@ import { browserRecord, browserRequestParams, browserStreamPath } from './browse
 import { latestNativeBrowserTab } from '../vendor/openclaw-browser-resources/index.js';
 import { containsAsciiControlCharacter } from '../lib/text-validation.js';
 import { nativeBrowserResource, type NativeBrowserTab } from './tool-resources.js';
-import { desktopObserveParams, desktopStreamPath, desktopEnvironment, desktopNodeIdentity } from './tool-desktop.js';
+import { desktopObserveParams, desktopStreamPath, desktopEnvironment, desktopNodeIdentity, readDesktopNodeIdentity } from './tool-desktop.js';
 import { browserRpc, NativeBrowserError } from './browser-rpc.js';
 
 interface ToolSession {
@@ -55,6 +55,7 @@ interface ToolRequests {
   live: LiveToolSession;
   rpc: ReturnType<typeof browserRpc>;
   profile?: string;
+  browserReferences: ReadonlyMap<string, NativeBrowserTab['tab']>;
   desktopNodeId(): string | undefined;
   readEnvironment(): Promise<Record<string, unknown>>;
   mintStream(path: string, kind: StreamGrant['kind']): { wsPath: string; grant: StreamGrant };
@@ -68,7 +69,7 @@ function toolRequest(data: string, binary: boolean, pending: Set<string>): ToolR
   return frame as unknown as ToolRequest;
 }
 async function requestBrowser(frame: ToolRequest, owner: ToolRequests): Promise<unknown> {
-  const params = browserRequestParams(frame.params, owner.profile!);
+  const params = browserRequestParams(frame.params, owner.profile!, { sessionKey: owner.live.context.sessionKey, referencedTabs: owner.browserReferences });
   const result = await owner.rpc.call('browser.request', params, params.path === '/download' ? 155000 : 35000);
   const payload = browserRecord(result);
   if (payload && params.path === '/screencast') {
@@ -194,11 +195,15 @@ async function nativeBrowserProfile(rpc: ReturnType<typeof browserRpc>): Promise
   if (typeof status?.profile !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(status.profile)) throw new Error('Native Browser profile unavailable');
   return status.profile;
 }
-async function subscribeBrowserResources(rpc: ReturnType<typeof browserRpc>, session: ToolSession, profile: string): Promise<NativeBrowserTab | null> {
+async function subscribeBrowserResources(rpc: ReturnType<typeof browserRpc>, session: ToolSession, profile: string, rememberTab: (resource: NativeBrowserTab) => void): Promise<NativeBrowserTab | null> {
   const subscribed = browserRecord(await rpc.call('sessions.messages.subscribe', { key: session.context.sessionKey, agentId: session.context.agentId }));
   if (subscribed?.subscribed !== true || subscribed.key !== session.context.sessionKey) throw new Error('Native session resource subscription unavailable');
   const history = browserRecord(await rpc.call('chat.history', { sessionKey: session.context.sessionKey, agentId: session.context.agentId, limit: 50, maxBytes: 262144 }));
   if (!history || !Array.isArray(history.messages)) throw new Error('Native session resource history unavailable');
+  for (const message of history.messages) {
+    const resource = latestNativeBrowserTab([message], profile);
+    if (resource) rememberTab(resource);
+  }
   return latestNativeBrowserTab(history.messages, profile);
 }
 
@@ -306,7 +311,8 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
       let environments: Array<Record<string, unknown>> | undefined;
       let desktopNodeId: string | undefined;
       const readEnvironment = async () => {
-        const nodeId = desktopNodeIdentity(await rpc.call('node.list', {}), env.OCTOGEE_DESKTOP_NODE_NAME);
+        const expectedNodeId = await readDesktopNodeIdentity(env.OCTOGEE_DESKTOP_NODE_IDENTITY_PATH);
+        const nodeId = desktopNodeIdentity(await rpc.call('node.list', {}), expectedNodeId, env.OCTOGEE_DESKTOP_NODE_NAME);
         if (desktopNodeId && desktopNodeId !== nodeId) throw new Error('The shared desktop identity changed. Reconnect to continue.');
         desktopNodeId = nodeId;
         return desktopEnvironment(await rpc.call('environments.status', { environmentId: `node:${nodeId}` }), nodeId);
@@ -332,19 +338,25 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
         browser.send(JSON.stringify(frame));
       };
       let browserTab: NativeBrowserTab | null = null;
+      const browserReferences = new Map<string, NativeBrowserTab['tab']>();
+      const rememberTab = (resource: NativeBrowserTab) => {
+        browserReferences.delete(resource.tab.targetId);
+        browserReferences.set(resource.tab.targetId, resource.tab);
+        if (browserReferences.size > 64) browserReferences.delete(browserReferences.keys().next().value!);
+      };
       onNativeEvent = frame => {
         if (session.surface === 'themes' && ['plugins.changed', 'users.prefs.changed'].includes(String(frame.event))) {
           send({ type: 'event', event: frame.event, payload: frame.payload });
         } else if (profile) {
           const resource = nativeBrowserResource(frame, session.context, profile);
-          if (resource) { browserTab = resource; send({ type: 'event', event: 'tools.browser-tab', payload: resource }); }
+          if (resource) { rememberTab(resource); browserTab = resource; send({ type: 'event', event: 'tools.browser-tab', payload: resource }); }
         }
       };
       if (profile) {
-        const historicalTab = await subscribeBrowserResources(rpc, session, profile);
+        const historicalTab = await subscribeBrowserResources(rpc, session, profile, rememberTab);
         browserTab ??= historicalTab;
       }
-      serveToolRequests(browser, { live, rpc, profile, desktopNodeId: () => desktopNodeId, readEnvironment, mintStream, registerMedia, retireGrant }, send, close);
+      serveToolRequests(browser, { live, rpc, profile, browserReferences, desktopNodeId: () => desktopNodeId, readEnvironment, mintStream, registerMedia, retireGrant }, send, close);
       send({ type: 'event', event: 'tools.ready', payload: { sessionKey: session.context.sessionKey, userId: session.context.uid, canControl: session.canControl, ...(browserTab ? { browserTab } : {}), ...(profile ? { profile } : {}), ...(environments ? { environments, desktopSource: `node:${desktopNodeId}` } : {}) } });
     } catch (error) { log('Tool upstream failed', { error: error instanceof Error ? error.message : String(error) }); close(1011, 'Tool unavailable'); }
   }

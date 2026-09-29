@@ -17,6 +17,61 @@ async function request<T>(rpc: ChannelMembershipRpc, method: string, params: Rec
   return response.result;
 }
 
+interface ChannelSyncDiagnostics {
+  agentId: string;
+  channelId: string;
+  member: boolean;
+  metadataAvailable: boolean;
+  channelCreated?: boolean;
+  incognito?: boolean;
+  draft?: boolean;
+  matchingOrigin?: boolean;
+}
+
+export class ChannelMembershipSyncError extends Error {
+  constructor(readonly diagnostics: ChannelSyncDiagnostics) {
+    super("Native channel membership synchronization failed");
+    this.name = "ChannelMembershipSyncError";
+  }
+}
+
+async function syncChannel(
+  rpc: ChannelMembershipRpc,
+  route: NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>>,
+  profileId: string,
+  member: boolean,
+  displayName?: unknown,
+): Promise<void> {
+  const result = await rpc.call("sessions.channel.sync", {
+    agentId: route.agentId, channel: "mattermost", peerKind: route.peerKind,
+    peerId: route.primaryChannelId, profileId, member,
+    ...(typeof displayName === "string" ? { displayName } : {}),
+  });
+  if (result.ok) return;
+  const diagnostics: ChannelSyncDiagnostics = {
+    agentId: route.agentId, channelId: route.primaryChannelId, member, metadataAvailable: false,
+  };
+  try {
+    const metadata = await rpc.call<{ session: { key?: string; createdVia?: string; incognito?: boolean; visibility?: string;
+      origin?: { provider?: string; chatType?: string; nativeChannelId?: string } } | null }>("sessions.describe", {
+      key: `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}`,
+      agentId: route.agentId, includeDerivedTitles: false, includeLastMessage: false,
+    });
+    const session = metadata.ok ? metadata.result?.session : null;
+    if (session?.key === `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}`) {
+      diagnostics.metadataAvailable = true;
+      diagnostics.channelCreated = session.createdVia === "channel";
+      diagnostics.incognito = session.incognito === true;
+      diagnostics.draft = session.visibility === "draft";
+      if (session.origin) diagnostics.matchingOrigin = session.origin.provider === "mattermost" &&
+        session.origin.chatType === route.peerKind && session.origin.nativeChannelId === route.primaryChannelId;
+    }
+  } catch {
+    diagnostics.metadataAvailable = false;
+  }
+  throw new ChannelMembershipSyncError(diagnostics);
+}
+
 export async function synchronizeChannelMemberships(input: {
   rpc: ChannelMembershipRpc;
   profileId: string;
@@ -48,17 +103,10 @@ export async function synchronizeChannelMemberships(input: {
   }
   for (const route of removals) {
     if (!route) continue;
-    await request(rpc, "sessions.channel.sync", {
-      agentId: route.agentId, channel: "mattermost", peerKind: route.peerKind,
-      peerId: route.primaryChannelId, profileId, member: false,
-    });
+    await syncChannel(rpc, route, profileId, false);
   }
   for (const row of desired.values()) {
     const route = parseChannelScopedMattermostSessionRoute(row.key)!;
-    await request(rpc, "sessions.channel.sync", {
-      agentId: route.agentId, channel: "mattermost", peerKind: route.peerKind,
-      peerId: route.primaryChannelId, profileId, member: true,
-      ...(typeof row.displayName === "string" ? { displayName: row.displayName } : {}),
-    });
+    await syncChannel(rpc, route, profileId, true, row.displayName);
   }
 }

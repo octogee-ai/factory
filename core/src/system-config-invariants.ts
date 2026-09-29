@@ -502,6 +502,14 @@ export function platformInvariantTable(
       path: `plugins.entries.${id}.config`,
       value,
     })),
+    ...(perUser ? [{
+      kind: "exact" as const,
+      path: "plugins.entries.octogee-voice-tools.config",
+      value: {
+        brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+        tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
+      },
+    }] : []),
     ...Object.entries(PLATFORM_PLUGIN_CONFIG_FIELDS).map<PlatformInvariant>(([path, value]) => ({
       kind: "exact",
       path,

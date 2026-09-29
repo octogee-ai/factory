@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import {
   GATEWAY_DESKTOP_NODE_CONTAINER,
   GATEWAY_DESKTOP_NODE_NAME,
+  GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME,
+  GATEWAY_DESKTOP_NODE_IDENTITY_DIR,
+  GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
   GATEWAY_DESKTOP_NODE_STATE_VOLUME,
   GATEWAY_DESKTOP_RUNTIME_DIR,
   type GatewayVmRuntimeBundle,
@@ -212,6 +215,7 @@ async function renderContainer(
     env = {
       ...env,
       ...GATEWAY_COMPUTER_ENV,
+      OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: input.computer.serviceAccountEmail,
       GATEWAY_COMPUTER_PROJECT_ID: input.computer.projectId,
       GATEWAY_COMPUTER_INSTANCE_ID: VM_INSTANCE_ID_PLACEHOLDER,
@@ -224,7 +228,10 @@ async function renderContainer(
     env,
     command: container.command ?? null,
     args: container.args ?? null,
-    mounts: renderMounts(container.volumeMounts, volumes),
+    mounts: [
+      ...renderMounts(container.volumeMounts, volumes),
+      ...(container.name === GATEWAY_EDGE_CONTAINER_NAME ? [{ volume: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, mountPath: GATEWAY_DESKTOP_NODE_IDENTITY_DIR, readOnly: true, subPath: null }] : []),
+    ],
   };
 }
 
@@ -237,11 +244,15 @@ export function renderDesktopNode(gateway: GatewayVmRuntimeContainer): GatewayVm
     env: {
       OPENCLAW_GATEWAY_PASSWORD: secret,
       OCTOGEE_DESKTOP_NODE_NAME: GATEWAY_DESKTOP_NODE_NAME,
+      OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
       XDG_RUNTIME_DIR: GATEWAY_DESKTOP_RUNTIME_DIR,
     },
     command: [GATEWAY_DESKTOP_NODE_COMMAND],
     args: null,
-    mounts: [{ volume: GATEWAY_DESKTOP_NODE_STATE_VOLUME, mountPath: "/home/node/.openclaw", readOnly: false, subPath: null }],
+    mounts: [
+      { volume: GATEWAY_DESKTOP_NODE_STATE_VOLUME, mountPath: "/home/node/.openclaw", readOnly: false, subPath: null },
+      { volume: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, mountPath: GATEWAY_DESKTOP_NODE_IDENTITY_DIR, readOnly: false, subPath: null },
+    ],
   };
 }
 
@@ -264,7 +275,7 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
   const gateway = containers.find((container) => container.name === GATEWAY_CONTAINER_NAME);
   if (!gateway) throw new Error("rendered Deployment has no gateway container");
   containers.push(renderDesktopNode(gateway));
-  volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" });
+  volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" }, { name: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, kind: "emptyDir" });
   const unversioned = {
     gatewayId: input.gatewayId,
     namespace: input.namespace,
