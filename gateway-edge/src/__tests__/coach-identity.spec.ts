@@ -118,6 +118,27 @@ describe("syncCoachIdentity", () => {
     );
   });
 
+  it("records the character look an avatar was rendered from", async () => {
+    await syncCoachIdentity("u1", { avatarPng: PNG, look: { style: "blob", color: "#0ea5e9" } }, { slug: "alice" });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ look: { style: "blob", color: "#0ea5e9" } }),
+      { merge: true },
+    );
+  });
+
+  it("forgets the character look when a new avatar arrives without one, so a picture is never animated as a character", async () => {
+    await syncCoachIdentity("u1", { avatarPng: PNG }, { slug: "alice" });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ look: { __op: "delete" } }),
+      { merge: true },
+    );
+  });
+
+  it("leaves the look alone when the avatar does not change", async () => {
+    await syncCoachIdentity("u1", { name: "Scout" });
+    expect(mockSet.mock.calls[0][0]).not.toHaveProperty("look");
+  });
+
   it("requires a slug to persist an avatar", async () => {
     await expect(syncCoachIdentity("u1", { avatarPng: PNG })).rejects.toThrow(/slug required/);
   });

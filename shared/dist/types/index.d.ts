@@ -11,6 +11,8 @@ export type { FeatureDecision, FeatureFlagDefinition, FeatureFlagKey, FeaturePol
 export { FEATURE_FLAGS, FEATURE_FLAG_KEYS, USER_VISIBLE_FEATURE_FLAG_KEYS, isFeatureFlagKey, } from './feature-flags.js';
 export type { ResolvedTalkSettings, TalkClientMessage, TalkEndpointing, TalkErrorCode, TalkMode, TalkServerEvent, TalkSettings, TalkState, TalkTranscriptFinalReason, TalkTurnMetrics, } from './voice.js';
 export { TALK_INPUT_SAMPLE_RATE, TALK_OUTPUT_SAMPLE_RATE, TALK_PROTOCOL_VERSION, TALK_SETTINGS_DEFAULTS, TALK_TICKET_PURPOSE, VOICE_TALK_FLAG, parseTalkClientMessage, parseTalkServerEvent, parseTalkSettings, resolveTalkSettings, } from './voice.js';
+export type { AgentLook, AgentLookStyle } from './agent-look.js';
+export { AGENT_LOOK_STYLES, parseAgentLook } from './agent-look.js';
 export type { ProductAnalyticsEvent, ProductAnalyticsEventName, ProductAnalyticsEventProperties, } from './product-analytics.js';
 export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
 export type { Workspace, WorkspaceVisibility, WorkspaceMattermost, WorkspaceGitea, } from './workspace.js';

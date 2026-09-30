@@ -116,6 +116,9 @@ export {
   resolveTalkSettings,
 } from './voice.js';
 
+export type { AgentLook, AgentLookStyle } from './agent-look.js';
+export { AGENT_LOOK_STYLES, parseAgentLook } from './agent-look.js';
+
 export type {
   ProductAnalyticsEvent,
   ProductAnalyticsEventName,

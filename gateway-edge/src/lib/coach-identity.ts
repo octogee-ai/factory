@@ -4,6 +4,7 @@ import { readAgent } from "./firestoreReads.js";
 import { mmApi, mmUploadAvatarBuffer } from "./mattermost.js";
 import { resolveFileTarget, type FileTarget } from "./fileTarget.js";
 import { storeWorkspaceBlob, removeWorkspaceBlob } from "./workspace-blob.js";
+import type { AgentLook } from "@octogee/shared/types/agent-look";
 
 export interface CoachIdentityPatch {
   name?: string;
@@ -12,6 +13,7 @@ export interface CoachIdentityPatch {
   /** Speech-engine voice id for Talk mode; "" restores the engine default. */
   voice?: string;
   avatarPng?: Buffer;
+  look?: AgentLook;
 }
 
 export interface CoachIdentityContext {
@@ -90,6 +92,7 @@ async function applyAvatarIdentity(args: {
   const { gcsPath } = await storeWorkspaceBlob(target, fileName, patch.avatarPng, "image/png");
   update.avatar = { path: fileName, gcsPath, updatedAt: FieldValue.serverTimestamp() };
   update.avatarVersion = FieldValue.increment(1);
+  update.look = patch.look ?? FieldValue.delete();
   updated.push("avatar");
   await removeOldAvatar(target, uid, agent?.avatar?.path, fileName);
 }

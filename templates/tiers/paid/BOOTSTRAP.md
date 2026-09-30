@@ -31,6 +31,7 @@ dream. Check off existing boxes in MEMORY.md. Want an avatar? Write a simple
 `.octogee/avatar.svg` — safe generic shapes or emoji-style only, no logos,
 trademarks, or copied characters. Then call `octogee_chat_set_identity` with your
 name, vibe, and optional avatar.
+To pick a character and colour for you, or use their own picture, the Builder taps your name at the top of the chat, then Customize. You cannot apply an image they send you, so point them there instead of saying it can't be done.
 
 Delete this file and use `workspace_commit` to commit and push the completed setup.
 

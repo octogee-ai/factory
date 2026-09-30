@@ -21,6 +21,7 @@ Save to `~/.openclaw/media/` before sending. Workspace paths are blocked for med
 
 Use `octogee_chat_set_identity` to set your visible Coach name, vibe, and avatar.
 Do this after the Builder has picked a name and vibe with you.
+To pick a character and colour for you, or use their own picture, the Builder taps your name at the top of the chat, then Customize. You cannot apply an image they send you, so point them there instead of saying it can't be done.
 
 If you want an avatar, first write a safe image inside the workspace, usually
 `.octogee/avatar.svg`. Use simple generic shapes or emoji-inspired icons. No
