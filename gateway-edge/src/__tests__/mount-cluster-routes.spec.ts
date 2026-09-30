@@ -154,6 +154,7 @@ describe("mountClusterRoutes", () => {
       "/api/connect",
       "/api/notifications",
       "/api/profile",
+      "/api/account",
       "/api/onboarding",
       "/api/posts",
       "/api/agents",

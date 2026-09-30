@@ -11,6 +11,7 @@ import {
   projectGatewayControl,
   projectGatewaySummary,
   resolveFleetDeploymentSettings,
+  scheduleCustomerSelfDeletion,
   shapeOperationsHistoryRecord,
   type GatewayPodDiagnostics,
 } from "./admin-fleet-router.js";
@@ -19,6 +20,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
 import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
+import { ACCOUNT_DELETION_RETENTION_MS } from "@octogee/shared/types/account-lifecycle";
 
 describe("projectGatewayControl", () => {
   const root = {
@@ -2851,21 +2853,74 @@ describe("account deletion revokes connector grants at the provider first", () =
       (req as unknown as { uid?: string }).uid = "admin-1";
       next();
     });
-    addAdminFleetRoutes(app, {
-      db,
-      logger: { info: vi.fn(), warn: vi.fn() },
-      workspaceSlugsForUser: (data) => (data.username ? [String(data.username)] : []),
-      provisionGatewayAuthSecret: vi.fn(async () => ({})),
-      listGatewayBuilds: vi.fn(async () => []),
+    const deletionDeps = {
+      workspaceSlugsForUser: (data: { username?: string | null }) => (data.username ? [String(data.username)] : []),
       suspendAuthUser: vi.fn(async (uid: string) => {
         calls.push(`suspend-auth:${uid}`);
       }),
       revokeConnectorGrantsForUser: vi.fn(async (uid: string) => {
         calls.push(`revoke:${uid}`);
       }),
+    };
+    addAdminFleetRoutes(app, {
+      db,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      provisionGatewayAuthSecret: vi.fn(async () => ({})),
+      listGatewayBuilds: vi.fn(async () => []),
+      ...deletionDeps,
     });
-    return { app, calls, added, remaining, otherDocs, operationDocsRead };
+    return { app, db, deletionDeps, calls, added, remaining, otherDocs, operationDocsRead };
   }
+
+  it("lets a customer schedule their own deletion on the 90-day retention path, journaled under their uid", async () => {
+    const { db, deletionDeps, calls, added, remaining } = makeDeleteApp({
+      u2: { username: "acme", email: "c@d.co" },
+    });
+    const before = Date.now();
+
+    const outcome = await scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" });
+
+    if (outcome.kind !== "scheduled") throw new Error(`unexpected outcome ${outcome.kind}`);
+    expect(outcome.incompleteStep).toBeNull();
+    expect(outcome.eraseAfter).toBeGreaterThanOrEqual(before + ACCOUNT_DELETION_RETENTION_MS);
+    expect(remaining.u2.accountLifecycle).toMatchObject({
+      status: "deletion_scheduled",
+      eraseAfter: outcome.eraseAfter,
+    });
+    expect(added).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestedBy: "u2", status: "suspension_pending" }),
+      expect.objectContaining({ kind: "suspend-customer", inputUid: "u2", createdBy: "u2" }),
+      expect.objectContaining({ kind: "erase-customer", inputUid: "u2", nextAttemptAt: outcome.eraseAfter }),
+      expect.objectContaining({ actor: "u2", why: "Customer account deletion request" }),
+    ]));
+    expect(calls).toContain("suspend-auth:u2");
+    expect(calls).toContain("revoke:u2");
+  });
+
+  it("reports a customer's deletion as scheduled even when the immediate sign-out fails, naming the step", async () => {
+    const { db, deletionDeps, remaining } = makeDeleteApp({
+      u2: { username: "acme", email: "c@d.co" },
+    });
+    deletionDeps.suspendAuthUser.mockRejectedValueOnce(new Error("identity platform unavailable"));
+
+    const outcome = await scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" });
+
+    expect(outcome).toMatchObject({
+      kind: "scheduled",
+      incompleteStep: { name: "suspend-auth", error: expect.objectContaining({ message: "identity platform unavailable" }) },
+    });
+    expect(remaining.u2.accountLifecycle).toMatchObject({ status: "deletion_scheduled" });
+  });
+
+  it("refuses a second self-deletion while one is already scheduled", async () => {
+    const { db, deletionDeps, calls } = makeDeleteApp({
+      u2: { username: "acme", accountLifecycle: { status: "deletion_scheduled", deletionId: "d1" } },
+    });
+
+    await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" }))
+      .resolves.toEqual({ kind: "conflict" });
+    expect(calls).not.toContain("suspend-auth:u2");
+  });
 
   it("reads only a customer's in-flight operations, never their terminal history", async () => {
     const history = Object.fromEntries(

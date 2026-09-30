@@ -2393,6 +2393,46 @@ async function claimAndCleanupCustomerDeletion(opts) {
     }
     return claimed;
 }
+const CUSTOMER_SELF_DELETION_REASON = "Customer account deletion request";
+export async function scheduleCustomerSelfDeletion(opts) {
+    const userSnap = await opts.db.collection("users").doc(opts.uid).get();
+    if (!userSnap.exists)
+        return { kind: "not-found" };
+    const lifecycle = userSnap.data()?.accountLifecycle;
+    const lifecycleStatus = lifecycle?.status ?? null;
+    if (customerDeletionIsActive(lifecycle))
+        return { kind: "conflict" };
+    const outcome = await runNormalFleetMutation(opts.db, {
+        actor: opts.uid,
+        forced: false,
+        what: "schedule customer deletion",
+        why: CUSTOMER_SELF_DELETION_REASON,
+        target: { uid: opts.uid },
+        preActionStatus: { lifecycleStatus },
+        mutation: { kind: "schedule-customer-deletion", uid: opts.uid, eraseNow: false },
+        classifyResult: (result) => classifyCustomerDeletion(result, opts.uid),
+        action: async () => claimAndCleanupCustomerDeletion({
+            db: opts.db,
+            deps: opts.deps,
+            uid: opts.uid,
+            requestedBy: opts.uid,
+            eraseNow: false,
+        }),
+    });
+    if (outcome.kind === "not-found")
+        return { kind: "not-found" };
+    if (outcome.kind === "conflict")
+        return { kind: "conflict" };
+    const claimed = outcome.kind === "partial" ? outcome.claimed : outcome;
+    return {
+        kind: "scheduled",
+        deletionId: claimed.deletionId,
+        eraseAfter: claimed.eraseAfter,
+        incompleteStep: outcome.kind === "partial"
+            ? { name: outcome.failedStep, error: outcome.error }
+            : null,
+    };
+}
 function classifyActivationLeaseTermination(result) {
     if (result.kind === "not-found") {
         return { outcome: "failed", error: ERR_USER_NOT_FOUND };

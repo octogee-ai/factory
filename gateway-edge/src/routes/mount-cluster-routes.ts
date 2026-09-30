@@ -18,6 +18,7 @@ import emailUnsubscribeRoutes from "./email-unsubscribe.js";
 import authEmailRoutes from "./auth-email.js";
 import entitiesRoutes from "./entities.js";
 import profileRoutes from "./profile.js";
+import accountRoutes from "./account.js";
 import onboardingRoutes from "./onboarding.js";
 import postsRoutes from "./posts.js";
 import agentRoutes from "./agents.js";
@@ -119,6 +120,7 @@ const PUBLIC_API_ROUTES: readonly (readonly [string, RouteHandler])[] = [
   ["/api/connect", connectRoutes],
   ["/api/notifications", notificationRoutes],
   ["/api/profile", profileRoutes],
+  ["/api/account", accountRoutes],
   ["/api/onboarding", onboardingRoutes],
   ["/api/posts", postsRoutes],
   ["/api/agents", agentRoutes],

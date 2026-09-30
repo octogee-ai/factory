@@ -3548,6 +3548,61 @@ async function claimAndCleanupCustomerDeletion(opts: {
   return claimed;
 }
 
+const CUSTOMER_SELF_DELETION_REASON = "Customer account deletion request";
+
+export type CustomerSelfDeletionOutcome =
+  | { kind: "not-found" }
+  | { kind: "conflict" }
+  | {
+      kind: "scheduled";
+      deletionId: string;
+      eraseAfter: number;
+      incompleteStep: { name: "suspend-auth" | "revoke-connector-grants"; error: Error } | null;
+    };
+
+export async function scheduleCustomerSelfDeletion(opts: {
+  db: Firestore;
+  deps: Pick<
+    FleetRouterDeps,
+    "workspaceSlugsForUser" | "suspendAuthUser" | "revokeConnectorGrantsForUser"
+  >;
+  uid: string;
+}): Promise<CustomerSelfDeletionOutcome> {
+  const userSnap = await opts.db.collection("users").doc(opts.uid).get();
+  if (!userSnap.exists) return { kind: "not-found" };
+  const lifecycle = userSnap.data()?.accountLifecycle as Record<string, unknown> | undefined;
+  const lifecycleStatus = lifecycle?.status ?? null;
+  if (customerDeletionIsActive(lifecycle)) return { kind: "conflict" };
+  const outcome = await runNormalFleetMutation(opts.db as unknown as NormalFleetMutationDb, {
+    actor: opts.uid,
+    forced: false,
+    what: "schedule customer deletion",
+    why: CUSTOMER_SELF_DELETION_REASON,
+    target: { uid: opts.uid },
+    preActionStatus: { lifecycleStatus },
+    mutation: { kind: "schedule-customer-deletion", uid: opts.uid, eraseNow: false },
+    classifyResult: (result) => classifyCustomerDeletion(result, opts.uid),
+    action: async () => claimAndCleanupCustomerDeletion({
+      db: opts.db,
+      deps: opts.deps,
+      uid: opts.uid,
+      requestedBy: opts.uid,
+      eraseNow: false,
+    }),
+  });
+  if (outcome.kind === "not-found") return { kind: "not-found" };
+  if (outcome.kind === "conflict") return { kind: "conflict" };
+  const claimed = outcome.kind === "partial" ? outcome.claimed : outcome;
+  return {
+    kind: "scheduled",
+    deletionId: claimed.deletionId,
+    eraseAfter: claimed.eraseAfter,
+    incompleteStep: outcome.kind === "partial"
+      ? { name: outcome.failedStep, error: outcome.error }
+      : null,
+  };
+}
+
 type ActivationLeaseTerminationOutcome =
   | { kind: "not-found" }
   | { kind: "conflict"; reason: string }

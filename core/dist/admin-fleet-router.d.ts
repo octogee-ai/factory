@@ -229,5 +229,23 @@ export declare function validateDeployBody(body: unknown): {
     };
 };
 export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
+export type CustomerSelfDeletionOutcome = {
+    kind: "not-found";
+} | {
+    kind: "conflict";
+} | {
+    kind: "scheduled";
+    deletionId: string;
+    eraseAfter: number;
+    incompleteStep: {
+        name: "suspend-auth" | "revoke-connector-grants";
+        error: Error;
+    } | null;
+};
+export declare function scheduleCustomerSelfDeletion(opts: {
+    db: Firestore;
+    deps: Pick<FleetRouterDeps, "workspaceSlugsForUser" | "suspendAuthUser" | "revokeConnectorGrantsForUser">;
+    uid: string;
+}): Promise<CustomerSelfDeletionOutcome>;
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;
 export {};

@@ -2,8 +2,6 @@ import { Router } from "express";
 import { requireAdmin } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue } from "../lib/db.js";
-import { decryptSecret } from "../lib/kms.js";
-import { revokeAllConnectorGrantsForUser } from "@octogee/core/connector-revocation";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
@@ -16,9 +14,8 @@ import {
 } from "@octogee/core/artifact-registry";
 import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
-import { disableAuthUserAndRevokeSessions } from "@octogee/core/firebase-auth-helpers";
+import { customerDeletionDeps } from "../lib/customer-deletion-deps.js";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
-import { CONNECTOR_OAUTH_REVOCATION_TARGETS } from "@octogee/shared/types/connectors";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
 import {
@@ -99,16 +96,8 @@ addAdminFleetRoutes(router, {
   provisionGatewayAuthSecret,
   listGatewayBuilds,
   ...centralRelease,
-  suspendAuthUser: async (uid: string) => {
-    const { getAuth } = await import("firebase-admin/auth");
-    await disableAuthUserAndRevokeSessions(uid, getAuth());
-  },
-  revokeConnectorGrantsForUser: (uid: string) =>
-    revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
-      db,
-      decryptSecret,
-      logger,
-    }),
+  suspendAuthUser: customerDeletionDeps.suspendAuthUser,
+  revokeConnectorGrantsForUser: customerDeletionDeps.revokeConnectorGrantsForUser,
 });
 
 const platformModelDoc = () =>
