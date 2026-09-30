@@ -439,6 +439,43 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
+  it("refuses a second placement while the Builder keeps a live assignment on another gateway", async () => {
+    const placedOnA = { provisioning: { openclaw: { gatewayId: "shared-a" } } };
+    const liveAssignment = { uid: "u1", slug: "s1", gatewayId: "shared-a", source: "repair", state: "serving", epoch: 0 };
+    const { db, store } = mkDb({
+      "users/u1": placedOnA,
+      "gateways/shared-a/assignments/u1": liveAssignment,
+      "gateways/shared-b": backfilled({ gatewayId: "shared-b" }),
+      "glmGateways/shared-b": runtimeDoc("shared-b"),
+    });
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "shared-b", source: "onboarding", now: 100,
+      mirrorPatch: { "provisioning.openclaw.gatewayId": "shared-b" },
+    });
+
+    expect(res).toEqual({ kind: "rejected", reason: "assigned-elsewhere" });
+    expect(store.get("users/u1")).toEqual(placedOnA);
+    expect(store.get("gateways/shared-b/assignments/u1")).toBeUndefined();
+    expect(store.get("gateways/shared-a/assignments/u1")).toEqual(liveAssignment);
+  });
+
+  it("re-places a Builder whose mirror names a gateway that no longer holds its assignment", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { provisioning: { openclaw: { gatewayId: "shared-retired" } } },
+      "gateways/shared-b": backfilled({ gatewayId: "shared-b" }),
+      "glmGateways/shared-b": runtimeDoc("shared-b"),
+    });
+
+    const res = await commitPlacementAtomic(db, {
+      uid: "u1", slug: "s1", gatewayId: "shared-b", source: "repair", now: 100,
+      mirrorPatch: { "provisioning.openclaw.gatewayId": "shared-b" },
+    });
+
+    expect(res).toEqual({ kind: "assigned", release: 3 });
+    expect(store.get("gateways/shared-b/assignments/u1")).toMatchObject({ gatewayId: "shared-b", state: "serving" });
+  });
+
   it("rejects an existing malformed root instead of falling back to a mirror-only legacy write", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },

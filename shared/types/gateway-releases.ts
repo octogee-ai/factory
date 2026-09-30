@@ -615,7 +615,8 @@ export type PlacementRejectReason =
   | "gateway-root-invalid"
   | "gateway-not-running"
   | "gateway-not-serving"
-  | "gateway-target-not-accepting";
+  | "gateway-target-not-accepting"
+  | "assigned-elsewhere";
 
 export type CommitPlacementResult =
   | { kind: "mirror-only" }
@@ -654,6 +655,23 @@ async function preserveExistingAssignment(
   if (!assignmentSnap.exists) return false;
   txn.update(userRef, params.mirrorPatch);
   return true;
+}
+
+async function assignedElsewhere(
+  db: PlacementFirestore,
+  txn: PlacementTxn,
+  userData: Record<string, unknown> | undefined,
+  params: CommitPlacementParams,
+): Promise<boolean> {
+  const provisioning = isPlainRecord(userData?.provisioning) ? userData.provisioning : undefined;
+  const openclaw = isPlainRecord(provisioning?.openclaw) ? provisioning.openclaw : undefined;
+  const currentGatewayId = openclaw?.gatewayId;
+  if (typeof currentGatewayId !== "string" || currentGatewayId === params.gatewayId) return false;
+  const current = await txn.get(
+    db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId)
+      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(params.uid),
+  );
+  return current.exists;
 }
 
 function placementGatewayRejectReason(
@@ -757,6 +775,9 @@ export async function commitPlacementAtomic(
     }
     if (!accountAllowsInteractiveAccess(userData)) {
       return { kind: "rejected", reason: "account-not-interactive" };
+    }
+    if (await assignedElsewhere(db, txn, userData, params)) {
+      return { kind: "rejected", reason: "assigned-elsewhere" };
     }
     const gatewaySnap = await txn.get(gatewayRef);
     const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;

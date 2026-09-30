@@ -274,6 +274,16 @@ async function preserveExistingAssignment(txn, assignmentRef, userRef, params) {
     txn.update(userRef, params.mirrorPatch);
     return true;
 }
+async function assignedElsewhere(db, txn, userData, params) {
+    const provisioning = isPlainRecord(userData?.provisioning) ? userData.provisioning : undefined;
+    const openclaw = isPlainRecord(provisioning?.openclaw) ? provisioning.openclaw : undefined;
+    const currentGatewayId = openclaw?.gatewayId;
+    if (typeof currentGatewayId !== "string" || currentGatewayId === params.gatewayId)
+        return false;
+    const current = await txn.get(db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId)
+        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(params.uid));
+    return current.exists;
+}
 function placementGatewayRejectReason(gatewayData, params) {
     if (!isDurablePlacementRoot(gatewayData, params.gatewayId))
         return "gateway-root-invalid";
@@ -343,6 +353,9 @@ export async function commitPlacementAtomic(db, params) {
         }
         if (!accountAllowsInteractiveAccess(userData)) {
             return { kind: "rejected", reason: "account-not-interactive" };
+        }
+        if (await assignedElsewhere(db, txn, userData, params)) {
+            return { kind: "rejected", reason: "assigned-elsewhere" };
         }
         const gatewaySnap = await txn.get(gatewayRef);
         const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
