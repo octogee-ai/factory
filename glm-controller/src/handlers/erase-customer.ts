@@ -8,8 +8,11 @@ import type { CustomerCleanupContext } from "./deprovision-customer.js";
 import type { NukeCloudStepResult } from "../lib/customer-ops/nuke-cloud.js";
 import {
   PostHogMergedIdentityError,
+  PostHogRateLimitedError,
   type PostHogConfirmation,
 } from "../lib/customer-ops/posthog-erasure.js";
+
+export const POSTHOG_VERIFICATION_RECHECK_MS = 60 * 60_000;
 
 export interface ErasureDeletionJob {
   uid: string;
@@ -139,6 +142,20 @@ function cleanupRetry(deletionId: string, error: string): OperationResult {
   };
 }
 
+function postHogFailure(
+  deletionId: string,
+  step: string,
+  err: unknown,
+): OperationResult {
+  const error = err instanceof Error ? err.message : String(err);
+  if (err instanceof PostHogMergedIdentityError) return deletionBlocked(deletionId, step, error);
+  const retry = cleanupRetry(deletionId, error);
+  if (err instanceof PostHogRateLimitedError && err.retryAfterMs !== null) {
+    return { ...retry, retryAfterMs: err.retryAfterMs };
+  }
+  return retry;
+}
+
 function verifiedErasureResult(deletionId: string, archiveId: string): OperationResult {
   return {
     steps: [],
@@ -196,10 +213,7 @@ async function requestPostHogDeletion(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     await report(ctx, deps, { name: REQUEST_POSTHOG_STEP, status: "failed", error });
-    if (err instanceof PostHogMergedIdentityError) {
-      return deletionBlocked(context.deletionId, REQUEST_POSTHOG_STEP, error);
-    }
-    return cleanupRetry(context.deletionId, error);
+    return postHogFailure(context.deletionId, REQUEST_POSTHOG_STEP, err);
   }
 }
 
@@ -216,10 +230,7 @@ async function confirmPostHogAndFinalize(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     await report(ctx, deps, { name: CONFIRM_POSTHOG_STEP, status: "failed", error });
-    if (err instanceof PostHogMergedIdentityError) {
-      return deletionBlocked(deletionId, CONFIRM_POSTHOG_STEP, error);
-    }
-    return cleanupRetry(deletionId, error);
+    return postHogFailure(deletionId, CONFIRM_POSTHOG_STEP, err);
   }
   if (outcome === "pending") {
     await report(ctx, deps, { name: CONFIRM_POSTHOG_STEP, status: "running" });
@@ -228,6 +239,7 @@ async function confirmPostHogAndFinalize(
       success: false,
       error: "PostHog event deletion verification is still pending",
       output: { postHogVerificationPending: { deletionId } },
+      retryAfterMs: POSTHOG_VERIFICATION_RECHECK_MS,
     };
   }
   await report(ctx, deps, {

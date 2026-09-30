@@ -37,7 +37,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bunexpected end\b/i,
   /\btruncated\b/i,
   /\b14 UNAVAILABLE\b/i,
-  /\bstatus (429|502|503|504)\b/,
+  /\b(status|HTTP) (429|502|503|504)\b/,
   /\bdatabase is locked\b/i,
   /\bpreempt(ed|ion)?\b/i,
   /config unfreeze cleanup pending/i,
@@ -82,6 +82,14 @@ const RETRY_BACKOFF_MS_CAP = 480_000;
 
 export function retryBackoffMs(attempt: number): number {
   return RETRY_BACKOFF_MS_BY_ATTEMPT[attempt] ?? RETRY_BACKOFF_MS_CAP;
+}
+
+export const MAX_REQUESTED_RETRY_DELAY_MS = 60 * 60_000;
+
+function requestedRetryDelayMs(result: OperationResult): number {
+  const requested = result.retryAfterMs;
+  if (requested === undefined || !Number.isFinite(requested) || requested <= 0) return 0;
+  return Math.min(requested, MAX_REQUESTED_RETRY_DELAY_MS);
 }
 
 export function shouldPersistClaimedOperationCompletion(input: {
@@ -288,7 +296,7 @@ function pendingCompletion(
   attempts: number,
   failure: FailureCompletionContext,
 ): Record<string, unknown> {
-  const backoffMs = retryBackoffMs(attempts);
+  const backoffMs = Math.max(retryBackoffMs(attempts), requestedRetryDelayMs(input.result));
   return {
     ...restartAbortedMigration(input.op),
     status: "pending",

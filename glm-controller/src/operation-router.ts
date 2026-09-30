@@ -13,6 +13,7 @@ export interface OperationResult {
   rolledBack?: boolean;
   output?: Record<string, unknown>;
   scrubInputOnSuccess?: boolean;
+  retryAfterMs?: number;
 }
 
 export interface OperationContext {

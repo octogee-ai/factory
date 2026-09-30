@@ -3632,7 +3632,6 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
     postHogErasureConfigFromEnvironment(),
     {
       fetch,
-      wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
       isOtherCustomerUid: async (distinctId) =>
         FIRESTORE_DOC_ID.test(distinctId) &&
         (await db.collection("users").doc(distinctId).get()).exists,

@@ -4,6 +4,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   MAX_OPERATION_ATTEMPTS,
   MAX_PREEMPTED_OPERATION_ATTEMPTS,
+  MAX_REQUESTED_RETRY_DELAY_MS,
   MAX_OPERATION_ATTEMPT_HISTORY,
   OPERATION_JOURNAL_RETENTION_MS,
   buildOperationCompletionUpdate,
@@ -85,6 +86,7 @@ describe("classifyOperationFailure", () => {
     ).toBe("transient");
     expect(classifyOperationFailure("connect ECONNREFUSED 10.0.0.1:443")).toBe("transient");
     expect(classifyOperationFailure("request failed with status 503")).toBe("transient");
+    expect(classifyOperationFailure("PostHog rate limited the erasure request (HTTP 429)")).toBe("transient");
     expect(classifyOperationFailure("context deadline exceeded")).toBe("transient");
     expect(classifyOperationFailure("instance preempted mid-warm")).toBe("transient");
     expect(
@@ -513,6 +515,30 @@ describe("buildOperationCompletionUpdate", () => {
         steps: [{ name: "spawn-green", status: "failed", error: "connect ECONNREFUSED 10.0.0.1:443" }],
       },
     ]);
+  });
+
+  it.each([
+    { retryAfterMs: 300_000, delay: 300_000 },
+    { retryAfterMs: 5_000, delay: 30_000 },
+    { retryAfterMs: 24 * 60 * 60_000, delay: MAX_REQUESTED_RETRY_DELAY_MS },
+    { retryAfterMs: Number.NaN, delay: 30_000 },
+  ])("waits for a handler-requested retry delay of $retryAfterMs ms without shortening backoff", ({ retryAfterMs, delay }) => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "erase-customer", attempts: 0, attemptHistory: [] },
+      result: {
+        steps: [],
+        success: false,
+        error: "PostHog rate limited the erasure request (HTTP 429)",
+        output: { deletionCleanupRetry: { deletionId: "delete-1" } },
+        retryAfterMs,
+      },
+      steps: [],
+      now,
+    });
+    expect(update.status).toBe("pending");
+    expect(update.nextAttemptAt).toBe(now + delay);
+    expect(update.error).toMatch(new RegExp(`retrying in ${delay / 1000}s`));
+    expect(update).not.toHaveProperty("retryAfterMs");
   });
 
   it("falls back to completion time for the attempt start when the op carries no startedAt", () => {
