@@ -5,18 +5,78 @@ import type { openNativeUserSocket } from '../openclaw-control/native-user-clien
 const grant = 'g'.repeat(43);
 const expiresAt = Date.now() + 60_000;
 const key = `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(26)}`;
-function setup() {
+function setup(options: Partial<ConstructorParameters<typeof NativeTalkSession>[0]> = {}) {
   const ws = Object.assign(new EventEmitter(), { close: vi.fn() });
   const rpc = { call: vi.fn<(method: string, params: Record<string, unknown>) => Promise<{ ok: true; result: Record<string, unknown> }>>().mockImplementation(async (method: string) => ({ ok: true, result: method === 'talk.session.create' ? { sessionId: 'native', relaySessionId: 'native' } : method === 'octogee.voice.bind' ? { sessionId: 'native', sessionKey: key, expiresAt } : { ok: true } })), dispose: vi.fn() };
   const send = vi.fn(); const audio = vi.fn(); const reauthorize = vi.fn<() => Promise<void>>().mockResolvedValue();
   const log = vi.fn();
   const open = vi.fn<typeof openNativeUserSocket>().mockResolvedValue({ ws, scopes: new Set(['operator.talk']) } as any);
-  const session = new NativeTalkSession({ voiceGrant: grant, voiceGrantExpiresAt: expiresAt, conversation: { uid: 'u', gatewayId: 'b-alice', sessionKey: key, agentId: 'octogee-alice-coach' }, send, sendAudio: audio, open, attachRpc: () => rpc as any, reauthorize, log });
+  const session = new NativeTalkSession({ voiceGrant: grant, voiceGrantExpiresAt: expiresAt, conversation: { uid: 'u', gatewayId: 'b-alice', sessionKey: key, agentId: 'octogee-alice-coach' }, send, sendAudio: audio, open, attachRpc: () => rpc as any, reauthorize, log, ...options });
   const event = (payload: object) => ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', ...payload } })));
   return { session, ws, rpc, send, audio, event, reauthorize, log, open };
 }
 const start = JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'a'.repeat(26) });
 describe('native Talk transport', () => {
+  it('selects OpenAI Live with the same canonical coach and reports its duplex engine', async () => {
+    const h = setup({ provider: 'octogee-openai' });
+    await h.session.handleText(start); h.event({ type: 'ready' });
+    expect(h.rpc.call).toHaveBeenCalledWith('talk.session.create', expect.objectContaining({ provider: 'octogee-openai', sessionKey: key, brain: 'agent-consult' }));
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session.ready', engines: { stt: 'openai:gpt-live-1', tts: 'openai:gpt-live-1' }, capabilities: expect.objectContaining({ bargeIn: true }) }));
+    h.session.close();
+  });
+  it('falls back only after grant binding when OpenAI fails before readiness', async () => {
+    const onUnavailable = vi.fn(); const onClose = vi.fn();
+    const h = setup({ provider: 'octogee-openai', onUnavailable, onClose });
+    await h.session.handleText(start);
+    h.event({ type: 'error', message: 'OpenAI unavailable' });
+    expect(onUnavailable).toHaveBeenCalledExactlyOnceWith('native', 'OpenAI unavailable');
+    expect(h.send).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(h.session.currentState).toBe('closed');
+  });
+  it('falls back from an unavailable create RPC using a fresh session ID for broker binding', async () => {
+    const onUnavailable = vi.fn(); const onClose = vi.fn();
+    const h = setup({ provider: 'octogee-openai', onUnavailable, onClose });
+    h.rpc.call.mockResolvedValueOnce({ ok: false, reason: 'OpenAI unavailable', error: { code: 'UNAVAILABLE', message: 'OpenAI unavailable' } } as any);
+    await h.session.handleText(start);
+    expect(onUnavailable).toHaveBeenCalledExactlyOnceWith(h.session.sessionId, 'OpenAI unavailable');
+    expect(h.send).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(h.rpc.call).toHaveBeenCalledOnce(); expect(h.session.boundNativeSessionId).toBeUndefined();
+    expect(h.ws.close).toHaveBeenCalledOnce();
+  });
+  it('does not start fallback when a late creation failure arrives after voice ends', async () => {
+    const onUnavailable = vi.fn(); const h = setup({ provider: 'octogee-openai', onUnavailable });
+    let rejectCreation!: (response: any) => void;
+    h.rpc.call.mockReturnValueOnce(new Promise(resolve => { rejectCreation = resolve; }));
+    const opening = h.session.handleText(start);
+    await vi.waitFor(() => expect(h.rpc.call).toHaveBeenCalledOnce());
+    h.session.close();
+    rejectCreation({ ok: false, reason: 'OpenAI unavailable', error: { code: 'UNAVAILABLE', message: 'OpenAI unavailable' } });
+    await opening;
+    expect(onUnavailable).not.toHaveBeenCalled(); expect(h.send).not.toHaveBeenCalled();
+  });
+  it('never falls back from a create RPC authorization rejection', async () => {
+    const onUnavailable = vi.fn(); const h = setup({ provider: 'octogee-openai', onUnavailable });
+    h.rpc.call.mockResolvedValueOnce({ ok: false, reason: 'Not authorized', error: { code: 'INVALID_REQUEST', message: 'Not authorized' } } as any);
+    await expect(h.session.handleText(start)).rejects.toThrow('Not authorized');
+    expect(onUnavailable).not.toHaveBeenCalled(); h.session.close();
+  });
+  it('keeps OpenAI failures fatal after readiness to avoid repeating an active turn', async () => {
+    const onUnavailable = vi.fn(); const h = setup({ provider: 'octogee-openai', onUnavailable });
+    await h.session.handleText(start); h.event({ type: 'ready' });
+    h.event({ type: 'error', message: 'OpenAI disconnected' });
+    expect(onUnavailable).not.toHaveBeenCalled();
+    expect(h.send).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'error', recoverable: false }));
+  });
+  it('never falls back on a rejected grant even if an OpenAI failure was queued', async () => {
+    const onUnavailable = vi.fn(); const h = setup({ provider: 'octogee-openai', onUnavailable });
+    h.rpc.call.mockImplementation(async method => {
+      if (method === 'talk.session.create') { h.event({ type: 'error', message: 'OpenAI unavailable' }); return { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } }; }
+      throw new Error('Grant rejected');
+    });
+    await expect(h.session.handleText(start)).rejects.toThrow('grant binding');
+    expect(onUnavailable).not.toHaveBeenCalled();
+  });
   it('initializes only the authorized native channel before creating Talk', async () => {
     const h = setup();
     await h.session.handleText(start);

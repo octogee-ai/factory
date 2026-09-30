@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -83,7 +83,7 @@ function eventFanout() {
 
 async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
   const grantExpiresAt = Date.now() + 60_000;
-  const relayStatus = { configured: true, engines: { stt: "fake-stt", tts: "fake-tts" }, capabilities: { speed: false } };
+  const relayStatus = { nativeOpenAi: false, configured: true, engines: { stt: "fake-stt", tts: "fake-tts" }, capabilities: { speed: false } };
   const relay = fakeRelay();
   const posts: Array<Record<string, unknown>> = [];
   const events = eventFanout();
@@ -229,6 +229,59 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, "open"); ws.close();
     expect(checkUid).toHaveBeenCalledWith("uid-owner");
+  });
+
+  it('admits native OpenAI independently of the original provider', async () => {
+    const createVad = vi.fn(); const handleText = vi.spyOn(NativeTalkSession.prototype, 'handleText').mockImplementation(async function (this: NativeTalkSession) {
+      (this as any).options.send({ type: 'session.ready', engines: { stt: 'openai:gpt-live-1', tts: 'openai:gpt-live-1' } });
+    });
+    const { base, relayStatus } = await serverWith({ nativeVoiceEnabled: true, createVad,
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+    });
+    relayStatus.nativeOpenAi = true; relayStatus.configured = false;
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open'); const ready = once(ws, 'message');
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    expect(JSON.parse(String((await ready)[0]))).toMatchObject({ type: 'session.ready', engines: { stt: 'openai:gpt-live-1' } });
+    expect(handleText).toHaveBeenCalledOnce(); expect(createVad).not.toHaveBeenCalled(); ws.close(); await once(ws, 'close');
+  });
+
+  it.each(['event', 'create'])('selects platform OpenAI and falls back with the same grant after startup %s failure', async failure => {
+    const nativeWs = Object.assign(new EventEmitter(), { close: vi.fn() });
+    const rpc = { call: vi.fn(async (method: string) => ({ ok: true, result: method === 'talk.session.create' ? { sessionId: 'native', relaySessionId: 'native' } : { sessionId: 'native', sessionKey: SESSION_KEY, expiresAt: Date.now() + 30_000 } })), dispose: vi.fn() };
+    if (failure === 'create') rpc.call.mockResolvedValueOnce({ ok: false, reason: 'OpenAI unavailable', error: { code: 'UNAVAILABLE', message: 'OpenAI unavailable' } } as any);
+    const log = vi.fn(); const createVad = vi.fn(async () => ({ process: async () => 0, reset: () => undefined }));
+    const { base, deps, relayStatus } = await serverWith({ nativeVoiceEnabled: true, createVad, log,
+      createNativeSession: options => new NativeTalkSession({ ...options, open: vi.fn().mockResolvedValue({ ws: nativeWs, scopes: new Set(['operator.talk']) }), attachRpc: () => rpc as any }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+    });
+    relayStatus.nativeOpenAi = true;
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open');
+    const ready = once(ws, 'message');
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1', settings: { voice: 'cedar' } }));
+    if (failure === 'event') {
+      await waitFor(() => rpc.call.mock.calls.length === 2);
+      nativeWs.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', type: 'error', message: 'OpenAI unavailable' } })));
+    }
+    const event = JSON.parse(String((await ready)[0]));
+    expect(rpc.call).toHaveBeenCalledWith('talk.session.create', expect.objectContaining({ provider: 'octogee-openai', sessionKey: SESSION_KEY }));
+    expect(event).toMatchObject({ type: 'session.ready', sessionId: failure === 'event' ? 'native' : expect.any(String), input: { sampleRate: 16000 }, engines: { stt: 'fake-stt', tts: 'fake-tts' }, settings: { voice: '' } });
+    expect(createVad).toHaveBeenCalledOnce();
+    expect(deps.bindGrant).toHaveBeenCalledWith(expect.objectContaining({ voiceGrant: GRANT, sessionId: event.sessionId }));
+    expect(deps.endGrant).not.toHaveBeenCalled();
+    expect(nativeWs.close).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith('OpenAI voice startup failed; using original voice', expect.objectContaining({ reason: 'OpenAI unavailable' }));
+    const updated = once(ws, 'message'); ws.send(JSON.stringify({ type: 'settings.update', settings: { voice: 'marin' } }));
+    expect(JSON.parse(String((await updated)[0]))).toMatchObject({ type: 'settings', settings: { voice: '' } });
+    ws.close(); await once(ws, 'close');
+  });
+  it('keeps shared gateways on the original engine and clears unsupported OpenAI voice IDs', async () => {
+    const createNativeSession = vi.fn();
+    const { base, relayStatus } = await serverWith({ nativeVoiceEnabled: false, createNativeSession }); relayStatus.nativeOpenAi = true;
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open');
+    const ready = once(ws, 'message');
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1', settings: { voice: 'cedar' } }));
+    expect(JSON.parse(String((await ready)[0]))).toMatchObject({ type: 'session.ready', input: { sampleRate: 16000 }, settings: { voice: '' } });
+    expect(createNativeSession).not.toHaveBeenCalled(); ws.close(); await once(ws, 'close');
   });
 
   it('revokes the grant when native Talk closes without another browser message', async () => {

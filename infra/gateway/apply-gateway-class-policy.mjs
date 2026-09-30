@@ -1487,7 +1487,7 @@ function applyBuilderTalkDefaults(config) {
   };
   config.talk ??= {};
   config.talk.realtime ??= {
-    provider: "octogee", providers: { octogee: {} },
+    provider: "octogee-openai", providers: { "octogee-openai": { model: "gpt-live-1" }, octogee: {} },
     mode: "realtime", transport: "gateway-relay", brain: "agent-consult", consultRouting: "provider-direct",
   };
 }

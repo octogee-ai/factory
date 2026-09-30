@@ -60,6 +60,17 @@ function wavResponse(samples: Int16Array): Response {
   return new Response(body, { status: 200 });
 }
 
+describe("native OpenAI availability", () => {
+  it("advertises native OpenAI even when the original voice provider is absent", async () => {
+    const response = await request(appWith({ config: null, nativeOpenAi: true })).get('/internal/voice/status?gatewayId=gw-mom');
+    expect(response.body).toEqual({ configured: false, nativeOpenAi: true });
+  });
+  it("advertises platform-funded Live voice without changing the original relay configuration", async () => {
+    const response = await request(appWith({ config, nativeOpenAi: true })).get("/internal/voice/status?gatewayId=gw-mom");
+    expect(response.body).toMatchObject({ configured: true, nativeOpenAi: true, engines: { tts: "openai-compatible:voxtral-mini-tts-2603" } });
+  });
+});
+
 describe("POST /internal/voice/tts", () => {
   it("streams normalized PCM with sample-rate headers for a bound gateway", async () => {
     const samples = Int16Array.from({ length: 480 }, (_, i) => i);

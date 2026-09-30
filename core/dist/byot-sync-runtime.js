@@ -487,6 +487,7 @@ export const CUSTOMER_APPROVED_PLUGINS = [
     "anthropic",
     "memory-core",
     "octogee-chat-tools",
+    "octogee-activity-tools",
     "octogee-connector-tools",
     "octogee-access-tools",
     "octogee-project-tools",
@@ -503,6 +504,10 @@ const BROKER_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
 const CUSTOMER_PLUGIN_ENTRIES = {
     mattermost: { enabled: true },
     anthropic: { enabled: true },
+    "octogee-activity-tools": {
+        enabled: true,
+        config: { activityEnabled: false, heartbeatMs: 5000 },
+    },
     "octogee-chat-tools": {
         enabled: true,
         hooks: {

@@ -1824,11 +1824,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(existsSync(path.join(result.home, ".claude", ".credentials.json"))).toBe(false);
   });
 
-  it("enables tenant speech through native Talk on an authenticated Builder without replacing their chosen provider", () => {
+  it("defaults authenticated Builder Talk to platform OpenAI without replacing their chosen provider", () => {
     const env = { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" };
     const out = runPolicyWithDir("builder", {}, undefined, env).config;
     expect(out.plugins.entries["octogee-voice-tools"]).toMatchObject({ enabled: true, config: brokerPluginConfig });
-    expect(out.talk.realtime).toMatchObject({ provider: "octogee", brain: "agent-consult", transport: "gateway-relay" });
+    expect(out.talk.realtime).toMatchObject({ provider: "octogee-openai", providers: { "octogee-openai": { model: "gpt-live-1" } }, brain: "agent-consult", transport: "gateway-relay" });
     const custom = { provider: "google", providers: { google: {} }, transport: "provider-websocket" };
     const preserved = runPolicyWithDir("builder", { talk: { realtime: custom } }, undefined, env).config;
     expect(preserved.talk.realtime).toEqual(custom);

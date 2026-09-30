@@ -195,6 +195,10 @@ secrets:
     optional: true
   # Voice relay (release-voice-talk). Provider keys stay on octogee-api; gateway
   # pods reach speech through /internal/voice/*. Absent secret = voice relay off.
+  - envName: VOICE_OPENAI_API_KEY
+    secretName: octogee-openai
+    secretKey: api_key
+    optional: true
   - envName: VOICE_STT_API_KEY
     secretName: voice-provider
     secretKey: stt_api_key

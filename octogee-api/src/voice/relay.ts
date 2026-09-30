@@ -19,6 +19,7 @@ export type VoiceRelayUpgradeAuth =
 
 export interface VoiceRelayDeps {
   config: VoiceRelayConfig | null;
+  nativeOpenAi?: boolean;
   fetchImpl?: typeof fetch;
   sttDeps?: SttSessionDeps;
   log?: (message: string, fields?: Record<string, unknown>) => void;
@@ -155,8 +156,8 @@ export function createVoiceRelayRoutes(deps: VoiceRelayDeps): Router {
     if (!boundGatewayId(req, res)) return;
     res.json(
       deps.config
-        ? { configured: true, engines: describeVoiceEngines(deps.config), capabilities: describeVoiceCapabilities(deps.config) }
-        : { configured: false },
+        ? { configured: true, engines: describeVoiceEngines(deps.config), capabilities: describeVoiceCapabilities(deps.config), ...(deps.nativeOpenAi ? { nativeOpenAi: true } : {}) }
+        : { configured: false, ...(deps.nativeOpenAi ? { nativeOpenAi: true } : {}) },
     );
   });
 

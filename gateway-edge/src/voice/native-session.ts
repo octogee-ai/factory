@@ -6,6 +6,8 @@ import { openNativeUserSocket, type NativeUserSocket } from '../openclaw-control
 import { attachUpstreamRpcClient, type UpstreamRpcClient } from '../chat-proxy/openclaw/bridge-upstream-rpc.js';
 
 interface NativeTalkOptions {
+  provider?: 'octogee' | 'octogee-openai';
+  onUnavailable?: (sessionId: string, reason: string) => void;
   voiceGrant: string;
   voiceGrantExpiresAt: number;
   conversation: { uid: string; gatewayId: string; agentId: string; sessionKey: string };
@@ -60,11 +62,16 @@ function nativeTalkPayload(value: unknown): Record<string, unknown> {
   return event;
 }
 
+class NativeRpcError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+}
+
 export class NativeTalkSession {
   sessionId = randomUUID();
   currentState: 'idle' | 'listening' | 'thinking' | 'speaking' | 'closed' = 'idle';
   private connection: NativeUserSocket | undefined;
   private started = false;
+  private ready = false;
   private rpc: UpstreamRpcClient | undefined;
   private nativeId: string | undefined;
   private settings: ResolvedTalkSettings = resolveTalkSettings();
@@ -87,7 +94,7 @@ export class NativeTalkSession {
   private async call<T = Record<string, unknown>>(method: string, params: Record<string, unknown>): Promise<T> {
     if (!this.rpc) throw new Error('Native voice is not connected');
     const response = await this.rpc.call<T>(method, params);
-    if (!response.ok) throw new Error(response.reason);
+    if (!response.ok) throw new NativeRpcError(response.reason, response.error?.code);
     return response.result;
   }
   private state(state: Exclude<NativeTalkSession['currentState'], 'closed'>): void {
@@ -165,9 +172,7 @@ export class NativeTalkSession {
     if (this.isClosed() || event.relaySessionId !== this.nativeId) return;
     this.selectOutputTurn(event);
     switch (event.type) {
-      case 'ready':
-        this.options.send({ type: 'session.ready', sessionId: this.sessionId, protocol: TALK_PROTOCOL_VERSION, input: { sampleRate: 24000 }, output: { sampleRate: TALK_OUTPUT_SAMPLE_RATE }, engines: { stt: 'native', tts: 'native' }, capabilities: { speed: false, interrupt: true, bargeIn: true }, settings: this.settings });
-        break;
+      case 'ready': this.publishReady(); break;
       case 'responseStarted': this.state('thinking'); break;
       case 'transcript': this.receiveTranscript(event); break;
       case 'audio': this.receiveAudio(event); break;
@@ -179,8 +184,39 @@ export class NativeTalkSession {
       case 'mark':
         if (typeof event.markName !== 'string') return;
         this.marks.add(event.markName); this.options.send({ type: 'audio.mark', name: event.markName }); break;
-      case 'error': this.fail(new Error(String(event.message ?? 'Native voice failed'))); break;
-      case 'close': this.fail(new Error('Native voice session ended')); break;
+      case 'error':
+      case 'close': this.handleUnavailable(this.safeError(event.message ?? 'Native voice session ended')); break;
+    }
+  }
+  private publishReady(): void {
+    this.ready = true;
+    const engines = this.options.provider === 'octogee-openai' ? { stt: 'openai:gpt-live-1', tts: 'openai:gpt-live-1' } : { stt: 'native', tts: 'native' };
+    this.options.send({ type: 'session.ready', sessionId: this.sessionId, protocol: TALK_PROTOCOL_VERSION, input: { sampleRate: 24000 }, output: { sampleRate: TALK_OUTPUT_SAMPLE_RATE }, engines, capabilities: { speed: false, interrupt: true, bargeIn: true }, settings: this.settings });
+  }
+  private handleUnavailable(reason: string): void {
+    if (this.isClosed()) return;
+    if (this.options.provider === 'octogee-openai' && !this.ready && this.options.onUnavailable) {
+      this.close(false);
+      this.options.onUnavailable(this.nativeId ?? this.sessionId, reason);
+    } else this.fail(new Error(reason));
+  }
+  private async connectNative(): Promise<boolean> {
+    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'], channelSessionKey: this.options.conversation.sessionKey });
+    if (this.isClosed()) { connection.ws.close(); return false; }
+    this.connection = connection;
+    this.rpc = (this.options.attachRpc ?? attachUpstreamRpcClient)(connection.ws, { timeoutMs: 15000 });
+    connection.ws.on('message', this.onMessage);
+    connection.ws.on('close', () => { if (!this.isClosed()) this.fail(new Error('Native voice connection closed')); });
+    connection.ws.on('error', (error) => this.fail(error));
+    return true;
+  }
+  private async createNativeSession(): Promise<{ sessionId: string; relaySessionId: string } | null> {
+    try {
+      return await this.call('talk.session.create', { sessionKey: this.options.conversation.sessionKey, mode: 'realtime', transport: 'gateway-relay', brain: 'agent-consult', provider: this.options.provider ?? 'octogee', voice: this.settings.voice, silenceDurationMs: 700 });
+    } catch (error) {
+      if (!(error instanceof NativeRpcError) || error.code !== 'UNAVAILABLE' || this.options.provider !== 'octogee-openai' || !this.options.onUnavailable) throw error;
+      this.handleUnavailable(this.safeError(error));
+      return null;
     }
   }
   private async startSession(message: Extract<TalkClientMessage, { type: 'session.start' }>): Promise<void> {
@@ -189,15 +225,11 @@ export class NativeTalkSession {
     if (message.mode !== 'converse') throw new Error('Native Talk requires conversation mode');
     if (!/^[A-Za-z0-9_-]{43}$/u.test(this.options.voiceGrant) || this.options.voiceGrantExpiresAt <= Date.now()) throw new Error('Native voice grant is unavailable');
     this.settings = { ...resolveTalkSettings(message.settings), endpointing: 'normal' };
+    if (this.options.provider === 'octogee-openai' && !['marin', 'cedar'].includes(this.settings.voice)) this.settings.voice = 'marin';
     await this.options.reauthorize();
-    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'], channelSessionKey: this.options.conversation.sessionKey });
-    if (this.isClosed()) { connection.ws.close(); return; }
-    this.connection = connection;
-    this.rpc = (this.options.attachRpc ?? attachUpstreamRpcClient)(connection.ws, { timeoutMs: 15000 });
-    connection.ws.on('message', this.onMessage);
-    connection.ws.on('close', () => { if (this.currentState !== 'closed') this.fail(new Error('Native voice connection closed')); });
-    connection.ws.on('error', (error) => this.fail(error));
-    const created = await this.call<{ sessionId: string; relaySessionId: string }>('talk.session.create', { sessionKey: this.options.conversation.sessionKey, mode: 'realtime', transport: 'gateway-relay', brain: 'agent-consult', provider: 'octogee', ...(this.settings.voice ? { voice: this.settings.voice } : {}), silenceDurationMs: 700 });
+    if (!await this.connectNative()) return;
+    const created = await this.createNativeSession();
+    if (!created) return;
     if (this.isClosed()) return;
     if (typeof created.sessionId !== 'string' || created.sessionId !== created.relaySessionId) throw new Error('Native voice returned an invalid session');
     await this.bindCreatedSession(created.sessionId);
@@ -276,10 +308,10 @@ export class NativeTalkSession {
     if (++this.audioInFlight > 64) { this.fail(new Error('Native voice audio connection is too slow')); return; }
     void this.call('talk.session.appendAudio', { sessionId: this.nativeId, audioBase64: audio.toString('base64') }).catch(error => this.fail(error)).finally(() => { this.audioInFlight--; });
   }
-  close(): void {
+  close(notify = true): void {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed'; this.marks.clear();
     this.rpc?.dispose(); this.connection?.ws.off('message', this.onMessage); this.connection?.ws.close();
-    this.options.onClose?.();
+    if (notify) this.options.onClose?.();
   }
 }

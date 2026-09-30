@@ -79,7 +79,7 @@ export interface SyncByotForCustomerDeps {
 type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
 type SyncByotUserData = Parameters<typeof deriveDesiredByotState>[0];
 export declare function agentIdsForSlug(slug: string, config: unknown): string[];
-export declare const CUSTOMER_APPROVED_PLUGINS: readonly ["mattermost", "anthropic", "memory-core", "octogee-chat-tools", "octogee-connector-tools", "octogee-access-tools", "octogee-project-tools", "octogee-board-tools", "octogee-status-tools", "octogee-ops-tools", "octogee-web-tools", "octogee-workspace-tools", "parallel", "openai"];
+export declare const CUSTOMER_APPROVED_PLUGINS: readonly ["mattermost", "anthropic", "memory-core", "octogee-chat-tools", "octogee-activity-tools", "octogee-connector-tools", "octogee-access-tools", "octogee-project-tools", "octogee-board-tools", "octogee-status-tools", "octogee-ops-tools", "octogee-web-tools", "octogee-workspace-tools", "parallel", "openai"];
 export type GatewayResolutionEnv = Readonly<Record<string, string | undefined>>;
 export declare function customerSecurityProjectionReplacePaths(current: unknown): string[];
 export declare function customerOauthRuntimeConfigPatch(current: unknown, slug: string, safeModelRef: string, opts?: {

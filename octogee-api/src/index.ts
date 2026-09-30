@@ -107,6 +107,8 @@ import {
 } from "./middleware/tenant-binding.js";
 import { createTenantEnforcementMiddleware } from "./middleware/tenant-enforcement.js";
 import { createGatewayIdentityReviewer } from "./lib/gateway-identity-reviewer.js";
+import { createOpenAiVoiceCatalog } from "./voice/openai-catalog.js";
+import { createOpenAiLiveUpgradeHandler } from "./voice/openai-live.js";
 import { createVoiceCatalog, type VoiceCatalog } from "./voice/catalog.js";
 import { parseVoiceRelayConfig, type VoiceRelayConfig } from "./voice/config.js";
 import {
@@ -203,6 +205,7 @@ export interface CreateAppOptions {
   resolveOpsAgentModel?: OpsAgentModelResolver;
   featurePolicy?: FeaturePolicy;
   voiceRelayConfig?: VoiceRelayConfig | null;
+  voiceOpenAiApiKey?: string | null;
   productAnalytics?: ProductAnalytics;
   postHogServices?: PostHogServices;
   projectRunControlPlane?: ProjectRunControlPlane;
@@ -655,10 +658,11 @@ export function createApp(opts: CreateAppOptions = {}) {
     sidecarBrokerAuth(req, res, next);
   });
   const voiceRelayConfig = opts.voiceRelayConfig === undefined ? parseVoiceRelayConfig() : opts.voiceRelayConfig;
+  const voiceOpenAiApiKey = opts.voiceOpenAiApiKey === undefined ? process.env.VOICE_OPENAI_API_KEY?.trim() || null : opts.voiceOpenAiApiKey;
   const voiceRelayLog = (message: string, fields?: Record<string, unknown>) => logger.warn(message, fields ?? {});
   mountClusterRoutes(app, clusterRouteOverrides(
     featurePolicy,
-    createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog }),
+    voiceOpenAiApiKey ? createOpenAiVoiceCatalog(voiceOpenAiApiKey) : createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog }),
     () => projectRunControlPlane.prewarm(),
   ));
   const chatArtifacts = defaultChatArtifactRoutes();
@@ -682,14 +686,20 @@ export function createApp(opts: CreateAppOptions = {}) {
   app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
   // octogee-api-only: voice relay. gateway-edge Talk engines stream microphone
   // audio and fetch speech here so provider keys never reach a gateway pod.
-  app.use("/internal/voice", createVoiceRelayRoutes({ config: voiceRelayConfig, log: voiceRelayLog }));
+  app.use("/internal/voice", createVoiceRelayRoutes({ config: voiceRelayConfig, nativeOpenAi: Boolean(voiceOpenAiApiKey), log: voiceRelayLog }));
   const voiceRelayUpgrade = createVoiceRelayUpgradeHandler({
     config: voiceRelayConfig,
     log: voiceRelayLog,
     authorize: (upgradeReq) => authorizeVoiceRelayUpgrade(app, tenantBindingMiddleware, upgradeReq),
   });
+  const openAiLiveUpgrade = createOpenAiLiveUpgradeHandler({
+    apiKey: voiceOpenAiApiKey,
+    log: voiceRelayLog,
+    authorize: (upgradeReq) => authorizeVoiceRelayUpgrade(app, tenantBindingMiddleware, upgradeReq),
+  });
   app.locals.attachUpgradeHandlers = (server: http.Server) => {
     server.on("upgrade", (upgradeReq, socket, head) => {
+      if (openAiLiveUpgrade(upgradeReq, socket, head)) return;
       if (voiceRelayUpgrade(upgradeReq, socket, head)) return;
       socket.destroy();
     });

@@ -122,6 +122,17 @@ const codexBlob = () =>
 const noCustomerOauthRuntimePurge = vi.fn(async () => ({ changed: false, resetCount: 0 }));
 
 describe("customer mount configuration projection", () => {
+  it("keeps the native voice event publisher enabled when a new customer is attached", () => {
+    const patch = customerMountConfigPatch({ plugins: {
+      allow: ["octogee-activity-tools"],
+      entries: { "octogee-activity-tools": { enabled: true, config: { activityEnabled: false, heartbeatMs: 5000 } } },
+    } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
+    expect(patch.plugins.allow).toContain("octogee-activity-tools");
+    expect(patch.plugins.entries["octogee-activity-tools"]).not.toBeNull();
+    const fresh = customerMountConfigPatch({ plugins: { allow: [], entries: {} } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
+    expect(fresh.plugins.entries["octogee-activity-tools"]).toEqual({ enabled: true, config: { activityEnabled: false, heartbeatMs: 5000 } });
+  });
+
   it("leaves a plugin token path that already resolves to its placeholder untouched", () => {
     vi.stubEnv("OCTOGEE_API_SA_TOKEN_PATH", "/var/run/secrets/octogee-gateway-broker/token");
     try {
@@ -1872,6 +1883,7 @@ describe("customer OAuth runtime purge", () => {
       "anthropic",
       "memory-core",
       "octogee-chat-tools",
+      "octogee-activity-tools",
       "octogee-connector-tools",
       "octogee-access-tools",
       "octogee-project-tools",

@@ -34,6 +34,7 @@ export interface VoiceWsRouteDeps {
   relayBaseUrl: string;
   createVad: () => Promise<SpeechProbabilityModel>;
   nativeVoiceEnabled?: boolean;
+  createNativeSession?: (options: ConstructorParameters<typeof NativeTalkSession>[0]) => NativeTalkSession;
   fetchImpl?: typeof fetch;
   resolveConversation?: typeof resolveVoiceConversation;
   postTurn?: typeof postVoiceTurn;
@@ -47,8 +48,19 @@ export interface VoiceWsRouteDeps {
 
 interface RelayStatus {
   configured: boolean;
+  nativeOpenAi?: boolean;
   engines?: { stt: string; tts: string };
   capabilities?: TalkCapabilities;
+}
+
+function hasVoiceService(status: RelayStatus, useOpenAiVoice: boolean): boolean {
+  return useOpenAiVoice || Boolean(status.configured && status.engines);
+}
+
+function originalVoiceFrame(raw: string, message: ReturnType<typeof parseTalkClientMessage>, session: TalkSession | NativeTalkSession | null, openAiConfigured: boolean): string {
+  if (!(session instanceof TalkSession) || !openAiConfigured) return raw;
+  if (message?.type !== 'session.start' && message?.type !== 'settings.update') return raw;
+  return JSON.stringify({ ...message, settings: { ...message.settings, voice: '' } });
 }
 
 interface RedeemedVoiceTicket {
@@ -227,14 +239,15 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         refuseWithError(req, socket, head, "fail:relay-unreachable", { code: "internal", message: VOICE_RELAY_UNAVAILABLE_MESSAGE });
         return;
       }
-      if (!status.configured || !status.engines) {
+      const useNativeVoice = nativeVoiceEnabled(deps);
+      const useOpenAiVoice = useNativeVoice && status.nativeOpenAi === true;
+      if (!hasVoiceService(status, useOpenAiVoice)) {
         refuseWithError(req, socket, head, "fail:not-configured", { code: "not_configured", message: VOICE_NOT_CONFIGURED_MESSAGE });
         return;
       }
-      const engines = status.engines;
+      const engines = status.engines ?? { stt: "openai:gpt-live-1", tts: "openai:gpt-live-1" };
       const capabilities = status.capabilities ?? TALK_CAPABILITIES_DEFAULT;
 
-      const useNativeVoice = nativeVoiceEnabled(deps);
       let vad: SpeechProbabilityModel | undefined;
       try {
         if (!useNativeVoice) vad = await deps.createVad();
@@ -249,7 +262,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         attached = true;
         clearTimeout(deadline);
         handshakes.inc({ outcome: "ok" });
-        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, vad, active, log, revokeGrant });
+        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, useOpenAiVoice, legacyAvailable: status.configured, openAiConfigured: status.nativeOpenAi === true, vad, active, log, revokeGrant });
       });
     } finally {
       if (!attached) { clearTimeout(deadline); await revokeGrant(); }
@@ -264,13 +277,16 @@ interface VoiceClientContext {
   engines: { stt: string; tts: string };
   capabilities: TalkCapabilities;
   nativeVoiceEnabled: boolean;
+  useOpenAiVoice: boolean;
+  legacyAvailable: boolean;
+  openAiConfigured: boolean;
   vad: SpeechProbabilityModel | undefined;
   active: Gauge;
   log: NonNullable<VoiceWsRouteDeps['log']>;
   revokeGrant: () => Promise<void>;
 }
 
-function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, vad, active, log, revokeGrant }: VoiceClientContext): void {
+function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant }: VoiceClientContext): void {
   active.inc();
   const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
   const relay = deps.createRelayClient?.(redeemed.gatewayId)
@@ -299,7 +315,8 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
   };
   const sessionCapabilities = { ...capabilities, interrupt: false };
   let session: TalkSession | NativeTalkSession | null = null;
-  const createLegacySession = () => new TalkSession({
+  const createLegacySession = (sessionId?: string) => new TalkSession({
+    ...(sessionId ? { sessionId } : {}),
     send,
     sendAudio: (pcm) => {
       if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true });
@@ -375,6 +392,32 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
   }, deps.conversationCheckMs ?? 10_000);
   conversationTimer.unref?.();
 
+  let startupRaw = '';
+  const fallbackToOriginal = (sessionId: string, reason: string) => {
+    session = null;
+    admitted = false;
+    sessionLog('OpenAI voice startup failed; using original voice', { reason });
+    void (async () => {
+      vad = await deps.createVad();
+      if (closed) return;
+      await reauthorize();
+      if (closed) return;
+      const original = createLegacySession(sessionId);
+      const bound = await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId, ...grantOptions(deps) });
+      assertGrantBinding(bound, redeemed, sessionId);
+      if (closed) { original.close(); return; }
+      session = original;
+      admitted = true;
+      const start = parseTalkClientMessage(startupRaw);
+      if (start?.type !== 'session.start') throw new Error('Voice fallback startup is unavailable');
+      await original.handleText(JSON.stringify({ ...start, settings: { ...start.settings, voice: '' } }));
+    })().catch(error => {
+      sessionLog('original voice fallback failed', { error: String(error) });
+      send({ type: 'error', code: 'internal', message: VOICE_ENGINE_FAILED_MESSAGE, recoverable: false });
+      teardown('fallback-failed');
+    });
+  };
+
   const bindConversation = async (channelId: string): Promise<boolean> => {
     bindingStarted = true;
     try {
@@ -386,7 +429,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
       sessionCapabilities.interrupt = resolved.nativeInterrupt;
       if (nativeVoiceEnabled) {
         if (!resolved.nativeInterrupt) throw new Error("Native voice requires current native conversation authority");
-        session = new NativeTalkSession({ voiceGrant: redeemed.voiceGrant, voiceGrantExpiresAt: redeemed.voiceGrantExpiresAt, conversation: resolved, onClose: () => teardown('native-session-closed'), send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
+        session = (deps.createNativeSession ?? (options => new NativeTalkSession(options)))({ provider: useOpenAiVoice ? 'octogee-openai' : 'octogee', ...(useOpenAiVoice && legacyAvailable ? { onUnavailable: fallbackToOriginal } : {}), voiceGrant: redeemed.voiceGrant, voiceGrantExpiresAt: redeemed.voiceGrantExpiresAt, conversation: resolved, onClose: () => teardown('native-session-closed'), send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
       } else {
         session = createLegacySession();
         const bound = await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId: session.sessionId, ...grantOptions(deps) });
@@ -425,13 +468,15 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     const raw = buf.toString("utf8");
     const message = parseTalkClientMessage(raw);
     if (message?.type === "session.start" && !bindingStarted) {
+      startupRaw = raw;
       if (!await bindConversation(message.channelId)) return;
     } else if (!admitted) {
       if (message?.type === "session.end") teardown("session-ended");
       else send({ type: "error", code: "session_not_started", message: "Voice is still connecting.", recoverable: true });
       return;
     }
-    await session?.handleText(raw);
+    const frame = originalVoiceFrame(raw, message, session, openAiConfigured);
+    await session?.handleText(frame);
     if (session?.currentState === "closed") teardown("session-ended");
   };
   client.on("message", (data, isBinary) => {
