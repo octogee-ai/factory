@@ -161,6 +161,7 @@ export interface CustomerLifecycleAdapter {
   ensureCustomerDirectories: (slug: string) => void;
   writeCustomerTemplateFiles: (ctx: CustomerContext) => Promise<void>;
   deleteCustomerDir: (slug: string) => Promise<void>;
+  deleteDepartedCustomerState: (slug: string) => Promise<void>;
 
   cloneWorkspaceRepo: (slug: string, repoUrl: string) => Promise<boolean>;
   initWorkspaceRepoFromExistingDir: (ctx: CustomerContext) => Promise<string | null>;
@@ -1413,11 +1414,9 @@ export async function removeCustomerFromGateway(
       return { wasMounted: true, steps, retained: true };
     }
 
-    if (adapter.hasCustomerDir(slug)) {
-      await adapter.deleteCustomerDir(slug);
-      steps.push("delete-dir");
-      adapter.log(`[remove:${slug}] customer dir deleted`);
-    }
+    await adapter.deleteDepartedCustomerState(slug);
+    steps.push("delete-dir");
+    adapter.log(`[remove:${slug}] customer state deleted`);
 
     if (await releaseUnmountedGiteaKey(adapter, slug)) steps.push("release-gitea-key");
 

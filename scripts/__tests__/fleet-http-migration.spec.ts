@@ -240,6 +240,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     customerMountMarked: vi.fn(() => true),
     applyRemoveCustomerConfigPatch: vi.fn(async () => {}),
     deleteCustomerDir: vi.fn(async () => {}),
+    deleteDepartedCustomerState: vi.fn(async () => {}),
     loadUserSnapshot: vi.fn(async () => ({
       uid: "uid-chris",
       slug: "chris",
@@ -1286,7 +1287,7 @@ const adapter = mkAdapter();
     expect(getStatus()).toBe(200);
     expect(getBody()).toMatchObject({ unmounted: true });
     expect(adapter.applyRemoveCustomerConfigPatch).toHaveBeenCalled();
-    expect(adapter.deleteCustomerDir).toHaveBeenCalled();
+    expect(adapter.deleteDepartedCustomerState).toHaveBeenCalled();
     expect(pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
   });
 
@@ -2644,7 +2645,7 @@ describe("queued-rsync migration control handlers", () => {
     expect(clearCustomerMigratingIn).toHaveBeenCalledWith("chris");
     expect(onUnmounted).toHaveBeenCalledWith("chris");
     expect(adapter.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(adapter.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(adapter.deleteDepartedCustomerState).not.toHaveBeenCalled();
   });
 
   it("does not acknowledge a finished key import until its rsync listener exits", async () => {
@@ -3390,6 +3391,7 @@ describe("Git metadata across migration imports", () => {
       expect(result.adapter.writeMountMarker).not.toHaveBeenCalled();
       expect(result.adapter.onMounted).not.toHaveBeenCalled();
       expect(result.adapter.deleteCustomerDir).not.toHaveBeenCalled();
+      expect(result.adapter.deleteDepartedCustomerState).not.toHaveBeenCalled();
       expect(result.adapter.onUnmounted).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(importDir, customerFile), "utf8")).toBe("destination draft");
       expect(await fs.readFile(path.join(sourceDir, customerFile), "utf8")).toBe("source draft");

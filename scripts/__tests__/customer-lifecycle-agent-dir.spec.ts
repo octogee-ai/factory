@@ -104,6 +104,43 @@ async function procRootHoldingWithFlags(
   return procRoot;
 }
 
+async function seedDepartedCustomerResidue(tempRoot: string): Promise<{ departed: string[]; kept: string[] }> {
+  const expiryDir = path.join(tempRoot, "secrets", "agent-model-token-expiry");
+  const expiry = async (refId: string): Promise<string> => {
+    const filename = path.join(expiryDir, `${Buffer.from(refId, "utf8").toString("base64url")}.json`);
+    await fs.mkdir(expiryDir, { recursive: true });
+    await fs.writeFile(filename, `${JSON.stringify({ refId, expiresAt: 1_900_000_000_000 })}\n`);
+    return filename;
+  };
+  const dir = async (...segments: string[]): Promise<string> => {
+    const target = path.join(tempRoot, ...segments);
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "HEAD"), "ref: refs/heads/main\n");
+    return target;
+  };
+  const departed = [
+    path.dirname(await dir("git-metadata", "alice", "workspace.git")),
+    await dir("git-metadata", "alice", "projects", "demo.git"),
+    await dir("git-metadata-quarantine", "alice", "workspace.git-stale"),
+    await dir("git-source-switch-locks", "alice", "demo.git"),
+    await dir("git-worktree-quarantine", "alice", "demo-stale"),
+    await dir("git-metadata-source-switch-backups", "alice", "demo-stale"),
+    await expiry("agent-model-token-octogee-alice-coach"),
+    await expiry("agent-model-token-openrouter-octogee-alice-coach"),
+    await expiry("agent-model-token-openai-octogee-alice-proj-demo-coach"),
+    await expiry("agent-embedding-token-openai-octogee-alice-coach"),
+  ];
+  const trustReceipt = path.join(tempRoot, "git-metadata", "alice", "workspace.git.octogee-trusted-v3");
+  await fs.writeFile(trustReceipt, "octogee-customer-git-v3\n");
+  departed.push(trustReceipt);
+  const kept = [
+    await dir("git-metadata", "alice-smith", "workspace.git"),
+    await dir("git-metadata-quarantine", "alice-smith", "workspace.git-stale"),
+    await expiry("agent-model-token-openrouter-octogee-alice-smith-coach"),
+  ];
+  return { departed, kept };
+}
+
 function removalRpc(agentsDelete: ReturnType<typeof vi.fn>): GatewayRpcClient {
   return {
     configGet: vi.fn(async () => ({
@@ -340,6 +377,7 @@ describe("customer lifecycle config patch agent directories", () => {
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(path.join(agentDir, "openclaw-agent.sqlite"), "released");
       await fs.mkdir(customerDir, { recursive: true });
+      const residue = await seedDepartedCustomerResidue(tempRoot);
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
@@ -358,38 +396,59 @@ describe("customer lifecycle config patch agent directories", () => {
       expect(agentsDelete).toHaveBeenCalledWith(expect.objectContaining({ agentId: "octogee-alice-coach" }));
       expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach"))).toBe(false);
       expect(fsSync.existsSync(customerDir)).toBe(false);
+      expect(residue.departed.filter((entry) => fsSync.existsSync(entry))).toEqual([]);
+      expect(residue.kept.filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
     });
   });
 
-  it("releases an agent dir found on disk through OpenClaw even when the roster no longer names it", async () => {
-    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
-      process.env.OPENCLAW_STATE_DIR = tempRoot;
-      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(path.join(agentDir, "openclaw-agent.sqlite"), "unrostered");
-      await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
-      const { buildBrokeredLifecycleAdapter } = await import(
-        "../lib/customer-lifecycle-broker-adapter.js"
-      );
-      const agentsDelete = vi.fn(async ({ agentId }: { agentId: string }) => {
-        expect(fsSync.existsSync(path.join(agentsDir, agentId))).toBe(true);
-        return { ok: true as const, agentId, removedBindings: 0 };
-      });
-      const rpc = removalRpc(agentsDelete) as unknown as { configGet: ReturnType<typeof vi.fn> };
-      rpc.configGet.mockResolvedValue({ config: { agents: { entries: {} } }, hash: "cfg-hash" });
-      const adapter = buildBrokeredLifecycleAdapter({
+  async function buildAdapter(adapterKind: "broker" | "prod") {
+    return adapterKind === "broker"
+      ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
         client: mkClient(brokerSnapshot),
-        rpc: rpc as unknown as GatewayRpcClient,
+        rpc: {} as GatewayRpcClient,
         log: vi.fn(),
-        procRoot: await procRootHolding(tempRoot, []),
+      })
+      : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
+        db: {} as Firestore,
+        rpc: {} as GatewayRpcClient,
+        log: vi.fn(),
       });
+  }
 
-      await adapter.removeImportedCustomerBySlug("alice");
+  it.each(["broker", "prod"] as const)(
+    "removes a departed customer's Git state and token expiry records with its workspace (%s)",
+    async (adapterKind) => {
+      await withRuntimeMock(async ({ tempRoot }) => {
+        const customerDir = path.join(tempRoot, "customers", "alice");
+        await fs.mkdir(customerDir, { recursive: true });
+        const residue = await seedDepartedCustomerResidue(tempRoot);
+        const adapter = await buildAdapter(adapterKind);
 
-      expect(agentsDelete).toHaveBeenCalledWith(expect.objectContaining({ agentId: "octogee-alice-coach" }));
-      expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach"))).toBe(false);
-    });
-  });
+        await adapter.deleteDepartedCustomerState("alice");
+
+        expect(fsSync.existsSync(customerDir)).toBe(false);
+        expect(residue.departed.filter((entry) => fsSync.existsSync(entry))).toEqual([]);
+        expect(residue.kept.filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["broker", "prod"] as const)(
+    "keeps a customer's Git state and token expiry records when only a partial workspace dir is removed before a clone (%s)",
+    async (adapterKind) => {
+      await withRuntimeMock(async ({ tempRoot }) => {
+        const customerDir = path.join(tempRoot, "customers", "alice");
+        await fs.mkdir(customerDir, { recursive: true });
+        const residue = await seedDepartedCustomerResidue(tempRoot);
+        const adapter = await buildAdapter(adapterKind);
+
+        await adapter.deleteCustomerDir("alice");
+
+        expect(fsSync.existsSync(customerDir)).toBe(false);
+        expect([...residue.departed, ...residue.kept].filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
+      });
+    },
+  );
 
   it("refuses to remove any of a departed customer's state while a process still holds its agent database", async () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
@@ -400,6 +459,7 @@ describe("customer lifecycle config patch agent directories", () => {
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(database, "still open");
       await fs.mkdir(customerDir, { recursive: true });
+      const residue = await seedDepartedCustomerResidue(tempRoot);
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
@@ -414,6 +474,7 @@ describe("customer lifecycle config patch agent directories", () => {
         .rejects.toThrow(`agent database files are still held open: ${database}`);
       expect(fsSync.existsSync(database)).toBe(true);
       expect(fsSync.existsSync(customerDir)).toBe(true);
+      expect(residue.departed.filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
     });
   });
 
@@ -744,6 +805,7 @@ describe("customer lifecycle config patch agent directories", () => {
       await fs.writeFile(customerKey, "private-key");
       await fs.writeFile(path.join(customerDir, ".system", ".mounted"), "");
       await fs.writeFile(path.join(customerDir, ".system", ".migrating-in"), "");
+      const residue = await seedDepartedCustomerResidue(tempRoot);
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
@@ -791,6 +853,7 @@ describe("customer lifecycle config patch agent directories", () => {
       expect(fsSync.existsSync(customerDir)).toBe(true);
       expect(fsSync.existsSync(customerKey)).toBe(true);
       expect(fsSync.existsSync(agentDir)).toBe(true);
+      expect(residue.departed.filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
       expect(fsSync.existsSync(path.join(customerDir, ".system", ".mounted"))).toBe(false);
       expect(fsSync.existsSync(path.join(customerDir, ".system", ".migrating-in"))).toBe(false);
     });

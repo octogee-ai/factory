@@ -1,7 +1,7 @@
 import { sharedMigrationAgentIds, sharedMigrationExportPaths } from "./source-transfer-plan.js";
 import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
 import { quiesceCustomerSessionsBounded, sessionStoreForPath } from "./customer-session-quiesce.js";
-import { customerFileStatePaths } from "./customer-file-state.js";
+import { customerFileStatePaths, removeDepartedCustomerFileState } from "./customer-file-state.js";
 import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import {
   builderOwnerCommandsPatch,
@@ -1704,7 +1704,7 @@ async function removeImportedCustomerBySlug(
     agentStateRelease(ctx, `[remove:${slug}]`),
     { ignoreReadOnlyConnections: true },
   );
-  await fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true });
+  await removeDepartedCustomerFileState(slug, { log: ctx.log });
   if (!isConfiguredGatewayBuilder(slug)) {
     await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
   }
@@ -1795,6 +1795,7 @@ export function buildBrokeredLifecycleAdapter(
     ensureCustomerDirectories,
     writeCustomerTemplateFiles,
     deleteCustomerDir: (slug) => fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true }),
+    deleteDepartedCustomerState: (slug) => removeDepartedCustomerFileState(slug, { log: opts.log }),
     cloneWorkspaceRepo,
     initWorkspaceRepoFromExistingDir: (customerCtx) => initWorkspaceRepo(customerCtx.customerDir, customerCtx.slug),
     hasCustomerSshKey: (slug) => fs.existsSync(customerSshKeyPath(slug)),

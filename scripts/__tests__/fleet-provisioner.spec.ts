@@ -2083,6 +2083,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
       applyRemoveCustomerConfigPatch: vi.fn(async () => undefined),
       hasCustomerDir: vi.fn(() => true),
       deleteCustomerDir: vi.fn(async () => undefined),
+      deleteDepartedCustomerState: vi.fn(async () => undefined),
       readLocalCustomerPubKey: vi.fn(() => null),
       ...overrides,
     } as CustomerLifecycleAdapter;
@@ -2107,7 +2108,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
 
     expect(removeImportedCustomerBySlug).toHaveBeenCalledWith("departed", undefined, undefined);
     expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
     expect(onUnmounted).toHaveBeenCalledWith("departed");
     expect(stampMounted).not.toHaveBeenCalled();
     expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
@@ -2131,9 +2132,23 @@ describe("evictLocalCustomer — complete local teardown", () => {
       undefined,
       undefined,
     );
-    expect(a.deleteCustomerDir).toHaveBeenCalledWith("departed");
+    expect(a.deleteDepartedCustomerState).toHaveBeenCalledWith("departed");
+    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
     expect(onUnmounted).toHaveBeenCalledWith("departed");
     expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
+  });
+
+  it("deletes departed state in the manual fallback even when the workspace is already gone", async () => {
+    const a = adapter({ hasCustomerDir: vi.fn(() => false) });
+
+    await expect(evictLocalCustomer({
+      adapter: a,
+      slug: "departed",
+      stampMounted: vi.fn(async () => undefined),
+      onLocalStateRemoved: vi.fn(),
+    })).resolves.toBe("deleted-user");
+
+    expect(a.deleteDepartedCustomerState).toHaveBeenCalledWith("departed");
   });
 
   it("clears runtime and fingerprint bookkeeping when teardown races with another cleanup", async () => {
@@ -2235,7 +2250,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
 
     expect(a.uidForSlug).not.toHaveBeenCalled();
     expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
     expect(clearMountMarker).toHaveBeenCalledWith("builder");
     expect(clearCustomerMigratingIn).toHaveBeenCalledWith("builder");
     expect(onUnmounted).toHaveBeenCalledWith("builder");
@@ -2259,7 +2274,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
 
     expect(a.uidForSlug).not.toHaveBeenCalled();
     expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
   });
 });
 

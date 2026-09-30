@@ -230,7 +230,7 @@ function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentit
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  const quarantineRoot = path.join(CUSTOMER_GIT_METADATA_ROOT, "quarantine", identity.slug);
+  const quarantineRoot = path.join(OPENCLAW_DIR, "git-metadata-quarantine", identity.slug);
   fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
   const quarantine = path.join(
     quarantineRoot,

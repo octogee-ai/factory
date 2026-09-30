@@ -113,6 +113,12 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       state.disk.workspaceGitDir = false;
       state.disk.gitRemote = false;
     },
+    deleteDepartedCustomerState: async () => {
+      record("deleteDepartedCustomerState");
+      state.disk.customerDir = false;
+      state.disk.workspaceGitDir = false;
+      state.disk.gitRemote = false;
+    },
 
     cloneWorkspaceRepo: async (_slug, _url) => {
       record("cloneWorkspaceRepo");
@@ -778,6 +784,7 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
 
     expect(result.steps).toContain("clone-workspace-repo");
     expect(state.calls).toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("deleteDepartedCustomerState");
     expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
       state.calls.indexOf("cloneWorkspaceRepo"),
     );
@@ -1941,7 +1948,8 @@ describe("removeCustomerFromGateway", () => {
     expect(result.wasMounted).toBe(true);
     expect(result.steps).toEqual(["config-patch-remove", "delete-dir", "release-gitea-key"]);
     expect(state.calls).toContain("applyRemoveCustomerConfigPatch");
-    expect(state.calls).toContain("deleteCustomerDir");
+    expect(state.calls).toContain("deleteDepartedCustomerState");
+    expect(state.calls).not.toContain("deleteCustomerDir");
     expect(state.calls).toContain("onUnmounted");
     expect(state.writes).toEqual([]);
   });
@@ -1990,6 +1998,16 @@ describe("removeCustomerFromGateway", () => {
     expect(state.disk.sshKey).toBe(true);
   });
 
+  it("deletes a mounted customer's departed state even when its workspace is already gone", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+
+    const result = await removeCustomerFromGateway(makeAdapter(state), "uid-test");
+
+    expect(result.wasMounted).toBe(true);
+    expect(result.steps).toEqual(["config-patch-remove", "delete-dir"]);
+    expect(state.calls).toContain("deleteDepartedCustomerState");
+  });
+
   it("is a no-op when the customer was never mounted", async () => {
     const state = makeState(snap({ status: "" }), emptyDisk());
 
@@ -1998,7 +2016,7 @@ describe("removeCustomerFromGateway", () => {
     expect(result.wasMounted).toBe(false);
     expect(result.steps).toEqual([]);
     expect(state.calls).not.toContain("applyRemoveCustomerConfigPatch");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("deleteDepartedCustomerState");
   });
 
   it("retains an admitted Builder overlay when a known customer is evicted", async () => {
@@ -2019,7 +2037,7 @@ describe("removeCustomerFromGateway", () => {
     expect(state.calls).toContain("clearCustomerMigratingIn");
     expect(state.calls).toContain("onUnmounted");
     expect(state.calls).not.toContain("applyRemoveCustomerConfigPatch");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("deleteDepartedCustomerState");
   });
 
   it("fails closed for the configured Builder when its overlay is unavailable", async () => {
@@ -2038,7 +2056,7 @@ describe("removeCustomerFromGateway", () => {
     );
 
     expect(state.calls).not.toContain("applyRemoveCustomerConfigPatch");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("deleteDepartedCustomerState");
     expect(state.calls).not.toContain("clearMountMarker");
     expect(state.calls).not.toContain("clearCustomerMigratingIn");
     expect(state.calls).not.toContain("onUnmounted");
@@ -2540,6 +2558,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     ensureCustomerDirectories: false,
     writeCustomerTemplateFiles: false,
     deleteCustomerDir: false,
+    deleteDepartedCustomerState: false,
     hasCustomerSshKey: false,
     generateCustomerSshKey: false,
     createGiteaUser: false,

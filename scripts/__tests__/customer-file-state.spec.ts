@@ -1,9 +1,9 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { customerFileStatePaths, flushCustomerFiles } from "../lib/customer-file-state.js";
+import { customerFileStatePaths, flushCustomerFiles, removeDepartedCustomerFileState } from "../lib/customer-file-state.js";
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
@@ -49,4 +49,33 @@ it("preserves branches, staging, untracked files and unpublished commits across 
 it("rejects a flush for a missing customer instead of claiming durability", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
   await expect(flushCustomerFiles("missing", { root })).rejects.toThrow();
+});
+it("refuses to remove departed state for a slug that is not a customer", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  await fs.mkdir(path.join(root, "git-metadata", "alice"), { recursive: true });
+  await expect(removeDepartedCustomerFileState("..", { root, log: vi.fn() })).rejects.toThrow("Invalid customer slug");
+  await expect(fs.stat(path.join(root, "git-metadata", "alice"))).resolves.toBeDefined();
+});
+it("keeps the customer workspace until the rest of its departed state is gone", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  await fs.mkdir(path.join(root, "customers", "alice"), { recursive: true });
+  await fs.mkdir(path.join(root, "git-metadata", "alice", "workspace.git"), { recursive: true });
+  await fs.mkdir(path.join(root, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(root, "secrets", "agent-model-token-expiry"), "");
+  await expect(removeDepartedCustomerFileState("alice", { root, log: vi.fn() })).rejects.toThrow(/ENOTDIR/);
+  await expect(fs.stat(path.join(root, "customers", "alice"))).resolves.toBeDefined();
+});
+it("removes a customer named quarantine without touching other customers' quarantined Git metadata", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  const othersQuarantine = path.join(root, "git-metadata-quarantine", "alice", "workspace.git-stale");
+  await fs.mkdir(othersQuarantine, { recursive: true });
+  await fs.mkdir(path.join(root, "customers", "quarantine"), { recursive: true });
+  await fs.mkdir(path.join(root, "git-metadata", "quarantine", "workspace.git"), { recursive: true });
+  expect(await customerFileStatePaths(root, "quarantine")).toEqual([
+    { cwd: root, path: "customers/quarantine" },
+    { cwd: root, path: "git-metadata/quarantine" },
+  ]);
+  await removeDepartedCustomerFileState("quarantine", { root, log: vi.fn() });
+  await expect(fs.stat(othersQuarantine)).resolves.toBeDefined();
+  await expect(fs.stat(path.join(root, "git-metadata", "quarantine"))).rejects.toThrow(/ENOENT/);
 });

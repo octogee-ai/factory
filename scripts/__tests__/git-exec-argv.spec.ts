@@ -186,7 +186,7 @@ describe("gitExec argv semantics (no shell)", () => {
   it("quarantines symlinked customer Git metadata without dereferencing it", () => {
     const customerRepo = "/tmp/octogee-test/customers-doesnt-exist/symlinked";
     const metadataRoot = "/tmp/octogee-test/git-metadata/symlinked";
-    const quarantine = "/tmp/octogee-test/git-metadata/quarantine/symlinked";
+    const quarantine = "/tmp/octogee-test/git-metadata-quarantine/symlinked";
     const attacker = fs.mkdtempSync(path.join(os.tmpdir(), "git-exec-symlink-attacker-"));
     fs.rmSync(customerRepo, { recursive: true, force: true });
     fs.rmSync(metadataRoot, { recursive: true, force: true });

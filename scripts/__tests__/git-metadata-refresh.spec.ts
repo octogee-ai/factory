@@ -305,7 +305,7 @@ describe("customer Git metadata refresh", () => {
       expect(fs.existsSync(legacy.hookMarker)).toBe(false);
       expect(fs.readFileSync(path.join(legacy.externalRoot, "refs", "heads", "main"), "utf8"))
         .toBe(`${"c".repeat(40)}\n`);
-      const quarantineRoot = path.join(METADATA_ROOT, "quarantine", repoCase.slug);
+      const quarantineRoot = path.join(TEST_ROOT, "git-metadata-quarantine", repoCase.slug);
       expect(findNamed(quarantineRoot, "commondir")).not.toBeNull();
     },
   );
@@ -363,7 +363,7 @@ describe("customer Git metadata refresh", () => {
       fs.readdirSync(path.dirname(repoCase.metadataDir)).filter((name) =>
         name.startsWith(`${path.basename(repoCase.metadataDir)}.octogee-new-`)),
     ).toEqual([]);
-    const quarantineRoot = path.join(METADATA_ROOT, "quarantine", repoCase.slug);
+    const quarantineRoot = path.join(TEST_ROOT, "git-metadata-quarantine", repoCase.slug);
     const quarantinedHook = findNamed(quarantineRoot, "post-checkout");
     expect(quarantinedHook).not.toBeNull();
 

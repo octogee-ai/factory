@@ -9,6 +9,7 @@ import {
   BROKER_TOKEN_REFRESH_SKEW_MS,
   createBrokerTokenRefreshScheduler,
   readBrokerTokenExpiries,
+  removeBrokerTokenExpiriesForSlug,
 } from "../lib/broker-token-refresh.js";
 
 describe("broker token refresh scheduler", () => {
@@ -158,6 +159,76 @@ describe("readBrokerTokenExpiries", () => {
         { refId: "agent-model-token-octogee-alice-coach", expiresAt: 2_000 },
       ]);
       expect(log).toHaveBeenCalledWith(expect.stringContaining("invalid.json"));
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an unreadable expiry directory and schedules from no metadata", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-token-expiry-"));
+    const log = vi.fn();
+    try {
+      const notADirectory = path.join(directory, "expiry");
+      fs.writeFileSync(notADirectory, "");
+
+      expect(readBrokerTokenExpiries(notADirectory, log)).toEqual([]);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("expiry metadata read failed"));
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("removeBrokerTokenExpiriesForSlug", () => {
+  function record(directory: string, name: string, refId: string): string {
+    const filename = path.join(directory, `${name}.json`);
+    fs.writeFileSync(filename, JSON.stringify({ refId, expiresAt: 2_000 }));
+    return filename;
+  }
+
+  it("removes every expiry record of the customer's agents and nobody else's", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-token-expiry-"));
+    const log = vi.fn();
+    try {
+      const departed = [
+        record(directory, "model", "agent-model-token-octogee-alice-coach"),
+        record(directory, "openrouter", "agent-model-token-openrouter-octogee-alice-coach"),
+        record(directory, "openai", "agent-model-token-openai-octogee-alice-coach"),
+        record(directory, "embedding", "agent-embedding-token-openai-octogee-alice-coach"),
+        record(directory, "project", "agent-model-token-openrouter-octogee-alice-proj-demo-coach"),
+      ];
+      const kept = [
+        record(directory, "neighbor", "agent-model-token-octogee-alice-smith-coach"),
+        record(directory, "other", "agent-model-token-openrouter-octogee-bob-proj-alice-coach"),
+        record(directory, "malformed", "octogee-alice-coach"),
+      ];
+
+      removeBrokerTokenExpiriesForSlug(directory, "alice", log);
+
+      expect(departed.filter((filename) => fs.existsSync(filename))).toEqual([]);
+      expect(kept.filter((filename) => !fs.existsSync(filename))).toEqual([]);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("malformed.json"));
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("has nothing to remove on a pod that never recorded an expiry", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-token-expiry-"));
+    try {
+      expect(() => removeBrokerTokenExpiriesForSlug(path.join(directory, "absent"), "alice", vi.fn())).not.toThrow();
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails the removal when the expiry directory cannot be read", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-token-expiry-"));
+    try {
+      const notADirectory = path.join(directory, "expiry");
+      fs.writeFileSync(notADirectory, "");
+
+      expect(() => removeBrokerTokenExpiriesForSlug(notADirectory, "alice", vi.fn())).toThrow(/ENOTDIR/);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

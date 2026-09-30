@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 export const BROKER_TOKEN_EXPIRY_DIRECTORY = "agent-model-token-expiry";
@@ -14,7 +15,7 @@ export interface BrokerTokenExpiry {
 }
 
 const BROKER_TOKEN_REF_ID_RE =
-  /^(?:agent-model-token-(?:(?:openrouter|openai)-)?octogee-[a-z0-9-]{1,64}-coach|agent-embedding-token-openai-octogee-[a-z0-9-]{1,64}-coach)$/;
+  /^(?:agent-model-token-(?:(?:openrouter|openai)-)?|agent-embedding-token-openai-)(?<agentId>octogee-[a-z0-9-]{1,64}-coach)$/;
 
 function isBrokerTokenExpiry(value: unknown): value is BrokerTokenExpiry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -32,31 +33,53 @@ export function brokerTokenExpiryDirectory(openclawDir: string): string {
   return path.join(openclawDir, "secrets", BROKER_TOKEN_EXPIRY_DIRECTORY);
 }
 
-export function readBrokerTokenExpiries(
+function readBrokerTokenExpiryRecords(
   directory: string,
   log: (message: string) => void,
-): BrokerTokenExpiry[] {
+): Array<{ filename: string; expiry: BrokerTokenExpiry }> {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(directory, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    log(`[agent-model-token] ⚠ expiry metadata read failed: ${String(error)}`);
-    return [];
+    throw error;
   }
-  const expiries: BrokerTokenExpiry[] = [];
+  const records: Array<{ filename: string; expiry: BrokerTokenExpiry }> = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const filename = path.join(directory, entry.name);
     try {
       const parsed = JSON.parse(fs.readFileSync(filename, "utf8")) as unknown;
       if (!isBrokerTokenExpiry(parsed)) throw new Error("invalid expiry metadata");
-      expiries.push(parsed);
+      records.push({ filename, expiry: parsed });
     } catch (error) {
       log(`[agent-model-token] ⚠ ignored malformed expiry metadata ${entry.name}: ${String(error)}`);
     }
   }
-  return expiries;
+  return records;
+}
+
+export function readBrokerTokenExpiries(
+  directory: string,
+  log: (message: string) => void,
+): BrokerTokenExpiry[] {
+  try {
+    return readBrokerTokenExpiryRecords(directory, log).map((record) => record.expiry);
+  } catch (error) {
+    log(`[agent-model-token] ⚠ expiry metadata read failed: ${String(error)}`);
+    return [];
+  }
+}
+
+export function removeBrokerTokenExpiriesForSlug(
+  directory: string,
+  slug: string,
+  log: (message: string) => void,
+): void {
+  for (const { filename, expiry } of readBrokerTokenExpiryRecords(directory, log)) {
+    const agentId = BROKER_TOKEN_REF_ID_RE.exec(expiry.refId)?.groups?.agentId;
+    if (agentId !== undefined && agentIdBelongsToSlug(agentId, slug)) fs.rmSync(filename, { force: true });
+  }
 }
 
 type TimerHandle = ReturnType<typeof setTimeout>;

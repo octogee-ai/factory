@@ -126,6 +126,7 @@ export interface CustomerLifecycleAdapter {
     ensureCustomerDirectories: (slug: string) => void;
     writeCustomerTemplateFiles: (ctx: CustomerContext) => Promise<void>;
     deleteCustomerDir: (slug: string) => Promise<void>;
+    deleteDepartedCustomerState: (slug: string) => Promise<void>;
     cloneWorkspaceRepo: (slug: string, repoUrl: string) => Promise<boolean>;
     initWorkspaceRepoFromExistingDir: (ctx: CustomerContext) => Promise<string | null>;
     hasCustomerSshKey: (slug: string) => boolean;

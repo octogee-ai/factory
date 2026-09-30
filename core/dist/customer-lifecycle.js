@@ -730,11 +730,9 @@ export async function removeCustomerFromGateway(adapter, uid, opts = {}) {
             adapter.cancelPendingEviction?.(slug);
             return { wasMounted: true, steps, retained: true };
         }
-        if (adapter.hasCustomerDir(slug)) {
-            await adapter.deleteCustomerDir(slug);
-            steps.push("delete-dir");
-            adapter.log(`[remove:${slug}] customer dir deleted`);
-        }
+        await adapter.deleteDepartedCustomerState(slug);
+        steps.push("delete-dir");
+        adapter.log(`[remove:${slug}] customer state deleted`);
         if (await releaseUnmountedGiteaKey(adapter, slug))
             steps.push("release-gitea-key");
         if (adapter.onUnmounted)

@@ -1295,7 +1295,7 @@ async function evictSlugOnlyCustomer(
     adapter.cancelPendingEviction?.(slug);
     return retainLocalCustomer(input);
   }
-  if (adapter.hasCustomerDir(slug)) await adapter.deleteCustomerDir(slug);
+  await adapter.deleteDepartedCustomerState(slug);
   adapter.onUnmounted?.(slug);
   input.onLocalStateRemoved(slug);
   return "deleted-user";
