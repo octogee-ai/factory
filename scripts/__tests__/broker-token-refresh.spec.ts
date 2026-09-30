@@ -55,6 +55,23 @@ describe("broker token refresh scheduler", () => {
     expect(timers[0]?.delayMs).toBe(expiresAt - BROKER_TOKEN_REFRESH_SKEW_MS - 1_000);
   });
 
+  it("does not reload again for an expiry that was already due when the last reload succeeded", async () => {
+    const now = 10_000_000;
+    const { scheduler, rpc, timers } = setup({
+      now,
+      expiries: [{
+        refId: "agent-model-token-octogee-departed-coach",
+        expiresAt: now + BROKER_TOKEN_REFRESH_SKEW_MS - 1_000,
+      }],
+    });
+
+    await scheduler.refresh();
+
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.delayMs).toBe(BROKER_TOKEN_REFRESH_FALLBACK_MS);
+  });
+
   it("uses a conservative cap when the resolver has no expiry metadata", async () => {
     const { scheduler, timers } = setup({ now: 1_000 });
 

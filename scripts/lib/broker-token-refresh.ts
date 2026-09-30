@@ -102,8 +102,9 @@ export function createBrokerTokenRefreshScheduler(input: {
   const nextRefreshDelay = (refreshedAt: number) => {
     const fallbackDueAt = refreshedAt + BROKER_TOKEN_REFRESH_FALLBACK_MS;
     const expiryDueAt = readExpiries().reduce((earliest, entry) => {
-      if (entry.expiresAt <= refreshedAt) return earliest;
-      return Math.min(earliest, entry.expiresAt - BROKER_TOKEN_REFRESH_SKEW_MS);
+      const dueAt = entry.expiresAt - BROKER_TOKEN_REFRESH_SKEW_MS;
+      if (dueAt <= refreshedAt) return earliest;
+      return Math.min(earliest, dueAt);
     }, fallbackDueAt);
     return Math.max(0, expiryDueAt - now());
   };
