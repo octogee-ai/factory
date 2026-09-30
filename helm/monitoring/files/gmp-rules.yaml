@@ -117,6 +117,14 @@ spec:
           annotations:
             summary: "Shared Barn reached its configured member limit"
             description: "Cowboy needs another whole Shared Barn member but shared-a through shared-d are already running. Raise the configured member ceiling or reduce assignment pressure before another disposable gateway is preempted."
+        - alert: GatewayKubeletPreempted
+          expr: increase(glm_disruption_observations_total{cause="kubelet_critical_preemption",namespace=~"octogee|octogee-test"}[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kubelet preempted a gateway pod in {{ $labels.namespace }} to admit a critical pod"
+            description: "GKE Autopilot bound a system-node-critical pod (usually kube-system/gke-system-balloon-pod) to a full node and the kubelet evicted a gateway to admit it. PriorityClass and PodDisruptionBudget cannot prevent this. The Deployment replaces the pod; check Cowboy's 'Gateway disruption observed' log for the node and affected Builders."
         - alert: BuilderComputerDiskLow
           expr: |
             (

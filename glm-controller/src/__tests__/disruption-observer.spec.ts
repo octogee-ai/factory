@@ -3,12 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 
 import { disruptionObserverTest, startDisruptionObserver } from "../disruption-observer";
+import { renderMetrics, resetMetrics } from "../metrics";
 
 describe("disruption observer classification", () => {
   it("keeps NodeShutdown explicitly unconfirmed until Cloud Audit Logs confirm preemption", () => {
     expect(disruptionObserverTest.causeFor("NodeShutdown")).toBe("node_shutdown_unconfirmed");
     expect(disruptionObserverTest.causeFor("FailedPreStopHook")).toBe("prestop_hook_failure");
     expect(disruptionObserverTest.causeFor("FailedScheduling")).toBe("scheduler_pending");
+  });
+
+  it("names kubelet critical-pod preemption as its own warning-level cause", () => {
+    const cause = disruptionObserverTest.causeFor("Preempting");
+    expect(cause).toBe("kubelet_critical_preemption");
+    expect(disruptionObserverTest.severityFor(cause)).toBe("WARNING");
   });
 
   it("classifies missing Spot labels as unknown rather than on-demand", () => {
@@ -54,7 +61,8 @@ describe("disruption observer environment isolation", () => {
     { namespace: "octogee", kind: "Pod", expectedRecords: 0 },
     { namespace: "octogee-test", kind: "Pod", expectedRecords: 1 },
     { namespace: undefined, kind: "Node", expectedRecords: 1 },
-  ])("handles $kind events from $namespace", async ({ namespace, kind, expectedRecords }) => {
+    { namespace: "octogee-test", kind: "Pod", reason: "Preempting", expectedRecords: 1 },
+  ])("handles $kind $reason events from $namespace", async ({ namespace, kind, reason, expectedRecords }) => {
     const pod = {
       metadata: { name: "gateway-pod", uid: "pod-uid", namespace: namespace ?? "octogee-test", labels: { "gateway-id": "gateway-a" } },
       spec: { nodeName: "node-a" },
@@ -62,7 +70,7 @@ describe("disruption observer environment isolation", () => {
     };
     const event = {
       metadata: { uid: "event-uid" },
-      reason: kind === "Node" ? "NodeShutdown" : "FailedPreStopHook",
+      reason: reason ?? (kind === "Node" ? "NodeShutdown" : "FailedPreStopHook"),
       type: "Warning",
       involvedObject: { kind, namespace, name: kind === "Node" ? "node-a" : "gateway-pod", uid: kind === "Node" ? "node-uid" : "pod-uid" },
     };
@@ -104,6 +112,34 @@ describe("disruption observer environment isolation", () => {
           namespace: "octogee-test",
           affectedGateways: [{ gatewayId: "gateway-a" }],
         });
+      }
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("disruption observer preemption counter", () => {
+  it("exports kubelet_critical_preemption at zero before any event so increase() sees the first one", () => {
+    resetMetrics();
+    const runKubectl = vi.fn(async () => ({ code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" }));
+    vi.useFakeTimers();
+    const stop = startDisruptionObserver({
+      db: {} as Firestore,
+      runKubectl,
+      environment: "test",
+      cluster: "cluster-a",
+      namespace: "octogee-test",
+      intervalMs: 60_000,
+      log: vi.fn(),
+    });
+    try {
+      const rendered = renderMetrics();
+      for (const capacityClass of ["spot", "on-demand", "unknown"]) {
+        expect(rendered).toContain(
+          `glm_disruption_observations_total{cause="kubelet_critical_preemption",source="kubernetes_event",capacity_class="${capacityClass}",namespace="octogee-test"} 0`,
+        );
       }
     } finally {
       stop();

@@ -3,6 +3,7 @@ const eventLogger = createServiceLogger("cowboy");
 import type { Firestore } from "firebase-admin/firestore";
 import type { KubectlSubprocess } from "./lib/kube-ops.js";
 import {
+  initializeDisruptionObservation,
   recordDisruptionObservation,
   recordDisruptionSnapshot,
 } from "./metrics.js";
@@ -15,6 +16,7 @@ export type DisruptionCause =
   | "prestop_hook_failure"
   | "scheduler_pending"
   | "taint_manager_eviction"
+  | "kubelet_critical_preemption"
   | "pod_evicted_unclassified";
 
 export interface DisruptionNodeRecord {
@@ -127,6 +129,7 @@ const RELEVANT_REASONS = new Set([
   "FailedScheduling",
   "TaintManagerEviction",
   "Evicted",
+  "Preempting",
 ]);
 
 type NodeCache = Map<string, DisruptionNodeRecord>;
@@ -297,12 +300,17 @@ function causeFor(reason: string): DisruptionCause {
     case "FailedPreStopHook": return "prestop_hook_failure";
     case "FailedScheduling": return "scheduler_pending";
     case "TaintManagerEviction": return "taint_manager_eviction";
+    case "Preempting": return "kubelet_critical_preemption";
     default: return "pod_evicted_unclassified";
   }
 }
 
 function severityFor(cause: DisruptionCause): DisruptionRecord["severity"] {
-  if (cause === "node_shutdown_unconfirmed" || cause === "prestop_hook_failure") return "WARNING";
+  if (
+    cause === "node_shutdown_unconfirmed" ||
+    cause === "prestop_hook_failure" ||
+    cause === "kubelet_critical_preemption"
+  ) return "WARNING";
   return "INFO";
 }
 
@@ -489,6 +497,14 @@ async function observeOnce(
 }
 
 export function startDisruptionObserver(deps: DisruptionObserverDeps): () => void {
+  for (const capacityClass of ["spot", "on-demand", "unknown"] as const) {
+    initializeDisruptionObservation({
+      cause: "kubelet_critical_preemption",
+      source: "kubernetes_event",
+      capacityClass,
+      namespace: deps.namespace,
+    });
+  }
   const nodeCache: NodeCache = new Map();
   const podCache: PodCache = new Map();
   const seenEvents = new Map<string, number>();
@@ -516,6 +532,7 @@ export function startDisruptionObserver(deps: DisruptionObserverDeps): () => voi
 
 export const disruptionObserverTest = {
   causeFor,
+  severityFor,
   parseNode,
   parsePod,
   parseEvent,

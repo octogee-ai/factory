@@ -122,8 +122,17 @@ export function recordVmDiskUsage(samples: VmDiskUsageSample[]): void {
   }));
 }
 
+function disruptionObservationKey(sample: DisruptionObservationSample): string {
+  return [sample.cause, sample.source, sample.capacityClass, sample.namespace].join("\0");
+}
+
+export function initializeDisruptionObservation(sample: DisruptionObservationSample): void {
+  const key = disruptionObservationKey(sample);
+  if (!disruptionObservations.has(key)) disruptionObservations.set(key, 0);
+}
+
 export function recordDisruptionObservation(sample: DisruptionObservationSample): void {
-  const key = [sample.cause, sample.source, sample.capacityClass, sample.namespace].join("\0");
+  const key = disruptionObservationKey(sample);
   disruptionObservations.set(key, (disruptionObservations.get(key) ?? 0) + 1);
   disruptionLastObservedMs = sample.now ?? Date.now();
 }
