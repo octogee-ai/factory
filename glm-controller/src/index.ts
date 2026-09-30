@@ -202,8 +202,13 @@ import { markSuspendedAndReleaseErasure } from "./lib/customer-ops/erasure-relea
 import {
   createPostHogErasureClient,
   postHogErasureConfigFromEnvironment,
-  type PostHogErasureState,
+  type PostHogErasureRequest,
 } from "./lib/customer-ops/posthog-erasure.js";
+import {
+  postHogMappingOnlyJobUpdate,
+  readPostHogErasureState,
+  verifiedDeletionJobUpdate,
+} from "./lib/customer-ops/deletion-job.js";
 import { buildAnonymousOperationalArchive } from "./lib/customer-ops/deletion-archive.js";
 import {
   eraseCustomerFirestore,
@@ -2107,20 +2112,7 @@ async function runClaimedOperation(
     if (verifiedDeletion) {
       txn.set(
         deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(verifiedDeletion.deletionId),
-        {
-          status: "verified",
-          archiveId: verifiedDeletion.archiveId,
-          completedAt: Date.now(),
-          uid: FieldValue.delete(),
-          slug: FieldValue.delete(),
-          requestedBy: FieldValue.delete(),
-          currentGatewayId: FieldValue.delete(),
-          stripeCustomerIds: FieldValue.delete(),
-          stripeSubscriptionIds: FieldValue.delete(),
-          cleanupContext: FieldValue.delete(),
-          suspensionOperationId: FieldValue.delete(),
-          erasureOperationId: FieldValue.delete(),
-        },
+        verifiedDeletionJobUpdate(verifiedDeletion.archiveId, Date.now()),
         { merge: true },
       );
     }
@@ -3646,6 +3638,23 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         (await db.collection("users").doc(distinctId).get()).exists,
     },
   );
+  const postHogErasureRequest = async (
+    uid: string,
+    deletionId: string,
+  ): Promise<PostHogErasureRequest> => {
+    const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
+    const job = await jobRef.get();
+    if (!job.exists) throw new Error(`deletion job missing: ${deletionId}`);
+    const data = job.data() as Record<string, unknown>;
+    if (data.uid !== uid) throw new Error(`deletion job uid mismatch: ${deletionId}`);
+    return {
+      uid,
+      state: readPostHogErasureState(deletionId, data),
+      persistState: async (nextState) => {
+        await jobRef.set({ posthogErasure: nextState, updatedAt: Date.now() }, { merge: true });
+      },
+    };
+  };
   return createEraseCustomerHandler({
     loadDeletionJob: async (deletionId) => {
       const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
@@ -3674,36 +3683,15 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
       };
     },
     ensureAnonymousArchive: (deletionId) => ensureAnonymousDeletionArchive(db, deletionId),
-    erasePostHog: async (uid, deletionId) => {
-      const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-      const job = await jobRef.get();
-      if (!job.exists) throw new Error(`deletion job missing: ${deletionId}`);
-      const data = job.data() as Record<string, unknown>;
-      if (data.uid !== uid) throw new Error(`deletion job uid mismatch: ${deletionId}`);
-      let state: PostHogErasureState | null = null;
-      if (data.posthogErasure !== undefined) {
-        const persisted = data.posthogErasure;
-        if (
-          !persisted ||
-          typeof persisted !== "object" ||
-          !Array.isArray((persisted as PostHogErasureState).personUuids) ||
-          (persisted as PostHogErasureState).personUuids.some(
-            (personUuid) => typeof personUuid !== "string" || personUuid.length === 0,
-          )
-        ) {
-          throw new Error(`deletion job has malformed PostHog erasure state: ${deletionId}`);
-        }
-        state = {
-          personUuids: [...new Set((persisted as PostHogErasureState).personUuids)].sort(),
-        };
-      }
-      return postHogErasure.erase({
-        uid,
-        state,
-        persistState: async (nextState) => {
-          await jobRef.set({ posthogErasure: nextState, updatedAt: Date.now() }, { merge: true });
-        },
-      });
+    requestPostHogDeletion: async (uid, deletionId) =>
+      postHogErasure.requestDeletion(await postHogErasureRequest(uid, deletionId)),
+    confirmPostHogDeletion: async (uid, deletionId) =>
+      postHogErasure.confirmDeletion(await postHogErasureRequest(uid, deletionId)),
+    retainPostHogMappingOnly: async (deletionId, archiveId) => {
+      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
+        postHogMappingOnlyJobUpdate(archiveId, Date.now()),
+        { merge: true },
+      );
     },
     deleteStripeCustomer: (customerId) =>
       deleteStripeCustomer(

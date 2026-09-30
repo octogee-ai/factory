@@ -6,7 +6,10 @@ import type {
 } from "../operation-router.js";
 import type { CustomerCleanupContext } from "./deprovision-customer.js";
 import type { NukeCloudStepResult } from "../lib/customer-ops/nuke-cloud.js";
-import { PostHogMergedIdentityError } from "../lib/customer-ops/posthog-erasure.js";
+import {
+  PostHogMergedIdentityError,
+  type PostHogConfirmation,
+} from "../lib/customer-ops/posthog-erasure.js";
 
 export interface ErasureDeletionJob {
   uid: string;
@@ -20,7 +23,9 @@ export interface ErasureDeletionJob {
 export interface EraseCustomerDeps {
   loadDeletionJob: (deletionId: string) => Promise<ErasureDeletionJob | null>;
   ensureAnonymousArchive: (deletionId: string) => Promise<string>;
-  erasePostHog: (uid: string, deletionId: string) => Promise<{ skipped: boolean }>;
+  requestPostHogDeletion: (uid: string, deletionId: string) => Promise<{ skipped: boolean }>;
+  confirmPostHogDeletion: (uid: string, deletionId: string) => Promise<PostHogConfirmation>;
+  retainPostHogMappingOnly: (deletionId: string, archiveId: string) => Promise<void>;
   deleteStripeCustomer: (customerId: string) => Promise<void>;
   discoverStripeCustomerIds: (uid: string) => Promise<string[]>;
   persistStripeCustomerIds: (deletionId: string, customerIds: string[]) => Promise<void>;
@@ -64,9 +69,16 @@ interface EraseCustomerContext {
   cleanup: CustomerCleanupContext;
 }
 
+interface PostHogConfirmationContext {
+  deletionId: string;
+  uid: string;
+  archiveId: string;
+}
+
 type EraseCustomerLoadResult =
   | { kind: "context"; context: EraseCustomerContext }
   | { kind: "error"; error: OperationResult }
+  | { kind: "awaiting-posthog"; confirmation: PostHogConfirmationContext }
   | { kind: "verified"; deletionId: string; archiveId: string };
 
 async function loadEraseCustomerContext(
@@ -88,6 +100,12 @@ async function loadEraseCustomerContext(
   }
   if (job.status === "verified_pending_completion" && job.archiveId) {
     return { kind: "verified", deletionId, archiveId: job.archiveId };
+  }
+  if (job.status === "posthog_verification_pending" && job.archiveId) {
+    return {
+      kind: "awaiting-posthog",
+      confirmation: { deletionId, uid, archiveId: job.archiveId },
+    };
   }
   if (!job.cleanupContext || job.status !== "hibernating") {
     return {
@@ -158,26 +176,65 @@ async function eraseStripeCustomers(
   }
 }
 
-async function erasePostHog(
+const REQUEST_POSTHOG_STEP = "request-posthog-person-deletion";
+const CONFIRM_POSTHOG_STEP = "confirm-posthog-person-deletion";
+
+async function requestPostHogDeletion(
   context: EraseCustomerContext,
   ctx: OperationContext,
   deps: EraseCustomerDeps,
 ): Promise<OperationResult | null> {
   try {
-    const outcome = await deps.erasePostHog(context.job.uid, context.deletionId);
+    const outcome = await deps.requestPostHogDeletion(context.job.uid, context.deletionId);
     await report(ctx, deps, {
-      name: "delete-posthog-person-data",
+      name: REQUEST_POSTHOG_STEP,
       status: outcome.skipped ? "skipped" : "done",
     });
     return null;
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    await report(ctx, deps, { name: "delete-posthog-person-data", status: "failed", error });
+    await report(ctx, deps, { name: REQUEST_POSTHOG_STEP, status: "failed", error });
     if (err instanceof PostHogMergedIdentityError) {
-      return deletionBlocked(context.deletionId, "delete-posthog-person-data", error);
+      return deletionBlocked(context.deletionId, REQUEST_POSTHOG_STEP, error);
     }
     return cleanupRetry(context.deletionId, error);
   }
+}
+
+async function confirmPostHogAndFinalize(
+  confirmation: PostHogConfirmationContext,
+  op: Operation,
+  ctx: OperationContext,
+  deps: EraseCustomerDeps,
+): Promise<OperationResult> {
+  const { deletionId, uid, archiveId } = confirmation;
+  let outcome: PostHogConfirmation;
+  try {
+    outcome = await deps.confirmPostHogDeletion(uid, deletionId);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await report(ctx, deps, { name: CONFIRM_POSTHOG_STEP, status: "failed", error });
+    if (err instanceof PostHogMergedIdentityError) {
+      return deletionBlocked(deletionId, CONFIRM_POSTHOG_STEP, error);
+    }
+    return cleanupRetry(deletionId, error);
+  }
+  if (outcome === "pending") {
+    await report(ctx, deps, { name: CONFIRM_POSTHOG_STEP, status: "running" });
+    return {
+      steps: [],
+      success: false,
+      error: "PostHog event deletion verification is still pending",
+      output: { postHogVerificationPending: { deletionId } },
+    };
+  }
+  await report(ctx, deps, {
+    name: CONFIRM_POSTHOG_STEP,
+    status: outcome === "skipped" ? "skipped" : "done",
+  });
+  await deps.finalizeVerifiedErasure(deletionId, archiveId, op.id);
+  await report(ctx, deps, { name: "destroy-identity-mapping", status: "done" });
+  return verifiedErasureResult(deletionId, archiveId);
 }
 
 function cloudStepStatus(result: NukeCloudStepResult): OperationStep["status"] {
@@ -210,6 +267,9 @@ async function runEraseCustomer(
   if (loaded.kind === "verified") {
     return verifiedErasureResult(loaded.deletionId, loaded.archiveId);
   }
+  if (loaded.kind === "awaiting-posthog") {
+    return confirmPostHogAndFinalize(loaded.confirmation, op, ctx, deps);
+  }
     const { deletionId, cleanup } = loaded.context;
 
     const archiveId = await deps.ensureAnonymousArchive(deletionId);
@@ -218,7 +278,7 @@ async function runEraseCustomer(
     const stripeFailure = await eraseStripeCustomers(loaded.context, ctx, deps);
     if (stripeFailure) return stripeFailure;
 
-    const postHogFailure = await erasePostHog(loaded.context, ctx, deps);
+    const postHogFailure = await requestPostHogDeletion(loaded.context, ctx, deps);
     if (postHogFailure) return postHogFailure;
 
     const retirement = await deps.ensureOwnedGatewayRetired(cleanup, deletionId);
@@ -269,9 +329,13 @@ async function runEraseCustomer(
       );
     }
     await report(ctx, deps, { name: "verify-erasure", status: "done" });
-    await deps.finalizeVerifiedErasure(deletionId, archiveId, op.id);
-    await report(ctx, deps, { name: "destroy-identity-mapping", status: "done" });
-    return verifiedErasureResult(deletionId, archiveId);
+    await deps.retainPostHogMappingOnly(deletionId, archiveId);
+    return confirmPostHogAndFinalize(
+      { deletionId, uid: loaded.context.job.uid, archiveId },
+      op,
+      ctx,
+      deps,
+    );
 }
 
 export function createEraseCustomerHandler(deps: EraseCustomerDeps): OperationHandler {
