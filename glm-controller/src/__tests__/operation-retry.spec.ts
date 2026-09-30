@@ -77,6 +77,22 @@ describe("operationNeedsDurableRestartResume", () => {
 });
 
 describe("classifyOperationFailure", () => {
+  it("retries a kubectl call rejected because this pod's service-account token was invalidated", () => {
+    expect(
+      classifyOperationFailure(
+        "kubectl get pods transport=shared-7b9a93aaa306 failed: error: You must be logged in to the server (Unauthorized)",
+      ),
+    ).toBe("transient");
+  });
+
+  it("keeps an RBAC denial terminal", () => {
+    expect(
+      classifyOperationFailure(
+        'kubectl get pods failed: Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:octogee:glm-controller" cannot list resource "pods"',
+      ),
+    ).toBe("terminal");
+  });
+
   it("classifies timeouts, K8s API hiccups, and preemption as transient", () => {
     expect(classifyOperationFailure("helm did not render bender-green@sha within 60000ms")).toBe(
       "transient",
@@ -686,6 +702,31 @@ describe("buildOperationCompletionUpdate", () => {
     expect(update.status).toBe("pending");
     expect(update.attempts).toBe(MAX_OPERATION_ATTEMPTS + 1);
     expect(update.nextAttemptAt).toBe(now + retryBackoffMs(MAX_OPERATION_ATTEMPTS + 1));
+  });
+
+  it("requeues a drain migration whose kubectl call lost its service-account token mid-deploy", () => {
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: `placement-${"b".repeat(32)}`,
+        kind: "migrate-customer",
+        origin: "automatic",
+        input: { source: "continuous-placement-policy" },
+        attempts: 0,
+        attemptHistory: [],
+      },
+      result: {
+        steps: [],
+        success: false,
+        error:
+          "kubectl get pods transport=shared-7b9a93aaa306 failed: " +
+          "error: You must be logged in to the server (Unauthorized)",
+      },
+      steps: [],
+      now,
+    });
+
+    expect(update.status).toBe("pending");
+    expect(update.nextAttemptAt).toBe(now + retryBackoffMs(1));
   });
 
   it("bounds level-triggered attempt history", () => {

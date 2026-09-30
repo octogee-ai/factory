@@ -40,6 +40,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(status|HTTP) (429|502|503|504)\b/,
   /\bdatabase is locked\b/i,
   /\bpreempt(ed|ion)?\b/i,
+  /You must be logged in to the server \(Unauthorized\)/,
   /config unfreeze cleanup pending/i,
   /source unmount cleanup pending/i,
   /scheduler handoff cleanup pending/i,
