@@ -29,6 +29,7 @@ describe("isSeriallyExclusiveKind", () => {
 
   it("treats migrate-customer as serial per migration target", () => {
     expect(isSeriallyExclusiveKind("migrate-customer")).toBe(true);
+    expect(isSeriallyExclusiveKind("suspend-customer")).toBe(true);
   });
 
   it("does not restrict kinds with no known hard-fail-on-busy path", () => {
@@ -494,6 +495,61 @@ describe("decideOperationClaim — FIFO per scope (an older pending op blocks a 
       pendingOpsSameKind: [
         { id: "op-1", kind: "rollout", createdAt: 2, input: { gatewayId: "bender-blue" } },
       ],
+    });
+    expect(decision).toEqual({ outcome: "claim" });
+  });
+});
+
+describe("decideOperationClaim — account suspensions run one at a time", () => {
+  const now = 1_000_000;
+  const suspension = (id: string, createdAt: number, nextAttemptAt?: number) => ({
+    id,
+    kind: "suspend-customer",
+    status: "pending",
+    createdAt,
+    nextAttemptAt,
+    input: { uid: `uid-${id}`, deletionId: `deletion-${id}` },
+  });
+
+  it("queues a suspension while another suspension is running", () => {
+    const decision = decideOperationClaim({
+      op: suspension("op-2", 2),
+      now,
+      runningOpsSameKind: [{ id: "op-1", kind: "suspend-customer", input: { uid: "uid-op-1" } }],
+      pendingOpsSameKind: [],
+    });
+    expect(decision).toEqual({ outcome: "queue", waitingOn: "another account suspension" });
+  });
+
+  it("queues behind an older suspension that is waiting to run", () => {
+    const decision = decideOperationClaim({
+      op: suspension("op-2", 2),
+      now,
+      runningOpsSameKind: [],
+      pendingOpsSameKind: [suspension("op-1", 1)],
+    });
+    expect(decision).toEqual({ outcome: "queue", waitingOn: "another account suspension" });
+  });
+
+  it("does not wait behind an older suspension that failed and is backing off", () => {
+    const decision = decideOperationClaim({
+      op: suspension("op-2", 2),
+      now,
+      runningOpsSameKind: [],
+      pendingOpsSameKind: [suspension("op-1", 1, now + 30_000)],
+    });
+    expect(decision).toEqual({ outcome: "claim" });
+  });
+
+  it("does not hold suspensions behind unrelated fleet work", () => {
+    const decision = decideOperationClaim({
+      op: suspension("op-2", 2),
+      now,
+      runningOpsSameKind: [
+        { id: "roll", kind: "rollout", input: { gatewayId: "shared-a" } },
+        { id: "move", kind: "migrate-customer", input: { fromGatewayId: "shared-a", toGatewayId: "shared-b" } },
+      ],
+      pendingOpsSameKind: [],
     });
     expect(decision).toEqual({ outcome: "claim" });
   });

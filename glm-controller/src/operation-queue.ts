@@ -1,8 +1,11 @@
 import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
 
+const ACCOUNT_SUSPENSION_KIND = "suspend-customer";
+
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",
   "migrate-customer",
+  ACCOUNT_SUSPENSION_KIND,
 ]);
 
 export function isSeriallyExclusiveKind(kind: string): boolean {
@@ -42,12 +45,19 @@ export function findRunningRolloutParentOperationId(
   return matches[0]?.id ?? null;
 }
 
+function operationsConflict(candidate: OperationRef, other: OperationRef): boolean {
+  if (candidate.kind === ACCOUNT_SUSPENSION_KIND || other.kind === ACCOUNT_SUSPENSION_KIND) {
+    return candidate.kind === other.kind;
+  }
+  return serialFleetOperationsConflict(candidate, other);
+}
+
 export function findSerialConflict(
   candidate: OperationRef,
   runningOpsSameKind: ReadonlyArray<OperationRef>,
 ): SerialConflict | null {
   const conflict = runningOpsSameKind.find(
-    (running) => running.id !== candidate.id && serialFleetOperationsConflict(candidate, running),
+    (running) => running.id !== candidate.id && operationsConflict(candidate, running),
   );
   if (!conflict) return null;
   return { conflictingOpId: conflict.id, waitingOn: describeWaitingOn(conflict) };
@@ -75,6 +85,7 @@ function migrationWaitingOn(input: OperationRef["input"]): string | null {
 const WAITING_ON_DESCRIPTIONS: Readonly<Record<string, (input: OperationRef["input"]) => string | null>> = {
   rollout: rolloutWaitingOn,
   "migrate-customer": migrationWaitingOn,
+  [ACCOUNT_SUSPENSION_KIND]: () => "another account suspension",
 };
 
 function describeWaitingOn(op: OperationRef): string {
@@ -123,15 +134,23 @@ function isOlderThanCandidate(
 // ahead of an op already queued for the same scope (whose blocker finished
 // without any event waking it) — starving the queue head. Together with the
 // drain's createdAt-asc scan this makes claiming jointly FIFO per scope.
+function isBackingOffSuspension(pending: PendingOperationRef, now: number): boolean {
+  return pending.kind === ACCOUNT_SUSPENSION_KIND &&
+    typeof pending.nextAttemptAt === "number" &&
+    pending.nextAttemptAt > now;
+}
+
 function findOlderPendingSameScope(
   candidate: OperationRef & { createdAt: number },
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
+  now: number,
 ): SerialConflict | null {
   const older = pendingOpsSameKind
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
-        serialFleetOperationsConflict(candidate, pending) &&
+        !isBackingOffSuspension(pending, now) &&
+        operationsConflict(candidate, pending) &&
         isOlderThanCandidate(pending, candidate),
     )
     .sort((a, b) => (isOlderThanCandidate(a, b) ? -1 : 1))[0];
@@ -156,7 +175,7 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
-  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind);
+  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };
   return { outcome: "claim" };
 }
