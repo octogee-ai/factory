@@ -163,6 +163,45 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
 
 });
 
+describe("GET /api/admin/customers — search and filters cover every customer", () => {
+  function directory(count: number): Record<string, DocData> {
+    return Object.fromEntries(
+      Array.from({ length: count }, (_, index) => {
+        const name = `builder${String(index).padStart(2, "0")}`;
+        return [`users/uid-${name}`, customerDoc({ username: name, email: `${name}@example.com`, displayName: name })];
+      }),
+    );
+  }
+
+  it("finds a customer beyond the first page", async () => {
+    const res = await request(makeApp(directory(40)))
+      .get("/api/admin/customers?search=builder33")
+      .expect(200);
+
+    expect(res.body.items.map((item: { username: string }) => item.username)).toEqual(["builder33"]);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.nextCursor).toBeNull();
+  });
+
+  it("pages through matches instead of through unfiltered rows", async () => {
+    const app = makeApp(directory(40));
+
+    const first = await request(app).get("/api/admin/customers?search=builder3&pageSize=4").expect(200);
+    expect(first.body.items.map((item: { username: string }) => item.username)).toEqual([
+      "builder30", "builder31", "builder32", "builder33",
+    ]);
+    expect(first.body.hasMore).toBe(true);
+
+    const second = await request(app)
+      .get(`/api/admin/customers?search=builder3&pageSize=4&cursor=${first.body.nextCursor}`)
+      .expect(200);
+    expect(second.body.items.map((item: { username: string }) => item.username)).toEqual([
+      "builder34", "builder35", "builder36", "builder37",
+    ]);
+    expect(second.body.hasMore).toBe(true);
+  });
+});
+
 describe("GET /api/admin/customer-archives", () => {
   it("returns retained operational totals while dropping unexpected identifying fields", async () => {
     const app = makeApp({

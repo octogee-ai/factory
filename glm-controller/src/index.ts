@@ -198,6 +198,7 @@ import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { nukeUserCloudSide } from "./lib/customer-ops/nuke-cloud.js";
+import { markSuspendedAndReleaseErasure } from "./lib/customer-ops/erasure-release.js";
 import {
   createPostHogErasureClient,
   postHogErasureConfigFromEnvironment,
@@ -3913,12 +3914,7 @@ function buildSuspendCustomerHandler(
         deletionId,
         now: Date.now(),
       }),
-    markSuspended: async (deletionId) => {
-      await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
-        { status: "hibernating", suspendedAt: Date.now(), updatedAt: Date.now() },
-        { merge: true },
-      );
-    },
+    markSuspended: (deletionId) => markSuspendedAndReleaseErasure(db, deletionId, Date.now()),
     now: () => Date.now(),
   });
 }

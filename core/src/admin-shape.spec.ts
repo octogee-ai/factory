@@ -14,6 +14,14 @@ const LIVE_SIGNUP_OFFER = {
 };
 
 describe("buildCustomerSummary", () => {
+  it("carries the account lifecycle so a list can mark customers scheduled for deletion", () => {
+    expect(buildCustomerSummary("u1", { email: "a@b.co" }).accountLifecycleStatus).toBe("active");
+    expect(buildCustomerSummary("u1", {
+      email: "a@b.co",
+      accountLifecycle: { status: "deletion_scheduled", eraseAfter: 1_800_000_000_000 },
+    }).accountLifecycleStatus).toBe("deletion_scheduled");
+  });
+
   it("normalizes malformed nested customer fields instead of leaking them", () => {
     const summary = buildCustomerSummary("uid-1", {
       email: "builder@example.com",

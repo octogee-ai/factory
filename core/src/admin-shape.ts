@@ -99,6 +99,7 @@ export interface CustomerSummary {
   marginUsd:           number;
 
   provisioningStatus:  string | null;
+  accountLifecycleStatus: string;
 }
 
 export function buildCustomerSummary(
@@ -169,5 +170,6 @@ export function buildCustomerSummary(
     provisioningStatus:
       nullableStringAt(openclaw, "status") ??
       nullableStringAt(provisioning, "status"),
+    accountLifecycleStatus: nullableStringAt(objectAt(d, "accountLifecycle"), "status") ?? "active",
   };
 }

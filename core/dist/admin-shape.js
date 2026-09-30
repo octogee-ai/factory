@@ -99,5 +99,6 @@ export function buildCustomerSummary(uid, d, broker = {}) {
         marginUsd: revenueUsd - costUsd,
         provisioningStatus: nullableStringAt(openclaw, "status") ??
             nullableStringAt(provisioning, "status"),
+        accountLifecycleStatus: nullableStringAt(objectAt(d, "accountLifecycle"), "status") ?? "active",
     };
 }

@@ -395,6 +395,55 @@ function applyCustomerFilters(
   return result;
 }
 
+function customerFiltersActive(f: CustomerListFilters): boolean {
+  return f.search !== "" || f.throttleFilter !== "all" || f.byotFilter !== "all";
+}
+
+interface CustomerPage {
+  items: CustomerSummary[];
+  hasMore: boolean;
+}
+
+async function unfilteredCustomerPage(
+  db: Firestore,
+  orderField: string,
+  cursor: string | null,
+  pageSize: number,
+): Promise<CustomerPage> {
+  let q = db.collection("users").orderBy(orderField, "desc").limit(pageSize + 1);
+  if (cursor) {
+    const cursorDoc = await db.collection("users").doc(cursor).get();
+    if (cursorDoc.exists) q = q.startAfter(cursorDoc);
+  }
+  const docs = (await q.get()).docs;
+  const pageDocs = docs.slice(0, pageSize);
+  const brokerUsage = await readBrokerCustomerUsage(db, pageDocs.map((d) => d.id), Date.now());
+  return {
+    items: pageDocs.map((d) => buildCustomerSummary(d.id, d.data(), brokerUsage.get(d.id) ?? {})),
+    hasMore: docs.length > pageSize,
+  };
+}
+
+async function filteredCustomerPage(
+  db: Firestore,
+  orderField: string,
+  filters: CustomerListFilters,
+  cursor: string | null,
+  pageSize: number,
+): Promise<CustomerPage> {
+  const docs = (await db.collection("users").orderBy(orderField, "desc").get()).docs;
+  const brokerUsage = await readBrokerCustomerUsage(db, docs.map((d) => d.id), Date.now());
+  const matches = applyCustomerFilters(
+    docs.map((d) => buildCustomerSummary(d.id, d.data(), brokerUsage.get(d.id) ?? {})),
+    filters,
+  );
+  const start = cursor ? matches.findIndex((customer) => customer.uid === cursor) + 1 : 0;
+  return {
+    items: matches.slice(start, start + pageSize),
+    hasMore: start + pageSize < matches.length,
+  };
+}
+
 export interface AdminCustomerPlacementProjection {
   gatewayId: string | null;
   gatewayProfile: string | null;
@@ -574,35 +623,19 @@ router.get(
           byotFilter: (req.query.byot as string) ?? "all",
         };
 
-        let q = db
-          .collection("users")
-          .orderBy(sort === "lastActive" ? "usage.lastUpdated" : "createdAt", "desc")
-          .limit(pageSize + 1); 
-        if (cursor) {
-          const cursorDoc = await db.collection("users").doc(cursor).get();
-          if (cursorDoc.exists) q = q.startAfter(cursorDoc);
-        }
-        const snap = await q.get();
-        const docs = snap.docs;
-        const hasMore = docs.length > pageSize;
-        const pageDocs = hasMore ? docs.slice(0, pageSize) : docs;
-
-        const brokerUsage = await readBrokerCustomerUsage(
-          db,
-          pageDocs.map((d) => d.id),
-          Date.now(),
-        );
-        const items: CustomerSummary[] = applyCustomerFilters(
-          pageDocs.map((d) => buildCustomerSummary(d.id, d.data(), brokerUsage.get(d.id) ?? {})),
-          filters,
-        );
+        const orderField = sort === "lastActive" ? "usage.lastUpdated" : "createdAt";
+        const page = customerFiltersActive(filters)
+          ? await filteredCustomerPage(db, orderField, filters, cursor, pageSize)
+          : await unfilteredCustomerPage(db, orderField, cursor, pageSize);
+        const { items, hasMore } = page;
+        const nextCursor = hasMore ? items[items.length - 1]!.uid : null;
 
 const statsSnap = await db.doc("system/stats").get();
         const total: number | null = (statsSnap.data()?.totalCustomers as number) ?? null;
 
         res.json({
           items,
-          nextCursor: hasMore ? pageDocs[pageDocs.length - 1]!.id : null,
+          nextCursor,
           hasMore,
           total,
           generatedAt: new Date().toISOString(),

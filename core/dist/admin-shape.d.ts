@@ -38,6 +38,7 @@ export interface CustomerSummary {
     revenueUsd: number;
     marginUsd: number;
     provisioningStatus: string | null;
+    accountLifecycleStatus: string;
 }
 export declare function buildCustomerSummary(uid: string, d: CustomerDoc, broker?: BrokerCustomerUsage): CustomerSummary;
 export {};
