@@ -160,7 +160,9 @@ async function eraseStripeCustomers(
     ])].sort();
     await deps.persistStripeCustomerIds(context.deletionId, customerIds);
     for (const customerId of customerIds) await deps.deleteStripeCustomer(customerId);
-    const remaining = await deps.discoverStripeCustomerIds(context.job.uid);
+    const deleted = new Set(customerIds);
+    const remaining = (await deps.discoverStripeCustomerIds(context.job.uid))
+      .filter((customerId) => !deleted.has(customerId));
     if (remaining.length > 0) {
       throw new Error(`Stripe customers remain: ${remaining.sort().join(", ")}`);
     }
