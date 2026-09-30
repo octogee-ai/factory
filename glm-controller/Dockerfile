@@ -2,7 +2,7 @@ FROM node:26-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e961522
 ARG NPM_VERSION=12.1.0
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.9 --ignore-scripts --no-audit --no-fund \
+    && npm install --global brace-expansion@5.0.12 --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
     && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 
