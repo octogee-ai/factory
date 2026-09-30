@@ -13,6 +13,7 @@ export type { ResolvedTalkSettings, TalkClientMessage, TalkEndpointing, TalkErro
 export { TALK_INPUT_SAMPLE_RATE, TALK_OUTPUT_SAMPLE_RATE, TALK_PROTOCOL_VERSION, TALK_SETTINGS_DEFAULTS, TALK_TICKET_PURPOSE, VOICE_TALK_FLAG, parseTalkClientMessage, parseTalkServerEvent, parseTalkSettings, resolveTalkSettings, } from './voice.js';
 export type { AgentLook, AgentLookStyle } from './agent-look.js';
 export { AGENT_LOOK_STYLES, parseAgentLook } from './agent-look.js';
+export { BRAND_LOOK_COLOR, CHARACTER_NAMES, CHARACTER_STYLES, DEFAULT_AGENT_LOOK, LOOK_COLORS, OCTO_MASCOT, characterBackSvg, characterSvg, } from './agent-characters.js';
 export type { ProductAnalyticsEvent, ProductAnalyticsEventName, ProductAnalyticsEventProperties, } from './product-analytics.js';
 export { PRODUCT_ANALYTICS_EVENT_NAMES } from './product-analytics.js';
 export type { Workspace, WorkspaceVisibility, WorkspaceMattermost, WorkspaceGitea, } from './workspace.js';

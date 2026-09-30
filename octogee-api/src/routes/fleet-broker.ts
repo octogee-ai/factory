@@ -32,6 +32,8 @@ import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+import type { AgentLook } from "@octogee/shared/types/agent-look";
+import { DEFAULT_AGENT_LOOK, characterSvg } from "@octogee/shared/types/agent-characters";
 import {
   isValidProjectId,
   isValidUsername,
@@ -174,6 +176,7 @@ type ApplyCoachIdentity = (input: {
   persona?: string;
   emoji?: string;
   avatarPng?: Buffer;
+  look?: AgentLook;
 }) => Promise<string[]>;
 
 // Chat broker: the gateway skill is a thin client; PAT resolution + MM reads run
@@ -321,10 +324,22 @@ const defaultApplyCoachIdentity: ApplyCoachIdentity = async (input) => {
   );
   return syncCoachIdentity(
     input.uid,
-    { name: input.name, persona: input.persona, emoji: input.emoji, avatarPng: input.avatarPng },
+    { name: input.name, persona: input.persona, emoji: input.emoji, avatarPng: input.avatarPng, look: input.look },
     { slug: input.slug },
   );
 };
+
+async function applyDefaultCoachLook(
+  input: { uid: string; slug: string },
+  deps: { renderAvatar: RenderAvatar; applyCoachIdentity: ApplyCoachIdentity },
+): Promise<void> {
+  try {
+    const avatarPng = await deps.renderAvatar(Buffer.from(characterSvg(DEFAULT_AGENT_LOOK), "utf8"));
+    await deps.applyCoachIdentity({ ...input, avatarPng, look: DEFAULT_AGENT_LOOK });
+  } catch (error) {
+    logger.error("[fleet-broker] default coach look was not applied", { uid: input.uid, error });
+  }
+}
 
 const defaultExecuteChatSearch: ExecuteChatSearch = async (identity, params) => {
   const { executeChatSearch } = await import(
@@ -2448,6 +2463,8 @@ function installProvisioningRoutes(
         userData: assigned.data,
         mmUpdate,
       });
+      const slug = stringAt(assigned.data, "username");
+      if (slug) await applyDefaultCoachLook({ uid: assigned.uid, slug }, deps);
       res.status(204).end();
     });
   });

@@ -118,6 +118,16 @@ export {
 
 export type { AgentLook, AgentLookStyle } from './agent-look.js';
 export { AGENT_LOOK_STYLES, parseAgentLook } from './agent-look.js';
+export {
+  BRAND_LOOK_COLOR,
+  CHARACTER_NAMES,
+  CHARACTER_STYLES,
+  DEFAULT_AGENT_LOOK,
+  LOOK_COLORS,
+  OCTO_MASCOT,
+  characterBackSvg,
+  characterSvg,
+} from './agent-characters.js';
 
 export type {
   ProductAnalyticsEvent,

@@ -7,6 +7,7 @@
 // path-traversal defense.
 import { filterOutCustomerBindings } from "./apply-config-patch.js";
 import { FieldValue } from "firebase-admin/firestore";
+import { DEFAULT_AGENT_LOOK } from "@octogee/shared/types/agent-characters";
 import * as fs from "fs";
 import * as path from "path";
 import { isValidUsername, usernameValidationError, } from "@octogee/shared/types/identity";
@@ -290,15 +291,19 @@ async function writeAgentDoc(ctx, mmUpdate) {
     const coachMmUserId = mmUpdate["mattermost.coachUserId"];
     if (!coachMmUserId)
         return;
-    await db.doc(`agents/${ctx.uid}`).set({
-        id: ctx.uid,
+    await db.doc(`agents/${ctx.uid}`).set(buildCoachAgentDoc(ctx.uid, coachMmUserId), { merge: true });
+}
+export function buildCoachAgentDoc(uid, coachMmUserId) {
+    return {
+        id: uid,
         name: "Octo",
         persona: "",
         avatarEmoji: "🐙",
+        look: DEFAULT_AGENT_LOOK,
         mattermost: { userId: coachMmUserId },
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    };
 }
 async function updateUserWorkspaceEntry(ctx, provisioningObj) {
     const wsSnap = await db

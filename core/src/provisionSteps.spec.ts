@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { FieldValue } from "firebase-admin/firestore";
 import {
+  buildCoachAgentDoc,
   buildProvisioningContext,
   buildRemoveCustomerConfig,
   buildUserOperationalFields,
@@ -106,5 +108,21 @@ describe("buildRemoveCustomerConfig", () => {
     expect(config.channels?.mattermost?.accounts).toEqual({
       "alice-b-proj-x": { botToken: "s" },
     });
+  });
+});
+
+describe("buildCoachAgentDoc", () => {
+  it("gives every new coach the Octo identity with the coral Octo look", () => {
+    const doc = buildCoachAgentDoc("uid-1", "mm-coach-1");
+    expect(doc).toMatchObject({
+      id: "uid-1",
+      name: "Octo",
+      persona: "",
+      avatarEmoji: "🐙",
+      look: { style: "octo", color: "#e74e3c" },
+      mattermost: { userId: "mm-coach-1" },
+    });
+    expect(doc.createdAt).toEqual(FieldValue.serverTimestamp());
+    expect(doc.updatedAt).toEqual(FieldValue.serverTimestamp());
   });
 });

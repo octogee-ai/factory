@@ -14,6 +14,10 @@
       "types": "./dist/types/index.d.ts",
       "default": "./dist/types/index.js"
     },
+    "./types/agent-characters": {
+      "types": "./dist/types/agent-characters.d.ts",
+      "default": "./dist/types/agent-characters.js"
+    },
     "./types/agent-look": {
       "types": "./dist/types/agent-look.d.ts",
       "default": "./dist/types/agent-look.js"
@@ -257,6 +261,9 @@
   },
   "typesVersions": {
     "*": {
+      "types/agent-characters": [
+        "dist/types/agent-characters.d.ts"
+      ],
       "types/agent-models": [
         "dist/types/agent-models.d.ts"
       ],
