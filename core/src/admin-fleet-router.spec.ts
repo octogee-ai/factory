@@ -2912,6 +2912,31 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(remaining.u2.accountLifecycle).toMatchObject({ status: "deletion_scheduled" });
   });
 
+  it.each(["restoreFence", "sourceTransferFence"])(
+    "tells a customer their workspace is busy, not already deleted, while a %s holds it",
+    async (fence) => {
+      const { db, deletionDeps, calls, remaining } = makeDeleteApp({
+        u1: { username: "alice", provisioning: { openclaw: { [fence]: { phase: "dispatched" }, gatewayId: "shared-1" } } },
+      });
+
+      await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u1" }))
+        .resolves.toEqual({ kind: "workspace-busy" });
+      expect(remaining.u1.accountLifecycle).toBeUndefined();
+      expect(calls).not.toContain("suspend-auth:u1");
+    },
+  );
+
+  it("reports a deletion in progress when the customer's suspension is already queued", async () => {
+    const { db, deletionDeps, calls } = makeDeleteApp(
+      { u2: { username: "acme" } },
+      { "glmOperations/suspend-1": { kind: "suspend-customer", status: "pending", inputUid: "u2" } },
+    );
+
+    await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" }))
+      .resolves.toEqual({ kind: "conflict" });
+    expect(calls).not.toContain("suspend-auth:u2");
+  });
+
   it("refuses a second self-deletion while one is already scheduled", async () => {
     const { db, deletionDeps, calls } = makeDeleteApp({
       u2: { username: "acme", accountLifecycle: { status: "deletion_scheduled", deletionId: "d1" } },

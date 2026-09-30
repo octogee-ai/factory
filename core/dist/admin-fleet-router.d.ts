@@ -234,6 +234,8 @@ export type CustomerSelfDeletionOutcome = {
 } | {
     kind: "conflict";
 } | {
+    kind: "workspace-busy";
+} | {
     kind: "scheduled";
     deletionId: string;
     eraseAfter: number;

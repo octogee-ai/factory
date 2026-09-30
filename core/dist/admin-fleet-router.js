@@ -2214,7 +2214,7 @@ async function claimCustomerDeletion(opts) {
             return { kind: "not-found" };
         const userData = userSnap.data() ?? {};
         if (customerRuntimeMutationFenced(userData)) {
-            return { kind: "conflict", deletionId: null, operationId: null };
+            return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: null };
         }
         const lifecycle = isPlainRecord(userData.accountLifecycle)
             ? userData.accountLifecycle
@@ -2222,6 +2222,7 @@ async function claimCustomerDeletion(opts) {
         if (lifecycle?.status === "deletion_scheduled" || lifecycle?.status === "erasing") {
             return {
                 kind: "conflict",
+                runtimeFenced: false,
                 deletionId: asStringOrNull(lifecycle.deletionId),
                 operationId: null,
             };
@@ -2235,6 +2236,7 @@ async function claimCustomerDeletion(opts) {
         if (conflict) {
             return {
                 kind: "conflict",
+                runtimeFenced: false,
                 deletionId: null,
                 operationId: conflict.id,
             };
@@ -2421,8 +2423,9 @@ export async function scheduleCustomerSelfDeletion(opts) {
     });
     if (outcome.kind === "not-found")
         return { kind: "not-found" };
-    if (outcome.kind === "conflict")
-        return { kind: "conflict" };
+    if (outcome.kind === "conflict") {
+        return outcome.runtimeFenced ? { kind: "workspace-busy" } : { kind: "conflict" };
+    }
     const claimed = outcome.kind === "partial" ? outcome.claimed : outcome;
     return {
         kind: "scheduled",
