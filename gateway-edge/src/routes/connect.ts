@@ -146,6 +146,14 @@ function requestScopesFor(def: ConnectorDef, capability: unknown): string[] | Ro
   return scopes ?? routeError(400, { error: `Unknown capability: ${capability}` });
 }
 
+async function connectedAccountHint(uid: string, def: ConnectorDef): Promise<Record<string, string>> {
+  const param = def.oauth?.accountHintParam;
+  if (!param) return {};
+  const snap = await userCol(uid, "integrations").doc(def.meta.id).get();
+  const accountLabel = (snap.data() as { accountLabel?: unknown } | undefined)?.accountLabel;
+  return typeof accountLabel === "string" && accountLabel.length > 0 ? { [param]: accountLabel } : {};
+}
+
 function parseGrantedScopes(scope: string | undefined, requested: string[]): string[] {
   const parsed = (scope ?? "").split(/[\s,]+/).filter(Boolean);
   return parsed.length > 0 ? parsed : requested;
@@ -674,6 +682,7 @@ router.get(
             }
           : {}),
         ...(def.oauth.extraAuthParams ?? {}),
+        ...(await connectedAccountHint(req.uid!, def)),
       });
       res.set("Cache-Control", "no-store");
       res.set("Pragma", "no-cache");

@@ -9,6 +9,7 @@ export interface ConnectorOAuthWebDef {
   clientSecretEnv: string;
   redirectUriEnv: string;
   pkce?: boolean;
+  accountHintParam?: string;
   extraAuthParams?: Record<string, string>;
 }
 

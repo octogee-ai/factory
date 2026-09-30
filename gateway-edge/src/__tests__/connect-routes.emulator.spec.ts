@@ -860,6 +860,26 @@ describe("connect — google platform capability flow", () => {
     expect(parsed.searchParams.get("prompt")).toBe("consent");
   });
 
+  it("mints one consent request for every capability the Builder selected", async () => {
+    await setGoogleStage("on");
+    const { url } = await mintAuthUrlState("google", "&capability=calendar,gmail");
+    expect(new URL(url).searchParams.get("scope")).toBe(`${CAL} ${EMAIL} ${GMAIL}`);
+    const partlyUnknown = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar,voice")
+      .set("Authorization", auth.bearer());
+    expect(partlyUnknown.status).toBe(400);
+  });
+
+  it("preselects the already connected Google account on a later consent request", async () => {
+    await setGoogleStage("on");
+    const first = await mintAuthUrlState("google", "&capability=calendar");
+    expect(new URL(first.url).searchParams.has("login_hint")).toBe(false);
+
+    await connectGoogle("calendar", `${CAL} ${EMAIL}`);
+    const later = await mintAuthUrlState("google", "&capability=gmail");
+    expect(new URL(later.url).searchParams.get("login_hint")).toBe("g@x.com");
+  });
+
   it("scopes each capability card to its own bundle", async () => {
     await setGoogleStage("on");
     const calendar = await mintAuthUrlState("google", "&capability=calendar");

@@ -42,6 +42,18 @@ async function probeCapability(accessToken: string, capability: GoogleCapability
   }
 }
 
+function isGoogleCapability(value: string): value is GoogleCapability {
+  return Object.prototype.hasOwnProperty.call(GOOGLE_CAPABILITY_SCOPES, value);
+}
+
+function capabilityListRequestScopes(capabilities: string): string[] | null {
+  const requested = capabilities.split(",");
+  if (!requested.every(isGoogleCapability)) {
+    return requested.length === 1 ? googleEscalationRequestScopes(capabilities) : null;
+  }
+  return [...new Set(requested.flatMap(googleAuthRequestScopes))];
+}
+
 export const googleConnector: ConnectorDef = {
   meta: catalogMeta("google"),
   oauth: {
@@ -52,16 +64,14 @@ export const googleConnector: ConnectorDef = {
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",
     redirectUriEnv: "GOOGLE_OAUTH_REDIRECT_URI",
     pkce: true,
+    accountHintParam: "login_hint",
     extraAuthParams: {
       access_type: "offline",
       prompt: "consent",
       include_granted_scopes: "true",
     },
   },
-  capabilityRequestScopes: (capability) =>
-    capability in GOOGLE_CAPABILITY_SCOPES
-      ? googleAuthRequestScopes(capability as GoogleCapability)
-      : googleEscalationRequestScopes(capability),
+  capabilityRequestScopes: capabilityListRequestScopes,
   fetchIdentity: async (accessToken) => {
     const resp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },

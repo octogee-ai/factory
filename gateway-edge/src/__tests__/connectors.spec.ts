@@ -152,6 +152,26 @@ describe('connector registry (gateway-edge)', () => {
     expect(getConnector('microsoft')!.capabilityRequestScopes).toBeUndefined();
   });
 
+  it('google unions a comma-separated capability selection into one consent request', () => {
+    const google = getConnector('google')!;
+    expect(google.capabilityRequestScopes!('calendar,gmail,calendar')).toEqual([
+      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/gmail.modify',
+    ]);
+    expect(google.capabilityRequestScopes!('calendar')).toEqual([
+      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ]);
+  });
+
+  it.each(['calendar,voice', 'calendar,drive-full', 'calendar,', ','])(
+    'google refuses the capability selection %s rather than requesting part of it',
+    (selection) => {
+      expect(getConnector('google')!.capabilityRequestScopes!(selection)).toBeNull();
+    },
+  );
+
   it('google has a capability deep probe; github/microsoft have none', () => {
     expect(typeof getConnector('google')!.deepProbe).toBe('function');
     expect(getConnector('github')!.deepProbe).toBeUndefined();
