@@ -115,73 +115,80 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 ## Current overlay
 
-Upstream: main
-[`a15f3f72a6aabe4d51ce53426d717b4c65a4589e`](https://github.com/openclaw/openclaw/commit/a15f3f72a6aabe4d51ce53426d717b4c65a4589e).
+Upstream: published [v2026.9.7](https://github.com/openclaw/openclaw/releases/tag/v2026.9.7),
+peeled commit
+[`c074824a27c96d3983043f9eeb33823cd1772d8c`](https://github.com/openclaw/openclaw/commit/c074824a27c96d3983043f9eeb33823cd1772d8c).
+Annotated tag object: `a05c851cc522fb5e6bc347f1eb0ff10d8f378fcc`.
 Exact overlay:
-[`06373977281e7b4006edeca49251b0011502659f`](https://github.com/ceckert/openclaw/commit/06373977281e7b4006edeca49251b0011502659f),
-pushed to `ceckert/openclaw:codex/octogee-main-sept29`.
-Package version is `2026.9.6`; these are September 29 main-snapshot bytes,
-not a GA tag. [Full CI 36575467514](https://github.com/openclaw/openclaw/actions/runs/36575467514)
-qualified the locked upstream with 197 successful jobs and 14 conditional skips
-across all 211 jobs. This is full-CI qualification, not a claim that upstream's
-separate release validation is green.
+[`82117be26cc8cad45b1c93692083283992143208`](https://github.com/ceckert/openclaw/commit/82117be26cc8cad45b1c93692083283992143208),
+pushed to `ceckert/openclaw:codex/octogee-v2026.9.7-sept30`.
+Package version is `2026.9.7`. The release was published September 30 at
+04:44:14 UTC and has [release validation 36644909314](https://github.com/openclaw/openclaw/actions/runs/36644909314).
+Its release notes waive Telegram integration checks and omit the Android APK;
+this is not a claim that every release check ran.
 
 The overlay retains fork PRs #5/#6, live voice-session grants, native approval
 authority, hosted Automations and final-reply observation. Runtime objects and
 all seven hosted UI provenance records come from the same clean, built source.
-The UI input audit retained the native entry points and adopted upstream's
-picker/layout simplification, desktop theme inheritance and browser-client
-changes; no replacement renderer or compatibility wrapper was added.
+The GA tag diverges from the prior `a15f3f72` main snapshot: 170 main-only
+commits are outside the tag. Rebase onto the published commit, not a moving
+release branch, and preserve its native APIs instead of copying main-only code.
 
-This rebase composes native auth-neutral reload skipping with pending refresh
-scope, carries process-bound restart preparation into its new native owner,
-and registers both native worker-pool construction paths for resource cleanup.
-A failing worker-cleanup control caught the construction change. Talk narration
-now preserves upstream's caller session key. Three unused SDK type re-exports
-were removed; their internal types remain.
+Release-specific adaptations preserve native sharing preparation, deletion
+cleanup bookkeeping and void execution admission. The Talk tool remains a
+session-bound factory: model-supplied targets cannot override its native session
+or authenticated runtime identity. Its existing regression harness now invokes
+that factory. Relay expiry validation moved unchanged into its existing state
+owner to satisfy the native line-cap ratchet; no coverage or guard was weakened.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-74d5699a.tgz` | `74d5699aa674db1182294d223f04a8f0c77857c05bec8eed8a17def8b2b7add9` | `1790698528730556` |
-| `openclaw-mattermost-f49c678c.tgz` | `f49c678c390c883b7b82863ce335f94dadb7a6ff0b43985b8c5f80cc70341e2e` | `1790698531739611` |
+| `openclaw-fork-06ac9f47.tgz` | `06ac9f47132cc28d98780c9b56e14609d0a1c22da8341f602525aa3157580576` | `1790774777466453` |
+| `openclaw-mattermost-1401a28f.tgz` | `1401a28f47d7c6b202658e0a9b43594c23a25585cb84f02089604af85e2c61a6` | `1790774780673707` |
 
-Shared-state schema remains 20; agent schema advances from 23 to 24. Preserve
-native backups and roll forward, not an image-only downgrade or reset.
+Shared-state schema remains 20 and agent schema remains 24, as in the prior
+current build. Schema equality is not live migration or continuity proof.
+Preserve native backups and roll forward, not an image-only downgrade or reset.
 
 ### Qualification
 
-The exact-source `pnpm build` passed in 9m 7.6s and records build ID
-`2026.9.6-06373977281e-2026-09-29T15-59-09.117Z`. Both maintained packers ran
+The exact-source `pnpm build` passed in 9m 7.5s and records build ID
+`2026.9.7-82117be26cc8-2026-09-30T13-09-30.088Z`. Both maintained packers ran
 sequentially. Exact-source voice and activity consumer SDK checks passed.
 Native archive integrity and the isolated matched installation passed. The
 actual Linux arm64 `openclaw-full-plugin-installer` passed with 156 byte-identical
 Codex files, nine Parallel files, bundled trust and all three native-hook imports.
 Local installer image:
-`sha256:7627c58222787c73e534a4e86835b868a20f2b3e032de47fa4ef59002fa9e771`.
+`sha256:961ceb8229c5749932d2ce2f7edab94c86319e8bd2af8453b1cff53cf79f7691`.
 This is package qualification, not the later Build main gateway image identity.
 Both write-once objects were read back and their full hashes verified.
 
-Focused native proof includes 150 worker/deletion/reload/Talk tests, 178
-cron/sharing/approval boundary tests, 49 final-reply channel-turn tests and five
-desktop/mobile UI E2E tests. These are separate suites, not an assertion that the
-entire upstream test suite ran. Additional catalog, registry, reader, channel,
-Mattermost and browser regressions passed. Production core/UI/extensions types,
-protocol/config/Kysely generation and native line-cap checks passed.
-Independent integration review found no actionable remaining regression.
-Scoped typed lint passed after packing stabilized generated companions.
-Octogee passed 135 artifact/provenance tests, 19 base-image tests, 45 native-island,
-model-picker and Automations consumer tests, and the PWA typecheck. Generated
-bundles changed with upstream and were regenerated together, not hand-edited.
+Focused native proof includes 138 resource/deletion/reload tests, 178
+cron/sharing/approval boundary tests, 229 channel/voice/browser/UI tests and 534
+owner/cleanup/relay tests. The final Talk extraction rerun passed 158 tests.
+Five real desktop/mobile UI E2E tests passed; inspected captures are
+byte-identical to the prior current build. These are separate suites, not an
+assertion that the entire upstream test suite ran. Production core/UI/extensions
+types, protocol/config/Kysely/session-schema generation and native line-cap
+checks passed. Independent integration review found no actionable remaining
+regression. Stable post-pack scoped typed lint passed.
+Octogee passed 135 artifact/provenance tests, 19 base-image tests, 32 native-island,
+model-picker and Automations consumer tests, and the PWA typecheck. The UI audit
+retains native, actively wired entry points; gateway protocol/client,
+picker/composer, layout, redaction and style changes follow the release's source.
+All bundles were regenerated together, not hand-edited or wrapped for main-only APIs.
 
-The unchanged upstream SDK size gate reports 4,597 exports against 4,594 and
-2,699 callables against 2,698 after removing three unused type exports.
+The unchanged upstream SDK size gate reports 4,594 exports against 4,591 and
+2,696 callables against 2,695. Three unused type exports remain removed.
 The retained surface has concrete approval, voice and packaged Mattermost
 consumers; the budget was not raised or bypassed. Export consistency passes.
 No aggregate `pnpm check` success is claimed.
 
 ### Patch assessment
 
-Rechecked against the selected `a15f3f72` base: none of the four contributed
+Rechecked against the published `c074824a` base: all 45 prior overlay commits
+were carried; no retained area is fully adopted, and every area still has a
+current Octogee consumer. None of the four contributed
 fixes is fully adopted. Native workspace registry reuse (#160658) does not cover
 the undefined-workspace metadata fallback. Whole-Gateway writer shutdown
 (#160201) does not close every isolate's readers during per-agent deletion.
@@ -195,10 +202,9 @@ attribution (#160257) fixes messages; the retained header patch resolves exact
 participant labels from the matching transcript. Worker computer takeover is
 already adopted: its transport has no diff from the selected upstream base.
 
-This is not an overall overlay reduction: the selected-base diff is 280 files,
-13,031 insertions and 1,153 deletions versus 12,958 insertions and 1,153 deletions
-at the prior base. Removed unused exports and duplicate/stale glue are offset
-by integration coverage and preserving resource ownership after upstream moves.
+This is not an overall overlay reduction: the selected-tag diff is 281 files,
+13,083 insertions and 1,182 deletions. The small integration repair adapts existing
+owners and tests; it does not add a replacement runtime or duplicate test suite.
 
 | Behavior | Current consumer | Removal condition |
 | --- | --- | --- |
