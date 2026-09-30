@@ -8,6 +8,8 @@ import {
   workspaceCoachMmUsername,
 } from "@octogee/shared/types/identity";
 
+import { isRunnableProject } from "./project-runs/active-project.js";
+
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 const REQUEST_CONTEXT_FIELDS = new Set([
   "channel",
@@ -191,23 +193,7 @@ async function trustedWorkspaceSender(
   return isActiveWorkspaceMember(db, slug, senderId);
 }
 
-async function isCanonicalProjectChannel(
-  db: Firestore,
-  channelId: string,
-  slug: string,
-  project: string,
-): Promise<boolean> {
-  const snap = await db
-    .collectionGroup("channels")
-    .where("mattermost.channelId", "==", channelId)
-    .limit(2)
-    .get();
-  if (snap.docs.length !== 1) return false;
-  const channel = snap.docs[0];
-  return channel.ref.path === `workspaces/${slug}/projects/${project}/channels/general`
-    && channelIsActive(channel.data() ?? {});
-}
-export function createOwnerWorkspaceTurnVerifier(
+export function createGoogleTurnVerifier(
   db: Firestore,
 ): OwnerWorkspaceTurnVerifier {
   return async ({ req, agentId, ownerUid, assignedData }) => {
@@ -240,21 +226,35 @@ export function createOwnerWorkspaceTurnVerifier(
   };
 }
 
-async function projectSenderAuthorized(
-  db: Firestore,
-  slug: string,
-  ownerUid: string,
-  assignedData: Record<string, unknown>,
-  senderId: string,
-): Promise<boolean> {
-  if (await trustedWorkspaceSender(db, slug, assignedData, senderId)) return true;
-  const coach = await db.doc(`agents/${ownerUid}`).get();
-  return coach.data()?.mattermost?.userId === senderId;
+async function activeOwnedWorkspace(db: Firestore, slug: string, ownerUid: string): Promise<boolean> {
+  const workspace = await db.doc(`workspaces/${slug}`).get();
+  return workspace.exists
+    && workspace.data()?.ownerUid === ownerUid
+    && workspace.data()?.ownerActive === true;
 }
 
-// Agent support serves both lanes. Dispatch on the agent's own identity so a
-// project agent is verified as a project agent: the owner verifier refuses any
-// kind other than "coach", which would 403 every project-lane Ops question.
+export function createOwnerWorkspaceTurnVerifier(
+  db: Firestore,
+): OwnerWorkspaceTurnVerifier {
+  return async ({ agentId, ownerUid, assignedData }) => {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind !== "coach" || assignedData.workspaceId !== parsed.username) return false;
+    return activeOwnedWorkspace(db, parsed.username, ownerUid);
+  };
+}
+
+export function createProjectWorkspaceTurnVerifier(
+  db: Firestore,
+): OwnerWorkspaceTurnVerifier {
+  return async ({ agentId, ownerUid, assignedData }) => {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind !== "project" || assignedData.workspaceId !== parsed.username) return false;
+    if (!await activeOwnedWorkspace(db, parsed.username, ownerUid)) return false;
+    const project = await db.doc(`workspaces/${parsed.username}/projects/${parsed.project}`).get();
+    return project.exists && isRunnableProject(project.data() ?? {}, ownerUid);
+  };
+}
+
 export function createAgentSupportTurnVerifier(
   db: Firestore,
 ): OwnerWorkspaceTurnVerifier {
@@ -265,34 +265,5 @@ export function createAgentSupportTurnVerifier(
     if (kind === "project") return verifyProject(turn);
     if (kind === "coach") return verifyCoach(turn);
     return false;
-  };
-}
-
-export function createProjectWorkspaceTurnVerifier(
-  db: Firestore,
-): OwnerWorkspaceTurnVerifier {
-  return async ({ req, agentId, ownerUid, assignedData }) => {
-    const parsed = parseAgentId(agentId);
-    const context = ownerWorkspaceRequestContext(req);
-    if (
-      parsed.kind !== "project"
-      || !context
-      || context.accountId !== `${parsed.username}-proj-${parsed.project}`
-      || assignedData.workspaceId !== parsed.username
-      || context.routeKind !== "channel"
-      || context.routeId !== context.nativeChannelId
-    ) return false;
-
-    const workspace = await db.doc(`workspaces/${parsed.username}`).get();
-    if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
-      || workspace.data()?.ownerActive !== true) return false;
-
-    if (!await projectSenderAuthorized(db, parsed.username, ownerUid, assignedData, context.requesterSenderId)) return false;
-    return isCanonicalProjectChannel(
-      db,
-      context.nativeChannelId,
-      parsed.username,
-      parsed.project,
-    );
   };
 }
