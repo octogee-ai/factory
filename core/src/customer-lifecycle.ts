@@ -15,6 +15,7 @@ import {
   VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "@octogee/shared/types/fleet-controller";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 
 export interface UserSnapshot {
   uid: string;
@@ -27,6 +28,7 @@ export interface UserSnapshot {
   mattermostUserId: string | null;
   channels: CustomerSnapshot["channels"];
   ownerName: string;
+  timeZone?: string | null;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   projects?: FleetBrokerProjectRestore[];
   projectAgents?: FleetBrokerProjectAgent[];
@@ -1107,6 +1109,7 @@ async function restoreByos(
 function byotUserDataFromSnapshot(snapshot: UserSnapshot): Record<string, unknown> {
   return {
     username: snapshot.slug,
+    timeZone: snapshot.timeZone ?? null,
     byotActive: snapshot.byotActive,
     systemConfig: snapshot.systemConfig,
     tier: snapshot.tier,
@@ -1470,6 +1473,7 @@ function buildCustomerContext(snapshot: UserSnapshot, customersDir: string): Cus
       tier: snapshot.tier,
       createdAt: today,
       slug: snapshot.slug,
+      timeZone: snapshot.timeZone ?? UNKNOWN_TIME_ZONE,
     },
     userData: {},
   };

@@ -130,6 +130,9 @@ export function snapshotConfigFingerprint(snapshot: FleetBrokerUserSnapshot): st
     // The Builder Agent default dial: a flip must re-ensure every mounted
     // catalog customer running the platform default.
     builderAgentDefault: snapshot.builderAgentDefault ?? null,
+    // The Builder's time zone lands in USER.md at reassert time, so a change
+    // must re-ensure the mounted customer.
+    timeZone: snapshot.timeZone ?? null,
   };
   return fnv1a64Hex(stableStringify(configSlice));
 }

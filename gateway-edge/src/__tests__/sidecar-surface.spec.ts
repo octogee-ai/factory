@@ -192,6 +192,16 @@ describe("gateway-edge sidecar surface", () => {
     expect(publish.status).toBe(404);
   });
 
+  it("fronts the Builder computer's style and Desk note for the gateway's own identity only, on the sidecar alone", async () => {
+    configureGatewayServiceAccountAuth();
+    const sidecar = createApp({ surface: "sidecar" });
+    expect((await request(sidecar).post("/internal/computer/style").send({ style: "familiar" })).status).toBe(401);
+    const noComputer = await request(sidecar).post("/internal/computer/desk/note").set("x-k8s-sa-token", "valid-ksa-token").send({ note: "hi" });
+    expect(noComputer.status).toBe(404);
+    expect(noComputer.body).toEqual({ error: "computer_unavailable" });
+    expect((await request(createApp({ surface: "cluster" })).post("/internal/computer/style").send({ style: "familiar" })).status).toBe(404);
+  });
+
   it("requires valid gateway KSA auth on sidecar connector materialization", async () => {
     const reviewer = configureGatewayServiceAccountAuth();
     const app = createApp({ surface: "sidecar" });

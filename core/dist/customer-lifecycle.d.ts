@@ -14,6 +14,7 @@ export interface UserSnapshot {
     mattermostUserId: string | null;
     channels: CustomerSnapshot["channels"];
     ownerName: string;
+    timeZone?: string | null;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     projects?: FleetBrokerProjectRestore[];
     projectAgents?: FleetBrokerProjectAgent[];

@@ -196,3 +196,15 @@ describe("replaceCoachTextIdentity", () => {
     expect(mockMmApi).toHaveBeenCalledWith("/bots/coach-mm-u1", "PUT", { display_name: "Coach" });
   });
 });
+
+describe("syncCoachIdentity refuses a malformed look at the write boundary", () => {
+  it("throws before touching Firestore or Mattermost", async () => {
+    await expect(syncCoachIdentity("u1", {
+      avatarPng: PNG,
+      look: { style: "dragon", color: "red" } as unknown as import("@octogee/shared/types/agent-look").AgentLook,
+    }, { slug: "u1" })).rejects.toThrow(/coach look must be a known style/u);
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockMmApi).not.toHaveBeenCalled();
+    expect(mockStoreWorkspaceBlob).not.toHaveBeenCalled();
+  });
+});

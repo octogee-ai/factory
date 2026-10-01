@@ -37,9 +37,10 @@ it.each([
   ["checks screenshot and XWayland resize geometry", "test_display_resize.py"],
   ["keeps untested image candidates outside the family", "test_build.py"],
   ["validates resize requests and waits for output dimensions", "test_resize.py"],
+  ["serves the Desk page, apps, launch, note and style endpoints", "test_desk.py"],
 ])("%s", async (_behavior, filename) => {
   const script = resolve(__dirname, "../../../infra/desktop/image", filename);
   await expect(promisify(execFile)("python3", [script])).resolves.toMatchObject({
     stderr: expect.stringMatching(/Ran [1-9]\d* tests? in [^\n]+\n\nOK\s*$/),
   });
-}, 30_000);
+}, 90_000);

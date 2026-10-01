@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { COMPUTER_HOME_CHECKPOINT_MAX_BYTES } from "@octogee/shared/types/glm";
 import {
+  DESKTOP_HOME_PATHS,
   checkpointHome,
   homeScope,
   restoreHome,
@@ -94,6 +95,22 @@ describe("checkpointHome", () => {
       "find /srv/octogee/volumes/data ( -name node_modules -o -name .npm -o -name .npm-cache -o -name .cache -o -name .pnpm-store -o -name Trash -o -name Cache -o -name Code Cache -o -name GPUCache -o -name DawnCache -o -name GrShaderCache -o -name ShaderCache -o -name CacheStorage -o -name SingletonLock -o -name SingletonCookie -o -name SingletonSocket -o -name DevToolsActivePort ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
     ]);
     expect(h.fetches).toEqual([]);
+  });
+
+  it("carries the desktop's Octogee config (the Desk note) in the checkpoint alongside the browser profile and Omarchy config", async () => {
+    expect(DESKTOP_HOME_PATHS).toEqual([".config/octogee-chromium", ".config/hypr", ".config/omarchy", ".config/octogee", "Documents"]);
+    const h = fakeHome({}, {
+      "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: NAME, upload: signedUpload } }),
+      "/internal/fleet/computer-home/commit": () => ({ status: 200, body: { name: NAME, size: 2048, sha256: SHA, completedAt: 5 } }),
+      "/internal/fleet/computer-home/prune": () => ({ status: 200, body: { deleted: 0 } }),
+    });
+    const present = new Set(["/srv/octogee/desktop-home/.config/octogee", "/srv/octogee/desktop-home/Documents"]);
+    const baseExists = h.deps.fs.exists;
+    h.deps.fs.exists = async (path) => present.has(path) || baseExists(path);
+    await checkpointHome(h.deps, h.scope, { force: true });
+    const tar = h.shell.find((line) => line.startsWith("tar "))!;
+    expect(tar).toContain("--directory=/srv/octogee/desktop-home/.. desktop-home/.config/octogee desktop-home/Documents");
+    expect(tar).not.toContain("desktop-home/.config/hypr");
   });
 
   it("archives the home without caches, uploads to the signed create-only URL, commits, marks the start time, and prunes", async () => {

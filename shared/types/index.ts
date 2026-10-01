@@ -577,3 +577,5 @@ export type {
   MattermostConversationRecordsInput,
   MattermostConversationRecordsProjection,
 } from './mattermost-conversation-projection.js';
+
+export { IANA_TIME_ZONE_MAX_LENGTH, IANA_TIME_ZONE_PATTERN, parseTimeZone } from './time-zone.js';

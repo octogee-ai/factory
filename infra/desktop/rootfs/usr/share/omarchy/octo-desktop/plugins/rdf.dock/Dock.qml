@@ -194,6 +194,7 @@ Item {
   // windows belong to no item. See RunningModel.qml for the matching rules.
 
   readonly property bool showRunning: flag("showRunning", true)
+  readonly property bool alwaysVisible: flag("alwaysVisible", false)
   readonly property string runningIndicator:
     (config.runningIndicator === "line" || config.runningIndicator === "none")
       ? String(config.runningIndicator) : "dot"
@@ -846,7 +847,7 @@ Item {
   Timer {
     id: hideTimer
     interval: root.hideDelay
-    onTriggered: if (!root.held) root.revealed = false
+    onTriggered: if (!root.held && !root.alwaysVisible) root.revealed = false
   }
 
   function close() {
@@ -1333,7 +1334,7 @@ Item {
       // With several monitors the dock appears only on the one being asked
       // for; the empty-target case means we could not tell, so show it here
       // rather than nowhere.
-      readonly property bool shown: pinnedOpen
+      readonly property bool shown: root.alwaysVisible || pinnedOpen
         || (root.revealed && (root.targetScreen === "" || root.targetScreen === screenName))
 
       screen: modelData
@@ -1343,7 +1344,7 @@ Item {
       // area the bar (or any other panel) has reserved, whichever edge it
       // and the bar are on — see the hotspot above.
       exclusionMode: ExclusionMode.Normal
-      exclusiveZone: 0
+      exclusiveZone: root.alwaysVisible ? root.cardCross + root.edgeGap : 0
       WlrLayershell.namespace: "omarchy-dock"
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None

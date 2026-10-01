@@ -14,7 +14,7 @@ current_theme="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme.name"
 require_line='package.loaded["octo-desktop.familiar"] = nil require("octo-desktop.familiar")'
 plugin_ids=(rdf.dock community.window-switcher)
 
-usage() { echo "usage: octo-desktop-style familiar|omarchy|apply|status" >&2; exit 2; }
+usage() { echo "usage: octo-desktop-style familiar [--accent <#rrggbb>]|omarchy|apply|status" >&2; exit 2; }
 warn() { printf 'octo-desktop-style: %s\n' "$*" >&2; }
 
 session_live() { [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && hyprctl -j version >/dev/null 2>&1; }
@@ -94,10 +94,47 @@ set_theme() {
   if session_live; then omarchy-theme-set "$name"; else OMARCHY_THEME_HEADLESS=1 omarchy-theme-set "$name"; fi || { warn "omarchy-theme-set $name failed"; return 1; }
 }
 
+accent_selection() {
+  case "$1" in
+    '#e74e3c') echo '#f8cac4' ;;
+    '#0ea5e9') echo '#b7e3f8' ;;
+    '#f5b301') echo '#fce8b3' ;;
+    '#c026d3') echo '#ecbef2' ;;
+    '#65a30d') echo '#d1e3b6' ;;
+    '#db2777') echo '#f4bed6' ;;
+    '#475569') echo '#c7cdd6' ;;
+    *)
+      local r g b
+      r=$((16#${1:1:2})); g=$((16#${1:3:2})); b=$((16#${1:5:2}))
+      printf '#%02x%02x%02x\n' $(( (r * 3 + 255 * 7) / 10 )) $(( (g * 3 + 255 * 7) / 10 )) $(( (b * 3 + 255 * 7) / 10 ))
+      ;;
+  esac
+}
+
+current_accent() {
+  [[ -f "$theme_dir/colors.toml" ]] || return 0
+  sed -n 's/^accent = "\(#[0-9a-f]\{6\}\)"$/\1/p' "$theme_dir/colors.toml" | head -n 1
+}
+
+apply_accent() {
+  local accent="$1" selection tmp
+  selection="$(accent_selection "$accent")"
+  tmp="$(mktemp "$theme_dir/colors.toml.XXXXXX")"
+  awk -v accent="$accent" -v selection="$selection" '
+    /^accent = / { print "accent = \"" accent "\""; next }
+    /^selection = / { print "selection = \"" selection "\""; next }
+    /^blue = / { print "blue = \"" accent "\""; next }
+    /^bright_blue = / { print "bright_blue = \"" accent "\""; next }
+    { print }' "$theme_dir/colors.toml" > "$tmp"
+  mv "$tmp" "$theme_dir/colors.toml"
+}
+
 install_theme() {
+  local accent="${1:-$(current_accent)}"
   rm -rf "$theme_dir"
   mkdir -p "$(dirname "$theme_dir")"
   cp -R "$share/theme" "$theme_dir"
+  [[ -z "$accent" ]] || apply_accent "$accent"
   set_theme octogee
 }
 
@@ -118,7 +155,7 @@ familiar() {
   link_plugins
   merge_shell_plugins
   ensure_require
-  install_theme
+  install_theme "${1:-}"
   printf 'familiar\n' > "$state_file"
   reload_session
 }
@@ -151,8 +188,23 @@ apply() {
 
 status() { if [[ -f "$state_file" ]]; then cat "$state_file"; else echo unset; fi; }
 
-case "${1:-}" in
-  familiar) familiar ;;
+command="${1:-}"
+accent=""
+[[ $# -eq 0 ]] || shift
+while (($#)); do
+  case "$1" in
+    --accent)
+      [[ "$command" == familiar ]] || usage
+      accent="${2:-}"
+      [[ "$accent" =~ ^#[0-9a-f]{6}$ ]] || { warn "accent must be a lowercase #rrggbb colour"; exit 2; }
+      shift 2
+      ;;
+    *) usage ;;
+  esac
+done
+
+case "$command" in
+  familiar) familiar "$accent" ;;
   omarchy) omarchy ;;
   apply) apply ;;
   status) status ;;

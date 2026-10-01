@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/octo-desk.ts "$@"

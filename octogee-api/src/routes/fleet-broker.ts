@@ -32,7 +32,8 @@ import { Router, type Request, type Response } from "express";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
-import type { AgentLook } from "@octogee/shared/types/agent-look";
+import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
+import { parseTimeZone } from "@octogee/shared/types/time-zone";
 import { DEFAULT_AGENT_LOOK, characterSvg } from "@octogee/shared/types/agent-characters";
 import {
   isValidProjectId,
@@ -60,6 +61,7 @@ import type {
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
   FleetBrokerConfiguredBuilderBootstrap,
+  FleetBrokerConfiguredBuilderDesk,
   FleetBrokerConfiguredBuilderProjectCredential,
   FleetBrokerCustomerRuntimeReset,
   FleetBrokerMattermostUpdate,
@@ -1589,6 +1591,7 @@ function snapshotBaseFields(
     email: stringAt(data, "email"),
     displayName: stringAt(data, "displayName"),
     lastName: stringAt(data, "lastName"),
+    timeZone: storedTimeZone(data),
     photoURL: stringAt(data, "photoURL"),
     onboardingVibe: snapshotOnboardingVibe(data),
     byotActive: data.byotActive === true,
@@ -2189,14 +2192,49 @@ function installOpenClawBootRoutes(
   });
 }
 
+export class CorruptStoredFieldError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CorruptStoredFieldError";
+  }
+}
+
+export function storedAgentLook(agent: Record<string, unknown> | undefined): AgentLook {
+  if (agent?.look === undefined || agent?.look === null) return DEFAULT_AGENT_LOOK;
+  const look = parseAgentLook(agent.look);
+  if (!look) throw new CorruptStoredFieldError(`agents/{uid}.look is not a drawable look: ${JSON.stringify(agent.look)}`);
+  return look;
+}
+
+export function storedTimeZone(user: Record<string, unknown> | undefined): string | null {
+  const raw = readPath(user, "preferences.timeZone");
+  if (raw === undefined || raw === null) return null;
+  const zone = parseTimeZone(raw);
+  if (!zone) throw new CorruptStoredFieldError(`users/{uid}.preferences.timeZone is not an IANA zone: ${JSON.stringify(raw)}`);
+  return zone;
+}
+
+export function configuredBuilderDesk(
+  user: Record<string, unknown> | undefined,
+  agent: Record<string, unknown> | undefined,
+): FleetBrokerConfiguredBuilderDesk {
+  return {
+    builderName: stringAt(user, "displayName") || stringAt(user, "username"),
+    agentName: stringAt(agent, "name"),
+    look: storedAgentLook(agent),
+    timeZone: storedTimeZone(user),
+  };
+}
+
 function configuredBuilderBootstrapPayload(input: {
   uid: string;
   slug: string;
   user: Record<string, unknown> | undefined;
   coach: Record<string, unknown> | undefined;
+  agent: Record<string, unknown> | undefined;
   projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
 }): FleetBrokerConfiguredBuilderBootstrap | null {
-  const { uid, slug, user, coach, projectCredentials } = input;
+  const { uid, slug, user, coach, agent, projectCredentials } = input;
   const agentId = `octogee-${slug}-coach`;
   if (!user || slugFromAssignedUser(user) !== slug) return null;
   if (!agentBelongsToAssignedWorkspace(user, agentId)) return null;
@@ -2208,6 +2246,7 @@ function configuredBuilderBootstrapPayload(input: {
     accountId: `${slug}-coach`,
     coachToken: coach.personalToken,
     projectCredentials,
+    desk: configuredBuilderDesk(user, agent),
   };
 }
 
@@ -2262,18 +2301,28 @@ async function handleConfiguredBuilderBootstrap(
     return;
   }
 
-  const [userSnap, coachSnap, projectAgents] = await Promise.all([
+  const [userSnap, coachSnap, agentSnap, projectAgents] = await Promise.all([
     db.collection("users").doc(uid).get(),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
+    db.collection("agents").doc(uid).get(),
     collectProjectAgentStates(db, uid, request.slug),
   ]);
-  const bootstrap = configuredBuilderBootstrapPayload({
-    uid,
-    slug: request.slug,
-    user: userSnap.data() as Record<string, unknown> | undefined,
-    coach: coachSnap.data() as Record<string, unknown> | undefined,
-    projectCredentials: configuredBuilderProjectCredentials(request.slug, projectAgents),
-  });
+  let bootstrap: FleetBrokerConfiguredBuilderBootstrap | null;
+  try {
+    bootstrap = configuredBuilderBootstrapPayload({
+      uid,
+      slug: request.slug,
+      user: userSnap.data() as Record<string, unknown> | undefined,
+      coach: coachSnap.data() as Record<string, unknown> | undefined,
+      agent: agentSnap.data() as Record<string, unknown> | undefined,
+      projectCredentials: configuredBuilderProjectCredentials(request.slug, projectAgents),
+    });
+  } catch (error) {
+    if (!(error instanceof CorruptStoredFieldError)) throw error;
+    logger.error("[fleet-broker] configured Builder bootstrap refused: corrupt stored identity", { uid, slug: request.slug, error: error.message });
+    res.status(500).json({ error: "corrupt_stored_identity", detail: error.message });
+    return;
+  }
   if (!bootstrap) {
     res.status(404).json({ error: "configured_builder_bootstrap_unavailable" });
     return;

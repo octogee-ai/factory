@@ -9,17 +9,7 @@ case "${OCTO_CHROMIUM_NO_SANDBOX-0}" in
 esac
 
 if (( $# == 0 )); then
-  set -- --start-maximized --restore-last-session
-  has_session=false
-  for session in "$HOME"/.config/octogee-chromium/Default/Sessions/Session_*; do
-    if [[ -f "$session" && -s "$session" ]]; then
-      has_session=true
-      break
-    fi
-  done
-  if [[ "$has_session" == false ]]; then
-    set -- "$@" "${OCTO_HOME_URL:-https://octogee.com}"
-  fi
+  set -- "--app=${OCTO_HOME_URL:-http://127.0.0.1:7777/desk}"
 fi
 
 export ACCESSIBILITY_ENABLED=1

@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import { parseTimeZone } from "@octogee/shared/types/time-zone";
 import * as path from "path";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { PLATFORM_CONVERGED_CONTEXT_FILES, readTierTemplateFile, } from "./tier-template-files.js";
@@ -45,10 +46,37 @@ function writeAtomic(target, content) {
 // PLATFORM_CONVERGED_CONTEXT_FILES is the single list this function and the
 // seed-once writer both honor, so the two can never drift apart on which files
 // are platform-owned.
+export const UNKNOWN_TIME_ZONE = "unknown";
+const TIME_ZONE_LINE = /^(- \*\*Time ?zone:\*\*)[^\n]*$/imu;
+const NAME_LINE = /^(- \*\*Name:\*\*[^\n]*\n)/mu;
+// USER.md is customer-owned: the coach fills it in. The one platform-written
+// fact in it is the Builder's time zone, which the app captures from their
+// browser, so this rewrites exactly that line (or adds it under the Name line
+// the template seeds) and touches nothing else. A file without either anchor is
+// left to the Builder.
+export function reassertUserTimeZoneLine(customerDir, timeZone) {
+    if (!timeZone)
+        return false;
+    const file = path.join(customerDir, "USER.md");
+    if (!fs.existsSync(file))
+        return false;
+    const existing = fs.readFileSync(file, "utf-8");
+    const desired = TIME_ZONE_LINE.test(existing)
+        ? existing.replace(TIME_ZONE_LINE, `$1 ${timeZone}`)
+        : existing.replace(NAME_LINE, `$1- **Timezone:** ${timeZone}\n`);
+    if (desired === existing)
+        return false;
+    writeAtomic(file, desired);
+    return true;
+}
 export function reassertConvergedContextFiles(slug, customerDir, userData, vars = {}) {
     const plan = resolveBillingProfile(userData);
     const templateTier = convergedContextTemplateTier(plan);
     const changed = [];
+    if (reassertUserTimeZoneLine(customerDir, parseTimeZone(userData.timeZone))) {
+        changed.push("USER.md");
+        log(`[context-files] ${slug}: USER.md time zone set to ${String(userData.timeZone)}`);
+    }
     for (const file of PLATFORM_CONVERGED_CONTEXT_FILES) {
         const desired = readTierTemplateFile(templateTier, file, vars);
         const dest = path.join(customerDir, file);

@@ -463,6 +463,7 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     mattermostUserId: snapshot.mattermostUserId,
     channels: snapshot.channels,
     ownerName: snapshot.ownerName,
+    timeZone: snapshot.timeZone ?? null,
     projectCheckoutScope: snapshot.projectCheckoutScope,
     projects: snapshot.projects,
     projectAgents: snapshot.projectAgents,

@@ -27,6 +27,7 @@ import {
   type HomeFs,
   type HomeShell,
 } from "./home-checkpoint.js";
+import { fetchDesk, syncDesk } from "./desk.js";
 import type { MetadataClient } from "./metadata.js";
 import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 import type { DesktopControl } from "./desktop-control.js";
@@ -58,6 +59,7 @@ const HOST_PROBE_BIN = "/octogee-host-bin";
 export interface AgentFs {
   mkdir(path: string): Promise<void>;
   writeFile(path: string, content: string, mode: number): Promise<void>;
+  readFile(path: string): Promise<string | null>;
   chown(path: string, uid: number, gid: number): Promise<void>;
   diskUsage(path: string): Promise<GatewayVmDiskSample>;
 }
@@ -261,6 +263,22 @@ export async function applyServices(deps: VmAgentDeps, bundle: GatewayVmRuntimeB
   }
 }
 
+export async function syncBuilderDesk(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
+  const scope = homeScope(deps.stateRoot, bundle);
+  if (!scope) return;
+  try {
+    const desk = await fetchDesk(deps, scope.slug);
+    if (!desk) {
+      deps.log(`[vm-agent] desk sync waiting: ${scope.slug} has no configured Builder bootstrap yet`);
+      return;
+    }
+    const { written } = await syncDesk(deps, scope, desk);
+    if (written) deps.log(`[vm-agent] desk written for ${scope.slug}: ${desk.agentName || "agent"} as ${desk.look.style} ${desk.look.color}`);
+  } catch (err) {
+    deps.log(`[vm-agent] desk sync failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function homeCheckpointDue(state: VmAgentState, signal: HomeCheckpointSignal, now: number): { due: boolean; force: boolean } {
   const force = signal.requestedAt !== null && signal.requestedAt > (signal.completedAt ?? 0);
   const periodic = state.homeCheckpointCheckedAt === null || now - state.homeCheckpointCheckedAt >= HOME_CHECKPOINT_INTERVAL_MS;
@@ -329,9 +347,11 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
   const decision = decideConvergence(plan, running);
   if (decision.kind === "steady") {
     if (next.appliedVersion !== bundle.version) next = { ...next, appliedVersion: bundle.version };
+    await syncBuilderDesk(deps, bundle);
     return checkpointHomeIfDue(deps, bundle, fetched.homeCheckpoint, next);
   }
   await applyDecision(deps, bundle, plan, decision, running);
+  await syncBuilderDesk(deps, bundle);
   return { ...next, appliedVersion: bundle.version };
 }
 

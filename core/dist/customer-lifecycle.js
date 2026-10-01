@@ -2,6 +2,7 @@ import { withLogContext, setLogContext } from "@octogee/shared/server/service-lo
 import { projectCheckoutEnabled } from "@octogee/shared/types/project";
 import { ADD_CUSTOMER_DEADLINE_MS, VERIFY_ACCOUNT_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
 const CONFIG_PATCH = "config-patch";
 const inFlightUids = new Set();
@@ -526,6 +527,7 @@ async function restoreByos(adapter, slug) {
 function byotUserDataFromSnapshot(snapshot) {
     return {
         username: snapshot.slug,
+        timeZone: snapshot.timeZone ?? null,
         byotActive: snapshot.byotActive,
         systemConfig: snapshot.systemConfig,
         tier: snapshot.tier,
@@ -780,6 +782,7 @@ function buildCustomerContext(snapshot, customersDir) {
             tier: snapshot.tier,
             createdAt: today,
             slug: snapshot.slug,
+            timeZone: snapshot.timeZone ?? UNKNOWN_TIME_ZONE,
         },
         userData: {},
     };

@@ -170,12 +170,14 @@ COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
 COPY infra/gateway/octogee /usr/local/bin/octogee
+COPY infra/gateway/octo-desk /usr/local/bin/octo-desk
+COPY infra/gateway/octo-desktop-style /usr/local/bin/octo-desktop-style
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
 COPY infra/gateway/verify-runtime-image.sh /usr/local/bin/verify-runtime-image
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
 ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/octo-desk /usr/local/bin/octo-desktop-style /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
       false) \

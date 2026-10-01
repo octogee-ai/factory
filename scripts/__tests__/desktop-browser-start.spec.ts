@@ -56,36 +56,34 @@ describe('desktop Chromium startup', () => {
     expect(existsSync(join(state.home, 'arguments'))).toBe(false);
   });
 
-  it('opens the homepage on first startup with the persistent loopback CDP profile', () => {
+  it('opens the Desk as a frameless app window on the persistent loopback CDP profile', () => {
     const state = fixture();
-    expect(state.launch()).toEqual(expect.arrayContaining([
+    const args = state.launch();
+    expect(args).toEqual(expect.arrayContaining([
       `--user-data-dir=${state.home}/.config/octogee-chromium`,
       '--remote-debugging-address=127.0.0.1',
       '--remote-debugging-port=9222',
-      '--start-maximized',
-      '--restore-last-session',
-      'https://octogee.com',
+      '--app=http://127.0.0.1:7777/desk',
     ]));
+    expect(args).not.toContain('--start-maximized');
+    expect(args).not.toContain('http://127.0.0.1:7777/desk');
   });
 
   it.each([[[]], [['--new-tab', 'https://example.com']]])('always exposes the renderer accessibility tree (args %j)', (args) => {
     expect(fixture().launch(args)).toContain('--force-renderer-accessibility');
   });
 
-  it('restores a saved session without adding another homepage tab', () => {
+  it('never restores old browser windows over the Desk at session start, even with a saved session', () => {
     const state = fixture();
     writeFileSync(join(state.sessions, 'Session_123'), 'saved session');
     const args = state.launch();
-    expect(args).toContain('--restore-last-session');
+    expect(args).not.toContain('--restore-last-session');
     expect(args.filter((arg) => !arg.startsWith('--'))).toEqual([]);
   });
 
-  it('opens the configured homepage when only empty sessions or tab metadata exist', () => {
+  it('opens the configured Desk URL as the app window', () => {
     const state = fixture();
-    writeFileSync(join(state.sessions, 'Session_123'), '');
-    writeFileSync(join(state.sessions, 'Tabs_456'), 'saved tab metadata');
-    mkdirSync(join(state.sessions, 'Session_directory'));
-    expect(state.launch([], 'https://app-test.octogee.com')).toContain('https://app-test.octogee.com');
+    expect(state.launch([], 'http://127.0.0.1:7777/desk?dev=1')).toContain('--app=http://127.0.0.1:7777/desk?dev=1');
   });
 
   it('passes explicit browser requests through without startup URLs or session restoration', () => {
@@ -94,6 +92,6 @@ describe('desktop Chromium startup', () => {
     expect(args.slice(-2)).toEqual(['--new-tab', 'file:///home/octo/Documents/a%20page.html']);
     expect(args).not.toContain('--restore-last-session');
     expect(args).not.toContain('--start-maximized');
-    expect(args).not.toContain('https://octogee.com');
+    expect(args.some((arg) => arg.startsWith('--app='))).toBe(false);
   });
 });

@@ -42,6 +42,11 @@ elif name == 'ssh':
             print('familiar desktop: Chromium is not floating', file=sys.stderr)
             sys.exit(1)
         print('familiar desktop: hyprbars loaded, theme octogee on 1-quattro.jpg, omarchy round trip clean, idle 1.2%')
+    elif command == 'bash -s desk':
+        if case == 'desk-broken':
+            print('desk: default note is: hello', file=sys.stderr)
+            sys.exit(1)
+        print('desk: app window chrome-127.0.0.1__desk-Default floating with no browser window, page served, default note, 9 apps with chromium + Nautilus, note round trip, launch validated, time zone round trip (America/Chicago), idle 95.6% with the Desk in front, Chromium policy homepage on "Desk"')
     elif command == 'python3 -':
         if case == 'missing-resize': sys.exit(22)
         if case == 'resize-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists(): sys.exit(22)
@@ -63,8 +68,8 @@ elif name == 'ssh':
         else: print('success\n/dev/sdb\n/dev/sdb[/desktop-home]')
     elif 'systemctl show octo-grow-root.service' in command: print('exit-code' if case == 'grow-root-failed' else 'success')
     elif 'systemctl show' in command: print(1 if case == 'desktop-restarted' else 0)
-    elif '/health' in command: print(json.dumps({'clients': ['chromium']}))
-    elif '/windows' in command: print(json.dumps([{'class': 'chromium', 'title': 'Example Domain - Chromium'}]))
+    elif '/health' in command: print(json.dumps({'clients': ['chrome-127.0.0.1__desk-Default']}))
+    elif '/windows' in command: print(json.dumps([{'class': 'chrome-127.0.0.1__desk-Default', 'title': 'Desk'}]))
     elif command.startswith('echo persist-'):
         pathlib.Path(os.environ['ACCEPTANCE_MARKER']).write_text(command.split()[1])
     elif 'cat ~/persist-marker' in command:
@@ -109,6 +114,13 @@ class ImageAcceptanceTests(unittest.TestCase):
         result = self.run_acceptance('familiar-broken')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('familiar desktop acceptance failed', result.stderr)
+
+    def test_desk_is_reported_and_its_failure_fails_acceptance(self):
+        result = self.run_acceptance('success')
+        self.assertIn('| Desk | desk: app window chrome-127.0.0.1__desk-Default floating with no browser window, page served, default note, 9 apps with chromium + Nautilus, note round trip, launch validated, time zone round trip (America/Chicago), idle 95.6% with the Desk in front, Chromium policy homepage on "Desk" |', result.stdout)
+        result = self.run_acceptance('desk-broken')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('desk acceptance failed', result.stderr)
 
     def test_desktop_without_chromium_on_the_accessibility_bus_fails_acceptance(self):
         result = self.run_acceptance('no-accessibility')

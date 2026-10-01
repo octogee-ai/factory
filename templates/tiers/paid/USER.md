@@ -2,6 +2,7 @@
 
 ## The Basics
 - **Name:** {{ownerName}}
+- **Timezone:** {{timeZone}}
 
 ## Communication Profile
 *(Coach fills this in during onboarding)*

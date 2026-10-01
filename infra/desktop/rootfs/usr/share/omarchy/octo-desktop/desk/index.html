@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk</title>
+<link rel="stylesheet" href="/desk/desk.css">
+</head>
+<body class="desk">
+<main class="desk__main">
+  <header class="desk__header">
+    <h1 class="desk__greeting" id="greeting">Welcome back</h1>
+    <time class="desk__clock" id="clock" aria-live="off"></time>
+  </header>
+  <section class="desk__agent">
+    <figure class="agent" id="agent" aria-label="Your agent">
+      <span class="agent__figure" id="character"></span>
+    </figure>
+    <div class="bubble" role="status">
+      <p class="bubble__note" id="note"></p>
+      <p class="bubble__from" id="agent-name"></p>
+    </div>
+  </section>
+  <section class="apps" aria-label="Applications">
+    <ul class="apps__grid" id="apps"></ul>
+  </section>
+  <p class="desk__status" id="status" aria-live="polite"></p>
+</main>
+<script src="/desk/desk-clock.js"></script>
+<script src="/desk/desk.js"></script>
+</body>
+</html>

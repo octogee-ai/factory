@@ -1,3 +1,4 @@
+import type { AgentLook } from "./agent-look.js";
 import type { AgentModelSelections } from "./agent-models.js";
 import type { ProjectAgentIdentity, ProjectAgentStatus } from "./project.js";
 import type { AssignmentState } from "./gateway-releases.js";
@@ -30,6 +31,12 @@ export interface FleetBrokerConfiguredBuilderProjectCredential {
     accountId: string;
     token: string;
 }
+export interface FleetBrokerConfiguredBuilderDesk {
+    builderName: string;
+    agentName: string;
+    look: AgentLook;
+    timeZone: string | null;
+}
 export interface FleetBrokerConfiguredBuilderBootstrap {
     uid: string;
     slug: string;
@@ -37,6 +44,7 @@ export interface FleetBrokerConfiguredBuilderBootstrap {
     accountId: string;
     coachToken: string;
     projectCredentials: FleetBrokerConfiguredBuilderProjectCredential[];
+    desk: FleetBrokerConfiguredBuilderDesk;
 }
 export interface FleetBrokerProjectAgentReadiness {
     projectId: string;
@@ -195,6 +203,7 @@ export interface FleetBrokerUserSnapshot {
     email: string;
     displayName: string;
     lastName: string;
+    timeZone?: string | null;
     photoURL: string;
     onboardingVibe: string | null;
     coachToken: string | null;

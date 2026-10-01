@@ -22,6 +22,10 @@
       "types": "./dist/types/agent-look.d.ts",
       "default": "./dist/types/agent-look.js"
     },
+    "./types/time-zone": {
+      "types": "./dist/types/time-zone.d.ts",
+      "default": "./dist/types/time-zone.js"
+    },
     "./types/agent-models": {
       "types": "./dist/types/agent-models.d.ts",
       "default": "./dist/types/agent-models.js"

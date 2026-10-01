@@ -78,10 +78,10 @@ wait_desktop() {
   local health="" restarts
   for _ in $(seq 1 60); do
     health="$(vssh 'curl -fsS -m 3 http://127.0.0.1:7777/health' 2>/dev/null || true)"
-    [[ "$health" == *chromium* ]] && break
+    [[ "$health" == *chrom* ]] && break
     sleep 2
   done
-  [[ "$health" == *chromium* ]] || { echo "desktop never reported a chromium client; health=$health" >&2; vssh 'journalctl -u octo-desktop --no-pager | tail -30; tail -20 ~/.local/state/octo-desktop/*.log' >&2 || true; return 1; }
+  [[ "$health" == *chrom* ]] || { echo "desktop never reported a Chromium client; health=$health" >&2; vssh 'journalctl -u octo-desktop --no-pager | tail -30; tail -20 ~/.local/state/octo-desktop/*.log' >&2 || true; return 1; }
   restarts="$(vssh 'systemctl show octo-desktop.service --property=NRestarts --value')"
   [[ "$restarts" == 0 ]] || { echo "desktop required $restarts service restarts to become healthy" >&2; return 1; }
 }
@@ -122,11 +122,13 @@ accessibility="$(vssh 'bash -s' < "$HERE/../acceptance/accessibility-bus.sh")" \
   || { echo "desktop accessibility bus does not serve Chromium" >&2; exit 1; }
 builder_power="$(vssh 'bash -s builder-power' < "$HERE/../acceptance/builder-power.sh")" \
   || { echo "builder power acceptance failed" >&2; exit 1; }
+desk="$(vssh 'bash -s desk' < "$HERE/../acceptance/desk.sh")" \
+  || { echo "desk acceptance failed" >&2; vssh 'curl -sS http://127.0.0.1:7777/desk/state | head -c 600; tail -20 ~/.local/state/octo-desktop/control.log' >&2 || true; exit 1; }
 familiar="$(vssh 'bash -s familiar' < "$HERE/../acceptance/familiar-desktop.sh")" \
   || { echo "familiar desktop acceptance failed" >&2; vssh 'octo-desktop-style status; hyprctl configerrors; tail -20 ~/.local/state/octo-desktop/hyprland.log' >&2 || true; exit 1; }
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
-chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
+chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chrom";"i")) | .title' | head -1)"
 read -r -a ihdr < <(od -An -tu1 -j16 -N8 "$work/screenshot.png")
 screenshot_size="$(( (ihdr[0] << 24) | (ihdr[1] << 16) | (ihdr[2] << 8) | ihdr[3] ))x$(( (ihdr[4] << 24) | (ihdr[5] << 16) | (ihdr[6] << 8) | ihdr[7] ))"
 [[ "$screenshot_size" == "$RESOLUTION" ]] || { echo "screenshot is ${screenshot_size}, expected ${RESOLUTION}" >&2; exit 1; }
@@ -161,8 +163,9 @@ cat <<RESULT
 | Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
 | Root filesystem growth (octo-grow-root) | ${grow_root} |
 | Desktop service restarts needed | 0 |
-| Chromium window | "${chromium_title}" |
+| Chromium window (the Desk app window) | "${chromium_title}" |
 | Accessibility bus | ${accessibility} |
+| Desk | ${desk} |
 | Familiar desktop | ${familiar} |
 | Builder power (sudo, polkit, boot entry after regen, tips, updates) | ${builder_power} |
 | Resize + screenshot + XWayland geometry | 800x600, 1024x768, restored 1440x900 |

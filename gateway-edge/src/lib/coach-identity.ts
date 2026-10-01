@@ -4,7 +4,7 @@ import { readAgent } from "./firestoreReads.js";
 import { mmApi, mmUploadAvatarBuffer } from "./mattermost.js";
 import { resolveFileTarget, type FileTarget } from "./fileTarget.js";
 import { storeWorkspaceBlob, removeWorkspaceBlob } from "./workspace-blob.js";
-import type { AgentLook } from "@octogee/shared/types/agent-look";
+import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
 
 export interface CoachIdentityPatch {
   name?: string;
@@ -102,6 +102,9 @@ export async function syncCoachIdentity(
   patch: CoachIdentityPatch,
   ctx: CoachIdentityContext = {},
 ): Promise<string[]> {
+  if (patch.look !== undefined && !parseAgentLook(patch.look)) {
+    throw new Error(`coach look must be a known style with a #rrggbb colour, got ${JSON.stringify(patch.look)}`);
+  }
   const update: Record<string, unknown> = {
     id: uid,
     updatedAt: FieldValue.serverTimestamp(),

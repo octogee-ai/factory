@@ -100,6 +100,11 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(extra)).not.toBe(base);
   });
 
+  it("changes when the Builder's time zone changes (USER.md is re-synced at reassert)", () => {
+    expect(snapshotConfigFingerprint(snap({ timeZone: "America/Chicago" }))).not.toBe(snapshotConfigFingerprint(snap()));
+    expect(snapshotConfigFingerprint(snap({ timeZone: null }))).toBe(snapshotConfigFingerprint(snap()));
+  });
+
   it("changes when the plan resolution inputs change (upgrade must reconverge model picks)", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(snapshotConfigFingerprint(snap({ tier: "trial" }))).not.toBe(base);
