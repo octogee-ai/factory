@@ -186,15 +186,15 @@ No aggregate `pnpm check` success is claimed.
 
 ### Patch assessment
 
-Rechecked against the published `c074824a` base: all 45 prior overlay commits
-were carried; no retained area is fully adopted, and every area still has a
-current Octogee consumer. None of the four contributed
-fixes is fully adopted. Native workspace registry reuse (#160658) does not cover
-the undefined-workspace metadata fallback. Whole-Gateway writer shutdown
-(#160201) does not close every isolate's readers during per-agent deletion.
-Auth-neutral reload skipping (#160274) does not detach a restarted channel
-monitor from its initiating RPC client's authority. Catalog retention is still
-unchanged. Keep the narrow behavioral coverage for these distinct boundaries.
+Rechecked against green main `3d3a11c4`: native per-record registry reuse
+([#161267](https://github.com/openclaw/openclaw/pull/161267)) replaces the prior
+workspace-registry workaround. Its two production files and existing loader
+test now match upstream exactly; closed #159002 is not carried or reopened.
+Catalog retention, per-agent reader closure and channel startup authority remain
+distinct gaps. The overlay incorporates the current cleanup/channel PR fixes,
+including worker close acknowledgment, committed-create fences and removal of
+operator-tool authority from account startup. Whole-Gateway shutdown does not
+replace per-agent cleanup, and reload skipping does not detach caller authority.
 
 Native scoped Slack reviewers (#159525) cover approval routing and eligibility,
 not Octogee's live VM/run authority through execution. Native unknown-author
@@ -202,9 +202,12 @@ attribution (#160257) fixes messages; the retained header patch resolves exact
 participant labels from the matching transcript. Worker computer takeover is
 already adopted: its transport has no diff from the selected upstream base.
 
-This is not an overall overlay reduction: the selected-tag diff is 281 files,
-13,083 insertions and 1,182 deletions. The small integration repair adapts existing
-owners and tests; it does not add a replacement runtime or duplicate test suite.
+This is not an overall overlay reduction. The prior GA overlay was 281 files,
+13,083 insertions and 1,182 deletions; the main integration still grows slightly
+despite dropping the registry workaround and 230 lines of duplicated Codex
+request-lifetime tests. Four distinct revoked/live-policy cases remain in the
+existing command-scope suite. Real SQLite, worker, tenant and execution-authority
+proof remains necessary; test-only type adaptations use the new native owners.
 
 | Behavior | Current consumer | Removal condition |
 | --- | --- | --- |
@@ -223,7 +226,6 @@ owners and tests; it does not add a replacement runtime or duplicate test suite.
 | Resolve `message_sent` observer availability at delivery time | Final-reply notifications after tool progress crosses plugin generations | Native emitter checks the current generation without caching an earlier hookless scope or falling back across isolation boundaries. |
 | Optional read-only explanation and per-job run-history capability in the native Automations view | Hosted Workspace Automations | Native view supports the same tenant-filtered read-only projection without transcript or mutation authority. |
 | Release superseded model-catalog generations | Long-lived gateway reloads | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
-| Reuse unchanged Gateway plugin registries across workspaces | Per-customer workspaces | [#159002](https://github.com/openclaw/openclaw/pull/159002) or equivalent preserves config, environment and metadata invalidation. |
 | Close deleted-agent owners and every isolate's database readers | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes descriptors without disturbing survivors or reopening deleted paths. |
 | Start channel accounts without initiating RPC client authority | Mattermost Coach turns after config reload | [#159396](https://github.com/openclaw/openclaw/pull/159396) or equivalent retains the Gateway binding without the closed client's authority. |
 
@@ -254,6 +256,13 @@ cannot reconstruct target data already discarded by the old staging behavior.
 - Adopted native approval scheduling, async row selection, plugin-scope access
   and cron reservation ownership. Removed the old reservation adapter and its
   test-helper/import churn.
+- Adopted native per-record plugin registry reuse; removed the fork's broader
+  registry cache and restored the native loader test unchanged.
+- Removed duplicated Codex request-lifetime coverage and unused approval helper
+  wrappers. Retained four distinct authorization controls in the existing suite.
+- Kept native candidate execution, async reservation receipt contexts, Browser
+  tab ownership and scoped test contracts when adapting main. Did not restore
+  removed SDK exports, Tasks APIs or old helper paths for stale fixtures.
 - Did not restore removed Tasks/TaskFlow APIs or generated Workboard overrides.
 - Kept main's native computer takeover transport unchanged; the overlay does
   not carry the obsolete fork implementation of that worker.
@@ -275,20 +284,26 @@ completion, authorization or a durable notification queue. The small follow-up
 changes 11 native files (141 insertions, nine deletions), mostly regression proof;
 it does not claim an overall overlay line-count reduction.
 
-Upstream contributions carry separate local and hosted evidence. #158986,
-#159002, #159013 and #159396 were all still open at this recut's inspection.
-Their hosted checks are not this overlay's qualification. Check exact-head
-adoption and feedback before dropping any patch; similarly named upstream
-cleanup is not evidence of equivalent behavior.
+Upstream contributions carry separate local and hosted evidence. #158986 is
+refreshed on the selected main with 63 focused tests and RED/GREEN retention
+proof; its native retirement callback no longer captures the predecessor's
+catalog inventory. #159013 and #159396 have no remaining actionable code-review
+findings, but their hosted reds are not declared resolved. #159013 still needs
+maintainer-only exact-head security approval. Main's shutdown fixture fix
+#162133 explains one old channel CI failure; its first-signin failure remains
+unclassified. #159002 is closed and replaced by the selected native owner.
+Hosted PR checks are not this overlay's qualification.
 
 ### Base-image inputs
 
-Claude Code moves to 2.1.283 and Codex CLI to 0.157.1, with matching Builder
-locks and install-script approvals. Node 26.10.0, npm 12.1.0 and Rust 1.98.1
-were current at selection. The actual Linux arm64 system stage and CLI smoke
-pass. Removing Builder's duplicate `fd-find` preserves inherited fd 10.5.0
-instead of downgrading it to Debian's 8.6.0. npm 12.1.0 already contains fixed
-`brace-expansion` 5.0.9, so its redundant override is removed.
+Claude Code moves to 2.1.286, Codex CLI to 0.159.3 and npm to 12.2.0, with
+matching Builder locks and install-script approvals. The base also updates
+gcloud to 587.0.0, GitHub CLI to 2.102.0 and yq to 4.54.1; Builder Firebase CLI
+is 15.32.1 and pnpm is 12.8.1. Node 26.10.0, Rust 1.98.1 and inherited fd
+10.5.0 stay unchanged. OpenClaw builds use its own pinned pnpm 12.5.1, not
+the Builder's tool version. The actual Linux arm64 system stage and CLI smoke
+pass. Builder's duplicate `fd-find` and the redundant npm dependency override
+remain removed.
 
 All Builder npm roots, four Python pins and five standalone tool pins were
 audited. A fresh Debian index check in the built system image found zero pending
@@ -302,7 +317,8 @@ The recipe correction and this selected pair passed actual Linux arm64 image
 proof. Native guards and live state remain unchanged.
 
 CUA remains the matched 0.28.2 package plus the native modifier backport below.
-Published 0.30.2 predates that fix; the upstream adoption issue tracks removal.
+Published 0.30.3 and 0.31.0 contain the upstream fix, but the selected OpenClaw
+still pins 0.28.2. The upstream adoption issue tracks a matched package upgrade.
 No desktop OS image change or environment deployment is part of this recut.
 
 ### Mattermost session and delivery policy
@@ -366,19 +382,21 @@ amd64. Each architecture passes 28 focused Wayland tests and 453 Linux tests;
 one focused and six full-suite GUI tests remain ignored because these builders
 have no live desktop. Release compilation, dynamic loading, and library
 architecture checks pass on both. The six installer regressions pass.
-PR #3659 merged on September 28 as `b1bd49ce1dcc`; the latest published driver
-still lacks the standalone mappings. The merge is not a claim that the local
-headless builds performed canonical desktop validation.
+PR #3659 merged on September 28 as `b1bd49ce1dcc`. Published driver 0.30.3
+contains it, as does [0.31.0](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.31.0),
+published September 30. The merge is not a claim that the local headless builds
+performed canonical desktop validation.
 
 [OpenClaw #160469](https://github.com/openclaw/openclaw/issues/160469) tracks
 adoption of the first published matched SDK/native release containing the fix,
 with release-source evidence and the focused modifier smoke needed to remove
-this backport. Published 0.30.2 predates the merge and is not that release.
+this backport. Published 0.30.2 predates the merge; 0.30.3 is the first fixed
+published pair.
 
 OpenClaw owns the package-version pin in its root and `cua-computer` manifests;
-Octogee owns this matching native backport and adapted skills. CUA 0.30.2 is
-available, but the selected OpenClaw main still uses 0.28.2 and 0.30.2 still lacks
-the modifier mappings. A version upgrade must align OpenClaw's dependency lock,
+Octogee owns this matching native backport and adapted skills. Fixed releases
+are available, but the selected OpenClaw main still uses 0.28.2. A version
+upgrade must align OpenClaw's dependency lock,
 JS bindings, native artifact digests, backport and skill provenance together;
 changing only `CUA_SOURCE_SHA` is not a safe version upgrade.
 
