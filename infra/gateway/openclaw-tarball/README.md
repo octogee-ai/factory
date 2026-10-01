@@ -115,36 +115,30 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 ## Current overlay
 
-Upstream: published [v2026.9.7](https://github.com/openclaw/openclaw/releases/tag/v2026.9.7),
-peeled commit
-[`c074824a27c96d3983043f9eeb33823cd1772d8c`](https://github.com/openclaw/openclaw/commit/c074824a27c96d3983043f9eeb33823cd1772d8c).
-Annotated tag object: `a05c851cc522fb5e6bc347f1eb0ff10d8f378fcc`.
+Upstream: selected green main
+[`3d3a11c401f9817c61531ad0781e7c14c08dd80c`](https://github.com/openclaw/openclaw/commit/3d3a11c401f9817c61531ad0781e7c14c08dd80c),
+locked before the October 1 recut. [Full CI 36786150394](https://github.com/openclaw/openclaw/actions/runs/36786150394)
+passed: all 160 jobs inspected, 153 successes and seven skips. Skips were
+ios-screenshots, pr-fail-fast, checks-node-compat-node24, check-plan,
+ios-release-e2e, ios-screenshot-evidence and Seal full-release child evidence.
 Exact overlay:
-[`82117be26cc8cad45b1c93692083283992143208`](https://github.com/ceckert/openclaw/commit/82117be26cc8cad45b1c93692083283992143208),
-pushed to `ceckert/openclaw:codex/octogee-v2026.9.7-sept30`.
-Package version is `2026.9.7`. The release was published September 30 at
-04:44:14 UTC and has [release validation 36644909314](https://github.com/openclaw/openclaw/actions/runs/36644909314).
-Its release notes waive Telegram integration checks and omit the Android APK;
-this is not a claim that every release check ran.
+[`46398c529fb23f4429542d0ef24dc6224ab6287e`](https://github.com/ceckert/openclaw/commit/46398c529fb23f4429542d0ef24dc6224ab6287e),
+pushed and read back at `ceckert/openclaw:codex/octogee-main-oct01`.
+Package version is `2026.9.7`; this is a main snapshot, not the published GA tag.
 
 The overlay retains fork PRs #5/#6, live voice-session grants, native approval
 authority, hosted Automations and final-reply observation. Runtime objects and
 all seven hosted UI provenance records come from the same clean, built source.
-The GA tag diverges from the prior `a15f3f72` main snapshot: 170 main-only
-commits are outside the tag. Rebase onto the published commit, not a moving
-release branch, and preserve its native APIs instead of copying main-only code.
-
-Release-specific adaptations preserve native sharing preparation, deletion
-cleanup bookkeeping and void execution admission. The Talk tool remains a
-session-bound factory: model-supplied targets cannot override its native session
-or authenticated runtime identity. Its existing regression harness now invokes
-that factory. Relay expiry validation moved unchanged into its existing state
-owner to satisfy the native line-cap ratchet; no coverage or guard was weakened.
+The selected main supplies native registry reuse, shared candidate execution,
+reservation receipt contexts and current Browser/UI owners. Removed APIs are
+not restored to accommodate old fixtures. Talk remains a session-bound factory:
+model-supplied targets cannot override its session or authenticated identity.
+Native line caps and authorization assertions remain unchanged.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-06ac9f47.tgz` | `06ac9f47132cc28d98780c9b56e14609d0a1c22da8341f602525aa3157580576` | `1790774777466453` |
-| `openclaw-mattermost-1401a28f.tgz` | `1401a28f47d7c6b202658e0a9b43594c23a25585cb84f02089604af85e2c61a6` | `1790774780673707` |
+| `openclaw-fork-ba4fdcd9.tgz` | `ba4fdcd9abf2cd698cf55f68489f234ef275f1777623c7dc2388ff01cd9c50f6` | `1790880475393384` |
+| `openclaw-mattermost-93fbedb5.tgz` | `93fbedb52e43f67d306a8cdc645f8a516da14d2c083b9ecd5532fdc585898483` | `1790880478811849` |
 
 Shared-state schema remains 20 and agent schema remains 24, as in the prior
 current build. Schema equality is not live migration or continuity proof.
@@ -152,34 +146,38 @@ Preserve native backups and roll forward, not an image-only downgrade or reset.
 
 ### Qualification
 
-The exact-source `pnpm build` passed in 9m 7.5s and records build ID
-`2026.9.7-82117be26cc8-2026-09-30T13-09-30.088Z`. Both maintained packers ran
+The exact-source `pnpm build` passed in 10m 14.5s and records build ID
+`2026.9.7-46398c529fb2-2026-10-01T18-31-32.924Z`. Both maintained packers ran
 sequentially. Exact-source voice and activity consumer SDK checks passed.
 Native archive integrity and the isolated matched installation passed. The
-actual Linux arm64 `openclaw-full-plugin-installer` passed with 156 byte-identical
+actual Linux arm64 `openclaw-full-plugin-installer` passed with 154 byte-identical
 Codex files, nine Parallel files, bundled trust and all three native-hook imports.
 Local installer image:
-`sha256:961ceb8229c5749932d2ce2f7edab94c86319e8bd2af8453b1cff53cf79f7691`.
+`sha256:868b37dca36a3291b1d59542758a2d5f55b16e4b70413179e72980b854065977`.
 This is package qualification, not the later Build main gateway image identity.
 Both write-once objects were read back and their full hashes verified.
 
-Focused native proof includes 138 resource/deletion/reload tests, 178
-cron/sharing/approval boundary tests, 229 channel/voice/browser/UI tests and 534
-owner/cleanup/relay tests. The final Talk extraction rerun passed 158 tests.
+Focused native proof includes 143 channel/Codex tests, 736 Gateway tests,
+real SQLite-worker catalog retention, per-agent cleanup, cron handoff,
+sharing/approval boundaries, Talk and Mattermost consults. Final affected
+cron/Browser/Mattermost reruns passed 59 tests in four files.
 Five real desktop/mobile UI E2E tests passed; inspected captures are
 byte-identical to the prior current build. These are separate suites, not an
 assertion that the entire upstream test suite ran. Production core/UI/extensions
-types, protocol/config/Kysely/session-schema generation and native line-cap
+types, all 27 canonical core-test typegraphs, extensions/scripts/root types,
+protocol/config/Kysely/session-schema generation and native line-cap
 checks passed. Independent integration review found no actionable remaining
 regression. Stable post-pack scoped typed lint passed.
-Octogee passed 135 artifact/provenance tests, 19 base-image tests, 32 native-island,
-model-picker and Automations consumer tests, and the PWA typecheck. The UI audit
+Octogee passed 135 artifact/provenance tests, 63 base/toolchain/security tests,
+32 native-island/model-picker/Automations tests, 14 gateway Browser resource
+consumer tests, and PWA/gateway-edge typechecks. The UI audit
 retains native, actively wired entry points; gateway protocol/client,
-picker/composer, layout, redaction and style changes follow the release's source.
-All bundles were regenerated together, not hand-edited or wrapped for main-only APIs.
+picker/composer, layout, redaction and style changes follow the selected main.
+All bundles were regenerated together, not hand-edited. The upstream input audit
+was read and each entry checked for active native wiring.
 
-The unchanged upstream SDK size gate reports 4,594 exports against 4,591 and
-2,696 callables against 2,695. Three unused type exports remain removed.
+The unchanged upstream SDK size gate reports 4,597 exports against 4,594 and
+2,699 callables against 2,698. Three unused type exports remain removed.
 The retained surface has concrete approval, voice and packaged Mattermost
 consumers; the budget was not raised or bypassed. Export consistency passes.
 No aggregate `pnpm check` success is claimed.
@@ -203,7 +201,8 @@ participant labels from the matching transcript. Worker computer takeover is
 already adopted: its transport has no diff from the selected upstream base.
 
 This is not an overall overlay reduction. The prior GA overlay was 281 files,
-13,083 insertions and 1,182 deletions; the main integration still grows slightly
+13,083 insertions and 1,182 deletions; the final main overlay is 284 files,
+13,282 insertions and 1,215 deletions. It still grows slightly
 despite dropping the registry workaround and 230 lines of duplicated Codex
 request-lifetime tests. Four distinct revoked/live-policy cases remain in the
 existing command-scope suite. Real SQLite, worker, tenant and execution-authority
