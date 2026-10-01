@@ -92,8 +92,8 @@ mkdir -p "$WORK"
 trap qemu_stop EXIT
 
 log "deps"
-sudo apt-get update -qq >/dev/null
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq qemu-system-x86 ovmf genisoimage jq socat >/dev/null
+sudo apt-get -o DPkg::Lock::Timeout=600 update -qq >/dev/null
+sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq qemu-system-x86 ovmf genisoimage jq socat >/dev/null
 [[ -c /dev/kvm ]] || die "/dev/kvm missing; the builder must have nested virtualization enabled"
 [[ -r /dev/kvm && -w /dev/kvm ]] || sudo chmod 0666 /dev/kvm
 

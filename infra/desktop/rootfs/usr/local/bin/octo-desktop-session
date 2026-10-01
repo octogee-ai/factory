@@ -41,6 +41,9 @@ if ! dbus-send --session --print-reply --reply-timeout=10000 --dest=org.a11y.Bus
   echo "ERROR: org.a11y.Bus did not answer on the session bus; accessibility trees are unavailable" >&2
 fi
 
+/usr/local/bin/octo-desktop-style apply || echo "ERROR: octo-desktop-style apply failed; the desktop starts with whatever configuration is in place" >&2
+
+
 /usr/local/bin/octo-desktop-run &
 session_pid=$!
 stop_session() {

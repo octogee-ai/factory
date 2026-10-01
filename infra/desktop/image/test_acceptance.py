@@ -32,6 +32,16 @@ elif name == 'ssh':
             print('Chromium never registered on the accessibility bus', file=sys.stderr)
             sys.exit(1)
         print('accessibility bus unix:path=/run/user/1000/at-spi/bus_0 serves: Chromium')
+    elif command == 'bash -s builder-power':
+        if case == 'builder-power-broken':
+            print('builder power: polkit still asks octo for a password', file=sys.stderr)
+            sys.exit(1)
+        print('builder power: sudo and polkit passwordless, boot entry enrolled under this machine id, keeps console and drops resume after regen, no first-run tips, Omarchy is up to date')
+    elif command == 'bash -s familiar':
+        if case == 'familiar-broken':
+            print('familiar desktop: Chromium is not floating', file=sys.stderr)
+            sys.exit(1)
+        print('familiar desktop: hyprbars loaded, theme octogee on 1-quattro.jpg, omarchy round trip clean, idle 1.2%')
     elif command == 'python3 -':
         if case == 'missing-resize': sys.exit(22)
         if case == 'resize-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists(): sys.exit(22)
@@ -85,6 +95,20 @@ class ImageAcceptanceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Home survives stop/start | yes', result.stdout)
         self.assertIn('| Accessibility bus | accessibility bus unix:path=/run/user/1000/at-spi/bus_0 serves: Chromium |', result.stdout)
+
+    def test_builder_power_is_reported_and_its_failure_fails_acceptance(self):
+        result = self.run_acceptance('success')
+        self.assertIn('| Builder power (sudo, polkit, boot entry after regen, tips, updates) | builder power: sudo and polkit passwordless, boot entry enrolled under this machine id, keeps console and drops resume after regen, no first-run tips, Omarchy is up to date |', result.stdout)
+        result = self.run_acceptance('builder-power-broken')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('builder power acceptance failed', result.stderr)
+
+    def test_familiar_desktop_is_reported_and_its_failure_fails_acceptance(self):
+        result = self.run_acceptance('success')
+        self.assertIn('| Familiar desktop | familiar desktop: hyprbars loaded, theme octogee on 1-quattro.jpg, omarchy round trip clean, idle 1.2% |', result.stdout)
+        result = self.run_acceptance('familiar-broken')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('familiar desktop acceptance failed', result.stderr)
 
     def test_desktop_without_chromium_on_the_accessibility_bus_fails_acceptance(self):
         result = self.run_acceptance('no-accessibility')

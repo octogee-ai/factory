@@ -98,6 +98,10 @@ IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJE
 wait_ssh 300
 t_ssh=$(date +%s)
 log "ssh up after $((t_ssh - t_create)) s at $IP"
+if [[ "$KEEP" == 1 ]]; then
+  cp "$work/key" "./octogee-computer-test-key" && chmod 0600 "./octogee-computer-test-key"
+  log "kept VM key: ./octogee-computer-test-key (ssh -i ./octogee-computer-test-key octo@$IP)"
+fi
 
 image_id="$(vssh 'cat /etc/octogee-computer-image 2>/dev/null || echo unknown')"
 vssh 'sudo systemd-analyze verify /etc/systemd/system/octo-*.service'
@@ -116,6 +120,10 @@ t_desktop=$(date +%s)
 vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
 accessibility="$(vssh 'bash -s' < "$HERE/../acceptance/accessibility-bus.sh")" \
   || { echo "desktop accessibility bus does not serve Chromium" >&2; exit 1; }
+builder_power="$(vssh 'bash -s builder-power' < "$HERE/../acceptance/builder-power.sh")" \
+  || { echo "builder power acceptance failed" >&2; exit 1; }
+familiar="$(vssh 'bash -s familiar' < "$HERE/../acceptance/familiar-desktop.sh")" \
+  || { echo "familiar desktop acceptance failed" >&2; vssh 'octo-desktop-style status; hyprctl configerrors; tail -20 ~/.local/state/octo-desktop/hyprland.log' >&2 || true; exit 1; }
 
 vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
 chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chromium";"i")) | .title' | head -1)"
@@ -155,6 +163,8 @@ cat <<RESULT
 | Desktop service restarts needed | 0 |
 | Chromium window | "${chromium_title}" |
 | Accessibility bus | ${accessibility} |
+| Familiar desktop | ${familiar} |
+| Builder power (sudo, polkit, boot entry after regen, tips, updates) | ${builder_power} |
 | Resize + screenshot + XWayland geometry | 800x600, 1024x768, restored 1440x900 |
 | Screenshot size | ${screenshot_size} (expected ${RESOLUTION}) |
 | Home survives stop/start | ${persist} |
@@ -162,7 +172,6 @@ cat <<RESULT
 RESULT
 if [[ "$KEEP" == 1 ]]; then
   cp "$work/screenshot.png" "./octogee-computer-test-screenshot.png"
-  cp "$work/key" "./octogee-computer-test-key" && chmod 0600 "./octogee-computer-test-key"
   cat <<KEEP
 Kept $NAME at $IP. Screenshot: ./octogee-computer-test-screenshot.png. Key: ./octogee-computer-test-key
 

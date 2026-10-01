@@ -72,6 +72,35 @@ With `--keep` the VM stays, the key lands next to the screenshot, and the
 script prints the SSH tunnel to open noVNC at `http://localhost:6080/vnc.html`
 and take over the desktop.
 
+## Familiar desktop
+
+Every Builder's desktop starts in the **Familiar** style: windows float and
+overlap with traffic-light title bars (hyprbars, built in `customize.sh`
+against the image's Hyprland), a bottom dock, Super+Tab window switching, and
+the light `octogee` theme on the Quattro wallpaper (`1-quattro.*` from Tokyo Night). The stock Omarchy desktop
+is one command away and both styles are stock Omarchy underneath:
+
+```bash
+octo-desktop-style familiar   # dock, title bars, floating windows, light theme
+octo-desktop-style omarchy    # stock Omarchy: tiling, Tokyo Night
+octo-desktop-style status
+```
+
+`octo-desktop-session` runs `octo-desktop-style apply` before the compositor:
+a home with no recorded choice becomes Familiar; a recorded choice is kept,
+and only its structural pieces (plugin links, `shell.json` entries, the
+`require("octo-desktop.familiar")` line) are re-ensured, so a theme the
+Builder or coach picked later survives restarts and home restores. The choice
+and everything it writes live under `.config/hypr` and `.config/omarchy`,
+which the home checkpoint already carries.
+
+The dock and the window switcher are vendored Omarchy shell plugins under
+`rootfs/usr/share/omarchy/octo-desktop/plugins/` at the commits recorded in
+`provenance.json`; Familiar links them into `~/.config/omarchy/plugins/`.
+Acceptance (`acceptance/familiar-desktop.sh`) checks the loaded hyprbars,
+theme, wallpaper, plugin links, pinned desktop entries, a floating Chromium,
+and a clean `omarchy` → `familiar` round trip with no Hyprland config errors.
+
 ## What runs on the VM at boot
 
 | Unit | Role |
@@ -87,8 +116,11 @@ and take over the desktop.
 | `docker.service` | hosts the gateway and gateway-edge containers the agent manages |
 
 Power: `HandlePowerKey=poweroff`, so a GCE stop completes on the ACPI signal
-instead of waiting for the timeout. `octo` has passwordless sudo: this is the
-Builder's own computer and the Builder class is full power.
+instead of waiting for the timeout. `octo` has passwordless sudo and a polkit rule
+(`/etc/polkit-1/rules.d/49-octogee-builder.rules`) that answers every polkit
+request for `octo` without a password, so Omarchy's own update, power and
+disk actions never raise a password prompt: this is the Builder's own
+computer and the Builder class is full power.
 SDDM is masked because this image's desktop service owns the display. The
 runtime-directory dependency prevents logind from mounting over live Wayland
 sockets when the first SSH session opens.
@@ -107,6 +139,8 @@ home being replaced; the lifecycle start action removes that hold.
 | Omarchy ISO version + sha256 | `build.sh` (`ISO_SHA256`) |
 | Package set | Omarchy's stable mirror at build time; the image name carries the build stamp |
 | wlrctl, noVNC, websockify | `customize.sh` |
+| hyprbars (hyprwm/hyprland-plugins commit) | `customize.sh` (`HYPRBARS_COMMIT`) |
+| Dock + window switcher shell plugins | `rootfs/usr/share/omarchy/octo-desktop/plugins/provenance.json` |
 | Session scripts | `../rootfs` (shared with the container spike) |
 
 ## Results

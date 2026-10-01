@@ -1,0 +1,34 @@
+[
+  {
+    "id": "rdf.dock",
+    "edge": "bottom",
+    "align": "center",
+    "iconSize": 44,
+    "labels": true,
+    "magnify": false,
+    "tiles": true,
+    "showRunning": true,
+    "hideOnLaunch": true,
+    "showWhenEmpty": true,
+    "revealDelay": 40,
+    "hideDelay": 350,
+    "hotspotFullWidth": true,
+    "hotspotHeight": 2,
+    "edgeGap": 6,
+    "items": [
+      { "desktop": "chromium", "label": "Web" },
+      { "desktop": "org.gnome.Nautilus", "label": "Files" },
+      { "exec": "omarchy launch terminal", "glyph": "󰆍", "label": "Terminal" },
+      { "desktop": "omawrite", "label": "Text" },
+      { "desktop": "libreoffice-writer", "label": "Writer" },
+      { "desktop": "obsidian", "label": "Obsidian" },
+      { "spacer": true },
+      { "exec": "omarchy menu", "glyph": "󰒓", "label": "Settings" }
+    ]
+  },
+  {
+    "id": "community.window-switcher",
+    "view": "windows",
+    "previewMode": "still"
+  }
+]

@@ -104,7 +104,7 @@ trap 'rm -rf "$payload"' EXIT
 cp "$HERE/pipeline.sh" "$HERE/customize.sh" "$payload/"
 cp -R "$HERE/cidata" "$HERE/rootfs" "$payload/"
 cp -R "$HERE/../rootfs" "$payload/desktop-rootfs"
-tar -C "$payload" -czf "$payload.tgz" .
+COPYFILE_DISABLE=1 tar -C "$payload" -czf "$payload.tgz" .
 
 printf 'imagebuilder:%s\n' "$(cat "$SSH_KEY.pub")" > "$payload/ssh-keys"
 log "builder ${BUILDER}"
