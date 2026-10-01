@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 
 import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
@@ -8,6 +11,7 @@ import {
   createBuilderToolchainStatusPublisher,
   probeBuilderInteractiveReadiness,
   resolveBuilderToolchainHydratorConfig,
+  waitForBuilderToolchainShutdown,
 } from "../entrypoints/builder-toolchain-hydrator.js";
 import { runBuilderToolchainHydrationLoop } from "../lib/builder-toolchain-hydrator.js";
 import { FleetBrokerHttpError } from "../lib/fleet-broker-client.js";
@@ -221,5 +225,41 @@ describe("Builder toolchain hydrator entrypoint", () => {
       .resolves.toBe(false);
     await expect(probeBuilderInteractiveReadiness("http://127.0.0.1:3003/surge-ready", fetchImpl))
       .resolves.toBe(true);
+  });
+});
+
+describe("Builder toolchain hydrator shutdown", () => {
+  it("keeps the ready runner alive until SIGTERM, then exits cleanly", async () => {
+    const entrypoint = new URL("../entrypoints/builder-toolchain-hydrator.ts", import.meta.url).href;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", `
+      import { waitForBuilderToolchainShutdown } from ${JSON.stringify(entrypoint)};
+      const controller = new AbortController();
+      process.once("SIGTERM", () => controller.abort());
+      waitForBuilderToolchainShutdown(controller.signal).then(() => process.stdout.write("stopped\\n"));
+      process.stdout.write("ready\\n");
+    `], { stdio: ["ignore", "pipe", "pipe"] });
+    const exited = once(child, "exit");
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => child.stdout.on("data", (chunk) => {
+          if (String(chunk).includes("ready")) resolve();
+        })),
+        exited.then(() => { throw new Error(`runner exited before ready: ${stderr}`); }),
+      ]);
+      expect(await Promise.race([exited.then(() => "exited"), delay(250, "alive")])).toBe("alive");
+      child.kill("SIGTERM");
+      await expect(exited).resolves.toEqual([0, null]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await exited;
+    }
+  });
+
+  it("resolves immediately when already stopped", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(waitForBuilderToolchainShutdown(controller.signal)).resolves.toBeUndefined();
   });
 });

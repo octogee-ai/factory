@@ -249,11 +249,22 @@ export async function runBuilderToolchainHydrator(input: {
     writeStatus,
     log,
     sleep: abortableSleep(signal),
-    waitForShutdown: () => new Promise((resolve) => {
-      if (signal.aborted) resolve();
-      else signal.addEventListener("abort", () => resolve(), { once: true });
-    }),
+    waitForShutdown: () => waitForBuilderToolchainShutdown(signal),
     shouldStop: () => signal.aborted,
+  });
+}
+
+export function waitForBuilderToolchainShutdown(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const keepAlive = setInterval(() => {}, 60_000);
+    signal.addEventListener("abort", () => {
+      clearInterval(keepAlive);
+      resolve();
+    }, { once: true });
   });
 }
 
