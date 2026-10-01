@@ -4,9 +4,9 @@ import { db } from "../../../gateway-edge/src/lib/db.js";
 import { requireAuth } from "../../../gateway-edge/src/middleware/auth.js";
 import { forwardMmRest } from "../../../gateway-edge/src/chat-proxy/mm-proxy/rest.js";
 import {
-  createProductionUserDmNotifier,
-  type UserDmNotifier,
-} from "../lib/user-dm-notifier.js";
+  createProductionChatPostNotifier,
+  type ChatPostNotifier,
+} from "../lib/chat-post-notifier.js";
 
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "";
 
@@ -107,11 +107,11 @@ export function isCreatePostRequest(method: string | undefined, url: string | un
   return method === "POST" && (url ?? "").split("?")[0] === "/api/v4/posts";
 }
 
-let userDmNotifier: UserDmNotifier | null = null;
+let chatPostNotifier: ChatPostNotifier | null = null;
 
-function notifier(): UserDmNotifier {
-  userDmNotifier ??= createProductionUserDmNotifier({ mmInternalUrl: MM_INTERNAL_URL });
-  return userDmNotifier;
+function notifier(): ChatPostNotifier {
+  chatPostNotifier ??= createProductionChatPostNotifier({ mmInternalUrl: MM_INTERNAL_URL });
+  return chatPostNotifier;
 }
 
 export function mmRestProxyHandler(req: Request, res: Response): void {
