@@ -147,6 +147,34 @@ describe('octo-desktop-style', () => {
     expect(state.theme()).toBe('tokyo-night');
   });
 
+  it('colours the octogee theme with the agent look accent and keeps it across a plain re-apply', () => {
+    const state = fixture();
+    state.run('familiar', '--accent', '#0ea5e9');
+    const colors = () => readFileSync(join(state.home, '.config/omarchy/themes/octogee/colors.toml'), 'utf8');
+    expect(colors()).toContain('accent = "#0ea5e9"');
+    expect(colors()).toContain('blue = "#0ea5e9"');
+    expect(colors()).toContain('bright_blue = "#0ea5e9"');
+    expect(colors()).toContain('selection = "#b7e3f8"');
+    expect(colors()).toContain('mode = "light"');
+    state.run('familiar');
+    expect(colors()).toContain('accent = "#0ea5e9"');
+    state.run('familiar', '--accent', '#65a30d');
+    expect(colors()).toContain('accent = "#65a30d"');
+    expect(colors()).toContain('selection = "#d1e3b6"');
+    expect(state.calls().filter((c) => c.startsWith('omarchy-theme-set'))).toHaveLength(3);
+  });
+
+  it('ships the brand coral as the default accent and refuses malformed accents', () => {
+    const state = fixture();
+    state.run('familiar');
+    expect(readFileSync(join(state.home, '.config/omarchy/themes/octogee/colors.toml'), 'utf8')).toContain('accent = "#e74e3c"');
+    for (const bad of ['blue', '#FFF', '#0EA5E9', '0ea5e9', '']) {
+      expect(() => state.run('familiar', '--accent', bad)).toThrow(/accent must be/);
+    }
+    expect(() => state.run('omarchy', '--accent', '#0ea5e9')).toThrow(/usage: octo-desktop-style/);
+    expect(() => state.run('familiar', '--accent')).toThrow(/accent must be/);
+  });
+
   it('refuses an unknown command', () => {
     const state = fixture();
     expect(() => state.run('mac')).toThrow(/usage: octo-desktop-style/);

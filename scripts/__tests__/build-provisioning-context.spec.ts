@@ -32,6 +32,7 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
         tier: "trial",
         createdAt: "2026-03-14",
         slug: "acme",
+        timeZone: "unknown",
       },
       userData: { username: "acme" },
     });
@@ -80,7 +81,7 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
     expect(ctx.customerDir).toBe(path.join(CUSTOMERS_DIR, "acme"));
   });
 
-  it("templateVars contains the six substitution keys consumed by readTierTemplateFile", () => {
+  it("templateVars contains the seven substitution keys consumed by readTierTemplateFile", () => {
     const ctx = buildProvisioningContext("uid-1", { username: "acme", tier: "pro" });
 
     expect(Object.keys(ctx.templateVars).sort()).toEqual([
@@ -88,9 +89,16 @@ vi.setSystemTime(new Date("2026-03-14T08:30:00Z"));
       "ownerName",
       "slug",
       "tier",
+      "timeZone",
       "uid",
       "username",
     ]);
+  });
+
+  it("seeds USER.md with the Builder's captured time zone and 'unknown' until one is captured or when it is malformed", () => {
+    expect(buildProvisioningContext("uid-1", { username: "acme", preferences: { timeZone: "America/Chicago" } }).templateVars.timeZone).toBe("America/Chicago");
+    expect(buildProvisioningContext("uid-1", { username: "acme", preferences: { timeZone: "../etc" } }).templateVars.timeZone).toBe("unknown");
+    expect(buildProvisioningContext("uid-1", { username: "acme" }).templateVars.timeZone).toBe("unknown");
   });
 
   it("today is the current UTC date as YYYY-MM-DD (ISO date slice, time-of-day irrelevant)", () => {

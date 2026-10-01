@@ -1,15 +1,80 @@
 #!/usr/bin/python3
+import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
+from urllib.parse import unquote, urlsplit
 
 OUTPUT = os.environ.get("OCTO_OUTPUT_NAME", "OCTOGEE")
 COMPOSITOR = os.environ.get("OCTO_COMPOSITOR", "hyprland")
 ACTION_LOCK = Lock()
+DESK_LOCK = Lock()
+
+DEFAULT_NOTE = "This is my computer. Watch me work here, or take the controls whenever you like."
+DEFAULT_LOOK = {"style": "octo", "color": "#e74e3c"}
+LOOK_STYLES = ("octo", "blob", "droplet", "ghost", "star", "kit")
+STYLES = ("familiar", "omarchy")
+HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$")
+ENTRY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ICON_EXTENSIONS = (".svg", ".png", ".xpm")
+CURRENT_DESKTOP = "Hyprland"
+APPLICATION_CATEGORIES = {
+    "Office", "Graphics", "AudioVideo", "Audio", "Video", "Network", "InstantMessaging",
+    "Game", "Education", "Science", "Development", "TextEditor", "Viewer", "Calculator",
+}
+UTILITY_ONLY_CATEGORIES = {"System", "Settings", "Utility", "ConsoleOnly", "Qt", "GTK", "HardwareSettings", "Printing"}
+DENIED_ENTRY_ID = re.compile(r"^(avahi-.*|bssh|bvnc|foot.*|lstopo|limine-.*|cups|system-config-printer|qv4l2|qvidcap|uuctl|x|xorg.*|x11vnc)$", re.IGNORECASE)
+WEB_APP_LAUNCHER = "omarchy-launch-webapp"
+TIME_ZONE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$")
+TIME_ZONE_MAX = 64
+NOTE_MAX = 500
+BODY_MAX = 4096
+ASSET_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".xpm": "image/x-xpixmap",
+    ".webp": "image/webp",
+}
+
+
+def config_dir():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "octogee")
+
+
+def desk_dir():
+    return os.environ.get("OCTO_DESK_DIR", "/usr/share/omarchy/octo-desktop/desk")
+
+
+def shell_json_paths():
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return [os.path.join(config, "omarchy", "shell.json"), os.path.join(os.path.dirname(desk_dir()), "shell-plugins.json")]
+
+
+def application_dirs():
+    system = os.environ.get("OCTO_APPLICATION_DIRS", "/usr/share/applications").split(":")
+    data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local/share")
+    return [d for d in system if d] + [os.path.join(data, "applications")]
+
+
+def zoneinfo_dir():
+    return os.environ.get("OCTO_ZONEINFO_DIR", "/usr/share/zoneinfo")
+
+
+def icon_dirs():
+    configured = os.environ.get("OCTO_ICON_DIRS")
+    if configured:
+        return [d for d in configured.split(":") if d]
+    data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local/share")
+    return [os.path.join(data, "icons"), "/usr/share/icons", "/usr/share/pixmaps"]
 
 
 def run(argv, timeout=15):
@@ -69,6 +134,270 @@ def screenshot_png():
     return out.stdout
 
 
+def parse_desktop_entry(path):
+    fields = {}
+    in_entry = False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if line.startswith("["):
+                    in_entry = line == "[Desktop Entry]"
+                    continue
+                if not in_entry or not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                fields.setdefault(key.strip(), value.strip())
+    except OSError:
+        return None
+    if fields.get("Type") != "Application" or not fields.get("Name"):
+        return None
+    if fields.get("NoDisplay", "").lower() == "true" or fields.get("Hidden", "").lower() == "true":
+        return None
+    if fields.get("Terminal", "").lower() == "true":
+        return None
+    only = set(filter(None, fields.get("OnlyShowIn", "").split(";")))
+    if only and CURRENT_DESKTOP not in only:
+        return None
+    if CURRENT_DESKTOP in set(filter(None, fields.get("NotShowIn", "").split(";"))):
+        return None
+    return {
+        "name": fields["Name"],
+        "comment": fields.get("Comment", ""),
+        "icon": fields.get("Icon", ""),
+        "webApp": fields.get("Exec", "").split(" ", 1)[0].rsplit("/", 1)[-1] == WEB_APP_LAUNCHER,
+        "categories": set(filter(None, fields.get("Categories", "").split(";"))),
+    }
+
+
+def curated(entry_id, parsed, pinned):
+    if entry_id in pinned or parsed["webApp"]:
+        return True
+    if DENIED_ENTRY_ID.match(entry_id):
+        return False
+    categories = parsed["categories"]
+    if not categories or categories <= UTILITY_ONLY_CATEGORIES:
+        return False
+    return bool(categories & APPLICATION_CATEGORIES)
+
+
+def pinned_entry_ids():
+    for path in shell_json_paths():
+        try:
+            with open(path, encoding="utf-8") as handle:
+                plugins = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        plugins = plugins.get("plugins", plugins) if isinstance(plugins, dict) else plugins
+        if not isinstance(plugins, list):
+            continue
+        for plugin in plugins:
+            if isinstance(plugin, dict) and plugin.get("id") == "rdf.dock":
+                return [item["desktop"] for item in plugin.get("items", []) if isinstance(item, dict) and isinstance(item.get("desktop"), str)]
+    return []
+
+
+def desktop_entries():
+    found = {}
+    pinned = pinned_entry_ids()
+    for directory in application_dirs():
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for filename in names:
+            if not filename.endswith(".desktop"):
+                continue
+            entry_id = filename[: -len(".desktop")]
+            if not ENTRY_ID.match(entry_id):
+                continue
+            parsed = parse_desktop_entry(os.path.join(directory, filename))
+            if parsed is None or not curated(entry_id, parsed, pinned):
+                found.pop(entry_id, None)
+                continue
+            found[entry_id] = {"id": entry_id, "name": parsed["name"], "comment": parsed["comment"], "icon": parsed["icon"]}
+    rank = {entry_id: index for index, entry_id in enumerate(pinned)}
+    return sorted(found.values(), key=lambda app: (rank.get(app["id"], len(rank)), app["name"].casefold(), app["id"]))
+
+
+def icon_rank(path):
+    directory = os.path.basename(os.path.dirname(os.path.dirname(path)))
+    if directory == "scalable" or path.endswith(".svg"):
+        return (0, 0)
+    size = re.match(r"^(\d+)x\d+$", directory)
+    return (1, -int(size.group(1)) if size else 0)
+
+
+def icon_path(icon):
+    if not isinstance(icon, str) or not icon or "/" in icon.strip("/") and not os.path.isabs(icon):
+        return None
+    if os.path.isabs(icon):
+        return icon if os.path.isfile(icon) else None
+    if not ENTRY_ID.match(icon):
+        return None
+    for base in icon_dirs():
+        candidates = []
+        for ext in ICON_EXTENSIONS:
+            candidates += glob.glob(os.path.join(base, "*", "*", "apps", icon + ext))
+            candidates += glob.glob(os.path.join(base, "*", "apps", "*", icon + ext))
+        if candidates:
+            return sorted(candidates, key=lambda c: (icon_rank(c), c))[0]
+        for ext in ICON_EXTENSIONS:
+            direct = os.path.join(base, icon + ext)
+            if os.path.isfile(direct):
+                return direct
+    return None
+
+
+def apps():
+    listed = []
+    for app in desktop_entries():
+        listed.append({**app, "icon": "/apps/icon/%s" % app["id"] if icon_path(app["icon"]) else None})
+    return listed
+
+
+def app_icon(entry_id):
+    if not isinstance(entry_id, str) or not ENTRY_ID.match(entry_id):
+        return None
+    for app in desktop_entries():
+        if app["id"] == entry_id:
+            return icon_path(app["icon"])
+    return None
+
+
+def launch(entry_id):
+    if not isinstance(entry_id, str) or not ENTRY_ID.match(entry_id):
+        raise ValueError("expected a desktop entry id")
+    if not any(app["id"] == entry_id for app in desktop_entries()):
+        raise ValueError("no such desktop entry: %s" % entry_id)
+    subprocess.Popen(
+        ["uwsm-app", "--", "gtk-launch", entry_id + ".desktop"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    return {"launched": entry_id}
+
+
+def valid_look(value):
+    if not isinstance(value, dict):
+        return None
+    style, color = value.get("style"), value.get("color")
+    if style in LOOK_STYLES and isinstance(color, str) and HEX_COLOR.match(color):
+        return {"style": style, "color": color}
+    return None
+
+
+def valid_note(value):
+    if not isinstance(value, str):
+        return None
+    note = value.strip()
+    return note if 0 < len(note) <= NOTE_MAX else None
+
+
+def read_desk_file():
+    try:
+        with open(os.path.join(config_dir(), "desk.json"), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_desk_file(data):
+    directory = config_dir()
+    os.makedirs(directory, exist_ok=True)
+    target = os.path.join(directory, "desk.json")
+    tmp = "%s.%d.tmp" % (target, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+    os.replace(tmp, target)
+
+
+def text_or_default(value, default=""):
+    return value if isinstance(value, str) else default
+
+
+def character_svg():
+    for path in (os.path.join(config_dir(), "desk.svg"), os.path.join(desk_dir(), "character.svg")):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            continue
+    raise RuntimeError("no character drawing available")
+
+
+def desk_state():
+    stored = read_desk_file()
+    return {
+        "builderName": text_or_default(stored.get("builderName")),
+        "agentName": text_or_default(stored.get("agentName")),
+        "look": valid_look(stored.get("look")) or dict(DEFAULT_LOOK),
+        "note": valid_note(stored.get("note")) or DEFAULT_NOTE,
+        "timeZone": stored.get("timeZone") if isinstance(stored.get("timeZone"), str) else None,
+        "characterSvg": character_svg(),
+        "apps": apps(),
+    }
+
+
+def set_note(value):
+    note = valid_note(value)
+    if note is None:
+        raise ValueError("note must be text of 1 to %d characters" % NOTE_MAX)
+    with DESK_LOCK:
+        stored = read_desk_file()
+        stored["note"] = note
+        write_desk_file(stored)
+    return {"note": note}
+
+
+def set_style(style, accent):
+    if style not in STYLES:
+        raise ValueError("style must be one of: %s" % ", ".join(STYLES))
+    if accent is not None and (style != "familiar" or not isinstance(accent, str) or not HEX_COLOR.match(accent)):
+        raise ValueError("accent must be a lowercase #rrggbb colour and applies to the familiar style only")
+    argv = ["octo-desktop-style", style] + (["--accent", accent] if accent else [])
+    out = run(argv, timeout=120)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.decode(errors="replace").strip() or "octo-desktop-style failed")
+    return {"style": style, "accent": accent}
+
+
+def current_time_zone():
+    out = run(["timedatectl", "show", "-p", "Timezone", "--value"])
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.decode(errors="replace").strip() or "timedatectl failed")
+    return {"timeZone": out.stdout.decode(errors="replace").strip()}
+
+
+def set_time_zone(zone):
+    if not isinstance(zone, str) or len(zone) > TIME_ZONE_MAX or not TIME_ZONE.match(zone):
+        raise ValueError("timeZone must be an IANA zone name such as America/Chicago")
+    base = zoneinfo_dir()
+    path = os.path.normpath(os.path.join(base, zone))
+    if not path.startswith(base + os.sep) or not os.path.isfile(path):
+        raise ValueError("unknown time zone: %s" % zone)
+    out = run(["sudo", "-n", "timedatectl", "set-timezone", zone], timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.decode(errors="replace").strip() or "timedatectl set-timezone failed")
+    return {"timeZone": zone}
+
+
+def desk_asset(name):
+    if name in ("", "index.html"):
+        name = "index.html"
+    if "/" in name or name in (".", "..") or name.startswith("."):
+        return None
+    ext = os.path.splitext(name)[1]
+    if ext not in ASSET_TYPES:
+        return None
+    path = os.path.join(desk_dir(), name)
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(), ASSET_TYPES[ext]
+    except OSError:
+        return None
+
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status, body, content_type="application/json"):
@@ -83,19 +412,37 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.command, fmt % args))
 
+    def _json_body(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if not 0 < length <= BODY_MAX:
+            raise ValueError("invalid request size")
+        body = json.loads(self.rfile.read(length))
+        if not isinstance(body, dict):
+            raise ValueError("expected a JSON object")
+        return body
+
     def do_POST(self):
-        if self.path != "/resize":
-            self._send(404, {"error": "not found"})
-            return
+        path = unquote(urlsplit(self.path).path)
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 1024:
-                raise ValueError("invalid request size")
-            body = json.loads(self.rfile.read(length))
-            if not isinstance(body, dict):
-                raise ValueError("expected display dimensions")
-            with ACTION_LOCK:
-                result = resize(body.get("width"), body.get("height"))
+            if path == "/resize":
+                body = self._json_body()
+                with ACTION_LOCK:
+                    result = resize(body.get("width"), body.get("height"))
+            elif path == "/launch":
+                result = launch(self._json_body().get("id"))
+            elif path == "/desk/note":
+                result = set_note(self._json_body().get("note"))
+            elif path == "/style":
+                body = self._json_body()
+                with ACTION_LOCK:
+                    result = set_style(body.get("style"), body.get("accent"))
+            elif path == "/timezone":
+                body = self._json_body()
+                with ACTION_LOCK:
+                    result = set_time_zone(body.get("timeZone"))
+            else:
+                self._send(404, {"error": "not found"})
+                return
             self._send(200, result)
         except ValueError as exc:
             self._send(400, {"error": str(exc)})
@@ -103,23 +450,43 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(exc)})
 
     def do_GET(self):
+        path = unquote(urlsplit(self.path).path)
         try:
-            with ACTION_LOCK:
-                if self.path == "/health":
-                    clients = [c.get("class") for c in windows()]
-                    self._send(200, {
-                        "ok": True,
-                        "compositor": COMPOSITOR,
-                        "output": OUTPUT,
-                        "monitors": monitors(),
-                        "clients": clients,
-                    })
-                elif self.path == "/screenshot":
-                    self._send(200, screenshot_png(), "image/png")
-                elif self.path == "/windows":
-                    self._send(200, windows())
-                else:
+            if path in ("/health", "/screenshot", "/windows"):
+                with ACTION_LOCK:
+                    if path == "/health":
+                        self._send(200, {
+                            "ok": True,
+                            "compositor": COMPOSITOR,
+                            "output": OUTPUT,
+                            "monitors": monitors(),
+                            "clients": [c.get("class") for c in windows()],
+                        })
+                    elif path == "/screenshot":
+                        self._send(200, screenshot_png(), "image/png")
+                    else:
+                        self._send(200, windows())
+            elif path == "/desk/state":
+                self._send(200, desk_state())
+            elif path == "/timezone":
+                self._send(200, current_time_zone())
+            elif path == "/apps":
+                self._send(200, apps())
+            elif path.startswith("/apps/icon/"):
+                icon = app_icon(path[len("/apps/icon/"):])
+                if icon is None:
                     self._send(404, {"error": "not found"})
+                    return
+                with open(icon, "rb") as handle:
+                    self._send(200, handle.read(), ASSET_TYPES.get(os.path.splitext(icon)[1], "application/octet-stream"))
+            elif path == "/desk" or path.startswith("/desk/"):
+                asset = desk_asset(path[len("/desk/"):] if path.startswith("/desk/") else "")
+                if asset is None:
+                    self._send(404, {"error": "not found"})
+                    return
+                self._send(200, asset[0], asset[1])
+            else:
+                self._send(404, {"error": "not found"})
         except Exception as exc:  # noqa: BLE001
             self._send(500, {"error": str(exc)})
 

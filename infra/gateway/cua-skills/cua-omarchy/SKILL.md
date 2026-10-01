@@ -26,6 +26,14 @@ Read the `cua-driver` skill first for the observe-act-verify loop and the
   reconfigure Hyprland plugins or input settings as part of a computer task.
 - The Cua Hyprland input plugin is not installed. Raw background input to an
   unfocused window is unavailable; `background_unavailable` is the contract.
+- The desktop starts in the Familiar style: windows float and overlap with
+  traffic-light title bars, open centred, and snap to a half or quarter when
+  dragged to a screen edge; a dock along the bottom edge appears when the
+  pointer reaches that edge and opens or raises apps; Super+Tab switches
+  windows. A floating target may be partly covered, so select it with
+  `list_windows` and foreground delivery instead of moving other windows.
+  Switching between Familiar and stock Omarchy is customization
+  (`octo-desktop-style`), not a computer task.
 
 ## Target and verify on Hyprland
 

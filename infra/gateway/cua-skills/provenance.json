@@ -10,7 +10,9 @@
         "SKILL.md": "a6ca1717f88a1d95e302f82f953ac4887d4ad7478290a73d36062e3ce479f0fe",
         "LINUX.md": "4d096f19eab5c56f0231bed98e2048abc09f969a92e70311be9e1f5ecc5209e0"
       },
-      "files": ["SKILL.md"]
+      "files": [
+        "SKILL.md"
+      ]
     },
     "cua-omarchy": {
       "repository": "https://github.com/omacom/omarchy",
@@ -20,7 +22,12 @@
       "adaptedFrom": {
         "SKILL.md": "23d635cad67c56be98f573fec39508ad9543027ca4042f8b4a0e7b713c7f796b"
       },
-      "files": ["SKILL.md"]
+      "files": [
+        "SKILL.md"
+      ],
+      "localEdits": [
+        "SKILL.md: Familiar desktop paragraph (floating windows, snapping, dock, Super+Tab) under \"This desktop\""
+      ]
     }
   }
 }

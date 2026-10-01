@@ -24,6 +24,7 @@ import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
+import { createInternalComputerRouter, resolveComputerControlUrl } from "./routes/internal/computer.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentImportRuntime, invokeLocalOpenClaw } from "./lib/agent-import-runtime.js";
 import { startDesktopNodePairing } from "./lib/desktop-node-pairing.js";
@@ -201,6 +202,7 @@ if (surface === "sidecar") {
   app.use("/api/g/:gatewayId/internal/agent-message", internalAgentMessageRoutes);
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
   app.use("/internal/connectors", internalConnectorRoutes);
+  app.use("/internal/computer", createInternalComputerRouter({ controlUrl: resolveComputerControlUrl(process.env) }));
 }
 
 if (surface === "cluster") {

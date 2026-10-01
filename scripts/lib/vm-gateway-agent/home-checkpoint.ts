@@ -18,7 +18,7 @@ export const HOME_VOLUME_NAME = "data";
 export const HOME_CHECKPOINT_INTERVAL_MS = 30 * 60_000;
 export const HOME_CHECKPOINT_MARKER = "home-checkpoint.marker";
 export const HOME_RESTORE_PENDING = "home-restore.pending";
-export const DESKTOP_HOME_PATHS = [".config/octogee-chromium", ".config/hypr", ".config/omarchy", "Documents"] as const;
+export const DESKTOP_HOME_PATHS = [".config/octogee-chromium", ".config/hypr", ".config/omarchy", ".config/octogee", "Documents"] as const;
 export const HOME_CHECKPOINT_EXCLUDES = [
   "node_modules",
   ".npm",

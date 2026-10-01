@@ -1,6 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("vm-gateway-agent");
-import { chown, mkdir, statfs, writeFile } from "node:fs/promises";
+import { chown, mkdir, readFile, statfs, writeFile } from "node:fs/promises";
 import { runVmGatewayAgent } from "../lib/vm-gateway-agent/agent.js";
 import { createDockerEngine } from "../lib/vm-gateway-agent/docker-engine.js";
 import { createDesktopControl } from "../lib/vm-gateway-agent/desktop-control.js";
@@ -26,6 +26,10 @@ await runVmGatewayAgent(
     fs: {
       mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
       writeFile: (path, content, mode) => writeFile(path, content, { mode }),
+      readFile: (path) => readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }),
       chown,
       diskUsage: async (path) => {
         const stats = await statfs(path);

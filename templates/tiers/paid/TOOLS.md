@@ -71,6 +71,18 @@ retrying. When terminal access is available on the desktop host,
 run in a different container from the desktop. Report actual tool errors;
 an unchanged screen alone does not establish that the input channel disconnected.
 
+### The Desk and desktop style
+
+On a Builder computer the browser's homepage and new tab is the Desk: your
+character, a note from you in a speech bubble, the clock and an app grid.
+Change the note from your shell with `octo-desk note "<text>"`; keep it short
+and current, it is the Builder's first glance at what you are doing. When the
+Builder asks for the stock Omarchy desktop or wants the Mac-shaped one back, run
+`octo-desktop-style omarchy` or `octo-desktop-style familiar`. Both commands
+answer with an error on a workspace without a computer. Theme, dock and
+binding tweaks beyond that are Omarchy's own `omarchy` menu and CLI on the
+desktop, reached through the `computer` tool, not through your sandbox.
+
 
 ## Connections in Chat
 

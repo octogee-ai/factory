@@ -101,6 +101,73 @@ Acceptance (`acceptance/familiar-desktop.sh`) checks the loaded hyprbars,
 theme, wallpaper, plugin links, pinned desktop entries, a floating Chromium,
 and a clean `omarchy` → `familiar` round trip with no Hyprland config errors.
 
+### The Desk
+
+At session start `octo-desktop-browser` launches Chromium with
+`--app=http://127.0.0.1:7777/desk` (`OCTO_HOME_URL`): the Desk is a
+frameless app window, class `chrome-127.0.0.1__desk-Default` (the same
+shape Omarchy's web apps take), which `familiar.lua` floats centred at 80%
+of the screen with `hyprbars:no_bar`; the stock `omarchy` style simply tiles
+it. Session restore is not requested at start, so old browser windows never
+reopen over the Desk; a later `chromium`/`omarchy launch browser` joins the
+same profile and opens a normal browser window on top, where the managed
+policy makes the homepage and new tab
+(`rootfs/etc/chromium/policies/managed/octogee-desk.json`) the Desk at
+`http://127.0.0.1:7777/desk`,
+a static page (`rootfs/usr/share/omarchy/octo-desktop/desk/`) served by the
+control API: the agent character, a speech bubble with the agent's note, the
+clock, "Welcome back, {first name}" and an app grid built from the installed
+desktop entries (`GET /apps`, launched through `POST /launch` the way the dock
+does, `uwsm-app -- gtk-launch`). The desktop renders through llvmpipe, so the
+page is static at rest: no continuous animation, a 240 ms blink every few
+seconds (none under `prefers-reduced-motion`), a clock that updates once a
+minute, and polling that compares state before touching the DOM; `desk.sh`
+fails when the VM is under 85% idle with the Desk in front. `GET /apps` curates
+the grid with desktop-entry metadata (NoDisplay/Hidden, `Terminal=true`,
+`OnlyShowIn`/`NotShowIn` against Hyprland, and entries whose categories are
+only System/Settings/ConsoleOnly or absent are dropped; Omarchy web apps
+stay) and lists the dock's pinned apps first, then alphabetical. The page polls
+`GET /desk/state`, which reads `~/.config/octogee/desk.json` and `desk.svg`;
+the VM gateway agent writes both from the Builder's bootstrap payload (name,
+agent name, `agents/{uid}.look`), rendering the shared character drawing, and
+keeps the stored `note`. Until the agent has written them the control API
+serves the shipped default drawing (`desk/character.svg`, pinned to the shared
+drawing by `scripts/__tests__/desktop-desk-page.spec.ts`) and the default note.
+The coach changes the note with `octo-desk note "<text>"` and the style with
+`octo-desktop-style familiar|omarchy` from its gateway container; both reach
+`POST /desk/note` and `POST /style` through gateway-edge's internal computer
+route with the gateway's own credential. `.config/octogee` rides the home
+checkpoint, so the note survives VM replacement.
+
+`octo-desktop-style familiar --accent <#rrggbb>` recolours the `octogee`
+theme's `accent`, `blue` and `selection` from the agent look colour (the
+seven mascot colours have hand-tuned selection tints; any other colour is
+mixed with white). The gateway agent re-runs it on a look change only while the
+recorded style is Familiar and the current theme is still `octogee`; a plain
+`familiar` keeps the accent already installed.
+
+The Builder's time zone comes from their browser: the PWA sends
+`Intl.DateTimeFormat().resolvedOptions().timeZone` with the signup claim and
+backfills `users/{uid}.preferences.timeZone` on app load for existing
+Builders (Firestore rules keep it IANA-shaped; every consumer re-parses it).
+It rides the bootstrap `desk` field into `desk.json`, and the gateway agent
+sets the computer's system zone through `POST /timezone` on the control API
+(`timedatectl set-timezone`, validated against `/usr/share/zoneinfo`), only
+when `GET /timezone` disagrees. The Desk clock formats in that zone and falls
+back to the browser's only when `desk.json` has none. The same zone is seeded
+into the coach's USER.md (`- **Timezone:**`) and that one line is re-synced
+on change.
+
+Acceptance (`acceptance/desk.sh`, run before the style round trip so the
+boot-time window state is what it sees) checks the Desk app window is present
+and floating with no normal browser window open, the served page, the default note and
+SVG in `/desk/state`, `chromium` and `org.gnome.Nautilus` in `/apps` with a
+resolvable icon, a `POST /desk/note` round trip into `desk.json`, launch input
+validation, a `POST /timezone` round trip against `timedatectl` (and that the
+system zone matches `desk.json` once the agent has written one), at least 85%
+idle CPU after a 5 s settle with the Desk in front, the Chromium policy file,
+and Chromium actually showing the Desk.
+
 ## What runs on the VM at boot
 
 | Unit | Role |

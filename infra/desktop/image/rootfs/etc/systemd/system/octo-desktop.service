@@ -14,7 +14,7 @@ Environment=OCTO_DISPLAY=drm
 Environment=OCTO_RESOLUTION=1440x900
 Environment=OCTO_REFRESH=60
 Environment=OCTO_BIND=127.0.0.1
-Environment=OCTO_HOME_URL=https://octogee.com
+Environment=OCTO_HOME_URL=http://127.0.0.1:7777/desk
 ExecStart=/usr/local/bin/octo-desktop-session
 ExecStop=/usr/local/bin/octo-desktop-stop
 StandardOutput=journal+console

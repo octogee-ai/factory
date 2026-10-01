@@ -8,7 +8,7 @@
     "magnify": false,
     "tiles": true,
     "showRunning": true,
-    "hideOnLaunch": true,
+    "hideOnLaunch": false,
     "showWhenEmpty": true,
     "revealDelay": 40,
     "hideDelay": 350,
@@ -16,15 +16,41 @@
     "hotspotHeight": 2,
     "edgeGap": 6,
     "items": [
-      { "desktop": "chromium", "label": "Web" },
-      { "desktop": "org.gnome.Nautilus", "label": "Files" },
-      { "exec": "omarchy launch terminal", "glyph": "󰆍", "label": "Terminal" },
-      { "desktop": "omawrite", "label": "Text" },
-      { "desktop": "libreoffice-writer", "label": "Writer" },
-      { "desktop": "obsidian", "label": "Obsidian" },
-      { "spacer": true },
-      { "exec": "omarchy menu", "glyph": "󰒓", "label": "Settings" }
-    ]
+      {
+        "desktop": "chromium",
+        "label": "Web"
+      },
+      {
+        "desktop": "org.gnome.Nautilus",
+        "label": "Files"
+      },
+      {
+        "exec": "omarchy launch terminal",
+        "glyph": "󰆍",
+        "label": "Terminal"
+      },
+      {
+        "desktop": "omawrite",
+        "label": "Text"
+      },
+      {
+        "desktop": "libreoffice-writer",
+        "label": "Writer"
+      },
+      {
+        "desktop": "obsidian",
+        "label": "Obsidian"
+      },
+      {
+        "spacer": true
+      },
+      {
+        "exec": "omarchy menu",
+        "glyph": "󰒓",
+        "label": "Settings"
+      }
+    ],
+    "alwaysVisible": true
   },
   {
     "id": "community.window-switcher",

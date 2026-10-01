@@ -6,6 +6,7 @@ import * as path from "path";
 import {
   reassertConvergedContextFiles,
   reassertConvergedContextFilesForSlug,
+  reassertUserTimeZoneLine,
 } from "./context-file-convergence.js";
 import { mapUserDocToSnapshot } from "./customer-snapshot-mapping.js";
 
@@ -284,5 +285,52 @@ describe("reassertConvergedContextFilesForSlug", () => {
 
     expect(changed.sort()).toEqual(["AGENTS.md", "TOOLS.md"]);
     expect(fs.existsSync(path.join(dir, "AGENTS.md"))).toBe(true);
+  });
+});
+
+describe("reassertUserTimeZoneLine", () => {
+  const seeded = "# USER.md — About You\n\n## The Basics\n- **Name:** Alice\n- **Timezone:** unknown\n\n## Notes\nCoach notes stay.\n";
+
+  it("rewrites only the time zone line of the customer-owned USER.md", () => {
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "USER.md"), seeded, "utf-8");
+    expect(reassertUserTimeZoneLine(dir, "America/Chicago")).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe(seeded.replace("- **Timezone:** unknown", "- **Timezone:** America/Chicago"));
+    expect(reassertUserTimeZoneLine(dir, "America/Chicago")).toBe(false);
+  });
+
+  it("adds the line under the Name line when the Builder's file predates it, keeping the trial template's spelling", () => {
+    const dir = customerDir();
+    fs.writeFileSync(path.join(dir, "USER.md"), "- **Name:** Alice\n- **Pronouns:** she\n", "utf-8");
+    expect(reassertUserTimeZoneLine(dir, "Europe/Berlin")).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("- **Name:** Alice\n- **Timezone:** Europe/Berlin\n- **Pronouns:** she\n");
+    fs.writeFileSync(path.join(dir, "USER.md"), "- **Time zone:** old\n", "utf-8");
+    reassertUserTimeZoneLine(dir, "Europe/Berlin");
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("- **Time zone:** Europe/Berlin\n");
+  });
+
+  it("leaves a file without an anchor, a missing file, and a Builder without a zone alone", () => {
+    const dir = customerDir();
+    expect(reassertUserTimeZoneLine(dir, "Europe/Berlin")).toBe(false);
+    fs.writeFileSync(path.join(dir, "USER.md"), "Free-form notes only.\n", "utf-8");
+    expect(reassertUserTimeZoneLine(dir, "Europe/Berlin")).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toBe("Free-form notes only.\n");
+    fs.writeFileSync(path.join(dir, "USER.md"), seeded, "utf-8");
+    expect(reassertUserTimeZoneLine(dir, null)).toBe(false);
+  });
+
+  it("rides the context-file reassert off the snapshot's time zone", () => {
+    const dir = customerDir("bob");
+    fs.writeFileSync(path.join(dir, "USER.md"), seeded, "utf-8");
+    const changed = reassertConvergedContextFilesForSlug(
+      { ...mapUserDocToSnapshot("uid-bob", { username: "bob", tier: "free" }, []), username: "bob", timeZone: "Asia/Tokyo" },
+      path.join(tmpRoot, "customers"),
+    );
+    expect(changed).toContain("USER.md");
+    expect(fs.readFileSync(path.join(dir, "USER.md"), "utf-8")).toContain("- **Timezone:** Asia/Tokyo");
+    expect(reassertConvergedContextFilesForSlug(
+      { ...mapUserDocToSnapshot("uid-bob", { username: "bob", tier: "free" }, []), username: "bob", timeZone: "../etc" },
+      path.join(tmpRoot, "customers"),
+    )).not.toContain("USER.md");
   });
 });

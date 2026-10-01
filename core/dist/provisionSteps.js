@@ -6,6 +6,8 @@
 // /^[a-z0-9]+(-[a-z0-9]+)*$/ minus a reserved set. That validator is the
 // path-traversal defense.
 import { filterOutCustomerBindings } from "./apply-config-patch.js";
+import { parseTimeZone } from "@octogee/shared/types/time-zone";
+import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { DEFAULT_AGENT_LOOK } from "@octogee/shared/types/agent-characters";
 import * as fs from "fs";
@@ -42,6 +44,7 @@ export function buildProvisioningContext(uid, userData) {
         tier,
         createdAt: today,
         slug,
+        timeZone: parseTimeZone(data.preferences?.timeZone) ?? UNKNOWN_TIME_ZONE,
     };
     return {
         uid,

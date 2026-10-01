@@ -117,6 +117,7 @@ function deps(
     fs: {
       mkdir: async (p) => { dirs.add(p); },
       writeFile: async (p, content, mode) => { files.set(p, { content, mode }); },
+      readFile: async (p) => files.get(p)?.content ?? null,
       chown: async (p) => { chowns.push(p); },
       diskUsage: opts.diskUsage ?? (async () => DISK),
     },
@@ -162,6 +163,42 @@ const calls = (fetchImpl: typeof fetch, suffix: string) =>
   (fetchImpl as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls.filter(([url]) => String(url).endsWith(suffix));
 
 describe("convergeOnce", () => {
+  it("writes the Desk identity into a Builder's home from the configured bootstrap and keeps converging when it is unavailable", async () => {
+    const clock = { now: 1_000 };
+    const desk = { builderName: "Bob Builder", agentName: "Scout", look: { style: "kit", color: "#0ea5e9" }, timeZone: null };
+    const h = deps(fakeDocker(), () => runtimeReply(homeBundle()), clock, {
+      routes: { "/internal/fleet/configured-builder-bootstrap": () => ({ status: 200, body: { bootstrap: { coachToken: "x", desk } } }) },
+    });
+    const state = await convergeOnce(h.d, initialAgentState());
+    expect(state.appliedVersion).toBe("v1");
+    expect(JSON.parse(calls(h.fetchImpl, "/internal/fleet/configured-builder-bootstrap")[0][1].body as string)).toEqual({ gatewayId: "b-x", slug: "bob", revisionId: "b-x" });
+    expect(JSON.parse(h.files.get("/srv/octogee/desktop-home/.config/octogee/desk.json")!.content)).toEqual(desk);
+    expect(h.files.get("/srv/octogee/desktop-home/.config/octogee/desk.svg")?.content).toContain("<svg");
+    expect(h.chowns).toContain("/srv/octogee/desktop-home/.config/octogee/desk.json");
+
+    await convergeOnce(h.d, state);
+    expect(calls(h.fetchImpl, "/internal/fleet/configured-builder-bootstrap")).toHaveLength(2);
+    expect([...h.files.keys()].filter((p) => p.endsWith("desk.json"))).toHaveLength(1);
+
+    const broken = deps(fakeDocker(), () => runtimeReply(homeBundle()), clock, {
+      routes: { "/internal/fleet/configured-builder-bootstrap": () => ({ status: 500, body: { error: "boom" } }) },
+    });
+    const converged = await convergeOnce(broken.d, initialAgentState());
+    expect(converged.appliedVersion).toBe("v1");
+    expect(broken.d.log).toHaveBeenCalledWith(expect.stringContaining("desk sync failed: configured-builder-bootstrap: HTTP 500"));
+    expect(broken.files.has("/srv/octogee/desktop-home/.config/octogee/desk.json")).toBe(false);
+
+    const pending = deps(fakeDocker(), () => runtimeReply(homeBundle()), clock, {
+      routes: { "/internal/fleet/configured-builder-bootstrap": () => ({ status: 404, body: { error: "configured_builder_bootstrap_unavailable" } }) },
+    });
+    await convergeOnce(pending.d, initialAgentState());
+    expect(pending.d.log).toHaveBeenCalledWith(expect.stringContaining("desk sync waiting"));
+
+    const shared = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock);
+    await convergeOnce(shared.d, initialAgentState());
+    expect(calls(shared.fetchImpl, "/internal/fleet/configured-builder-bootstrap")).toEqual([]);
+  });
+
   it("applies a bundle from a platform that predates the namespace field, and says so", async () => {
     const clock = { now: 1_000 };
     const h = deps(fakeDocker(), () => runtimeReply(homeBundle({ namespace: undefined })), clock);

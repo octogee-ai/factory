@@ -1,5 +1,6 @@
 local hyprbars_path = (os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/octo-desktop/hyprbars.so"
 local switcher = "omarchy-shell shell summon community.window-switcher "
+local desk_class = "^chrome-127\\.0\\.0\\.1__desk-Default$"
 
 hl.config({
   general = {
@@ -13,7 +14,7 @@ hl.config({
 
 hl.window_rule({
   name = "octo-familiar-float",
-  match = { class = "negative:^org\\.omarchy\\.screensaver$", float = false },
+  match = { class = "negative:^(org\\.omarchy\\.screensaver|chrome-127\\.0\\.0\\.1__desk-Default)$", float = false },
   float = true,
   size = { "monitor_w*0.7", "monitor_h*0.7" },
   center = true,
@@ -21,11 +22,21 @@ hl.window_rule({
 
 hl.window_rule({
   name = "octo-familiar-browser",
-  match = { tag = "chromium-based-browser" },
+  match = { tag = "chromium-based-browser", class = "negative:" .. desk_class },
   tile = false,
   float = true,
   size = { "monitor_w*0.92", "monitor_h*0.9" },
   center = true,
+})
+
+hl.window_rule({
+  name = "octo-familiar-desk",
+  match = { class = desk_class },
+  tile = false,
+  float = true,
+  size = { "monitor_w*0.8", "monitor_h*0.8" },
+  center = true,
+  ["hyprbars:no_bar"] = true,
 })
 
 hl.unbind("SUPER + TAB")

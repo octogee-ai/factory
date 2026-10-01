@@ -36,7 +36,9 @@ done
 for entry in $(jq -r '.plugins[] | select(.id == "rdf.dock") | .items[] | .desktop // empty' "$shell_json"); do
   [[ -f "/usr/share/applications/$entry.desktop" || -f "$HOME/.local/share/applications/$entry.desktop" ]] || fail "dock pins $entry but no desktop entry exists"
 done
-chromium="$(hyprctl -j clients | jq -c '[.[] | select(.class | test("chromium"; "i"))][0] | {floating, size}')"
+reserved_bottom="$(hyprctl -j monitors | jq '.[0].reserved[3]')"
+[[ "$reserved_bottom" =~ ^[0-9]+$ && "$reserved_bottom" -gt 0 ]] || fail "the dock reserves no space at the bottom edge (reserved: $(hyprctl -j monitors | jq -c '.[0].reserved'))"
+chromium="$(hyprctl -j clients | jq -c '[.[] | select(.class | test("chrom"; "i"))][0] | {class, floating, size}')"
 [[ "$chromium" == *'"floating":true'* ]] || fail "Chromium is not floating: $chromium"
 
 octo-desktop-style omarchy || fail "octo-desktop-style omarchy failed"
@@ -54,5 +56,5 @@ config_errors "switching back to familiar"
 
 sleep 5
 idle="$(top -bn2 -d5 | grep -F 'Cpu(s)' | tail -1 | awk '{print $8}')"
-printf 'familiar desktop: hyprbars loaded, theme octogee on %s, dock + switcher linked, Chromium %s, omarchy round trip clean, idle %s%%\n' \
-  "$(basename "$(readlink -f "$HOME/.local/state/omarchy/current/background")")" "$chromium" "$idle"
+printf 'familiar desktop: hyprbars loaded, theme octogee on %s, dock visible reserving %spx + switcher linked, Chromium %s, omarchy round trip clean, idle %s%%\n' \
+  "$(basename "$(readlink -f "$HOME/.local/state/omarchy/current/background")")" "$reserved_bottom" "$chromium" "$idle"
