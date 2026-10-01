@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { Request, Response } from "express";
 import {
+  isCreatePostRequest,
   mmRestProxyHandler,
   setMmCredsCache,
   mmCredsCache,
@@ -30,6 +31,17 @@ const res = mockRes();
     mmRestProxyHandler({ method: "GET", url: "/api/v4/users/me", headers: {} } as Request, res);
     expect(res.statusCode).toBe(502);
     expect(res.body).toMatchObject({ error: expect.stringContaining("misconfigured") });
+  });
+});
+
+describe("isCreatePostRequest — which proxied calls feed the user-DM notifier", () => {
+  it("matches only POST /api/v4/posts, with or without a query string", () => {
+    expect(isCreatePostRequest("POST", "/api/v4/posts")).toBe(true);
+    expect(isCreatePostRequest("POST", "/api/v4/posts?set_online=true")).toBe(true);
+    expect(isCreatePostRequest("GET", "/api/v4/posts")).toBe(false);
+    expect(isCreatePostRequest("POST", "/api/v4/posts/abc/reactions")).toBe(false);
+    expect(isCreatePostRequest("POST", "/api/v4/channels/direct")).toBe(false);
+    expect(isCreatePostRequest(undefined, undefined)).toBe(false);
   });
 });
 

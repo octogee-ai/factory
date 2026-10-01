@@ -3,9 +3,62 @@ import https from "node:https";
 import { URL } from "node:url";
 import type { BridgeLog } from "../bridge-log.js";
 
+export interface MmRestCapture {
+  status: number;
+  body: string;
+}
+
 export interface MmRestProxyDeps {
   mmInternalUrl: string;
   log: BridgeLog;
+  captureResponse?: (req: http.IncomingMessage) => boolean;
+  onCapturedResponse?: (captured: MmRestCapture) => void;
+}
+
+export const MAX_CAPTURED_RESPONSE_BYTES = 256 * 1024;
+
+function attachResponseCapture(
+  deps: MmRestProxyDeps,
+  req: http.IncomingMessage,
+  upstreamRes: http.IncomingMessage,
+): void {
+  const onCaptured = deps.onCapturedResponse;
+  if (!onCaptured) return;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let overflow = false;
+  upstreamRes.on("data", (chunk: Buffer) => {
+    if (overflow) return;
+    size += chunk.length;
+    if (size > MAX_CAPTURED_RESPONSE_BYTES) {
+      overflow = true;
+      chunks.length = 0;
+      return;
+    }
+    chunks.push(chunk);
+  });
+  upstreamRes.on("end", () => {
+    if (overflow) {
+      deps.log(
+        `[mm-proxy/rest] captured response exceeded ${MAX_CAPTURED_RESPONSE_BYTES} bytes for ${req.method} ${req.url}; dropped`,
+        "warn",
+      );
+      return;
+    }
+    try {
+      onCaptured({
+        status: upstreamRes.statusCode ?? 0,
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+    } catch (err) {
+      deps.log(
+        `[mm-proxy/rest] capture handler threw for ${req.method} ${req.url}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        "warn",
+      );
+    }
+  });
 }
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -35,6 +88,8 @@ const forwardedHeaders: http.OutgoingHttpHeaders = {};
     if (value !== undefined) forwardedHeaders[key] = value;
   }
   forwardedHeaders["host"] = target.host;
+  const capture = Boolean(deps.captureResponse?.(req) && deps.onCapturedResponse);
+  if (capture) delete forwardedHeaders["accept-encoding"];
 
   const upstream = transport.request(
     {
@@ -53,6 +108,7 @@ const forwardedHeaders: http.OutgoingHttpHeaders = {};
         if (value !== undefined) responseHeaders[key] = value;
       }
       res.writeHead(upstreamRes.statusCode ?? 502, responseHeaders);
+      if (capture) attachResponseCapture(deps, req, upstreamRes);
       upstreamRes.pipe(res);
     },
   );

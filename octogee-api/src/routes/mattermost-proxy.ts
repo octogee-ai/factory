@@ -3,6 +3,10 @@ import { Router, type Request, type Response } from "express";
 import { db } from "../../../gateway-edge/src/lib/db.js";
 import { requireAuth } from "../../../gateway-edge/src/middleware/auth.js";
 import { forwardMmRest } from "../../../gateway-edge/src/chat-proxy/mm-proxy/rest.js";
+import {
+  createProductionUserDmNotifier,
+  type UserDmNotifier,
+} from "../lib/user-dm-notifier.js";
 
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "";
 
@@ -99,15 +103,33 @@ if (!API_PUBLIC_URL) {
   });
 });
 
+export function isCreatePostRequest(method: string | undefined, url: string | undefined): boolean {
+  return method === "POST" && (url ?? "").split("?")[0] === "/api/v4/posts";
+}
+
+let userDmNotifier: UserDmNotifier | null = null;
+
+function notifier(): UserDmNotifier {
+  userDmNotifier ??= createProductionUserDmNotifier({ mmInternalUrl: MM_INTERNAL_URL });
+  return userDmNotifier;
+}
+
 export function mmRestProxyHandler(req: Request, res: Response): void {
-  
   if (!MM_INTERNAL_URL) {
     logger.error("[mm-proxy] MM_INTERNAL_URL unset — cannot proxy MM REST");
     res.status(502).json({ error: "Chat service misconfigured" });
     return;
   }
+  const authorization = req.headers.authorization;
   forwardMmRest(
-    { mmInternalUrl: MM_INTERNAL_URL, log: (msg) => logger.warn(msg) },
+    {
+      mmInternalUrl: MM_INTERNAL_URL,
+      log: (msg) => logger.warn(msg),
+      captureResponse: (incoming) => isCreatePostRequest(incoming.method, incoming.url),
+      onCapturedResponse: (captured) => {
+        void notifier().handleCreatedPost({ ...captured, authorization });
+      },
+    },
     req,
     res,
   );
