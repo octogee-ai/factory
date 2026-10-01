@@ -1,7 +1,7 @@
 {
   "name": "@octogee/gateway-edge",
   "version": "1.0.0",
-  "description": "Octogee gateway-edge sidecar — locality-bound HTTP routes (ESM)",
+  "description": "Octogee gateway-edge sidecar \u2014 locality-bound HTTP routes (ESM)",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -25,7 +25,7 @@
     "test:coverage": "vitest run --coverage",
     "pretypecheck": "node ../scripts/ops/sync-local-file-deps.mjs --consumer .",
     "typecheck": "tsc --noEmit",
-    "verify:no-alias-leakage": "! grep -rq --include='*.js' '@shared' dist/ || (echo '❌ Found un-rewritten @shared/* alias in compiled JS. Fix: ensure tsc-alias is installed and the build script runs `tsc && tsc-alias -p tsconfig.json` (path alias rewriting must run after emit, or Node will fail at runtime with MODULE_NOT_FOUND).' && exit 1)"
+    "verify:no-alias-leakage": "! grep -rq --include='*.js' '@shared' dist/ || (echo '\u274c Found un-rewritten @shared/* alias in compiled JS. Fix: ensure tsc-alias is installed and the build script runs `tsc && tsc-alias -p tsconfig.json` (path alias rewriting must run after emit, or Node will fail at runtime with MODULE_NOT_FOUND).' && exit 1)"
   },
   "engines": {
     "node": ">=24"
@@ -95,6 +95,7 @@
     "js-yaml": "^4.3.1",
     "@opentelemetry/core": "^2.8.0",
     "postcss": "8.5.25",
-    "undici@<7.0.0": "^6.28.0"
+    "undici@<7.0.0": "^6.28.0",
+    "basic-ftp": "^6.2.1"
   }
 }

@@ -80,6 +80,7 @@
     "js-yaml": "^4.3.1",
     "@opentelemetry/core": "^2.8.0",
     "postcss": "8.5.25",
-    "undici@<7.0.0": "^6.28.0"
+    "undici@<7.0.0": "^6.28.0",
+    "basic-ftp": "^6.2.1"
   }
 }
