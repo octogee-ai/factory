@@ -121,11 +121,12 @@ describe("renderVmRuntimeBundle", () => {
     expect(bundle.renderedAt).toBe(1_000);
   });
 
-  it("connects only the edge to the visible desktop and marks the gateway's runtime", async () => {
+  it("connects the edge to the visible desktop and enables VM runtime behavior in both services", async () => {
     const bundle = await render();
     const [gateway, edge] = bundle.containers;
     expect(edge.name).toBe("gateway-edge");
     expect(edge.env).toMatchObject({
+      GATEWAY_RUNTIME_KIND: "gce-vm",
       GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777",
       GATEWAY_COMPUTER_VNC_URL: "ws://127.0.0.1:6080",
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: "octogee-computer-test@octogee.iam.gserviceaccount.com",

@@ -215,6 +215,7 @@ async function renderContainer(
     env = {
       ...env,
       ...GATEWAY_COMPUTER_ENV,
+      GATEWAY_RUNTIME_KIND: "gce-vm",
       OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: input.computer.serviceAccountEmail,
       GATEWAY_COMPUTER_PROJECT_ID: input.computer.projectId,
