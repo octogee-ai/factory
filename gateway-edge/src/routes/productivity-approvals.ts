@@ -408,10 +408,14 @@ function projectSheetsAppendPreview(preview: Record<string, unknown>): Record<st
   }
   let totalChars = 0;
   const rows = preview.rows.map((row) => {
-    if (!Array.isArray(row) || row.length === 0 || row.length > 40) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
       throw new Error("canonical productivity approval preview is malformed");
     }
-    return row.map((cell) => {
+    exactKeys(row, ["cells"]);
+    if (!Array.isArray(row.cells) || row.cells.length === 0 || row.cells.length > 40) {
+      throw new Error("canonical productivity approval preview is malformed");
+    }
+    return row.cells.map((cell: unknown) => {
       if (
         (typeof cell !== "string" && typeof cell !== "number" && typeof cell !== "boolean")
         || (typeof cell === "number" && !Number.isFinite(cell))
