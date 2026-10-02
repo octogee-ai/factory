@@ -1,3 +1,4 @@
+import { VOICE_MIGRATION_PATH } from '../voice/migration.js';
 export const FINAL_REPLY_INTAKE_PATH = "/internal/openclaw/notifications/v1/final-reply";
 export const VOICE_EVENT_RELAY_PATH = "/internal/openclaw/voice/v1/events";
 export const ACTIVITY_INTAKE_PATH = "/internal/openclaw/activity/v1/events";
@@ -13,6 +14,7 @@ export function chatProxyOwnsHttpPath(
     (strippedPath === FINAL_REPLY_INTAKE_PATH && originalPath === strippedPath) ||
     (strippedPath === ACTIVITY_INTAKE_PATH && originalPath === strippedPath) ||
     (strippedPath === DIRECT_ACTIVITY_TARGET_PATH && originalPath === strippedPath) ||
+    (strippedPath === VOICE_MIGRATION_PATH && originalPath === strippedPath) ||
     (strippedPath === VOICE_EVENT_RELAY_PATH &&
       originalPath === strippedPath)
   );

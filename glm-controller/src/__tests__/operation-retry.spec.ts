@@ -879,3 +879,14 @@ describe("retained source execution completion", () => {
     expect(supersededRollMigrationAction({status:"pending",sourceTransferExecution:execution})).toBe("wait");
   });
 });
+
+it("waits for active Builder work without consuming attempts or recording a failure", () => {
+  const update = buildOperationCompletionUpdate({
+    op: { kind: "migrate-customer", attempts: 17, startedAt: 500 },
+    result: { success: false, steps: [], waitingForBuilderIdle: true }, steps: [], now: 1_000,
+  });
+  expect(update).toMatchObject({ status: "pending", startedAt: null, nextAttemptAt: 16_000, waitingOn: "builder-idle", rolledBack: false });
+  expect(update).not.toHaveProperty("attempts");
+  expect(update).not.toHaveProperty("attemptHistory");
+  expect(update.error).toEqual(FieldValue.delete());
+});

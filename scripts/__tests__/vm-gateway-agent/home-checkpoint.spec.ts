@@ -46,6 +46,8 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
     stateRoot: "/srv/octogee",
     desktop: { run: vi.fn(async () => {}) },
     snapshot: async (work) => work(),
+    captureSnapshot: async () => {},
+    discardSnapshot: async () => {},
     shell: {
       run: async (command, args) => {
         shell.push(`${command} ${args.join(" ")}`);
@@ -88,6 +90,38 @@ describe("homeScope", () => {
 });
 
 describe("checkpointHome", () => {
+  it("preserves the archive error when snapshot cleanup also fails", async () => {
+    const h = fakeHome({ tarCode: 2 });
+    let cleanups = 0;
+    h.deps.discardSnapshot = async () => { if (++cleanups === 2) throw new Error("snapshot deletion failed"); };
+    await expect(checkpointHome(h.deps, h.scope, { force: true })).rejects.toThrow(/tar --create exited 2.*snapshot deletion failed/);
+    expect(h.removed).toEqual(["/tmp/octogee-home-checkpoint-xyz"]);
+  });
+
+  it("thaws writers before compression and archives only the captured filesystem snapshot", async () => {
+    const h = fakeHome({}, {
+      "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: NAME, upload: signedUpload } }),
+      "/internal/fleet/computer-home/commit": () => ({ status: 200, body: { name: NAME, size: 2048, sha256: SHA } }),
+      "/internal/fleet/computer-home/prune": () => ({ status: 200, body: { deleted: 0 } }),
+    });
+    let frozen = false;
+    const events: string[] = [];
+    h.deps.snapshot = async (work) => { frozen = true; try { await work(); } finally { frozen = false; events.push("thaw"); } };
+    h.deps.captureSnapshot = async () => { expect(frozen).toBe(true); events.push("snapshot-home"); };
+    h.deps.discardSnapshot = async () => { events.push("discard-home-snapshot"); };
+    const run = h.deps.shell.run;
+    h.deps.shell.run = async (command, args) => {
+      if (command === "tar") {
+        expect(frozen).toBe(false);
+        expect(args).toContain("/srv/octogee/.home-checkpoint/snapshot/volumes/data/..");
+        events.push("compress");
+      }
+      return run(command, args);
+    };
+    await checkpointHome(h.deps, h.scope, { force: true });
+    expect(events).toEqual(["discard-home-snapshot", "snapshot-home", "thaw", "compress", "discard-home-snapshot"]);
+  });
+
   it("is a no-op when nothing changed since the marker", async () => {
     const h = fakeHome({ dirty: false });
     expect(await checkpointHome(h.deps, h.scope, { force: false })).toEqual({ status: "clean" });
@@ -104,12 +138,12 @@ describe("checkpointHome", () => {
       "/internal/fleet/computer-home/commit": () => ({ status: 200, body: { name: NAME, size: 2048, sha256: SHA, completedAt: 5 } }),
       "/internal/fleet/computer-home/prune": () => ({ status: 200, body: { deleted: 0 } }),
     });
-    const present = new Set(["/srv/octogee/desktop-home/.config/octogee", "/srv/octogee/desktop-home/Documents"]);
+    const present = new Set(["/srv/octogee/.home-checkpoint/snapshot/desktop-home/.config/octogee", "/srv/octogee/.home-checkpoint/snapshot/desktop-home/Documents"]);
     const baseExists = h.deps.fs.exists;
     h.deps.fs.exists = async (path) => present.has(path) || baseExists(path);
     await checkpointHome(h.deps, h.scope, { force: true });
     const tar = h.shell.find((line) => line.startsWith("tar "))!;
-    expect(tar).toContain("--directory=/srv/octogee/desktop-home/.. desktop-home/.config/octogee desktop-home/Documents");
+    expect(tar).toContain("-C /srv/octogee/.home-checkpoint/snapshot/desktop-home/.. desktop-home/.config/octogee desktop-home/Documents");
     expect(tar).not.toContain("desktop-home/.config/hypr");
   });
 
@@ -124,7 +158,7 @@ describe("checkpointHome", () => {
     const tar = h.shell.find((line) => line.startsWith("tar "))!;
     expect(tar).toContain("--create --gzip --numeric-owner");
     expect(tar).toContain("--file=/tmp/octogee-home-checkpoint-xyz/home.tar.gz");
-    expect(tar).toContain("--directory=/srv/octogee/volumes/data/.. data");
+    expect(tar).toContain("-C /srv/octogee/.home-checkpoint/snapshot/volumes/data/.. data");
     expect(tar).toContain("--exclude=node_modules");
     expect(tar).toContain("--exclude=Code Cache");
     expect(tar).not.toContain("--ignore-failed-read");

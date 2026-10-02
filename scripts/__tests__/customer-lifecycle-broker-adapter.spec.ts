@@ -235,6 +235,7 @@ function mkGatewayRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClie
       accountId,
       started: true as const,
     })),
+    sessionsList: vi.fn(async () => ({ sessions: [] })),
     sessionsAbort: vi.fn(async () => ({ ok: true as const, abortedRunId: "run-1", status: "aborted" as const })),
     schedulerMigration: vi.fn(async (request: { operationId: string; phase: string; agentIds?: string[] }) => ({
       operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: true,
@@ -1565,7 +1566,7 @@ describe("broker migration admission", () => {
     await adapter.quiesceCustomer("migrationqa", 100, { stopMattermost: false });
     expect(rpc.channelsStop).not.toHaveBeenCalled();
   });
-  it("stops a turn that outlives the grace window through sessions.abort and reports the customer drained", async () => {
+  it("defers a turn that outlives the drain budget without aborting it", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-bounded-stop-"));
     boundedStopDirs.push(stateDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -1584,15 +1585,13 @@ describe("broker migration admission", () => {
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1" }))
-      .resolves.toEqual({ drained: true, runningCount: 0 });
+      .resolves.toEqual({ drained: false, runningCount: 1 });
     expect(rpc.channelsStop).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId: "migrationqa-coach" });
-    expect(rpc.sessionsAbort).toHaveBeenCalledExactlyOnceWith({
-      key: "agent:octogee-migrationqa-coach:main", agentId: "octogee-migrationqa-coach", clearQueued: true,
-    });
+    expect(rpc.sessionsAbort).not.toHaveBeenCalled();
     expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-migrationqa-coach"] });
   });
 
-  it("stops an active scheduled run itself: the hold stays undrained until the run's session is aborted", async () => {
+  it("defers while an active scheduled run keeps the source undrained", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-cron-stop-"));
     boundedStopDirs.push(stateDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -1612,11 +1611,11 @@ describe("broker migration admission", () => {
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1" }))
-      .resolves.toEqual({ drained: true, runningCount: 0 });
-    expect(rpc.sessionsAbort).toHaveBeenCalledTimes(1);
+      .resolves.toEqual({ drained: false, runningCount: 1 });
+    expect(rpc.sessionsAbort).not.toHaveBeenCalled();
     const holds = vi.mocked(rpc.schedulerMigration).mock.calls.map(([request]) => request.phase);
     expect(holds.every((phase) => phase === "hold")).toBe(true);
-    expect(holds.length).toBeGreaterThanOrEqual(2);
+    expect(holds).toEqual(["hold"]);
   });
 
   it("never aborts turns for the whole-process handoff owner, which stops the process itself", async () => {
@@ -3749,6 +3748,16 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
       ...overrides,
     };
   }
+
+  it("refreshes a prepared Builder snapshot after the source changes desired configuration", async () => {
+    let ownerName = "Before";
+    const client = mkClient({ userSnapshot: vi.fn(async () => fullSnapshot({ ownerName })) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+    expect((await adapter.loadUserSnapshot("uid-tester10"))?.ownerName).toBe("Before");
+    ownerName = "After";
+    expect((await adapter.loadUserSnapshot("uid-tester10", { refresh: true }))?.ownerName).toBe("After");
+    expect(client.userSnapshot).toHaveBeenCalledTimes(2);
+  });
 
   it("loadUserSnapshot carries byotActive + systemConfig from the broker snapshot (the in-pod re-assert must see the real BYOT state)", async () => {
     const client = mkClient({

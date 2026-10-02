@@ -756,6 +756,7 @@ describe("customer lifecycle config patch agent directories", () => {
         const rpc = {
           configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
           channelsStop: vi.fn(async () => ({ ok: true as const })),
+          sessionsList: vi.fn<GatewayRpcClient["sessionsList"]>(async () => ({ sessions: [] })),
           schedulerMigration: vi.fn(async (request: { operationId: string; phase: string; agentIds?: string[] }) => ({
             operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: true,
           })),
@@ -773,8 +774,11 @@ describe("customer lifecycle config patch agent directories", () => {
           });
         const retain = partialHandoff ? { retainNonportable: true } : {};
 
-        await adapter.quiesceCustomer("alice", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1", ...retain });
+        const quiesced = await adapter.quiesceCustomer("alice", 0, { stopMattermost: true, schedulerMigrationId: "handoff-1", ...retain });
         await adapter.schedulerMigration("alice", { operationId: "handoff-1", phase: "hold", ...retain });
+
+        expect(quiesced).toEqual({ drained: true, runningCount: 0 });
+        expect(vi.mocked(rpc.sessionsList).mock.calls.map(([request]) => request.agentId)).toEqual(expectedAgentIds);
 
         const heldAgentIds = vi.mocked(rpc.schedulerMigration).mock.calls
           .filter(([request]) => request.phase === "hold")

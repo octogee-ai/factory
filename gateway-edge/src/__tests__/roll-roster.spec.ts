@@ -237,7 +237,7 @@ describe("createRollRosterGate — end to end", () => {
       code: "workspace-moving",
       id: "workspace-moving",
       status_code: 503,
-      message: "Moving your workspace — back in a minute",
+      message: "Moving your workspace — reconnecting shortly",
     });
   });
 

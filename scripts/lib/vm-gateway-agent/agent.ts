@@ -1,3 +1,4 @@
+import { captureHomeSnapshot, discardHomeSnapshot } from "./home-snapshot.js";
 import { basename, dirname } from "node:path";
 import {
   isGatewayVmRuntimeBundle,
@@ -199,7 +200,10 @@ async function resumeWriters(deps: VmAgentDeps, names: string[]): Promise<void> 
 function homeDeps(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, holdAfterSnapshot = false) {
   return {
     ...deps, shell: deps.home.shell, fs: deps.home.fs, desktop: deps.home.desktop,
+    captureSnapshot: () => captureHomeSnapshot({ ...deps, fs: deps.home.fs, shell: deps.home.shell }),
+    discardSnapshot: () => discardHomeSnapshot({ ...deps, fs: deps.home.fs }),
     snapshot: async (work: () => Promise<void>) => {
+      const startedAt = deps.now();
       const paused: string[] = [];
       const errors: unknown[] = [];
       try {
@@ -216,6 +220,7 @@ function homeDeps(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, holdAfterSn
       if (!holdAfterSnapshot) {
         try { await resumeWriters(deps, paused); } catch (error) { errors.push(error); }
       }
+      deps.log(`[vm-agent] home snapshot writers ${holdAfterSnapshot ? "held for retirement" : "resumed"} after ${deps.now() - startedAt}ms`);
       if (errors.length) throw new AggregateError(errors, `home snapshot failed: ${errors.map(String).join("; ")}`);
     },
   };

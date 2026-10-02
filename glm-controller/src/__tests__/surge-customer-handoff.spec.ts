@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import {
   reconcileSurgeCustomerHandoff,
   assertSurgeAssignmentCoverage,
@@ -166,6 +167,8 @@ function harness(input: {
         ? { ...item, state, updatedByOperationId }
         : item);
     }),
+    waitForSourceIdle: vi.fn(async () => undefined),
+    resumeSourceIngress: vi.fn(async () => undefined),
     quiesce: vi.fn(async ({ slug }) => {
       events.push(`quiesce:${slug}`);
     }),
@@ -227,6 +230,69 @@ function harness(input: {
 }
 
 describe("surge customer handoff", () => {
+  it("keeps source ingress closed when a shared target release has an unknown outcome", async () => {
+    const h = harness({ assignments: [assignment("u1", "alice")], releaseErrorBeforeCommit: new Error("connection refused") });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow("connection refused");
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
+  });
+
+  it.each([false, true])("keeps source assignments serving when coach or voice work defers a roll (Builder=%s)", async (builder) => {
+    const h = harness();
+    vi.mocked(h.deps.waitForSourceIdle).mockRejectedValueOnce(new MigrationDrainPendingError("coach is active"));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: builder, stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(h.deps.markAssignment).not.toHaveBeenCalled();
+    expect(h.deps.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceIngress).toHaveBeenCalledWith(expect.objectContaining({ slug: "alice", sourcePod: oldPod }));
+    expect(h.assignments().every((item) => item.state === "serving")).toBe(true);
+    expect(h.deps.reportMigrationProgress).toHaveBeenCalledWith(expect.objectContaining({ event: expect.objectContaining({ phase: "waiting-for-builder-idle", status: "pending" }) }));
+  });
+
+  it("checks every mounted Builder before gating anyone and releases all earlier voice holds on defer", async () => {
+    const h = harness();
+    vi.mocked(h.deps.waitForSourceIdle).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new MigrationDrainPendingError("voice is active"));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(h.deps.markAssignment).not.toHaveBeenCalled();
+    expect(vi.mocked(h.deps.resumeSourceIngress).mock.calls.map(([input]) => input.slug).sort()).toEqual(["alice", "bob"]);
+  });
+
+  it.each([false, true])("restores source admission when new work races the final gate (Builder=%s)", async (builder) => {
+    const h = harness({ assignments: [assignment("u1", "alice")] });
+    vi.mocked(h.deps.quiesce).mockRejectedValueOnce(new MigrationDrainPendingError("new coach turn"));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: builder, stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(h.events).toEqual(["assignment:u1:quiescing", "assignment:u1:serving"]);
+    expect(h.deps.waitForSourceIdle).toHaveBeenCalledOnce();
+    expect(h.deps.resumeSourceIngress).toHaveBeenCalledOnce();
+    expect(vi.mocked(h.deps.resumeSourceIngress).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(h.deps.markAssignment).mock.invocationCallOrder[1],
+    );
+    expect(h.deps.flush).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("serving");
+  });
+
+  it("reports failed source resume instead of hiding it as a pending drain", async () => {
+    const h = harness();
+    vi.mocked(h.deps.waitForSourceIdle).mockRejectedValueOnce(new MigrationDrainPendingError("coach active"));
+    vi.mocked(h.deps.resumeSourceIngress).mockRejectedValueOnce(new Error("voice resume unavailable"));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    })).rejects.toThrow(/voice resume unavailable/);
+    expect(h.deps.markAssignment).not.toHaveBeenCalled();
+  });
+
   it("rejects the ambiguous short heartbeat for a pinned OpenClaw image tag", async () => {
     const h = harness({
       pods: [{ ...targetPod, ready: true }],
@@ -1349,6 +1415,40 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual(["resume-source:old-uid:alice", "assignment:u1:serving"]);
   });
 
+  it("releases source voice admission before restoring a recovered Builder assignment", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      bootingUids: [oldPod.uid, targetPod.uid],
+      prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "hydrated" },
+    });
+    vi.mocked(h.deps.resumeSourceIngress).mockImplementation(async () => {
+      expect(h.assignments()[0].state).toBe("quiescing");
+    });
+    await reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: true, stateMigration: MIGRATE_STATE,
+    });
+    expect(h.deps.resumeSourceIngress).toHaveBeenCalledWith(expect.objectContaining({ slug: "alice", sourcePod: expect.objectContaining({ uid: oldPod.uid }) }));
+    expect(h.assignments()[0].state).toBe("serving");
+  });
+
+  it("keeps a recovered Builder gated if its voice admission cannot resume", async () => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      bootingUids: [oldPod.uid, targetPod.uid],
+      prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "hydrated" },
+    });
+    vi.mocked(h.deps.resumeSourceIngress).mockRejectedValueOnce(new Error("voice admission unavailable"));
+    await reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: true, stateMigration: MIGRATE_STATE,
+    });
+    expect(h.assignments()[0].state).toBe("quiescing");
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("voice admission unavailable"));
+  });
+
   it("does not read assignments for a Barn whose source is missing or NotReady", async () => {
     const h = harness({
       pods: [{ ...oldPod, ready: false }, targetPod],
@@ -1693,6 +1793,38 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual(["resume-source:old-uid:alice", "assignment:u1:serving"]);
   });
 
+  it("releases a live source voice hold when superseding a held Builder target", async () => {
+    const h = harness({
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      prelaunchByUid: { [targetPod.uid]: "hydrated" },
+    });
+    vi.mocked(h.deps.resumeSourceIngress).mockImplementation(async () => {
+      expect(h.assignments()[0].state).toBe("quiescing");
+    });
+    await reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: true, stateMigration: MIGRATE_STATE, supersedingImageTag: "next-sha",
+    });
+    expect(h.deps.resumeSourceIngress).toHaveBeenCalledOnce();
+    expect(h.assignments()[0].state).toBe("serving");
+  });
+
+  it.each([false, true])("keeps source admission closed when a superseded target may be executing (held=%s)", async (held) => {
+    const h = harness({
+      pods: [{ ...oldPod, ready: !held }, targetPod],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      bootingUids: [targetPod.uid, ...(held ? [oldPod.uid] : [])],
+      prelaunchByUid: { [oldPod.uid]: held ? "held" : "serving", [targetPod.uid]: "starting" },
+    });
+    await reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: true, stateMigration: MIGRATE_STATE, supersedingImageTag: "next-sha",
+    });
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
+  });
+
   it("unreserves a sourceless Builder target while standing down for a pending release", async () => {
     const h = harness({
       pods: [targetPod],
@@ -1756,7 +1888,7 @@ describe("surge customer handoff", () => {
     ]);
   });
 
-  it("reopens a lease its own dead handoff left gated while standing down", async () => {
+  it("retains its source gate when a superseded shared target has unknown execution state", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
@@ -1772,11 +1904,11 @@ describe("surge customer handoff", () => {
       supersedingImageTag: "next-sha",
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["assignment:u1:serving"]);
-    expect(h.assignments()[0]).toMatchObject({ state: "serving" });
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0]).toMatchObject({ state: "quiescing" });
   });
 
-  it("reopens an abandoned surge gate while standing down for a pending release", async () => {
+  it("retains an abandoned source gate until a superseded shared target is known held", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
@@ -1792,8 +1924,8 @@ describe("surge customer handoff", () => {
       supersedingImageTag: "next-sha",
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["assignment:u1:serving"]);
-    expect(h.assignments()[0]).toMatchObject({ state: "serving" });
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0]).toMatchObject({ state: "quiescing" });
   });
 });
 
@@ -1835,4 +1967,3 @@ describe("crash-looping surge target self-heal", () => {
     expect(readyButFlagged.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
   });
 });
-

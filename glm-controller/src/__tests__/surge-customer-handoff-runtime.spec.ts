@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
@@ -399,6 +400,21 @@ function requestThroughFetch(fetch: typeof globalThis.fetch): typeof import("nod
 }
 
 describe("surge handoff direct pod transport", () => {
+  it.each(["quiesce", "waitForSourceIdle"] as const)("treats HTTP 200 drained:false as pending for %s", async (method) => {
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ drained: false, runningCount: 1 }), { status: 200 }));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+    await expect(transport[method]({ gatewayId: GATEWAY_ID, slug: "alice", operationId: "surge-op", sourcePod: source })).rejects.toBeInstanceOf(MigrationDrainPendingError);
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({ stopMattermost: false, timeoutMs: 30_000 });
+  });
+
+  it("reopens source voice and chat admission with the matching signed migration identity", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ resumed: true }), { status: 200 }));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+    await transport.resumeSourceIngress({ gatewayId: GATEWAY_ID, slug: "alice", operationId: "surge-op", sourcePod: source });
+    expect(fetch).toHaveBeenCalledWith("http://10.0.0.1:3003/resume/gw-a", expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({ migrationId: "surge-op", slug: "alice" });
+  });
+
   it("uses native full-operation deadlines for Builder holds, source resume, and target completion", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const bodies: Record<string, unknown>[] = [];

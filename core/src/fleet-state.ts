@@ -21,7 +21,7 @@ import {
 } from "@octogee/shared/types/gateway-releases";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
-import type { WorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
+import { readWorkspaceMigrationMarker, type WorkspaceMigrationMarker, type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 import {
   customerMigrationV2GatewayRootFenceEqual,
   customerMigrationV2GatewayRootFenceMatches,
@@ -46,6 +46,43 @@ function workspaceMigrationMarker(
   startedAt: number,
 ): WorkspaceMigrationMarker {
   return { state: "moving", startedAt, ...(operationId ? { operationId } : {}) };
+}
+
+export async function setWorkspaceMigrationPhase(
+  deps: FleetStateDeps,
+  params: { uid: string; sourceGatewayId: string; operationId: string; phase: WorkspaceMigrationPhase },
+): Promise<void> {
+  await deps.db.runTransaction(async (txn) => {
+    const userRef = deps.db.collection("users").doc(params.uid);
+    const [userSnapshot, operationSnapshot] = await Promise.all([
+      txn.get(userRef),
+      txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(params.operationId)),
+    ]);
+    const user = userSnapshot.data();
+    assertRestoreUnfenced(user);
+    const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+    const operation = recordOrEmpty(operationSnapshot.data());
+    const input = recordOrEmpty(operation.input);
+    const prior = readWorkspaceMigrationMarker(openclaw);
+    const expectedGateway = params.phase === "connecting" && typeof operation.cutoverCommittedAt === "number"
+      ? input.toGatewayId : params.sourceGatewayId;
+    const exact = [
+      userSnapshot.exists, operationSnapshot.exists,
+      operation.kind === "migrate-customer", operation.status === "running",
+      operation.cancellationRequestedAt === undefined, input.uid === params.uid,
+      input.fromGatewayId === params.sourceGatewayId, openclaw.gatewayId === expectedGateway,
+      !prior?.operationId || prior.operationId === params.operationId,
+    ].every(Boolean);
+    if (!exact) throw new Error("workspace migration phase authority changed");
+    txn.update(userRef, {
+      [WORKSPACE_MIGRATION_MARKER_PATH]: {
+        state: params.phase === "preparing" || params.phase === "waiting" ? "preparing" : "moving",
+        phase: params.phase,
+        operationId: params.operationId,
+        startedAt: prior?.startedAt ?? (deps.now ? deps.now().getTime() : Date.now()),
+      } satisfies WorkspaceMigrationMarker,
+    });
+  });
 }
 
 function clearWorkspaceMigrationMarker(

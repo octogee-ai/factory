@@ -141,12 +141,12 @@ describe("advanceCustomerMigrationV2", () => {
     }
 
     expect(phases).toEqual([
-      "keysSynced", "sourceQuiesced",
+      "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "cutover", "sourceRetired", "complete",
     ]);
     const client = d.client as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(client.transferState.mock.calls.map((call) => call[0].mode)).toEqual([
-      "keys", "final",
+      "keys", "pre", "final",
     ]);
     expect(client.transferState.mock.calls.map((call) => call[0])).toEqual([
       expect.objectContaining({
@@ -155,6 +155,7 @@ describe("advanceCustomerMigrationV2", () => {
         toTransportId: "target",
         includeActivationManifest: false,
       }),
+      expect.objectContaining({ mode: "pre", fromTransportId: "source", toTransportId: "target", includeActivationManifest: true }),
       expect.objectContaining({
         mode: "final",
         fromTransportId: "source",
@@ -205,6 +206,14 @@ describe("advanceCustomerMigrationV2", () => {
     expect(Object.keys(client).every((name) => !/config/iu.test(name))).toBe(true);
   });
 
+  it("prepares the destination before fencing source writes", async () => {
+    const d = deps();
+    await expect(advanceCustomerMigrationV2(state("keysSynced"), d)).resolves.toMatchObject({ phase: "preSynced" });
+    expect(d.client.transferState).toHaveBeenCalledWith(expect.objectContaining({ mode: "pre", includeActivationManifest: true }));
+    expect(d.setSourceAssignmentState).not.toHaveBeenCalled();
+    expect(d.client.quiesce).not.toHaveBeenCalled();
+  });
+
   it("marks the source quiescing before the quiesce RPC so the edge blocks first", async () => {
     const d = deps();
     const order: string[] = [];
@@ -229,9 +238,9 @@ describe("advanceCustomerMigrationV2", () => {
       };
     });
 
-    await advanceCustomerMigrationV2(state("keysSynced"), d);
+    await advanceCustomerMigrationV2(state("preSynced"), d);
 
-    expect(order).toEqual(["assignment-quiescing", "quiesce-rpc", "source-flush"]);
+    expect(order).toEqual(["quiesce-rpc", "assignment-quiescing", "quiesce-rpc", "source-flush"]);
     expect(client.scheduler.mock.calls.map((call) => call[0].phase)).not.toContain("hold");
     expect(client.quiesce).toHaveBeenCalledWith(expect.objectContaining({ schedulerHandoff: true }));
   });
@@ -243,15 +252,15 @@ describe("advanceCustomerMigrationV2", () => {
     await expect(advanceCustomerMigrationV2(state("preSynced"), d)).resolves.toMatchObject({ phase: "sourceQuiesced" });
 
     expect(client.transferState).not.toHaveBeenCalled();
-    expect(client.quiesce).toHaveBeenCalledTimes(1);
+    expect(client.quiesce).toHaveBeenCalledTimes(2);
     expect(isCustomerMigrationV2Transition("preSynced", "sourceQuiesced")).toBe(true);
-    expect(isCustomerMigrationV2Transition("keysSynced", "preSynced")).toBe(false);
+    expect(isCustomerMigrationV2Transition("keysSynced", "preSynced")).toBe(true);
   });
 
   it("persists the source's exact accepted config commit before final transfer", async () => {
     const d = deps();
 
-    await expect(advanceCustomerMigrationV2(state("keysSynced"), d)).resolves.toMatchObject({
+    await expect(advanceCustomerMigrationV2(state("preSynced"), d)).resolves.toMatchObject({
       phase: "sourceQuiesced",
       sourceSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
     });
@@ -271,7 +280,7 @@ describe("advanceCustomerMigrationV2", () => {
         ...(systemConfigCommit === undefined ? {} : { systemConfigCommit }),
       });
 
-      await expect(advanceCustomerMigrationV2(state("keysSynced"), d))
+      await expect(advanceCustomerMigrationV2(state("preSynced"), d))
         .rejects.toThrow(/accepted system.config commit/iu);
     },
   );
@@ -300,7 +309,7 @@ describe("advanceCustomerMigrationV2", () => {
   });
 
   it.each([
-    ["source", "keysSynced" as const, "quiesce"],
+    ["source", "preSynced" as const, "quiesce"],
     ["target", "sourceQuiesced" as const, "transferState"],
   ])("replays the %s handoff phase after a lost flush response", async (_name, phase, priorRpc) => {
     const d = deps();
@@ -311,7 +320,7 @@ describe("advanceCustomerMigrationV2", () => {
     await expect(advanceCustomerMigrationV2(state(phase), d)).resolves.toBeDefined();
 
     expect(client.flushGateway).toHaveBeenCalledTimes(2);
-    expect(client[priorRpc]).toHaveBeenCalledTimes(2);
+    expect(client[priorRpc]).toHaveBeenCalledTimes(priorRpc === "quiesce" ? 4 : 2);
   });
 
   it("advances state only after the RPC response so a lost response is reissued", async () => {
@@ -380,7 +389,7 @@ describe("customer migration V2 failure boundary", () => {
 
   it("accepts only the next durable phase or the legal pre-cutover abort branch", () => {
     const forward: CustomerMigrationV2Phase[] = [
-      "initialized", "keysSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete",
     ];
     for (let index = 0; index < forward.length - 1; index += 1) {

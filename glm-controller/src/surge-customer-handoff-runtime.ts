@@ -1,9 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import * as http from "node:http";
+import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import {
   type FlushGatewayResponse,
   type MigrationConfigTransferMode,
-  MIGRATION_QUIESCE_TIMEOUT_MS,
   SIGNATURE_HEADER,
   type PrepareRsyncImportResponse,
 } from "@octogee/shared/types/fleet-controller";
@@ -418,6 +418,8 @@ export type SurgePodTransport = Pick<
   | "reportMigrationProgress"
   | "readPodHealth"
   | "quiesce"
+  | "waitForSourceIdle"
+  | "resumeSourceIngress"
   | "stopSourceOpenClaw"
   | "resumeSourceOpenClaw"
   | "holdTargetOpenClaw"
@@ -734,6 +736,20 @@ async function transferCustomerState(
   await transferMode(runtime, input, "final");
 }
 
+async function quiesceSurgeSource(
+  control: SurgeControlCall,
+  { gatewayId, slug, operationId, sourcePod }: Parameters<SurgeCustomerHandoffDeps["quiesce"]>[0],
+): Promise<void> {
+  const response = await control(sourcePod, gatewayId, "quiesce", {
+    operationId,
+    body: { migrationId: operationId, slug, timeoutMs: 30_000, stopMattermost: false },
+  });
+  if (response.drained === false) throw new MigrationDrainPendingError(
+    `quiesce still active on ${gatewayId} for slug=${slug}: ${response.runningCount} running`,
+  );
+  if (response.drained !== true) throw new Error(`invalid quiesce response from pod=${sourcePod.name}`);
+}
+
 export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePodTransport {
   const fetchImpl = opts.fetch ?? globalThis.fetch;
   const randomKey = opts.randomKey ?? (() => randomBytes(32).toString("hex"));
@@ -814,16 +830,13 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       log: opts.log,
     }, pod, gatewayId),
 
-    async quiesce({ gatewayId, slug, operationId, sourcePod }) {
-      await control(sourcePod, gatewayId, "quiesce", {
-        operationId,
-        body: {
-          migrationId: operationId,
-          slug,
-          timeoutMs: MIGRATION_QUIESCE_TIMEOUT_MS,
-          stopMattermost: false,
-        },
+    quiesce: (input) => quiesceSurgeSource(control, input),
+    waitForSourceIdle: (input) => quiesceSurgeSource(control, input),
+    async resumeSourceIngress({ gatewayId, slug, operationId, sourcePod }) {
+      const response = await control(sourcePod, gatewayId, "resume", {
+        operationId, body: { migrationId: operationId, slug },
       });
+      if (response.resumed !== true) throw new Error(`source admission did not resume for ${slug} on pod=${sourcePod.name}`);
     },
 
     async stopSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {

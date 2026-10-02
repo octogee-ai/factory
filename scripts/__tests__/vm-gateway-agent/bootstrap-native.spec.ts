@@ -20,6 +20,8 @@ elif command == 'ufw':
 elif command == 'docker':
     with (root/'events').open('a') as out: out.write(json.dumps(args)+'\\n')
     if args[0] == 'login': sys.stdin.read()
+    if args[:2] == ['image', 'inspect']: sys.exit(0 if (root/'cached').exists() and (root/'cached').read_text() == args[-1] else 1)
+    if args[0] == 'pull': (root/'cached').write_text(args[-1])
     if args[:2] == ['image', 'prune']: print('Total reclaimed space: 38.2GB')
     if args[0] == 'run':
         while not (root/'stopped').exists(): time.sleep(0.02)
@@ -58,13 +60,45 @@ describe("native VM bootstrap supervision", () => {
       expect(events.find((args) => args[0] === "run")).toContain(`/home/octo:${root}/state/desktop-home`);
       expect(events.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "octo-gateway-agent"]]);
       const dockerVerbs = events.filter((args) => args[0] !== "ufw").map((args) => args.slice(0, 2).join(" "));
-      expect(dockerVerbs.slice(0, 3)).toEqual(["image prune", "login -u", "pull -q"]);
-      expect(events.find((args) => args[0] === "image")).toEqual(["image", "prune", "--all", "--force"]);
-      expect(output).toContain("octo-gateway-agent: reclaimed unused images before pulling: Total reclaimed space: 38.2GB");
+      expect(dockerVerbs.slice(0, 3)).toEqual(["image inspect", "login -u", "pull -q"]);
+      expect(events.some((args) => args[0] === "image" && args[1] === "prune")).toBe(false);
     } finally {
       clearTimeout(timer);
       if (child.exitCode === null) child.kill("SIGTERM");
       await done;
     }
   });
+});
+
+it("prefetches before assignment, refreshes a changed image, and reuses it without pruning", async () => {
+  const root = await mkdtemp(`${tmpdir()}/octogee-bootstrap-prefetch-`);
+  roots.push(root);
+  await mkdir(`${root}/bin`);
+  for (const name of ["curl", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+  const binaries = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin");
+  await writeFile(`${root}/bin/octo-gateway-firewall`, await readFile(`${binaries}/octo-gateway-firewall`), { mode: 0o755 });
+  const script = `${root}/bootstrap`;
+  await writeFile(script, (await readFile(`${binaries}/octo-gateway-agent`, "utf8")).replace("/usr/local/bin/octo-gateway-firewall", `${root}/bin/octo-gateway-firewall`));
+  await writeFile(`${root}/gateway-image`, "registry.invalid/gateway@sha256:old");
+  const child = spawn("bash", [script], {
+    env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, BOOTSTRAP_FIXTURE: root, OCTO_VM_STATE_ROOT: `${root}/state`, OCTO_ASSIGNMENT_POLL_SECONDS: "0.05" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const done = new Promise<number | null>((accept, reject) => { child.once("close", accept); child.once("error", reject); });
+  const events = async () => (await readFile(`${root}/events`, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
+  try {
+    await expect.poll(async () => readFile(`${root}/cached`, "utf8").catch(() => ""), { timeout: 5_000 }).toBe("registry.invalid/gateway@sha256:old");
+    expect((await events()).some((args) => args[0] === "run")).toBe(false);
+    await writeFile(`${root}/gateway-image`, "registry.invalid/gateway@sha256:next");
+    await expect.poll(async () => readFile(`${root}/cached`, "utf8"), { timeout: 5_000 }).toBe("registry.invalid/gateway@sha256:next");
+    await writeFile(`${root}/gateway-id`, "b-fixture");
+    await writeFile(`${root}/octogee-api-url`, "https://api.invalid");
+    await expect.poll(async () => (await events()).some((args) => args[0] === "run"), { timeout: 5_000 }).toBe(true);
+    expect((await events()).filter((args) => args[0] === "pull")).toHaveLength(2);
+    expect((await events()).filter((args) => args[0] === "image" && args[1] === "rm")).toEqual([["image", "rm", "--", "registry.invalid/gateway@sha256:old"]]);
+    expect((await events()).some((args) => args[0] === "image" && args[1] === "prune")).toBe(false);
+  } finally {
+    child.kill("SIGTERM");
+    await done;
+  }
 });

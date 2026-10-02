@@ -12,8 +12,8 @@ import { InMemoryNpmCacheCapabilityStore } from "../lib/npm-cache-capabilities.j
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const GATEWAY_ID = "builder-alice";
-const POD_NAME = "octogee-gateway-builder-alice-abc123";
-const POD_UID = "pod-uid-alice";
+const POD_NAME = "octogee-gateway-builder-alice-vm-4242";
+const POD_UID = "4242";
 const SA_NAME = "octogee-gw-builder-alice";
 const JWT = `${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`;
 const TOKEN = "n".repeat(43);
@@ -47,7 +47,11 @@ function gatewayDoc() {
   };
 }
 
-function database(assignedSlug: string | null = "alice") {
+function database(assignedSlug: string | null = "alice", preparation: {
+  operation?: Record<string, unknown>;
+  runtime?: Record<string, unknown>;
+  user?: Record<string, unknown>;
+} = {}) {
   const assignments = assignedSlug === null
     ? []
     : [{
@@ -64,6 +68,14 @@ function database(assignedSlug: string | null = "alice") {
       }];
   return {
     collection: vi.fn((name: string) => {
+      if (name === "users") return { doc: () => ({ get: async () => ({ exists: true, data: () => preparation.user ?? {
+        username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: "shared-source" } },
+      } }) }) };
+      if (name === "glmGateways") return { doc: () => ({ get: async () => ({ exists: Boolean(preparation.runtime), data: () => preparation.runtime }) }) };
+      if (name === "glmOperations") {
+        const query = { where: () => query, get: async () => ({ docs: preparation.operation ? [{ id: "move-alice", data: () => preparation.operation }] : [] }) };
+        return query;
+      }
       if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
       return {
         doc: vi.fn(() => ({
@@ -131,6 +143,40 @@ function proxyApp(options: ReturnType<typeof brokerOptions>) {
 }
 
 describe("npm cache capability broker", () => {
+  const preparation = () => ({
+    operation: { kind: "migrate-customer", status: "running", input: {
+      uid: "uid-alice", slug: "alice", fromGatewayId: "shared-source", toGatewayId: GATEWAY_ID,
+    } },
+    runtime: { gatewayId: GATEWAY_ID, runtime: "gce-vm", vm: { instanceId: POD_UID }, vmInstance: { ownerUid: "uid-alice", builderSlug: "alice" } },
+  });
+
+  it("hydrates the exact destination instance during its owner's active migration before assignment", async () => {
+    const options = brokerOptions(undefined, { db: database(null, preparation()) });
+    const response = await request(builderApp(options))
+      .post("/internal/fleet/npm-registry-credentials")
+      .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
+      .send({ gatewayId: GATEWAY_ID, slug: "alice" });
+    expect(response.status).toBe(200);
+  });
+
+  it.each(["finished", "foreign-owner", "foreign-source", "foreign-target", "replaced-instance", "moved-user", "cancelled", "foreign-runtime-owner", "foreign-runtime-slug"])("rejects stale or unrelated preparation (%s)", async (scenario) => {
+    const state: Parameters<typeof database>[1] = preparation();
+    if (scenario === "cancelled") state.operation!.cancellationRequestedAt = 1;
+    if (scenario === "foreign-runtime-owner") state.runtime!.vmInstance = { ownerUid: "other-uid", builderSlug: "alice" };
+    if (scenario === "foreign-runtime-slug") state.runtime!.vmInstance = { ownerUid: "uid-alice", builderSlug: "other-slug" };
+    if (scenario === "finished") state.operation!.status = "succeeded";
+    if (scenario === "foreign-owner") (state.operation!.input as Record<string, unknown>).uid = "other-uid";
+    if (scenario === "foreign-source") (state.operation!.input as Record<string, unknown>).fromGatewayId = "other-source";
+    if (scenario === "foreign-target") (state.operation!.input as Record<string, unknown>).toGatewayId = "other-target";
+    if (scenario === "replaced-instance") state.runtime!.vm = { instanceId: "previous-instance" };
+    if (scenario === "moved-user") state.user = { username: "alice", provisioning: { openclaw: { slug: "alice", gatewayId: "another-source" } } };
+    const response = await request(builderApp(brokerOptions(undefined, { db: database(null, state) })))
+      .post("/internal/fleet/npm-registry-credentials")
+      .set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT)
+      .send({ gatewayId: GATEWAY_ID, slug: "alice" });
+    expect(response.status).toBe(403);
+  });
+
   it("requires the second purpose-audience KSA credential", async () => {
     expect(GATEWAY_CREDENTIAL_ROUTES.has("/internal/fleet/npm-registry-credentials"))
       .toBe(true);

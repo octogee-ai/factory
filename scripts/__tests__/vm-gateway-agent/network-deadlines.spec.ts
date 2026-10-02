@@ -35,6 +35,6 @@ it("gives metadata and signed checkpoint uploads their own finite deadlines", as
   const fetchImpl: typeof fetch = async (url, init) => String(url).endsWith("/checkpoint-url")
     ? Response.json({ name: "20260905T101500Z.tar.gz", upload: { url: "https://storage.invalid/upload", method: "PUT" } })
     : abortingFetch(url, init);
-  await expect(checkpointHome({ gatewayId: "b-x", apiUrl: "https://api.invalid", metadata: { identityToken: async () => "fixture" }, stateRoot: "/tmp", fs, fetchImpl, now: Date.now, log: vi.fn(), snapshot: async (work: () => Promise<void>) => work(), shell: { run: async () => ({ code: 0, stdout: "", stderr: "" }) } } as never,
+  await expect(checkpointHome({ gatewayId: "b-x", apiUrl: "https://api.invalid", metadata: { identityToken: async () => "fixture" }, stateRoot: "/tmp", fs, fetchImpl, now: Date.now, log: vi.fn(), snapshot: async (work: () => Promise<void>) => work(), captureSnapshot: async () => {}, discardSnapshot: async () => {}, shell: { run: async () => ({ code: 0, stdout: "", stderr: "" }) } } as never,
     { slug: "bob", dataDir: "/tmp/data", desktopDir: "/tmp/desktop", marker: "/tmp/marker", restorePending: "/tmp/pending" }, { force: true })).rejects.toMatchObject({ name: "TimeoutError" });
 });

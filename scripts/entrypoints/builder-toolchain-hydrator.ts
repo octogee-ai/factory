@@ -67,7 +67,7 @@ export function resolveBuilderToolchainHydratorConfig(
     ),
     gatewayId: envValue(env, "GATEWAY_ID"),
     builderSlug: envValue(env, "GATEWAY_BUILDER_SLUG"),
-    readinessUrl: `http://127.0.0.1:${fleetControllerPort}/surge-ready`,
+    readinessUrl: `http://127.0.0.1:${fleetControllerPort}/toolchain-ready`,
   };
 }
 

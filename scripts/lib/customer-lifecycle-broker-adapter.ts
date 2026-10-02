@@ -1303,6 +1303,8 @@ async function quiesceCustomer(
     slug,
     agentIds,
     stores: sessionPathsForMigration(slug).map(sessionStoreForPath),
+    maxWaitMs: timeoutMs,
+    abortAfterGrace: false,
     ...(opts.stopMattermost
       ? {
         schedulerMigrationId: opts.schedulerMigrationId,
@@ -1310,7 +1312,7 @@ async function quiesceCustomer(
         graceMs: Math.min(MIGRATION_QUIESCE_GRACE_MS, timeoutMs),
         recheckMs: Math.min(MIGRATION_QUIESCE_STOP_RECHECK_MS, timeoutMs),
       }
-      : { graceMs: timeoutMs, abortAfterGrace: false }),
+      : { graceMs: Math.min(MIGRATION_QUIESCE_GRACE_MS, timeoutMs), abortAfterGrace: false }),
     log: dlog,
   });
   if (result.drained && opts.stopMattermost && !opts.schedulerMigrationId) {
@@ -1766,7 +1768,8 @@ export function buildBrokeredLifecycleAdapter(
     clearCustomerMigratingIn: (slug) => clearMigratingInPin(CUSTOMERS_DIR, slug),
     listMigratingInSlugs: () => listMigratingInSlugs(CUSTOMERS_DIR, MIGRATING_IN_PIN_TTL_MS),
 
-    loadUserSnapshot: async (uid) => {
+    loadUserSnapshot: async (uid, options) => {
+      if (options?.refresh) invalidateSnapshot(ctx, uid);
       const snapshot = await snapshotForUid(ctx, uid);
       return snapshot ? toUserSnapshot(snapshot) : null;
     },

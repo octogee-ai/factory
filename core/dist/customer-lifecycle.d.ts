@@ -115,7 +115,9 @@ export interface CustomerLifecycleAdapter {
     /** Clear the migration pin after a target-side import is aborted. */
     clearCustomerMigratingIn?: (slug: string) => void;
     listMigratingInSlugs?: () => string[];
-    loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
+    loadUserSnapshot: (uid: string, options?: {
+        refresh?: boolean;
+    }) => Promise<UserSnapshot | null>;
     seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;
     setProvisioningStatus: (uid: string, status: "provisioning" | "complete") => Promise<void>;
     setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;

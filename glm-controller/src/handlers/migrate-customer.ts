@@ -24,7 +24,7 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import { computerPreemptionError } from "../operation-retry.js";
-import { MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import {
   advanceCustomerMigrationV2,
@@ -101,6 +101,8 @@ export interface MigrateCustomerDeps {
 
   resolveSourcePlacement: (uid: string, currentGatewayId: string) => Promise<SourcePlacement | null>;
   resolveTargetPlacement: (toGatewayId: string) => Promise<PlacementResolution | null>;
+
+  setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: "preparing" | "waiting" | "transferring" | "connecting" }) => Promise<void>;
 
   setAssignmentState: (input: {
     gatewayId: string;
@@ -317,6 +319,9 @@ async function ordinaryV2IterationFailure(
   } catch {
     if (execution.input.op.input.sourceTransferMode === RETAINED_POD) return {steps:[],success:false,error:"source transfer observation unavailable: status 503",rolledBack:false};
   }
+  if (error instanceof MigrationDrainPendingError) {
+    return { steps: [], success: false, waitingForBuilderIdle: true, rolledBack: false };
+  }
   const retryable = classifyCustomerMigrationV2Error(error) === "retry";
   if (retryable && !requiresSourceResumeBeforeRetry(execution.state.phase)) {
     return { steps: [], success: false, error: v2RetryError(error), rolledBack: false };
@@ -402,7 +407,7 @@ async function runOrdinaryV2Iteration(
     await execution.progress.report(phase, "done");
     return "continue";
   } catch (error) {
-    await execution.progress.report(phase, "failed");
+    await execution.progress.report(phase, error instanceof MigrationDrainPendingError ? "pending" : "failed");
     return ordinaryV2IterationFailure(execution, error);
   }
 }
@@ -491,6 +496,7 @@ async function buildV2DriverDeps(
   }, op.input.sourceTransferMode === RETAINED_POD ? {op,state} : undefined);
   return {
     client,
+    setMigrationPhase: (phase: "preparing" | "waiting" | "transferring" | "connecting") => deps.setMigrationPhase?.({ uid: state.uid, sourceGatewayId: state.sourceGatewayId, operationId: state.operationId, phase }) ?? Promise.resolve(),
     setSourceAssignmentState: (assignmentState: "serving" | "quiescing") =>
       deps.setAssignmentState({
         gatewayId: state.sourceGatewayId,
@@ -607,11 +613,14 @@ function buildRunnerDeps(
     ctx: OperationContext;
     automatic: boolean;
     operationId: string;
+    uid: string;
+    sourceGatewayId: string;
   },
 ): MigrationRunnerDeps {
   const { deps, client, ctx } = input;
   return {
     client,
+    setMigrationPhase: (phase) => deps.setMigrationPhase?.({ uid: input.uid, sourceGatewayId: input.sourceGatewayId, operationId: input.operationId, phase }) ?? Promise.resolve(),
     commitCutover: async (commit) => {
       await deps.commitCutover({ ...commit, automatic: input.automatic });
       await recordCutoverCommitted(deps, ctx, input.operationId);
@@ -679,12 +688,17 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
     updatedByOperationId: input.operationId,
     automatic,
   };
+  let sourceFenced = false;
   try {
+    await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
+    await step("wait-for-active-work", () => client.quiesce({ migrationId, gatewayId: targets.fromGatewayId, slug, timeoutMs: 30_000, stopMattermost: false }));
+    await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "transferring" });
     await deps.setAssignmentState({
       ...sourceAssignment,
       state: "quiescing",
       createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
     });
+    sourceFenced = true;
     await closeSourceForFreshProvision(input, client, step, handoff);
     await step("cutover-firestore", async () => {
       await deps.commitCutover({
@@ -698,6 +712,9 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
       await recordCutoverCommitted(deps, ctx, input.operationId);
     });
   } catch (error) {
+    if (error instanceof MigrationDrainPendingError) {
+      return deferFreshProvision(input, client, sourceAssignment, handoff, sourceFenced);
+    }
     if (input.nativeReturn) {
       const settled = await settleNativeReturnAfterFailure(input, ctx, input.nativeReturn, handoff);
       if (settled) return settled;
@@ -712,6 +729,25 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
     slug,
   });
   return { steps: [], success: true, rolledBack: false };
+}
+
+async function deferFreshProvision(
+  input: FreshProvision,
+  client: MigrationClient,
+  sourceAssignment: SourceAssignment,
+  handoff: SchedulerHandoffState | null,
+  sourceFenced: boolean,
+): Promise<OperationResult> {
+  const { deps, targets, uid, slug, migrationId, operationId } = input;
+  if (sourceFenced && handoff) {
+    const failure = await reopenSourceScheduler(deps, client, handoff);
+    if (failure) throw new Error(failure);
+  }
+  if (sourceFenced) await restoreSourceServing(deps, { ...sourceAssignment, state: "serving", createIfMissing: false });
+  await client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug });
+  await input.nativeReturn?.release();
+  await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId, phase: "waiting" });
+  return { steps: [], success: false, waitingForBuilderIdle: true, rolledBack: false };
 }
 
 async function closeSourceForFreshProvision(
@@ -930,7 +966,7 @@ async function reportFreshStep(
     await action();
   } catch (error) {
     await ctx.reportStep(reportedToOperationStep(
-      { name, status: "failed", error: errorMessage(error) },
+      { name, status: error instanceof MigrationDrainPendingError ? "skipped" : "failed", error: errorMessage(error) },
       deps.now(),
     ));
     throw error;
@@ -1622,7 +1658,7 @@ async function executeMigration(
       includeActivationManifest: true,
     },
     {
-      ...buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId }),
+      ...buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
       recordSchedulesStaged: () => persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() }),
     },
   );
@@ -1630,6 +1666,7 @@ async function executeMigration(
     steps: [],
     success: result.success,
     error: result.errorAt?.error,
+    ...(result.waitingForBuilderIdle ? { waitingForBuilderIdle: true } : {}),
     rolledBack: result.rolledBack,
   };
 }

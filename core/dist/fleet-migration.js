@@ -9,6 +9,8 @@ export function nextMigrationStep(state) {
                 slug: state.slug,
             };
         case "keys-synced":
+            return { action: "sync-state", mode: "pre", from: state.fromGatewayId, to: state.toGatewayId, slug: state.slug };
+        case "pre-synced":
             return {
                 action: "quiesce-source",
                 gateway: state.fromGatewayId,
@@ -58,6 +60,8 @@ export function advancePhase(p) {
         case "initial":
             return "keys-synced";
         case "keys-synced":
+            return "pre-synced";
+        case "pre-synced":
             return "source-quiesced";
         case "source-quiesced":
             return "source-flushed";
@@ -94,6 +98,7 @@ export function rollbackPlan(state) {
         case "initial":
             return [];
         case "keys-synced":
+        case "pre-synced":
         case "source-quiesced":
         case "source-flushed":
         case "final-synced":

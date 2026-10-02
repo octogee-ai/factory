@@ -34,12 +34,18 @@ describe("nextMigrationStep — forward path", () => {
     });
   });
 
-  it("keys-synced → quiesce-source on the source gateway: one consistent copy follows the stop", () => {
-    const step = nextMigrationStep(s("keys-synced"));
+  it("pre-synced → quiesce-source after the destination is prepared", () => {
+    const step = nextMigrationStep(s("pre-synced"));
     expect(step).toEqual({
       action: "quiesce-source",
       gateway: "gw-prod",
       slug: "ceckert",
+    });
+  });
+
+  it("keys-synced prepares the destination while the source still serves", () => {
+    expect(nextMigrationStep(s("keys-synced"))).toEqual({
+      action: "sync-state", mode: "pre", from: "gw-prod", to: "gw-prod-v2", slug: "ceckert",
     });
   });
 
@@ -104,7 +110,8 @@ describe("nextMigrationStep — forward path", () => {
 describe("advancePhase", () => {
   it("walks the canonical sequence", () => {
     expect(advancePhase("initial")).toBe("keys-synced");
-    expect(advancePhase("keys-synced")).toBe("source-quiesced");
+    expect(advancePhase("keys-synced")).toBe("pre-synced");
+    expect(advancePhase("pre-synced")).toBe("source-quiesced");
     expect(advancePhase("source-quiesced")).toBe("source-flushed");
     expect(advancePhase("source-flushed")).toBe("final-synced");
     expect(advancePhase("final-synced")).toBe("target-verified");
@@ -123,11 +130,12 @@ describe("advancePhase", () => {
 });
 
 describe("fullPlan", () => {
-  it("from initial → 7 steps in canonical order", () => {
+  it("from initial → 8 steps in canonical order", () => {
     const plan = fullPlan(s("initial"));
-    expect(plan).toHaveLength(7);
+    expect(plan).toHaveLength(8);
     expect(plan.map((p) => p.action === "sync-state" ? `${p.mode}-sync-state` : p.action)).toEqual([
       "keys-sync-state",
+      "pre-sync-state",
       "quiesce-source",
       "flush-source",
       "final-sync-state",

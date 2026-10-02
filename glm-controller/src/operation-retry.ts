@@ -351,6 +351,14 @@ export function buildOperationCompletionUpdate(
     status:'pending',startedAt:null,completedAt:null,expireAt:FieldValue.delete(),steps:persistedSteps,
     nextAttemptAt:input.now+30_000,lastProgressAt:input.now,error:'source transfer termination not observed',
   };
+  if (result.waitingForBuilderIdle === true) {
+    if (op.kind !== "migrate-customer" || result.success) throw new Error("only pending customer migrations can wait for active Builder work");
+    return {
+      status: "pending", startedAt: null, completedAt: null, expireAt: FieldValue.delete(),
+      steps: persistedSteps, nextAttemptAt: input.now + 15_000, lastProgressAt: input.now,
+      waitingOn: "builder-idle", error: FieldValue.delete(), rolledBack: false,
+    };
+  }
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);

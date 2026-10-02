@@ -1,6 +1,7 @@
 import { withLogContext } from "@octogee/shared/server/service-logger";
 import { advancePhase, nextMigrationStep, rollbackPlan, } from "./fleet-migration.js";
-import { MigrationRpcError } from "./fleet-migration-client.js";
+import { MigrationDrainPendingError, MigrationRpcError } from "./fleet-migration-client.js";
+const QUIESCE_SOURCE = "quiesce-source";
 const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_DELAY_MS = 2_000;
 const TARGET_SCHEDULER_READY_TIMEOUT_MS = 120_000;
@@ -40,7 +41,7 @@ async function executeStep(params) {
     const { step, deps, migrationId, slug, projectCheckoutScope, includeActivationManifest, crossGateway, } = params;
     const clock = deps.now ?? Date.now;
     switch (step.action) {
-        case "quiesce-source":
+        case QUIESCE_SOURCE:
             await deps.client.quiesce({
                 migrationId,
                 gatewayId: step.gateway,
@@ -68,7 +69,7 @@ async function executeStep(params) {
                 toGatewayId: step.to,
                 slug: step.slug,
                 mode: step.mode,
-                includeActivationManifest: step.mode === "final" && includeActivationManifest,
+                includeActivationManifest: step.mode !== "keys" && includeActivationManifest,
                 projectCheckoutScope,
             });
             timings.transferMs = clock() - transferStartedAt;
@@ -199,6 +200,7 @@ function createMigrationExecution(input, deps) {
         crossGateway: input.crossGateway ?? input.fromGatewayId !== input.toGatewayId,
         quiescingMarked: false,
         quiesceStarted: false,
+        preDrainStarted: false,
         targetScheduler: { mayHoldStage: false },
         state: {
             phase: "initial",
@@ -210,12 +212,13 @@ function createMigrationExecution(input, deps) {
     };
 }
 async function markSourceQuiescing(execution, step) {
-    if (step.action !== "quiesce-source" || execution.input.gateAssignment !== true)
+    if (step.action !== QUIESCE_SOURCE || execution.input.gateAssignment !== true)
         return;
     const { input, deps } = execution;
     if (!deps.setAssignmentState) {
         throw new Error("assignment-gated migration requires deps.setAssignmentState");
     }
+    await deps.setMigrationPhase?.("transferring");
     await deps.setAssignmentState({
         gatewayId: input.fromGatewayId,
         uid: input.uid,
@@ -273,7 +276,7 @@ async function runNextMigrationStep(execution) {
     if (step.action === "complete")
         return migrationComplete(execution);
     const phaseAtStart = execution.state.phase;
-    if (step.action === "quiesce-source" && execution.crossGateway && !execution.input.stageSchedulesAfterCutover) {
+    if (step.action === QUIESCE_SOURCE && execution.crossGateway && !execution.input.stageSchedulesAfterCutover) {
         try {
             await awaitTargetSchedulerReady(execution);
         }
@@ -284,8 +287,17 @@ async function runNextMigrationStep(execution) {
     const name = reportName(step);
     await report(execution.deps, { name, status: "running" });
     try {
+        if (step.action === "sync-state" && step.mode === "keys")
+            await execution.deps.setMigrationPhase?.("preparing");
+        if (step.action === QUIESCE_SOURCE) {
+            await execution.deps.setMigrationPhase?.("waiting");
+            execution.preDrainStarted = true;
+            await execution.deps.client.quiesce({ migrationId: execution.input.migrationId, gatewayId: step.gateway, slug: step.slug, timeoutMs: 30_000, stopMattermost: false });
+        }
+        if (step.action === "verify-target")
+            await execution.deps.setMigrationPhase?.("connecting");
         await markSourceQuiescing(execution, step);
-        if (step.action === "quiesce-source")
+        if (step.action === QUIESCE_SOURCE)
             execution.quiesceStarted = true;
         const timings = await executeForwardStep(execution, step);
         await report(execution.deps, { name, status: "done" });
@@ -310,6 +322,16 @@ async function handleStepFailure(execution, failure) {
     const { step, name, phaseAtStart, error } = failure;
     const { input, deps } = execution;
     const message = error instanceof Error ? error.message : String(error);
+    if (step.action === QUIESCE_SOURCE && error instanceof MigrationDrainPendingError) {
+        if (execution.crossGateway && execution.quiesceStarted)
+            await deps.client.scheduler({ migrationId: schedulerMigrationId(input), gatewayId: input.fromGatewayId, slug: input.slug, phase: "resume" });
+        await deps.client.resume({ migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug });
+        if (execution.quiescingMarked)
+            await deps.setAssignmentState({ gatewayId: input.fromGatewayId, uid: input.uid, state: "serving" });
+        await deps.setMigrationPhase?.("waiting");
+        await report(deps, { name, status: "skipped", error: message });
+        return { success: false, finalPhase: execution.state.phase, rolledBack: false, waitingForBuilderIdle: true };
+    }
     if (isPostCutoverSourceCleanup(execution.state, step) && error instanceof SchedulerHandoffPendingError) {
         await report(deps, { name, status: "failed", error: message });
         return { success: false, finalPhase: execution.state.phase, errorAt: { phase: phaseAtStart, error: message }, rolledBack: false };
@@ -320,6 +342,8 @@ async function handleStepFailure(execution, failure) {
         execution.state = { ...execution.state, phase: advancePhase(execution.state.phase) };
         return null;
     }
+    if (execution.preDrainStarted && !execution.quiesceStarted)
+        await deps.client.resume({ migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug });
     await report(deps, { name, status: "failed", error: message });
     deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${message}`);
     const rollback = await rollbackExecution(execution);

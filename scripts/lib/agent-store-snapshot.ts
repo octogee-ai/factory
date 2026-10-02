@@ -248,6 +248,7 @@ export async function prepareAgentStoreSnapshots(
   await fs.rm(landingRoot, { recursive: true, force: true });
   await fs.mkdir(landingRoot, { mode: 0o700 });
   const stores: PreparedAgentStore[] = [];
+  let requiresUpgrade = false;
   for (const snapshot of snapshots) {
     const restoredDir = path.join(landingRoot, ...snapshot.agentDir.split("/"));
     await fs.mkdir(restoredDir, { recursive: true, mode: 0o700 });
@@ -256,10 +257,6 @@ export async function prepareAgentStoreSnapshots(
     const fit = await preflightAgentDatabase(artifact, snapshot.agentId, run, { env, signal: input.signal });
     if (fit === "exact") {
       parseOkJson(
-        `verify of ${snapshot.agentId}`,
-        await run(["backup", "sqlite", "verify", snapshot.snapshotDir, "--json"], { env, signal: input.signal }),
-      );
-      parseOkJson(
         `restore of ${snapshot.agentId}`,
         await run(
           ["backup", "sqlite", "restore", snapshot.snapshotDir, "--target", restoredPath, "--json"],
@@ -267,6 +264,7 @@ export async function prepareAgentStoreSnapshots(
         ),
       );
     } else {
+      requiresUpgrade = true;
       await landOlderSchemaSnapshot(snapshot, restoredPath);
     }
     await fs.rm(path.dirname(snapshot.snapshotDir), { recursive: true, force: true });
@@ -276,7 +274,7 @@ export async function prepareAgentStoreSnapshots(
       destinationPath: path.join(input.importDir, ...snapshot.agentDir.split("/"), AGENT_STORE_BASENAME),
     });
   }
-  await upgradeStagedAgentStores(landingRoot, { signal: input.signal, log: input.log });
+  if (requiresUpgrade) await upgradeStagedAgentStores(landingRoot, { signal: input.signal, log: input.log });
   if (input.requireDrained) await assertCarriedAgentSessionsDrained(landingRoot);
   input.log?.(`[agent-store-snapshot] restored ${stores.length} carried agent database(s)`);
   return { landingRoot, stores };

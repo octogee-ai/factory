@@ -3,7 +3,7 @@ import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
-import { MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
@@ -588,14 +588,14 @@ describe("native computer return", () => {
       });
 
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
-      expect(order).toEqual(["quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
-      expect(vi.mocked(h.client.quiesce).mock.calls[0][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: handoffId, retainNonportable: true });
+      expect(order).toEqual(["quiesce:gw-blue", "quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
+      expect(vi.mocked(h.client.quiesce).mock.calls[1][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: handoffId, retainNonportable: true });
       expect(schedulerCalls(h)).toEqual([
         ["gw-blue", "export", true], ["gw-green", "stage", undefined], ["gw-blue", "retire", undefined], ["gw-green", "activate", undefined],
       ]);
       expect(vi.mocked(h.client.scheduler).mock.calls[1][0]).toMatchObject({ migrationId: handoffId, agentIds: ["octogee-alice-coach"], snapshot });
       expect(h.steps.filter((step) => step.status === "done").map((step) => step.name)).toEqual([
-        "quiesce-source", "flush-source", "stage-scheduler", "checkpoint-native-computer", "cutover-firestore", "activate-scheduler", "unmount-source", "verify-target",
+        "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "checkpoint-native-computer", "cutover-firestore", "activate-scheduler", "unmount-source", "verify-target",
       ]);
       expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");
     });
@@ -703,6 +703,7 @@ describe("native computer return", () => {
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
       expect(order).toEqual([
         `gw-green:abort:${handoffId}`, `gw-blue:resume:${handoffId}`,
+        "quiesce:gw-blue:undefined:undefined",
         `quiesce:gw-blue:${retried}:true`, `gw-blue:export:${retried}`, `gw-green:stage:${retried}`,
         "cutover", `gw-blue:retire:${retried}`, `gw-green:activate:${retried}`,
       ]);
@@ -938,6 +939,8 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(result).toMatchObject({ success: true, rolledBack: false });
     expect(client.calls).toEqual([
       "transfer:keys:gw-blue->gw-green",
+      "transfer:pre:gw-blue->gw-green",
+      "quiesce:gw-blue",
       "quiesce:gw-blue",
       "transfer:final:gw-blue->gw-green",
       "verify:gw-green",
@@ -1003,13 +1006,13 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
 
     expect(result).toMatchObject({ success: true, rolledBack: false });
     expect(vi.mocked(client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("hold");
-    expect(vi.mocked(client.quiesce).mock.calls[0][0]).toMatchObject({ gatewayId: "gw-blue", schedulerHandoff: true });
+    expect(vi.mocked(client.quiesce).mock.calls[1][0]).toMatchObject({ gatewayId: "gw-blue", schedulerHandoff: true });
     expect(events.some((event) => event.startsWith("cutover:") || event.startsWith("v2-cutover:"))).toBe(true);
   });
 
   it("reports failure with rollback when quiesce cannot drain", async () => {
     const client = happyClient();
-    (client.quiesce as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("agents busy"));
+    (client.quiesce as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ migrationId: "mig-op-1", slug: "alice", drained: true, runningCount: 0 }).mockRejectedValue(new Error("agents busy"));
     const { deps, ctx, events } = mkDeps({ client });
     const handler = createMigrateCustomerHandler(deps);
 
@@ -1103,11 +1106,13 @@ describe("migrate-customer — durable V2 migration", () => {
       targetRelease: 2,
     });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "targetVerified", "cutover", "cutover", "sourceRetired", "complete",
     ]);
     expect(client.calls).toEqual([
       "transfer:keys:gw-blue->gw-green",
+      "transfer:pre:gw-blue->gw-green",
+      "quiesce:gw-blue",
       "quiesce:gw-blue",
       "transfer:final:gw-blue->gw-green",
       "verify:gw-green",
@@ -1250,7 +1255,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
@@ -1295,7 +1300,7 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "sourceQuiesced",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
       "finalSynced", "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
     expect(c.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
@@ -1411,7 +1416,7 @@ describe("scheduler handoff recovery", () => {
     expect(vi.mocked(h.client.scheduler).mock.calls.slice(0, 3).map(([request]) => [request.gatewayId, request.phase, request.migrationId])).toEqual([
       ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "export", "mig-op-1:scheduler:2"],
     ]);
-    expect(vi.mocked(h.client.quiesce).mock.calls[0][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "mig-op-1:scheduler:2" });
+    expect(vi.mocked(h.client.quiesce).mock.calls[1][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "mig-op-1:scheduler:2" });
   });
 
   it("finishes handoff cleanup for a migration whose serial lock was already released", async () => {
@@ -1520,5 +1525,31 @@ describe("retained source cancellation", () => {
     expect(result).toMatchObject({success:false,rolledBack:false,error:expect.stringContaining("observation pending")});
     expect(h.client.resume).not.toHaveBeenCalled();expect(h.client.unmount).not.toHaveBeenCalled();expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
     expect(h.persisted).toEqual([]);
+  });
+});
+
+describe("waiting for active Builder work", () => {
+  it.each([false, true])("keeps prepared targets and resumes source ingress without failing migration (durable=%s)", async (durable) => {
+    const h = mkDeps({ durable });
+    vi.mocked(h.client.quiesce).mockRejectedValue(new MigrationDrainPendingError("coach still active"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: false, waitingForBuilderIdle: true, rolledBack: false });
+    expect(h.client.unmount).not.toHaveBeenCalled();
+    expect(h.client.resume).toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(h.deps.commitV2Cutover).not.toHaveBeenCalled();
+    if (durable) expect(h.persisted.at(-1)?.phase).toBe("preSynced");
+  });
+  it("defers native computer return before checkpointing or fencing an active voice call", async () => {
+    const h = mkDeps();
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    vi.mocked(h.client.quiesce).mockRejectedValue(new MigrationDrainPendingError("voice call active"));
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ waitingForBuilderIdle: true, rolledBack: false });
+    expect(native.checkpoint).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+    expect(h.client.resume).toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
   });
 });

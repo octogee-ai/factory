@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Bootstraps the gateway registration agent on an Octogee computer: waits for a
-# gateway identity in instance metadata (a warm-pool member boots without one
-# and receives it when Cowboy claims it), pulls the pinned gateway image with
-# the VM's own service account, and runs the agent from that image against the
-# host Docker socket. Everything else (tokens, bundle, containers) is the
-# agent's job; see scripts/lib/vm-gateway-agent.
 set -euo pipefail
 
 STATE_ROOT="${OCTO_VM_STATE_ROOT:-/srv/octogee}"
@@ -28,12 +22,45 @@ install -d -m 0755 "$STATE_ROOT" "$STATE_ROOT/volumes" "$STATE_ROOT/tokens"
 
 # Metadata is re-read on every poll: the assignment arrives through
 # instances.setMetadata on a running pool member, never through a reboot.
+ensure_image() {
+  local image="$1"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    local registry="${image%%/*}"
+    meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
+      | docker login -u oauth2accesstoken --password-stdin "$registry" >/dev/null || return 1
+    docker pull -q "$image" >/dev/null || return 1
+    echo "octo-gateway-agent: cached gateway image $image"
+  fi
+  local previous=""
+  [ ! -f "$STATE_ROOT/gateway-image-cache" ] || previous="$(cat "$STATE_ROOT/gateway-image-cache")"
+  if [ -n "$previous" ] && [ "$previous" != "$image" ]; then
+    if ! docker image rm -- "$previous" >/dev/null 2>&1; then
+      echo "octo-gateway-agent: previous cached image $previous could not be removed; images in use are retained" >&2
+    fi
+  fi
+  if [ "$previous" != "$image" ]; then
+    printf '%s\n' "$image" > "$STATE_ROOT/gateway-image-cache"
+  fi
+}
+
 waiting=0
 while :; do
   GATEWAY_ID="$(attr gateway-id)"
   GATEWAY_IMAGE="$(attr gateway-image)"
   OCTOGEE_API_URL="$(attr octogee-api-url)"
-  [ -n "$GATEWAY_ID" ] && [ -n "$GATEWAY_IMAGE" ] && [ -n "$OCTOGEE_API_URL" ] && break
+  if [ -n "$GATEWAY_IMAGE" ]; then
+    if ! ensure_image "$GATEWAY_IMAGE"; then
+      echo "octo-gateway-agent: image prefetch failed for $GATEWAY_IMAGE; retrying" >&2
+      sleep "$ASSIGNMENT_POLL_SECONDS"
+      continue
+    fi
+  fi
+  if [ -n "$GATEWAY_ID" ] && [ -n "$GATEWAY_IMAGE" ] && [ -n "$OCTOGEE_API_URL" ]; then
+    if [[ "$(attr gateway-image)" = "$GATEWAY_IMAGE" && "$(attr gateway-id)" = "$GATEWAY_ID" && "$(attr octogee-api-url)" = "$OCTOGEE_API_URL" ]]; then
+      break
+    fi
+    continue
+  fi
   if [ "$waiting" -eq 0 ]; then
     echo "octo-gateway-agent: no gateway assigned yet (gateway-id, gateway-image, octogee-api-url); polling metadata every ${ASSIGNMENT_POLL_SECONDS}s"
     waiting=1
@@ -41,14 +68,6 @@ while :; do
   sleep "$ASSIGNMENT_POLL_SECONDS"
 done
 echo "octo-gateway-agent: assigned to gateway $GATEWAY_ID"
-
-reclaimed="$(docker image prune --all --force | tail -n 1)"
-echo "octo-gateway-agent: reclaimed unused images before pulling: $reclaimed"
-
-REGISTRY="${GATEWAY_IMAGE%%/*}"
-meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
-  | docker login -u oauth2accesstoken --password-stdin "$REGISTRY" >/dev/null
-docker pull -q "$GATEWAY_IMAGE" >/dev/null
 
 docker rm -f octo-gateway-agent >/dev/null 2>&1 || true
 docker run --rm --name octo-gateway-agent \

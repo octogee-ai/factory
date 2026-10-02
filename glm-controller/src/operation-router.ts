@@ -14,6 +14,7 @@ export interface OperationResult {
   output?: Record<string, unknown>;
   scrubInputOnSuccess?: boolean;
   retryAfterMs?: number;
+  waitingForBuilderIdle?: boolean;
 }
 
 export interface OperationContext {

@@ -153,7 +153,7 @@ COPY --chown=node:node templates/ /octogee/templates/
 # with restricted perms (observed at OC 2026.5.12: "Couldn't create
 # temporary file /tmp/apt.conf.XXXX for passing config to apt-key").
 RUN chmod 1777 /tmp \
-    && apt-get update && apt-get install -y --no-install-recommends gettext-base libx11-6 libxi6 libxkbcommon0 \
+    && apt-get update && apt-get install -y --no-install-recommends btrfs-progs gettext-base libx11-6 libxi6 libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Computer-use skills (loaded only by VM Builder gateways) ────────────────

@@ -1,3 +1,4 @@
+import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
@@ -1390,6 +1391,7 @@ function assignedBuilderNpmUid(input: {
   return matches.length === 1 ? matches[0]!.uid : null;
 }
 
+
 async function configuredBuilderNpmSubject(
   db: Firestore,
   bound: GatewayBinding,
@@ -1412,7 +1414,9 @@ async function configuredBuilderNpmSubject(
     gatewayId: bound.gatewayId,
     slug,
   });
-  return assignedUid === ownerUid ? { uid: ownerUid } : null;
+  if (assignedUid === ownerUid) return { uid: ownerUid };
+  if (assignmentsSnap.docs.length > 0) return null;
+  return await configuredBuilderPreparationAllowed(db, bound, slug, ownerUid) ? { uid: ownerUid } : null;
 }
 
 function installNpmCacheCapabilityRoutes(

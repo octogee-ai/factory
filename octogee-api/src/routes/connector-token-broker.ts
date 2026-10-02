@@ -9,9 +9,11 @@ import {
 import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connector-tokens.js";
 import { isSafeCanvasPath, resolveCanvasFile } from "../../../gateway-edge/src/lib/canvas-file.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
+import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import { gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { readComputerRuntimeObservation } from "../lib/computer-runtime-observation.js";
 import type {
   GatewayPodOwnerIdentity,
@@ -303,21 +305,37 @@ async function ownerRuntimeAccessAuthorized(input: {
   return workspaceOwnerUid === input.ownerUid;
 }
 
-async function projectCloneSourceAuthorized(input: {
+type ProjectCloneAuthorizationInput = {
   db: Firestore;
   bound: GatewayBinding;
   uid: string;
   access: ProjectCloneAccessContext;
   readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
-}): Promise<{ owner: string; repo: string } | null> {
+};
+
+async function projectCloneGatewayMode(input: ProjectCloneAuthorizationInput): Promise<"preparing" | "serving" | null> {
   const { db, bound, uid, access, readPodOwnerIdentity } = input;
-  if (!bound.ownerUid || uid !== bound.ownerUid) return refused(bound, "clone request is not from the owner runtime");
+  if (!safeDocId(uid) || !bound.ownerUid || uid !== bound.ownerUid) return refused(bound, "clone request is not from the owner runtime");
+  if (await configuredBuilderPreparationAllowed(db, bound, access.builderSlug, uid)) return "preparing";
+  const [user, assignmentSnapshot] = await Promise.all([
+    db.doc(`users/${uid}`).get(),
+    db.doc(`gateways/${bound.gatewayId}/assignments/${uid}`).get(),
+  ]);
+  const assignedGateway = recordOf(recordOf(user.data()?.provisioning).openclaw).gatewayId;
+  const assignment = parseAssignmentDoc(uid, assignmentSnapshot.data());
+  if (assignedGateway !== bound.gatewayId || assignment?.gatewayId !== bound.gatewayId ||
+    assignment.slug !== access.builderSlug || assignment.state !== "serving") return refused(bound, "clone gateway does not own the serving assignment");
   const authorization = await verifiedGatewayAuthorization(db, bound, readPodOwnerIdentity);
   if (!authorization) return null;
   if (authorization.gatewayClass !== "builder" || authorization.builderSlug !== access.builderSlug) {
     return refused(bound, `clone requested for ${access.builderSlug} on a ${authorization.gatewayClass} gateway of ${authorization.builderSlug}`);
   }
+  return "serving";
+}
 
+async function projectCloneSourceAuthorized(input: ProjectCloneAuthorizationInput): Promise<{ owner: string; repo: string } | null> {
+  const { db, bound, access } = input;
+  if (!await projectCloneGatewayMode(input)) return null;
   const project = await db.doc(`workspaces/${access.builderSlug}/projects/${access.projectSlug}`).get();
   const data = project.data() as Record<string, unknown> | undefined;
   const source = data?.repoSource;
@@ -391,7 +409,13 @@ async function respondProjectCloneAccess(input: {
     res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
     return;
   }
-  res.json({ accessToken: token.accessToken, repository });
+  const currentRepository = await projectCloneSourceAuthorized({ db, bound, uid, access, readPodOwnerIdentity });
+  if (!currentRepository || currentRepository.owner !== repository.owner || currentRepository.repo !== repository.repo) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
+  res.set("Cache-Control", "no-store");
+  res.json({ accessToken: token.accessToken, repository: { owner: repository.owner, repo: repository.repo } });
 }
 
 async function respondAuthorizedAccess(input: {

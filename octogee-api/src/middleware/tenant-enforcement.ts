@@ -55,6 +55,7 @@ function platformBindingAuthorized(bound: PlatformBinding, path: string): boolea
 export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/computer/agent-context",
   "/internal/connectors/access-token",
+  "/internal/connectors/github-project-clone-access",
   "/internal/byok/agent-usage-status",
   "/internal/byok/byosub-cred",
   "/internal/byok/byosub-cred-syncback",
@@ -64,6 +65,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/byok/byosub-user",
   "/internal/byok/byosub-flow-read",
   "/internal/fleet/configured-builder-bootstrap",
+  "/internal/fleet/npm-registry-credentials",
   "/internal/fleet/user-snapshot",
   "/internal/fleet/builder-runtime-state/download-url",
   "/internal/fleet/builder-runtime-state/snapshot-urls",

@@ -1,3 +1,6 @@
+import { projectCheckoutEnabled } from "../../shared/types/project.js";
+import { updateVoiceMigration, type VoiceMigrationInput } from './voice-migration.js';
+import { clearMigrationStaging, prepareMigrationStaging, type MigrationStagingIdentity } from "./migration-staging.js";
 import { sourceTransferRsyncArgs } from "./source-transfer-rsync.js";
 import { sourcesForPushMode } from "./source-transfer-plan.js";
 import { log as provisionerLog } from "@octogee/core/config";
@@ -114,6 +117,7 @@ const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as con
 const ACTIVATION_MANIFEST_TRANSFER = "activation-manifest" as const;
 
 export interface MigrationHandlerDeps {
+  voiceMigration?: (input: VoiceMigrationInput) => Promise<{ activeCalls: number }>;
   publicKey: string;
   gatewayId: string;
   adapter: CustomerLifecycleAdapter;
@@ -139,6 +143,7 @@ flushLocalState?: (input: {
   reason: string;
   expectedSystemConfigCommit?: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
+prepareSurgeTarget?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<void>;
 releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
 reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
 surgeTargetOpenClawHeld?: (input: {
@@ -535,6 +540,7 @@ export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler 
     if (!body) return;
     try {
       await deps.adapter.resumeCustomer(body.slug);
+      await (deps.voiceMigration ?? updateVoiceMigration)({ slug: body.slug, operationId: body.migrationId, phase: "resume" });
       res.status(200).json({ migrationId: body.migrationId, slug: body.slug, resumed: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -551,6 +557,12 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
+      const voice = await (deps.voiceMigration ?? updateVoiceMigration)({ slug: body.slug, operationId: body.migrationId, phase: "hold" });
+      if (voice.activeCalls > 0) {
+        log(`[migration-http] deferring quiesce slug=${body.slug}: ${voice.activeCalls} active voice call(s)`);
+        res.status(200).json({ migrationId: body.migrationId, slug: body.slug, drained: false, runningCount: voice.activeCalls });
+        return;
+      }
       let options: { stopMattermost: boolean; schedulerMigrationId?: string; retainNonportable?: boolean } | undefined;
       if (body.stopMattermost === false) options = { stopMattermost: false };
       else if (body.schedulerHandoff === true) {
@@ -570,9 +582,9 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
         runningCount: result.runningCount,
       };
       (result.drained ? dlog : log)(
-        `${result.drained ? "🟢" : "🔴"} [migration-http] quiesce migrationId=${body.migrationId} slug=${body.slug} → drained=${result.drained} runningCount=${result.runningCount}`,
+        `${result.drained ? "🟢" : "🟡"} [migration-http] quiesce migrationId=${body.migrationId} slug=${body.slug} → drained=${result.drained} runningCount=${result.runningCount}`,
       );
-      res.status(result.drained ? 200 : 408).json(response);
+      res.status(200).json(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-http] 🔴 quiesce migrationId=${body.migrationId} slug=${body.slug} failed: ${message}`, { status: "failed" });
@@ -947,9 +959,12 @@ interface RSyncImportSession {
   secretsPath: string;
   child: ReturnType<typeof spawn>;
   transport: MigrationTlsEndpoint;
+  baselineEntries?: string[];
 }
 
 const rsyncImportSessions = new Map<string, RSyncImportSession>();
+let preparingRsyncImport = false;
+const finishingRsyncImports = new Set<string>();
 
 function rsyncSessionKey(
   migrationId: string,
@@ -1185,11 +1200,11 @@ async function stopRsyncTransfer(session: RSyncImportSession): Promise<void> {
   await stopRsyncDaemon(session.child);
 }
 
-async function stopRsyncSession(session: RSyncImportSession | undefined): Promise<void> {
+async function stopRsyncSession(session: RSyncImportSession | undefined, preserveStage = false): Promise<void> {
   if (!session) return;
   await stopRsyncTransfer(session);
   rsyncImportSessions.delete(session.key);
-  await fs.rm(session.stageDir, { recursive: true, force: true }).catch(() => undefined);
+  if (!preserveStage) await fs.rm(session.mode === "keys" ? session.stageDir : path.dirname(session.stageDir), { recursive: true, force: true });
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true }).catch(() => undefined);
 }
 
@@ -1202,10 +1217,21 @@ async function stopConflictingRsyncSession(migrationId: string, port: number): P
     );
   }
   for (const session of sessions) {
-    await stopRsyncSession(session);
+    await stopRsyncSession(session, true);
   }
 }
 
+function stagingIdentity(deps: MigrationHandlerDeps, body: MigrationRequestBody, configTransferMode: MigrationConfigTransferMode): MigrationStagingIdentity {
+  return { gatewayId: deps.gatewayId, instanceId: process.env.POD_UID?.trim() || `process-${process.pid}`, migrationId: body.migrationId, slug: body.slug, configTransferMode };
+}
+
+const GIT_METADATA_DIR = "git-metadata";
+
+async function retainCheckoutStaging(stageDir: string): Promise<void> {
+  for (const entry of await fs.readdir(stageDir)) {
+    if (entry !== "customers" && entry !== GIT_METADATA_DIR) await fs.rm(path.join(stageDir, entry), { recursive: true, force: true });
+  }
+}
 
 async function runSpawnChecked(
   command: string,
@@ -1315,13 +1341,20 @@ async function listRelativeEntries(root: string): Promise<string[]> {
   return entries;
 }
 
-async function copyStageToOpenClaw(stageDir: string, importDir: string, slug: string): Promise<void> {
+async function copyStageToOpenClaw(stageDir: string, importDir: string, slug: string, baselineEntries?: readonly string[]): Promise<void> {
+  if (baselineEntries) {
+    const current = new Set(await listRelativeEntries(stageDir));
+    for (const relative of baselineEntries) {
+      if (!current.has(relative)) await fs.rm(path.join(importDir, relative), { recursive: true, force: true });
+    }
+  }
   await runSpawnChecked(
     RSYNC_BIN,
     ["-a", `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
     { label: "rsync import copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS },
   );
-  for (const directory of ["customers", "git-metadata"]) {
+  if (baselineEntries) return;
+  for (const directory of ["customers", GIT_METADATA_DIR]) {
     const relative = path.join(directory, slug);
     if (!await hasRealStageAncestors(stageDir, path.join(relative, ".entry"))) continue;
     await runSpawnChecked(RSYNC_BIN, [
@@ -1453,6 +1486,50 @@ async function startRsyncTransport(input: {
   }
 }
 
+async function readStagedSourceEntries(stageDir: string, slug: string): Promise<string[] | undefined> {
+  const entries: unknown = await fs.readFile(path.join(path.dirname(stageDir), "source-entries.json"), "utf8")
+    .then((value) => JSON.parse(value))
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+  if (entries === undefined) return undefined;
+  if (!Array.isArray(entries) || entries.some(entry => typeof entry !== "string" ||
+    (!entry.startsWith(`customers/${slug}/`) && !entry.startsWith(`${GIT_METADATA_DIR}/${slug}/`)) || entry.split("/").includes(".."))) {
+    throw new Error("migration preparation contains unsafe source paths");
+  }
+  return entries;
+}
+
+async function prepareRsyncImportDirectories(
+  deps: MigrationHandlerDeps,
+  body: PrepareRsyncImportRequestBody,
+  mode: MigrationTransferMode,
+  configTransferMode: MigrationConfigTransferMode,
+): Promise<{ tmpDir: string; stageDir: string; importDir: string; baselineEntries: string[] | undefined }> {
+  const importDir = mode === "keys"
+    ? await deps.adapter.prepareKeyImportDir(body.slug)
+    : await deps.adapter.prepareImportDir(body.slug, mode);
+  if (mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-rsync-${body.migrationId}-`));
+  try {
+    const stageDir = mode === "keys"
+      ? path.join(tmpDir, "stage")
+      : await prepareMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, configTransferMode));
+    await fs.mkdir(stageDir, { recursive: true });
+    if (mode !== "keys") await retainCheckoutStaging(stageDir);
+    const baselineEntries = mode === "final" ? await readStagedSourceEntries(stageDir, body.slug) : undefined;
+    return { tmpDir, stageDir, importDir, baselineEntries };
+  } catch (error) {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function migrationImportBusy(): boolean {
+  return preparingRsyncImport || finishingRsyncImports.size > 0;
+}
+
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
@@ -1473,6 +1550,11 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       return;
     }
 
+    if (migrationImportBusy()) {
+      res.status(409).json({ error: "migration import preparation is already in progress" });
+      return;
+    }
+    preparingRsyncImport = true;
     const port = rsyncPortFromDeps(deps);
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     let activation: ReturnType<typeof configuredBuilderActivationRequest> = null;
@@ -1484,13 +1566,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         await deps.reserveSurgeTarget?.({ migrationId: body.migrationId, slug: body.slug });
       }
       await stopConflictingRsyncSession(body.migrationId, port);
-      const importDir = mode === "keys"
-        ? await deps.adapter.prepareKeyImportDir(body.slug)
-        : await deps.adapter.prepareImportDir(body.slug, mode);
-      if (mode !== "keys") deps.adapter.markCustomerMigratingIn?.(body.slug);
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-rsync-${body.migrationId}-`));
-      const stageDir = path.join(tmpDir, "stage");
-      await fs.mkdir(stageDir, { recursive: true });
+      const { tmpDir, stageDir, importDir, baselineEntries } = await prepareRsyncImportDirectories(deps, body, mode, configTransferMode);
       const { configPath, secretsPath } = await writeRsyncDaemonConfig({
         dir: tmpDir,
         stageDir,
@@ -1517,6 +1593,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         secretsPath,
         child,
         transport,
+        baselineEntries,
       };
       rsyncImportSessions.set(key, session);
       child.on("exit", () => {
@@ -1552,6 +1629,8 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         `[migration-rsync] 🔴 prepare-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" },
       );
       res.status(500).json({ error: "prepare-rsync-import failed", message });
+    } finally {
+      preparingRsyncImport = false;
     }
   });
 }
@@ -1611,7 +1690,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
-      if (mode === "final") {
+      if (mode !== "keys") {
         sources.push(...await exportAgentStoreSnapshots({
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),
@@ -1619,7 +1698,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
         }));
       }
 
-      const activationManifest = mode !== "final" || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
+      const activationManifest = mode === "keys" || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
         ? { source: null, cleanup: async () => {} }
         : await maybeMaterializeActivationManifest(deps, body);
       cleanupActivationManifest = activationManifest.cleanup;
@@ -1666,8 +1745,8 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
 }
 
 async function validateStagedGitMetadata(stageDir: string, slug: string): Promise<string | null> {
-  const metadataPath = path.join("git-metadata", slug);
-  for (const relative of ["", "git-metadata", metadataPath]) {
+  const metadataPath = path.join(GIT_METADATA_DIR, slug);
+  for (const relative of ["", GIT_METADATA_DIR, metadataPath]) {
     let stat: Awaited<ReturnType<typeof fs.lstat>>;
     try {
       stat = await fs.lstat(path.join(stageDir, relative));
@@ -1736,7 +1815,7 @@ function configuredBuilderActivationRequest(
   mode: MigrationTransferMode,
   configTransferMode: MigrationConfigTransferMode,
 ): ConfiguredBuilderActivation | null {
-  if (mode !== "final" || configTransferMode !== ACTIVATION_MANIFEST_TRANSFER ||
+  if (mode === "keys" || configTransferMode !== ACTIVATION_MANIFEST_TRANSFER ||
     deps.adapter.isBuilderGateway?.() !== true) return null;
   if (deps.adapter.isConfiguredBuilderCustomer?.(body.slug) !== true) {
     throw new Error("import does not match the configured Builder");
@@ -1827,6 +1906,33 @@ async function activateFinishedRsyncImport(input: {
   return undefined;
 }
 
+async function removeObsoletePreparedProjects(deps: MigrationHandlerDeps, session: RSyncImportSession, slug: string): Promise<void> {
+  if (!session.baselineEntries) return;
+  const projectsDir = path.join(session.importDir, "customers", slug, "projects");
+  const entries = await fs.readdir(projectsDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  if (entries.length === 0) return;
+  const uid = await deps.adapter.uidForSlug(slug);
+  if (!uid) throw new Error("prepared Builder no longer has an owner");
+  const snapshot = await deps.adapter.loadUserSnapshot(uid, { refresh: true });
+  if (!snapshot || snapshot.slug !== slug) throw new Error("prepared Builder ownership changed");
+  const desired = new Set((snapshot.projects ?? []).filter(project => projectCheckoutEnabled(project.checkoutEnabled) &&
+    (project.provisioningState === undefined || project.provisioningState === "active")).map(project => project.projectSlug));
+  for (const entry of entries) {
+    if (desired.has(entry.name)) continue;
+    const relative = path.join("customers", slug, "projects", entry.name);
+    const sourcePresent = await fs.lstat(path.join(session.stageDir, relative)).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+    if (sourcePresent) continue;
+    await fs.rm(path.join(session.importDir, relative), { recursive: true, force: true });
+    await fs.rm(path.join(session.importDir, GIT_METADATA_DIR, slug, "projects", `${entry.name}.git`), { recursive: true, force: true });
+  }
+}
+
 async function deliverStagedImport(input: {
   deps: MigrationHandlerDeps;
   session: RSyncImportSession;
@@ -1837,18 +1943,19 @@ async function deliverStagedImport(input: {
   log: (msg: string, fields?: LogContext) => void;
 }): Promise<void> {
   const { deps, session, log } = input;
-  const prepared = input.mode === "final"
+  const prepared = input.mode !== "keys"
     ? await prepareAgentStoreSnapshots({
       stageDir: session.stageDir,
       importDir: session.importDir,
       migrationId: session.migrationId,
-      requireDrained: true,
+      requireDrained: input.mode === "final",
       run: deps.runOpenClaw,
       signal: input.signal,
       log,
     })
     : null;
-  await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug);
+  await removeObsoletePreparedProjects(deps, session, input.slug);
+  await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, session.baselineEntries);
   if (!prepared) return;
   await installPreparedAgentStores({
     prepared,
@@ -1856,6 +1963,21 @@ async function deliverStagedImport(input: {
     procRoot: deps.procRoot ?? PROC_ROOT,
     log,
   });
+}
+
+async function finishTargetPreparation(
+  deps: MigrationHandlerDeps,
+  session: RSyncImportSession,
+  body: FinishRsyncImportRequestBody,
+  configTransferMode: MigrationConfigTransferMode,
+): Promise<void> {
+  const sourceEntries = (await listRelativeEntries(session.stageDir)).filter(entry =>
+    entry.startsWith(`customers/${body.slug}/`) || entry.startsWith(`${GIT_METADATA_DIR}/${body.slug}/`));
+  await fs.writeFile(path.join(path.dirname(session.stageDir), "source-entries.json"), JSON.stringify(sourceEntries), { mode: 0o600 });
+  const activation = configuredBuilderActivationRequest(deps, body, "pre", configTransferMode);
+  if (!activation) return;
+  if (!deps.prepareSurgeTarget) throw new Error("Builder target preparation is unavailable");
+  await deps.prepareSurgeTarget(activation);
 }
 
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -1882,12 +2004,18 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       res.status(409).json({ error: "rsync import config transfer mode does not match prepared session" });
       return;
     }
+    if (migrationImportBusy()) {
+      res.status(409).json({ error: "migration import completion is already in progress" });
+      return;
+    }
+    finishingRsyncImports.add(key);
     const { controller, detach } = attachImportDisconnectHandlers(
       res,
       body.migrationId,
       body.slug,
       log,
     );
+    let preserveStage = false;
     try {
       const startedAt = Date.now();
       await stopRsyncTransfer(session);
@@ -1909,6 +2037,10 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         log,
       });
       const stagedAt = Date.now();
+      if (mode === "pre") {
+        await finishTargetPreparation(deps, session, body, configTransferMode);
+        preserveStage = true;
+      }
       const verificationPending = mode === "final"
         ? await activateFinishedRsyncImport({
           deps,
@@ -1937,7 +2069,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       respondImportFailure(res, controller.signal, err);
     } finally {
       detach();
-      await stopRsyncSession(session).catch(() => undefined);
+      try { await stopRsyncSession(session, preserveStage); } finally { finishingRsyncImports.delete(key); }
     }
   });
 }
@@ -1959,7 +2091,8 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     if (!configTransferMode) return;
     if (!requireConfiguredBuilderSystemConfigTransfer(body.slug, configTransferMode, res)) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
-    await stopRsyncSession(rsyncImportSessions.get(key)).catch(() => undefined);
+    await stopRsyncSession(rsyncImportSessions.get(key));
+    await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, configTransferMode));
     let activation: ReturnType<typeof configuredBuilderActivationRequest> = null;
     try {
       activation = configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
@@ -2244,6 +2377,8 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
     try {
       const activation = configuredBuilderActivationRequest(deps, body, "final", ACTIVATION_MANIFEST_TRANSFER);
       if (activation) await deps.unreserveSurgeTarget!(activation);
+      await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, ACTIVATION_MANIFEST_TRANSFER));
+      await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, BUILDER_SYSTEM_CONFIG_TRANSFER));
       if (deps.adapter.removeImportedCustomerBySlug) {
         const result = await removeCustomerWithSystemConfigWatchPaused({
           deps,

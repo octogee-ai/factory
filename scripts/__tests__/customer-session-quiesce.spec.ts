@@ -42,6 +42,7 @@ function clockedRpc() {
     schedulerMigration: vi.fn(async (request: { operationId: string; phase: string; agentIds?: string[] }) => ({
       operationId: request.operationId, phase: request.phase, agentIds: request.agentIds ?? [], drained: true,
     })),
+    sessionsList: vi.fn(async (_request: { agentId: string }): Promise<{ sessions: Array<{ key: string; hasActiveRun?: boolean; status?: string; updatedAt?: number; lastActivityAt?: number }> }> => ({ sessions: [] })),
     sessionsAbort: vi.fn(async () => ({ ok: true as const, abortedRunId: "run-1", status: "aborted" as const })),
   };
 }
@@ -117,6 +118,79 @@ describe("sessionStoreForPath", () => {
 });
 
 describe("quiesceCustomerSessionsBounded", () => {
+  it("retains the completed-turn grace across separate bounded drain attempts", async () => {
+    const h = harness(mkStateDir(), { graceMs: 20_000, maxWaitMs: 2_000 });
+    h.rpc.sessionsList.mockResolvedValue({ sessions: [{ key: "agent:octogee-alice-coach:main", hasActiveRun: true }] });
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toMatchObject({ drained: false });
+    h.rpc.sessionsList.mockResolvedValue({ sessions: [{ key: "agent:octogee-alice-coach:main", hasActiveRun: false, lastActivityAt: h.clock() - 1_000 }] });
+    h.opts.maxWaitMs = 30_000;
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toMatchObject({ drained: true });
+    expect(h.clock()).toBe(21_000);
+    expect(h.rpc.sessionsAbort).not.toHaveBeenCalled();
+  });
+
+  it("keeps a live coach turn past the original grace deadline until it settles", async () => {
+    const h = harness(mkStateDir(), { graceMs: 2_000, maxWaitMs: 10_000 });
+    h.rpc.sessionsList.mockImplementation(async () => ({ sessions: h.clock() < 5_000
+      ? [{ key: "agent:octogee-alice-coach:main", hasActiveRun: true, updatedAt: h.clock() }]
+      : [] }));
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toEqual({ drained: true, runningCount: 0, abortedSessions: 0 });
+    expect(h.clock()).toBe(7_000);
+    expect(h.rpc.sessionsAbort).not.toHaveBeenCalled();
+  });
+
+  it("defers when the request budget expires during live work instead of aborting", async () => {
+    const h = harness(mkStateDir(), { graceMs: 2_000, maxWaitMs: 4_000, abortAfterGrace: true });
+    h.rpc.sessionsList.mockResolvedValue({ sessions: [{ key: "agent:octogee-alice-coach:main", hasActiveRun: true }] });
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toEqual({ drained: false, runningCount: 1, abortedSessions: 0 });
+    expect(h.clock()).toBe(4_000);
+    expect(h.rpc.sessionsAbort).not.toHaveBeenCalled();
+  });
+
+  it("resets the idle grace on session progress without treating an unchanged running flag as progress", async () => {
+    const h = harness(mkStateDir(), { graceMs: 2_000, maxWaitMs: 10_000 });
+    h.rpc.sessionsList.mockImplementation(async () => ({ sessions: [{
+      key: "agent:octogee-alice-coach:main", status: "running", updatedAt: Math.min(h.clock(), 3_000),
+    }] }));
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toEqual({ drained: false, runningCount: 1, abortedSessions: 0 });
+    expect(h.clock()).toBe(5_000);
+    expect(h.rpc.sessionsAbort).not.toHaveBeenCalled();
+  });
+
+  it("defers before cutover while an idle native turn still has durable running state", async () => {
+    const stateDir = mkStateDir();
+    writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "running"]]);
+    const h = harness(stateDir);
+    h.rpc.sessionsList.mockResolvedValue({ sessions: [{ key: "agent:octogee-alice-coach:main", hasActiveRun: false }] });
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toEqual({ drained: false, runningCount: 1, abortedSessions: 0 });
+    expect(h.rpc.sessionsAbort).not.toHaveBeenCalled();
+    expect(h.opts.log).toHaveBeenCalledWith(expect.stringContaining("native runtime idle but durable session still running"));
+  });
+
+  it("waits for project and queued turns returned by the native runtime", async () => {
+    const h = harness(mkStateDir(), { graceMs: 2_000, maxWaitMs: 3_000, agentIds: ["octogee-alice-coach", "octogee-alice-proj-app-coach"] });
+    h.rpc.sessionsList.mockImplementation(async ({ agentId }) => ({ sessions: agentId.includes("proj")
+      ? [{ key: "agent:octogee-alice-proj-app-coach:main", hasActiveRun: true, status: "queued" }]
+      : [] }));
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toMatchObject({ drained: false, runningCount: 1, abortedSessions: 0 });
+    expect(h.rpc.sessionsList).toHaveBeenCalledWith({ agentId: "octogee-alice-proj-app-coach", includeGlobal: true, includeUnknown: true, archived: "all", offset: 0 });
+  });
+
+  it("checks every native page before declaring the customer idle", async () => {
+    const h = harness(mkStateDir(), { maxWaitMs: 0 });
+    h.rpc.sessionsList.mockImplementation(async (request) => (request as { offset?: number }).offset === 100
+      ? { sessions: [{ key: "agent:octogee-alice-coach:older", hasActiveRun: true }], hasMore: false }
+      : { sessions: [], hasMore: true, nextOffset: 100 });
+    await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toMatchObject({ drained: false, runningCount: 1 });
+    expect(h.rpc.sessionsList).toHaveBeenCalledWith(expect.objectContaining({ agentId: "octogee-alice-coach", offset: 100 }));
+  });
+
+  it("fails closed when a native inventory page belongs to a different customer agent", async () => {
+    const h = harness(mkStateDir());
+    h.rpc.sessionsList.mockResolvedValue({ sessions: [{ key: "global", agentId: "octogee-bob-coach", hasActiveRun: true }] } as never);
+    await expect(quiesceCustomerSessionsBounded(h.opts)).rejects.toThrow("unexpected session owner octogee-bob-coach");
+  });
+
   it("returns drained immediately, without a grace wait, when nothing is running", async () => {
     const stateDir = mkStateDir();
     writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "done"]]);
@@ -142,14 +216,11 @@ describe("quiesceCustomerSessionsBounded", () => {
     writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "running"]]);
     const h = harness(stateDir, {
       graceMs: 20_000,
-      wait: async (delayMs) => {
-        h.waits.push(delayMs);
-        writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "done"]]);
-      },
+      readSessions: async () => [{ key: "agent:octogee-alice-coach:main", status: h.clock() === 0 ? "running" : "done" }],
     });
 
     await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toEqual({ drained: true, runningCount: 0, abortedSessions: 0 });
-    expect(h.waits).toEqual([1_000]);
+    expect(h.clock()).toBe(21_000);
     expect(h.rpc.sessionsAbort).not.toHaveBeenCalled();
   });
 
@@ -160,7 +231,7 @@ describe("quiesceCustomerSessionsBounded", () => {
       ["agent:octogee-alice-coach:mattermost:channel", "done"],
     ]);
     const projectStore = writeSessions(stateDir, "octogee-alice-proj-app-coach", [["agent:octogee-alice-proj-app-coach:cron", "running"]]);
-    const h = harness(stateDir, { graceMs: 2_000, recheckMs: 10_000 });
+    const h = harness(stateDir, { graceMs: 2_000, recheckMs: 10_000, abortAfterGrace: true });
     h.opts.stores = [...h.opts.stores, sessionStoreForPath(projectStore)];
     h.rpc.sessionsAbort.mockImplementation(async () => {
       writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "killed"]]);
@@ -179,7 +250,7 @@ describe("quiesceCustomerSessionsBounded", () => {
   it("is bounded by grace plus recheck even when the agent never settles, and reports not drained", async () => {
     const stateDir = mkStateDir();
     writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:main", "running"]]);
-    const h = harness(stateDir, { graceMs: 3_000, recheckMs: 2_000 });
+    const h = harness(stateDir, { graceMs: 3_000, recheckMs: 2_000, abortAfterGrace: true });
 
     await expect(quiesceCustomerSessionsBounded(h.opts)).resolves.toEqual({ drained: false, runningCount: 1, abortedSessions: 1 });
     expect(h.clock()).toBe(5_000);
@@ -189,7 +260,7 @@ describe("quiesceCustomerSessionsBounded", () => {
   it("keeps polling the scheduler hold until its in-flight run is gone, aborting that run like any session", async () => {
     const stateDir = mkStateDir();
     writeSessions(stateDir, "octogee-alice-coach", [["agent:octogee-alice-coach:cron", "running"]]);
-    const h = harness(stateDir, { schedulerMigrationId: "handoff-1", graceMs: 1_000, recheckMs: 5_000 });
+    const h = harness(stateDir, { schedulerMigrationId: "handoff-1", graceMs: 1_000, recheckMs: 5_000, abortAfterGrace: true });
     let holds = 0;
     h.rpc.schedulerMigration.mockImplementation(async (request) => {
       holds += 1;

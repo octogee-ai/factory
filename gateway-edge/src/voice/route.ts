@@ -1,3 +1,4 @@
+import type { VoiceMigrationRegistry } from './migration.js';
 import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
@@ -43,6 +44,7 @@ export interface VoiceWsRouteDeps {
   conversationCheckMs?: number;
   createRelayClient?: (gatewayId: string) => VoiceRelayClient;
   registry?: Registry;
+  migrationRegistry?: VoiceMigrationRegistry;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -130,6 +132,27 @@ async function readRelayStatus(deps: VoiceWsRouteDeps, gatewayId: string): Promi
   } catch {
     return null;
   }
+}
+
+async function reserveVoiceAdmission(
+  deps: VoiceWsRouteDeps,
+  redeemed: RedeemedVoiceTicket,
+  socket: Duplex,
+  handshakes: Counter<'outcome'>,
+  log: NonNullable<VoiceWsRouteDeps['log']>,
+): Promise<(() => void) | null> {
+  if (!deps.migrationRegistry) return () => undefined;
+  const release = deps.migrationRegistry.begin(redeemed.voiceConversation.workspaceSlug);
+  if (release) return release;
+  handshakes.inc({ outcome: 'fail:migration' });
+  refuse(socket, '503 Service Unavailable');
+  await grantRevoker(deps, redeemed, log)();
+  return null;
+}
+
+function nativeVoiceMode(deps: VoiceWsRouteDeps, status: RelayStatus) {
+  const useNativeVoice = nativeVoiceEnabled(deps);
+  return { useNativeVoice, useOpenAiVoice: useNativeVoice && status.nativeOpenAi === true };
 }
 
 export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
@@ -221,6 +244,8 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
   return async (req: http.IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
     const redeemed = await admit(req, socket);
     if (!redeemed) return;
+    const releaseAdmission = await reserveVoiceAdmission(deps, redeemed, socket, handshakes, log);
+    if (!releaseAdmission) return;
     const revokeGrant = grantRevoker(deps, redeemed, log);
     let attached = false;
     const deadline = setTimeout(() => { socket.destroy(); void revokeGrant(); }, Math.max(0, redeemed.voiceGrantExpiresAt - Date.now()));
@@ -239,8 +264,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
         refuseWithError(req, socket, head, "fail:relay-unreachable", { code: "internal", message: VOICE_RELAY_UNAVAILABLE_MESSAGE });
         return;
       }
-      const useNativeVoice = nativeVoiceEnabled(deps);
-      const useOpenAiVoice = useNativeVoice && status.nativeOpenAi === true;
+      const { useNativeVoice, useOpenAiVoice } = nativeVoiceMode(deps, status);
       if (!hasVoiceService(status, useOpenAiVoice)) {
         refuseWithError(req, socket, head, "fail:not-configured", { code: "not_configured", message: VOICE_NOT_CONFIGURED_MESSAGE });
         return;
@@ -259,13 +283,13 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
 
       if (socket.destroyed || redeemed.voiceGrantExpiresAt <= Date.now()) return;
       wss.handleUpgrade(req, socket, head, (client) => {
-        attached = true;
         clearTimeout(deadline);
         handshakes.inc({ outcome: "ok" });
-        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, useOpenAiVoice, legacyAvailable: status.configured, openAiConfigured: status.nativeOpenAi === true, vad, active, log, revokeGrant });
+        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, useOpenAiVoice, legacyAvailable: status.configured, openAiConfigured: status.nativeOpenAi === true, vad, active, log, revokeGrant, releaseAdmission });
+        attached = true;
       });
     } finally {
-      if (!attached) { clearTimeout(deadline); await revokeGrant(); }
+      if (!attached) { releaseAdmission(); clearTimeout(deadline); await revokeGrant(); }
     }
   };
 }
@@ -284,9 +308,10 @@ interface VoiceClientContext {
   active: Gauge;
   log: NonNullable<VoiceWsRouteDeps['log']>;
   revokeGrant: () => Promise<void>;
+  releaseAdmission?: () => void;
 }
 
-function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant }: VoiceClientContext): void {
+function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant, releaseAdmission }: VoiceClientContext): void {
   active.inc();
   const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
   const relay = deps.createRelayClient?.(redeemed.gatewayId)
@@ -361,6 +386,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     clearTimeout(expiryTimer);
     void revokeGrant();
     active.dec();
+    releaseAdmission?.();
     session?.close();
     try {
       client.close(1000, reason);

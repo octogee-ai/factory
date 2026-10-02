@@ -557,6 +557,21 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
     expect(MIGRATION_QUIESCE_TIMEOUT_MS).toBeGreaterThan(0);
   });
 
+  it.each([undefined, 120_000])("lets the bounded drain return before the HTTP deadline: %s", async (timeoutMs) => {
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const { fakeFetch } = captureSignal();
+      const client = createMigrationClient({
+        transferState: transferNotUnderTest, privateKey: PRIVATE_KEY,
+        resolveGatewayUrl: () => "https://fleet.example.com", fetch: fakeFetch,
+      });
+      await client.quiesce({ migrationId: "m1", gatewayId: "gw", slug: "alice", timeoutMs });
+      expect(timer).toHaveBeenCalledWith(expect.any(Function), (timeoutMs ?? MIGRATION_QUIESCE_TIMEOUT_MS) + 30_000);
+    } finally {
+      timer.mockRestore();
+    }
+  });
+
   it("aborts and reports a path-tagged timeout when the server stalls past the deadline", async () => {
     const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       return await new Promise<Response>((_resolve, reject) => {

@@ -55,7 +55,7 @@ export interface HomeFs {
   touch(path: string, atMs: number): Promise<void>;
   uploadBody(path: string): Promise<BodyInit>;
   saveResponse(response: Response, path: string): Promise<void>;
-  mkdir(path: string): Promise<void>;
+  mkdir(path: string, mode?: number): Promise<void>;
   replaceDirectory(source: string, target: string): Promise<void>;
 }
 
@@ -67,6 +67,8 @@ export interface HomeCheckpointDeps extends BrokerClientDeps {
   log: (msg: string) => void;
   desktop: DesktopControl;
   snapshot(work: () => Promise<void>): Promise<void>;
+  captureSnapshot(): Promise<void>;
+  discardSnapshot(): Promise<void>;
 }
 
 export interface HomeScope {
@@ -103,8 +105,8 @@ export function tarCreateArgs(archive: string, scope: HomeScope, desktopPaths: r
     "--numeric-owner",
     `--file=${archive}`,
     ...HOME_CHECKPOINT_EXCLUDES.map((name) => `--exclude=${name}`),
-    `--directory=${scope.dataDir}/..`, "data",
-    `--directory=${scope.desktopDir}/..`,
+    "-C", `${scope.dataDir}/..`, "data",
+    "-C", `${scope.desktopDir}/..`,
     ...desktopPaths.map((path) => `desktop-home/${path}`),
   ];
 }
@@ -157,47 +159,67 @@ async function pruneCheckpoints(deps: HomeCheckpointDeps, slug: string): Promise
   }
 }
 
+async function createAndUploadCheckpoint(
+  deps: HomeCheckpointDeps,
+  scope: HomeScope,
+  requestedAt: number | null,
+  archive: string,
+  startedAt: number,
+): Promise<HomeCheckpointResult> {
+  await deps.discardSnapshot();
+  await deps.snapshot(() => deps.captureSnapshot());
+  const snapshotRoot = `${deps.stateRoot}/.home-checkpoint/snapshot`;
+  const capturedScope = {
+    ...scope,
+    dataDir: `${snapshotRoot}/volumes/data`,
+    desktopDir: `${snapshotRoot}/desktop-home`,
+  };
+  const desktopPaths: string[] = [];
+  for (const path of DESKTOP_HOME_PATHS) {
+    if (await deps.fs.exists(`${capturedScope.desktopDir}/${path}`)) desktopPaths.push(path);
+  }
+  await sh(deps, "tar", tarCreateArgs(archive, capturedScope, desktopPaths), [0]);
+  const size = await deps.fs.fileSize(archive);
+  if (size <= 0) throw new Error("home checkpoint archive is empty");
+  if (size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
+    throw new Error(`home checkpoint archive is ${size} bytes, over the ${COMPUTER_HOME_CHECKPOINT_MAX_BYTES} byte cap`);
+  }
+  const sha256 = await deps.fs.sha256(archive);
+  const signed = await post<FleetBrokerComputerHomeCheckpointUrl>(deps, "checkpoint-url", { slug: scope.slug, size }, "computer-home checkpoint-url");
+  if (!COMPUTER_HOME_CHECKPOINT_NAME_RE.test(signed.name)) throw new Error(`computer-home checkpoint-url returned an invalid name ${signed.name}`);
+  const upload = await deps.fetchImpl(signed.upload.url, {
+    method: signed.upload.method,
+    signal: AbortSignal.timeout(10 * 60_000),
+    headers: { "content-type": COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE, ...signed.upload.requiredHeaders },
+    body: await deps.fs.uploadBody(archive),
+  });
+  if (!upload.ok) throw await brokerFailure("computer-home upload", upload);
+  const committed = await post<FleetBrokerComputerHomeCheckpointCommit>(
+    deps,
+    "commit",
+    { slug: scope.slug, name: signed.name, size, sha256, requestedAt },
+    "computer-home commit",
+  );
+  await deps.fs.touch(scope.marker, startedAt);
+  const pruned = await pruneCheckpoints(deps, scope.slug);
+  return { status: "uploaded", name: committed.name, size, pruned };
+}
+
 export async function checkpointHome(deps: HomeCheckpointDeps, scope: HomeScope, opts: { force: boolean; requestedAt?: number | null }): Promise<HomeCheckpointResult> {
   if (!opts.force && !(await homeIsDirty(deps, scope))) return { status: "clean" };
   const startedAt = deps.now();
   const tempDir = await deps.fs.mkdtemp("octogee-home-checkpoint-");
-  const archive = `${tempDir}/home.tar.gz`;
-  try {
-    await deps.snapshot(async () => {
-      const desktopPaths: string[] = [];
-      for (const path of DESKTOP_HOME_PATHS) {
-        if (await deps.fs.exists(`${scope.desktopDir}/${path}`)) desktopPaths.push(path);
-      }
-      await sh(deps, "sync", ["-f", scope.dataDir], [0]);
-      await sh(deps, "tar", tarCreateArgs(archive, scope, desktopPaths), [0]);
-    });
-    const size = await deps.fs.fileSize(archive);
-    if (size <= 0) throw new Error("home checkpoint archive is empty");
-    if (size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
-      throw new Error(`home checkpoint archive is ${size} bytes, over the ${COMPUTER_HOME_CHECKPOINT_MAX_BYTES} byte cap`);
-    }
-    const sha256 = await deps.fs.sha256(archive);
-    const signed = await post<FleetBrokerComputerHomeCheckpointUrl>(deps, "checkpoint-url", { slug: scope.slug, size }, "computer-home checkpoint-url");
-    if (!COMPUTER_HOME_CHECKPOINT_NAME_RE.test(signed.name)) throw new Error(`computer-home checkpoint-url returned an invalid name ${signed.name}`);
-    const upload = await deps.fetchImpl(signed.upload.url, {
-      method: signed.upload.method,
-      signal: AbortSignal.timeout(10 * 60_000),
-      headers: { "content-type": COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE, ...signed.upload.requiredHeaders },
-      body: await deps.fs.uploadBody(archive),
-    });
-    if (!upload.ok) throw await brokerFailure("computer-home upload", upload);
-    const committed = await post<FleetBrokerComputerHomeCheckpointCommit>(
-      deps,
-      "commit",
-      { slug: scope.slug, name: signed.name, size, sha256, requestedAt: opts.requestedAt ?? null },
-      "computer-home commit",
-    );
-    await deps.fs.touch(scope.marker, startedAt);
-    const pruned = await pruneCheckpoints(deps, scope.slug);
-    return { status: "uploaded", name: committed.name, size, pruned };
-  } finally {
-    await deps.fs.rm(tempDir);
+  const [checkpoint] = await Promise.allSettled([
+    createAndUploadCheckpoint(deps, scope, opts.requestedAt ?? null, `${tempDir}/home.tar.gz`, startedAt),
+  ]);
+  const cleanup = await Promise.allSettled([deps.discardSnapshot(), deps.fs.rm(tempDir)]);
+  const cleanupFailures = cleanup.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+  if (cleanupFailures.length) {
+    const failures = checkpoint.status === "rejected" ? [checkpoint.reason, ...cleanupFailures] : cleanupFailures;
+    throw new AggregateError(failures, `home checkpoint failed: ${failures.map(String).join("; ")}`);
   }
+  if (checkpoint.status === "rejected") throw checkpoint.reason;
+  return checkpoint.value;
 }
 
 function validateHomeDownload(current: FleetBrokerComputerHomeDownload): void {

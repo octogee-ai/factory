@@ -1,3 +1,4 @@
+import { createVoiceMigrationRegistry, createVoiceMigrationHandler, VOICE_MIGRATION_PATH } from '../voice/migration.js';
 import http from "node:http";
 import * as fs from "node:fs";
 import type { Duplex } from "node:stream";
@@ -267,6 +268,7 @@ function getDirectActivityTargetHandler():
   return directActivityTargetHandler;
 }
 
+const voiceMigrationRegistry = createVoiceMigrationRegistry();
 const voiceEventRelayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
 const voiceEventRelay = voiceEventRelayToken
   ? createOpenClawVoiceEventRelay({
@@ -274,6 +276,7 @@ const voiceEventRelay = voiceEventRelayToken
       log: (message, fields) => logger.warn(`[voice] ${message}`, fields),
     })
   : null;
+const voiceMigrationHandler = voiceEventRelayToken ? createVoiceMigrationHandler({ gatewayToken: voiceEventRelayToken, registry: voiceMigrationRegistry }) : null;
 const unavailableVoiceEventSource: AgentEventSource = {
   subscribe: () => () => undefined,
 };
@@ -473,6 +476,11 @@ async function handleLocalInternalRoute(
       res.writeHead(503, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "activity_intake_unavailable", retryable: true }));
     }
+    return true;
+  }
+  if (path === VOICE_MIGRATION_PATH) {
+    if (voiceMigrationHandler) await voiceMigrationHandler(req, res);
+    else { res.writeHead(503, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'voice_migration_unconfigured' })); }
     return true;
   }
   if (path !== VOICE_EVENT_RELAY_PATH) return false;
@@ -877,6 +885,7 @@ export function attachChatProxyWsUpgrade(
   const wsRouter = new WsUpgradeRouter();
   const upgradeGate = opts.upgradeGate ?? null;
   const voiceWsUpgrade = createVoiceWsUpgradeHandler({
+    migrationRegistry: voiceMigrationRegistry,
     runtimeBroker: {
       redeemOpenClawWs: (ticket, purpose) =>
         (opts.runtimeBroker ?? getOpenClawRuntimeBroker()).redeemOpenClawWs(ticket, purpose),

@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import {
   createMigrationProgressHandler,
@@ -266,6 +267,7 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
     publicKey: PUBLIC_KEY,
     gatewayId: GATEWAY_ID,
     adapter: mkAdapter(),
+    voiceMigration: vi.fn(async () => ({ activeCalls: 0 })),
     log: vi.fn(),
     reserveLoopbackPort: async () => RSYNC_DAEMON_LOOPBACK_PORT,
     openMigrationTlsEndpoint: vi.fn(async () => ({
@@ -371,6 +373,25 @@ const armOnClose = (event: string | symbol) => {
 }
 
 describe("createQuiesceHandler", () => {
+  it("does not pause the coach if the live voice registry cannot be checked", async () => {
+    const adapter = mkAdapter();
+    const response = mkResponse();
+    const voiceMigration = vi.fn(async () => { throw new Error("voice registry unavailable"); });
+    await createQuiesceHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_QUIESCE, { signature: signForPod(SAMPLE_QUIESCE.migrationId, JSON.stringify(SAMPLE_QUIESCE)) }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(adapter.quiesceCustomer).not.toHaveBeenCalled();
+  });
+
+  it("defers before touching the coach while a voice call is active", async () => {
+    const adapter = mkAdapter();
+    const voiceMigration = vi.fn(async () => ({ activeCalls: 1 }));
+    const response = mkResponse();
+    await createQuiesceHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_QUIESCE, { signature: signForPod(SAMPLE_QUIESCE.migrationId, JSON.stringify(SAMPLE_QUIESCE)) }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toMatchObject({ drained: false, runningCount: 1 });
+    expect(adapter.quiesceCustomer).not.toHaveBeenCalled();
+  });
+
   it("passes the whole-process rollout's ingress ownership through", async () => {
     const adapter = mkAdapter();
     const body = { ...SAMPLE_QUIESCE, stopMattermost: false };
@@ -497,7 +518,7 @@ describe("createQuiesceHandler", () => {
     expect(adapter.quiesceCustomer).toHaveBeenCalledWith("chris", 5_000);
   });
 
-  it("returns 408 + drained:false when adapter reports timeout", async () => {
+  it("returns 200 + drained:false when active work defers the move", async () => {
     const adapter = mkAdapter({
       quiesceCustomer: vi.fn(async () => ({ drained: false, runningCount: 2 })),
     });
@@ -507,7 +528,7 @@ describe("createQuiesceHandler", () => {
     const req = mkRequest(SAMPLE_QUIESCE, { signature: sig });
     const { res, getStatus, getBody } = mkResponse();
     await handler(req, res, vi.fn());
-    expect(getStatus()).toBe(408);
+    expect(getStatus()).toBe(200);
     expect(getBody()).toMatchObject({ drained: false, runningCount: 2 });
   });
 
@@ -2849,7 +2870,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     ]));
   });
 
-  it("carries no agent database in a pre-sync", async () => {
+  it("carries a consistent agent snapshot during pre-sync without transferring the live database", async () => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
     const runOpenClaw = fakeOpenClaw();
@@ -2860,7 +2881,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
-    expect(runOpenClaw).not.toHaveBeenCalled();
+    expect(runOpenClaw).toHaveBeenCalledWith(expect.arrayContaining(["backup", "sqlite", "create"]), expect.any(Object));
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(args).toContain("--exclude=openclaw-agent.sqlite");
   });
@@ -3096,16 +3117,12 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(run.mock.calls.map(([args]) => args.slice(0, 2).join(" "))).toEqual([
       "database preflight-agent",
       "backup sqlite",
-      "backup sqlite",
     ]);
-    expect(run.mock.calls.slice(1).map(([args]) => args[2])).toEqual(["verify", "restore"]);
+    expect(run.mock.calls.slice(1).map(([args]) => args[2])).toEqual(["restore"]);
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
     expect((await fs.stat(path.join(importDir, CARRIED_STORE))).mode & 0o777).toBe(0o600);
     expect(landedAtActivation).toEqual([true]);
-    expect(upgradeStoresMock).toHaveBeenCalledWith(
-      path.join(importDir, ".octogee-import", "mig-carry-land"),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
+    expect(upgradeStoresMock).not.toHaveBeenCalled();
     await expect(fs.access(path.join(importDir, ".octogee-import", "mig-carry-land"))).rejects.toThrow();
     await expect(fs.access(path.join(stageDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
   });
@@ -3307,9 +3324,22 @@ describe("agent sqlite stores across an rsync carry", () => {
     const importDir = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({ migrationId: "mig-schema-failure", importDir, daemon: mkFakeChild() });
     await stageSnapshot(stageDir, () => {});
+    const artifact = path.join(stageDir, STAGED_SNAPSHOT, "database.sqlite");
+    const bytes = await fs.readFile(artifact);
+    await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), JSON.stringify({
+      schemaVersion: 1,
+      database: { role: "agent", agentId: "octogee-chris-coach" },
+      artifact: { path: "database.sqlite", sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") },
+    }));
+    deps.runOpenClaw = vi.fn(async () => ({ code: 1, stdout: JSON.stringify({
+      schema: "openclaw.agent-schema-preflight.v1", databasePath: artifact, agentId: "octogee-chris-coach",
+      foundVersion: 23, targetVersion: 24, status: "incompatible",
+    }) }));
     upgradeStoresMock.mockRejectedValueOnce(new Error("schema upgrade failed"));
-    const { getStatus } = await finishImport(deps, "mig-schema-failure");
+    const { getStatus, getBody } = await finishImport(deps, "mig-schema-failure");
     expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ message: "schema upgrade failed" });
+    expect(upgradeStoresMock).toHaveBeenCalledOnce();
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
@@ -3767,5 +3797,101 @@ describe("scheduler migration signed endpoint", () => {
     );
     expect(response.getStatus()).toBe(400);
     expect(schedulerMigration).not.toHaveBeenCalled();
+  });
+});
+
+describe("prepared migration staging", () => {
+  it("does not finish an existing import while another phase prepares its staging", async () => {
+    vi.stubEnv("POD_UID", "concurrent-builder-pod");
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "concurrent-import-"));
+    migrationTempRoots.push(importDir);
+    let releasePreparation!: () => void;
+    const blocked = new Promise<void>(resolve => { releasePreparation = resolve; });
+    const reserveSurgeTarget = vi.fn(async () => blocked);
+    const deps = mkDeps({
+      adapter: mkAdapter({ isBuilderGateway: () => true,
+        prepareKeyImportDir: vi.fn(async () => importDir), prepareImportDir: vi.fn(async () => importDir) }),
+      reserveSurgeTarget, releaseSurgeReadiness: vi.fn(async () => undefined),
+      unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const migrationId = "concurrent-preparation";
+    const first = { migrationId, slug: "chris", mode: "keys", rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "d".repeat(64) };
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    const prepared = mkResponse();
+    await createPrepareRsyncImportHandler(deps)(mkRequest(first, { signature: signForPod(migrationId, JSON.stringify(first)) }), prepared.res, vi.fn());
+    expect(prepared.getStatus()).toBe(200);
+    const next = { ...first, mode: "pre" };
+    const preparing = createPrepareRsyncImportHandler(deps)(mkRequest(next, { signature: signForPod(migrationId, JSON.stringify(next)) }), mkResponse().res, vi.fn());
+    try {
+      await vi.waitFor(() => expect(reserveSurgeTarget).toHaveBeenCalledOnce());
+      spawnMock.mockImplementation(() => mkFakeChild({ exitCode: 0 }));
+      const finish = { migrationId, slug: "chris", mode: "keys", rpcPhase: "finish-rsync-import" };
+      const finished = mkResponse();
+      await createFinishRsyncImportHandler(deps)(mkRequest(finish, { signature: signForPod(migrationId, JSON.stringify(finish)) }), finished.res, vi.fn());
+      expect(finished.getStatus()).toBe(409);
+      expect(finished.getBody()).toEqual({ error: "migration import completion is already in progress" });
+    } finally {
+      releasePreparation();
+      await preparing;
+      const abort = { migrationId, slug: "chris", mode: "pre", rpcPhase: "abort-rsync-import" };
+      await createAbortRsyncImportHandler(deps)(mkRequest(abort, { signature: signForPod(migrationId, JSON.stringify(abort)) }), mkResponse().res, vi.fn());
+    }
+  });
+
+  it("reuses the prepared file tree for final synchronization and holds Builder startup", async () => {
+    vi.stubEnv("POD_UID", "builder-prepared-pod");
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "prepared-import-"));
+    migrationTempRoots.push(importDir);
+    const prepareSurgeTarget = vi.fn(async () => undefined);
+    const releaseSurgeReadiness = vi.fn(async () => undefined);
+    const deps = mkDeps({
+      adapter: mkAdapter({ isBuilderGateway: () => true, prepareImportDir: vi.fn(async () => importDir),
+        loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT, agentIds: [...RESTORE_SNAPSHOT.agentIds], channels: [], projects: [{ projectId: "new", projectSlug: "new-repo", giteaRepoName: "chris-new-repo" }] })),
+      }),
+      reserveSurgeTarget: vi.fn(async () => undefined), prepareSurgeTarget,
+      releaseSurgeReadiness, unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const migrationId = "prepared-persistent-stage";
+    const prepare = async (mode: "pre" | "final") => {
+      spawnMock.mockReturnValueOnce(mkFakeChild());
+      const body = { migrationId, slug: "chris", mode, rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "b".repeat(64) };
+      const response = mkResponse();
+      await createPrepareRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(200);
+      const call = spawnMock.mock.calls.at(-1)!;
+      const configPath = (call[1] as string[]).find(arg => arg.startsWith("--config="))!.slice(9);
+      return /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
+    };
+    const stageDir = await prepare("pre");
+    await fs.mkdir(path.join(stageDir, "customers/chris"), { recursive: true });
+    await fs.writeFile(path.join(stageDir, "customers/chris/draft.txt"), "uncommitted source work");
+    spawnMock.mockImplementation(() => mkFakeChild({ exitCode: 0 }));
+    const finish = { migrationId, slug: "chris", mode: "pre", rpcPhase: "finish-rsync-import" };
+    const finished = mkResponse();
+    await createFinishRsyncImportHandler(deps)(mkRequest(finish, { signature: signForPod(migrationId, JSON.stringify(finish)) }), finished.res, vi.fn());
+    expect(finished.getStatus()).toBe(200);
+    expect(prepareSurgeTarget).toHaveBeenCalledWith({ migrationId, slug: "chris", targetPodUid: "builder-prepared-pod" });
+    expect(releaseSurgeReadiness).not.toHaveBeenCalled();
+    const finalStage = await prepare("final");
+    expect(finalStage).toBe(stageDir);
+    expect(await fs.readFile(path.join(finalStage, "customers/chris/draft.txt"), "utf8")).toBe("uncommitted source work");
+    await fs.mkdir(path.join(importDir, "customers/chris/projects/new-repo"), { recursive: true });
+    await fs.writeFile(path.join(importDir, "customers/chris/projects/new-repo/README.md"), "prepared checkout");
+    await fs.mkdir(path.join(importDir, "customers/chris/projects/archived-repo"), { recursive: true });
+    await fs.writeFile(path.join(importDir, "customers/chris/projects/archived-repo/draft"), "prepared before project removal");
+    await fs.writeFile(path.join(importDir, "customers/chris/draft.txt"), "old source content");
+    await fs.rm(path.join(finalStage, "customers/chris/draft.txt"));
+    const finishFinal = { migrationId, slug: "chris", mode: "final", rpcPhase: "finish-rsync-import" };
+    const completed = mkResponse();
+    await createFinishRsyncImportHandler(deps)(mkRequest(finishFinal, { signature: signForPod(migrationId, JSON.stringify(finishFinal)) }), completed.res, vi.fn());
+    expect(completed.getStatus()).toBe(200);
+    await expect(fs.stat(path.join(importDir, "customers/chris/draft.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(importDir, "customers/chris/projects/new-repo/README.md"), "utf8")).toBe("prepared checkout");
+    await expect(fs.stat(path.join(importDir, "customers/chris/projects/archived-repo"))).rejects.toMatchObject({ code: "ENOENT" });
+    const abort = { migrationId, slug: "chris", mode: "final", rpcPhase: "abort-rsync-import" };
+    await createAbortRsyncImportHandler(deps)(mkRequest(abort, { signature: signForPod(migrationId, JSON.stringify(abort)) }), mkResponse().res, vi.fn());
+    await expect(fs.stat(stageDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

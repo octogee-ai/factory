@@ -24,6 +24,7 @@ export interface MigrationRunnerDeps {
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
     recordSchedulesStaged?: () => Promise<void>;
+    setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
     now?: () => number;
     wait?: (delayMs: number) => Promise<void>;
 }
@@ -43,6 +44,7 @@ export interface MigrationRunnerInput {
     stageSchedulesAfterCutover?: boolean;
 }
 export interface MigrationRunnerResult {
+    waitingForBuilderIdle?: boolean;
     success: boolean;
     finalPhase: MigrationPhase;
     errorAt?: {

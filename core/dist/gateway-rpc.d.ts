@@ -74,9 +74,14 @@ export interface GatewaySessionSummary {
     key: string;
     agentId?: string;
     hasActiveRun?: boolean;
+    status?: string;
+    updatedAt?: number;
+    lastActivityAt?: number;
 }
 export interface GatewaySessionsListResult {
     sessions: GatewaySessionSummary[];
+    hasMore?: boolean;
+    nextOffset?: number | null;
     [extra: string]: unknown;
 }
 export interface GatewaySessionsResetResult {
@@ -204,6 +209,10 @@ export interface GatewayRpcClient {
     }): Promise<GatewayRestartRequestResult>;
     sessionsList(params: {
         agentId: string;
+        includeGlobal?: boolean;
+        includeUnknown?: boolean;
+        archived?: "all";
+        offset?: number;
     }): Promise<GatewaySessionsListResult>;
     sessionsReset(params: {
         key: string;

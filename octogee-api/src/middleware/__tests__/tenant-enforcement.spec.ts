@@ -112,6 +112,7 @@ function app(opts: {
   a.post("/internal/probe", enforcement, handler);
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
+  a.post("/internal/connectors/github-project-clone-access", enforcement, handler);
   a.post("/internal/byok/agent-usage-status", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/byok/byosub-cred-syncback", enforcement, handler);
@@ -167,6 +168,7 @@ function app(opts: {
   a.post("/internal/chat-artifacts/:artifactId/lease", enforcement, handler);
   a.post("/internal/product-analytics/events", enforcement, handler);
   a.post("/internal/fleet/npm-cache-authorize", enforcement, handler);
+  a.post("/internal/fleet/npm-registry-credentials", enforcement, handler);
   a.post("/internal/notifications/social", enforcement, handler);
   a.post("/api/notifications/ingest", enforcement, handler);
   a.get("/internal/gitea/user-pubkey", enforcement, handler);
@@ -1162,3 +1164,14 @@ const STILL_ON_SHARED = {
     expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200]);
   });
 });
+
+it.each(["/internal/fleet/npm-registry-credentials", "/internal/connectors/github-project-clone-access"])(
+  "passes %s preparation to its operation-bound authorization while rejecting a foreign gateway", async (route) => {
+    const target = app({ boundTenant: BENDER_R2 });
+    const responses = await Promise.all([
+      request(target).post(route).send({ gatewayId: "bender", slug: "victim", access: { kind: "project-clone", builderSlug: "victim", projectSlug: "project" } }),
+      request(target).post(route).send({ gatewayId: "other", slug: "victim", access: { kind: "project-clone", builderSlug: "victim", projectSlug: "project" } }),
+    ]);
+    expect(responses.map(response => response.status)).toEqual([200, 403]);
+  },
+);

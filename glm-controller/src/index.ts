@@ -253,6 +253,7 @@ import {
   acknowledgeCustomerRestore,
   commitCutoverAtomic,
   markAssignmentState,
+  setWorkspaceMigrationPhase,
   type FleetStateFirestore,
 } from "@octogee/core/fleet-state";
 import {
@@ -2817,12 +2818,15 @@ async function main(): Promise<void> {
     }, SHARED_POOL_SCALER_MS),
   );
   if (BUILDER_VM_SPEC) {
+    const builderImage = platformArtifact.profileImages?.builder;
+    if (!builderImage) throw new Error("warm Builder computers require the platform's pinned Builder image");
     stoppers.push(
       startVmWarmPoolReconciler({
         vm: createGatewayComputeClient(log),
         vmSpec: BUILDER_VM_SPEC,
         environment: COMPUTER_ENVIRONMENT,
         config: BUILDER_VM_WARM_POOL,
+        gatewayImage: `${builderImage.imageRepository}:${builderImage.imageTag}`,
         now: () => Date.now(),
         log,
       }, VM_WARM_POOL_RECONCILE_MS),
@@ -3099,6 +3103,7 @@ async function buildHandlers(
   });
 
   const migrateCustomer = createMigrateCustomerHandler({
+    setMigrationPhase: (input) => setWorkspaceMigrationPhase({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     reportMigrationProgress: async (gatewayId, event) => {
       const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
       await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);

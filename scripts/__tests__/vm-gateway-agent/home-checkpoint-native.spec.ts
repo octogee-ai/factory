@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkpointHome, homeIsDirty, homeScope, restoreHome, type HomeCheckpointDeps } from "../../lib/vm-gateway-agent/home-checkpoint";
@@ -33,6 +33,13 @@ async function fixture() {
     metadata: { identityToken: async () => "local-test-token" },
     fs: createHomeFs(root), shell: homeShell, now: Date.now, log: vi.fn(),
     desktop: { run: async (action) => { events.push(action); } },
+    discardSnapshot: async () => { await rm(`${root}/.home-checkpoint/snapshot`, { recursive: true, force: true }); },
+    captureSnapshot: async () => {
+      const snapshot = `${root}/.home-checkpoint/snapshot`;
+      await mkdir(`${snapshot}/volumes`, { recursive: true });
+      await cp(scope.dataDir, `${snapshot}/volumes/data`, { recursive: true });
+      await cp(scope.desktopDir, `${snapshot}/desktop-home`, { recursive: true });
+    },
     snapshot: async (work) => { events.push("freeze"); try { await work(); } finally { events.push("thaw"); } },
     fetchImpl: vi.fn(async (input, init) => {
       const url = String(input);

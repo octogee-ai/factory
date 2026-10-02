@@ -148,7 +148,7 @@ export interface CustomerLifecycleAdapter {
 
   listMigratingInSlugs?: () => string[];
 
-  loadUserSnapshot: (uid: string) => Promise<UserSnapshot | null>;
+  loadUserSnapshot: (uid: string, options?: { refresh?: boolean }) => Promise<UserSnapshot | null>;
 
   seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;
 
@@ -1200,9 +1200,6 @@ function githubCheckoutsHydrateHere(adapter: CustomerLifecycleAdapter, slug: str
 }
 
 export interface CloneMissingProjectsOptions {
-  // A migration import runs before cutover, while the customer is still assigned to the
-  // source gateway; the GitHub clone broker cannot be granted the owner's credential for
-  // this gateway until the assignment moves, so those checkouts wait for the reconcile.
   githubCheckouts?: "hydrate-here" | "defer";
 }
 

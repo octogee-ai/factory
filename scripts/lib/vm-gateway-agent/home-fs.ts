@@ -53,7 +53,7 @@ export function createHomeFs(stateRoot: string): HomeFs {
       if (!response.body) throw new Error("home checkpoint download has no body");
       await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), createWriteStream(path, { mode: 0o600 }));
     },
-    mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+    mkdir: (path, mode) => mkdir(path, { recursive: true, mode }).then(() => undefined),
     replaceDirectory: async (source, target) => {
       const stage = `${target}.octogee-restore-stage`;
       const backup = `${target}.octogee-restore-backup`;

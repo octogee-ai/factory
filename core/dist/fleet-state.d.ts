@@ -1,6 +1,7 @@
 import { type GatewayStatus } from "@octogee/shared/types/fleet-controller";
 import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
+import { type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 export interface FleetStateDeps {
     db: FleetStateFirestore;
     serverTimestamp: () => unknown;
@@ -8,6 +9,12 @@ export interface FleetStateDeps {
     now?: () => Date;
     log?: (msg: string) => void;
 }
+export declare function setWorkspaceMigrationPhase(deps: FleetStateDeps, params: {
+    uid: string;
+    sourceGatewayId: string;
+    operationId: string;
+    phase: WorkspaceMigrationPhase;
+}): Promise<void>;
 export interface FleetStateDocRef {
     set: (data: Record<string, unknown>, options?: {
         merge?: boolean;

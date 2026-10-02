@@ -1,3 +1,4 @@
+import { createVoiceMigrationRegistry } from './migration.js';
 import { EventEmitter, once } from "node:events";
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -143,6 +144,27 @@ async function firstEventThenClose(ws: WebSocket): Promise<{ event: TalkServerEv
 }
 
 describe("voice ws route", () => {
+  it('protects handshakes and idle calls through a migration longer than the takeover lease', async () => {
+    let now = 0;
+    const migrationRegistry = createVoiceMigrationRegistry({ now: () => now });
+    let resolveStatus!: (response: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { resolveStatus = resolve; })) as unknown as typeof fetch;
+    const { base } = await serverWith({ migrationRegistry, fetchImpl });
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
+    await waitFor(() => Boolean(resolveStatus));
+    expect(migrationRegistry.hold('mom', 'move-1')).toBe(1);
+    expect(() => migrationRegistry.resume('mom', 'old-move')).toThrow(/another migration/);
+    resolveStatus(new Response(JSON.stringify({ configured: true, engines: { stt: 'fake', tts: 'fake' } })));
+    await once(ws, 'open');
+    expect(migrationRegistry.hold('mom', 'move-1')).toBe(1);
+    now = 179_000;
+    const blocked = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
+    await once(blocked, 'error');
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close(); await once(ws, 'close');
+    await waitFor(() => migrationRegistry.hold('mom', 'move-1') === 0);
+  });
+
   it('binds the legacy grant before readiness and revokes it when the client closes', async () => {
     const { base, deps } = await serverWith();
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
@@ -270,8 +292,11 @@ describe("voice ws route", () => {
     expect(deps.endGrant).not.toHaveBeenCalled();
     expect(nativeWs.close).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith('OpenAI voice startup failed; using original voice', expect.objectContaining({ reason: 'OpenAI unavailable' }));
-    const updated = once(ws, 'message'); ws.send(JSON.stringify({ type: 'settings.update', settings: { voice: 'marin' } }));
-    expect(JSON.parse(String((await updated)[0]))).toMatchObject({ type: 'settings', settings: { voice: '' } });
+    const messages: Array<Record<string, unknown>> = [];
+    ws.on('message', data => messages.push(JSON.parse(String(data))));
+    ws.send(JSON.stringify({ type: 'settings.update', settings: { voice: 'marin' } }));
+    await waitFor(() => messages.some(message => message.type === 'settings'));
+    expect(messages.find(message => message.type === 'settings')).toMatchObject({ settings: { voice: '' } });
     ws.close(); await once(ws, 'close');
   });
   it('keeps shared gateways on the original engine and clears unsupported OpenAI voice IDs', async () => {

@@ -1,4 +1,5 @@
 import type { CrashLoopEvictionClaim } from "./surge-crashloop-eviction.js";
+import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import { createMigrationProgress } from "./migration-progress.js";
 import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
@@ -86,6 +87,13 @@ export class SurgeGatewayScopedSignatureCapabilityMissingError extends Error {}
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const CONFIGURED_BUILDER_TARGET_RELEASE_RETRY_DELAY_MS = 7_000;
 
+interface SurgeSourceControlInput {
+  gatewayId: string;
+  slug: string;
+  operationId: string;
+  sourcePod: SurgePod;
+}
+
 export interface SurgeCustomerHandoffDeps {
   reportMigrationProgress: (input: { gatewayId: string; targetPod: SurgePod; event: MigrationProgressRequestBody }) => Promise<unknown>;
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
@@ -105,12 +113,9 @@ export interface SurgeCustomerHandoffDeps {
       updatedByOperationId: string | null;
     };
   }) => Promise<void>;
-  quiesce: (input: {
-    gatewayId: string;
-    slug: string;
-    operationId: string;
-    sourcePod: SurgePod;
-  }) => Promise<void>;
+  waitForSourceIdle: (input: SurgeSourceControlInput) => Promise<void>;
+  quiesce: (input: SurgeSourceControlInput) => Promise<void>;
+  resumeSourceIngress: (input: SurgeSourceControlInput) => Promise<void>;
   stopSourceOpenClaw?: (input: {
     gatewayId: string;
     slug: string;
@@ -561,12 +566,44 @@ async function copyAndVerifyAssignment(
   }
 }
 
-// The configured Builder source finalization contract:
-// quiesce → final durable flush → reserve target → stop source → copy → verify.
-// The flush runs while the source still serves so a flush failure never costs
-// availability; the reservation lands before the source stops so the target can
-// never self-release into a half-copied state; the copy begins only after the
-// source process exits so the digests compare frozen state.
+async function drainWithProgress<T>(
+  progress: ReturnType<typeof createMigrationProgress>,
+  phase: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  await progress.report(phase, "running");
+  try {
+    const result = await action();
+    await progress.report(phase, "done");
+    return result;
+  } catch (error) {
+    await progress.report(error instanceof MigrationDrainPendingError ? "waiting-for-builder-idle" : phase,
+      error instanceof MigrationDrainPendingError ? "pending" : "failed");
+    throw error;
+  }
+}
+
+async function waitForSourceAssignments(
+  deps: SurgeCustomerHandoffDeps,
+  context: AssignmentTransferContext & { assignments: readonly SurgeAssignment[]; sourceDrainSlugs: string[] },
+): Promise<void> {
+  for (const assignment of context.assignments) {
+    context.sourceDrainSlugs.push(assignment.slug);
+    const progress = createMigrationProgress({
+      log: deps.log,
+      send: (event) => deps.reportMigrationProgress({
+        gatewayId: context.input.gatewayId,
+        targetPod: context.targetPod,
+        event: { ...event, migrationId: context.ownedBy, slug: assignment.slug, source: context.sourcePod.name },
+      }),
+    });
+    await drainWithProgress(progress, "waiting-for-builder-idle", () => deps.waitForSourceIdle({
+      gatewayId: context.input.gatewayId, slug: assignment.slug,
+      operationId: context.ownedBy, sourcePod: context.sourcePod,
+    }));
+  }
+}
+
 async function transferAssignments(
   deps: SurgeCustomerHandoffDeps,
   context: AssignmentTransferContext & { assignments: readonly SurgeAssignment[] },
@@ -584,7 +621,7 @@ async function transferAssignments(
         }),
       });
       await progress.run("gate-source", () => gateServingAssignments(deps, input.gatewayId, [assignment], ownedBy));
-      const sourceSystemConfigCommit = await progress.run("quiesce-and-finalize-source", () => finalizeSourceForAssignment(deps, context, assignment));
+      const sourceSystemConfigCommit = await drainWithProgress(progress, "quiesce-and-finalize-source", () => finalizeSourceForAssignment(deps, context, assignment));
       touchedSlugs.push(assignment.slug);
       await progress.run("transfer-and-verify", () => copyAndVerifyAssignment(deps, context, assignment, sourceSystemConfigCommit));
       await progress.report("serving-handoff", "pending");
@@ -690,18 +727,20 @@ async function recoverHeldWaitingSource(
     sourcePod: SurgePod;
     sourceHealth: SurgePodHealth | undefined;
     targetPod: SurgePod;
+    targetHealth: SurgePodHealth;
     ownedBy: string;
     assignments: readonly SurgeAssignment[];
   },
 ): Promise<void> {
   if (
     !configuredBuilderProcessGateRequired(input) ||
-    context.sourceHealth?.prelaunchState !== "held"
+    context.sourceHealth?.prelaunchState !== "held" || !prelaunchTransferEligible(context.targetHealth)
   ) {
     return;
   }
-  let resumed = false;
-  for (const slug of context.assignments.map((assignment) => assignment.slug)) {
+  const resumed: SurgeAssignment[] = [];
+  for (const assignment of context.assignments) {
+    const { slug } = assignment;
     try {
       await resumeSourceOpenClaw(deps, {
         gatewayId: input.gatewayId,
@@ -710,7 +749,9 @@ async function recoverHeldWaitingSource(
         sourcePod: context.sourcePod,
         targetPod: context.targetPod,
       });
-      resumed = true;
+      await deps.resumeSourceIngress({ gatewayId: input.gatewayId, slug,
+        operationId: context.ownedBy, sourcePod: context.sourcePod });
+      resumed.push(assignment);
       deps.log(
         `[surge-handoff] resumed a held NotReady source ` +
         `gateway=${input.gatewayId} source=${context.sourcePod.name} slug=${slug}`,
@@ -723,9 +764,7 @@ async function recoverHeldWaitingSource(
       );
     }
   }
-  if (resumed) {
-    await restoreOwnedAssignments(deps, input.gatewayId, context.assignments, context.ownedBy);
-  }
+  await restoreOwnedAssignments(deps, input.gatewayId, resumed, context.ownedBy);
 }
 
 // A reserved target whose source pod object is gone waits forever: its
@@ -826,6 +865,7 @@ async function migrateAssignedState(
     targetPod: SurgePod;
     ownedBy: string;
     heldSourceSlugs: string[];
+    sourceDrainSlugs: string[];
   },
 ): Promise<void> {
   const { input, assignments, sourcePod, targetPod, ownedBy, heldSourceSlugs } = context;
@@ -854,6 +894,7 @@ async function migrateAssignedState(
       );
     }
   }
+  await waitForSourceAssignments(deps, { ...context, assignments: assignments.filter((assignment) => mounted.has(assignment.slug)) });
   if (targetHealth.mountedCustomers.length > 0) {
     if (configTransferMode === "configured-builder-system-config") {
       const foreignMount = targetHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
@@ -931,7 +972,6 @@ async function rollBackConfiguredBuilderHandoff(
   deps: SurgeCustomerHandoffDeps,
   context: {
     input: ReconcileSurgeCustomerHandoffInput;
-    assignments: readonly SurgeAssignment[];
     sourcePod: SurgePod;
     targetPod: SurgePod;
     ownedBy: string;
@@ -943,7 +983,6 @@ async function rollBackConfiguredBuilderHandoff(
 ): Promise<void> {
   const {
     input,
-    assignments,
     sourcePod,
     targetPod,
     ownedBy,
@@ -999,7 +1038,18 @@ async function rollBackConfiguredBuilderHandoff(
       `gateway=${input.gatewayId} source=${sourcePod.name}`,
     );
   }
-  await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
+}
+
+async function resumeDrainedSource(
+  deps: SurgeCustomerHandoffDeps,
+  context: { gatewayId: string; operationId: string; sourcePod: SurgePod; slugs: readonly string[]; cause: unknown },
+): Promise<void> {
+  const resumed = await Promise.allSettled([...new Set(context.slugs)].map((slug) => deps.resumeSourceIngress({
+    gatewayId: context.gatewayId, operationId: context.operationId, sourcePod: context.sourcePod, slug,
+  })));
+  const failures = resumed.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+  if (failures.length) throw new AggregateError([context.cause, ...failures],
+    `surge source admission could not resume: ${failures.map(errorMessage).join("; ")}`);
 }
 
 async function migrateAssignmentsAndReleaseTarget(
@@ -1027,6 +1077,7 @@ async function migrateAssignmentsAndReleaseTarget(
   assertAssignmentsAvailable(assignments, ownedBy);
   const reservedTargetSlugs: string[] = [];
   const heldSourceSlugs: string[] = [];
+  const sourceDrainSlugs: string[] = [];
   let targetReleaseAttempted = false;
   try {
     await migrateAssignedState(deps, {
@@ -1036,6 +1087,7 @@ async function migrateAssignmentsAndReleaseTarget(
       targetPod,
       ownedBy,
       heldSourceSlugs,
+      sourceDrainSlugs,
     });
     await gateServingAssignments(deps, input.gatewayId, assignments, ownedBy);
     targetReleaseAttempted = true;
@@ -1052,7 +1104,6 @@ async function migrateAssignmentsAndReleaseTarget(
     if (configuredBuilderProcessGateRequired(input)) {
       await rollBackConfiguredBuilderHandoff(deps, {
         input,
-        assignments,
         sourcePod,
         targetPod,
         ownedBy,
@@ -1061,10 +1112,16 @@ async function migrateAssignmentsAndReleaseTarget(
         targetReleaseAttempted,
         cause: error,
       });
-      throw error;
     }
-    if (!targetReleaseAttempted) {
+    if (!targetReleaseAttempted || configuredBuilderProcessGateRequired(input)) {
+      await resumeDrainedSource(deps, {
+        gatewayId: input.gatewayId, operationId: ownedBy, sourcePod, slugs: sourceDrainSlugs, cause: error,
+      });
       await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
+    }
+    if (error instanceof MigrationDrainPendingError) {
+      deps.log(`[surge-handoff] waiting for Builder activity to finish gateway=${input.gatewayId}: ${error.message}`);
+      return;
     }
     throw error;
   }
@@ -1149,6 +1206,7 @@ async function tendSourcelessTarget(
       sourcePod: source.pod,
       sourceHealth: healthByUid.get(source.pod.uid),
       targetPod: target,
+      targetHealth,
       ownedBy,
       assignments: sourceAssignments,
     });
@@ -1246,6 +1304,10 @@ async function standDownForSupersedingRelease(
     `[surge-handoff] standing down for a queued rollout gateway=${input.gatewayId} ` +
     `serving=${input.desiredImageTag} queued=${input.supersedingImageTag}`,
   );
+  if (source.kind !== "missing" && !prelaunchTransferEligible(targetHealth)) {
+    deps.log(`[surge-handoff] source admission remains closed while superseded target execution is uncertain gateway=${input.gatewayId} target=${target.name}`);
+    return { ready: false };
+  }
   const assignments = await deps.readAssignments(input.gatewayId);
   await restoreAbandonedSurgeAssignments(
     deps,
@@ -1262,10 +1324,12 @@ async function standDownForSupersedingRelease(
     ownedBy,
     assignments,
   });
-  // Reopening admits the customer to whichever pod serves them next, so it waits
-  // only on a source still holding its OpenClaw down — the resume above owns that
-  // case and reopens the lease itself once the process is back.
   if (!sourceHoldsItsOpenClaw(input, source, healthByUid)) {
+    if (source.kind === "ready" && prelaunchTransferEligible(targetHealth)) {
+      await resumeDrainedSource(deps, { gatewayId: input.gatewayId, operationId: ownedBy,
+        sourcePod: source.pod, slugs: assignments.map(assignment => assignment.slug),
+        cause: new Error("surge superseded before target activation") });
+    }
     await restoreOwnedAssignments(deps, input.gatewayId, assignments, ownedBy);
   }
   return { ready: false };

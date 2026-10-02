@@ -1,10 +1,12 @@
+import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
 import express from "express";
 import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
 import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
 import { agentIdsFromConfig } from "./byosub-restore.js";
-import { readOpenClawConfig } from "./config.js";
+import { OPENCLAW_DIR, readOpenClawConfig } from "./config.js";
+import { readActivationManifest } from "./migration-activation-manifest.js";
 import { withCustomerRemoval } from "./customer-removal-exclusion.js";
 import {
   materializeBrokerProfilesForAgents,
@@ -1108,6 +1110,26 @@ function createSurgeReadinessHandler(input: {
   };
 }
 
+export function createToolchainReadinessHandler(input: {
+  adapter: CustomerLifecycleAdapter;
+  prelaunchState: () => Promise<BuilderPrelaunchState>;
+  log: (message: string) => void;
+}): express.RequestHandler {
+  return async (_req, res) => {
+    try {
+      const slug = configuredBuilderSlug(input.adapter);
+      const prelaunchState = await input.prelaunchState();
+      const ready = Boolean(slug && configuredBuilderMountProven(input.adapter) &&
+        ["hydrated", "starting", "serving", "none"].includes(prelaunchState));
+      res.status(ready ? 200 : 503).json({ ready, prelaunchState });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.log(`[builder-toolchain] readiness failed: ${message}`);
+      res.status(500).json({ ready: false, error: message });
+    }
+  };
+}
+
 function createStartupReadinessHandler(input: {
   readiness: FleetReadinessInput;
   prelaunchState?: () => Promise<BuilderPrelaunchState>;
@@ -1980,6 +2002,7 @@ function registerMigrationRoutes(
 }
 
 interface BuilderSurgeGateWiring {
+  prepareSurgeTarget: (input: BuilderSurgeTargetRequest) => Promise<void>;
   reserveSurgeTarget: (input: { migrationId: string; slug: string }) => Promise<void>;
   unreserveSurgeTarget: (input: {
     migrationId: string;
@@ -2196,6 +2219,7 @@ async function configuredBuilderSelfReleaseReserved(input: {
 }
 
 interface BuilderSurgeGateWiringOptions {
+  openclawDir?: string;
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
@@ -2226,9 +2250,67 @@ function reservedTargetOpenClawHeld(
   return true;
 }
 
+type PreparedBuilderTarget = BuilderSurgeTargetRequest & { inputs: string };
+
+async function builderPreparationFingerprint(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string): Promise<string> {
+  const uid = await adapter.uidForSlug(slug);
+  if (!uid) throw new Error("prepared Builder no longer has an owner");
+  const snapshot = await adapter.loadUserSnapshot(uid, { refresh: true });
+  if (!snapshot || snapshot.slug !== slug) throw new Error("prepared Builder ownership changed");
+  return JSON.stringify({ snapshot, manifest: await readActivationManifest(openclawDir, slug) });
+}
+
+async function prepareConfiguredBuilderTarget(input: {
+  request: BuilderSurgeTargetRequest;
+  adapter: CustomerLifecycleAdapter;
+  processGate: SurgeOpenClawProcessSupervisorClient | null;
+  attachConfigured: ConfiguredBuilderAttach;
+  log: (message: string) => void;
+  provisioning: ProvisioningCounter;
+  waitForActiveProvisioningDrain: () => Promise<void>;
+  openclawDir: string;
+}): Promise<PreparedBuilderTarget> {
+  const { request, adapter, processGate, attachConfigured, log, provisioning } = input;
+  if (!processGate || !reservedTargetOpenClawHeld(await processGate.status(), request)) {
+    throw new Error("Builder preparation requires its reserved OpenClaw process to remain held");
+  }
+  await input.waitForActiveProvisioningDrain();
+  const inputs = await builderPreparationFingerprint(adapter, input.openclawDir, request.slug);
+  await runProvisioningWork({ provisioning, work: async (onWorkSettled) => {
+    const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
+    if (attachedSlug !== request.slug) throw new Error("Builder preparation attached the wrong customer");
+    const checkouts = await cloneMissingProjects(adapter, request.slug, { githubCheckouts: "hydrate-here" });
+    if (checkouts.pending.length > 0) throw new Error(`Builder preparation has pending repositories: ${checkouts.pending.join(", ")}`);
+  } });
+  const lockSha256 = process.env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim();
+  const groupsSha256 = process.env.OCTOGEE_BUILDER_TOOL_GROUPS_SHA256?.trim();
+  if (lockSha256 && groupsSha256) {
+    await waitForPreparedBuilderToolchain({ root: path.join(process.env.HOME || "/home/node", ".octogee", "toolchains"), lockSha256, groupsSha256 });
+  }
+  if (!reservedTargetOpenClawHeld(await processGate.status(), request)) throw new Error("Builder process started during preparation");
+  log(`[surge-handoff] Builder prepared while OpenClaw remains held slug=${request.slug} migrationId=${request.migrationId}`);
+  return { ...request, inputs };
+}
+
+async function reholdFailedBuilderTarget(input: {
+  request: BuilderSurgeTargetRequest;
+  release: ActiveBuilderSurgeRelease;
+  processGate: SurgeOpenClawProcessSupervisorClient;
+  log: (message: string) => void;
+  runCancellation: <T>(work: () => Promise<T>) => Promise<T>;
+  waitForActiveProvisioningDrain: () => Promise<void>;
+}): Promise<void> {
+  if (input.release.cancelled) return;
+  const state = await input.processGate.rehold(input.request);
+  if (state.phase === "cancelling" && !input.release.cancelled) {
+    scheduleBuilderTargetHoldFinalization(input);
+  }
+}
+
 export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOptions): BuilderSurgeGateWiring {
   const {
     adapter,
+    openclawDir = OPENCLAW_DIR,
     processGate,
     surgeReadiness,
     waitForGatewayReady,
@@ -2239,6 +2321,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     configuredBuilderAssigned = async () => false,
   } = input;
   let activeRelease: ActiveBuilderSurgeRelease | null = null;
+  let preparedTarget: PreparedBuilderTarget | null = null;
   let cancellationQueue = Promise.resolve();
   const runCancellation = <T>(work: () => Promise<T>): Promise<T> => {
     const result = cancellationQueue.then(work, work);
@@ -2248,20 +2331,9 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
   const reholdAfterReleaseFailure = (
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
-  ): Promise<void> => runCancellation(async () => {
-    if (release.cancelled) return;
-    const state = await processGate!.rehold(request);
-    if (state.phase === "cancelling" && !release.cancelled) {
-      scheduleBuilderTargetHoldFinalization({
-        log,
-        processGate: processGate!,
-        release,
-        request,
-        runCancellation,
-        waitForActiveProvisioningDrain,
-      });
-    }
-  });
+  ): Promise<void> => runCancellation(() => reholdFailedBuilderTarget({
+    request, release, processGate: processGate!, log, runCancellation, waitForActiveProvisioningDrain,
+  }));
   const attachClaimedTargetWithProvisioning = (
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
@@ -2280,7 +2352,10 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       await processGate!.claimTargetCompletion(request);
       throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
-      const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
+      const attachedSlug = preparedTarget?.migrationId === request.migrationId && preparedTarget.targetPodUid === request.targetPodUid &&
+        preparedTarget.inputs === await builderPreparationFingerprint(adapter, openclawDir, request.slug)
+        ? preparedTarget.slug
+        : await attachConfigured({ adapter, log, onWorkSettled });
       if (attachedSlug !== request.slug) {
         throw new Error(
           `configured Builder prelaunch attach returned ${attachedSlug}, expected ${request.slug}`,
@@ -2355,6 +2430,10 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     }
   };
   return {
+    async prepareSurgeTarget(request) {
+      preparedTarget = await prepareConfiguredBuilderTarget({ request, adapter, processGate, attachConfigured,
+        log, provisioning, waitForActiveProvisioningDrain, openclawDir });
+    },
     async reserveSurgeTarget({ migrationId, slug }) {
       if (!processGate || configuredBuilderSlug(adapter) !== slug) return;
       await processGate.hydrate({
@@ -2369,6 +2448,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       return reservedTargetOpenClawHeld(await processGate.status(), request);
     },
     async unreserveSurgeTarget(request) {
+      preparedTarget = null;
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
       return runCancellation(() => unreserveConfiguredBuilderTarget({
         activeRelease, configuredBuilderAssigned,
@@ -2592,6 +2672,12 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     }),
   );
 
+  app.get("/toolchain-ready", createToolchainReadinessHandler({
+    adapter: wrappedAdapter,
+    prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
+    log: opts.log,
+  }));
+
   app.get("/health", (_req, res) => {
     res.json(buildFleetHealthResponse({
       status: runtime.status,
@@ -2666,6 +2752,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     getMountedCustomers: () => runtime.mountedCustomers,
     customerAttachPending: createVerifyAttachPending({ provision: caps.provision, opts }),
     flushLocalState: opts.flushLocalState,
+    prepareSurgeTarget: surgeGate.prepareSurgeTarget,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
     surgeTargetOpenClawHeld: surgeGate.surgeTargetOpenClawHeld,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,

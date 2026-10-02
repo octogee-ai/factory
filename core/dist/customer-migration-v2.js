@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
-import { isDefinitiveConfigRpcRejection, MigrationTransportError, } from "./fleet-migration-client.js";
+import { isDefinitiveConfigRpcRejection, MigrationDrainPendingError, MigrationTransportError, } from "./fleet-migration-client.js";
 import { callReleasedTargetScheduler } from "./fleet-migration-runner.js";
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 function acceptedSystemConfigCommit(value) {
@@ -88,6 +88,7 @@ export async function advanceCustomerMigrationV2(state, deps) {
 async function advancePreparation(state, deps) {
     switch (state.phase) {
         case "initialized":
+            await deps.setMigrationPhase?.("preparing");
             await deps.client.transferState({
                 migrationId: state.migrationId,
                 fromGatewayId: state.sourceGatewayId,
@@ -99,35 +100,60 @@ async function advancePreparation(state, deps) {
                 includeActivationManifest: false,
             });
             return { ...state, phase: "keysSynced" };
+        case "keysSynced":
+            await deps.client.transferState({
+                migrationId: state.migrationId,
+                fromGatewayId: state.sourceGatewayId,
+                fromTransportId: state.sourceGatewayId,
+                toGatewayId: state.targetGatewayId,
+                toTransportId: state.targetGatewayId,
+                slug: state.slug,
+                mode: "pre",
+                includeActivationManifest: true,
+            });
+            return { ...state, phase: "preSynced" };
         default:
             throw new Error(`customer migration V2 preparation cannot advance ${state.phase}`);
     }
 }
+async function advanceSourceQuiescence(state, deps) {
+    await deps.setMigrationPhase?.("waiting");
+    let fenced = false;
+    try {
+        await deps.client.quiesce({ migrationId: state.migrationId, gatewayId: state.sourceGatewayId, transportId: state.sourceGatewayId, slug: state.slug, timeoutMs: 30_000, stopMattermost: false });
+        await deps.setMigrationPhase?.("transferring");
+        await deps.setSourceAssignmentState("quiescing");
+        fenced = true;
+        await deps.client.quiesce({ migrationId: state.migrationId, gatewayId: state.sourceGatewayId, transportId: state.sourceGatewayId, slug: state.slug, schedulerHandoff: true, timeoutMs: 30_000 });
+    }
+    catch (error) {
+        if (error instanceof MigrationDrainPendingError) {
+            if (fenced)
+                await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "resume" });
+            await deps.client.resume({ migrationId: state.migrationId, gatewayId: state.sourceGatewayId, slug: state.slug });
+            if (fenced)
+                await deps.setSourceAssignmentState("serving");
+            await deps.setMigrationPhase?.("waiting");
+        }
+        throw error;
+    }
+    const flush = await deps.client.flushGateway({
+        migrationId: state.migrationId,
+        gatewayId: state.sourceGatewayId,
+        transportId: state.sourceGatewayId,
+        slug: state.slug,
+        reason: "migration-final",
+    });
+    return {
+        ...state,
+        phase: "sourceQuiesced",
+        sourceSystemConfigCommit: acceptedSystemConfigCommit(flush.systemConfigCommit),
+    };
+}
 async function advanceForward(state, deps) {
     switch (state.phase) {
-        case "keysSynced":
-        case "preSynced": {
-            await deps.setSourceAssignmentState("quiescing");
-            await deps.client.quiesce({
-                migrationId: state.migrationId,
-                gatewayId: state.sourceGatewayId,
-                transportId: state.sourceGatewayId,
-                slug: state.slug,
-                schedulerHandoff: true,
-            });
-            const flush = await deps.client.flushGateway({
-                migrationId: state.migrationId,
-                gatewayId: state.sourceGatewayId,
-                transportId: state.sourceGatewayId,
-                slug: state.slug,
-                reason: "migration-final",
-            });
-            return {
-                ...state,
-                phase: "sourceQuiesced",
-                sourceSystemConfigCommit: acceptedSystemConfigCommit(flush.systemConfigCommit),
-            };
-        }
+        case "preSynced":
+            return advanceSourceQuiescence(state, deps);
         case "sourceQuiesced": {
             await deps.client.scheduler({ migrationId: state.migrationId, slug: state.slug, gatewayId: state.sourceGatewayId, phase: "export" });
             const expectedSystemConfigCommit = acceptedSystemConfigCommit(state.sourceSystemConfigCommit);
@@ -152,6 +178,7 @@ async function advanceForward(state, deps) {
             return { ...state, phase: "finalSynced" };
         }
         case "finalSynced":
+            await deps.setMigrationPhase?.("connecting");
             await deps.client.verifyTarget({
                 migrationId: state.migrationId,
                 gatewayId: state.targetGatewayId,
@@ -227,7 +254,7 @@ async function freshPhaseRequiresFreshDriver(state) {
 }
 const ADVANCE_HANDLERS = {
     initialized: advancePreparation,
-    keysSynced: advanceForward,
+    keysSynced: advancePreparation,
     preSynced: advanceForward,
     sourceQuiesced: advanceForward,
     finalSynced: advanceForward,
@@ -251,7 +278,7 @@ export function isCustomerMigrationV2PostIntent(state) {
 }
 const NEXT_PHASES = {
     initialized: ["keysSynced", "freshSourceQuiesced", "aborted"],
-    keysSynced: ["sourceQuiesced"],
+    keysSynced: ["preSynced"],
     preSynced: ["sourceQuiesced"],
     sourceQuiesced: ["finalSynced"],
     finalSynced: ["targetVerified"],

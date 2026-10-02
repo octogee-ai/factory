@@ -32,7 +32,7 @@ describe("Builder toolchain hydrator entrypoint", () => {
       root: "/home/builder/.octogee/toolchains",
       gatewayId: "bender",
       builderSlug: "alice",
-      readinessUrl: "http://127.0.0.1:4111/surge-ready",
+      readinessUrl: "http://127.0.0.1:4111/toolchain-ready",
       packageJsonPath: "/octogee/toolchain/package.json",
       packageLockPath: "/octogee/toolchain/package-lock.json",
       packageLockSha256: "a".repeat(64),
@@ -216,14 +216,14 @@ describe("Builder toolchain hydrator entrypoint", () => {
     });
   });
 
-  it("treats only a successful surge-readiness response as interactive readiness", async () => {
+  it("treats only a successful preparation-readiness response as permission to hydrate", async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
 
-    await expect(probeBuilderInteractiveReadiness("http://127.0.0.1:3003/surge-ready", fetchImpl))
+    await expect(probeBuilderInteractiveReadiness("http://127.0.0.1:3003/toolchain-ready", fetchImpl))
       .resolves.toBe(false);
-    await expect(probeBuilderInteractiveReadiness("http://127.0.0.1:3003/surge-ready", fetchImpl))
+    await expect(probeBuilderInteractiveReadiness("http://127.0.0.1:3003/toolchain-ready", fetchImpl))
       .resolves.toBe(true);
   });
 });

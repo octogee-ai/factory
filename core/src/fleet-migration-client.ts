@@ -53,6 +53,7 @@ export interface MigrationClient {
   schedulerReady(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   quiesce(opts: {
+    stopMattermost?: boolean;
     schedulerHandoff?: boolean;
     schedulerMigrationId?: string;
     retainNonportable?: boolean;
@@ -127,6 +128,10 @@ export class MigrationRpcError extends Error {
     this.status = options.status;
     this.code = options.code;
   }
+}
+
+export class MigrationDrainPendingError extends Error {
+  readonly retryable = true;
 }
 
 export class MigrationTransportError extends Error {
@@ -295,7 +300,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       if (response.resumed !== true) throw new Error(`source ingress did not resume for ${slug}`);
     },
 
-    async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, schedulerHandoff, schedulerMigrationId, retainNonportable }) {
+    async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, stopMattermost, schedulerHandoff, schedulerMigrationId, retainNonportable }) {
       const handoff = schedulerHandoff
         ? { schedulerHandoff: true, schedulerMigrationId: schedulerMigrationId ?? migrationId, ...(retainNonportable ? { retainNonportable: true } : {}) }
         : {};
@@ -304,11 +309,11 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         path: `/quiesce/${gatewayId}`,
         gatewayId,
         migrationId,
-        body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...handoff },
-        timeoutMs: quiesceMs,
+        body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...(stopMattermost === undefined ? {} : { stopMattermost }), ...handoff },
+        timeoutMs: Math.max(quiesceMs, (timeoutMs ?? MIGRATION_QUIESCE_TIMEOUT_MS) + 30_000),
       });
       if (!res.drained) {
-        throw new Error(
+        throw new MigrationDrainPendingError(
           `quiesce did not drain: ${res.runningCount} still running on ${gatewayId} for slug=${slug}`,
         );
       }

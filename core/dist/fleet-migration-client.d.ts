@@ -33,6 +33,7 @@ export interface MigrationClient {
         slug: string;
     }): Promise<void>;
     quiesce(opts: {
+        stopMattermost?: boolean;
         schedulerHandoff?: boolean;
         schedulerMigrationId?: string;
         retainNonportable?: boolean;
@@ -93,6 +94,9 @@ export declare class MigrationRpcError extends Error {
     readonly status?: number;
     readonly code?: string;
     constructor(message: string, options?: MigrationRpcErrorOptions);
+}
+export declare class MigrationDrainPendingError extends Error {
+    readonly retryable = true;
 }
 export declare class MigrationTransportError extends Error {
     readonly retryable = true;

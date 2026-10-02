@@ -12,6 +12,9 @@ export class MigrationRpcError extends Error {
         this.code = options.code;
     }
 }
+export class MigrationDrainPendingError extends Error {
+    retryable = true;
+}
 export class MigrationTransportError extends Error {
     retryable = true;
     constructor(message, options = {}) {
@@ -140,7 +143,7 @@ export function createMigrationClient(deps) {
             if (response.resumed !== true)
                 throw new Error(`source ingress did not resume for ${slug}`);
         },
-        async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, schedulerHandoff, schedulerMigrationId, retainNonportable }) {
+        async quiesce({ migrationId, gatewayId, transportId, slug, timeoutMs, stopMattermost, schedulerHandoff, schedulerMigrationId, retainNonportable }) {
             const handoff = schedulerHandoff
                 ? { schedulerHandoff: true, schedulerMigrationId: schedulerMigrationId ?? migrationId, ...(retainNonportable ? { retainNonportable: true } : {}) }
                 : {};
@@ -149,11 +152,11 @@ export function createMigrationClient(deps) {
                 path: `/quiesce/${gatewayId}`,
                 gatewayId,
                 migrationId,
-                body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...handoff },
-                timeoutMs: quiesceMs,
+                body: { migrationId, slug, ...(timeoutMs == null ? {} : { timeoutMs }), ...(stopMattermost === undefined ? {} : { stopMattermost }), ...handoff },
+                timeoutMs: Math.max(quiesceMs, (timeoutMs ?? MIGRATION_QUIESCE_TIMEOUT_MS) + 30_000),
             });
             if (!res.drained) {
-                throw new Error(`quiesce did not drain: ${res.runningCount} still running on ${gatewayId} for slug=${slug}`);
+                throw new MigrationDrainPendingError(`quiesce did not drain: ${res.runningCount} still running on ${gatewayId} for slug=${slug}`);
             }
             log(`[migration-client] ✅ quiesce ok migrationId=${migrationId} slug=${slug}`);
             return res;
