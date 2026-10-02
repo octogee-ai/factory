@@ -168,10 +168,10 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "gw ls",
     summary: "List gateways (alias for ls gateways).",
-    args: "",
+    args: "[--all]",
     description:
-      "Alias for `ls gateways`, retaining the established Firestore and Kubernetes diagnostic read.",
-    examples: ["fleet --env=prod gw ls"],
+      "Alias for `ls gateways`, retaining the established Firestore and Kubernetes diagnostic read. Retired gateways are hidden unless --all is passed.",
+    examples: ["fleet --env=prod gw ls", "fleet --env=prod gw ls --all"],
     writes: false,
   },
   {
@@ -1265,9 +1265,31 @@ async function findUserBySlug(slug: string): Promise<
   return { uid: doc.id, data: doc.data() as UserDoc };
 }
 
+export function retirementFinished(entry: FleetGatewayRuntimeEntry, podNames: readonly string[]): boolean {
+  const runtime = entry.runtime;
+  if (runtime?.desiredStatus !== "retired") return false;
+  const heartbeat = runtime.heartbeat ?? {};
+  if (heartbeat.status || heartbeat.lastHeartbeatAt) return false;
+  return !podNames.some((name) => name.startsWith(`octogee-gateway-${entry.gatewayId}-`));
+}
+
+export function visibleFleetGateways(
+  gateways: FleetGatewayRuntimeEntry[],
+  includeRetired: boolean,
+  podNames: readonly string[],
+): { shown: FleetGatewayRuntimeEntry[]; hiddenRetired: number } {
+  if (includeRetired) return { shown: gateways, hiddenRetired: 0 };
+  const shown = gateways.filter((entry) => !retirementFinished(entry, podNames));
+  return { shown, hiddenRetired: gateways.length - shown.length };
+}
+
 async function lsGateways(): Promise<void> {
-  const gateways = await listFleetGatewayRuntimes(db);
   const pods = allGatewayPods();
+  const { shown: gateways, hiddenRetired } = visibleFleetGateways(
+    await listFleetGatewayRuntimes(db),
+    args.flags.all === true,
+    pods.map((pod) => pod.name),
+  );
   const podSummary = pods.length === 0
     ? "?"
     : pods.length === 1
@@ -1285,6 +1307,9 @@ async function lsGateways(): Promise<void> {
     };
   });
   console.log(table(rows));
+  if (hiddenRetired > 0) {
+    console.log(`${hiddenRetired} retired gateway${hiddenRetired === 1 ? "" : "s"} with no heartbeat or pods hidden; pass --all to include them.`);
+  }
 }
 
 async function lsCustomers(): Promise<void> {
