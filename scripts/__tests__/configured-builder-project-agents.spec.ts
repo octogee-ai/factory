@@ -3,6 +3,7 @@ import {
   configuredBuilderManagedProjectIds,
   configuredBuilderOwnerAuthorityPatch,
   configuredBuilderProjectAgentPatch,
+  configuredBuilderWorkspacePatch,
 } from "../lib/configured-builder-project-agents.js";
 import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
 import { buildCustomerBindings, buildProjectAgentAccounts, buildProjectAgents } from "../lib/openclaw-config-builders.js";
@@ -60,6 +61,20 @@ function currentConfig(representation: "list" | "entries", extraAgents: Record<s
     } } },
   };
 }
+
+describe("configuredBuilderWorkspacePatch", () => {
+  it("adds only missing workspace peers, preserves custom routing and stops patching after convergence", () => {
+    const current = currentConfig("entries");
+    const task = { channelId: "task-channel", scope: "workspace" as const, kind: "session" };
+    const admin = { channelId: "admin-channel", scope: "workspace" as const, kind: "admin" };
+    const patch = configuredBuilderWorkspacePatch(current, slug, ownerMmUserId, [...channels, task, admin]);
+    expect(patch).toEqual({ bindings: [...existingBindings, {
+      agentId: "octogee-alice-coach",
+      match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "task-channel" } },
+    }] });
+    expect(configuredBuilderWorkspacePatch({ ...current, ...patch }, slug, ownerMmUserId, [...channels, task, admin])).toEqual({});
+  });
+});
 
 describe("configuredBuilderProjectAgentPatch", () => {
   it("removes coach project bindings even when no project activation is pending", () => {

@@ -6,8 +6,8 @@ import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
 import {
   builderOwnerCommandsPatch,
   configuredBuilderManagedProjectIds,
-  configuredBuilderOwnerAuthorityPatch,
   configuredBuilderProjectAgentPatch,
+  configuredBuilderWorkspacePatch,
   validOwnerMmUserId,
 } from "./configured-builder-project-agents.js";
 import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
@@ -1111,9 +1111,10 @@ async function reconcileConfiguredBuilderProjectAgents(
   const managedProjectIds = configuredBuilderManagedProjectIds(readOpenClawConfig(), snapshot.slug,
     (brokerSnapshot.projectAgents ?? []).map((agent) => agent.projectId));
   if (managedProjectIds.length === 0) {
-    if (Object.keys(configuredBuilderOwnerAuthorityPatch(current, snapshot.slug, brokerSnapshot.customerMmUserId)).length > 0) {
+    if (Object.keys(configuredBuilderWorkspacePatch(current, snapshot.slug, brokerSnapshot.customerMmUserId, brokerSnapshot.channels)).length > 0) {
       await applyConfigPatch({
-        buildPatch: (latest) => configuredBuilderOwnerAuthorityPatch(latest, snapshot.slug, brokerSnapshot.customerMmUserId),
+        buildPatch: (latest) => configuredBuilderWorkspacePatch(latest, snapshot.slug, brokerSnapshot.customerMmUserId, brokerSnapshot.channels),
+        buildReplacePaths: (latest) => configuredBuilderWorkspacePatch(latest, snapshot.slug, brokerSnapshot.customerMmUserId, brokerSnapshot.channels).bindings ? ["bindings"] : [],
         logPrefix: `[project-agents:${snapshot.slug}]`,
       }, { rpc: convergedConfigRpc(ctx), cache: ctx.configCache, totalDeadlineMs: CONFIG_PATCH_DEADLINE_MS, signal: options.signal });
     }

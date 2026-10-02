@@ -2293,6 +2293,46 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit", activationId: "activation-1" })]);
   });
 
+  it("routes a new workspace session on a configured Builder without platform projects", async () => {
+    secretMocks.updateMattermostAccountSecrets.mockClear();
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [], channels: [
+      { scope: "workspace", kind: "general", channelId: "general-channel" },
+      { scope: "workspace", kind: "session", channelId: "task-channel" },
+      { scope: "workspace", kind: "admin", channelId: "admin-channel" },
+      { scope: "project", kind: "general", projectId: "disabled", channelId: "disabled-project-channel" },
+    ] });
+    const coach = { model: "owner-model", tools: { allow: ["owner-tool"] } };
+    const customRoute = { agentId: "owner-agent", match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "general-channel" } } };
+    const config = {
+      agents: { entries: { "octogee-alice-coach": coach } },
+      commands: { ownerAllowFrom: [`mattermost:${ALICE_OWNER_MM_ID}`] },
+      channels: { mattermost: { accounts: { "alice-coach": { botToken: "owner-coach-token", allowFrom: [ALICE_OWNER_MM_ID] } } } },
+      bindings: [customRoute],
+    };
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    const rpc = mkGatewayRpc(rosterRpc(config));
+    let patch: unknown;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch(config);
+      expect(args.buildReplacePaths?.(config)).toEqual(["bindings"]);
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+
+    const result = await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
+    expect(patch).toEqual({ bindings: [customRoute, {
+      agentId: "octogee-alice-coach",
+      match: { channel: "mattermost", accountId: "alice-coach", peer: { kind: "group", id: "task-channel" } },
+    }] });
+    expect(result.appliedFingerprint).toBe(snapshotConfigFingerprint(snapshot));
+    expect(rpc.agentsCreate).not.toHaveBeenCalled();
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(secretMocks.updateMattermostAccountSecrets).not.toHaveBeenCalled();
+  });
+
   it("makes the owner the native OpenClaw owner on a configured Builder without platform projects", async () => {
     const snapshot = aliceSnapshot({ status: "complete", projectAgents: [] });
     const coachAccount = { botToken: "owner-coach-token", dmPolicy: "disabled", groupPolicy: "open" };

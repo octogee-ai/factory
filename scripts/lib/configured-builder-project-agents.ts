@@ -102,6 +102,22 @@ export function configuredBuilderOwnerAuthorityPatch(
   };
 }
 
+export function configuredBuilderWorkspacePatch(
+  current: unknown,
+  slug: string,
+  ownerMmUserId: string | null | undefined,
+  channels: readonly BindingChannelInput[],
+): ConfiguredBuilderOwnerAuthorityPatch & { bindings?: unknown[] } {
+  const bindings = projectBindings(current, {
+    slug, ownerMmUserId, channels: channels.filter(channel => channel.scope === "workspace"),
+    managedProjectIds: [], activationProjectIds: [], projectAgentEntries: [], projectAccounts: {},
+  }, new Set(), new Set());
+  return {
+    ...configuredBuilderOwnerAuthorityPatch(current, slug, ownerMmUserId),
+    ...(bindings !== record(current).bindings && bindings.length > 0 ? { bindings } : {}),
+  };
+}
+
 function currentRoster(current: unknown): ConfigEntry[] {
   const agents = record(record(current).agents);
   if (agents.entries !== undefined) {
