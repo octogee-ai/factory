@@ -182,6 +182,38 @@ function auditDockerfileReference(
   if (matchingUpdates.length === 1) managedReferences.push(reference);
 }
 
+function matchesDependencyName(pattern: string, name: string): boolean {
+  const [prefix, ...segments] = pattern.split("*");
+  if (segments.length === 0) return name === prefix;
+  const suffix = segments.pop() ?? "";
+  if (!name.startsWith(prefix) || !name.endsWith(suffix) || name.length < prefix.length + suffix.length) return false;
+  let remaining = name.slice(prefix.length, name.length - suffix.length);
+  return segments.every((segment) => {
+    const index = remaining.indexOf(segment);
+    if (index === -1) return false;
+    remaining = remaining.slice(index + segment.length);
+    return true;
+  });
+}
+
+function auditGithubActionReference(
+  actionUpdates: DependabotUpdate[],
+  reference: DependencyReferenceIdentity,
+  errors: string[],
+  managedReferences: DependencyReferenceIdentity[],
+): void {
+  if (!/^(?:\.github\/workflows\/[^/]+\.ya?ml|action\.ya?ml)$/.test(reference.path)) return;
+  const matchingUpdates = actionUpdates.filter(({ directory }) => directory === "/");
+  if (matchingUpdates.length > 1) {
+    errors.push(`${reference.path}: duplicate Dependabot GitHub Actions entries`);
+  }
+  if (matchingUpdates.length !== 1) return;
+  const ignored = matchingUpdates[0].ignores.some(({ dependencyName }) =>
+    matchesDependencyName(dependencyName, reference.packageName),
+  );
+  if (!ignored) managedReferences.push(reference);
+}
+
 function auditIgnore(
   input: DependabotAuditInput,
   update: DependabotUpdate,
@@ -214,6 +246,7 @@ export function auditDependabotCoverage(input: DependabotAuditInput): {
   const managedReferences: DependencyReferenceIdentity[] = [];
   const npmUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "npm");
   const dockerUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "docker");
+  const actionUpdates = input.updates.filter(({ ecosystem }) => ecosystem === "github-actions");
   // npm discovery runs weekly, batched onto one review day. Discovery cadence
   // governs VERSION updates only — Dependabot raises security advisories
   // immediately regardless of schedule — so the slower sweep costs advisory
@@ -230,6 +263,10 @@ export function auditDependabotCoverage(input: DependabotAuditInput): {
   for (const reference of input.inventory.references.filter(({ referenceKind }) =>
     referenceKind === "dockerfile")) {
     auditDockerfileReference(dockerUpdates, reference, errors, managedReferences);
+  }
+  for (const reference of input.inventory.references.filter(({ referenceKind }) =>
+    referenceKind === "github-action")) {
+    auditGithubActionReference(actionUpdates, reference, errors, managedReferences);
   }
   for (const update of npmUpdates) {
     if (update.interval !== "weekly" && !scheduleException) {

@@ -12,15 +12,26 @@ const bundle = {
   renderedAt: 1,
 };
 
-function appWith(docs: Record<string, Record<string, unknown>>, bound: BoundTenant | null, writes: Array<[string, unknown]> = [], writeFails = false) {
+function appWith(docs: Record<string, Record<string, unknown>>, bound: BoundTenant | null, writes: Array<[string, unknown]> = [], writeFails = false, beforeTransaction?: () => void) {
   const db = {
     doc: (path: string) => ({
+      path,
       get: async () => ({ exists: docs[path] !== undefined, data: () => docs[path] }),
       set: async (next: unknown) => {
         if (writeFails) throw new Error("14 UNAVAILABLE");
         writes.push([path, next]);
       },
     }),
+    runTransaction: async (work: (tx: unknown) => Promise<void>) => {
+      beforeTransaction?.();
+      return work({
+        get: (ref: { get: () => unknown }) => ref.get(),
+        set: (ref: { path: string }, next: unknown) => {
+          if (writeFails) throw new Error("14 UNAVAILABLE");
+          writes.push([ref.path, next]);
+        },
+      });
+    },
     collection: () => { throw new Error("unexpected collection access"); },
   } as unknown as Firestore;
   const app = express();
@@ -77,6 +88,55 @@ describe("POST /internal/fleet/vm-runtime", () => {
       .post("/internal/fleet/vm-runtime").send({ disk: { sizeBytes: 10, freeBytes: 11 } });
     expect(malformed.status).toBe(400);
     expect(malformed.body).toEqual({ error: "invalid_disk_sample" });
+  });
+
+  it("records image observations with broker time and current instance identity, excluding guest metadata", async () => {
+    const writes: Array<[string, unknown]> = [];
+    const containers = [
+      { name: "gateway", imageReference: "registry.example/gateway:actual", digests: [`registry.example/gateway@sha256:${"a".repeat(64)}`], running: true },
+      { name: "gateway-edge", imageReference: "", digests: [], running: false },
+    ];
+    const docs = { "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242" } } };
+    const bound: BoundTenant = { kind: "gateway", gatewayId: "b-x", podUid: "4242" };
+    const response = await request(appWith(docs, bound, writes)).post("/internal/fleet/vm-runtime")
+      .send({ images: { containers: containers.map(c => ({ ...c, env: "secret" })), observedAt: 999_999, instanceId: "forged" } });
+    expect(response.status).toBe(200);
+    expect(writes).toEqual([["glmGateways/b-x", { vmImages: { instanceId: "4242", observedAt: 5_000, containers } }]]);
+
+    for (const other of [{ ...bound, podUid: "old" }, { kind: "gateway", gatewayId: "b-x" } as BoundTenant]) {
+      const foreign: Array<[string, unknown]> = [];
+      expect((await request(appWith(docs, other, foreign)).post("/internal/fleet/vm-runtime").send({ images: { containers } })).status).toBe(200);
+      expect(foreign).toEqual([]);
+    }
+    const raced: Array<[string, unknown]> = [];
+    await request(appWith(docs, bound, raced, false, () => { docs["glmGateways/b-x"].vm.instanceId = "replacement"; }))
+      .post("/internal/fleet/vm-runtime").send({ images: { containers } });
+    expect(raced).toEqual([]);
+  });
+
+  it("fails visibly when image observation persistence fails", async () => {
+    const docs = { "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242" } } };
+    const containers = ["gateway", "gateway-edge"].map(name => ({ name, imageReference: "", digests: [], running: false }));
+    const response = await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" }, [], true))
+      .post("/internal/fleet/vm-runtime").send({ images: { containers } });
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: "image_observation_unrecorded" });
+  });
+
+  it("rejects incomplete, duplicate, oversized and malformed image observations", async () => {
+    const missing = { name: "gateway", imageReference: "", digests: [], running: false };
+    const edge = { ...missing, name: "gateway-edge" };
+    const docs = { "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242" } } };
+    for (const containers of [[], [missing], [missing, missing], [missing, edge, edge],
+      [{ ...missing, running: true }, edge], [{ ...missing, imageReference: "x", digests: ["sha256:bad"] }, edge],
+      [{ ...missing, imageReference: "x".repeat(1025) }, edge]]) {
+      const writes: Array<[string, unknown]> = [];
+      const response = await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" }, writes))
+        .post("/internal/fleet/vm-runtime").send({ images: { containers } });
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: "invalid_image_sample" });
+      expect(writes).toEqual([]);
+    }
   });
 
   it("records the bound instance's Spot preemption notice with the API's clock, ignores another instance's, and rejects a malformed one", async () => {

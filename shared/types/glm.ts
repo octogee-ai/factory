@@ -227,7 +227,52 @@ export interface GatewayVmDiskSample {
 
 export interface GatewayVmRuntimeRequest {
   disk?: GatewayVmDiskSample;
+  images?: GatewayVmImageSample;
   preempted?: true;
+}
+
+export const GATEWAY_VM_IMAGE_SERVICES = ["gateway", "gateway-edge"] as const;
+
+export interface GatewayVmContainerImage {
+  name: typeof GATEWAY_VM_IMAGE_SERVICES[number];
+  imageReference: string;
+  digests: string[];
+  running: boolean;
+}
+
+export interface GatewayVmImageSample {
+  containers: GatewayVmContainerImage[];
+}
+
+export interface GatewayVmImageObservation extends GatewayVmImageSample {
+  instanceId: string;
+  observedAt: number;
+}
+
+function isGatewayVmContainerImage(value: unknown): value is GatewayVmContainerImage {
+  if (!value || typeof value !== "object") return false;
+  const c = value as Partial<GatewayVmContainerImage>;
+  return GATEWAY_VM_IMAGE_SERVICES.some(name => name === c.name)
+    && typeof c.running === "boolean"
+    && typeof c.imageReference === "string" && c.imageReference.length <= 1024
+    && (c.imageReference === "" ? !c.running && Array.isArray(c.digests) && c.digests.length === 0 : /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(c.imageReference))
+    && Array.isArray(c.digests) && c.digests.length <= 16
+    && c.digests.every(digest => typeof digest === "string" && digest.length <= 1024 && /^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(digest));
+}
+
+export function isGatewayVmImageSample(value: unknown): value is GatewayVmImageSample {
+  const sample = value as Partial<GatewayVmImageSample> | null;
+  return !!sample && Array.isArray(sample.containers)
+    && sample.containers.length === GATEWAY_VM_IMAGE_SERVICES.length
+    && sample.containers.every(isGatewayVmContainerImage)
+    && new Set(sample.containers.map(c => c.name)).size === GATEWAY_VM_IMAGE_SERVICES.length;
+}
+
+export function isGatewayVmImageObservation(value: unknown): value is GatewayVmImageObservation {
+  const observation = value as Partial<GatewayVmImageObservation> | null;
+  return isGatewayVmImageSample(value) && !!observation
+    && typeof observation.instanceId === "string" && observation.instanceId.length > 0
+    && typeof observation.observedAt === "number" && Number.isSafeInteger(observation.observedAt) && observation.observedAt >= 0;
 }
 
 export interface GatewayVmPreemptionNotice {

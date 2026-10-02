@@ -56,6 +56,7 @@ export type SharedPoolScalingDecision =
   | { kind: "mint-slot"; reason: "minimum-replicas" | "scale-out" }
   | { kind: "mint-slot"; reason: "platform-replacement"; replacesGatewayId: string }
   | { kind: "finish-replacement" }
+  | { kind: "supersede-replacement"; gatewayId: string }
   | { kind: "begin-drain"; gatewayId: string }
   | { kind: "retire-member"; gatewayId: string }
   | { kind: "max-capacity"; assignmentCount: number; hotMemberCount: number };

@@ -1,3 +1,4 @@
+import { isReleasePayload, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { GoogleAuth } from "google-auth-library";
 import { gunzipSync } from "node:zlib";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
@@ -282,6 +283,32 @@ export interface ReleaseDigestManifest {
     gateway: Record<string, string>;
     platform: Record<string, string>;
   };
+}
+
+export function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleasePayload {
+  const shortSha = manifest.sourceSha.slice(0, 7);
+  const tag = `${shortSha}-oc${manifest.openclawVersion}`;
+  const payload: ReleasePayload = {
+    imageRepository: `${manifest.repository}/octogee-gateway`,
+    imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
+    ...(manifest.openclawSourceSha
+      ? { openclawSourceSha: manifest.openclawSourceSha }
+      : {}),
+    profileImages: {
+      builder: {
+        imageRepository: `${manifest.repository}/octogee-gateway-builder`,
+        imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-builder"]}`,
+      },
+    },
+    gatewayEdgeImage: {
+      imageRepository: `${manifest.repository}/gateway-edge`,
+      imageTag: `${tag}@${manifest.surfaces.gateway["gateway-edge"]}`,
+    },
+  };
+  if (!isReleasePayload(payload)) {
+    throw new Error("CENTRAL release manifest cannot produce a valid gateway release payload");
+  }
+  return payload;
 }
 
 export interface ReleaseDigestAlias {

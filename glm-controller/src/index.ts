@@ -1493,6 +1493,7 @@ function reconcileRelevantFingerprint(data: Record<string, unknown>): string {
   const { heartbeat, kubernetes, helm, ...rest } = data;
   delete rest.podReplacements;
   delete rest.vmDisk;
+  delete rest.vmImages;
   const heartbeatRecord =
     heartbeat !== null && typeof heartbeat === "object" && !Array.isArray(heartbeat)
       ? heartbeat as Record<string, unknown>

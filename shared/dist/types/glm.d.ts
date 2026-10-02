@@ -157,8 +157,25 @@ export interface GatewayVmDiskSample {
 }
 export interface GatewayVmRuntimeRequest {
     disk?: GatewayVmDiskSample;
+    images?: GatewayVmImageSample;
     preempted?: true;
 }
+export declare const GATEWAY_VM_IMAGE_SERVICES: readonly ["gateway", "gateway-edge"];
+export interface GatewayVmContainerImage {
+    name: typeof GATEWAY_VM_IMAGE_SERVICES[number];
+    imageReference: string;
+    digests: string[];
+    running: boolean;
+}
+export interface GatewayVmImageSample {
+    containers: GatewayVmContainerImage[];
+}
+export interface GatewayVmImageObservation extends GatewayVmImageSample {
+    instanceId: string;
+    observedAt: number;
+}
+export declare function isGatewayVmImageSample(value: unknown): value is GatewayVmImageSample;
+export declare function isGatewayVmImageObservation(value: unknown): value is GatewayVmImageObservation;
 export interface GatewayVmPreemptionNotice {
     instanceId: string;
     announcedAt: number;

@@ -255,6 +255,15 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
+  it("ignores VM container image observations without hiding release changes", () => {
+    const fingerprints = new Map<string, string>();
+    const first = servingRuntime({ vmImages: { instanceId: "4242", observedAt: 1, containers: [] } });
+    snapshotHasReconcileRelevantChange([{ type: "added", doc: { id: "default", data: () => first } }], fingerprints);
+    const next = { ...first, vmImages: { instanceId: "4242", observedAt: 2, containers: [{ name: "gateway", running: false }] } };
+    expect(snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => next } }], fingerprints)).toBe(false);
+    expect(snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => ({ ...next, desiredRelease: 99 }) } }], fingerprints)).toBe(true);
+  });
+
   it.each([
     ["status", { status: "unreachable", version: "abc1234" }],
     ["version", { status: "ready", version: "def5678" }],

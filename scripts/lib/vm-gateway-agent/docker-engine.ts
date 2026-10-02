@@ -8,7 +8,7 @@ export interface DockerResponse<T> {
 }
 
 export interface DockerEngine {
-  request<T = unknown>(method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<DockerResponse<T>>;
+  request<T = unknown>(method: string, path: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal): Promise<DockerResponse<T>>;
 }
 
 export class DockerEngineError extends Error {
@@ -38,12 +38,13 @@ function collectResponse<T>(res: http.IncomingMessage, resolve: (value: DockerRe
 export function createDockerEngine(opts: { socketPath?: string } = {}): DockerEngine {
   const socketPath = opts.socketPath ?? "/var/run/docker.sock";
   return {
-    request<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<DockerResponse<T>> {
+    request<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}, signal?: AbortSignal): Promise<DockerResponse<T>> {
       return new Promise((resolve, reject) => {
         const payload = body === undefined ? null : JSON.stringify(body);
         const req = http.request(
           {
             socketPath,
+            signal,
             method,
             path: `${DOCKER_API_PREFIX}${path}`,
             headers: {
@@ -106,11 +107,17 @@ export interface ContainerInspection {
   Image?: string;
 }
 
-export async function inspectContainer(engine: DockerEngine, name: string): Promise<ContainerInspection | null> {
-  const res = await engine.request<ContainerInspection>("GET", `/containers/${encodeURIComponent(name)}/json`);
+export async function inspectContainer(engine: DockerEngine, name: string, signal?: AbortSignal): Promise<ContainerInspection | null> {
+  const res = await engine.request<ContainerInspection>("GET", `/containers/${encodeURIComponent(name)}/json`, undefined, undefined, signal);
   if (res.status === 404) return null;
   assertOk(res, `inspect ${name}`);
   return res.body;
+}
+
+export async function inspectImageDigests(engine: DockerEngine, imageId: string, signal: AbortSignal): Promise<string[]> {
+  const res = await engine.request<{ RepoDigests?: string[] | null }>("GET", `/images/${encodeURIComponent(imageId)}/json`, undefined, undefined, signal);
+  assertOk(res, "inspect container image");
+  return res.body.RepoDigests ?? [];
 }
 
 export async function containerPathExists(engine: DockerEngine, name: string, path: string): Promise<boolean> {

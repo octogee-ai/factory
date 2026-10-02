@@ -47,6 +47,7 @@ platformRelease:
   builderImageTag: ""
   gatewayEdgeImageRepository: ""
   gatewayEdgeImageTag: ""
+  openclawSourceSha: ""
 
 # Customer-cleanup target endpoints (Gitea + Mattermost). Defaults
 # resolve to in-cluster ClusterIP Services for the same Helm release;

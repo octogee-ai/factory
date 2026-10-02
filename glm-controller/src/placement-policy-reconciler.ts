@@ -3761,9 +3761,6 @@ async function deleteRetiredDisposableGatewayFirestore(
     return false;
   }
   if (verdict !== "delete") return false;
-  // Deletion order makes every partial failure re-drivable: auxiliary docs
-  // first (idempotent), the root next (its claim + the retire op are the
-  // re-verification fence), and the retire op only once nothing else remains.
   await Promise.all([
     input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-activate-${request.gatewayId}`).delete(),
     input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-return-${request.gatewayId}`).delete(),
@@ -3774,7 +3771,6 @@ async function deleteRetiredDisposableGatewayFirestore(
       .delete(),
   ]);
   await input.db.recursiveDelete(gatewayRef);
-  await operationRef.delete();
   input.log(
     `[placement-policy] deleted retired disposable runtime ${request.gatewayId} for ${request.ownerUid}`,
   );

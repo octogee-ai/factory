@@ -3801,6 +3801,52 @@ describe("scheduler migration signed endpoint", () => {
 });
 
 describe("prepared migration staging", () => {
+  it("finishes a Shared import before ownership moves and removes source-deleted projects", async () => {
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-prepared-import-"));
+    migrationTempRoots.push(importDir);
+    const uidForSlug = vi.fn(async () => null);
+    const loadUserSnapshot = vi.fn();
+    const deps = mkDeps({
+      adapter: mkAdapter({ isBuilderGateway: () => false, uidForSlug, loadUserSnapshot,
+        prepareImportDir: vi.fn(async () => importDir) }),
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const migrationId = "shared-unassigned-final-import";
+    const prepare = async (mode: "pre" | "final") => {
+      spawnMock.mockReturnValueOnce(mkFakeChild());
+      const body = { migrationId, slug: "chris", mode, rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "c".repeat(64) };
+      const response = mkResponse();
+      await createPrepareRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(200);
+      const configPath = (spawnMock.mock.calls.at(-1)![1] as string[]).find(arg => arg.startsWith("--config="))!.slice(9);
+      return /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
+    };
+    const finish = async (mode: "pre" | "final") => {
+      spawnMock.mockImplementation(() => mkFakeChild({ exitCode: 0 }));
+      const body = { migrationId, slug: "chris", mode, rpcPhase: "finish-rsync-import" };
+      const response = mkResponse();
+      await createFinishRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      return response;
+    };
+    const stageDir = await prepare("pre");
+    for (const root of [stageDir, importDir]) {
+      await fs.mkdir(path.join(root, "customers/chris/projects/active-repo"), { recursive: true });
+      await fs.writeFile(path.join(root, "customers/chris/projects/active-repo/README.md"), "source checkout");
+      await fs.mkdir(path.join(root, "customers/chris/projects/deleted-repo"), { recursive: true });
+      await fs.writeFile(path.join(root, "customers/chris/projects/deleted-repo/draft"), "removed after pre-sync");
+    }
+    expect((await finish("pre")).getStatus()).toBe(200);
+    expect(await prepare("final")).toBe(stageDir);
+    await fs.rm(path.join(stageDir, "customers/chris/projects/deleted-repo"), { recursive: true });
+    const completed = await finish("final");
+    expect(completed.getBody()).toEqual({ migrationId, slug: "chris", imported: true });
+    expect(completed.getStatus()).toBe(200);
+    expect(uidForSlug).not.toHaveBeenCalled();
+    expect(loadUserSnapshot).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(importDir, "customers/chris/projects/active-repo/README.md"), "utf8")).toBe("source checkout");
+    await expect(fs.stat(path.join(importDir, "customers/chris/projects/deleted-repo"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("does not finish an existing import while another phase prepares its staging", async () => {
     vi.stubEnv("POD_UID", "concurrent-builder-pod");
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "concurrent-import-"));

@@ -61,7 +61,6 @@ import {
   type GatewayRuntimeDoc,
   type PlacementFirestore,
   type ReleaseDoc,
-  type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
 import {
   isGatewayPodReplacements,
@@ -137,6 +136,7 @@ import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
 import {
   type CentralReleaseAuthority,
   type ReleaseDigestManifest,
+  centralGatewayReleasePayload,
 } from "./artifact-registry.js";
 
 export interface FleetLogger {
@@ -2815,32 +2815,6 @@ async function readRelease(
 
 function releaseSourceShaFromBody(value: unknown): string | null {
   return typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
-}
-
-function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleasePayload {
-  const shortSha = manifest.sourceSha.slice(0, 7);
-  const tag = `${shortSha}-oc${manifest.openclawVersion}`;
-  const payload: ReleasePayload = {
-    imageRepository: `${manifest.repository}/octogee-gateway`,
-    imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway"]}`,
-    ...(manifest.openclawSourceSha
-      ? { openclawSourceSha: manifest.openclawSourceSha }
-      : {}),
-    profileImages: {
-      builder: {
-        imageRepository: `${manifest.repository}/octogee-gateway-builder`,
-        imageTag: `${tag}@${manifest.surfaces.gateway["octogee-gateway-builder"]}`,
-      },
-    },
-    gatewayEdgeImage: {
-      imageRepository: `${manifest.repository}/gateway-edge`,
-      imageTag: `${tag}@${manifest.surfaces.gateway["gateway-edge"]}`,
-    },
-  };
-  if (!isReleasePayload(payload)) {
-    throw new Error("CENTRAL release manifest cannot produce a valid gateway release payload");
-  }
-  return payload;
 }
 
 function artifactFromRelease(release: ReleaseDoc): GatewayArtifact | null {

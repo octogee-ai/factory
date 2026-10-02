@@ -6,6 +6,7 @@ import {
   vmDiskFreePercent,
   type GatewayVmDiskObservation,
   type GatewayVmHomeState,
+  type GatewayVmImageObservation,
   type GatewayVmPreemptionNotice,
 } from "@octogee/shared/types/glm";
 
@@ -65,4 +66,20 @@ export async function recordComputerPreemptionNotice(
   notice: GatewayVmPreemptionNotice,
 ): Promise<void> {
   await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).set({ vmPreemption: notice }, { merge: true });
+}
+
+export async function recordComputerImageObservation(
+  db: Pick<Firestore, "doc" | "runTransaction">,
+  gatewayId: string,
+  next: GatewayVmImageObservation,
+): Promise<void> {
+  const ref = db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.data();
+    if (!snap.exists || data?.gatewayId !== gatewayId || data.runtime !== "gce-vm" || data.vm?.instanceId !== next.instanceId) return;
+    const previous = data.vmImages as Partial<GatewayVmImageObservation> | undefined;
+    if (typeof previous?.observedAt === "number" && previous.instanceId === next.instanceId && previous.observedAt > next.observedAt) return;
+    tx.set(ref, { vmImages: next }, { merge: true });
+  });
 }

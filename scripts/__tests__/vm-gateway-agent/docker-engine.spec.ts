@@ -37,6 +37,22 @@ it("inspects containers through a Docker 29 daemon that rejects retired API vers
   }
 });
 
+it("aborts a stalled Docker inspection at the caller's observation deadline", async () => {
+  const root = await mkdtemp(join(tmpdir(), "octogee-docker-timeout-"));
+  const socketPath = join(root, "docker.sock");
+  const sockets = new Set<import("node:net").Socket>();
+  const server = createServer(() => {});
+  server.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  await new Promise<void>(resolve => server.listen(socketPath, resolve));
+  try {
+    await expect(inspectContainer(createDockerEngine({ socketPath }), "octogee-gateway", AbortSignal.timeout(20))).rejects.toThrow(/aborted/i);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("image references", () => {
   it("derives the registry host and the pull query for tagged, digest, and bare references", () => {
     expect(registryHostOf("us-central1-docker.pkg.dev/octogee/octogee/gateway:main.abc")).toBe("us-central1-docker.pkg.dev");

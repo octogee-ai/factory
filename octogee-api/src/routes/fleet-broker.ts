@@ -2,7 +2,7 @@ import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
-import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerHomeCheckpoint, recordComputerPreemptionNotice } from "../lib/computer-runtime-observation.js";
+import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerImageObservation, recordComputerHomeCheckpoint, recordComputerPreemptionNotice } from "../lib/computer-runtime-observation.js";
 import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
@@ -11,6 +11,7 @@ import {
   computerHomeCheckpointName,
   gatewayVmRuntimeDocPath,
   isGatewayVmDiskSample,
+  isGatewayVmImageSample,
   isGatewayVmRuntimeBundle,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
@@ -3382,6 +3383,30 @@ async function recordVmPreemptionNotice(
   return true;
 }
 
+async function recordVmImageReport(
+  deps: ResolvedFleetBrokerRouteDeps,
+  req: Request,
+  res: Response,
+  bound: GatewayBinding,
+): Promise<boolean> {
+  const images = (req.body as Partial<GatewayVmRuntimeRequest> | undefined)?.images;
+  if (images === undefined) return true;
+  if (!isGatewayVmImageSample(images)) {
+    res.status(400).json({ error: "invalid_image_sample" });
+    return false;
+  }
+  if (!bound.podUid) return true;
+  const containers = images.containers.map(({ name, imageReference, digests, running }) => ({ name, imageReference, digests, running }));
+  try {
+    await recordComputerImageObservation(deps.db, bound.gatewayId, { containers, instanceId: bound.podUid, observedAt: deps.now() });
+  } catch (error) {
+    logger.error("[fleet-broker] computer image observation failed", { gatewayId: bound.gatewayId, error });
+    res.status(503).json({ error: "image_observation_unrecorded" });
+    return false;
+  }
+  return true;
+}
+
 function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db } = deps;
   router.post("/vm-runtime", async (req, res) => {
@@ -3396,6 +3421,7 @@ function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDe
       res.status(404).json({ error: "vm_runtime_not_rendered" });
       return;
     }
+    if (!(await recordVmImageReport(deps, req, res, bound))) return;
     if (!(await recordVmPreemptionNotice(deps, req, res, bound, observation))) return;
     if (!(await recordVmDiskReport(deps, req, res, bound, observation))) return;
     const home = observation?.vmHome as Partial<GatewayVmHomeState> | undefined;

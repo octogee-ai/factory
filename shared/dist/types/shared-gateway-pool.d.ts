@@ -47,6 +47,9 @@ export type SharedPoolScalingDecision = {
 } | {
     kind: "finish-replacement";
 } | {
+    kind: "supersede-replacement";
+    gatewayId: string;
+} | {
     kind: "begin-drain";
     gatewayId: string;
 } | {

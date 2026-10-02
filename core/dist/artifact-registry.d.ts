@@ -1,3 +1,4 @@
+import { type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 export interface GatewayBuild {
     tag: string;
     pushedAt: string;
@@ -39,6 +40,7 @@ export interface ReleaseDigestManifest {
         platform: Record<string, string>;
     };
 }
+export declare function centralGatewayReleasePayload(manifest: ReleaseDigestManifest): ReleasePayload;
 export interface ReleaseDigestAlias {
     alias: string;
     intendedTarget: string;

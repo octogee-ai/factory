@@ -1954,7 +1954,7 @@ async function deliverStagedImport(input: {
       log,
     })
     : null;
-  await removeObsoletePreparedProjects(deps, session, input.slug);
+  if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
   await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, session.baselineEntries);
   if (!prepared) return;
   await installPreparedAgentStores({

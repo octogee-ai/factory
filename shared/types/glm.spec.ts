@@ -23,6 +23,7 @@ import {
   OPERATION_AUDIT_SCHEMA_VERSION,
   homeCheckpointOutstanding,
   readBuilderParkedComputer,
+  isGatewayVmImageObservation,
 } from "./glm";
 
 describe("operation origin", () => {
@@ -409,5 +410,16 @@ describe("readBuilderParkedComputer", () => {
     expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, zone: "" } } })).toBeNull();
     expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, checkpoint: { outcome: "fresh" } } } })).toBeNull();
     expect(readBuilderParkedComputer({ provisioning: { computer: { ...parked, checkpoint: { ...parked.checkpoint, outcome: "unknown" } } } })).toBeNull();
+  });
+});
+
+describe("VM image observations", () => {
+  const containers = ["gateway", "gateway-edge"].map(name => ({ name, imageReference: "", digests: [], running: false }));
+  it("requires a bounded complete sample with server time and instance identity", () => {
+    const observation = { containers, observedAt: 1000, instanceId: "4242" };
+    expect(isGatewayVmImageObservation(observation)).toBe(true);
+    for (const invalid of [null, { containers }, { ...observation, instanceId: "" }, { ...observation, observedAt: Infinity }, { ...observation, observedAt: -1 }]) {
+      expect(isGatewayVmImageObservation(invalid)).toBe(false);
+    }
   });
 });

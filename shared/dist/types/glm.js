@@ -57,6 +57,31 @@ export function isGatewayVmRuntimeBundle(value) {
         && !!b.hostAliases && typeof b.hostAliases === "object"
         && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
 }
+export const GATEWAY_VM_IMAGE_SERVICES = ["gateway", "gateway-edge"];
+function isGatewayVmContainerImage(value) {
+    if (!value || typeof value !== "object")
+        return false;
+    const c = value;
+    return GATEWAY_VM_IMAGE_SERVICES.some(name => name === c.name)
+        && typeof c.running === "boolean"
+        && typeof c.imageReference === "string" && c.imageReference.length <= 1024
+        && (c.imageReference === "" ? !c.running && Array.isArray(c.digests) && c.digests.length === 0 : /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(c.imageReference))
+        && Array.isArray(c.digests) && c.digests.length <= 16
+        && c.digests.every(digest => typeof digest === "string" && digest.length <= 1024 && /^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(digest));
+}
+export function isGatewayVmImageSample(value) {
+    const sample = value;
+    return !!sample && Array.isArray(sample.containers)
+        && sample.containers.length === GATEWAY_VM_IMAGE_SERVICES.length
+        && sample.containers.every(isGatewayVmContainerImage)
+        && new Set(sample.containers.map(c => c.name)).size === GATEWAY_VM_IMAGE_SERVICES.length;
+}
+export function isGatewayVmImageObservation(value) {
+    const observation = value;
+    return isGatewayVmImageSample(value) && !!observation
+        && typeof observation.instanceId === "string" && observation.instanceId.length > 0
+        && typeof observation.observedAt === "number" && Number.isSafeInteger(observation.observedAt) && observation.observedAt >= 0;
+}
 export function isGatewayVmPreemptionNotice(value) {
     const n = value;
     return !!n && typeof n === "object"

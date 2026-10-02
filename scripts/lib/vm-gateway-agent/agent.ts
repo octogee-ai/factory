@@ -7,6 +7,7 @@ import {
   type GatewayVmRuntimeRequest,
   type GatewayVmRuntimeResponse,
 } from "@octogee/shared/types/glm";
+import { observeVmImages } from "./image-observation.js";
 import { brokerFailure, brokerPost } from "./broker.js";
 import {
   containerPathExists,
@@ -106,8 +107,18 @@ async function diskReport(deps: VmAgentDeps): Promise<GatewayVmRuntimeRequest> {
   }
 }
 
+async function imageReport(deps: VmAgentDeps): Promise<GatewayVmRuntimeRequest> {
+  try {
+    return { images: await observeVmImages(deps.engine) };
+  } catch (error) {
+    deps.log(`[vm-agent] image observation unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
+}
+
 export async function fetchRuntimeBundle(deps: VmAgentDeps): Promise<BundleFetch> {
-  const res = await brokerPost(deps, "vm-runtime", { ...(await diskReport(deps)) });
+  const [disk, images] = await Promise.all([diskReport(deps), imageReport(deps)]);
+  const res = await brokerPost(deps, "vm-runtime", { ...disk, ...images });
   if (res.status === 404) return { kind: "not-rendered" };
   if (!res.ok) throw await brokerFailure("vm-runtime", res);
   const body = (await res.json()) as Partial<GatewayVmRuntimeResponse>;

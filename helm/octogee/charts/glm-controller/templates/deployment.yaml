@@ -194,6 +194,8 @@ spec:
               value: {{ required "glm-controller.platformRelease.gatewayEdgeImageRepository is required" (.Values.platformRelease).gatewayEdgeImageRepository | quote }}
             - name: PLATFORM_GATEWAY_EDGE_IMAGE_TAG
               value: {{ (.Values.platformRelease).gatewayEdgeImageTag | default "" | quote }}
+            - name: OPENCLAW_FORK_SHA
+              value: {{ (.Values.platformRelease).openclawSourceSha | default "" | quote }}
           ports:
             - containerPort: {{ .Values.http.port }}
               name: http

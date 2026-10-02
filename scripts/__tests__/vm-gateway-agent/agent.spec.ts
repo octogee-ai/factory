@@ -3,6 +3,7 @@ import {
   TOKEN_REFRESH_MS,
   PREEMPTION_WATCH_RETRY_MS,
   convergeOnce,
+  fetchRuntimeBundle,
   initialAgentState,
   watchPreemption,
   type VmAgentDeps,
@@ -40,6 +41,9 @@ function fakeDocker(log: string[] = []): FakeDocker {
           ? { status: 200, body: { Id: "agent", Image: fake.agentImage } as never }
           : { status: 404, body: { message: "no such container" } as never };
       }
+      if (method === "GET" && path.startsWith("/images/")) {
+        return { status: 200, body: { RepoDigests: [`registry.example/actual@sha256:${"a".repeat(64)}`] } as never };
+      }
       if (method === "HEAD" && path.includes("/archive?")) {
         const c = containers.get(name(path))!;
         const target = new URL(`http://x${path}`).searchParams.get("path")!;
@@ -53,7 +57,7 @@ function fakeDocker(log: string[] = []): FakeDocker {
       if (method === "GET" && path.endsWith("/json")) {
         const c = containers.get(name(path));
         return c
-          ? { status: 200, body: { Id: name(path), State: { Running: c.running, Paused: c.paused ?? false }, Config: { Labels: (c.config.Labels as Record<string, string>) } } as never }
+          ? { status: 200, body: { Id: name(path), Image: `sha256:${"b".repeat(64)}`, State: { Running: c.running, Paused: c.paused ?? false }, Config: { Image: c.config.Image, Labels: (c.config.Labels as Record<string, string>) } } as never }
           : { status: 404, body: { message: "no such container" } as never };
       }
       if (method === "DELETE") { containers.delete(name(path)); return { status: 204, body: "" as never }; }
@@ -211,17 +215,49 @@ describe("convergeOnce", () => {
     );
   });
 
+  it("reports actual image digests by container image ID and explicit missing or stopped services", async () => {
+    const docker = fakeDocker();
+    docker.containers.set("octogee-gateway", { config: { Image: "registry.example/actual:older", Env: ["SECRET=hidden"] }, running: true });
+    const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
+    await fetchRuntimeBundle(h.d);
+    const first = JSON.parse(String(calls(h.fetchImpl, "/internal/fleet/vm-runtime")[0][1].body));
+    expect(first.images).toEqual({ containers: [
+      { name: "gateway", imageReference: "registry.example/actual:older", digests: [`registry.example/actual@sha256:${"a".repeat(64)}`], running: true },
+      { name: "gateway-edge", imageReference: "", digests: [], running: false },
+    ] });
+    expect(JSON.stringify(first)).not.toContain("hidden");
+    expect(docker.log).toContain(`GET /images/sha256%3A${"b".repeat(64)}/json`);
+    docker.containers.get("octogee-gateway")!.paused = true;
+    docker.containers.set("octogee-gateway-edge", { config: { Image: "registry.example/edge:older" }, running: false });
+    await fetchRuntimeBundle(h.d);
+    const second = JSON.parse(String(calls(h.fetchImpl, "/internal/fleet/vm-runtime")[1][1].body));
+    expect(second.images.containers.map((c: { running: boolean }) => c.running)).toEqual([false, false]);
+  });
+
+  it("logs an image inspection failure and polls without falsely reporting image readiness", async () => {
+    const docker = fakeDocker();
+    const original = docker.engine.request;
+    docker.engine.request = async (method, path, ...args) => {
+      if (path === "/containers/octogee-gateway/json") throw new Error("Docker unavailable");
+      return original(method, path, ...args);
+    };
+    const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 1_000 });
+    await fetchRuntimeBundle(h.d);
+    expect(JSON.parse(String(calls(h.fetchImpl, "/internal/fleet/vm-runtime")[0][1].body))).not.toHaveProperty("images");
+    expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("image observation unavailable: Docker unavailable"));
+  });
+
   it("reports the state root's disk usage with every bundle poll, and still polls when the measurement fails", async () => {
     const clock = { now: 1_000 };
     const reported = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock);
     await convergeOnce(reported.d, initialAgentState());
     const [, init] = calls(reported.fetchImpl, "/internal/fleet/vm-runtime")[0];
-    expect(JSON.parse(String(init.body))).toEqual({ gatewayId: "b-x", disk: DISK });
+    expect(JSON.parse(String(init.body))).toMatchObject({ gatewayId: "b-x", disk: DISK, images: { containers: [{ name: "gateway", running: false }, { name: "gateway-edge", running: false }] } });
 
     const unmeasured = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock, { diskUsage: async () => { throw new Error("ENOENT: statfs"); } });
     const state = await convergeOnce(unmeasured.d, initialAgentState());
     expect(state.appliedVersion).toBe("v1");
-    expect(JSON.parse(String(calls(unmeasured.fetchImpl, "/internal/fleet/vm-runtime")[0][1].body))).toEqual({ gatewayId: "b-x" });
+    expect(JSON.parse(String(calls(unmeasured.fetchImpl, "/internal/fleet/vm-runtime")[0][1].body))).toMatchObject({ gatewayId: "b-x", images: { containers: [{ name: "gateway", running: false }, { name: "gateway-edge", running: false }] } });
     expect(unmeasured.d.log).toHaveBeenCalledWith(expect.stringContaining("disk usage unavailable for /srv/octogee: ENOENT: statfs"));
   });
 

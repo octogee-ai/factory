@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -535,7 +536,43 @@ describe("deployment target consumers", () => {
       "--set-string glm-controller.platformRelease.builderImageTag=${GLM_TAG}@${BUILDER_DIGEST}",
     );
     expect(workflow).toContain('BUILDER_DIGEST="$(manifest_digest gateway octogee-gateway-builder)"');
+    expect(workflow).toContain(
+      '--set-string "glm-controller.platformRelease.openclawSourceSha=${OPENCLAW_SOURCE_SHA}"',
+    );
+    expect(workflow).toContain('OPENCLAW_SOURCE_SHA="$(jq -er \'.openclawSourceSha\' "$MANIFEST_FILE")"');
+    expect(workflow).toContain('OPENCLAW_SOURCE_SHA="$(jq -er \'.sourceSha\' infra/gateway/openclaw-tarball/current.json)"');
+    expect(workflow).toContain('[[ "$OPENCLAW_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]');
     expect(workflow).not.toContain("bootstrapDefaultGateway");
+  });
+
+  it.each([
+    ["f".repeat(40), true],
+    [undefined, false],
+    [null, false],
+    ["f".repeat(7), false],
+    ["F".repeat(40), false],
+    [123, false],
+  ])("validates release manifest OpenClaw source %s before deployment", (openclawSourceSha, valid) => {
+    const workflow = source(".github/workflows/build-and-deploy.yml");
+    const validation = workflow.match(/if ! jq -e --arg source_sha "\$SOURCE_SHA" --arg repository "\$AR_REPOSITORY" '([\s\S]*?)' "\$MANIFEST_FILE"/);
+    expect(validation).not.toBeNull();
+    const digest = `sha256:${"a".repeat(64)}`;
+    const manifest = {
+      sourceSha: "b".repeat(40),
+      repository: "registry.example/release",
+      openclawSourceSha,
+      surfaces: {
+        gateway: { "gateway-edge": digest, "octogee-gateway": digest },
+        platform: Object.fromEntries([
+          "artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner",
+        ].map((image) => [image, digest])),
+      },
+    };
+    const result = spawnSync("jq", [
+      "-e", "--arg", "source_sha", manifest.sourceSha, "--arg", "repository", manifest.repository, validation![1],
+    ], { input: JSON.stringify(manifest), encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    expect(result.status === 0, result.stderr).toBe(valid);
   });
 
   it("prints a full-rebuild recipe that requires a digest-qualified platform gateway image", () => {
