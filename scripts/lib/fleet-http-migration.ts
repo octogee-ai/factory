@@ -1341,7 +1341,13 @@ async function listRelativeEntries(root: string): Promise<string[]> {
   return entries;
 }
 
-async function copyStageToOpenClaw(stageDir: string, importDir: string, slug: string, baselineEntries?: readonly string[]): Promise<void> {
+async function copyStageToOpenClaw(
+  stageDir: string,
+  importDir: string,
+  slug: string,
+  options: { baselineEntries?: readonly string[]; deferAgentState: boolean },
+): Promise<void> {
+  const { baselineEntries, deferAgentState } = options;
   if (baselineEntries) {
     const current = new Set(await listRelativeEntries(stageDir));
     for (const relative of baselineEntries) {
@@ -1350,7 +1356,7 @@ async function copyStageToOpenClaw(stageDir: string, importDir: string, slug: st
   }
   await runSpawnChecked(
     RSYNC_BIN,
-    ["-a", `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
+    ["-a", ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
     { label: "rsync import copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS },
   );
   if (baselineEntries) return;
@@ -1943,10 +1949,11 @@ async function deliverStagedImport(input: {
   log: (msg: string, fields?: LogContext) => void;
 }): Promise<void> {
   const { deps, session, log } = input;
+  const deferAgentState = input.mode === "pre" && !input.activation;
   const prepared = input.mode !== "keys"
     ? await prepareAgentStoreSnapshots({
       stageDir: session.stageDir,
-      importDir: session.importDir,
+      importDir: deferAgentState ? path.dirname(session.stageDir) : session.importDir,
       migrationId: session.migrationId,
       requireDrained: input.mode === "final",
       run: deps.runOpenClaw,
@@ -1955,8 +1962,11 @@ async function deliverStagedImport(input: {
     })
     : null;
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
-  await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, session.baselineEntries);
-  if (!prepared) return;
+  await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, {
+    baselineEntries: session.baselineEntries,
+    deferAgentState,
+  });
+  if (!prepared || deferAgentState) return;
   await installPreparedAgentStores({
     prepared,
     releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log),

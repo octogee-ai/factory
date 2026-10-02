@@ -2959,7 +2959,7 @@ describe("agent sqlite stores across an rsync carry", () => {
       mkResponse().res,
       vi.fn(),
     );
-    const [, daemonArgs] = spawnMock.mock.calls[0] as [string, string[]];
+    const [, daemonArgs] = spawnMock.mock.calls.at(-1) as [string, string[]];
     const configPath = daemonArgs
       .find((arg) => arg.startsWith("--config="))!
       .slice("--config=".length);
@@ -3127,6 +3127,89 @@ describe("agent sqlite stores across an rsync carry", () => {
     await expect(fs.access(path.join(stageDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
   });
 
+  it("keeps Shared pre-copy agents undiscoverable until the final authoritative snapshot arrives", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const migrationId = "mig-shared-undiscoverable-pre";
+    const releaseAgent = vi.fn(async () => undefined);
+    const adapter = { isBuilderGateway: () => false, releaseAgent };
+    const pre = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre", adapter, deps: { procRoot } });
+    await stageSnapshot(pre.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    expect((await finishImport(pre.deps, migrationId, "pre")).getStatus()).toBe(200);
+
+    const liveDatabase = path.join(importDir, CARRIED_STORE);
+    if (fsSync.existsSync(liveDatabase)) {
+      await fs.mkdir(path.join(procRoot, "92", "fd"), { recursive: true });
+      await fs.symlink(liveDatabase, path.join(procRoot, "92", "fd", "53"));
+    }
+    const final = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter, deps: { procRoot } });
+    await stageSnapshot(final.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre'), ('final')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(final.deps, migrationId);
+
+    expect(result.getBody()).toEqual({ migrationId, slug: "chris", imported: true });
+    expect(result.getStatus()).toBe(200);
+    expect(rowCount(liveDatabase)).toBe(2);
+    expect(releaseAgent).not.toHaveBeenCalled();
+    expect(final.deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    await expect(fs.access(path.dirname(pre.stageDir))).rejects.toThrow();
+  });
+
+  it("pre-copies Shared repositories while keeping agent files private and removes them on abort", async () => {
+    const importDir = await mkTempRoot();
+    const migrationId = "mig-shared-private-pre";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre" });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre')"));
+    await fs.writeFile(path.join(stageDir, "agents/octogee-chris-coach/agent/auth.json"), "agent configuration");
+    await fs.mkdir(path.join(stageDir, "customers/chris/projects/project"), { recursive: true });
+    await fs.writeFile(path.join(stageDir, "customers/chris/projects/project/README.md"), "source checkout");
+    const { spawn } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementation(spawn);
+
+    const finished = await finishImport(deps, migrationId, "pre");
+
+    expect(finished.getStatus()).toBe(200);
+    expect(await fs.readFile(path.join(importDir, "customers/chris/projects/project/README.md"), "utf8")).toBe("source checkout");
+    await expect(fs.access(path.join(importDir, "agents"))).rejects.toThrow();
+    const privateRoot = path.join(path.dirname(stageDir), ".octogee-import", migrationId);
+    expect(rowCount(path.join(privateRoot, CARRIED_STORE))).toBe(1);
+    expect((await fs.stat(privateRoot)).mode & 0o777).toBe(0o700);
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+
+    const body: AbortRsyncImportRequestBody = { migrationId, slug: "chris", mode: "pre", rpcPhase: "abort-rsync-import" };
+    const aborted = mkResponse();
+    await createAbortRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), aborted.res, vi.fn());
+    expect(aborted.getStatus()).toBe(200);
+    await expect(fs.access(path.dirname(stageDir))).rejects.toThrow();
+    expect(await fs.readFile(path.join(importDir, "customers/chris/projects/project/README.md"), "utf8")).toBe("source checkout");
+  });
+
+  it("rejects Builder pre-copy without a configured activation gate before staging agent state", async () => {
+    vi.stubEnv("POD_UID", "builder-without-gate");
+    const prepareImportDir = vi.fn(async () => "/unused-builder-state");
+    const deps = mkDeps({ adapter: mkAdapter({
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: () => true,
+      prepareImportDir,
+    }) });
+    const body: PrepareRsyncImportRequestBody = {
+      migrationId: "mig-builder-without-gate", slug: "chris", mode: "pre",
+      rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "c".repeat(64),
+    };
+    const response = mkResponse();
+
+    await createPrepareRsyncImportHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toMatchObject({ message: "configured Builder activation requires its pod-bound process gate" });
+    expect(prepareImportDir).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("releases an occupied destination through OpenClaw before replacing its database", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
@@ -3209,6 +3292,31 @@ describe("agent sqlite stores across an rsync carry", () => {
       },
     };
   }
+
+  it("prepares a held Builder with its agent snapshot installed before offline hydration", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const migrationId = "mig-builder-pre-installed";
+    const target = builderTargetImport(async () => true);
+    await writeStore(importDir, CARRIED_STORE, () => {});
+    const prepareSurgeTarget = vi.fn(async () => {
+      expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+    });
+    const { deps, stageDir } = await prepareImport({
+      migrationId, importDir, daemon: mkFakeChild(), mode: "pre", adapter: target.adapter,
+      deps: { ...target.deps, procRoot, prepareSurgeTarget },
+    });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId, "pre");
+
+    expect(result.getStatus()).toBe(200);
+    expect(prepareSurgeTarget).toHaveBeenCalledOnce();
+    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
+    expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+    migrationTempRoots.push(path.dirname(stageDir));
+  });
 
   it("replaces an occupied database on a held Builder target without calling its unreleased OpenClaw", async () => {
     const importDir = await mkTempRoot();
