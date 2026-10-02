@@ -121,6 +121,10 @@ locked before the October 1 recut. [Full CI 36786150394](https://github.com/open
 passed: all 160 jobs inspected, 153 successes and seven skips. Skips were
 ios-screenshots, pr-fail-fast, checks-node-compat-node24, check-plan,
 ios-release-e2e, ios-screenshot-evidence and Seal full-release child evidence.
+The October 2 refresh retains this base by operator choice: no newer completed
+full main CI was green at selection. Recent green push runs cover security only;
+they do not qualify a new runtime. Runtime archives and hosted islands remain
+unchanged while the base-tool pins are refreshed.
 Exact overlay:
 [`46398c529fb23f4429542d0ef24dc6224ab6287e`](https://github.com/ceckert/openclaw/commit/46398c529fb23f4429542d0ef24dc6224ab6287e),
 pushed and read back at `ceckert/openclaw:codex/octogee-main-oct01`.
@@ -225,7 +229,7 @@ proof remains necessary; test-only type adaptations use the new native owners.
 | Resolve `message_sent` observer availability at delivery time | Final-reply notifications after tool progress crosses plugin generations | Native emitter checks the current generation without caching an earlier hookless scope or falling back across isolation boundaries. |
 | Optional read-only explanation and per-job run-history capability in the native Automations view | Hosted Workspace Automations | Native view supports the same tenant-filtered read-only projection without transcript or mutation authority. |
 | Release superseded model-catalog generations | Long-lived gateway reloads | [#158986](https://github.com/openclaw/openclaw/pull/158986) or equivalent is in the selected base. |
-| Close deleted-agent owners and every isolate's database readers | Source unmount after migration | [#159013](https://github.com/openclaw/openclaw/pull/159013) or equivalent closes descriptors without disturbing survivors or reopening deleted paths. |
+| Close deleted-agent owners and every isolate's database readers | Source unmount after migration | Adopt merged [#159013](https://github.com/openclaw/openclaw/pull/159013), `40d284f9a6a`, once a qualified base contains it; it is newer than the selected base. |
 | Start channel accounts without initiating RPC client authority | Mattermost Coach turns after config reload | [#159396](https://github.com/openclaw/openclaw/pull/159396) or equivalent retains the Gateway binding without the closed client's authority. |
 
 Deletion closes readers after session purging but before Trash; journal
@@ -283,25 +287,51 @@ completion, authorization or a durable notification queue. The small follow-up
 changes 11 native files (141 insertions, nine deletions), mostly regression proof;
 it does not claim an overall overlay line-count reduction.
 
-Upstream contributions carry separate local and hosted evidence. #158986 is
-refreshed on the selected main with 63 focused tests and RED/GREEN retention
-proof; its native retirement callback no longer captures the predecessor's
-catalog inventory. #159013 and #159396 have no remaining actionable code-review
-findings, but their hosted reds are not declared resolved. #159013 still needs
-maintainer-only exact-head security approval. Main's shutdown fixture fix
-#162133 explains one old channel CI failure; its first-signin failure remains
-unclassified. #159002 is closed and replaced by the selected native owner.
-Hosted PR checks are not this overlay's qualification.
+Upstream contributions carry separate local and hosted evidence. #159013 merged
+as `40d284f9a6aaa6b11f6d9d7bc1db253781d7ef76`, including native worker-owned
+journal authority and deletion-lease fixes. Adopt that implementation rather
+than replaying the old cleanup family when the selected base contains it.
+#159002 is closed and replaced by the selected native owner. #158986 retains
+focused RED/GREEN coverage; additional real-worker lifetime proof is being
+evaluated separately. #159396 is being adapted to the new native
+`runChannelAccountStartup` owner, which detaches lifecycle/plugin scopes but
+does not yet detach initiating client, agent-run and operator-tool authority.
+Neither open PR is described as hosted-green here.
+
+The next qualified-main rebase should also adopt these newer native owners:
+
+- Downloaded catalog publication (#158000), model metadata during plugin drain
+  (#162301), and reload/model-call admission (#162484). Remove the overlay's
+  duplicated published-config advancement, preserving native abort/commit
+  bookkeeping; these changes do not replace the predecessor-closure fix.
+- Current session-member authority and worker entry guards (#148951), preserving
+  Octogee's distinct explicit and channel-derived membership provenance.
+- Awaited transcript persistence (#163264) and native channel session-header
+  return links (#158742). Mattermost can extend the latter through its plugin
+  contract rather than adding another core UI customization.
+
+Newer main uses shared schema 20 for cron delivery-attempt state (#159873),
+whereas this overlay already uses 20 for migration fences. A future rebase must
+handle the shipped overlay-20 layout explicitly in the native schema migration
+owner and advance the overlay version: merely raising the version skips native
+`previousVersion < 20` work. Preserve old receipt state as `unknown`, handoff
+rows and scratch, and prove populated-state upgrade plus downgrade rejection.
+Native Doctor now owns legacy cron ownership repair (#160448); do not restore
+its removed general-purpose helper just to satisfy the handoff adapter.
 
 ### Base-image inputs
 
-Claude Code moves to 2.1.286, Codex CLI to 0.159.3 and npm to 12.2.0, with
+Claude Code moves to 2.1.287, Codex CLI to 0.160.0 and npm to 12.2.0, with
 matching Builder locks and install-script approvals. The base also updates
 gcloud to 587.0.0, GitHub CLI to 2.102.0 and yq to 4.54.1; Builder Firebase CLI
 is 15.32.1 and pnpm is 12.8.1. Node 26.10.0, Rust 1.98.1 and inherited fd
 10.5.0 stay unchanged. OpenClaw builds use its own pinned pnpm 12.5.1, not
 the Builder's tool version. The actual Linux arm64 system stage and CLI smoke
-pass. Builder's duplicate `fd-find` and the redundant npm dependency override
+pass; the October 2 system image is
+`sha256:7723f923f186a42f9c3a0d143119ed95d3bc3f3d6afd9a76b5fa8cb85c896417`.
+Network-disabled smoke confirms both updated CLIs and the unchanged Node/npm/
+GitHub CLI/fd versions. All 65 focused base/toolchain tests pass. Builder's
+duplicate `fd-find` and the redundant npm dependency override
 remain removed.
 
 All Builder npm roots, four Python pins and five standalone tool pins were
@@ -316,7 +346,7 @@ The recipe correction and this selected pair passed actual Linux arm64 image
 proof. Native guards and live state remain unchanged.
 
 CUA remains the matched 0.28.2 package plus the native modifier backport below.
-Published 0.30.3 and 0.31.0 contain the upstream fix, but the selected OpenClaw
+Published 0.30.3 and later releases contain the upstream fix, but the selected OpenClaw
 still pins 0.28.2. The upstream adoption issue tracks a matched package upgrade.
 No desktop OS image change or environment deployment is part of this recut.
 
