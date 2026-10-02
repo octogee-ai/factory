@@ -83,7 +83,10 @@ sys.exit(int((root / ('exit-' + name)).read_text()))
                 self.process.wait(timeout=3)
 
     def exit_child(self, name, status=0):
-        (self.root / ('exit-' + name)).write_text(str(status))
+        exit_file = self.root / ('exit-' + name)
+        pending = exit_file.with_suffix('.pending')
+        pending.write_text(str(status))
+        pending.replace(exit_file)
 
     def assert_services_running(self):
         self.assertIsNone(self.process.poll(), self.output())
