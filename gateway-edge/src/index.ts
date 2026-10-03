@@ -70,6 +70,8 @@ import {
   type TerminalSession,
 } from "./routes/terminal.js";
 import { createToolSurface } from "./routes/tool-surface.js";
+import { createComputerSessionsRouter } from "./routes/computer-sessions.js";
+import { applyCookiesOverCdp, type CdpCookie } from "./lib/cdp-cookies.js";
 import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
 import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
@@ -282,7 +284,18 @@ function mountSidecarLocalitySurface(app: Express, options: {
     resolveConversation: resolveToolConversationForUid,
   }));
   mountApi(app, "/tools", toolSurface.router);
-  if (process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm") {
+  const computerOnVm = process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm";
+  const computerCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
+  const computerSessionsLocality = Router({ mergeParams: true });
+  computerSessionsLocality.use(requireAuthenticatedUid);
+  computerSessionsLocality.use(createComputerSessionsRouter({
+    localGatewayId: () => process.env.GATEWAY_ID ?? null,
+    available: computerOnVm,
+    resolveAccess: resolveNativeAdminAccess,
+    applyCookies: (cookies: CdpCookie[]) => applyCookiesOverCdp(cookies, { cdpUrl: computerCdpUrl }),
+  }));
+  mountApi(app, "/computer", computerSessionsLocality);
+  if (computerOnVm) {
     startDesktopNodePairing({
       invoke: (method, params) => invokeLocalOpenClaw(method, params),
       log: (message, fields) => logger.info(message, fields),
