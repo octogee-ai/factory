@@ -63,6 +63,8 @@ export interface GatewayDesiredState {
   vmSpec?: GatewayVmSpec;
 
   vm?: GatewayVmState | null;
+
+  vmEgress?: GatewayVmEgressState;
 }
 
 export const GATEWAY_RUNTIMES = ["cluster", "gce-vm"] as const;
@@ -113,6 +115,26 @@ export interface GatewayVmState {
   parkedCheckpoint?: GatewayVmParkedCheckpoint;
   updatedAt: number;
 }
+
+export const GATEWAY_EGRESS_MODES = ["cloud", "desktop"] as const;
+export type GatewayEgressMode = (typeof GATEWAY_EGRESS_MODES)[number];
+
+export function isGatewayEgressMode(value: unknown): value is GatewayEgressMode {
+  return typeof value === "string" && (GATEWAY_EGRESS_MODES as readonly string[]).includes(value);
+}
+
+export interface GatewayVmEgressState {
+  mode: GatewayEgressMode;
+  updatedAt: number;
+}
+
+export function isGatewayVmEgressState(value: unknown): value is GatewayVmEgressState {
+  const c = value as Partial<GatewayVmEgressState> | null;
+  return !!c && typeof c === "object" && isGatewayEgressMode(c.mode) && typeof c.updatedAt === "number" && Number.isFinite(c.updatedAt);
+}
+
+export const GATEWAY_EGRESS_SOCKS_HOST = "127.0.0.1";
+export const GATEWAY_EGRESS_SOCKS_PORT = 1080;
 
 export const GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES = ["fresh", "stale"] as const;
 export type GatewayVmParkedCheckpointOutcome = (typeof GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES)[number];

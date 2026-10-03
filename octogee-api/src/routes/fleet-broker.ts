@@ -3,6 +3,7 @@ import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-de
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
 import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerImageObservation, recordComputerHomeCheckpoint, recordComputerPreemptionNotice } from "../lib/computer-runtime-observation.js";
+import { readComputerEgress, recordComputerEgress } from "../lib/computer-egress-state.js";
 import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
@@ -12,10 +13,12 @@ import {
   gatewayVmRuntimeDocPath,
   isGatewayVmDiskSample,
   isGatewayVmImageSample,
+  isGatewayEgressMode,
   isGatewayVmRuntimeBundle,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
   type GatewayVmHomeCheckpoint,
+  type GatewayVmEgressState,
   type GatewayVmHomeState,
   type GatewayVmRuntimeRequest,
   type GatewayVmRuntimeResponse,
@@ -59,6 +62,7 @@ import type {
   FleetBrokerComputerHomeCheckpointUrl,
   FleetBrokerComputerHomeDownload,
   FleetBrokerComputerHomePruneResult,
+  FleetBrokerComputerEgress,
   FleetBrokerBuilderRuntimeStateSnapshotUrls,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerChannelBinding,
@@ -3437,6 +3441,40 @@ function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDe
   });
 }
 
+function installComputerEgressRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
+  const { db, now } = deps;
+  router.post("/computer-egress", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const requested = objectBody(req).mode;
+    if (requested !== undefined && !isGatewayEgressMode(requested)) {
+      res.status(400).json({ error: "invalid_egress_mode" });
+      return;
+    }
+    const record = await readComputerEgress(db, bound.gatewayId);
+    if (record.kind === "missing") {
+      res.status(404).json({ error: "gateway_not_found" });
+      return;
+    }
+    let egress: GatewayVmEgressState | null = null;
+    if (requested) {
+      egress = { mode: requested, updatedAt: now() };
+      if (await recordComputerEgress(db, bound.gatewayId, egress) === "missing") {
+        res.status(404).json({ error: "gateway_not_found" });
+        return;
+      }
+    } else if (record.kind === "malformed") {
+      logger.error("[fleet-broker] stored computer egress record is malformed", { gatewayId: bound.gatewayId, stored: record.stored });
+      res.status(409).json({ error: "egress_record_malformed" });
+      return;
+    } else if (record.kind === "stored") {
+      egress = record.egress;
+    }
+    const response: FleetBrokerComputerEgress = { egress };
+    res.set("cache-control", "no-store").json(response);
+  });
+}
+
 function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db, renderAvatar, applyCoachIdentity } = deps;
 
@@ -3601,6 +3639,7 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
   installProvisioningRoutes(router, deps);
   installGatewayOpsRoutes(router, deps);
   installVmRuntimeRoutes(router, deps);
+  installComputerEgressRoutes(router, deps);
   installAgentRoutes(router, deps);
   return router;
 }

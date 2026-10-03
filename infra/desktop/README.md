@@ -60,6 +60,15 @@ that permits the sandbox. The launcher accepts only `0` or `1` and fails before
 starting Chromium for any other value. Docker acceptance with the opt-out does
 not verify Chromium sandbox isolation; native VM acceptance does.
 
+Chromium is launched behind gateway-edge's loopback SOCKS5 listener
+(`--proxy-server=socks5://127.0.0.1:1080`, names resolved at the proxy) so a
+Builder can route the computer's web traffic through their desktop shell.
+WebRTC is held to the proxy too (`--force-webrtc-ip-handling-policy=disable_non_proxied_udp`),
+so a page cannot open direct UDP around it. The
+Docker development recipe has no gateway-edge, so it sets
+`OCTO_CHROMIUM_EGRESS_PROXY=0` and the launcher omits the proxy flags; the VM
+image keeps the default `1`. Any other value fails before Chromium starts.
+
 GPU-less (any host, including Apple Silicon under Rosetta):
 
 ```bash

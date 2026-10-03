@@ -2,6 +2,7 @@ import type { AgentLook } from "./agent-look.js";
 import type { AgentModelSelections } from "./agent-models.js";
 import type { ProjectAgentIdentity, ProjectAgentStatus } from "./project.js";
 import type { AssignmentState } from "./gateway-releases.js";
+import type { GatewayVmEgressState } from "./glm.js";
 import type { ProjectRepoSource } from "./project.js";
 export type FleetBrokerProvisioningStatus = "" | "provisioning" | "complete";
 export type FleetBrokerMattermostUpdate = Record<string, unknown>;
@@ -152,6 +153,9 @@ export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHome
 }
 export interface FleetBrokerComputerHomePruneResult {
     deleted: number;
+}
+export interface FleetBrokerComputerEgress {
+    egress: GatewayVmEgressState | null;
 }
 export type FleetBrokerOpenClawBootAction = "start" | "doctor";
 export interface FleetBrokerOpenClawBootClaim {

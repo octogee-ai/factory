@@ -78,6 +78,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/fleet/openclaw-boot/healthy",
   "/internal/fleet/uid-for-slug",
   "/internal/fleet/vm-runtime",
+  "/internal/fleet/computer-egress",
   "/internal/openclaw-control/redeem",
   "/internal/openclaw-control/authorize",
   "/internal/openclaw-control/profile",

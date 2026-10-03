@@ -45,6 +45,7 @@ describe('native paired gateway desktop transport contract', () => {
   });
   it('projects only the bound native node inventory', () => {
     expect(desktopEnvironment({ id: 'node:desktop-node', type: 'node', status: 'available', desktop: true, secret: 'omit' },'desktop-node')).toEqual({ id: 'node:desktop-node', type: 'node', status: 'available', desktop: true });
+    expect(desktopEnvironment({ id: 'node:desktop-node', type: 'node', status: 'available', desktop: true },'desktop-node', { mode: 'desktop', shell: 'disconnected', listener: 'closed-pending-mode' })).toEqual({ id: 'node:desktop-node', type: 'node', status: 'available', desktop: true, egress: { mode: 'desktop', shell: 'disconnected', listener: 'closed-pending-mode' } });
     for (const changed of [{id:'gateway'},{id:'node:foreign'},{type:'gateway'},{status:'unavailable'},{desktop:false}]) expect(() => desktopEnvironment({id:'node:desktop-node',type:'node',status:'available',desktop:true,...changed},'desktop-node')).toThrow();
   });
 });

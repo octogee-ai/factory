@@ -162,6 +162,7 @@ function app(opts: {
   a.post("/internal/fleet/computer-home/download-url", enforcement, handler);
   a.post("/internal/fleet/computer-home/prune", enforcement, handler);
   a.post("/internal/fleet/vm-runtime", enforcement, handler);
+  a.post("/internal/fleet/computer-egress", enforcement, handler);
   a.post("/internal/fleet/uid-for-slug", enforcement, handler);
   a.post("/internal/billing/check-trial-expiry", enforcement, handler);
   a.post("/internal/billing/run-auto-top-ups", enforcement, handler);
@@ -1048,6 +1049,16 @@ const STILL_ON_SHARED = {
       expect(own.status, route).toBe(200);
       expect(foreign.status, route).toBe(403);
     }
+  });
+
+  it("admits the computer egress mode route for the gateway's own binding with an empty body and refuses a foreign gateway claim", async () => {
+    const target = app({
+      boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242" },
+      gateways: { bender: configuredBender() },
+    });
+    expect((await request(target).post("/internal/fleet/computer-egress").send({})).status).toBe(200);
+    expect((await request(target).post("/internal/fleet/computer-egress").send({ mode: "desktop" })).status).toBe(200);
+    expect((await request(target).post("/internal/fleet/computer-egress").send({ gatewayId: "other", mode: "desktop" })).status).toBe(403);
   });
 
   it("limits a retired computer's final-checkpoint binding to the runtime bundle and checkpoint upload routes", async () => {

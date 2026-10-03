@@ -19,10 +19,10 @@ function fixture() {
   return {
     home,
     sessions,
-    launch(args: string[] = [], homepage?: string, noSandbox?: string) {
+    launch(args: string[] = [], homepage?: string, noSandbox?: string, extraEnv: Record<string, string> = {}) {
       const capture = join(home, 'arguments');
       execFileSync('bash', [browser, ...args], {
-        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, CAPTURE_FILE: capture, OCTO_HOME_URL: homepage ?? '', OCTO_CHROMIUM_NO_SANDBOX: noSandbox },
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, CAPTURE_FILE: capture, OCTO_HOME_URL: homepage ?? '', OCTO_CHROMIUM_NO_SANDBOX: noSandbox, ...extraEnv },
         stdio: 'pipe',
       });
       return readFileSync(capture, 'utf8').trimEnd().split('\n');
@@ -54,6 +54,16 @@ describe('desktop Chromium startup', () => {
     const state = fixture();
     expect(() => state.launch([], undefined, value)).toThrow('OCTO_CHROMIUM_NO_SANDBOX must be 0 or 1');
     expect(existsSync(join(state.home, 'arguments'))).toBe(false);
+  });
+
+  it('confines WebRTC to the egress proxy whenever the proxy is on, so pages cannot open direct UDP around it', () => {
+    const proxied = fixture().launch([], undefined, undefined, { OCTO_CHROMIUM_EGRESS_PROXY: '1' });
+    expect(proxied).toEqual(expect.arrayContaining([
+      '--proxy-server=socks5://127.0.0.1:1080',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+    ]));
+    const direct = fixture().launch([], undefined, undefined, { OCTO_CHROMIUM_EGRESS_PROXY: '0' });
+    expect(direct.some((arg) => arg.startsWith('--proxy-server') || arg.startsWith('--force-webrtc-ip-handling-policy'))).toBe(false);
   });
 
   it('opens the Desk as a frameless app window on the persistent loopback CDP profile', () => {

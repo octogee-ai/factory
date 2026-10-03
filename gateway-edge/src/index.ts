@@ -70,6 +70,9 @@ import {
   type TerminalSession,
 } from "./routes/terminal.js";
 import { createToolSurface } from "./routes/tool-surface.js";
+import { createComputerEgressRouter } from "./routes/computer-egress.js";
+import { createComputerEgressService } from "./egress/service.js";
+import { createBrokerEgressStore } from "./egress/broker.js";
 import { createComputerSessionsRouter } from "./routes/computer-sessions.js";
 import { applyCookiesOverCdp, type CdpCookie } from "./lib/cdp-cookies.js";
 import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
@@ -96,7 +99,16 @@ let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
 const terminalTickets = createWsTicketStore<TerminalSession>();
-const toolSurface = createToolSurface();
+const computerEgress = createComputerEgressService({
+  store: createBrokerEgressStore(),
+  log: (message, meta) => logger.info(message, meta),
+});
+const computerEgressRoutes = createComputerEgressRouter({ service: computerEgress });
+const toolSurface = createToolSurface({ egressReport: () => {
+  const status = computerEgress.status();
+  return status.listener === "off" ? null : { mode: status.mode, shell: status.shell, listener: status.listener };
+} });
+const isBuilderComputer = () => process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm";
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -284,18 +296,18 @@ function mountSidecarLocalitySurface(app: Express, options: {
     resolveConversation: resolveToolConversationForUid,
   }));
   mountApi(app, "/tools", toolSurface.router);
-  const computerOnVm = process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm";
+  mountApi(app, "/computer", computerEgressRoutes.router);
   const computerCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
   const computerSessionsLocality = Router({ mergeParams: true });
   computerSessionsLocality.use(requireAuthenticatedUid);
   computerSessionsLocality.use(createComputerSessionsRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
-    available: computerOnVm,
+    available: isBuilderComputer(),
     resolveAccess: resolveNativeAdminAccess,
     applyCookies: (cookies: CdpCookie[]) => applyCookiesOverCdp(cookies, { cdpUrl: computerCdpUrl }),
   }));
   mountApi(app, "/computer", computerSessionsLocality);
-  if (computerOnVm) {
+  if (isBuilderComputer()) {
     startDesktopNodePairing({
       invoke: (method, params) => invokeLocalOpenClaw(method, params),
       log: (message, fields) => logger.info(message, fields),
@@ -450,6 +462,14 @@ if (process.env.NODE_ENV !== "test") {
     chatProxy.attachChatProxyWsUpgrade(server, { upgradeGate: rollRosterUpgradeGate });
     mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
     toolSurface.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
+    computerEgressRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
+    if (isBuilderComputer()) {
+      computerEgress.boot().catch((err) => {
+        logger.error("[computer-egress] SOCKS5 listener failed to start; the computer's Chromium has no egress", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
     if (terminalAvailable(process.env)) {
       attachTerminalWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,

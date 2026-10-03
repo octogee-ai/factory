@@ -41,8 +41,10 @@ export function desktopNodeIdentity(value: unknown, expectedNodeId: string, node
     !Array.isArray(node.commands) || !node.commands.includes('desktop.stream')) throw new Error('The shared desktop node is not connected and approved');
   return node.nodeId;
 }
-export function desktopEnvironment(value: unknown, nodeId: string): Record<string, unknown> {
+export interface DesktopEgressReport { mode: 'cloud' | 'desktop'; shell: 'connected' | 'disconnected'; listener: 'listening' | 'closed-pending-mode' }
+export function desktopEnvironment(value: unknown, nodeId: string, egress: DesktopEgressReport | null = null): Record<string, unknown> {
   const entry = browserRecord(value);
   if (entry?.id !== `node:${nodeId}` || entry.type !== 'node' || entry.status !== 'available' || entry.desktop !== true) throw new Error('Native shared desktop unavailable');
-  return Object.fromEntries(['id', 'type', 'label', 'status', 'platform', 'desktop', 'desktopAvailability', 'desktopSetup'].filter(key => entry[key] !== undefined).map(key => [key, entry[key]]));
+  const projected = Object.fromEntries(['id', 'type', 'label', 'status', 'platform', 'desktop', 'desktopAvailability', 'desktopSetup'].filter(key => entry[key] !== undefined).map(key => [key, entry[key]]));
+  return egress ? { ...projected, egress: { mode: egress.mode, shell: egress.shell, listener: egress.listener } } : projected;
 }

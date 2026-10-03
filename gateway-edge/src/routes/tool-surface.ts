@@ -19,7 +19,7 @@ import { browserRecord, browserRequestParams, browserStreamPath } from './browse
 import { latestNativeBrowserTab } from '../vendor/openclaw-browser-resources/index.js';
 import { containsAsciiControlCharacter } from '../lib/text-validation.js';
 import { nativeBrowserResource, type NativeBrowserTab } from './tool-resources.js';
-import { desktopObserveParams, desktopStreamPath, desktopEnvironment, desktopNodeIdentity, readDesktopNodeIdentity } from './tool-desktop.js';
+import { desktopObserveParams, desktopStreamPath, desktopEnvironment, desktopNodeIdentity, readDesktopNodeIdentity, type DesktopEgressReport } from './tool-desktop.js';
 import { browserRpc, NativeBrowserError } from './browser-rpc.js';
 
 interface ToolSession {
@@ -44,6 +44,7 @@ interface ToolSurfaceOptions {
   fetchImpl?: typeof fetch;
   log?: (message: string, meta?: Record<string, unknown>) => void;
   authorizationIntervalMs?: number;
+  egressReport?: () => DesktopEgressReport | null;
 }
 const RPC_PREFIX = '/tools/ws/';
 const STREAM_PREFIX = '/tools/stream/';
@@ -315,7 +316,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
         const nodeId = desktopNodeIdentity(await rpc.call('node.list', {}), expectedNodeId, env.OCTOGEE_DESKTOP_NODE_NAME);
         if (desktopNodeId && desktopNodeId !== nodeId) throw new Error('The shared desktop identity changed. Reconnect to continue.');
         desktopNodeId = nodeId;
-        return desktopEnvironment(await rpc.call('environments.status', { environmentId: `node:${nodeId}` }), nodeId);
+        return desktopEnvironment(await rpc.call('environments.status', { environmentId: `node:${nodeId}` }), nodeId, options.egressReport?.() ?? null);
       };
       if (session.surface === 'browser') {
         profile = await nativeBrowserProfile(rpc);

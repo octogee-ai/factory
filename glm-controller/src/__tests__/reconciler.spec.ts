@@ -255,6 +255,13 @@ describe("snapshot reconciliation filters", () => {
     ).toBe(false);
   });
 
+  it("ignores the Builder's computer egress routing choice", () => {
+    const fingerprints = new Map<string, string>();
+    const routed = (mode: "cloud" | "desktop", updatedAt: number) => servingRuntime({ runtime: "gce-vm", vmEgress: { mode, updatedAt } });
+    snapshotHasReconcileRelevantChange([{ type: "added", doc: { id: "default", data: () => routed("cloud", 1) } }], fingerprints);
+    expect(snapshotHasReconcileRelevantChange([{ type: "modified", doc: { id: "default", data: () => routed("desktop", 2) } }], fingerprints)).toBe(false);
+  });
+
   it("ignores VM container image observations without hiding release changes", () => {
     const fingerprints = new Map<string, string>();
     const first = servingRuntime({ vmImages: { instanceId: "4242", observedAt: 1, containers: [] } });

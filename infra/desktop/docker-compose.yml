@@ -19,6 +19,7 @@ services:
       OCTO_REFRESH: ${OCTO_REFRESH:-30}
       OCTO_HOME_URL: ${OCTO_HOME_URL:-http://127.0.0.1:7777/desk}
       OCTO_CHROMIUM_NO_SANDBOX: ${OCTO_CHROMIUM_NO_SANDBOX:-1}
+      OCTO_CHROMIUM_EGRESS_PROXY: ${OCTO_CHROMIUM_EGRESS_PROXY:-0}
     volumes:
       - octo-home:/home/octo
     tmpfs:

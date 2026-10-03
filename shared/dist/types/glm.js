@@ -14,6 +14,16 @@ export const GATEWAY_VM_STOP_REASONS = ["idle", "preempted", "operator"];
 export function isGatewayVmStopReason(value) {
     return typeof value === "string" && GATEWAY_VM_STOP_REASONS.includes(value);
 }
+export const GATEWAY_EGRESS_MODES = ["cloud", "desktop"];
+export function isGatewayEgressMode(value) {
+    return typeof value === "string" && GATEWAY_EGRESS_MODES.includes(value);
+}
+export function isGatewayVmEgressState(value) {
+    const c = value;
+    return !!c && typeof c === "object" && isGatewayEgressMode(c.mode) && typeof c.updatedAt === "number" && Number.isFinite(c.updatedAt);
+}
+export const GATEWAY_EGRESS_SOCKS_HOST = "127.0.0.1";
+export const GATEWAY_EGRESS_SOCKS_PORT = 1080;
 export const GATEWAY_VM_PARKED_CHECKPOINT_OUTCOMES = ["fresh", "stale"];
 export function isGatewayVmParkedCheckpoint(value) {
     const c = value;
