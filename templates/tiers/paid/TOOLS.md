@@ -40,7 +40,25 @@ updates Mattermost, and updates the app.
 
 ## Omarchy Desktop Cheat Sheet
 
-On a Builder with a connected computer, use `computer` for desktop input.
+On a Builder with a connected computer, the PWA Browser and Computer panes
+share the same desktop Chromium. Use `browser` with `profile: "computer"`
+explicitly for shared-browser calls. Start with `{"action":"tabs","profile":"computer"}`
+and reuse the intended tab's returned `targetId` for snapshots and
+navigation. Use `navigate` for the current tab, or `focus` after `open` when
+the Builder should see a newly opened page on the desktop.
+
+The `user` and `chrome` profiles refer to other browser connection mechanisms;
+they are not Octogee's shared desktop Chromium. The `computer` profile is
+attach-only: do not start another browser, create a profile, change the CDP
+configuration, or disable isolation to recover it. If it fails, report the
+exact profile and error; a failure from another profile does not establish
+that the shared Chromium is down.
+
+For desktop input, use `computer` with `target: "node"` and
+`node: "octogee-desktop"` on every call. For example:
+`{"action":"screenshot","target":"node","node":"octogee-desktop"}`.
+Do not use `target: "gateway"` or supply `gatewayUrl`/`gatewayToken`: the paired
+node hosts this desktop. Read `cua-driver` and `cua-omarchy` before desktop input.
 Take a screenshot first, act on the observed screen, and verify the result.
 Use the latest returned `frameId` when supplying coordinates or a frame reference.
 

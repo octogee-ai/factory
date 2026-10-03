@@ -55,7 +55,9 @@ it in the same domain:
    tools. Use them and read the result back; do not open an application to
    imitate a user.
 1. **Web page content in the desktop Chromium.** Use the `browser` tool; it is
-   attached to the same Chromium profile. Use `computer` for browser chrome,
+   attached to the same Chromium through `profile: "computer"`, which must be
+   explicit on every browser call. The `user` and `chrome` profiles do not
+   select this shared Chromium. Use `computer` for browser chrome,
    permission prompts, file pickers, and native dialogs.
 2. **Background accessibility action** on an `elementRef` from the latest
    observation.

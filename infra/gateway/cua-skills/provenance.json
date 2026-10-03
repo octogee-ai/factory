@@ -12,6 +12,9 @@
       },
       "files": [
         "SKILL.md"
+      ],
+      "localEdits": [
+        "SKILL.md: explicit Octogee computer browser profile under \"Start with the narrowest route\""
       ]
     },
     "cua-omarchy": {
@@ -26,7 +29,8 @@
         "SKILL.md"
       ],
       "localEdits": [
-        "SKILL.md: Familiar desktop paragraph (floating windows, snapping, dock, Super+Tab) under \"This desktop\""
+        "SKILL.md: Familiar desktop paragraph (floating windows, snapping, dock, Super+Tab) under \"This desktop\"",
+        "SKILL.md: explicit Octogee computer browser profile under \"This desktop\""
       ]
     }
   }

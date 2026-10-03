@@ -19,7 +19,9 @@ Read the `cua-driver` skill first for the observe-act-verify loop and the
   over the same screen from the Computer pane.
 - The desktop is the paired node `octogee-desktop`: call `computer` with
   `target: "node"` and `node: "octogee-desktop"`, never `target: "gateway"`.
-- Chromium on this desktop is the same profile the `browser` tool drives.
+- Chromium on this desktop is the attach-only `computer` browser profile.
+  Pass `profile: "computer"` explicitly on every `browser` call; `user` and
+  `chrome` do not select the browser shared with the Builder.
 - The platform manages the Cua Driver and its desktop node. Do not install,
   update, or reconfigure Cua Driver or the Cua Hyprland plugin, do not run
   Omarchy's Cua install or toggle commands, and do not load, unload, or
