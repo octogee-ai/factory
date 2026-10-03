@@ -130,6 +130,7 @@ function app(opts: {
   a.post("/internal/agent-support/ask", enforcement, handler);
   a.post("/internal/openclaw/previews/authorize", enforcement, handler);
   a.post("/internal/workspace-git/authorize", enforcement, handler);
+  a.post("/internal/channel-agent-readiness/authorize", enforcement, handler);
   a.post("/internal/agent-projects/create", enforcement, handler);
   a.post("/internal/agent-projects/list", enforcement, handler);
   a.post("/internal/agent-projects/set-recipe", enforcement, handler);
@@ -1023,6 +1024,13 @@ const STILL_ON_SHARED = {
     expect(foreign.status).toBe(403);
   });
 
+  it("passes channel readiness to its user-membership broker and rejects a foreign gateway", async () => {
+    const target = app({ boundTenant: BENDER, gateways: { bender: configuredBender() } });
+    const route = "/internal/channel-agent-readiness/authorize";
+    expect((await request(target).post(route).send({ gatewayId: "bender", channelId: "a".repeat(26) })).status).toBe(200);
+    expect((await request(target).post(route).send({ gatewayId: "other", channelId: "a".repeat(26) })).status).toBe(403);
+  });
+
   it("passes computer-home checkpoint routes to their VM-bound authorization and rejects a claimed foreign gateway", async () => {
     const target = app({
       boundTenant: { ...BENDER, podName: "octogee-gw-bender", podUid: "4242" },
@@ -1060,6 +1068,7 @@ const STILL_ON_SHARED = {
       "/internal/fleet/builder-runtime-state/download-url",
       "/internal/openclaw-control/authorize",
       "/internal/workspace-git/authorize",
+      "/internal/channel-agent-readiness/authorize",
       "/internal/byok/agent-usage-status",
       "/internal/agent-projects/list",
       "/internal/computer/agent-context",

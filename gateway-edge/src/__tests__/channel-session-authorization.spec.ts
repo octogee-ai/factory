@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
     data: { kind: "general", mattermost: { channelId: "c".repeat(26) } },
   },
   createClientCalls: 0,
+  denyMembership: false,
   channelLookupLimit: 0,
 }));
 
@@ -48,7 +49,10 @@ vi.mock("../lib/channel-session-model-control.js", async (importOriginal) => {
       h.createClientCalls += 1;
       return {
         getCurrentUserId: async () => "u".repeat(26),
-        getJson: async () => ({}),
+        getJson: async () => {
+          if (h.denyMembership) throw new actual.ChannelSessionMattermostError("Forbidden", 403);
+          return {};
+        },
       };
     },
   };
@@ -135,6 +139,7 @@ beforeEach(() => {
     data: { kind: "general", mattermost: { channelId } },
   };
   h.createClientCalls = 0;
+  h.denyMembership = false;
   h.channelLookupLimit = 0;
   resetProjectGate();
 });
@@ -256,5 +261,39 @@ describe("workspace conversation channel authority", () => {
   it("rejects archived workspace conversation ledgers", async () => {
     Object.assign(h.channelLedger.data, { archivedAt: 100 });
     await expect(authorizeChannel("caller", channelId, "alice", { workspaceConversation: true })).resolves.toBeNull();
+  });
+});
+
+
+describe("readiness active Coach conversation authority", () => {
+  const options = { requireActiveLedger: true, includeCoachConversation: true };
+  function coachLedger(): void {
+    h.channelLedger = { id: "coach-dm", path: "workspaces/alice/channels/coach-dm",
+      data: { kind: "coach-dm", mattermost: { channelId } } };
+  }
+  it("authorizes the canonical private Coach conversation without making it discoverable", async () => {
+    coachLedger();
+    await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toMatchObject({
+      target: { workspaceSlug: "alice", agentId: "octogee-alice-coach" },
+    });
+    await expect(authorizeChannel("caller", channelId, "alice", { requireActiveLedger: true })).resolves.toBeNull();
+  });
+  it("still requires live Mattermost membership for the Coach conversation", async () => {
+    coachLedger(); h.denyMembership = true;
+    await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toEqual({ forbidden: true });
+  });
+  it.each(["archived", "wrong-kind", "admin"])("rejects %s Coach ledger bindings", async (failure) => {
+    coachLedger();
+    if (failure === "archived") Object.assign(h.channelLedger.data, { archivedAt: 100 });
+    if (failure === "wrong-kind") h.channelLedger.data.kind = "session";
+    if (failure === "admin") h.channelLedger = { id: "admin", path: "workspaces/alice/channels/admin",
+      data: { kind: "admin", mattermost: { channelId } } };
+    await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
+    expect(h.createClientCalls).toBe(0);
+  });
+  it("still rejects archived parent projects when Coach conversations are included", async () => {
+    h.channelLedger.path = "workspaces/alice/projects/orbit/channels/general";
+    h.documents.set("workspaces/alice/projects/orbit", { commercialLifecycle: { status: "archived" } });
+    await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
   });
 });

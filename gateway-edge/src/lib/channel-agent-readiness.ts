@@ -1,4 +1,4 @@
-interface ChannelAgentScope {
+export interface ChannelAgentScope {
   workspaceId: string;
   project: string | null;
   channelId: string;

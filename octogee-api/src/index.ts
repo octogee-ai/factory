@@ -43,6 +43,7 @@ import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
+import { createChannelReadinessAuthorizationBrokerRoutes } from "./routes/channel-agent-readiness-authorization-broker.js";
 import { createVoiceConversationRoutes } from "./routes/voice-conversation.js";
 import { createToolConversationRoutes, createWorkspaceNativeAccessRoutes } from "./routes/workspace-native-access.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
@@ -812,6 +813,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   app.use("/internal/openclaw-control", createToolConversationRoutes({ db }));
   app.use("/internal/openclaw-control", requireAuthenticatedUid, createWorkspaceNativeAccessRoutes({ db }));
   app.use("/internal/workspace-git", requireAuth, createWorkspaceGitAuthorizationBrokerRoutes({ db }));
+  app.use("/internal/channel-agent-readiness", requireAuth, createChannelReadinessAuthorizationBrokerRoutes({ db }));
   app.use(
     "/internal/agent-imports",
     requireAuthenticatedUid,

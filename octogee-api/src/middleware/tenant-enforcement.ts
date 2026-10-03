@@ -89,6 +89,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/openclaw-control/mattermost/authorize",
   "/internal/openclaw-control/mattermost/channels",
   "/internal/workspace-git/authorize",
+  "/internal/channel-agent-readiness/authorize",
   "/internal/openclaw/notifications/final-reply",
   "/internal/openclaw/activity/session-context",
   "/internal/openclaw/activity/dispatch-context",
