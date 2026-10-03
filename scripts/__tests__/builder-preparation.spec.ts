@@ -8,6 +8,7 @@ import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import { writeActivationManifest, type MigrationActivationManifest } from "../lib/migration-activation-manifest.js";
 import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
+import { hasMountedMarker, writeMigratingInPin, writeMountedMarker } from "../lib/local-coach-wired.js";
 
 const temporaryDirectories: string[] = [];
 const request = { migrationId: "prepare-alice", slug: "alice", targetPodUid: "target-pod" };
@@ -36,7 +37,7 @@ async function preparationFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "builder-preparation-"));
   temporaryDirectories.push(root);
   await writeActivationManifest(root, manifest("initial"));
-  let mounted = false;
+  const customersDir = path.join(root, "customers");
   let cloned = false;
   const cloneProjectRepo = vi.fn(async () => { cloned = true; return true; });
   const loadUserSnapshot = vi.fn(async () => ({ uid: "uid-alice", slug: request.slug, projects: [] }));
@@ -47,8 +48,8 @@ async function preparationFixture() {
     isBuilderGateway: () => true,
     isConfiguredBuilderCustomer: (slug: string) => slug === request.slug,
     configuredBuilderOverlayPresent: () => true,
-    customerMountMarked: () => mounted,
-    listLocalCustomerSlugs: () => mounted ? [request.slug] : [],
+    customerMountMarked: () => hasMountedMarker(customersDir, request.slug),
+    listLocalCustomerSlugs: () => hasMountedMarker(customersDir, request.slug) ? [request.slug] : [],
     hasWorkspaceGitDir: () => true,
     hasGitRemote: () => true,
     listProjectsNeedingClone: async () => cloned ? [] : [{
@@ -57,11 +58,12 @@ async function preparationFixture() {
     }],
     cloneProjectRepo,
   } as unknown as CustomerLifecycleAdapter;
-  const attach = vi.fn(async () => { mounted = true; return request.slug; });
+  const attach = vi.fn(async () => { writeMountedMarker(customersDir, request.slug); return request.slug; });
   const state = { version: 1, podUid: request.targetPodUid, role: "target", mode: "held", phase: "held", ...request };
   const processGate = {
     status: vi.fn(async () => state), claimTargetCompletion: vi.fn(async () => state),
     permit: vi.fn(async () => state), releaseTarget: vi.fn(async () => state),
+    rehold: vi.fn(async () => state),
   } as unknown as SurgeOpenClawProcessSupervisorClient;
   const ready = vi.fn(async () => undefined);
   const wiring = createBuilderSurgeGateWiring({
@@ -70,10 +72,60 @@ async function preparationFixture() {
     log: vi.fn(), provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     attachConfiguredBuilderBeforeOpenClaw: attach,
   });
-  return { root, adapter, attach, ready, processGate, cloneProjectRepo, wiring, loadUserSnapshot };
+  return { root, customersDir, adapter, attach, ready, processGate, cloneProjectRepo, wiring, loadUserSnapshot };
 }
 
 describe("offline Builder preparation", () => {
+  it("re-earns the target mount after final-import preparation clears its marker", async () => {
+    const fixture = await preparationFixture();
+    await fixture.wiring.prepareSurgeTarget(request);
+    expect(hasMountedMarker(fixture.customersDir, request.slug)).toBe(true);
+
+    writeMigratingInPin(fixture.customersDir, request.slug);
+    expect(hasMountedMarker(fixture.customersDir, request.slug)).toBe(false);
+    fixture.processGate.permit = vi.fn(async () => {
+      expect(hasMountedMarker(fixture.customersDir, request.slug)).toBe(true);
+      return await fixture.processGate.status();
+    });
+
+    await fixture.wiring.releaseSurgeReadiness(request);
+    expect(fixture.attach).toHaveBeenCalledTimes(2);
+    expect(fixture.processGate.permit).toHaveBeenCalledExactlyOnceWith(request);
+    expect(fixture.processGate.releaseTarget).toHaveBeenCalledExactlyOnceWith(request);
+    expect(fixture.ready).toHaveBeenCalledOnce();
+  });
+
+  it("keeps OpenClaw held when final-import mount restoration fails", async () => {
+    const fixture = await preparationFixture();
+    await fixture.wiring.prepareSurgeTarget(request);
+    writeMigratingInPin(fixture.customersDir, request.slug);
+    fixture.attach.mockRejectedValueOnce(new Error("workspace Git cannot be restored"));
+
+    await expect(fixture.wiring.releaseSurgeReadiness(request)).rejects.toThrow("workspace Git cannot be restored");
+    expect(fixture.processGate.permit).not.toHaveBeenCalled();
+    expect(fixture.processGate.releaseTarget).not.toHaveBeenCalled();
+    expect(fixture.ready).not.toHaveBeenCalled();
+    expect(fixture.processGate.rehold).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
+  it.each(["hasWorkspaceGitDir", "hasGitRemote"] as const)("rechecks prepared workspace state before startup: %s", async (probe) => {
+    const fixture = await preparationFixture();
+    await fixture.wiring.prepareSurgeTarget(request);
+    fixture.adapter[probe] = vi.fn(() => false);
+    fixture.attach.mockImplementationOnce(async () => {
+      fixture.adapter[probe] = () => true;
+      return request.slug;
+    });
+    fixture.processGate.permit = vi.fn(async () => {
+      expect(fixture.adapter[probe](request.slug)).toBe(true);
+      return await fixture.processGate.status();
+    });
+
+    await fixture.wiring.releaseSurgeReadiness(request);
+    expect(fixture.attach).toHaveBeenCalledTimes(2);
+    expect(fixture.processGate.releaseTarget).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it.each(["same", "manifest", "projects"])("hydrates GitHub before permitting OpenClaw and reconciles changed inputs=%s", async (changed) => {
     const fixture = await preparationFixture();
     await fixture.wiring.prepareSurgeTarget(request);

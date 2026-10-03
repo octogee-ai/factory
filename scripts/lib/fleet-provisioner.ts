@@ -2353,6 +2353,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       throwIfBuilderSurgeReleaseCancelled(release);
       await processGate!.claimTargetCompletion(request);
       const attachedSlug = preparedTarget?.migrationId === request.migrationId && preparedTarget.targetPodUid === request.targetPodUid &&
+        preparedTarget.slug === request.slug && configuredBuilderMountProven(adapter) &&
         preparedTarget.inputs === await builderPreparationFingerprint(adapter, openclawDir, request.slug)
         ? preparedTarget.slug
         : await attachConfigured({ adapter, log, onWorkSettled });
