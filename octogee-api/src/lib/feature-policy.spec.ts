@@ -28,14 +28,14 @@ describe("FeaturePolicy", () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
-  it("leaves non-bypass flags to the provider for admins", async () => {
+  it.each(["release-workspace-sharing", "release-coach-readiness"] as const)("leaves %s to the provider for admins", async (key) => {
     const evaluate = vi.fn(async () => ({ isEnabled: () => false }));
     const policy = new FeaturePolicy({ evaluate });
     const admin = { ...subject, isAdmin: true };
 
-    await expect(policy.evaluate("release-workspace-sharing", admin, "sharing"))
+    await expect(policy.evaluate(key, admin, "sharing"))
       .resolves.toEqual({ state: "disabled", value: false });
-    expect(evaluate).toHaveBeenCalledWith(admin, ["release-workspace-sharing"]);
+    expect(evaluate).toHaveBeenCalledWith(admin, [key]);
   });
 
   it("keeps an adminBypass flag enabled for admins when the provider is unavailable", async () => {

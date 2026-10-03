@@ -33,6 +33,7 @@ describe("GET /api/features", () => {
         "release-workspace-sharing": false,
         "release-project-repo-source": false,
         "release-voice-talk": false,
+        "release-coach-readiness": false,
       },
     });
   });

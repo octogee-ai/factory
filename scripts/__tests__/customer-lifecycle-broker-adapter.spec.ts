@@ -2293,6 +2293,92 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit", activationId: "activation-1" })]);
   });
 
+  it("withholds project readiness while model profile materialization is deferred", async () => {
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [{
+      projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning",
+    }] });
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockReturnValueOnce({ materialized: 0, deferred: ["octogee-alice-proj-orbit-coach"] });
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await expect(adapter.reconcileConfiguredBuilderProjectAgents!(snapshot)).rejects.toThrow("Agent model profiles are not ready");
+    expect(client.reportProjectAgentReadiness).not.toHaveBeenCalled();
+    expect(routingActivationMocks.activate).not.toHaveBeenCalled();
+    expect(rpc.secretsReload).not.toHaveBeenCalled();
+  });
+
+  it("withholds initial Project Agent activation while model profiles are deferred", async () => {
+    routingActivationMocks.activateAfterPatch.mockClear();
+    const snapshot = aliceSnapshot({ projectAgents: [{
+      projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning",
+    }] });
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockReturnValueOnce({ materialized: 0, deferred: ["octogee-alice-proj-orbit-coach"] });
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    const rpc = mkGatewayRpc(rosterRpc({}));
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await expect(adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" })).rejects.toThrow("Agent model profiles are not ready");
+    expect(client.reportProjectAgentReadiness).not.toHaveBeenCalled();
+    expect(routingActivationMocks.activateAfterPatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["configured", "config timeout"], ["configured", "secret reload failed"],
+    ["initial", "config timeout"], ["initial", "secret reload failed"],
+    ["configured", "partial sweep"], ["initial", "partial sweep"],
+  ])("retries %s project secrets before readiness after %s", async (phase, failure) => {
+    const agentId = "octogee-alice-proj-orbit-coach";
+    const accountId = "alice-proj-orbit";
+    const match = { channel: "mattermost", accountId };
+    const snapshot = aliceSnapshot({
+      status: "complete",
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+    });
+    const config = {
+      agents: { entries: { "octogee-alice-coach": {}, [agentId]: { workspace: path.join(testRuntime.dir, "customers/alice/projects/orbit") } } },
+      channels: { mattermost: { accounts: { "alice-coach": { allowFrom: [ALICE_OWNER_MM_ID] }, [accountId]: {} } } },
+      bindings: [{ agentId, match }, { agentId, match: { ...match, peer: { kind: "group", id: "orbit-general" } } }],
+    };
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockReturnValueOnce({ materialized: 1, deferred: [] }).mockReturnValueOnce({ materialized: 0, deferred: [] }).mockReturnValueOnce({ materialized: 0, deferred: [] });
+    if (failure === "partial sweep") {
+      brokerCatalogMocks.materializeBrokerProfilesForAgents.mockReset();
+      brokerCatalogMocks.materializeBrokerProfilesForAgents
+        .mockReturnValueOnce({ materialized: 1, deferred: [agentId] })
+        .mockReturnValue({ materialized: 0, deferred: [] });
+    }
+    secretMocks.updateMattermostAccountSecrets.mockResolvedValue({ changed: false });
+    patchMocks.applyConfigPatch.mockImplementation(async (args) => {
+      args.buildPatch(config);
+      return { mode: "rpc", attempts: 1, noop: true };
+    });
+    if (failure === "config timeout") patchMocks.applyConfigPatch.mockRejectedValueOnce(new Error(failure));
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot(config)),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId, running: true, connected: true, lastStartAt: 2 }] } })),
+    });
+    if (failure === "secret reload failed") rpc.secretsReload = vi.fn().mockRejectedValueOnce(new Error(failure)).mockResolvedValue({ ok: true });
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    const reconcile = () => phase === "initial"
+      ? adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" })
+      : adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+
+    await expect(reconcile()).rejects.toThrow(failure === "partial sweep" ? "Agent model profiles are not ready" : failure);
+    expect(client.reportProjectAgentReadiness).not.toHaveBeenCalled();
+    rpc.secretsReload.mockClear();
+    await reconcile();
+
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+    expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(client.reportProjectAgentReadiness.mock.invocationCallOrder[0]);
+    rpc.secretsReload.mockClear();
+    await reconcile();
+    expect(rpc.secretsReload).not.toHaveBeenCalled();
+    secretMocks.updateMattermostAccountSecrets.mockResolvedValue({ changed: true });
+    patchMocks.applyConfigPatch.mockImplementation(async () => ({ mode: "rpc", attempts: 1 }));
+  });
+
   it("routes a new workspace session on a configured Builder without platform projects", async () => {
     secretMocks.updateMattermostAccountSecrets.mockClear();
     const snapshot = aliceSnapshot({ status: "complete", projectAgents: [], channels: [

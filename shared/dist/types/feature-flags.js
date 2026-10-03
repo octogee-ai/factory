@@ -7,6 +7,7 @@ export const FEATURE_FLAG_KEYS = [
     "release-workspace-sharing",
     "release-project-repo-source",
     "release-voice-talk",
+    "release-coach-readiness",
 ];
 export const FEATURE_FLAGS = {
     "release-openclaw-dashboard": { userVisible: true },
@@ -17,6 +18,7 @@ export const FEATURE_FLAGS = {
     "release-workspace-sharing": { userVisible: true },
     "release-project-repo-source": { userVisible: true, adminBypass: true },
     "release-voice-talk": { userVisible: true, adminBypass: true },
+    "release-coach-readiness": { userVisible: true },
 };
 export function featureFlagBypassedForAdmin(key, subject) {
     return subject.isAdmin === true && FEATURE_FLAGS[key].adminBypass === true;

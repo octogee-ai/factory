@@ -1,0 +1,140 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const native = vi.hoisted(() => ({ open: vi.fn(), call: vi.fn(), close: vi.fn(), dispose: vi.fn() }));
+vi.mock("../chat-proxy/openclaw/authenticated-upstream.js", () => ({ openAuthenticatedUpstream: native.open }));
+vi.mock("../chat-proxy/openclaw/bridge-upstream-rpc.js", () => ({ attachUpstreamRpcClient: () => ({ call: native.call, dispose: native.dispose }) }));
+import { channelAgentReady, readChannelAgentReadiness } from "./channel-agent-readiness.js";
+
+const scope = { workspaceId: "alice", project: null, channelId: "planning", agentId: "octogee-alice-coach", peerKind: "channel" as "group" | "channel" };
+function ready(project: string | null = null) {
+  const agentId = project ? `octogee-alice-proj-${project}-coach` : scope.agentId;
+  const accountId = project ? `alice-proj-${project}` : "alice-coach";
+  return {
+    config: { configRevisionHash: "next", appliedConfigHash: "next", config: {
+      agents: { entries: { [agentId]: { model: "platform-openrouter/openai/test" } } },
+      bindings: [{ agentId, match: { channel: "mattermost", accountId, peer: { kind: "group", id: "planning" } } }],
+    } },
+    models: { providers: [{ provider: "platform-openrouter", status: "static" }] },
+    session: { session: null as unknown },
+    channels: { channelAccounts: { mattermost: [{ accountId, running: true, connected: true }] } },
+  };
+}
+
+describe("channel Agent readiness", () => {
+  it("allows a healthy configured fallback before a channel has a live session", () => {
+    const snapshot = ready();
+    Reflect.set(snapshot.config.config.agents.entries[scope.agentId], "model", { primary: "anthropic/test", fallbacks: ["platform-openrouter/openai/test"] });
+    expect(channelAgentReady(scope, snapshot)).toBe(true);
+  });
+  it("inherits default fallbacks unless the Agent explicitly disables them", () => {
+    const snapshot = ready();
+    snapshot.config.config.agents.entries[scope.agentId].model = "anthropic/test";
+    Reflect.set(snapshot.config.config.agents, "defaults", { model: { primary: "anthropic/test", fallbacks: ["platform-openrouter/openai/test"] } });
+    expect(channelAgentReady(scope, snapshot)).toBe(true);
+    Reflect.set(snapshot.config.config.agents.entries[scope.agentId], "model", { primary: "anthropic/test", fallbacks: [] });
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+  });
+  it("blocks a new session when both primary and fallback credentials are unavailable", () => {
+    const snapshot = ready();
+    Reflect.set(snapshot.config.config.agents.entries[scope.agentId], "model", { primary: "anthropic/test", fallbacks: ["platform-openrouter/openai/test"] });
+    snapshot.models.providers[0].status = "expired";
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+  });
+  it("keeps an existing session authoritative over a healthy default fallback", () => {
+    const snapshot = ready();
+    Reflect.set(snapshot.config.config.agents.entries[scope.agentId], "model", { primary: "anthropic/test", fallbacks: ["platform-openrouter/openai/test"] });
+    snapshot.session.session = { key: `agent:${scope.agentId}:mattermost:channel:${scope.channelId}`, modelProvider: "anthropic", model: "test" };
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+  });
+  it.each(["anthropic", "claude-cli"])("requires native credential health for %s owner models", (provider) => {
+    const snapshot = ready();
+    snapshot.config.config.agents.entries[scope.agentId].model = `${provider}/test`;
+    for (const status of ["missing", "expired"]) {
+      snapshot.models.providers = [{ provider, status }];
+      expect(channelAgentReady(scope, snapshot)).toBe(false);
+    }
+    snapshot.models.providers = [];
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+    for (const status of ["static", "ok", "expiring"]) {
+      snapshot.models.providers = [{ provider, status }];
+      expect(channelAgentReady(scope, snapshot)).toBe(true);
+    }
+  });
+  it.each([undefined, {}, { key: "another-channel", modelProvider: "platform-openrouter", model: "test" }, { key: `agent:${scope.agentId}:mattermost:channel:${scope.channelId}`, model: "test" }])("blocks malformed or differently scoped live session metadata (%j)", (session) => {
+    const snapshot = ready();
+    snapshot.session.session = session;
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+  });
+  it("checks an active session override instead of a healthy durable default", () => {
+    const snapshot = ready();
+    snapshot.session.session = { key: `agent:${scope.agentId}:mattermost:channel:${scope.channelId}`, modelProvider: "platform-openai", model: "test" };
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+  });
+  it("accepts a healthy live override when the unused durable default has no credential", () => {
+    const snapshot = ready();
+    snapshot.session.session = { key: `agent:${scope.agentId}:mattermost:channel:${scope.channelId}`, modelProvider: "platform-openai", model: "test" };
+    snapshot.models.providers = [{ provider: "platform-openai", status: "static" }];
+    expect(channelAgentReady(scope, snapshot)).toBe(true);
+  });
+  it.each([null, "orbit"])("requires applied connected routing for scope %s", (project) => {
+    const agentId = project ? `octogee-alice-proj-${project}-coach` : scope.agentId;
+    expect(channelAgentReady({ ...scope, project, agentId }, ready(project))).toBe(true);
+  });
+  it.each(["unapplied", "wrong-channel", "wrong-account", "wrong-agent", "missing-agent", "disconnected", "stopped", "account-fallback", "missing-credential", "expired-credential"])("does not mark a channel ready with %s", (failure) => {
+    const snapshot = ready();
+    const binding = snapshot.config.config.bindings[0];
+    if (failure === "unapplied") snapshot.config.appliedConfigHash = "previous";
+    if (failure === "wrong-channel") binding.match.peer.id = "other";
+    if (failure === "wrong-account") binding.match.accountId = "bob-coach";
+    if (failure === "wrong-agent") binding.agentId = "other-agent";
+    if (failure === "missing-agent") snapshot.config.config.agents.entries = {};
+    if (failure === "disconnected") snapshot.channels.channelAccounts.mattermost[0].connected = false;
+    if (failure === "stopped") snapshot.channels.channelAccounts.mattermost[0].running = false;
+    if (failure === "missing-credential") snapshot.models.providers = [];
+    if (failure === "expired-credential") snapshot.models.providers[0].status = "expired";
+    if (failure === "account-fallback") Reflect.deleteProperty(binding.match, "peer");
+    expect(channelAgentReady(scope, snapshot)).toBe(false);
+  });
+  it("requires an explicit peer binding for the private Coach channel", () => {
+    const snapshot = ready();
+    Reflect.deleteProperty(snapshot.config.config.bindings[0].match, "peer");
+    expect(channelAgentReady({ ...scope, peerKind: "group" }, snapshot)).toBe(false);
+  });
+});
+
+describe("native channel readiness snapshot", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    native.open.mockResolvedValue({ close: native.close });
+    const snapshot = ready();
+    native.call.mockImplementation(async (method) => ({ ok: true, result:
+      method === "config.get" ? snapshot.config : method === "channels.status" ? snapshot.channels : method === "sessions.describe" ? snapshot.session : snapshot.models,
+    }));
+  });
+  it("reads live applied routing, connection and selected Agent credentials without refreshing them", async () => {
+    expect(await readChannelAgentReadiness(scope)).toBe(true);
+    expect(native.call.mock.calls).toEqual([
+      ["config.get", {}], ["channels.status", {}],
+      ["sessions.describe", { key: `agent:${scope.agentId}:mattermost:channel:${scope.channelId}`, agentId: scope.agentId }],
+      ["models.authStatus", { agentId: scope.agentId }],
+    ]);
+    expect(native.dispose).toHaveBeenCalledOnce();
+    expect(native.close).toHaveBeenCalledOnce();
+  });
+  it("checks the private channel's live group session override", async () => {
+    const success = native.call.getMockImplementation()!;
+    const key = `agent:${scope.agentId}:mattermost:group:${scope.channelId}`;
+    native.call.mockImplementation((method, params) => method === "sessions.describe"
+      ? Promise.resolve({ ok: true, result: { session: params.key === key ? { key, modelProvider: "platform-openai", model: "test" } : null } })
+      : success(method, params));
+    expect(await readChannelAgentReadiness({ ...scope, peerKind: "group" })).toBe(false);
+    expect(native.call).toHaveBeenCalledWith("sessions.describe", { key, agentId: scope.agentId });
+  });
+  it.each(["config.get", "channels.status", "sessions.describe", "models.authStatus"])("closes the upstream and reports a failed %s check", async (failed) => {
+    const success = native.call.getMockImplementation()!;
+    native.call.mockImplementation((method, params) => method === failed
+      ? Promise.resolve({ ok: false, reason: "runtime reloading" }) : success(method, params));
+    await expect(readChannelAgentReadiness(scope)).rejects.toThrow("runtime reloading");
+    expect(native.dispose).toHaveBeenCalledOnce();
+    expect(native.close).toHaveBeenCalledOnce();
+  });
+});

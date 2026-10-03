@@ -258,6 +258,7 @@ interface BrokerCtx {
   snapshotsBySlug: Map<string, FleetBrokerUserSnapshot>;
   projectCheckoutScope?: (slug: string) => FleetBrokerProjectCheckoutScope;
   configRemovedForEviction: Set<string>;
+  pendingRuntimeSecrets: Map<string, SecretMaterialLedger>;
   procRoot: string;
 }
 
@@ -557,8 +558,9 @@ async function materializeCustomerBrokerProfiles(
   agentIds: string[],
   slug: string,
   logFn: (message: string) => void,
+  secretMaterial: SecretMaterialLedger,
   logPrefix = `[add:${slug}]`,
-): Promise<{ materialized: number }> {
+): Promise<void> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
   const materialized = await materializeBrokerProfilesForAgents(agentIds, {
@@ -571,6 +573,7 @@ async function materializeCustomerBrokerProfiles(
       : {}),
   });
   if (materialized.materialized > 0) {
+    secretMaterial.note(brokerProfileMaterializationReason(materialized.materialized));
     logFn(`${logPrefix} broker model profiles materialized before config hot-reload`);
   }
   if (materialized.deferred.length > 0) {
@@ -580,7 +583,9 @@ async function materializeCustomerBrokerProfiles(
         ` the post-boot sweep retries it`,
     );
   }
-  return { materialized: materialized.materialized };
+  if (materialized.deferred.length > 0) {
+    throw new Error(`Agent model profiles are not ready: ${materialized.deferred.join(", ")}`);
+  }
 }
 
 async function writeMountAccountSecrets(
@@ -931,7 +936,8 @@ async function applyAddCustomerConfigPatch(
     evictionSlugs,
     callOpts?.currentEvictionBatch,
   );
-  const secretMaterial = createSecretMaterialLedger();
+  const secretMaterial = ctx.pendingRuntimeSecrets.get(snapshot.slug) ?? createSecretMaterialLedger();
+  ctx.pendingRuntimeSecrets.set(snapshot.slug, secretMaterial);
   secretMaterial.noteIf(
     (await writeMountAccountSecrets(snapshot.slug, accountId, coachPat, projectAgents, evictionSlugs)).changed,
     "Mattermost account secrets file changed",
@@ -952,8 +958,7 @@ async function applyAddCustomerConfigPatch(
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
   await callOpts?.brokerProfilesReady;
-  const brokerProfiles = await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log);
-  secretMaterial.note(brokerProfileMaterializationReason(brokerProfiles.materialized));
+  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log, secretMaterial);
   await reconcileCustomerRosterAgents(
     ctx,
     snapshot.slug,
@@ -1079,6 +1084,9 @@ async function settleProjectAgentActivations(
 ): Promise<void> {
   const errors: unknown[] = [];
   await reloadRuntimeSecretsIfChanged(ctx, `[add:${input.snapshot.slug}]`, input.secretMaterial);
+  if (ctx.pendingRuntimeSecrets.get(input.snapshot.slug) === input.secretMaterial) {
+    ctx.pendingRuntimeSecrets.delete(input.snapshot.slug);
+  }
   try {
     await input.activate();
   } catch (error) {
@@ -1135,11 +1143,12 @@ async function reconcileConfiguredBuilderProjectAgents(
   await ensureCustomerRosterAgents(ctx, projectAgentEntries, logPrefix);
   const agentIds = agentIdsFromEntries(projectAgentEntries);
   await Promise.all(agentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })));
-  const secretMaterial = createSecretMaterialLedger();
-  const brokerProfiles = await materializeCustomerBrokerProfiles(agentIds, snapshot.slug, ctx.log);
-  secretMaterial.note(brokerProfileMaterializationReason(brokerProfiles.materialized));
+  const secretMaterial = ctx.pendingRuntimeSecrets.get(snapshot.slug) ?? createSecretMaterialLedger();
+  ctx.pendingRuntimeSecrets.set(snapshot.slug, secretMaterial);
+  await materializeCustomerBrokerProfiles(agentIds, snapshot.slug, ctx.log, secretMaterial);
   const projectSecrets = mattermostProjectAccountSecretChange(snapshot.slug, projectAgents);
   const setSecrets = await updateMattermostAccountSecrets(OPENCLAW_DIR, { set: projectSecrets.set });
+  secretMaterial.noteIf(setSecrets.changed, "Mattermost account secrets file changed");
   const pendingAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
   const baseline = pendingAccountIds.length > 0
     ? await captureMattermostRoutingActivationBaseline(ctx.rpc, pendingAccountIds)
@@ -1160,7 +1169,7 @@ async function reconcileConfiguredBuilderProjectAgents(
     .filter((accountId) => !projectAccounts[accountId]);
   for (const accountId of retiredAccountIds) await ctx.rpc.channelsStop({ channel: "mattermost", accountId });
   const removedSecrets = await updateMattermostAccountSecrets(OPENCLAW_DIR, { remove: [...new Set([...projectSecrets.remove, ...retiredAccountIds])] });
-  secretMaterial.noteIf(setSecrets.changed || removedSecrets.changed, "Mattermost account secrets file changed");
+  secretMaterial.noteIf(removedSecrets.changed, "Mattermost account secrets file changed");
   await settleProjectAgentActivations(ctx, {
     snapshot, projectAgents, channels: brokerSnapshot.channels, baseline, secretMaterial,
     activate: async () => {
@@ -1458,7 +1467,8 @@ async function activateImportedCustomer(
   const ownerMmUserId = configuredBuilder
     ? validOwnerMmUserId(slug, (await snapshotForSlug(ctx, slug))?.customerMmUserId)
     : undefined;
-  const secretMaterial = createSecretMaterialLedger();
+  const secretMaterial = ctx.pendingRuntimeSecrets.get(slug) ?? createSecretMaterialLedger();
+  ctx.pendingRuntimeSecrets.set(slug, secretMaterial);
   const { manifest: safeManifest, secretsChanged } = await materializeActivationManifestSecret(
     OPENCLAW_DIR,
     manifest,
@@ -1483,13 +1493,13 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
-  const brokerProfiles = await materializeCustomerBrokerProfiles(
+  await materializeCustomerBrokerProfiles(
     activationManifestAgentIds(safeManifest),
     slug,
     ctx.log,
+    secretMaterial,
     `[import:${slug}]`,
   );
-  secretMaterial.note(brokerProfileMaterializationReason(brokerProfiles.materialized));
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
@@ -1574,6 +1584,7 @@ async function settleActivatedImport(
   try {
     await waitForAppliedConfigRevision(ctx.rpc, slug, { signal });
     await reloadRuntimeSecretsIfChanged(ctx, `[import:${slug}]`, secretMaterial);
+    if (ctx.pendingRuntimeSecrets.get(slug) === secretMaterial) ctx.pendingRuntimeSecrets.delete(slug);
     if (configuredBuilderRouting && patch.configNoop === true) {
       await activateMattermostRoutingAfterConfigPatch(
         ctx.rpc,
@@ -1729,6 +1740,7 @@ export function buildBrokeredLifecycleAdapter(
     snapshotsBySlug: new Map(),
     projectCheckoutScope: opts.projectCheckoutScope,
     configRemovedForEviction: new Set(),
+    pendingRuntimeSecrets: new Map(),
     procRoot: opts.procRoot ?? PROC_ROOT,
   };
   const adapter: CustomerLifecycleAdapter = {
@@ -1743,7 +1755,9 @@ export function buildBrokeredLifecycleAdapter(
     materializeBrokerProfiles: async (slug) => {
       const agentId = `octogee-${slug}-coach`;
       await fsp.mkdir(path.join(AGENTS_DIR, agentId, "agent"), { recursive: true });
-      await materializeCustomerBrokerProfiles([agentId], slug, opts.log);
+      const secretMaterial = ctx.pendingRuntimeSecrets.get(slug) ?? createSecretMaterialLedger();
+      ctx.pendingRuntimeSecrets.set(slug, secretMaterial);
+      await materializeCustomerBrokerProfiles([agentId], slug, opts.log, secretMaterial);
     },
     projectCheckoutScope: (slug) =>
       ctx.snapshotsBySlug.get(slug)?.projectCheckoutScope

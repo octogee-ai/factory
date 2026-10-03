@@ -1,3 +1,4 @@
+import { createChannelAgentReadinessRouter } from "./routes/channel-agent-readiness.js";
 import express, { Express, Request, RequestHandler, Response, Router } from "express";
 import http from "node:http";
 import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
@@ -249,6 +250,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
       authorizationCache: options.openClawControlAuthorizationCache,
     }));
   }
+  mountApi(app, "/channel-agent-readiness", createChannelAgentReadinessRouter());
   const workspaceLocality = Router({ mergeParams: true });
   workspaceLocality.use(gitRoutes);
   mountApi(app, "/workspace", workspaceLocality);

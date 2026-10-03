@@ -14,6 +14,17 @@ vi.mock("../lib/surge-openclaw-process-gate.js", () => ({
   createSurgeOpenClawProcessSupervisorClient: () => ({ status: supervisorStatus }),
 }));
 
+vi.mock("../lib/agent-model-token-materializer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/agent-model-token-materializer.js")>();
+  return {
+    ...actual,
+    materializeBrokerProfilesForAgents: vi.fn(async (agentIds: string[]) => ({
+      materialized: agentIds.length,
+      deferred: [],
+    })),
+  };
+});
+
 vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/mattermost-account-secrets.js")>();
   return { ...actual, updateMattermostAccountSecrets: vi.fn(async () => ({ changed: true })) };

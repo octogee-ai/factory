@@ -7,6 +7,7 @@ export const FEATURE_FLAG_KEYS = [
   "release-workspace-sharing",
   "release-project-repo-source",
   "release-voice-talk",
+  "release-coach-readiness",
 ] as const;
 
 export type FeatureFlagKey = typeof FEATURE_FLAG_KEYS[number];
@@ -25,6 +26,7 @@ export const FEATURE_FLAGS: Record<FeatureFlagKey, FeatureFlagDefinition> = {
   "release-workspace-sharing": { userVisible: true },
   "release-project-repo-source": { userVisible: true, adminBypass: true },
   "release-voice-talk": { userVisible: true, adminBypass: true },
+  "release-coach-readiness": { userVisible: true },
 };
 
 export function featureFlagBypassedForAdmin(
