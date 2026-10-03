@@ -15,6 +15,16 @@ export declare function setWorkspaceMigrationPhase(deps: FleetStateDeps, params:
     operationId: string;
     phase: WorkspaceMigrationPhase;
 }): Promise<void>;
+export interface WorkspaceMigrationPreparationParams {
+    uid: string;
+    sourceGatewayId: string;
+    operationId: string;
+    sourceAssignmentMode: "assigned" | "unassigned-live";
+    sourceRelease: number;
+    sourceEpoch: number;
+    sourceRootUpdatedAt?: number;
+}
+export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps, params: WorkspaceMigrationPreparationParams): Promise<void>;
 export interface FleetStateDocRef {
     set: (data: Record<string, unknown>, options?: {
         merge?: boolean;

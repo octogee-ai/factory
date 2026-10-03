@@ -254,6 +254,7 @@ import {
   commitCutoverAtomic,
   markAssignmentState,
   setWorkspaceMigrationPhase,
+  clearWorkspaceMigrationPreparation,
   type FleetStateFirestore,
 } from "@octogee/core/fleet-state";
 import {
@@ -3104,6 +3105,7 @@ async function buildHandlers(
   });
 
   const migrateCustomer = createMigrateCustomerHandler({
+    clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     setMigrationPhase: (input) => setWorkspaceMigrationPhase({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     reportMigrationProgress: async (gatewayId, event) => {
       const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
@@ -3174,6 +3176,7 @@ async function buildHandlers(
         release: source.release,
         ...(source.epoch !== undefined ? { epoch: source.epoch } : {}),
         assignmentMode: source.assignmentMode,
+        ...(source.rootUpdatedAt !== undefined ? { rootUpdatedAt: source.rootUpdatedAt } : {}),
       };
     },
     resolveTargetPlacement: async (toGatewayId) => {

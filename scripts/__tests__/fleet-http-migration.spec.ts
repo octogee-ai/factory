@@ -846,7 +846,8 @@ describe("createVerifyHandler", () => {
 
   it("returns 200 ready=true when local migration readiness checks pass", async () => {
     const adapter = mkAdapter();
-    const handler = createVerifyHandler(mkDeps({ adapter }));
+    const log = vi.fn();
+    const handler = createVerifyHandler(mkDeps({ adapter, log }));
     const body = { migrationId: "mig-1", slug: "chris", timeoutMs: 5_000 };
     const rawBody = JSON.stringify(body);
     const sig = signForPod(body.migrationId, rawBody);
@@ -855,6 +856,7 @@ describe("createVerifyHandler", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("[migration-http] verify"), { status: "done" });
     expect(getBody()).toEqual({
       migrationId: "mig-1",
       slug: "chris",
@@ -876,7 +878,8 @@ describe("createVerifyHandler", () => {
     const adapter = mkAdapter({
       customerMountMarked: vi.fn(() => false),
     });
-    const handler = createVerifyHandler(mkDeps({ adapter }));
+    const log = vi.fn();
+    const handler = createVerifyHandler(mkDeps({ adapter, log }));
     const body = { migrationId: "mig-1", slug: "chris" };
     const rawBody = JSON.stringify(body);
     const sig = signForPod(body.migrationId, rawBody);
@@ -885,6 +888,7 @@ describe("createVerifyHandler", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(409);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("[migration-http] verify"), { status: "failed" });
     expect(getBody()).toMatchObject({
       ready: false,
       checks: { mountMarked: false },

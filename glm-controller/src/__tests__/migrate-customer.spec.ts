@@ -930,6 +930,38 @@ describe("migrate-customer — input validation", () => {
 });
 
 describe("migrate-customer — legacy data-plane migration (shared class)", () => {
+  it.each([true, false])("clears failed preparation only after target unmount is confirmed (%s)", async (cleanupConfirmed) => {
+    const h = mkDeps();
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
+    vi.mocked(h.client.transferState).mockImplementation(async (request) => {
+      if (request.mode === "pre") throw new Error("staged snapshot rejected");
+      return { migrationId: request.migrationId, slug: request.slug, imported: true };
+    });
+    if (!cleanupConfirmed) vi.mocked(h.client.unmount).mockRejectedValue(new Error("target cleanup unknown"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result.success).toBe(false);
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    if (cleanupConfirmed) expect(h.deps.clearMigrationPreparation).toHaveBeenCalledWith({ uid: "uid-alice", sourceGatewayId: "gw-blue", operationId: "op-1", sourceAssignmentMode: "assigned", sourceRelease: 1, sourceEpoch: 4 });
+    else expect(h.deps.clearMigrationPreparation).not.toHaveBeenCalled();
+  });
+
+  it("retains the unassigned live source fence when clearing a rolled-back preparation", async () => {
+    const h = mkDeps();
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, assignmentMode: "unassigned-live", rootUpdatedAt: 17 });
+    vi.mocked(h.client.transferState).mockImplementation(async (request) => {
+      if (request.mode === "pre") throw new Error("staged snapshot rejected");
+      return { migrationId: request.migrationId, slug: request.slug, imported: true };
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: true, error: "staged snapshot rejected" });
+    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledWith({
+      uid: "uid-alice", sourceGatewayId: "gw-blue", operationId: "op-1",
+      sourceAssignmentMode: "unassigned-live", sourceRelease: 1, sourceEpoch: 0, sourceRootUpdatedAt: 17,
+    });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+  });
+
   it("runs the full flow with the roster gate and no config steps", async () => {
     const { deps, ctx, client, events } = mkDeps();
     const handler = createMigrateCustomerHandler(deps);

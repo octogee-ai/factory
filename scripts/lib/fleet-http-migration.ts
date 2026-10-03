@@ -2232,7 +2232,7 @@ export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler 
       log(
         `${response.ready ? "🟢" : "🔴"} [migration-http] verify migrationId=${body.migrationId} slug=${body.slug} ` +
         `mode=${response.configTransferMode ?? ACTIVATION_MANIFEST_TRANSFER} ` +
-        `ready=${response.ready} checks=${JSON.stringify(response.checks)}`, { status: "failed" },
+        `ready=${response.ready} checks=${JSON.stringify(response.checks)}`, { status: response.ready ? "done" : "failed" },
       );
       res.status(response.ready ? 200 : 409).json(response);
     } catch (err) {

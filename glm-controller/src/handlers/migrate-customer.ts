@@ -26,6 +26,7 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 import { computerPreemptionError } from "../operation-retry.js";
 import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
+import type { WorkspaceMigrationPreparationParams } from "@octogee/core/fleet-state";
 import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
@@ -66,6 +67,7 @@ export interface SourcePlacement {
   release: number;
   epoch?: number;
   assignmentMode?: "assigned" | "unassigned-live";
+  rootUpdatedAt?: number;
 }
 
 type PlacementResolution =
@@ -102,6 +104,7 @@ export interface MigrateCustomerDeps {
   resolveSourcePlacement: (uid: string, currentGatewayId: string) => Promise<SourcePlacement | null>;
   resolveTargetPlacement: (toGatewayId: string) => Promise<PlacementResolution | null>;
 
+  clearMigrationPreparation?: (input: WorkspaceMigrationPreparationParams) => Promise<void>;
   setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: "preparing" | "waiting" | "transferring" | "connecting" }) => Promise<void>;
 
   setAssignmentState: (input: {
@@ -552,6 +555,7 @@ interface MigrationTargets {
   fromRelease: number;
   fromEpoch: number;
   sourceAssignmentMode: "assigned" | "unassigned-live";
+  sourceRootUpdatedAt?: number;
 }
 
 async function resolveMigrationTargets(
@@ -586,6 +590,7 @@ async function resolveMigrationTargets(
       fromRelease: source.release,
       fromEpoch: source.epoch ?? 0,
       sourceAssignmentMode: source.assignmentMode ?? "assigned",
+      ...(source.rootUpdatedAt !== undefined ? { sourceRootUpdatedAt: source.rootUpdatedAt } : {}),
     },
   };
 }
@@ -1622,10 +1627,12 @@ async function executeMigration(
       source: prepared.user.currentGatewayId,
     }),
   });
+  let targetUnmountConfirmed = false;
   const destinationContext: OperationContext = {
     ...ctx,
     reportStep: async (step) => {
       await ctx.reportStep(step);
+      if (step.name === "rollback:unmount-target" && step.status === "done") targetUnmountConfirmed = true;
       await progress.report(step.name, step.status);
     },
   };
@@ -1662,6 +1669,18 @@ async function executeMigration(
       recordSchedulesStaged: () => persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() }),
     },
   );
+  if (result.rolledBack && result.finalPhase === "keys-synced" && targetUnmountConfirmed) {
+    await deps.clearMigrationPreparation?.({
+      uid: prepared.uid,
+      sourceGatewayId: prepared.user.currentGatewayId,
+      operationId,
+      sourceAssignmentMode: prepared.targets.sourceAssignmentMode,
+      sourceRelease: prepared.targets.fromRelease,
+      sourceEpoch: prepared.targets.fromEpoch,
+      ...(prepared.targets.sourceRootUpdatedAt !== undefined
+        ? { sourceRootUpdatedAt: prepared.targets.sourceRootUpdatedAt } : {}),
+    });
+  }
   return {
     steps: [],
     success: result.success,

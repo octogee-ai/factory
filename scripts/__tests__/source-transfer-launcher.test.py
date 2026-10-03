@@ -92,7 +92,11 @@ class LauncherTest(unittest.TestCase):
             pid = int(pidfile.read_text())
             status = pathlib.Path(f'/proc/{pid}/stat')
             for _ in range(20):
-                if not status.exists() or status.read_text().split()[2] == 'Z':
+                try:
+                    stopped = status.read_text().split()[2] == 'Z'
+                except FileNotFoundError:
+                    return
+                if stopped:
                     return
                 time.sleep(.05)
             self.fail('descendant remained running')

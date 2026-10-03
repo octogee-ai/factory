@@ -28,6 +28,7 @@ import {
 } from "./customer-migration-v2.js";
 
 import { slugFromAssignedUser } from "./assigned-roster.js";
+import { gatewayAuthorizationFromRootDocument } from "./gateway-live-release.js";
 
 const MIGRATE_CUSTOMER_OPERATION_KIND = "migrate-customer" as const;
 
@@ -83,6 +84,92 @@ export async function setWorkspaceMigrationPhase(
       } satisfies WorkspaceMigrationMarker,
     });
   });
+}
+
+export interface WorkspaceMigrationPreparationParams {
+  uid: string;
+  sourceGatewayId: string;
+  operationId: string;
+  sourceAssignmentMode: "assigned" | "unassigned-live";
+  sourceRelease: number;
+  sourceEpoch: number;
+  sourceRootUpdatedAt?: number;
+}
+
+function preparationAssignmentMatches(
+  params: WorkspaceMigrationPreparationParams,
+  snapshot: Awaited<ReturnType<FleetStateTxn["get"]>>,
+): boolean {
+  const source = recordOrEmpty(snapshot.data());
+  return snapshot.exists && source.uid === params.uid && source.gatewayId === params.sourceGatewayId &&
+    source.state === "serving" && Number.isSafeInteger(params.sourceEpoch) && params.sourceEpoch >= 0 &&
+    source.epoch === params.sourceEpoch;
+}
+
+async function preparationSourceMatches(
+  deps: FleetStateDeps,
+  txn: FleetStateTxn,
+  params: WorkspaceMigrationPreparationParams,
+  snapshot: Awaited<ReturnType<FleetStateTxn["get"]>>,
+): Promise<boolean> {
+  if (params.sourceAssignmentMode === "assigned") return preparationAssignmentMatches(params, snapshot);
+  if (params.sourceAssignmentMode !== "unassigned-live" || snapshot.exists || params.sourceEpoch !== 0 ||
+      !Number.isSafeInteger(params.sourceRelease) || params.sourceRelease < 1 ||
+      !Number.isFinite(params.sourceRootUpdatedAt)) return false;
+  const rootSnapshot = await txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.sourceGatewayId));
+  const root = gatewayAuthorizationFromRootDocument(rootSnapshot.data(), params.sourceGatewayId)?.gateway;
+  return root !== undefined && root.desiredStatus === "running" &&
+    root.desiredRelease === params.sourceRelease && root.liveRelease === params.sourceRelease &&
+    root.updatedAt === params.sourceRootUpdatedAt;
+}
+
+export async function clearWorkspaceMigrationPreparation(
+  deps: FleetStateDeps,
+  params: WorkspaceMigrationPreparationParams,
+): Promise<void> {
+  await deps.db.runTransaction(async (txn) => {
+    const userRef = deps.db.collection("users").doc(params.uid);
+    const [userSnapshot, operationSnapshot, sourceSnapshot] = await Promise.all([
+      txn.get(userRef),
+      txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(params.operationId)),
+      txn.get(assignmentRef(deps.db, params.sourceGatewayId, params.uid)),
+    ]);
+    const user = userSnapshot.data();
+    assertRestoreUnfenced(user);
+    const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+    const marker = readWorkspaceMigrationMarker(openclaw);
+    const operation = recordOrEmpty(operationSnapshot.data());
+    const input = recordOrEmpty(operation.input);
+    const exact = [
+      userSnapshot.exists, operationSnapshot.exists,
+      marker?.state === "preparing", marker?.phase === "preparing", marker?.operationId === params.operationId,
+      openclaw.gatewayId === params.sourceGatewayId,
+      input.uid === params.uid, input.fromGatewayId === params.sourceGatewayId,
+      typeof input.toGatewayId === "string", input.toGatewayId !== params.sourceGatewayId,
+      await preparationSourceMatches(deps, txn, params, sourceSnapshot),
+      preparationRollbackConfirmed(operation),
+    ].every(Boolean);
+    if (!exact) throw new Error("workspace preparation cleanup authority changed");
+    const target = await txn.get(assignmentRef(deps.db, String(input.toGatewayId), params.uid));
+    if (target.exists) throw new Error("workspace preparation target assignment remains");
+    clearWorkspaceMigrationMarker(txn, deps, params.uid);
+  });
+}
+
+function preparationRollbackConfirmed(operation: Record<string, unknown>): boolean {
+  if (operation.kind !== MIGRATE_CUSTOMER_OPERATION_KIND ||
+      !["running", "failed"].includes(String(operation.status)) ||
+      operation.cutoverCommittedAt !== undefined || !Array.isArray(operation.steps)) return false;
+  const expected: Record<string, string> = {
+    "keys-sync-state": "done",
+    "pre-sync-state": "failed",
+    "rollback:unmount-target": "done",
+  };
+  return operation.steps.length === Object.keys(expected).length &&
+    operation.steps.every((value) => {
+      const step = recordOrEmpty(value);
+      return typeof step.name === "string" && Object.hasOwn(expected, step.name) && expected[step.name] === step.status;
+    }) && new Set(operation.steps.map(value => recordOrEmpty(value).name)).size === Object.keys(expected).length;
 }
 
 function clearWorkspaceMigrationMarker(
