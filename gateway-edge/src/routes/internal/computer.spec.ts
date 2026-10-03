@@ -88,6 +88,7 @@ describe("internal computer routes", () => {
     const [url, init] = (fetchImpl as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls[0];
     expect(url).toBe("http://127.0.0.1:7777/style");
     expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "content-type": "application/json" });
     expect(JSON.parse(String(init.body))).toEqual({ style: "familiar", accent: "#0ea5e9" });
   });
 
@@ -96,7 +97,9 @@ describe("internal computer routes", () => {
     const res = await request(app("http://127.0.0.1:7777", ok)).post("/internal/computer/desk/note").set("x-k8s-sa-token", "valid-ksa-token").send({ note: "  Deploying.  " });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ note: "Deploying." });
-    expect(JSON.parse(String((ok as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls[0][1].body))).toEqual({ note: "Deploying." });
+    const [, noteInit] = (ok as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls[0];
+    expect(noteInit.headers).toEqual({ "content-type": "application/json" });
+    expect(JSON.parse(String(noteInit.body))).toEqual({ note: "Deploying." });
 
     const rejected = upstream(500, { error: "octo-desktop-style failed" });
     const failed = await request(app("http://127.0.0.1:7777", rejected)).post("/internal/computer/style").set("x-k8s-sa-token", "valid-ksa-token").send({ style: "omarchy" });

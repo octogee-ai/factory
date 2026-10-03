@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ loader.exec_module(control)
 
 DESK_DIR = Path(__file__).parents[1] / 'rootfs/usr/share/omarchy/octo-desktop/desk'
 DEFAULT_NOTE = 'This is my computer. Watch me work here, or take the controls whenever you like.'
+CONTROL_CALLER = {'Content-Type': 'application/json'}
 
 
 def entry(directory, name, **fields):
@@ -289,11 +291,12 @@ class TimeZoneTest(unittest.TestCase):
                 self.assertIn('Access denied', str(failure.exception))
 
 
-def handler(path, body=None):
+def handler(path, body=None, headers=None):
     h = object.__new__(control.Handler)
     h.path = path
     raw = b'' if body is None else json.dumps(body).encode()
-    h.headers = {'Content-Length': str(len(raw))}
+    h.headers = {'Content-Length': str(len(raw)), **(headers or {})}
+    h.server = SimpleNamespace(server_address=('0.0.0.0', 7777))
     h.rfile = io.BytesIO(raw)
     return h
 
@@ -374,7 +377,7 @@ class RoutingTest(unittest.TestCase):
             ]
             for path, body, expected, target, args in cases:
                 with self.subTest(path=path, body=body):
-                    h = handler(path, body)
+                    h = handler(path, body, CONTROL_CALLER)
                     patched = patch.object(control, target, wraps=getattr(control, target)) if target else patch.object(control, 'resize')
                     with patched as fn, patch.object(control.subprocess, 'Popen'), patch.object(control, 'run') as run, patch.object(h, '_send') as send:
                         run.return_value.returncode = 0
@@ -386,12 +389,50 @@ class RoutingTest(unittest.TestCase):
             with patch.object(control, 'current_time_zone', return_value={'timeZone': 'Etc/UTC'}), patch.object(h, '_send') as send:
                 h.do_GET()
             self.assertEqual(send.call_args.args[:2], (200, {'timeZone': 'Etc/UTC'}))
-            h = handler('/desk/note')
-            h.headers = {'Content-Length': '99999'}
+            h = handler('/desk/note', None, CONTROL_CALLER)
+            h.headers['Content-Length'] = '99999'
             with patch.object(h, '_send') as send:
                 h.do_POST()
             self.assertEqual(send.call_args.args[0], 400)
 
+    def test_takes_state_changes_only_as_json_from_local_callers_or_its_own_pages(self):
+        json_type = {'Content-Type': 'application/json'}
+        refused = [
+            {},
+            {'Content-Type': 'text/plain;charset=UTF-8'},
+            {'Content-Type': 'application/x-www-form-urlencoded'},
+            {'Content-Type': 'text/plain', 'Origin': 'http://127.0.0.1:7777'},
+            {**json_type, 'Origin': 'https://attacker.example'},
+            {**json_type, 'Origin': 'null'},
+            {**json_type, 'Origin': 'http://attacker.example:7777'},
+            {**json_type, 'Origin': 'http://127.0.0.1:8080'},
+            {**json_type, 'Origin': 'https://127.0.0.1:7777'},
+            {**json_type, 'Origin': 'http://127.0.0.1'},
+        ]
+        accepted = [
+            {'Content-Type': 'application/json; charset=utf-8'},
+            {**json_type, 'Origin': 'http://127.0.0.1:7777'},
+            {**json_type, 'Origin': 'http://localhost:7777'},
+        ]
+        actions = {'/resize': 'resize', '/launch': 'launch', '/desk/note': 'set_note', '/style': 'set_style', '/timezone': 'set_time_zone'}
+        bodies = {'/resize': {'width': 800, 'height': 600}, '/launch': {'id': 'chromium'}, '/desk/note': {'note': 'pwned'}, '/style': {'style': 'omarchy'}, '/timezone': {'timeZone': 'Asia/Tokyo'}}
+        with _stack() as stack:
+            Fixture(stack)
+            for path, target in actions.items():
+                for headers in refused:
+                    with self.subTest(path=path, headers=headers):
+                        h = handler(path, bodies[path], headers)
+                        with patch.object(control, target) as action, patch.object(h, '_send') as send:
+                            h.do_POST()
+                        self.assertEqual(send.call_args.args[0], 403)
+                        action.assert_not_called()
+                for headers in accepted:
+                    with self.subTest(path=path, headers=headers):
+                        h = handler(path, bodies[path], headers)
+                        with patch.object(control, target, return_value={'ok': True}) as action, patch.object(h, '_send') as send:
+                            h.do_POST()
+                        self.assertEqual(send.call_args.args, (200, {'ok': True}))
+                        action.assert_called_once()
 
 def _stack():
     from contextlib import ExitStack

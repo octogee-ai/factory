@@ -20,10 +20,10 @@ describe('the Desk page shipped on the desktop image', () => {
     expect(desktop('docker-compose.yml')).toContain(`OCTO_HOME_URL: \${OCTO_HOME_URL:-${DESK_URL}}`);
   });
 
-  it('polls the control API for state and launches apps through it', () => {
+  it('polls the control API for state and launches apps through it with a JSON request', () => {
     const script = desktop('rootfs/usr/share/omarchy/octo-desktop/desk/desk.js');
     expect(script).toContain("'/desk/state'");
-    expect(script).toContain("fetch('/launch'");
+    expect(script).toMatch(/fetch\('\/launch', \{ method: 'POST', headers: \{ 'content-type': 'application\/json' \}/u);
     expect(desktop('rootfs/usr/share/omarchy/octo-desktop/desk/index.html')).toContain('Welcome back');
   });
   it("formats the clock in the Builder's zone and falls back to the browser zone only without one", () => {

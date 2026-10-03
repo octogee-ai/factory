@@ -398,6 +398,8 @@ def desk_asset(name):
         return None
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status, body, content_type="application/json"):
@@ -421,8 +423,28 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("expected a JSON object")
         return body
 
+    def _own_origin(self, origin):
+        try:
+            parts = urlsplit(origin)
+            return parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS and parts.port == self.server.server_address[1]
+        except ValueError:
+            return False
+
+    def _refusal(self):
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if content_type != "application/json":
+            return "control requests must be application/json"
+        origin = self.headers.get("Origin")
+        if origin is not None and not self._own_origin(origin):
+            return "control requests from web pages must come from the desktop's own pages"
+        return None
+
     def do_POST(self):
         path = unquote(urlsplit(self.path).path)
+        refusal = self._refusal()
+        if refusal:
+            self._send(403, {"error": refusal})
+            return
         try:
             if path == "/resize":
                 body = self._json_body()

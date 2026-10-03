@@ -40,6 +40,10 @@ post /desk/note "$(jq -cn --arg note "$marker" '{note: $note}')" >/dev/null || f
 post /desk/note "$(jq -cn --arg note "$default_note" '{note: $note}')" >/dev/null || fail "restoring the default note failed"
 rejected="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"id":"../etc/passwd"}' "$control/launch")"
 [[ "$rejected" == 400 ]] || fail "POST /launch accepted a bad id (HTTP $rejected)"
+plain="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' -d '{"note":"forged"}' "$control/desk/note")"
+[[ "$plain" == 403 ]] || fail "POST /desk/note took a text/plain body (HTTP $plain)"
+cross_origin="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -H 'origin: https://attacker.example' -d '{"note":"forged"}' "$control/desk/note")"
+[[ "$cross_origin" == 403 ]] || fail "POST /desk/note took a request from another origin (HTTP $cross_origin)"
 
 zone_before="$(timedatectl show -p Timezone --value)"
 post /timezone '{"timeZone":"Pacific/Auckland"}' >/dev/null || fail "POST /timezone failed"

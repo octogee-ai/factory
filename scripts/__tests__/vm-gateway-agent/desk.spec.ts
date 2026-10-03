@@ -107,6 +107,7 @@ describe("syncDesk", () => {
     await syncDesk(h.deps, SCOPE, desk());
     expect(h.fetches).toHaveLength(1);
     expect(h.fetches[0].url).toBe("http://127.0.0.1:7777/style");
+    expect(h.fetches[0].init.headers).toEqual({ "content-type": "application/json" });
     expect(JSON.parse(String(h.fetches[0].init.body))).toEqual({ style: "familiar", accent: "#0ea5e9" });
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("accent refreshed to #0ea5e9"));
 
@@ -155,6 +156,7 @@ describe("syncDesk", () => {
     await syncDesk(h.deps, SCOPE, desk(OCEAN, "America/Chicago"));
     expect(JSON.parse(h.store.get(DESK_JSON)!).timeZone).toBe("America/Chicago");
     expect(h.fetches.map((f) => `${f.init.method} ${f.url}`)).toEqual(["GET http://127.0.0.1:7777/timezone", "POST http://127.0.0.1:7777/timezone"]);
+    expect(h.fetches[1].init.headers).toEqual({ "content-type": "application/json" });
     expect(JSON.parse(String(h.fetches[1].init.body))).toEqual({ timeZone: "America/Chicago" });
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("computer time zone set to America/Chicago (was Etc/UTC)"));
 

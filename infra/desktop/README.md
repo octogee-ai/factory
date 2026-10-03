@@ -223,6 +223,13 @@ coach's built-in `computer` tool.
 | `GET /screenshot` | PNG of the output (grim, wlr-screencopy) |
 | `GET /windows` | toplevels `{class, title, …}` (hyprctl or wlrctl) |
 
+Every `POST` (resize, launch, note, style, time zone) is refused with 403
+unless it is `Content-Type: application/json` and either carries no `Origin`
+(gateway-edge and the vm-agent) or carries the API's own loopback origin (the
+Desk page). Pages in the computer's own Chromium can reach 127.0.0.1:7777;
+browsers always send `Origin` on a POST, and a cross-origin JSON POST needs a
+CORS preflight the server never answers.
+
 ## Image shape
 
 - `archlinux:base` on Omarchy's stable snapshot mirror plus the `omarchy` repo.

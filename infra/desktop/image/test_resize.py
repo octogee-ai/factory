@@ -16,7 +16,7 @@ class ResizeTest(unittest.TestCase):
             with self.subTest(raw=raw), patch.object(control, 'resize', return_value={'width': 800, 'height': 600}) as resize:
                 handler = object.__new__(control.Handler)
                 handler.path = '/resize'
-                handler.headers = {'Content-Length': str(len(raw))}
+                handler.headers = {'Content-Length': str(len(raw)), 'Content-Type': 'application/json'}
                 handler.rfile = io.BytesIO(raw)
                 with patch.object(handler, '_send') as send:
                     handler.do_POST()
