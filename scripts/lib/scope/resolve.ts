@@ -114,6 +114,7 @@ export interface GhaOutputs {
   any: boolean;
   test_matrix: UnitPackage[];
   run_app: boolean;
+  run_desktop_package: boolean;
   run_firestore_rules: boolean;
   run_customer_lifecycle_emulator: boolean;
   run_functions_emulator: boolean;
@@ -128,6 +129,7 @@ export function toGhaOutputs(result: ScopeResult): GhaOutputs {
     any: result.jobs.length > 0,
     test_matrix: UNIT_PACKAGES.filter((p) => has(p.name)),
     run_app: has("app"),
+    run_desktop_package: has("desktop-package"),
     run_firestore_rules: has("firestore-rules"),
     run_customer_lifecycle_emulator: has("customer-lifecycle-emulator"),
     run_functions_emulator: has("functions-emulator"),
@@ -143,6 +145,7 @@ export function serializeGhaOutputs(out: GhaOutputs): string {
     `any=${out.any}`,
     `test_matrix=${JSON.stringify(out.test_matrix)}`,
     `run_app=${out.run_app}`,
+    `run_desktop_package=${out.run_desktop_package}`,
     `run_firestore_rules=${out.run_firestore_rules}`,
     `run_customer_lifecycle_emulator=${out.run_customer_lifecycle_emulator}`,
     `run_functions_emulator=${out.run_functions_emulator}`,

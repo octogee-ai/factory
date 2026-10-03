@@ -85,6 +85,7 @@ describe("shared document shapes", () => {
       read: false,
       readAt: null,
       deliveredVia: ["inbox", "toast"],
+      deliveryChannels: ["inbox", "toast"],
       createdAt: 1,
       expiresAt: 2,
     } satisfies InboxDocument;

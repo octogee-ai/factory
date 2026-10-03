@@ -49,6 +49,7 @@ import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { createLinkPreviewRoutes } from "./routes/link-preview.js";
 import { createSignupOfferRoutes } from "./routes/signup-offer.js";
+import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import { createProductAnalyticsRoutes } from "./routes/product-analytics.js";
 import { createInternalProductAnalyticsRoutes } from "./routes/internal-product-analytics.js";
@@ -82,7 +83,7 @@ import {
   createMattermostArtifactSourceReader,
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
-import { db, storage } from "../../gateway-edge/src/lib/db.js";
+import { auth, db, storage } from "../../gateway-edge/src/lib/db.js";
 import {
   ConnectorTokenReadError,
   getFreshAccessTokenFromDb,
@@ -584,6 +585,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   installBodyParsers(app);
   mountDiagnosticRoutes(app, metricsRegistry, tenantBindingHealth);
   app.use("/api/signup-offer", createSignupOfferRoutes({ db }));
+  app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth }));
   mountProductRoutes(app, product);
   app.use("/api/projects", createProjectPreviewDiscoveryRoutes({
     db,

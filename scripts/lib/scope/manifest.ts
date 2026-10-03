@@ -28,6 +28,7 @@ export const JOBS = {
   app: "app",
   obsidianConnect: "obsidian-connect",
   desktop: "desktop",
+  desktopPackage: "desktop-package",
   firestoreRules: "firestore-rules",
   customerLifecycleEmulator: "customer-lifecycle-emulator",
   functionsEmulator: "functions-emulator",
@@ -144,6 +145,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
 // Jobs that JDK/emulator or sharding force out of the matrix; each gated by its own flag.
 export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.app,
+  JOBS.desktopPackage,
   JOBS.firestoreRules,
   JOBS.customerLifecycleEmulator,
   JOBS.functionsEmulator,
@@ -179,7 +181,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "ops-agent/", jobs: [JOBS.opsAgent, JOBS.tests] },
   { dir: "tests/", jobs: [JOBS.tests] },
   { dir: "acceptance/", jobs: [JOBS.acceptance] },
-  { dir: "desktop/", jobs: [JOBS.desktop] },
+  { dir: "desktop/", jobs: [JOBS.desktop, JOBS.desktopPackage] },
   { dir: "scripts/", jobs: [JOBS.scripts, JOBS.customerLifecycleEmulator] },
   {
     dir: "infra/gateway/extensions/octogee-voice-tools/",

@@ -94,7 +94,7 @@ class LauncherTest(unittest.TestCase):
             for _ in range(20):
                 try:
                     stopped = status.read_text().split()[2] == 'Z'
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
                     return
                 if stopped:
                     return

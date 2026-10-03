@@ -33,6 +33,8 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   modelBrokerGatewayTokens: { uidFields: ["ownerUid"] },
   modelBrokerCreditTopups: { uidFields: ["ownerUid"] },
   connectFlows: { uidFields: ["uid"] },
+  desktopSignInCodes: { uidFields: ["uid"] },
+  desktopSignInChallenges: {},
   byosubFlows: { uidFields: ["uid"] },
   invites: {
     uidFields: [

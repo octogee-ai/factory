@@ -347,10 +347,18 @@ describe("toGhaOutputs", () => {
     expect(out.run_functions_emulator).toBe(true);
   });
 
+  it("a desktop change runs the desktop unit job and the three-OS packaging job", () => {
+    const out = toGhaOutputs(resolveScope(["desktop/src/main/index.ts"]));
+    expect(out.test_matrix.map((p) => p.name)).toEqual(["desktop"]);
+    expect(out.run_desktop_package).toBe(true);
+    expect(toGhaOutputs(resolveScope(["site/src/x.ts"])).run_desktop_package).toBe(false);
+  });
+
   it("everything → full matrix + every flag true", () => {
     const out = toGhaOutputs(resolveScope(["package-lock.json"]));
     expect(out.test_matrix).toHaveLength(UNIT_PACKAGES.length);
     expect(out.run_app).toBe(true);
+    expect(out.run_desktop_package).toBe(true);
     expect(out.run_firestore_rules).toBe(true);
     expect(out.run_customer_lifecycle_emulator).toBe(true);
     expect(out.run_functions_emulator).toBe(true);
