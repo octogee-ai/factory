@@ -74,6 +74,9 @@ import { createComputerEgressRouter } from "./routes/computer-egress.js";
 import { createComputerEgressService } from "./egress/service.js";
 import { createBrokerEgressStore } from "./egress/broker.js";
 import { controlApiModePoster, createBrowserModeSync } from "./egress/browser-mode.js";
+import { createComputerPasskeysRouter } from "./routes/computer-passkeys.js";
+import { createPasskeyLinkHost } from "./webauthn/link-host.js";
+import { createWebAuthnCdpProxy } from "./webauthn/cdp-proxy.js";
 import { createComputerSessionsRouter } from "./routes/computer-sessions.js";
 import { applyCookiesOverCdp, type CdpCookie } from "./lib/cdp-cookies.js";
 import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
@@ -117,6 +120,14 @@ const toolSurface = createToolSurface({ egressReport: () => {
   return status.listener === "off" ? null : { mode: status.mode, shell: status.shell, listener: status.listener };
 } });
 const isBuilderComputer = () => process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm";
+const computerPasskeys = createPasskeyLinkHost({ log: (message, meta) => logger.warn(message, meta) });
+const computerPasskeyRoutes = createComputerPasskeysRouter({ host: computerPasskeys, available: isBuilderComputer });
+const computerWebAuthn = createWebAuthnCdpProxy({
+  cdpUrl: process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222",
+  handle: (request, signal) => computerPasskeys.request(request, signal),
+  platformAvailable: () => computerPasskeys.platformAuthenticator(),
+  log: (message, meta) => logger.info(message, meta),
+});
 
 async function loadChatProxyModule(): Promise<ChatProxyModule> {
   chatProxyModulePromise ??= import("./chat-proxy/proxy.js").then((mod) => {
@@ -305,6 +316,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
   }));
   mountApi(app, "/tools", toolSurface.router);
   mountApi(app, "/computer", computerEgressRoutes.router);
+  mountApi(app, "/computer", computerPasskeyRoutes.router);
   const computerCdpUrl = process.env.GATEWAY_COMPUTER_CDP_URL?.trim() || "http://127.0.0.1:9222";
   const computerSessionsLocality = Router({ mergeParams: true });
   computerSessionsLocality.use(requireAuthenticatedUid);
@@ -471,7 +483,9 @@ if (process.env.NODE_ENV !== "test") {
     mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
     toolSurface.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
     computerEgressRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
+    computerPasskeyRoutes.attachWs((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter, isAllowedWsOrigin);
     if (isBuilderComputer()) {
+      computerWebAuthn.start();
       computerEgress.boot().catch((err) => {
         logger.error("[computer-egress] SOCKS5 listener failed to start; the computer's Chromium has no egress", {
           err: err instanceof Error ? err.message : String(err),
