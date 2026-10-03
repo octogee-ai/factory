@@ -25,7 +25,7 @@ describe("native connector approval authority", () => {
   it("does not elevate a Builder member without approval scopes", async () => {
     const h = harness(["operator.read"]);
     await expect(runNativeConnectorApproval({ ...identity, operation: "get", nativeId, reviewerUid: "member" },
-      { ...h, builder: true })).rejects.toThrow("approval permission");
+      { ...h, builder: true })).rejects.toMatchObject({ status: 403, code: "approval_forbidden" });
     expect(h.call).not.toHaveBeenCalled();
     expect(h.openService).not.toHaveBeenCalled();
   });

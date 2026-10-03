@@ -1,7 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { gatewayModelCredentialSyncUrl } from "./byot-sync-trigger.js";
 import { createModelCredentialSyncAuthHeaders } from "./byot-sync-internal-auth.js";
-import { parseNativeApproval, type NativeConnectorCommand, type NativeApprovalSnapshot } from "./native-connector-approval.js";
+import { NativeConnectorApprovalAccessError, parseNativeApproval, type NativeConnectorCommand, type NativeApprovalSnapshot } from "./native-connector-approval.js";
 import { resolveGatewayAssignment } from "../chat-proxy/openclaw/gateway-resolver.js";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
@@ -19,6 +19,17 @@ export function connectorApprovalRpc(db: Firestore, env: NodeJS.ProcessEnv = pro
     const headers = createModelCredentialSyncAuthHeaders({ body, gatewayId: command.gatewayId, secret: env.BYOT_SYNC_INTERNAL_SIGNING_SECRET ?? "" });
     const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body), signal: AbortSignal.timeout(20_000), redirect: "error" });
+    if (response.status === 403) {
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new Error("Native connector approval unavailable: HTTP 403 with invalid JSON");
+      }
+      if (body !== null && typeof body === "object" && "error" in body && body.error === "approval_forbidden") {
+        throw new NativeConnectorApprovalAccessError("Native approval permission is required");
+      }
+    }
     if (!response.ok) throw new Error(`Native connector approval unavailable: HTTP ${response.status}`);
     return response.json();
   };

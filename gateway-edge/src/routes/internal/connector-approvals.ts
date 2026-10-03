@@ -4,7 +4,7 @@ import { openAuthenticatedUpstream } from "../../chat-proxy/openclaw/authenticat
 import { attachUpstreamRpcClient } from "../../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import { openNativeUserClient } from "../../openclaw-control/native-user-client.js";
 import { resolveWorkspaceNativeIdentity } from "../../lib/workspace-native-access.js";
-import { runNativeConnectorApproval, type NativeConnectorCommand, type NativeApprovalClient } from "../../lib/native-connector-approval.js";
+import { NativeConnectorApprovalAccessError, runNativeConnectorApproval, type NativeConnectorCommand, type NativeApprovalClient } from "../../lib/native-connector-approval.js";
 
 async function openService(): Promise<NativeApprovalClient> {
   const ws = await openAuthenticatedUpstream({ gatewayId: process.env.GATEWAY_ID!, url: "ws://127.0.0.1:18789", timeoutMs: 5000 });
@@ -38,7 +38,13 @@ export function createInternalConnectorApprovalRouter() {
         if (identity.uid !== command.reviewerUid) { res.status(403).json({ error: "reviewer_mismatch" }); return; }
       }
       res.set("cache-control", "no-store").json(await runNativeConnectorApproval(command, { builder, openService, openUser: openNativeUserClient }));
-    } catch (error) { next(error); }
+    } catch (error) {
+      if (error instanceof NativeConnectorApprovalAccessError) {
+        res.status(error.status).set("cache-control", "no-store").json({ error: error.code });
+        return;
+      }
+      next(error);
+    }
   });
   return router;
 }

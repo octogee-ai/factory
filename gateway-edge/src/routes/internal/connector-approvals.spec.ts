@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelCredentialSyncAuthHeaders } from "../../lib/byot-sync-internal-auth.js";
 
 const h = vi.hoisted(() => ({ run: vi.fn(), identity: vi.fn() }));
-vi.mock("../../lib/native-connector-approval.js", () => ({ runNativeConnectorApproval: h.run }));
+vi.mock("../../lib/native-connector-approval.js", async importOriginal => ({
+  ...await importOriginal<typeof import("../../lib/native-connector-approval.js")>(), runNativeConnectorApproval: h.run,
+}));
 vi.mock("../../lib/workspace-native-access.js", () => ({ resolveWorkspaceNativeIdentity: h.identity }));
+import { NativeConnectorApprovalAccessError } from "../../lib/native-connector-approval.js";
 import { createInternalConnectorApprovalRouter } from "./connector-approvals.js";
 
 const keys = generateKeyPairSync("ed25519");
@@ -30,6 +33,13 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 describe("API-signed connector approval bridge", () => {
+  it("returns a non-cacheable forbidden result for native permission denial", async () => {
+    h.run.mockRejectedValue(new NativeConnectorApprovalAccessError("Native approval permission is required"));
+    const response = await send();
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: "approval_forbidden" });
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
   it("requires an API signature over the exact operation and passes the authenticated delegate to native roles", async () => {
     expect((await send()).status).toBe(200);
     expect(h.identity).toHaveBeenCalledWith({ gatewayId, authorization: "Bearer firebase-token" });

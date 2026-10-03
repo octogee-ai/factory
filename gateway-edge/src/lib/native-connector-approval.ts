@@ -3,6 +3,11 @@ import { parseAgentId } from "@octogee/shared/types/identity";
 export const CONNECTOR_APPROVAL_PLUGIN = "octogee-connector-tools";
 export const CONNECTOR_APPROVAL_TIMEOUT_MS = 600_000;
 
+export class NativeConnectorApprovalAccessError extends Error {
+  readonly status = 403;
+  readonly code = "approval_forbidden";
+}
+
 interface Binding { gatewayId: string; ownerUid: string; agentId: string }
 export type NativeConnectorCommand = Binding & (
   | { operation: "create"; title: string; detail: string; actionUrl: string; coachChannelId: string }
@@ -45,7 +50,7 @@ interface NativeApprovalDeps {
 }
 async function openClient(command: NativeConnectorCommand, deps: NativeApprovalDeps) {
   const reviewerUid = command.operation === "create" ? undefined : command.reviewerUid;
-  if (!deps.builder && reviewerUid && reviewerUid !== command.ownerUid) throw new Error("Shared approval requires its owner");
+  if (!deps.builder && reviewerUid && reviewerUid !== command.ownerUid) throw new NativeConnectorApprovalAccessError("Shared approval requires its owner");
   return deps.builder && reviewerUid ? deps.openUser(reviewerUid, command.gatewayId) : deps.openService();
 }
 
@@ -53,7 +58,7 @@ export async function runNativeConnectorApproval(command: NativeConnectorCommand
   const client = await openClient(command, deps);
   try {
     if (command.operation !== "create" && command.reviewerUid && deps.builder && !client.scopes.has("operator.admin") && !client.scopes.has("operator.approvals")) {
-      throw new Error("Native approval permission is required");
+      throw new NativeConnectorApprovalAccessError("Native approval permission is required");
     }
     const call = async (method: string, params: Record<string, unknown>) => {
       const result = await client.call(method, params);

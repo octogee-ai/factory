@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectorApprovalRpc, requestConnectorApproval } from "./connector-approval-client.js";
+
+vi.mock("./byot-sync-trigger.js", () => ({ gatewayModelCredentialSyncUrl: () => "http://gateway/model-credential-sync" }));
+vi.mock("./byot-sync-internal-auth.js", () => ({ createModelCredentialSyncAuthHeaders: () => ({}) }));
+afterEach(() => vi.unstubAllGlobals());
 
 function harness() {
   const docs: Record<string, unknown> = {
@@ -14,6 +18,24 @@ function harness() {
   return { docs, db: db as never, input, rpc };
 }
 describe("connector approval native creation", () => {
+  it("preserves an explicit native permission denial without exposing upstream detail", async () => {
+    const h = harness();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "approval_forbidden" }), { status: 403 })));
+    await expect(connectorApprovalRpc(h.db, {})({ operation: "get", ownerUid: "owner", gatewayId: "b-alice", agentId: h.input.agentId, nativeId: "plugin:test" }))
+      .rejects.toMatchObject({ status: 403, code: "approval_forbidden" });
+  });
+  it.each([JSON.stringify({ error: "reviewer_mismatch" }), "intermediary refusal"])("keeps other upstream 403 responses as bridge failures: %s", async body => {
+    const h = harness();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 403 })));
+    await expect(connectorApprovalRpc(h.db, {})({ operation: "get", ownerUid: "owner", gatewayId: "b-alice", agentId: h.input.agentId, nativeId: "plugin:test" }))
+      .rejects.toThrow("HTTP 403");
+  });
+  it("does not turn an unknown upstream failure into a permission denial", async () => {
+    const h = harness();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("upstream detail", { status: 500 })));
+    await expect(connectorApprovalRpc(h.db, {})({ operation: "get", ownerUid: "owner", gatewayId: "b-alice", agentId: h.input.agentId, nativeId: "plugin:test" }))
+      .rejects.toThrow("HTTP 500");
+  });
   it("uses the private canonical Coach channel and preserves the exact preview link and action hash", async () => {
     const h = harness();
     await expect(requestConnectorApproval(h.db, h.rpc, h.input)).resolves.toEqual({ nativeApprovalId: "plugin:native-request", expiresAtMs: 100_000 });

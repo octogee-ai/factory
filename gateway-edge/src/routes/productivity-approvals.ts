@@ -12,7 +12,7 @@ import { isProjectRecipeId } from "@octogee/shared/types/project";
 import { db as defaultDb } from "../lib/db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { connectorApprovalBinding, connectorApprovalRpc, readConnectorApproval, type ConnectorApprovalRpc } from "../lib/connector-approval-client.js";
-import { nativeApprovalViewState, type NativeApprovalSnapshot } from "../lib/native-connector-approval.js";
+import { NativeConnectorApprovalAccessError, nativeApprovalViewState, type NativeApprovalSnapshot } from "../lib/native-connector-approval.js";
 
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 const NOT_FOUND = { error: "not_found" } as const;
@@ -613,6 +613,10 @@ async function preview(deps: Deps, req: Request, res: Response, next: NextFuncti
     const updated = await applyNativeGoogleGrantApproval(deps.db, approvalId, data, native);
     res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, native, deps.now()));
   } catch (error) {
+    if (error instanceof NativeConnectorApprovalAccessError) {
+      res.status(error.status).set("cache-control", "no-store").json({ error: error.code });
+      return;
+    }
     next(error);
   }
 }
@@ -645,6 +649,10 @@ async function respondToApproval(
     const updated = await applyNativeGoogleGrantApproval(deps.db, approvalId, data, native);
     res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, native, deps.now()));
   } catch (error) {
+    if (error instanceof NativeConnectorApprovalAccessError) {
+      res.status(error.status).set("cache-control", "no-store").json({ error: error.code });
+      return;
+    }
     next(error);
   }
 }
