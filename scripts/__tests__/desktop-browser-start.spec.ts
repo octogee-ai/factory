@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DESKTOP_HOME_PATHS } from '../lib/vm-gateway-agent/home-checkpoint';
 
 const browser = fileURLToPath(new URL('../../infra/desktop/rootfs/usr/local/bin/octo-desktop-browser', import.meta.url));
 const temporaryHomes: string[] = [];
+const EGRESS_MODE_DIR = '.config/octogee';
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), 'octo-browser-start-'));
@@ -16,9 +18,14 @@ function fixture() {
   mkdirSync(bin);
   mkdirSync(sessions, { recursive: true });
   writeFileSync(join(bin, 'chromium'), '#!/usr/bin/bash\nprintf "%s\\n" "$@" > "$CAPTURE_FILE"\nprintf "%s" "${ACCESSIBILITY_ENABLED-unset}" > "$CAPTURE_FILE.a11y"\n', { mode: 0o755 });
+  const stateDir = join(home, EGRESS_MODE_DIR);
   return {
     home,
     sessions,
+    recordEgressMode(mode: string) {
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'egress-mode'), mode);
+    },
     launch(args: string[] = [], homepage?: string, noSandbox?: string, extraEnv: Record<string, string> = {}) {
       const capture = join(home, 'arguments');
       execFileSync('bash', [browser, ...args], {
@@ -56,14 +63,38 @@ describe('desktop Chromium startup', () => {
     expect(existsSync(join(state.home, 'arguments'))).toBe(false);
   });
 
-  it('confines WebRTC to the egress proxy whenever the proxy is on, so pages cannot open direct UDP around it', () => {
-    const proxied = fixture().launch([], undefined, undefined, { OCTO_CHROMIUM_EGRESS_PROXY: '1' });
-    expect(proxied).toEqual(expect.arrayContaining([
+  it.each([
+    ['no recorded mode', undefined],
+    ['cloud mode', 'cloud\n'],
+  ])('connects Chromium directly with %s, so the computer never depends on the egress listener', (_label, mode) => {
+    const state = fixture();
+    if (mode !== undefined) state.recordEgressMode(mode);
+    const args = state.launch();
+    expect(args.some((arg) => arg.startsWith('--proxy-server') || arg.startsWith('--host-resolver-rules') || arg.startsWith('--force-webrtc-ip-handling-policy'))).toBe(false);
+  });
+
+  it('routes Chromium through the egress listener, WebRTC included, only in desktop mode', () => {
+    const state = fixture();
+    state.recordEgressMode('desktop\n');
+    expect(state.launch()).toEqual(expect.arrayContaining([
       '--proxy-server=socks5://127.0.0.1:1080',
+      '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1 , EXCLUDE localhost',
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
     ]));
-    const direct = fixture().launch([], undefined, undefined, { OCTO_CHROMIUM_EGRESS_PROXY: '0' });
-    expect(direct.some((arg) => arg.startsWith('--proxy-server') || arg.startsWith('--force-webrtc-ip-handling-policy'))).toBe(false);
+    const forcedOff = fixture();
+    forcedOff.recordEgressMode('desktop\n');
+    expect(forcedOff.launch([], undefined, undefined, { OCTO_CHROMIUM_EGRESS_PROXY: '0' }).some((arg) => arg.startsWith('--proxy-server'))).toBe(false);
+  });
+
+  it('keeps the recorded egress mode in a home folder the computer checkpoint carries across image replacement', () => {
+    expect(DESKTOP_HOME_PATHS).toContain(EGRESS_MODE_DIR);
+  });
+
+  it('refuses to start Chromium on an unrecognised recorded egress mode', () => {
+    const state = fixture();
+    state.recordEgressMode('tor\n');
+    expect(() => state.launch()).toThrow('unknown egress mode');
+    expect(existsSync(join(state.home, 'arguments'))).toBe(false);
   });
 
   it('opens the Desk as a frameless app window on the persistent loopback CDP profile', () => {

@@ -3,16 +3,19 @@ import glob
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Lock
 from urllib.parse import unquote, urlsplit
 
 OUTPUT = os.environ.get("OCTO_OUTPUT_NAME", "OCTOGEE")
 COMPOSITOR = os.environ.get("OCTO_COMPOSITOR", "hyprland")
 ACTION_LOCK = Lock()
+EGRESS_LOCK = Lock()
 DESK_LOCK = Lock()
 
 DEFAULT_NOTE = "This is my computer. Watch me work here, or take the controls whenever you like."
@@ -369,6 +372,45 @@ def current_time_zone():
     return {"timeZone": out.stdout.decode(errors="replace").strip()}
 
 
+EGRESS_MODES = ("cloud", "desktop")
+
+
+def egress_mode_file():
+    return Path(os.environ["HOME"]) / ".config/octogee/egress-mode"
+
+
+def set_egress_mode(mode):
+    if mode not in EGRESS_MODES:
+        raise ValueError("mode must be cloud or desktop")
+    supervisor = os.environ.get("OCTO_SUPERVISOR_PID", "")
+    if not supervisor.isdigit():
+        raise RuntimeError("the desktop supervisor is unknown, so Chromium cannot be restarted")
+    path = egress_mode_file()
+    original = path.read_text() if path.exists() else None
+    previous = original.strip() if original is not None else "cloud"
+    if original == mode + "\n":
+        return {"mode": mode, "restarted": False}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_egress_mode_file(path, mode + "\n")
+    restarted = previous != mode
+    if restarted:
+        try:
+            os.kill(int(supervisor), signal.SIGUSR1)
+        except OSError as exc:
+            write_egress_mode_file(path, original)
+            raise RuntimeError(f"could not ask the desktop supervisor to restart Chromium: {exc}") from exc
+    return {"mode": mode, "restarted": restarted}
+
+
+def write_egress_mode_file(path, content):
+    if content is None:
+        path.unlink(missing_ok=True)
+        return
+    pending = path.with_suffix(".pending")
+    pending.write_text(content)
+    pending.replace(path)
+
+
 def set_time_zone(zone):
     if not isinstance(zone, str) or len(zone) > TIME_ZONE_MAX or not TIME_ZONE.match(zone):
         raise ValueError("timeZone must be an IANA zone name such as America/Chicago")
@@ -423,6 +465,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("expected a JSON object")
         return body
 
+    def _from_gateway(self):
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        return content_type == "application/json" and self.headers.get("X-Octogee-Egress-Control") == "1"
+
     def _own_origin(self, origin):
         try:
             parts = urlsplit(origin)
@@ -462,6 +508,12 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._json_body()
                 with ACTION_LOCK:
                     result = set_time_zone(body.get("timeZone"))
+            elif path == "/egress":
+                if not self._from_gateway():
+                    self._send(403, {"error": "egress mode changes come from the gateway only"})
+                    return
+                with EGRESS_LOCK:
+                    result = set_egress_mode(self._json_body().get("mode"))
             else:
                 self._send(404, {"error": "not found"})
                 return

@@ -8,10 +8,23 @@ case "${OCTO_CHROMIUM_NO_SANDBOX-0}" in
   *) printf '%s\n' 'OCTO_CHROMIUM_NO_SANDBOX must be 0 or 1' >&2; exit 2 ;;
 esac
 
+egress_mode() {
+  local file="$HOME/.config/octogee/egress-mode" mode=cloud
+  [[ -f "$file" ]] && mode="$(<"$file")"
+  printf '%s' "$mode"
+}
+
 proxy_args=()
 case "${OCTO_CHROMIUM_EGRESS_PROXY-1}" in
   0) ;;
-  1) proxy_args+=(--proxy-server=socks5://127.0.0.1:1080 "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1 , EXCLUDE localhost" --force-webrtc-ip-handling-policy=disable_non_proxied_udp) ;;
+  1)
+    mode="$(egress_mode)"
+    case "$mode" in
+      cloud) ;;
+      desktop) proxy_args+=(--proxy-server=socks5://127.0.0.1:1080 "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1 , EXCLUDE localhost" --force-webrtc-ip-handling-policy=disable_non_proxied_udp) ;;
+      *) printf '%s\n' "unknown egress mode recorded: ${mode}" >&2; exit 2 ;;
+    esac
+    ;;
   *) printf '%s\n' 'OCTO_CHROMIUM_EGRESS_PROXY must be 0 or 1' >&2; exit 2 ;;
 esac
 

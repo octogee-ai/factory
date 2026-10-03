@@ -1,6 +1,7 @@
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import { GATEWAY_EGRESS_SOCKS_HOST, GATEWAY_EGRESS_SOCKS_PORT, type GatewayEgressMode, type GatewayVmEgressState } from "@octogee/shared/types/glm";
+import type { BrowserModeSync } from "./browser-mode.js";
 import { EGRESS_CLOSE_NOT_SELECTED, SOCKS_REPLY } from "./protocol.js";
 import { createNat64Discovery, resolveEgressTarget, systemLookup, vettedLookup, type AddressLookup } from "./denylist.js";
 import { createSocks5Server, EgressDialError, type EgressDialer, type Socks5Server } from "./socks5.js";
@@ -47,6 +48,7 @@ export interface ComputerEgressServiceOptions {
   directDial?: EgressDialer;
   tunnel?: EgressTunnelHost;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  browser?: BrowserModeSync;
 }
 
 function unbracketed(host: string): string {
@@ -178,6 +180,7 @@ export function createComputerEgressService(options: ComputerEgressServiceOption
     mode = state.mode;
     updatedAt = state.updatedAt;
     if (changed) {
+      if (!pendingMode) options.browser?.apply(mode);
       if (mode === "cloud") tunnel.detach(EGRESS_CLOSE_NOT_SELECTED, "Cloud egress selected");
       const terminated = server?.terminateRelays() ?? 0;
       log("computer egress mode applied", { mode, terminatedRelays: terminated });
@@ -221,6 +224,7 @@ export function createComputerEgressService(options: ComputerEgressServiceOption
         await loadWithRetry(bootRead, bootOptions, { settled: () => bootSettled, onSleep: (wake) => { wakeBoot = wake; } }, log);
         wakeBoot = null;
         pendingMode = false;
+        options.browser?.apply(mode);
         return this.start();
       });
       bootDone = run.then(() => undefined, () => undefined);

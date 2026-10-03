@@ -28,6 +28,36 @@ shutdown() {
 }
 trap shutdown TERM INT
 
+restart_browser=0
+request_browser_restart() {
+  restart_browser=1
+  if [[ -n "$browser_pid" ]]; then kill "$browser_pid" 2>/dev/null || true; fi
+}
+trap request_browser_restart USR1
+
+browser_idle=0
+idle_browser() {
+  sleep infinity &
+  browser_pid=$!
+  browser_idle=1
+  if (( restart_browser )); then kill "$browser_pid" 2>/dev/null || true; fi
+}
+
+launch_browser() {
+  browser_idle=0
+  while true; do
+    restart_browser=0
+    /usr/local/bin/octo-desktop-browser >>"$log_dir/chromium.log" 2>&1 &
+    browser_pid=$!
+    stamp "chromium launched"
+    (( restart_browser )) || return 0
+    kill "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" 2>/dev/null || true
+    browser_pid=""
+    stamp "Chromium restarting for an egress mode change"
+  done
+}
+
 wayland_socket() {
   ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | head -n1
 }
@@ -130,22 +160,30 @@ websockify --web /opt/novnc "${bind}:${novnc_port}" "127.0.0.1:${vnc_port}" >"$l
 children+=($!)
 stamp "novnc + websockify on ${novnc_port} (open /vnc.html?autoconnect=true)"
 
-OCTO_BIND="$bind" python3 /usr/local/bin/octo-desktop-control "$control_port" >"$log_dir/control.log" 2>&1 &
+OCTO_BIND="$bind" OCTO_SUPERVISOR_PID="$$" python3 /usr/local/bin/octo-desktop-control "$control_port" >"$log_dir/control.log" 2>&1 &
 children+=($!)
 stamp "control api on ${control_port}"
 
-/usr/local/bin/octo-desktop-browser \
-  >"$log_dir/chromium.log" 2>&1 &
-browser_pid=$!
-stamp "chromium launched"
+launch_browser
 
 while true; do
   child_status=0
   exited_pid=""
   wait -n -p exited_pid "${children[@]}" ${browser_pid:+"$browser_pid"} || child_status=$?
+  if [[ -z "${exited_pid:-}" && -n "$browser_pid" ]] && ! kill -0 "$browser_pid" 2>/dev/null; then
+    exited_pid="$browser_pid"
+  fi
+  [[ -n "${exited_pid:-}" ]] || continue
   if [[ "$exited_pid" == "$browser_pid" ]]; then
-    stamp "Chromium exited (status=${child_status}); desktop remains running"
     browser_pid=""
+    if (( restart_browser )); then
+      restart_browser=0
+      stamp "Chromium restarting for an egress mode change"
+      launch_browser
+      continue
+    fi
+    (( browser_idle )) || stamp "Chromium exited (status=${child_status}); desktop remains running"
+    idle_browser
     continue
   fi
   stamp "desktop service exited (pid=${exited_pid}, status=${child_status}); shutting down"

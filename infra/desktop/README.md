@@ -60,14 +60,22 @@ that permits the sandbox. The launcher accepts only `0` or `1` and fails before
 starting Chromium for any other value. Docker acceptance with the opt-out does
 not verify Chromium sandbox isolation; native VM acceptance does.
 
-Chromium is launched behind gateway-edge's loopback SOCKS5 listener
-(`--proxy-server=socks5://127.0.0.1:1080`, names resolved at the proxy) so a
-Builder can route the computer's web traffic through their desktop shell.
-WebRTC is held to the proxy too (`--force-webrtc-ip-handling-policy=disable_non_proxied_udp`),
-so a page cannot open direct UDP around it. The
-Docker development recipe has no gateway-edge, so it sets
-`OCTO_CHROMIUM_EGRESS_PROXY=0` and the launcher omits the proxy flags; the VM
-image keeps the default `1`. Any other value fails before Chromium starts.
+Chromium connects directly unless the Builder routes the computer's web
+traffic through their desktop shell. gateway-edge records the mode through the
+control API (`POST /egress`) in `~/.config/octogee/egress-mode`, and
+the supervisor restarts Chromium when it changes. Only in `desktop` mode does
+the launcher put Chromium behind gateway-edge's loopback SOCKS5 listener
+(`--proxy-server=socks5://127.0.0.1:1080`, names resolved at the proxy, and
+`--force-webrtc-ip-handling-policy=disable_non_proxied_udp` so WebRTC cannot
+open direct UDP around it). A missing file means `cloud`; an unknown value
+fails before Chromium starts. The Docker development recipe has no
+gateway-edge, so it sets `OCTO_CHROMIUM_EGRESS_PROXY=0`, which keeps Chromium
+direct whatever the file says; the VM image keeps the default `1`. A missing
+file reads as `cloud` because gateway-edge releases before the egress tunnel
+have no SOCKS listener at all; the cost is that a Builder already in desktop
+mode on the first tunnel release (which never writes the file) browses
+directly on an image with this launcher, so deploy a gateway-edge that writes
+the mode before publishing that image to a gateway using desktop mode.
 
 GPU-less (any host, including Apple Silicon under Rosetta):
 

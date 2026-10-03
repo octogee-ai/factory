@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import threading
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -289,6 +290,109 @@ class TimeZoneTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as failure:
                     control.set_time_zone('America/Chicago')
                 self.assertIn('Access denied', str(failure.exception))
+
+
+class EgressModeTest(unittest.TestCase):
+    def test_records_the_mode_and_restarts_chromium_only_when_the_mode_changes(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            stack.enter_context(patch.dict(os.environ, {'OCTO_SUPERVISOR_PID': '4242'}))
+            recorded = fx.root / 'home/.config/octogee/egress-mode'
+            with patch.object(control.os, 'kill') as kill:
+                self.assertEqual(control.set_egress_mode('cloud'), {'mode': 'cloud', 'restarted': False})
+                kill.assert_not_called()
+                self.assertEqual(recorded.read_text(), 'cloud\n')
+                self.assertEqual(control.set_egress_mode('desktop'), {'mode': 'desktop', 'restarted': True})
+                kill.assert_called_once_with(4242, control.signal.SIGUSR1)
+                self.assertEqual(recorded.read_text(), 'desktop\n')
+                kill.reset_mock()
+                self.assertEqual(control.set_egress_mode('desktop'), {'mode': 'desktop', 'restarted': False})
+                kill.assert_not_called()
+                self.assertEqual(control.set_egress_mode('cloud'), {'mode': 'cloud', 'restarted': True})
+                kill.assert_called_once_with(4242, control.signal.SIGUSR1)
+
+    def test_leaves_the_recorded_mode_untouched_when_the_gateway_repeats_it(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            stack.enter_context(patch.dict(os.environ, {'OCTO_SUPERVISOR_PID': '4242'}))
+            recorded = fx.root / 'home/.config/octogee/egress-mode'
+            with patch.object(control.os, 'kill'):
+                control.set_egress_mode('desktop')
+            os.utime(recorded, (1_000_000, 1_000_000))
+            with patch.object(control.os, 'kill') as kill:
+                self.assertEqual(control.set_egress_mode('desktop'), {'mode': 'desktop', 'restarted': False})
+                kill.assert_not_called()
+            self.assertEqual(recorded.stat().st_mtime, 1_000_000)
+
+    def test_refuses_an_unknown_mode_and_a_missing_supervisor_without_recording_anything(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            recorded = fx.root / 'home/.config/octogee/egress-mode'
+            stack.enter_context(patch.dict(os.environ, {'OCTO_SUPERVISOR_PID': '4242'}))
+            for bad in ('tor', '', None, 7):
+                with self.subTest(bad=bad), patch.object(control.os, 'kill') as kill:
+                    with self.assertRaises(ValueError):
+                        control.set_egress_mode(bad)
+                    kill.assert_not_called()
+            os.environ.pop('OCTO_SUPERVISOR_PID')
+            with self.assertRaises(RuntimeError):
+                control.set_egress_mode('desktop')
+            self.assertFalse(recorded.exists())
+
+    def test_keeps_the_previous_mode_when_the_supervisor_cannot_be_signalled_so_a_retry_still_restarts(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            stack.enter_context(patch.dict(os.environ, {'OCTO_SUPERVISOR_PID': '4242'}))
+            recorded = fx.root / 'home/.config/octogee/egress-mode'
+            with patch.object(control.os, 'kill', side_effect=ProcessLookupError(3, 'No such process')):
+                with self.assertRaises(RuntimeError):
+                    control.set_egress_mode('desktop')
+            self.assertFalse(recorded.exists())
+            with patch.object(control.os, 'kill'):
+                control.set_egress_mode('cloud')
+            with patch.object(control.os, 'kill', side_effect=PermissionError(1, 'Operation not permitted')):
+                with self.assertRaises(RuntimeError):
+                    control.set_egress_mode('desktop')
+            self.assertEqual(recorded.read_text(), 'cloud\n')
+            with patch.object(control.os, 'kill') as kill:
+                self.assertEqual(control.set_egress_mode('desktop'), {'mode': 'desktop', 'restarted': True})
+                kill.assert_called_once_with(4242, control.signal.SIGUSR1)
+
+    def test_takes_mode_changes_only_from_callers_a_browser_page_cannot_impersonate(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            stack.enter_context(patch.dict(os.environ, {'OCTO_SUPERVISOR_PID': '4242'}))
+            recorded = fx.root / 'home/.config/octogee/egress-mode'
+            gateway = {'Content-Type': 'application/json', 'X-Octogee-Egress-Control': '1'}
+            for headers in ({}, {'Content-Type': 'text/plain'}, {'Content-Type': 'application/json'}, {'X-Octogee-Egress-Control': '1', 'Content-Type': 'text/plain;charset=UTF-8'}):
+                with self.subTest(headers=headers):
+                    h = handler('/egress', {'mode': 'cloud'}, headers)
+                    with patch.object(control.os, 'kill') as kill, patch.object(h, '_send') as send:
+                        h.do_POST()
+                    self.assertEqual(send.call_args.args[0], 403)
+                    kill.assert_not_called()
+                    self.assertFalse(recorded.exists())
+            h = handler('/egress', {'mode': 'desktop'}, gateway)
+            with patch.object(control.os, 'kill'), patch.object(h, '_send') as send:
+                h.do_POST()
+            self.assertEqual(send.call_args.args, (200, {'mode': 'desktop', 'restarted': True}))
+            h = handler('/egress', {'mode': 'tor'}, gateway)
+            with patch.object(h, '_send') as send:
+                h.do_POST()
+            self.assertEqual(send.call_args.args[0], 400)
+
+    def test_applies_a_mode_change_while_a_long_desktop_action_holds_the_action_lock(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            stack.enter_context(patch.dict(os.environ, {'OCTO_SUPERVISOR_PID': '4242'}))
+            h = handler('/egress', {'mode': 'desktop'}, {'Content-Type': 'application/json', 'X-Octogee-Egress-Control': '1'})
+            with control.ACTION_LOCK, patch.object(control.os, 'kill'), patch.object(h, '_send') as send:
+                worker = threading.Thread(target=h.do_POST, daemon=True)
+                worker.start()
+                worker.join(timeout=2)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(send.call_args.args, (200, {'mode': 'desktop', 'restarted': True}))
+            self.assertEqual((fx.root / 'home/.config/octogee/egress-mode').read_text(), 'desktop\n')
 
 
 def handler(path, body=None, headers=None):

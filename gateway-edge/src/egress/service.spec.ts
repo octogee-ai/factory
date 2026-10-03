@@ -374,6 +374,17 @@ describe("computer egress service", () => {
     await expect(service.dial("ifconfig.me", 443, new AbortController().signal)).rejects.toMatchObject({ reply: SOCKS_REPLY.generalFailure });
   });
 
+  it("points the computer's browser at the loaded mode after boot and at every later change", async () => {
+    const browser = { apply: vi.fn() };
+    const service = createComputerEgressService({ store: memoryStore({ mode: "desktop", updatedAt: 1 }), directDial: async () => new PassThrough(), tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 }, browser });
+    services.push(service);
+    await service.boot({ schedule: () => {} });
+    expect(browser.apply.mock.calls).toEqual([["desktop"]]);
+    await service.setMode("cloud");
+    await service.setMode("cloud");
+    expect(browser.apply.mock.calls).toEqual([["desktop"], ["cloud"]]);
+  });
+
   it("drops every open relay when the mode changes so Chromium re-dials through the selected route", async () => {
     const upstream = new PassThrough();
     const service = createComputerEgressService({ store: memoryStore(), directDial: async () => upstream, tunnel: createEgressTunnelHost(), listen: { host: "127.0.0.1", port: 0 } });

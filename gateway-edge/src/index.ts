@@ -73,6 +73,7 @@ import { createToolSurface } from "./routes/tool-surface.js";
 import { createComputerEgressRouter } from "./routes/computer-egress.js";
 import { createComputerEgressService } from "./egress/service.js";
 import { createBrokerEgressStore } from "./egress/broker.js";
+import { controlApiModePoster, createBrowserModeSync } from "./egress/browser-mode.js";
 import { createComputerSessionsRouter } from "./routes/computer-sessions.js";
 import { applyCookiesOverCdp, type CdpCookie } from "./lib/cdp-cookies.js";
 import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
@@ -99,9 +100,16 @@ let activeChatProxyMetricsRegistry: Registry | null = null;
 let activeOpenClawControlMetrics: OpenClawControlMetrics | undefined;
 const openClawControlAuthorizationCache = createOpenClawControlAuthorizationCache();
 const terminalTickets = createWsTicketStore<TerminalSession>();
+const computerControlUrl = resolveComputerControlUrl(process.env);
 const computerEgress = createComputerEgressService({
   store: createBrokerEgressStore(),
   log: (message, meta) => logger.info(message, meta),
+  browser: computerControlUrl
+    ? createBrowserModeSync({
+      post: controlApiModePoster(computerControlUrl),
+      logger: { warn: (message, meta) => logger.warn(message, meta), error: (message, meta) => logger.error(message, meta) },
+    })
+    : { apply: (mode) => { if (isBuilderComputer()) logger.error("[computer-egress] no desktop control URL; the computer's browser cannot follow the egress mode", { mode }); } },
 });
 const computerEgressRoutes = createComputerEgressRouter({ service: computerEgress });
 const toolSurface = createToolSurface({ egressReport: () => {
@@ -217,7 +225,7 @@ if (surface === "sidecar") {
   app.use("/api/g/:gatewayId/internal/agent-message", internalAgentMessageRoutes);
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
   app.use("/internal/connectors", internalConnectorRoutes);
-  app.use("/internal/computer", createInternalComputerRouter({ controlUrl: resolveComputerControlUrl(process.env) }));
+  app.use("/internal/computer", createInternalComputerRouter({ controlUrl: computerControlUrl }));
 }
 
 if (surface === "cluster") {
