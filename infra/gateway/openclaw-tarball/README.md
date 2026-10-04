@@ -123,11 +123,12 @@ ios-screenshots, pr-fail-fast, checks-node-compat-node24, check-plan,
 ios-release-e2e, ios-screenshot-evidence and Seal full-release child evidence.
 The October 2 refresh retains this base by operator choice: no newer completed
 full main CI was green at selection. Recent green push runs cover security only;
-they do not qualify a new runtime. Runtime archives and hosted islands remain
-unchanged while the base-tool pins are refreshed.
+they do not qualify a new runtime. The October 4 follow-up retains this base
+and repairs native queued-turn channel propagation without changing the runtime
+authority policy.
 Exact overlay:
-[`46398c529fb23f4429542d0ef24dc6224ab6287e`](https://github.com/ceckert/openclaw/commit/46398c529fb23f4429542d0ef24dc6224ab6287e),
-pushed and read back at `ceckert/openclaw:codex/octogee-main-oct01`.
+[`9c2dab6f804533f40185a9f4ac1d17c65a9c197d`](https://github.com/ceckert/openclaw/commit/9c2dab6f804533f40185a9f4ac1d17c65a9c197d),
+pushed and read back at `ceckert/openclaw:codex/queued-native-channel-context`.
 Package version is `2026.9.7`; this is a main snapshot, not the published GA tag.
 
 The overlay retains fork PRs #5/#6, live voice-session grants, native approval
@@ -141,7 +142,7 @@ Native line caps and authorization assertions remain unchanged.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-ba4fdcd9.tgz` | `ba4fdcd9abf2cd698cf55f68489f234ef275f1777623c7dc2388ff01cd9c50f6` | `1790880475393384` |
+| `openclaw-fork-75fb8b45.tgz` | `75fb8b45facd28f738740b99105b3d0080007111db50ba7ed462f66319e7a3c6` | `1791123661569302` |
 | `openclaw-mattermost-93fbedb5.tgz` | `93fbedb52e43f67d306a8cdc645f8a516da14d2c083b9ecd5532fdc585898483` | `1790880478811849` |
 
 Shared-state schema remains 20 and agent schema remains 24, as in the prior
@@ -150,41 +151,38 @@ Preserve native backups and roll forward, not an image-only downgrade or reset.
 
 ### Qualification
 
-The exact-source `pnpm build` passed in 10m 14.5s and records build ID
-`2026.9.7-46398c529fb2-2026-10-01T18-31-32.924Z`. Both maintained packers ran
-sequentially. Exact-source voice and activity consumer SDK checks passed.
-Native archive integrity and the isolated matched installation passed. The
-actual Linux arm64 `openclaw-full-plugin-installer` passed with 154 byte-identical
-Codex files, nine Parallel files, bundled trust and all three native-hook imports.
-Local installer image:
-`sha256:868b37dca36a3291b1d59542758a2d5f55b16e4b70413179e72980b854065977`.
-This is package qualification, not the later Build main gateway image identity.
-Both write-once objects were read back and their full hashes verified.
+The October 4 recut adds one native producer repair to the previously selected
+`46398c529fb23f4429542d0ef24dc6224ab6287e` overlay. Queued Mattermost turns
+already capture and retain `originatingChatId`; canonical queued execution now
+passes that admitted value as `NativeChannelId`. Fresh turns, queued user
+requests and approved continuations retain the same caller/channel authority.
+Missing context stays missing instead of being inferred from the reply destination.
 
-Focused native proof includes 143 channel/Codex tests, 736 Gateway tests,
-real SQLite-worker catalog retention, per-agent cleanup, cron handoff,
-sharing/approval boundaries, Talk and Mattermost consults. Final affected
-cron/Browser/Mattermost reruns passed 59 tests in four files.
-Five real desktop/mobile UI E2E tests passed; inspected captures are
-byte-identical to the prior current build. These are separate suites, not an
-assertion that the entire upstream test suite ran. Production core/UI/extensions
-types, all 27 canonical core-test typegraphs, extensions/scripts/root types,
-protocol/config/Kysely/session-schema generation and native line-cap
-checks passed. Independent integration review found no actionable remaining
-regression. Stable post-pack scoped typed lint passed.
-Octogee passed 135 artifact/provenance tests, 63 base/toolchain/security tests,
-32 native-island/model-picker/Automations tests, 14 gateway Browser resource
-consumer tests, and PWA/gateway-edge typechecks. The UI audit
-retains native, actively wired entry points; gateway protocol/client,
-picker/composer, layout, redaction and style changes follow the selected main.
-All bundles were regenerated together, not hand-edited. The upstream input audit
-was read and each entry checked for active native wiring.
+Two native regressions failed before the repair. All 84 focused execution,
+queue-lifecycle, steering and embedded-context tests pass after it, including
+changed-sender authority denial and missing-channel behavior. Octogee's 363
+connector tests pass: its own broker authorization denial is distinguished
+from Google provider failures, capability grants and protected-action approval
+states. Pre-provider admission failures emit `broker_forbidden`; operation-level
+`forbidden` responses, including Calendar organizer denials, retain their service
+mapping. All 68 focused API handler tests and 14 real emulator boundary tests
+pass. No broker verifier, credential policy or approval execution policy changes.
 
-The unchanged upstream SDK size gate reports 4,597 exports against 4,594 and
-2,699 callables against 2,698. Three unused type exports remain removed.
-The retained surface has concrete approval, voice and packaged Mattermost
-consumers; the budget was not raised or bypassed. Export consistency passes.
-No aggregate `pnpm check` success is claimed.
+The full native build, production typechecks, messaging test typegraph and
+archive integrity check pass. The exact root/Mattermost pair installs in the
+actual Linux full plugin installer; registry refresh, source matching and three
+native Codex hook imports pass. Installed build-info matches the clean source
+above. Published root and reused Mattermost bytes match the complete SHA-256
+values after readback. All seven UI provenance records are regenerated from
+that source. Generated UI code is unchanged after normalizing chunk references;
+chunk names reflect the isolated source checkout. PWA typecheck, 15 consumer
+tests and 45 focused pin/base/packer tests pass. This package qualification
+does not claim a live TEST acceptance pass. After deployment, rerun overlapping user requests and approvals queued
+behind Browser work, then confirm provider readback and absence of duplicate writes.
+
+The selected base and every previous overlay area remain unchanged. Prior
+broader integration and UI evidence applies only to the previous source;
+this focused repair does not claim the entire upstream suite or `pnpm check` passed.
 
 ### Patch assessment
 
