@@ -4,6 +4,7 @@ import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { readBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
+import { addAdminCustomerResetRoutes } from "./admin-customer-reset.js";
 import { MODEL_BROKER_USAGE_EVENTS_COLLECTION, MODEL_BROKER_USAGE_ROLLUPS_COLLECTION, MODEL_BROKER_USAGE_WINDOWS_COLLECTION, MODEL_BROKER_WEEK_WINDOWS_COLLECTION, modelBrokerWindowDocId, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
 import { ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION, anonymousOperationalEnvironment, anonymousOperationalGatewayClass, anonymousOperationalPlanTier, isAnonymousOperationalModelDimension, } from "@octogee/shared/types/account-lifecycle";
 function financeNumber(value) {
@@ -78,8 +79,8 @@ async function readBrokerCustomerUsage(db, uids, now) {
         const weekData = snaps[i * 3 + 1]?.data() ?? {};
         const rollupData = snaps[i * 3 + 2]?.data() ?? {};
         usage.set(uid, {
-            windowCostUsd: financeNumber(windowData.costUsd),
-            weekCostUsd: financeNumber(weekData.costUsd),
+            windowCostUsd: financeNumber(windowData.chargeUsd ?? windowData.costUsd),
+            weekCostUsd: financeNumber(weekData.chargeUsd ?? weekData.costUsd),
             totalCostUsd: financeNumber(rollupData.costUsd),
             totalTokens: financeNumber(rollupData.totalTokens),
             now,
@@ -347,6 +348,7 @@ function warnIfNoSlug(logger, slugs, uid) {
 // eslint-disable-next-line max-lines-per-function -- factory mounts the customer routes; splitting it would scatter the contract
 export function addAdminCustomerRoutes(router, deps) {
     const { db, logger, FieldValue } = deps;
+    addAdminCustomerResetRoutes(router, deps);
     router.get("/customer-archives", async (_req, res, next) => {
         try {
             const snap = await db

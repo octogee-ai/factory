@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
+import { usageWindowStartMs, weekWindowStartMs } from "@octogee/shared/types/model-broker-usage";
 import {
   aggregateBrokerDiagnostics,
   addAdminCustomerRoutes,
@@ -340,6 +341,18 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
 });
 
 describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
+  it("uses reset budget charges while retaining actual historical cost totals", async () => {
+    const now = Date.now();
+    const app = makeApp({
+      "users/uid-1": customerDoc({ subscription: { tier: "personal", status: "active" } }),
+      [`modelBrokerUsageWindows/uid-1_${usageWindowStartMs(now)}`]: { costUsd: 10, chargeUsd: 0 },
+      [`modelBrokerWeekWindows/uid-1_${weekWindowStartMs(now)}`]: { costUsd: 20, chargeUsd: 0 },
+      "modelBrokerUsageRollups/uid-1": { costUsd: 50, totalTokens: 1000000 },
+    });
+    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+    expect(res.body.usage).toMatchObject({ windowCostUsd: 0, weekCostUsd: 0, costUsd: 50, degraded: false, percentUsed: 0 });
+    expect(res.body.summary.weekPercentUsed).toBe(0);
+  });
   it("serves USD from the broker ledger and never the legacy $0 fields", async () => {
     const app = makeApp({
       "users/uid-1": customerDoc({

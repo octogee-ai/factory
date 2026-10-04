@@ -1,4 +1,5 @@
 import { catalogEntryForModelRef } from "./agent-models.js";
+import type { TrialGrant } from "./billing.js";
 import {
   BUILDER_TIERS,
   TIERS,
@@ -9,6 +10,9 @@ import type { ModelCatalogProvider } from "./model-catalog.js";
 import {
   DEFAULT_SIGNUP_OFFER_BUDGET_POLICY,
   parseSignupOfferBudgetPolicy,
+  modelBrokerSignupOfferBudgetDocId,
+  SIGNUP_OFFER_LEDGER_RETENTION_MS,
+  type ModelBrokerSignupOfferBudget,
   type SignupOfferBudgetPolicy,
 } from "./signup-offer.js";
 
@@ -172,6 +176,40 @@ export function trialConfigHash(config: PlatformTrialConfig): string {
     defaultBuilderTier: config.defaultBuilderTier,
     budgetPolicy: config.budgetPolicy,
   }));
+}
+
+export function createSignupOffer(
+  uid: string,
+  config: PlatformTrialConfig,
+  claimedAtMs: number,
+): { grant: TrialGrant; budgetKey: string; budget: ModelBrokerSignupOfferBudget } {
+  const endsAtMs = claimedAtMs + config.durationDays * 24 * 60 * 60 * 1000;
+  const configHash = trialConfigHash(config);
+  const grant: TrialGrant = {
+    schemaVersion: 4,
+    offerId: config.offerId,
+    offerVersion: config.offerVersion,
+    personalTier: config.defaultPersonalTier,
+    builderTier: config.defaultBuilderTier,
+    configHash,
+    claimedAt: new Date(claimedAtMs),
+    endsAt: new Date(endsAtMs),
+    budgetPolicy: config.budgetPolicy,
+  };
+  const budget: ModelBrokerSignupOfferBudget = {
+    ownerUid: uid,
+    offerId: config.offerId,
+    offerVersion: config.offerVersion,
+    receiptConfigHash: configHash,
+    claimedAtMs,
+    endsAtMs,
+    chargeUsd: 0,
+    requestCount: 0,
+    totalTokens: 0,
+    updatedAt: claimedAtMs,
+    expiresAt: new Date(claimedAtMs + SIGNUP_OFFER_LEDGER_RETENTION_MS),
+  };
+  return { grant, budgetKey: modelBrokerSignupOfferBudgetDocId(budget), budget };
 }
 
 export type GoogleConnectStage = "off" | "allowlist" | "on";

@@ -1,6 +1,7 @@
+import type { TrialGrant } from "./billing.js";
 import { type BuilderTierName, type PersonalTierName } from "./billing-tiers.js";
 import type { ModelCatalogProvider } from "./model-catalog.js";
-import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, type SignupOfferBudgetPolicy } from "./signup-offer.js";
+import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, type ModelBrokerSignupOfferBudget, type SignupOfferBudgetPolicy } from "./signup-offer.js";
 export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
 export type { SignupOfferBudgetPolicy };
 export declare const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS: number;
@@ -36,6 +37,11 @@ export interface PlatformTrialConfig {
 export declare const DEFAULT_PLATFORM_TRIAL_CONFIG: PlatformTrialConfig;
 export declare function parsePlatformTrialConfig(value: unknown): PlatformTrialConfig | null;
 export declare function trialConfigHash(config: PlatformTrialConfig): string;
+export declare function createSignupOffer(uid: string, config: PlatformTrialConfig, claimedAtMs: number): {
+    grant: TrialGrant;
+    budgetKey: string;
+    budget: ModelBrokerSignupOfferBudget;
+};
 export type GoogleConnectStage = "off" | "allowlist" | "on";
 export interface PlatformConnectConfig {
     googleStage: GoogleConnectStage;

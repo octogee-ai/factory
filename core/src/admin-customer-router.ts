@@ -17,6 +17,7 @@ import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { readBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
+import { addAdminCustomerResetRoutes } from "./admin-customer-reset.js";
 import {
   MODEL_BROKER_USAGE_EVENTS_COLLECTION,
   MODEL_BROKER_USAGE_ROLLUPS_COLLECTION,
@@ -111,8 +112,8 @@ async function readBrokerCustomerUsage(
     const weekData = snaps[i * 3 + 1]?.data() ?? {};
     const rollupData = snaps[i * 3 + 2]?.data() ?? {};
     usage.set(uid, {
-      windowCostUsd: financeNumber(windowData.costUsd),
-      weekCostUsd: financeNumber(weekData.costUsd),
+      windowCostUsd: financeNumber(windowData.chargeUsd ?? windowData.costUsd),
+      weekCostUsd: financeNumber(weekData.chargeUsd ?? weekData.costUsd),
       totalCostUsd: financeNumber(rollupData.costUsd),
       totalTokens: financeNumber(rollupData.totalTokens),
       now,
@@ -534,6 +535,7 @@ export function addAdminCustomerRoutes(
   deps: AdminCustomerRouterDeps,
 ): Router {
   const { db, logger, FieldValue } = deps;
+  addAdminCustomerResetRoutes(router, deps);
 
   router.get(
     "/customer-archives",
