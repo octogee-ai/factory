@@ -958,7 +958,6 @@ async function applyAddCustomerConfigPatch(
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
   await callOpts?.brokerProfilesReady;
-  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log, secretMaterial);
   await reconcileCustomerRosterAgents(
     ctx,
     snapshot.slug,
@@ -966,6 +965,7 @@ async function applyAddCustomerConfigPatch(
     brokerAgentIds,
     customerAgentEntries,
   );
+  await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log, secretMaterial);
   const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
     captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
   const pendingProjectAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
@@ -1493,13 +1493,6 @@ async function activateImportedCustomer(
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
   });
-  await materializeCustomerBrokerProfiles(
-    activationManifestAgentIds(safeManifest),
-    slug,
-    ctx.log,
-    secretMaterial,
-    `[import:${slug}]`,
-  );
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
@@ -1507,6 +1500,13 @@ async function activateImportedCustomer(
     signal: opts?.signal,
     waitForAppliedRevision: ctx.isBuilderGateway(),
   });
+  await materializeCustomerBrokerProfiles(
+    activationManifestAgentIds(safeManifest),
+    slug,
+    ctx.log,
+    secretMaterial,
+    `[import:${slug}]`,
+  );
   if (ctx.isBuilderGateway()) {
     const restore = await restoreModelCredentialOauthStoreForSlug(slug, {
       logFn: (message) => ctx.log(`[import:${slug}] ${message}`),

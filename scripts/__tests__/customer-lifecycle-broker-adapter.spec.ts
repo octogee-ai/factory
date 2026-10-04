@@ -406,7 +406,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledOnce();
   });
 
-  it("prepares imported credentials before registering agents for runtime reload", async () => {
+  it("prepares imported credentials after agent revival and before activating the manifest", async () => {
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
     const rpc = {
       ...rosterRpc(),
@@ -421,7 +421,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     await adapter.activateImportedCustomer("tester10");
     expect(brokerCatalogMocks.materializeBrokerProfilesForAgents).toHaveBeenCalledOnce();
     expect(brokerCatalogMocks.materializeBrokerProfilesForAgents.mock.invocationCallOrder[0])
-      .toBeLessThan(rpc.agentsCreate.mock.invocationCallOrder[0]);
+      .toBeGreaterThan(rpc.agentsCreate.mock.invocationCallOrder.at(-1)!);
+    expect(brokerCatalogMocks.materializeBrokerProfilesForAgents.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.applyOpenClawActivationManifest.mock.invocationCallOrder[0]);
   });
 
   it.each([false, true])("waits for the final import revision and only gates intermediate roster revisions on Builder gateways (builder=%s)", async (isBuilderGateway) => {
@@ -543,7 +545,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
-  it.each([false, true])("clears imported project deletion state before activation (already rostered: %s)", async (rostered) => {
+  it.each([false, true])("revives imported projects before applying model secrets and activation (already rostered: %s)", async (rostered) => {
     const agentId = "octogee-tester10-proj-orbit-coach";
     let deleted = true;
     mocks.readActivationManifest.mockResolvedValue({
@@ -569,6 +571,10 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         return { ok: true, agentId: name, name, workspace };
       }),
     });
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => ({
+      materialized: deleted ? 0 : 1,
+      deferred: deleted ? [agentId] : [],
+    }));
     mocks.applyOpenClawActivationManifest.mockImplementationOnce(async () => {
       if (deleted) throw new Error("agent database is unavailable while agent is deleted");
       return { elapsedMs: 1, routingActivationRequired: false, restartExistingAccountIds: [] };
@@ -3439,19 +3445,20 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ]);
   });
 
-  it("clears completed deletion state for an already-rostered agent before patching", async () => {
+  it.each([false, true])("revives returning coaches before applying model secrets and patching (already rostered: %s)", async (rostered) => {
     let deleted = true;
     const agentId = "octogee-alice-coach";
-    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster([agentId]) } }, {
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(rostered ? [agentId] : []) } }, {
       agentsCreate: vi.fn(async () => {
         deleted = false;
-        throw new OpenclawWireError("rpc-error", `agent "${agentId}" already exists`);
+        if (rostered) throw new OpenclawWireError("rpc-error", `agent "${agentId}" already exists`);
+        return { ok: true, agentId };
       }),
     });
-    patchMocks.applyConfigPatch.mockImplementationOnce(async () => {
-      if (deleted) throw new Error("agent database is unavailable while agent is deleted");
-      return { mode: "rpc", attempts: 1 };
-    });
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => ({
+      materialized: deleted ? 0 : 1,
+      deferred: deleted ? [agentId] : [],
+    }));
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), {
@@ -3460,6 +3467,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     expect(deleted).toBe(false);
     expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(patchMocks.applyConfigPatch).toHaveBeenCalled();
   });
 
   it("re-reads the roster after creating, because agents.create rewrites the config", async () => {
@@ -3618,7 +3626,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     }
   });
 
-  it("materializes every active agent's broker catalog before agents.create, once the mount's early materialization settles", async () => {
+  it("materializes admitted agents' broker catalogs before config patching, once early materialization settles", async () => {
     const events: string[] = [];
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(() => {
       events.push("materialize");
@@ -3675,7 +3683,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         openAi: expect.objectContaining({ baseUrl: "http://llm-broker:3010/v1" }),
       }),
     );
-    expect(events).toEqual(["early", "materialize", "agents.create", "agents.create", "config-patch", "secrets"]);
+    expect(events).toEqual(["early", "agents.create", "agents.create", "materialize", "config-patch", "secrets"]);
   });
 
   it("leaves nothing for the post-mount oauth purge or model override to patch", async () => {
