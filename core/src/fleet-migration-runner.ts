@@ -719,12 +719,12 @@ async function tryRollback(
       deps.log(`[migration-runner] ⚠ rollback warn: ${step.action} failed: ${msg}`);
     }
   }
+  if (transports.quiesceStarted) {
+    const unreleased = await releaseSource(state, deps, migrationId, transports);
+    if (unreleased.length > 0) return { rolledBack: false, unreleased: unreleased.join("; ") };
+  }
   await restoreSourceServing(deps, transports.restoreServing);
-  if (!transports.quiesceStarted) return { rolledBack: true };
-  const unreleased = await releaseSource(state, deps, migrationId, transports);
-  return unreleased.length === 0
-    ? { rolledBack: true }
-    : { rolledBack: false, unreleased: unreleased.join("; ") };
+  return { rolledBack: true };
 }
 
 // Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving

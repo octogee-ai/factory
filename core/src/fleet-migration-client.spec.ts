@@ -46,6 +46,30 @@ function captureFetch(handler: (call: CapturedCall) => Response | Promise<Respon
 }
 
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
+
+describe("MigrationClient abandoned import cleanup", () => {
+  it("does not accept an unmount acknowledgement for another migration", async () => {
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://target", fetch: captureFetch(() => Response.json({ migrationId: "other", slug: "alice", unmounted: true })).fakeFetch, transferState: transferNotUnderTest });
+    await expect(client.unmount({ gatewayId: "target", migrationId: "mig-1", slug: "alice" })).rejects.toThrow(/acknowledgement/);
+  });
+  it.each(["keys", "pre", "final"] as const)("signs and checks the exact %s import acknowledgement", async (mode) => {
+    const { calls, fakeFetch } = captureFetch(() => Response.json({ migrationId: "mig-1", slug: "alice", imported: false }));
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://target", fetch: fakeFetch, transferState: transferNotUnderTest });
+    await client.abortImport({ gatewayId: "target", migrationId: "mig-1", slug: "alice", mode });
+    expect(calls[0].url).toBe("http://target/abort-rsync-import/target");
+    expect(JSON.parse(calls[0].body!)).toMatchObject({ migrationId: "mig-1", slug: "alice", mode, rpcPhase: "abort-rsync-import" });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBeTruthy();
+  });
+
+  it.each([
+    { migrationId: "other", slug: "alice", imported: false },
+    { migrationId: "mig-1", slug: "other", imported: false },
+    { migrationId: "mig-1", slug: "alice", imported: true },
+  ])("rejects a mismatched acknowledgement %j", async (response) => {
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://target", fetch: captureFetch(() => Response.json(response)).fakeFetch, transferState: transferNotUnderTest });
+    await expect(client.abortImport({ gatewayId: "target", migrationId: "mig-1", slug: "alice", mode: "final" })).rejects.toThrow(/acknowledgement/);
+  });
+});
 const transferNotUnderTest = async (): Promise<never> => {
   throw new Error("state transfer is not under test");
 };

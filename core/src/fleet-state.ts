@@ -96,6 +96,71 @@ export interface WorkspaceMigrationPreparationParams {
   sourceRootUpdatedAt?: number;
 }
 
+export interface WorkspaceMigrationRecoveryParams {
+  uid: string;
+  sourceGatewayId: string;
+  operationId: string;
+  sourceEpoch: number;
+  claimStartedAt: number;
+}
+
+export async function assertWorkspaceMigrationRecoveryAuthority(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void> {
+  await workspaceMigrationRecovery(deps, params, false);
+}
+
+export async function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void> {
+  await workspaceMigrationRecovery(deps, params, true);
+}
+
+async function workspaceMigrationRecovery(
+  deps: FleetStateDeps,
+  params: WorkspaceMigrationRecoveryParams,
+  complete: boolean,
+): Promise<void> {
+  await deps.db.runTransaction(async (txn) => {
+    const userRef = deps.db.collection("users").doc(params.uid);
+    const sourceRef = assignmentRef(deps.db, params.sourceGatewayId, params.uid);
+    const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(params.operationId);
+    const [userSnapshot, operationSnapshot, sourceSnapshot, sourceRootSnapshot] = await Promise.all([
+      txn.get(userRef), txn.get(operationRef), txn.get(sourceRef),
+      txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.sourceGatewayId)),
+    ]);
+    const user = userSnapshot.data();
+    assertRestoreUnfenced(user);
+    const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+    const operation = recordOrEmpty(operationSnapshot.data());
+    const input = recordOrEmpty(operation.input);
+    const source = recordOrEmpty(sourceSnapshot.data());
+    const marker = readWorkspaceMigrationMarker(openclaw);
+    const exact = [
+      operation.kind === MIGRATE_CUSTOMER_OPERATION_KIND, operation.status === "running",
+      operation.startedAt === params.claimStartedAt, Number.isFinite(params.claimStartedAt), params.claimStartedAt > 0,
+      operation.cutoverCommittedAt === undefined, operation.customerMigrationV2 === undefined,
+      operation.cancellationRequestedAt === undefined,
+      input.uid === params.uid, input.fromGatewayId === params.sourceGatewayId,
+      typeof input.toGatewayId === "string", input.toGatewayId !== params.sourceGatewayId,
+      openclaw.gatewayId === params.sourceGatewayId,
+      marker?.operationId === params.operationId || openclaw.migration === undefined && source.state === "serving" && source.updatedByOperationId === params.operationId,
+      source.uid === params.uid, source.gatewayId === params.sourceGatewayId, source.epoch === params.sourceEpoch,
+      Number.isSafeInteger(params.sourceEpoch), params.sourceEpoch >= 0,
+      projectGatewayDesiredRootForGateway(sourceRootSnapshot.data(), params.sourceGatewayId)?.gatewayClass === "shared",
+      source.state === "serving" || source.state === "quiescing" && source.updatedByOperationId === params.operationId,
+    ].every(Boolean);
+    if (!exact) throw new Error("workspace migration recovery authority changed");
+    const [target, targetRoot] = await Promise.all([
+      txn.get(assignmentRef(deps.db, String(input.toGatewayId), params.uid)),
+      txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(String(input.toGatewayId))),
+    ]);
+    if (target.exists) throw new Error("workspace migration recovery target assignment remains");
+    if (projectGatewayDesiredRootForGateway(targetRoot.data(), String(input.toGatewayId))?.gatewayClass !== "shared") throw new Error("workspace migration recovery target is not Shared");
+    if (!complete) return;
+    const completedAt = deps.now ? deps.now().getTime() : Date.now();
+    txn.update(sourceRef, { state: "serving", updatedByOperationId: params.operationId, updatedAt: completedAt });
+    txn.update(operationRef, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: completedAt });
+    clearWorkspaceMigrationMarker(txn, deps, params.uid);
+  });
+}
+
 function preparationAssignmentMatches(
   params: WorkspaceMigrationPreparationParams,
   snapshot: Awaited<ReturnType<FleetStateTxn["get"]>>,

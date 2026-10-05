@@ -26,7 +26,7 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 import { computerPreemptionError } from "../operation-retry.js";
 import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
-import type { WorkspaceMigrationPreparationParams } from "@octogee/core/fleet-state";
+import type { WorkspaceMigrationPreparationParams, WorkspaceMigrationRecoveryParams } from "@octogee/core/fleet-state";
 import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
@@ -105,6 +105,8 @@ export interface MigrateCustomerDeps {
   resolveTargetPlacement: (toGatewayId: string) => Promise<PlacementResolution | null>;
 
   clearMigrationPreparation?: (input: WorkspaceMigrationPreparationParams) => Promise<void>;
+  assertMigrationRecoveryAuthority?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
+  completeMigrationRecovery?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
   setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: "preparing" | "waiting" | "transferring" | "connecting" }) => Promise<void>;
 
   setAssignmentState: (input: {
@@ -1403,22 +1405,48 @@ async function unmountSourceAfterCutover(
   }
 }
 
+async function sharedRecoveryAuthority(deps: MigrateCustomerDeps, op: Operation, user: UserGatewayInfo, uid: string): Promise<WorkspaceMigrationRecoveryParams> {
+  if (!deps.assertMigrationRecoveryAuthority || !deps.completeMigrationRecovery || typeof op.startedAt !== "number" || op.schedulerHandoff?.toGatewayId !== op.input.toGatewayId) {
+    throw new Error("Shared migration recovery requires exact claimed authority");
+  }
+  const source = await deps.resolveSourcePlacement(uid, user.currentGatewayId);
+  if (!source || source.assignmentMode !== "assigned" || source.epoch === undefined) throw new Error("Shared migration recovery source assignment disappeared");
+  const recovery = { uid, sourceGatewayId: user.currentGatewayId, operationId: op.id, sourceEpoch: source.epoch, claimStartedAt: op.startedAt };
+  await deps.assertMigrationRecoveryAuthority(recovery);
+  return recovery;
+}
+
 async function resumePreviousSchedulerAttempt(
   deps: MigrateCustomerDeps,
   op: Operation,
   user: UserGatewayInfo,
   uid: string,
-): Promise<void> {
+): Promise<boolean> {
   const previous = op.schedulerHandoff;
-  if (!previous || previous.migrationId === `${deps.genMigrationId(op.id)}:scheduler:${(op.attempts ?? 0) + 1}`) return;
+  if (!previous || previous.migrationId === `${deps.genMigrationId(op.id)}:scheduler:${(op.attempts ?? 0) + 1}`) return false;
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
   }
+  const sharedRecovery = !op.customerMigrationV2 && previous.fromGatewayId.startsWith("shared-") && previous.toGatewayId.startsWith("shared-");
+  let recovery: WorkspaceMigrationRecoveryParams | undefined;
+  if (sharedRecovery) recovery = await sharedRecoveryAuthority(deps, op, user, uid);
   if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous);
   const url = await deps.resolveGatewayUrl(previous.fromGatewayId);
-  await deps.buildClient(() => url).scheduler({
+  if (sharedRecovery) {
+    const targetUrl = await deps.resolveGatewayUrl(previous.toGatewayId);
+    const target = deps.buildClient(() => targetUrl);
+    for (const mode of ["keys", "pre", "final"] as const) {
+      await target.abortImport({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: previous.toGatewayId, mode });
+    }
+    await target.unmount({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: previous.toGatewayId });
+  }
+  const client = deps.buildClient(() => url);
+  await client.scheduler({
     migrationId: previous.migrationId, slug: previous.slug, gatewayId: previous.fromGatewayId, phase: "resume",
   });
+  await client.resume({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: user.currentGatewayId });
+  if (recovery) await deps.completeMigrationRecovery!(recovery);
+  return recovery !== undefined;
 }
 
 async function abortPreviousTargetAttempt(deps: MigrateCustomerDeps, previous: SchedulerHandoffState): Promise<void> {
@@ -1456,6 +1484,17 @@ function assertRetainedMigrationStrategy(op: Operation, durable: boolean, stateM
   if (op.input.sourceTransferMode === RETAINED_POD && (!durable || stateMigration.strategy === PROVISION_FRESH || nativeReturn)) throw new Error('retained source transfer requires an ordinary durable migration');
 }
 
+function sourceRecoveryOwnershipChanged(op: Operation, user: UserGatewayInfo): boolean {
+  return op.input.recoverSourceOnly === true && (op.cutoverCommittedAt !== undefined || user.currentGatewayId !== op.input.fromGatewayId);
+}
+
+async function sourceOnlyRecoveryResult(op: Operation, sourceRecovered: boolean, ctx: OperationContext, now: number): Promise<OperationResult | null> {
+  if (op.input.recoverSourceOnly !== true) return null;
+  if (!sourceRecovered) throw new Error("source-only recovery requires an abandoned Shared migration");
+  await ctx.reportStep(reportedToOperationStep({ name: "recover-source", status: "done" }, now));
+  return { steps: [], success: false, rolledBack: true, error: "abandoned Shared migration rolled back; native source recovery completed" };
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1471,9 +1510,12 @@ async function prepareMigration(
   try {
     user = await deps.readUser(request.uid);
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: errorMessage(error) };
   }
   if (!user) return { error: `user not found: ${request.uid}` };
+  if (sourceRecoveryOwnershipChanged(op, user)) {
+    return { error: "source recovery cannot reverse cutover or changed ownership", rolledBack: false };
+  }
   const recovered = await recoverCommittedMigration(deps, op, ctx, user, request);
   if (recovered) return { result: recovered };
   if (op.cutoverCommittedAt !== undefined) {
@@ -1487,7 +1529,9 @@ async function prepareMigration(
   const migrationId = deps.genMigrationId(op.id);
 
   try {
-    await resumePreviousSchedulerAttempt(deps, op, user, request.uid);
+    const sourceRecovered = await resumePreviousSchedulerAttempt(deps, op, user, request.uid);
+    const rollback = await sourceOnlyRecoveryResult(op, sourceRecovered, ctx, deps.now());
+    if (rollback) return { result: rollback };
     const resolved = await resolveMigrationTargets(
       deps,
       request.uid,
@@ -1575,7 +1619,7 @@ async function prepareMigration(
       stateMigration,
     };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: errorMessage(error) };
   }
 }
 

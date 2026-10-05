@@ -355,12 +355,13 @@ it("resumes source ingress after final copy fails, and never on successful cutov
   expect(success.client.resume).not.toHaveBeenCalled();
 });
 
-it("keeps channels stopped when source assignment restoration fails", async () => {
+it("reports source assignment publication failure after native ingress resumes", async () => {
   const h = harness({ gateAssignment: true });
   vi.mocked(h.client.quiesce).mockResolvedValueOnce({ migrationId: "m1", slug: "alice", drained: true, runningCount: 0 }).mockRejectedValueOnce(new Error("drain failed"));
   vi.mocked(h.deps.setAssignmentState!).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("restore failed"));
   await expect(runMigration(h.input, h.deps)).rejects.toThrow("restore failed");
-  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.client.resume).toHaveBeenCalledOnce();
+  expect(h.assignmentWrites).not.toContainEqual(expect.objectContaining({ state: "serving" }));
 });
 
 
@@ -538,8 +539,18 @@ describe("rollback releases the source scheduler fence", () => {
     expect(result.errorAt?.error).toContain("/quiesce/gw-blue timed out after 60000ms");
     expect(result.errorAt?.error).toContain("scheduler fence m1 on gw-blue not released");
     expect(h.events).toContain("report:rollback:scheduler-resume:failed");
+    expect(h.assignmentWrites).not.toContainEqual(expect.objectContaining({ state: "serving" }));
     expect(h.client.resume).toHaveBeenCalledTimes(1);
     expect(h.events.some((event) => event.startsWith("log:") && event.includes("❌") && event.includes("scheduler fence m1 on gw-blue not released"))).toBe(true);
+  });
+
+  it("publishes source serving only after native ingress acknowledges resumption", async () => {
+    const h = heldSourceHarness();
+    vi.mocked(h.client.resume).mockImplementation(async () => {
+      expect(h.assignmentWrites).not.toContainEqual(expect.objectContaining({ state: "serving" }));
+    });
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ rolledBack: true });
+    expect(h.assignmentWrites.at(-1)).toMatchObject({ state: "serving" });
   });
 
   it("never touches the source scheduler or ingress when the failure precedes the quiesce", async () => {

@@ -24,6 +24,15 @@ export interface WorkspaceMigrationPreparationParams {
     sourceEpoch: number;
     sourceRootUpdatedAt?: number;
 }
+export interface WorkspaceMigrationRecoveryParams {
+    uid: string;
+    sourceGatewayId: string;
+    operationId: string;
+    sourceEpoch: number;
+    claimStartedAt: number;
+}
+export declare function assertWorkspaceMigrationRecoveryAuthority(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
+export declare function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
 export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps, params: WorkspaceMigrationPreparationParams): Promise<void>;
 export interface FleetStateDocRef {
     set: (data: Record<string, unknown>, options?: {

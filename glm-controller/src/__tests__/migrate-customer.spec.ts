@@ -71,6 +71,7 @@ function mkOp(overrides: Partial<Operation>): Operation {
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
+    abortImport: vi.fn(async () => undefined),
     schedulerReady: vi.fn(async () => undefined),
     scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } })),
     restoreTarget: vi.fn(async ({ gatewayId, slug }) => {
@@ -167,6 +168,8 @@ function mkDeps(options: HarnessOptions = {}) {
     resolveGatewayUrl: vi.fn(async (gatewayId: string) => `http://${gatewayId}.svc:3003`),
     reportMigrationProgress: vi.fn(async () => undefined),
     buildClient: vi.fn(() => client),
+    assertMigrationRecoveryAuthority: vi.fn(async () => undefined),
+    completeMigrationRecovery: vi.fn(async () => undefined),
     resolveSourcePlacement: vi.fn(async () => ({
       release: 1,
       epoch: 4,
@@ -205,6 +208,66 @@ function mkDeps(options: HarnessOptions = {}) {
   } as unknown as OperationContext;
   return { deps, ctx, client, events, steps, persisted };
 }
+
+describe("abandoned Shared migration recovery", () => {
+  const previous = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };
+  function recovery() {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    return h;
+  }
+  const op = () => mkOp({ status: "running", startedAt: 4_000, schedulerHandoff: previous, attempts: 1, input: { uid: "uid-alice", fromGatewayId: "shared-blue", toGatewayId: "shared-green" } });
+  it("aborts all old imports and the target before reopening native source ingress and publishing recovery", async () => {
+    const h = recovery();
+    const order: string[] = [];
+    vi.mocked(h.client.abortImport).mockImplementation(async ({ mode }) => { order.push(`abort:${mode}`); });
+    vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, migrationId, slug }) => { order.push(`unmount:${gatewayId}`); return { migrationId, slug, unmounted: true }; });
+    vi.mocked(h.client.resume).mockImplementation(async () => { order.push("resume"); });
+    vi.mocked(h.deps.completeMigrationRecovery!).mockImplementation(async (input) => {
+      expect(order).toEqual(["abort:keys", "abort:pre", "abort:final", "unmount:shared-green", "resume"]);
+      expect(input).toMatchObject({ sourceEpoch: 4, claimStartedAt: 4_000, operationId: "op-1" });
+      order.push("published");
+    });
+    expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
+    expect(h.client.abortImport).toHaveBeenCalledTimes(3);
+    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith(expect.objectContaining({ migrationId: "mig-op-1:scheduler:2" }));
+  });
+  it.each(["authority", "abort", "unmount", "resume", "publish"])("does not start a fresh transfer after %s recovery failure", async (step) => {
+    const h = recovery();
+    const fail = vi.fn(async () => { throw new Error("recovery refused"); });
+    if (step === "authority") h.deps.assertMigrationRecoveryAuthority = fail;
+    if (step === "abort") h.client.abortImport = fail;
+    if (step === "unmount") h.client.unmount = fail;
+    if (step === "resume") h.client.resume = fail;
+    if (step === "publish") h.deps.completeMigrationRecovery = fail;
+    expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false });
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.ctx.persistSchedulerHandoff).not.toHaveBeenCalled();
+    if (step !== "publish") expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+  });
+  it("finishes boot recovery as a rollback rather than retrying the abandoned target", async () => {
+    const h = recovery();
+    const request = op();
+    request.input.recoverSourceOnly = true;
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "abandoned Shared migration rolled back; native source recovery completed" });
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.verifyTarget).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(h.steps).toContainEqual(expect.objectContaining({ name: "recover-source", status: "done" }));
+  });
+  it.each(["cutover", "source-moved"])("refuses source-only recovery before native RPCs after %s", async (scenario) => {
+    const h = recovery();
+    const request = op();
+    request.input.recoverSourceOnly = true;
+    if (scenario === "cutover") request.cutoverCommittedAt = 3_000;
+    if (scenario === "source-moved") request.input.fromGatewayId = "shared-other";
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, rolledBack: false });
+    expect(h.client.scheduler).not.toHaveBeenCalled();
+    expect(h.client.abortImport).not.toHaveBeenCalled();
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+  });
+});
 
 describe("native computer return", () => {
   function nativeReturn(h: ReturnType<typeof mkDeps>) {

@@ -118,6 +118,7 @@ export async function releaseAbandonedSchedulerHandoffs(
   let released = 0;
   for (const doc of pending.docs) {
     const operation = doc.data();
+    if (operation.input?.recoverSourceOnly === true && typeof operation.cutoverCommittedAt !== "number") continue;
     const handoff = operation.schedulerHandoff;
     if (!isHandoff(handoff)) {
       deps.log(`[scheduler-handoff-release] ⚠ ${doc.id} has no valid scheduler handoff; leaving it pending`);

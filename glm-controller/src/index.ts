@@ -255,6 +255,8 @@ import {
   markAssignmentState,
   setWorkspaceMigrationPhase,
   clearWorkspaceMigrationPreparation,
+  completeWorkspaceMigrationRecovery,
+  assertWorkspaceMigrationRecoveryAuthority,
   type FleetStateFirestore,
 } from "@octogee/core/fleet-state";
 import {
@@ -2298,6 +2300,7 @@ interface ControllerBackgroundTasksDeps {
   helm: HelmRunner;
   fleetControllerPrivateKey: string;
   platformArtifact: GatewayArtifact;
+  controllerStartedAt: number;
 }
 
 const GITEA_GATEWAY_KEY_GC_INTERVAL_MS = 60_000;
@@ -2311,6 +2314,7 @@ function startControllerBackgroundTasks({
   helm,
   fleetControllerPrivateKey,
   platformArtifact,
+  controllerStartedAt,
 }: ControllerBackgroundTasksDeps): ControllerStopper[] {
   if (!deps.kubeOps) {
     throw new Error("controller background tasks require Kubernetes operations");
@@ -2340,6 +2344,7 @@ function startControllerBackgroundTasks({
     intervalMs: 60_000,
     stalenessMs: 15 * 60 * 1000,
     now: () => Date.now(),
+    controllerStartedAt,
   });
   const migrationClient = createMigrationClientBuilder(db, fleetControllerPrivateKey, log);
   const stopSchedulerHandoffRelease = startSchedulerHandoffRelease({
@@ -2809,6 +2814,7 @@ async function main(): Promise<void> {
     helm: deps.helm,
     fleetControllerPrivateKey,
     platformArtifact,
+    controllerStartedAt,
   });
   stoppers.push(
     startSharedPoolScaler({
@@ -3106,6 +3112,8 @@ async function buildHandlers(
   });
 
   const migrateCustomer = createMigrateCustomerHandler({
+    assertMigrationRecoveryAuthority: (input) => assertWorkspaceMigrationRecoveryAuthority({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
+    completeMigrationRecovery: (input) => completeWorkspaceMigrationRecovery({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     setMigrationPhase: (input) => setWorkspaceMigrationPhase({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     reportMigrationProgress: async (gatewayId, event) => {

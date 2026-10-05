@@ -94,6 +94,15 @@ export function createMigrationClient(deps) {
         fetchWithTimeout: createFetchWithTimeout(deps.fetch ?? globalThis.fetch),
     });
     return {
+        async abortImport({ migrationId, gatewayId, slug, mode }) {
+            const result = await postSignedJson({
+                transportId: gatewayId, path: `/abort-rsync-import/${gatewayId}`, gatewayId, migrationId,
+                body: { migrationId, slug, mode, rpcPhase: "abort-rsync-import" }, timeoutMs: unmountMs,
+            });
+            if (result.migrationId !== migrationId || result.slug !== slug || result.imported !== false) {
+                throw new Error("import cleanup acknowledgement mismatch");
+            }
+        },
         async scheduler({ gatewayId, transportId, ...body }) {
             const result = await postSignedJson({
                 transportId: transportId ?? gatewayId,
@@ -187,6 +196,9 @@ export function createMigrationClient(deps) {
                 body: { migrationId, slug },
                 timeoutMs: unmountMs,
             });
+            if (res.migrationId !== migrationId || res.slug !== slug || typeof res.unmounted !== "boolean") {
+                throw new Error("unmount cleanup acknowledgement mismatch");
+            }
             log(`[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`);
             return res;
         },

@@ -49,6 +49,7 @@ export interface MigrationClientDeps {
 // gatewayId; simple-roll has one stable Service per gateway, so tenant and
 // transport are the same name (GATEWAY-SIMPLE-ROLL-SPEC).
 export interface MigrationClient {
+  abortImport(opts: { migrationId: string; gatewayId: string; slug: string; mode: MigrationSyncMode }): Promise<void>;
   scheduler(opts: SchedulerMigrationRequestBody & { gatewayId: string; transportId?: string }): Promise<SchedulerMigrationResult>;
   schedulerReady(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
@@ -249,6 +250,15 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
   });
 
   return {
+    async abortImport({ migrationId, gatewayId, slug, mode }) {
+      const result = await postSignedJson<ImportResponse>({
+        transportId: gatewayId, path: `/abort-rsync-import/${gatewayId}`, gatewayId, migrationId,
+        body: { migrationId, slug, mode, rpcPhase: "abort-rsync-import" }, timeoutMs: unmountMs,
+      });
+      if (result.migrationId !== migrationId || result.slug !== slug || result.imported !== false) {
+        throw new Error("import cleanup acknowledgement mismatch");
+      }
+    },
     async scheduler({ gatewayId, transportId, ...body }) {
       const result = await postSignedJson<SchedulerMigrationResult>({
         transportId: transportId ?? gatewayId,
@@ -357,6 +367,9 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
         body: { migrationId, slug },
         timeoutMs: unmountMs,
       });
+      if (res.migrationId !== migrationId || res.slug !== slug || typeof res.unmounted !== "boolean") {
+        throw new Error("unmount cleanup acknowledgement mismatch");
+      }
       log(
         `[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`,
       );

@@ -30,9 +30,11 @@ import {
 import {
   commitPlacementAtomic,
   GATEWAY_RELEASES_SUBCOLLECTION,
+  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   isGatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
+  customerRuntimeMutationFenced,
   releasePayloadHash,
   type PlacementFirestore,
   type ReleasePayload,
@@ -95,6 +97,7 @@ import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
 import {
   classifyOperationFailure,
+  isGatewayStartupUnavailable,
 } from "./operation-retry.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
@@ -1765,7 +1768,7 @@ async function reconcileReturnMigrationOnTarget(
   if (
     (returnOperation?.status === "failed" ||
       returnOperation?.status === ROLLED_BACK_STATUS) &&
-    returnOperation.retryRequested !== true
+    returnOperation.retryRequested !== true && !isGatewayStartupUnavailable(returnOperation.error)
   ) {
     blockTerminalReturnOperation(context, user.uid, lease, returnOperation);
     return true;
@@ -3154,6 +3157,94 @@ function placementMigrationIsNonTerminal(data: Record<string, unknown>): boolean
   return ["pending", "running", "succeeded"].includes(data.status as string);
 }
 
+function startupFailedReturnMatchesDemand(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const original = record(data.input);
+  return request.source === BUILDER_ACTIVATION_LEASE_SOURCE && data.kind === MIGRATE_CUSTOMER_KIND &&
+    data.status === "failed" && data.origin === "automatic" && data.createdBy === PLACEMENT_POLICY_ACTOR &&
+    data.customerMigrationV2 === undefined && data.cutoverCommittedAt === undefined && data.cancellationRequestedAt === undefined &&
+    original?.uid === request.uid && original.builderSlug === request.builderSlug &&
+    original.fromGatewayId === request.fromGatewayId && original.source === request.source &&
+    isGatewayStartupUnavailable(typeof data.error === "string" ? data.error : undefined);
+}
+
+function preRpcAuthorityFailure(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const steps = Array.isArray(data.steps) ? data.steps : [];
+  const step = record(steps[0]);
+  return request.source === CONTINUOUS_PLACEMENT_POLICY_SOURCE && data.status === "failed" &&
+    data.origin === "automatic" && data.createdBy === PLACEMENT_POLICY_ACTOR &&
+    data.customerMigrationV2 === undefined && data.cutoverCommittedAt === undefined && data.cancellationRequestedAt === undefined &&
+    data.error === "workspace migration phase authority changed" && steps.length === 1 &&
+    step?.name === "keys-sync-state" && step.status === "failed" && step.error === data.error;
+}
+
+function sourceOnlyRollbackCompleted(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const steps = Array.isArray(data.steps) ? data.steps : [];
+  const step = record(steps[0]);
+  return isAutomaticRolledBackPlacement(data, request) && record(data.input)?.recoverSourceOnly === true &&
+    data.cutoverCommittedAt === undefined && data.cancellationRequestedAt === undefined && steps.length === 1 &&
+    step?.name === "recover-source" && step.status === "done";
+}
+
+async function assertPreRpcRetryAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput): Promise<void> {
+  const [user, source, target] = await Promise.all([
+    transaction.get(input.db.collection("users").doc(request.uid)),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
+  ]);
+  const assignment = source.data();
+  const exact = !customerRuntimeMutationFenced(user.data()) &&
+    currentGatewayId(user.data() ?? {}) === request.fromGatewayId &&
+    user.data()?.provisioning?.openclaw?.migration === undefined && !target.exists &&
+    retrySourceAssignmentMatches(assignment, request) &&
+    continuousPlacementMigrationOperationId({ ...request, sourceAssignmentEpoch: assignment.epoch }) === request.operationId;
+  if (!exact) throw new Error("workspace migration retry authority remains blocked");
+}
+
+function retrySourceAssignmentMatches(assignment: FirebaseFirestore.DocumentData | undefined, request: EnqueuePlacementMigrationInput): assignment is FirebaseFirestore.DocumentData {
+  return assignment?.uid === request.uid && assignment.gatewayId === request.fromGatewayId &&
+    assignment.state === "serving" && Number.isSafeInteger(assignment.epoch) && assignment.epoch >= 0;
+}
+
+function startupReturnLeaseMatches(user: FirebaseFirestore.DocumentData | undefined, lease: BuilderActivationLease | null, request: EnqueuePlacementMigrationInput): lease is BuilderActivationLease {
+  return !customerRuntimeMutationFenced(user) && currentGatewayId(user ?? {}) === request.fromGatewayId &&
+    lease?.status === "returning" && lease.targetGatewayId === request.fromGatewayId && lease.raw.returnOperationId === request.operationId;
+}
+
+function startupReturnSourceMatches(root: ReturnType<typeof projectGatewayDesiredRootForGateway>, lease: BuilderActivationLease, request: EnqueuePlacementMigrationInput): boolean {
+  const allocation = root?.allocation;
+  return root?.gatewayClass === "builder" && root.ownerUid === request.uid && root.desiredStatus !== "retired" &&
+    allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND && allocation.claimedByUid === request.uid &&
+    allocation.leaseId === lease.leaseId && allocation.generation === lease.generation;
+}
+
+function sharedReturnTargetReady(root: ReturnType<typeof projectGatewayDesiredRootForGateway>, runtime: FirebaseFirestore.DocumentData | undefined, request: EnqueuePlacementMigrationInput, now: number): boolean {
+  if (!root || !isGatewayRuntimeDoc(runtime)) return false;
+  const heartbeatAt = millis(runtime.heartbeat.lastHeartbeatAt);
+  return root.gatewayClass === "shared" && root.desiredStatus === "running" && root.liveRelease !== null &&
+    root.liveRelease === root.desiredRelease && runtime.gatewayId === request.toGatewayId && runtime.release === root.liveRelease &&
+    runtime.lifecycle === "serving" && runtime.heartbeat.status === "ready" &&
+    heartbeatAt !== null && heartbeatAt <= now && now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
+}
+
+async function assertStartupReturnAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput): Promise<void> {
+  const [user, assignment, source, target, runtime, pool, targetAssignment] = await Promise.all([
+    transaction.get(input.db.collection("users").doc(request.uid)),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId)),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId)),
+    transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(request.toGatewayId)),
+    readSharedGatewayPoolConfig(input.db, transaction),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
+  ]);
+  const lease = builderActivationLease(user.data() ?? {});
+  const sourceRoot = projectGatewayDesiredRootForGateway(source.data(), request.fromGatewayId);
+  const targetRoot = projectGatewayDesiredRootForGateway(target.data(), request.toGatewayId);
+  const exact = !targetAssignment.exists && startupReturnLeaseMatches(user.data(), lease, request) &&
+    startupReturnSourceMatches(sourceRoot, lease, request) && retrySourceAssignmentMatches(assignment.data(), request) &&
+    pool?.sharedGatewayIds.includes(request.toGatewayId) && sharedReturnTargetReady(targetRoot, runtime.data(), request, input.now());
+  if (!exact) throw new Error("Builder startup return retry authority changed");
+}
+
 function rearmedPlacementMigrationPatch(): Record<string, unknown> {
   return {
     status: "pending",
@@ -3210,6 +3301,13 @@ export async function enqueuePlacementMigration(
       return;
     }
     const data = existing.data() as Record<string, unknown>;
+    if (startupFailedReturnMatchesDemand(data, request)) {
+      await assertStartupReturnAuthority(input, transaction, request);
+      transaction.update(ref, {
+        ...rearmedPlacementMigrationPatch(), "input.toGatewayId": request.toGatewayId, gatewayId: request.toGatewayId,
+      });
+      return;
+    }
     if (operatorRetriedBuilderReturnMatchesDemand(data, request)) {
       transaction.update(ref, {
         ...rearmedPlacementMigrationPatch(),
@@ -3224,6 +3322,11 @@ export async function enqueuePlacementMigration(
       throw new Error(`migration operation ${ref.id} does not match activation demand`);
     }
     if (placementMigrationIsNonTerminal(data)) return;
+    if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {
+      await assertPreRpcRetryAuthority(input, transaction, request);
+      transaction.update(ref, { ...rearmedPlacementMigrationPatch(), schedulerHandoff: FieldValue.delete(), "input.recoverSourceOnly": FieldValue.delete() });
+      return;
+    }
     if (!rolledBackTransientPlacementCanRearm(data, request)) {
       throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
     }

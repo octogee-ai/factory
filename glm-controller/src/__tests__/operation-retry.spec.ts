@@ -17,6 +17,14 @@ import {
 } from "../operation-retry";
 
 describe("verifiedDeletionCompletion", () => {
+  it.each([
+    "/quiesce/builder: 500 Agent alice-coach has not completed startup inspection and preparation. Inspection and writable admission continue after the Gateway listener binds.",
+    "/quiesce/builder: 500 agent alice-coach startup preparation was superseded",
+    "/resume/shared: 500 gateway starting; retry shortly",
+  ])("retries native startup availability without classifying database corruption as transient: %s", (error) => {
+    expect(classifyOperationFailure(error)).toBe("transient");
+    expect(classifyOperationFailure("agent alice-coach database corrupt; run Doctor")).toBe("terminal");
+  });
   it("returns the durable deletion mapping only for a successful verified erasure", () => {
     expect(verifiedDeletionCompletion({
       steps: [],

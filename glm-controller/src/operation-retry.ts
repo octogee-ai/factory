@@ -11,6 +11,10 @@ import type { OperationResult } from "./operation-router.js";
 
 export type OperationFailureClassification = "transient" | "terminal";
 
+export function isGatewayStartupUnavailable(error: string | undefined): boolean {
+  return typeof error === "string" && /\b(?:agent \S+ (?:has not completed startup inspection and preparation|startup preparation was superseded)|gateway starting; retry shortly)\b/i.test(error);
+}
+
 // Explicit allowlist, terminal by default: "TRUE validation failures... fail
 // immediately" is the safe default for a string-classified error. Only causes
 // we recognize as environmental (network/K8s-API hiccups, timeouts, preemption)
@@ -57,6 +61,7 @@ export function classifyOperationFailure(
   error: string | undefined,
 ): OperationFailureClassification {
   if (!error) return "terminal";
+  if (isGatewayStartupUnavailable(error)) return "transient";
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(error))
     ? "transient"
     : "terminal";

@@ -19,6 +19,12 @@ interface FakeOpDoc {
     steps?: Array<{ name: string; status: string }>;
     cutoverCommittedAt?: number;
     schedulerHandoffReleased?: boolean;
+    schedulerHandoff?: Record<string, unknown>;
+    completedAt?: number;
+    error?: unknown;
+    attempts?: number;
+    attemptHistory?: unknown[];
+    cancellationRequestedAt?: number;
   };
   updated?: Record<string, unknown>;
 }
@@ -33,6 +39,7 @@ interface FakeDbState {
 function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
   function operationRef(operation: FakeOpDoc) {
     return {
+      id: operation.id,
       snapshot: () => ({ exists: true, data: () => operation.data }),
       apply: (patch: Record<string, unknown>) => {
         operation.updated = patch;
@@ -110,6 +117,87 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it.each(["boot", "budget", "scheduler-only-released"])("requeues an abandoned owned Shared migration without pretending the source is serving: %s", async (scenario) => {
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "failed", completedAt: NOW - 1_000, steps: [],
+      error: "reaped: controller restarted mid-op", input: {
+        uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b",
+      },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    if (scenario === "budget") op.data.error = "reaped: op exceeded 15m running budget — controller likely restarted mid-op or the work hung past the inner deadlines";
+    if (scenario === "scheduler-only-released") op.data.schedulerHandoffReleased = true;
+    const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "quiescing", updatedByOperationId: op.id };
+    const marker = { state: "moving", operationId: op.id, startedAt: 100 };
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: marker } } } },
+      assignments: { "shared-a/alice": assignment },
+    });
+    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    expect(op.data.status).toBe("pending");
+    expect(assignment.state).toBe("quiescing");
+    expect(marker.operationId).toBe(op.id);
+    expect(op.data.schedulerHandoff).toMatchObject({ migrationId: "mig-placement-owned:scheduler:1" });
+    expect(op.data.attempts).toBe(1);
+    expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+  });
+  it.each(["previous-controller", "current-controller"])("does not strand a boot-missed orphan or race a live claim: %s", async (scenario) => {
+    const claimedAt = NOW - 30 * 60_000;
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "running", startedAt: claimedAt, steps: [],
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "quiescing", updatedByOperationId: op.id };
+    const db = makeFakeDb([op], { users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: op.id, startedAt: 100 } } } } }, assignments: { "shared-a/alice": assignment } });
+    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000,
+      controllerStartedAt: claimedAt + (scenario === "previous-controller" ? 1_000 : -1_000),
+    } as never);
+    expect(op.data.status).toBe(scenario === "previous-controller" ? "pending" : "failed");
+    expect(assignment.state).toBe("quiescing");
+  });
+
+  it.each(["foreign-marker", "moved", "foreign-gate", "target-assigned", "cutover", "v2", "cancelled", "restore", "source-transfer", "terminal", "missing-handoff"])("preserves abandoned state when recovery has %s", async (scenario) => {
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "failed", steps: [], error: "reaped: controller restarted mid-op",
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    const openclaw: Record<string, unknown> = { gatewayId: "shared-a", migration: { state: "moving", startedAt: 100, operationId: op.id } };
+    const assignment = { uid: "alice", gatewayId: "shared-a", state: "quiescing", epoch: 1, updatedByOperationId: op.id };
+    if (scenario === "foreign-marker") openclaw.migration = { state: "moving", startedAt: 100, operationId: "another" };
+    if (scenario === "moved") openclaw.gatewayId = "shared-b";
+    if (scenario === "foreign-gate") assignment.updatedByOperationId = "another";
+    if (scenario === "cutover") op.data.cutoverCommittedAt = 200;
+    if (scenario === "v2") op.data.customerMigrationV2 = { phase: "initial" };
+    if (scenario === "cancelled") op.data.cancellationRequestedAt = 200;
+    if (scenario === "restore") openclaw.restoreFence = { operationId: "restore" };
+    if (scenario === "source-transfer") openclaw.sourceTransferFence = { operationId: op.id };
+    if (scenario === "terminal") op.data.error = "signature verification failed";
+    if (scenario === "missing-handoff") delete op.data.schedulerHandoff;
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw } } },
+      assignments: { "shared-a/alice": assignment, ...(scenario === "target-assigned" ? { "shared-b/alice": { state: "serving" } } : {}) },
+    });
+    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    expect(op.updated).toBeUndefined();
+    expect(assignment.state).toBe("quiescing");
+  });
+
+  it("requeues a live orphan's journal and uses a fresh scheduler attempt after the old controller exits", async () => {
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "running", startedAt: NOW - 1_000, attempts: 0,
+      steps: [{ name: "quiesce-source", status: "done" }],
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "quiescing", updatedByOperationId: op.id };
+    const db = makeFakeDb([op], { users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: op.id, startedAt: 100 } } } } }, assignments: { "shared-a/alice": assignment } });
+    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    expect(op.data).toMatchObject({ status: "pending", attempts: 1, steps: [], schedulerHandoff: { migrationId: "mig-placement-owned:scheduler:1" } });
+    expect(op.data.attemptHistory).toMatchObject([{ attempt: 1, steps: [{ name: "quiesce-source", status: "done" }] }]);
+    expect(assignment.state).toBe("quiescing");
+  });
   it("preserves an ID-less persisted automatic Builder return for restart recovery", async () => {
     const ops: FakeOpDoc[] = [{
       id: "builder-return-builder-alice",
@@ -213,7 +301,7 @@ describe("runStuckOpReaperTick", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("restore"));
   });
 
-  it("atomically restores an operation-owned legacy migration gate before failing the stuck op", async () => {
+  it("keeps the source closed when native recovery ownership is missing", async () => {
     const ops: FakeOpDoc[] = [{
       id: "placement-owned",
       data: {
@@ -253,12 +341,11 @@ describe("runStuckOpReaperTick", () => {
 
     expect(result).toEqual({ scanned: 1, reaped: 1 });
     expect(assignment).toMatchObject({
-      state: "serving",
-      updatedAt: NOW,
+      state: "quiescing",
       updatedByOperationId: "placement-owned",
     });
     expect(ops[0].updated).toMatchObject({ status: "failed" });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("restored source assignment"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("source recovery remains unacknowledged"));
   });
 
   it.each([
@@ -540,7 +627,7 @@ describe("recoverControllerOrphanedOperations", () => {
     });
   }
 
-  it("fails a pre-cutover migration the previous controller orphaned without waiting out the reaper budget, reopening its source and unblocking the queued conflicting migration", async () => {
+  it("fails an orphan lacking native recovery ownership without falsely reopening its source", async () => {
     const orphan = orphanedPlacement({
       steps: [
         { name: "keys-sync-state", status: "done" },
@@ -580,7 +667,7 @@ describe("recoverControllerOrphanedOperations", () => {
       error: expect.stringMatching(/^reaped: controller restarted mid-op/),
       schedulerHandoffReleased: false,
     });
-    expect(assignment).toMatchObject({ state: "serving", updatedByOperationId: "placement-orphan" });
+    expect(assignment).toMatchObject({ state: "quiescing", updatedByOperationId: "placement-orphan" });
     expect(decideOperationClaim({
       op: queued as never, now: NOW, runningOpsSameKind: running(), pendingOpsSameKind: [],
     }).outcome).toBe("claim");

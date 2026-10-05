@@ -16,6 +16,12 @@ export interface MigrationClientDeps {
     transferState: MigrationClient["transferState"];
 }
 export interface MigrationClient {
+    abortImport(opts: {
+        migrationId: string;
+        gatewayId: string;
+        slug: string;
+        mode: MigrationSyncMode;
+    }): Promise<void>;
     scheduler(opts: SchedulerMigrationRequestBody & {
         gatewayId: string;
         transportId?: string;
