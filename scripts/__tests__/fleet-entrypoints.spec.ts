@@ -642,17 +642,17 @@ describe("fleet force gateway restart", () => {
       liveRelease: 1,
       desiredStatus: "running",
       configSchemaVersion: 1,
-      profile: "standard",
-      gatewayClass: "shared",
-      imageProfile: "standard",
+      profile: "builder",
+      gatewayClass: "builder",
+      imageProfile: "builder",
       sizingTier: null,
       gcpProject: null,
       gatewayContainerSecurityContext: null,
       serviceAccountName: null,
       serviceAccount: null,
       builderAccess: null,
-      ownerUid: null,
-      builderSlug: null,
+      ownerUid: "canary-owner",
+      builderSlug: "canary",
       modelBrokerLimits: null,
       preemption: null,
     };
@@ -736,6 +736,19 @@ describe("fleet force gateway restart", () => {
       path: "/api/admin/gateways/canary/restart",
       idempotencyKey: "restart-canary",
     });
+  });
+
+  it("rejects a Shared forced pod restart before audit or kubectl", async () => {
+    const { db, documents, writes, kubectl, runMutation } = forceRestartHarness();
+    documents.get("gateways/canary")!.gatewayClass = "shared";
+    await expect(runForcedGatewayRestart({
+      db: db as never,
+      kubeContext: "gke_octogee_us-central1_octogee-gateway", namespace: "octogee-test",
+      gatewayId: "canary", runKubectl: kubectl, runMutation,
+    })).rejects.toThrow("Shared gateways cannot be force restarted");
+    expect(runMutation).not.toHaveBeenCalled();
+    expect(kubectl).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
   });
 
   it("accepts only the exact restart grammar", () => {
@@ -893,6 +906,9 @@ describe("fleet force gateway restart", () => {
   });
 
   it.each([
+    ["gateway becomes Shared", (documents: Map<string, Record<string, unknown>>) => {
+      documents.set("gateways/canary", { ...documents.get("gateways/canary")!, gatewayClass: "shared" });
+    }, "Shared gateways cannot be force restarted"],
     ["gateway retirement", (documents: Map<string, Record<string, unknown>>) => {
       documents.set("gateways/canary", {
         ...documents.get("gateways/canary")!,

@@ -14,6 +14,10 @@ import {
 } from "../lib/surge-openclaw-process-gate.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 import { startSurgeOpenClawSupervisor } from "../entrypoints/surge-openclaw-supervisor.js";
+import { createBuilderSurgeGateWiring } from "../lib/fleet-provisioner.js";
+import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
+import { startSurgeReadinessSelfRelease } from "../lib/surge-reconcile-gate.js";
+import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 
 const roots: string[] = [];
 
@@ -327,6 +331,108 @@ describe("surge OpenClaw process gate", () => {
 });
 
 describe("surge OpenClaw process supervisor", () => {
+  it("keeps Builder self-release alive when a permitted first boot fails before health", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const readiness = createSurgeReadinessGate(openclawDir, "target-pod");
+    await readiness.release({ targetPodUid: "target-pod" });
+    const firstBoot = Promise.withResolvers<void>();
+    const initialCheck = Promise.withResolvers<void>();
+    const children: FakeChild[] = [];
+    const log = vi.fn();
+    const doctor = vi.fn(async () => {
+      throw new Error("owner heartbeat is fresh; wait up to 90 seconds");
+    });
+    const bootClient = {
+      claimOpenClawBoot: vi.fn()
+        .mockImplementationOnce(async () => { await firstBoot.promise; return { action: "start" }; })
+        .mockResolvedValueOnce({ action: "doctor" })
+        .mockResolvedValue({ action: "start" }),
+      completeOpenClawBoot: vi.fn(async () => undefined),
+    };
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: "target-pod", socketPath, log,
+      prepareTarget: async () => undefined,
+      bootWatcher: createOpenClawBootWatcher({ client: bootClient, releaseKey: "release-2", log, run: doctor }),
+      spawnOpenClaw: () => {
+        const child = new FakeChild();
+        children.push(child);
+        if (children.length === 1) queueMicrotask(() => {
+          child.alive = false;
+          child.emit("exit", 1, null);
+        });
+        return child;
+      },
+      probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const adapter = {
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+      configuredBuilderOverlayPresent: () => true,
+      listLocalCustomerSlugs: () => ["ceckert-test"],
+      customerMountMarked: () => true,
+      hasWorkspaceGitDir: () => true,
+      hasGitRemote: () => true,
+    } as unknown as CustomerLifecycleAdapter;
+    const attach = vi.fn(async () => "ceckert-test");
+    const wiring = createBuilderSurgeGateWiring({
+      openclawDir, adapter, processGate: client, surgeReadiness: readiness, log,
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      configuredBuilderAssigned: async () => true,
+      attachConfiguredBuilderBeforeOpenClaw: attach,
+      waitForGatewayReady: async () => {
+        expect(await client.status()).toMatchObject({ mode: "permitted", phase: "running" });
+      },
+    });
+    const scheduled: Array<() => void> = [];
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => {
+        const settled = await wiring.selfReleaseLoopSettled();
+        initialCheck.resolve();
+        return settled;
+      },
+      observe: async () => ({ kind: "none", reason: "no Ready sibling" }),
+      reserved: wiring.selfReleaseReserved,
+      release: () => wiring.selfRelease("target-pod"),
+      schedule: (callback) => { scheduled.push(callback); return () => undefined; },
+      log,
+    });
+    try {
+      await initialCheck.promise;
+      await expect(client.status()).resolves.toMatchObject({ mode: "permitted", phase: "starting" });
+      firstBoot.resolve();
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith(
+        "[surge-openclaw] initial permitted start failed: owner heartbeat is fresh; wait up to 90 seconds",
+      ));
+      await expect(client.status()).resolves.toMatchObject({ role: "normal", mode: "held", phase: "held" });
+      expect(doctor).toHaveBeenCalledExactlyOnceWith("openclaw", ["doctor", "--fix", "--non-interactive"]);
+      expect(bootClient.completeOpenClawBoot).not.toHaveBeenCalled();
+      expect(children).toHaveLength(1);
+      expect(attach).not.toHaveBeenCalled();
+      expect(scheduled).toHaveLength(1);
+
+      scheduled.shift()!();
+      await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+      scheduled.shift()!();
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith("[surge-handoff] self-released: never observed a Ready sibling"));
+
+      await expect(client.status()).resolves.toMatchObject({ role: "normal", mode: "permitted", phase: "running" });
+      expect(children).toHaveLength(2);
+      expect(children[1]!.alive).toBe(true);
+      expect(attach).toHaveBeenCalledOnce();
+      expect(bootClient.completeOpenClawBoot).toHaveBeenCalledExactlyOnceWith({ releaseKey: "release-2" });
+      await expect(wiring.selfReleaseLoopSettled()).resolves.toBe(true);
+    } finally {
+      firstBoot.resolve();
+      stop();
+      await supervisor.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("permits startup after the supervisor closes an idle socket during blocked setup", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(openclawDir, "supervisor.sock");

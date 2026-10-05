@@ -2501,7 +2501,8 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     async selfReleaseLoopSettled() {
       if (!(await surgeReadiness.released())) return false;
       if (!processGate) return true;
-      return (await processGate.status()).mode === "permitted";
+      const state = await processGate.status();
+      return state.mode === "permitted" && state.phase === "running";
     },
     selfReleaseReserved: () => configuredBuilderSelfReleaseReserved({
       adapter, configuredBuilderAssigned, processGate,

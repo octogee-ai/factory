@@ -385,6 +385,10 @@
     "./native-final-reply": {
       "types": "./dist/native-final-reply.d.ts",
       "default": "./dist/native-final-reply.js"
+    },
+    "./gateway-restart-probe": {
+      "types": "./dist/gateway-restart-probe.d.ts",
+      "default": "./dist/gateway-restart-probe.js"
     }
   },
   "typesVersions": {
@@ -658,6 +662,9 @@
       ],
       "native-final-reply": [
         "dist/native-final-reply.d.ts"
+      ],
+      "gateway-restart-probe": [
+        "dist/gateway-restart-probe.d.ts"
       ]
     }
   },

@@ -39,6 +39,9 @@ import {
   type OperationsDb,
 } from "../lib/glm-operations.js";
 import { readReleaseStatus, summarizeReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
+import { readForceMigrationPlan, readForceMigrationSource } from "./fleet-force-migration.js";
+import { readForcedMigrationRecovery, runForcedMigration } from "./fleet-force-migration-executor.js";
+import { createForceMigrationTransport } from "./fleet-force-migration-transport.js";
 import {
   createAdminFleetClient,
   exchangeAdminFleetCustomToken,
@@ -255,10 +258,10 @@ const VERBS: readonly VerbHelp[] = [
   },
   {
     verb: "gw restart",
-    summary: "Restart a gateway through the Admin API, or force-delete its exact pod.",
+    summary: "Restart through the Admin API, or force-delete an exact Builder pod.",
     args: "<gw-id> [--force] [--idempotency-key=<key>] [--apply]",
     description:
-      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. With --force --apply, it journals a break-glass operation, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting; Cowboy keeps reconciling the gateway throughout, so the deployment recreates the pod on its own. Dry-run by default.",
+      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. --force requires an authoritative Builder gateway; Shared gateways are rejected. With --force --apply, it journals a break-glass operation, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting; Cowboy keeps reconciling the gateway throughout, so the deployment recreates the pod on its own. Dry-run by default.",
     examples: [
       "fleet --env=test gw restart canary",
       "fleet --env=test gw restart canary --apply",
@@ -281,9 +284,9 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "migrate-customer",
     summary: "Move a customer between gateways through a journaled migration.",
-    args: "<slug> --to=<gw-id> [--source-transfer=retained-pod] [--apply]",
+    args: "<slug> --to=<gw-id> [--source-transfer=retained-pod | --force --operation=<existing-operation-id>] [--apply]",
     description:
-      "Plans (or executes with --apply) a journaled migration: prepare target → quiesce source → transfer and verify state → commit placement → release source. Before cutover, the controller can safely abort; after cutover it recovers forward using the same handoff.\n\nDry-run by default — pass --apply to execute. Migration runs server-side in glm-controller; the CLI just enqueues the operation and streams its reported steps. --source-transfer=retained-pod explicitly selects the bounded transfer helper on a retained Shared pod; ambiguous target preparation or helper execution keeps the durable safety fence until its outcome is proven.",
+      "Plans (or executes with --apply) a journaled migration: prepare target → quiesce source → transfer and verify state → commit placement → release source. Before cutover, the controller can safely abort; after cutover it recovers forward using the same handoff.\n\nDry-run by default — pass --apply to execute. Ordinary migrations run server-side in glm-controller; the CLI enqueues the operation and streams its reported steps. Forced recovery runs the native restart from Fleet, then Cowboy continues the same migration. --source-transfer=retained-pod explicitly selects the bounded transfer helper on a retained Shared pod; ambiguous target preparation or helper execution keeps the durable safety fence until its outcome is proven. --force requires the exact existing pending drain operation. It recovers the source gateway on that same operation, preserving disk and migration history. Repeating the same forced command observes an accepted restart without dispatching it again. Force recovery is restricted to the assigned customer’s dedicated Builder gateway on Kubernetes; Shared sources are always rejected and GCE VM transport is not available. Native acknowledgement and target verification remain required.",
     examples: [
       "fleet --env=test migrate-customer ceckert --to=canary",
       "fleet --env=test migrate-customer ceckert --to=canary --apply",
@@ -787,7 +790,7 @@ function assertForceRestartPodUnchanged(
   }
 }
 
-function localFleetKubectl(args: string[], input?: string): FleetKubectlResult {
+function localFleetKubectl(args: string[], input?: string, timeout?: number): FleetKubectlResult {
   const result = spawnSync(
     // eslint-disable-next-line sonarjs/no-os-command-from-path
     "kubectl",
@@ -795,6 +798,7 @@ function localFleetKubectl(args: string[], input?: string): FleetKubectlResult {
     {
       encoding: "utf-8",
       input,
+      timeout,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     },
   );
@@ -861,6 +865,7 @@ async function assertForcedGatewayRestartDeleteFence(
       transaction.get(gatewayRef),
       transaction.get(auditRef),
     ]);
+    assertBuilderForceRestart(gateway.data());
     const durableGateway = projectGatewayDesiredRootForGateway(
       gateway.exists ? gateway.data() : undefined,
       gatewayId,
@@ -892,6 +897,12 @@ async function assertForcedGatewayRestartDeleteFence(
   });
 }
 
+function assertBuilderForceRestart(root: Record<string, unknown> | undefined): void {
+  if (root?.gatewayClass !== "builder") {
+    throw new Error("Shared gateways cannot be force restarted; a dedicated Builder gateway is required");
+  }
+}
+
 function forceRestartKubectlArgs(input: {
   kubeContext: string;
   namespace: string;
@@ -906,6 +917,7 @@ function forceRestartKubectlArgs(input: {
 export async function runForcedGatewayRestart(
   input: ForcedGatewayRestartInput,
 ): Promise<{ auditId: string; podName: string; podUid: string }> {
+  assertBuilderForceRestart((await input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId).get()).data());
   const runKubectl = input.runKubectl ?? localFleetKubectl;
   const runMutation: ForcedGatewayRestartMutationRunner = input.runMutation ??
     ((mutation) => runNormalFleetMutation(
@@ -1524,6 +1536,7 @@ async function runFleetGatewayMutation(apply: boolean): Promise<void> {
 async function runFleetGatewayRestart(): Promise<void> {
   const restart = resolveFleetGatewayRestart(args);
   if (!restart.force) return runFleetGatewayMutation(restart.apply);
+  assertBuilderForceRestart((await db.collection(GATEWAYS_COLLECTION).doc(restart.gatewayId).get()).data());
   console.log(bold(`GW FORCE RESTART ${restart.gatewayId.toUpperCase()}`));
   console.log(dim(`  delete exactly one pod selected by gateway-instance=${restart.gatewayId}`));
   if (!restart.apply) {
@@ -1660,6 +1673,7 @@ async function migrateCustomerPlan(
   toGatewayId: string,
   apply: boolean,
   sourceTransferMode?: "retained-pod",
+  forceOperationId?: string,
 ): Promise<void> {
   const user = await findUserBySlug(slug);
   if (!user) {
@@ -1667,12 +1681,16 @@ async function migrateCustomerPlan(
     process.exit(1);
   }
   const oc = user.data.provisioning?.openclaw ?? {};
+  slug = oc.slug ?? user.data.username ?? slug;
   const fromGatewayId = oc.gatewayId;
   if (!fromGatewayId) {
     console.error(red(`${CROSS} User '${slug}' is not currently assigned to any gateway.`));
     console.error(dim(`  Use \`fleet --env=${args.env} add-customer ${slug} --to=<gw-id> --apply\` to place them first.`));
     process.exit(1);
   }
+  if (forceOperationId) await readForceMigrationSource(db, {
+    operationId: forceOperationId, uid: user.uid, slug, fromGatewayId, toGatewayId,
+  });
   if (fromGatewayId === toGatewayId) {
     console.log(yellow(`'${slug}' is already on '${toGatewayId}'. Nothing to migrate.`));
     return;
@@ -1695,6 +1713,17 @@ async function migrateCustomerPlan(
   console.log(bold(`MIGRATE-CUSTOMER ${slug}`) + dim(`  ${fromGatewayId} ${ARROW} ${toGatewayId}`));
   console.log(`  uid  ${user.uid}`);
   if (sourceTransferMode) console.log(`  source transfer  ${sourceTransferMode}`);
+  if (forceOperationId) {
+    const target = {
+      operationId: forceOperationId, uid: user.uid, slug, fromGatewayId, toGatewayId,
+    };
+    const recovery = await readForcedMigrationRecovery(db, target);
+    const plan = recovery.completed ?? await readForceMigrationPlan(db, target, recovery.owned);
+    console.log(`  existing operation  ${plan.operationId}  source epoch ${plan.sourceEpoch}`);
+    if (recovery.completed) console.log(dim("  Native restart already completed; observing the existing migration."));
+    else if (recovery.owned) console.log(dim("  Native restart already reserved; observing its outcome without dispatching again."));
+    console.log(yellow("  Force recovery interrupts this dedicated Builder gateway. Disk, migration history, and native acknowledgement are preserved. Shared gateways are excluded; only Kubernetes Builder gateways are supported."));
+  }
 
   console.log("\n" + bold("FORWARD PLAN"));
   console.log(dim("  Prepare target → quiesce source → transfer and verify → commit placement → release source."));
@@ -1708,10 +1737,26 @@ async function migrateCustomerPlan(
     return;
   }
 
-  await executeMigration(slug, user.uid, fromGatewayId, toGatewayId, sourceTransferMode);
+  await executeMigration(slug, user.uid, fromGatewayId, toGatewayId, { sourceTransferMode, forceOperationId });
 }
 
 const MIGRATION_OP_TIMEOUT_MS = 30 * 60_000;
+
+export function resolveFleetMigrationForce(args: ParsedFleetArgs): string | undefined {
+  if (args.flags.force === undefined && args.flags.operation === undefined) return undefined;
+  if (args.flags.force !== true) throw new Error("migrate-customer --operation requires the bare --force flag");
+  const operation = args.flags.operation;
+  if (typeof operation !== "string" || !operation || operation.includes("/")) {
+    throw new Error("migrate-customer --force requires --operation=<existing-operation-id>");
+  }
+  if (args.flags["source-transfer"] !== undefined) throw new Error("force migration cannot change source transfer mode");
+  if (args.flags.apply !== undefined && args.flags.apply !== true) throw new Error("migrate-customer --apply must be a bare flag");
+  if (args.positional.length !== 2) throw new Error("migrate-customer requires exactly one customer slug");
+  for (const flag of Object.keys(args.flags)) {
+    if (!["to", "force", "operation", "apply"].includes(flag)) throw new Error(`force migration does not accept --${flag}`);
+  }
+  return operation;
+}
 
 export function resolveFleetSourceTransferMode(value: unknown): "retained-pod" | undefined {
   if (value === undefined) return undefined;
@@ -1734,13 +1779,25 @@ async function executeMigration(
   uid: string,
   fromGatewayId: string,
   toGatewayId: string,
-  sourceTransferMode?: "retained-pod",
+  options: { sourceTransferMode?: "retained-pod"; forceOperationId?: string },
 ): Promise<void> {
+  const { sourceTransferMode, forceOperationId } = options;
   const opsDb = db as unknown as OperationsDb;
-  const opId = await enqueueOperation(opsDb, {
+  const actor = `fleet-cli:${process.env.USER ?? "operator"}`;
+  const opId = forceOperationId ? (await runForcedMigration({
+    db, actor, target: { operationId: forceOperationId, uid, slug, fromGatewayId, toGatewayId },
+    transport: createForceMigrationTransport({
+      namespace: KUBE_NS,
+      runKubectl: async (argv, opts) => {
+        const result = localFleetKubectl(["--context", KUBE_CONTEXT, ...argv], opts?.stdin, opts?.timeoutMs);
+        if (result.error) throw result.error;
+        return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+      },
+    }),
+  })).operationId : await enqueueOperation(opsDb, {
     kind: "migrate-customer",
     input: buildFleetMigrateOperationInput(uid, fromGatewayId, toGatewayId, sourceTransferMode),
-    createdBy: `fleet-cli:${process.env.USER ?? "operator"}`,
+    createdBy: actor,
   });
 
   console.log(
@@ -1791,8 +1848,8 @@ async function executeMigration(
   process.exit(1);
 }
 
-async function main(): Promise<void> {
-  initializeFleetCli(process.argv.slice(2));
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  initializeFleetCli(argv);
   const verb = args.positional[0] ?? "";
   const sub = args.positional[1] ?? "";
   const apply = args.flags.apply === true;
@@ -1842,12 +1899,12 @@ const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       return addCustomer(args.positional[1], to, apply);
     }
     case "migrate-customer": {
-
+const forceOperationId = resolveFleetMigrationForce(args);
 const to = typeof args.flags.to === "string" ? args.flags.to : undefined;
       if (!args.positional[1] || !to) {
         return missingArg("migrate-customer");
       }
-      return migrateCustomerPlan(args.positional[1], to, apply, resolveFleetSourceTransferMode(args.flags["source-transfer"]));
+      return migrateCustomerPlan(args.positional[1], to, apply, resolveFleetSourceTransferMode(args.flags["source-transfer"]), forceOperationId);
     }
   }
 
