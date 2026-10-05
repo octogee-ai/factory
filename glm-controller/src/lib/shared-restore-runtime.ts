@@ -5,7 +5,7 @@ import type { OperationContext } from '../operation-router.js';
 import type { KubectlSubprocess } from '../fleet-ingress.js';
 
 type RecordValue = DocumentData;
-interface Recovery { operationId: string; sourceSha: string; images: Record<string, string> }
+interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue }
 interface Deps { db: Firestore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
 function object(value: unknown): RecordValue { return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {}; }
 function customerState(user: RecordValue | undefined): RecordValue { return object(object(user?.provisioning).openclaw); }
@@ -18,6 +18,11 @@ function restoreMatches(receipt: RecordValue, returned: RecordValue, gatewayId: 
   return [input.uid === receipt.uid, input.toGatewayId === gatewayId, input.fromGatewayId === receipt.fromGatewayId,
     receipt.fromGatewayId !== gatewayId, handoff.uid === receipt.uid, handoff.slug === receipt.slug,
     handoff.toGatewayId === gatewayId, handoff.fromGatewayId === receipt.fromGatewayId].every(Boolean);
+}
+function reauthorizationMatches(input: Recovery, receipt: RecordValue): boolean {
+  return input.reauthorize === undefined || (isDeepStrictEqual(input.reauthorize, receipt) &&
+    Number.isSafeInteger(receipt.claimStartedAt) && receipt.claimStartedAt > 0 &&
+    Number.isSafeInteger(receipt.dispatchedAt) && receipt.dispatchedAt > 0);
 }
 function recovery(op: Operation, sourceSha: string): Recovery {
   const input = object(op.input.restoreRecovery);
@@ -63,6 +68,7 @@ async function authority(deps: Deps, tx: Transaction, op: Operation, input: Reco
     openclaw.status === 'complete', !Object.hasOwn(openclaw, 'sourceTransferFence'),
   ].every(Boolean);
   if (!exact) throw new Error('paired post-cutover restore authority is unavailable');
+  if (!reauthorizationMatches(input, receipt)) throw new Error('restore reauthorization intent changed');
   const assignment = object((await tx.get(deps.db.doc(`gateways/${gatewayId}/assignments/${uid}`))).data());
   if (assignment.state !== 'serving' || assignment.uid !== uid || assignment.slug !== receipt.slug ||
       assignment.gatewayId !== gatewayId || assignment.epoch !== receipt.assignmentEpoch) throw new Error('restore recovery assignment changed');
@@ -156,7 +162,15 @@ async function waitForRecovery(deps: Deps, ctx: OperationContext, saved: RecordV
 }
 function completedRecovery(completed: RecordValue, gatewayId: string, input: Recovery): boolean {
   return completed.completedAt > 0 && completed.gatewayId === gatewayId && completed.restoreOperationId === input.operationId &&
-    completed.sourceSha === input.sourceSha && isDeepStrictEqual(completed.images, input.images);
+    completed.sourceSha === input.sourceSha && isDeepStrictEqual(completed.images, input.images) &&
+    isDeepStrictEqual(completed.previousRestoreAttempt, input.reauthorize);
+}
+function reauthorizeRestore(deps: Deps, tx: Transaction, op: Operation, input: Recovery, now: number): void {
+  if (!input.reauthorize) return;
+  if (now < input.reauthorize.claimStartedAt) throw new Error('restore reauthorization clock precedes the retained intent');
+  const intent: RecordValue = { ...input.reauthorize, claimStartedAt: now, dispatchClaimStartedAt: now, dispatchedAt: now, reauthorizedBy: op.id };
+  tx.update(deps.db.doc(`users/${intent.uid}`), { 'provisioning.openclaw.restoreFence': intent });
+  tx.update(deps.db.doc(`glmOperations/${input.operationId}`), { restoreAttempt: intent });
 }
 export async function recoverSharedRestoreRuntime(deps: Deps, op: Operation, ctx: OperationContext): Promise<void> {
   const input = recovery(op, deps.sourceSha); const gatewayId = op.input.gatewayId as string;
@@ -172,10 +186,15 @@ export async function recoverSharedRestoreRuntime(deps: Deps, op: Operation, ctx
       const root = await authority(deps, tx, op, input);
       if (!isDeepStrictEqual(root.runtimeRestartFence, saved)) throw new Error('restore recovery restart fence changed');
       tx.update(deps.db.doc(`gateways/${gatewayId}`), { runtimeRestartFence: next ?? FieldValue.delete() });
-      if (!next) tx.update(deps.db.doc(`glmOperations/${op.id}`), { restoreRuntimeRecovery: {
-        gatewayId, restoreOperationId: input.operationId, sourceSha: input.sourceSha, images: input.images,
-        podUid: saved.target.podUid, completedAt: Date.now(),
-      } });
+      if (!next) {
+        const now = Date.now();
+        reauthorizeRestore(deps, tx, op, input, now);
+        tx.update(deps.db.doc(`glmOperations/${op.id}`), { restoreRuntimeRecovery: {
+          gatewayId, restoreOperationId: input.operationId, sourceSha: input.sourceSha, images: input.images,
+          podUid: saved.target.podUid, completedAt: now,
+          ...(input.reauthorize ? { previousRestoreAttempt: input.reauthorize } : {}),
+        } });
+      }
     });
     if (next) saved = next;
   };

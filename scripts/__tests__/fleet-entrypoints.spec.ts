@@ -1193,6 +1193,12 @@ describe("fleet CLI args", () => {
       '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=foreign/path',
     ]))).toThrow('invalid restore recovery');
     expect(resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1', '--reauthorize-attempt=retained-1',
+    ]))).toMatchObject({ body: { sourceSha, operationId: 'builder-return-1', reauthorizeAttemptId: 'retained-1' } });
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1', '--reauthorize-attempt',
+    ]))).toThrow('reauthorize-attempt');
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "deploy", "canary", `--sha=${sourceSha}`,
     ]))).toEqual({
       method: "POST",

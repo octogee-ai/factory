@@ -465,6 +465,26 @@ function buildAuthority(manifest: ReleaseDigestManifest): CentralReleaseAuthorit
 }
 
 describe('POST /gateways/:id/recover-restore', () => {
+  it('captures the exact retained attempt only when the operator explicitly reauthorizes its ID', async () => {
+    const manifest = immutableBuild();
+    const receipt = { uid: 'u', attemptId: 'retained-1', gatewayId: 'shared-0', assignmentEpoch: 3, claimStartedAt: 200, dispatchedAt: 100 };
+    const seed = seedNewSchemaGateway('shared-0', sharedPayload());
+    seed['glmOperations/return-1'] = { restoreAttempt: receipt };
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send({ sourceSha: manifest.sourceSha,
+      operationId: 'return-1', reauthorizeAttemptId: 'retained-1' }).expect(202);
+    expect(opsIn(store, 'restart-gateway')[0]).toMatchObject({ input: { restoreRecovery: { reauthorize: receipt } } });
+    expect(store.get('glmOperations/return-1')).toEqual({ restoreAttempt: receipt });
+  });
+  it('does not queue reauthorization for a changed retained attempt', async () => {
+    const manifest = immutableBuild();
+    const seed = seedNewSchemaGateway('shared-0', sharedPayload());
+    seed['glmOperations/return-1'] = { restoreAttempt: { attemptId: 'changed' } };
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send({ sourceSha: manifest.sourceSha,
+      operationId: 'return-1', reauthorizeAttemptId: 'retained-1' }).expect(409);
+    expect(opsIn(store, 'restart-gateway')).toHaveLength(0);
+  });
   it('journals exact immutable same-pod recovery inputs without appending a Shared release', async () => {
     const manifest = immutableBuild();
     const { app, store } = mkApp(seedNewSchemaGateway('shared-0', sharedPayload()), { releaseAuthority: buildAuthority(manifest) });

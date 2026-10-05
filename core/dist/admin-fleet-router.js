@@ -1174,7 +1174,14 @@ const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 function validRestoreRecoveryBody(body) {
     return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
         typeof body.operationId === "string" && Boolean(body.operationId) && body.operationId.length <= 256 && !body.operationId.includes("/") &&
-        Object.keys(body).every(key => ["sourceSha", "operationId"].includes(key));
+        (body.reauthorizeAttemptId === undefined || (typeof body.reauthorizeAttemptId === "string" &&
+            Boolean(body.reauthorizeAttemptId.trim()) && body.reauthorizeAttemptId.length <= 256)) &&
+        Object.keys(body).every(key => ["sourceSha", "operationId", "reauthorizeAttemptId"].includes(key));
+}
+async function capturedRestoreAttempt(db, operationId, attemptId) {
+    if (attemptId === undefined)
+        return undefined;
+    return (await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()).data()?.restoreAttempt;
 }
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(["prod", "test"].flatMap((environment) => deploymentTargetsForEnvironment(environment).map((target) => `${target.artifactRegistryRepository}/`)))];
@@ -4063,7 +4070,7 @@ export function addAdminFleetRoutes(router, deps) {
     router.post("/gateways/:id/recover-restore", async (req, res, next) => {
         try {
             const id = req.params.id;
-            const { sourceSha, operationId } = req.body ?? {};
+            const { sourceSha, operationId, reauthorizeAttemptId } = req.body ?? {};
             if (!validRestoreRecoveryBody(req.body ?? {})) {
                 res.status(400).json({ error: "sourceSha and restore operationId are required" });
                 return;
@@ -4077,9 +4084,14 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(503).json({ error: "immutable build manifests are unavailable" });
                 return;
             }
+            const reauthorize = await capturedRestoreAttempt(db, operationId, reauthorizeAttemptId);
+            if (reauthorizeAttemptId !== undefined && reauthorize?.attemptId !== reauthorizeAttemptId) {
+                res.status(409).json({ error: "retained restore attempt changed" });
+                return;
+            }
             const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
             const payload = centralGatewayReleasePayload(manifest);
-            const input = { gatewayId: id, restoreRecovery: { operationId, sourceSha,
+            const input = { gatewayId: id, restoreRecovery: { operationId, sourceSha, ...(reauthorize ? { reauthorize } : {}),
                     images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
                         "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}` } } };
             const queued = await runAdminFleetMutation({ req, what: "recover fenced Shared restore runtime", why: ADMIN_FLEET_REQUEST_REASON,

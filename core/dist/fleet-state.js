@@ -188,9 +188,12 @@ async function readCustomerRestoreAuthority(deps, txn, input) {
     assertCustomerRestoreInput(input);
     const userRef = deps.db.collection("users").doc(input.uid);
     const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId);
-    const [userSnapshot, operationSnapshot, assignmentSnapshot] = await Promise.all([
+    const [userSnapshot, operationSnapshot, assignmentSnapshot, gatewaySnapshot] = await Promise.all([
         txn.get(userRef), txn.get(operationRef), txn.get(assignmentRef(deps.db, input.gatewayId, input.uid)),
+        txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId)),
     ]);
+    if (Object.hasOwn(recordOrEmpty(gatewaySnapshot.data()), "runtimeRestartFence"))
+        throw new Error("gateway runtime restart outcome is unresolved");
     const user = userSnapshot.data();
     const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
     const operation = recordOrEmpty(operationSnapshot.data());

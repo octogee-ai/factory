@@ -1917,10 +1917,16 @@ const ERR_USER_NOT_FOUND = "user not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
 
-function validRestoreRecoveryBody(body: { sourceSha?: unknown; operationId?: unknown }): boolean {
+function validRestoreRecoveryBody(body: { sourceSha?: unknown; operationId?: unknown; reauthorizeAttemptId?: unknown }): boolean {
   return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
     typeof body.operationId === "string" && Boolean(body.operationId) && body.operationId.length <= 256 && !body.operationId.includes("/") &&
-    Object.keys(body).every(key => ["sourceSha", "operationId"].includes(key));
+    (body.reauthorizeAttemptId === undefined || (typeof body.reauthorizeAttemptId === "string" &&
+      Boolean(body.reauthorizeAttemptId.trim()) && body.reauthorizeAttemptId.length <= 256)) &&
+    Object.keys(body).every(key => ["sourceSha", "operationId", "reauthorizeAttemptId"].includes(key));
+}
+async function capturedRestoreAttempt(db: Firestore, operationId: string, attemptId: unknown) {
+  if (attemptId === undefined) return undefined;
+  return (await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()).data()?.restoreAttempt;
 }
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
@@ -5587,7 +5593,7 @@ router.post(
   router.post("/gateways/:id/recover-restore", async (req, res, next) => {
     try {
       const id = req.params.id as string;
-      const { sourceSha, operationId } = req.body ?? {};
+      const { sourceSha, operationId, reauthorizeAttemptId } = req.body ?? {};
       if (!validRestoreRecoveryBody(req.body ?? {})) {
         res.status(400).json({ error: "sourceSha and restore operationId are required" }); return;
       }
@@ -5596,9 +5602,13 @@ router.post(
         res.status(409).json({ error: "restore recovery requires a live Shared gateway" }); return;
       }
       if (!deps.releaseAuthority) { res.status(503).json({ error: "immutable build manifests are unavailable" }); return; }
+      const reauthorize = await capturedRestoreAttempt(db, operationId, reauthorizeAttemptId);
+      if (reauthorizeAttemptId !== undefined && reauthorize?.attemptId !== reauthorizeAttemptId) {
+        res.status(409).json({ error: "retained restore attempt changed" }); return;
+      }
       const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
       const payload = centralGatewayReleasePayload(manifest);
-      const input = { gatewayId: id, restoreRecovery: { operationId, sourceSha,
+      const input = { gatewayId: id, restoreRecovery: { operationId, sourceSha, ...(reauthorize ? { reauthorize } : {}),
         images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
           "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
       const queued = await runAdminFleetMutation({ req, what: "recover fenced Shared restore runtime", why: ADMIN_FLEET_REQUEST_REASON,
