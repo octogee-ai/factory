@@ -1,5 +1,9 @@
 {{- $sharedIngressName := .Values.ingress.sharedName | default "" -}}
 {{- $apiIngressName := default (.Values.ingress.apiName | default "gateway-edge-ingress") $sharedIngressName -}}
+{{- $sourceSha := (.Values.platformRelease).sourceSha | default "" -}}
+{{- if not (regexMatch "^[a-f0-9]{40}$" $sourceSha) -}}
+{{- fail "glm-controller.platformRelease.sourceSha must be the selected full 40-character immutable build SHA" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -186,6 +190,8 @@ spec:
               value: {{ required "glm-controller.sharedPool.maxReplicas is required" (.Values.sharedPool).maxReplicas | quote }}
             - name: PLATFORM_GATEWAY_IMAGE_REPOSITORY
               value: {{ required "glm-controller.platformRelease.gatewayImageRepository is required" (.Values.platformRelease).gatewayImageRepository | quote }}
+            - name: BUILD_SHA
+              value: {{ $sourceSha | quote }}
             - name: PLATFORM_GATEWAY_IMAGE_TAG
               value: {{ (.Values.platformRelease).gatewayImageTag | default "" | quote }}
             - name: PLATFORM_GATEWAY_BUILDER_IMAGE_TAG

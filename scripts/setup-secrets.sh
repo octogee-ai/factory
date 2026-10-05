@@ -1118,6 +1118,9 @@ if [[ "$SECRET_SETUP_PHASE" == "launch" ]]; then
   exit 0
 fi
 echo "  Next (Phase 1 → Helm):"
+echo "    PLATFORM_SOURCE_SHA=<full 40-character source SHA from the tested Central release manifest>"
+echo "    RELEASE_VALUES_FILE=\$(mktemp)"
+echo "    ./scripts/node_modules/.bin/tsx scripts/ops/render-release-helm-values.ts \"\$PLATFORM_SOURCE_SHA\" > \"\$RELEASE_VALUES_FILE\" || exit 1"
     echo "    GITEA_DB_PASS=\$(gcloud secrets versions access latest --secret=$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET --project=$SM_PROJECT)"
 echo "    UMBRELLA_CHART_DIR=\$(mktemp -d)"
 echo "    UMBRELLA_CHART=\$(./scripts/package-umbrella-chart.sh --output-dir \"\$UMBRELLA_CHART_DIR\")"
@@ -1125,6 +1128,7 @@ echo "    helm upgrade --install octogee \"\$UMBRELLA_CHART\" \\"
 echo "      --server-side=true --force-conflicts \\"
 echo "      -f helm/octogee/$VALUES_FILE \\"
 echo "      -f <(node core/dist/render-deployment-target-helm-values.js --target=$TARGET_ID) \\"
+echo "      -f \"\$RELEASE_VALUES_FILE\" \\"
 echo "      -n $K8S_NAMESPACE \\"
 echo "      --set \"gitea.gitea.config.database.PASSWD=\$GITEA_DB_PASS\" \\"
 echo "      --kube-context $K8S_CONTEXT \\"

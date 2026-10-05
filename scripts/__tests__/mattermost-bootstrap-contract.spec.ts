@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -14,6 +15,25 @@ function rebuildChangeAddresses(script: string): Set<string> {
 }
 
 describe("Mattermost fresh-database bootstrap contract", () => {
+  it.each(["test", "prod"])("prints an immutable-release Helm recipe for missing Mattermost in %s", (environment) => {
+    const setup = read("scripts/setup-mattermost.sh");
+    const start = setup.indexOf('  echo ""', setup.indexOf('  echo "  Next step: deploy Helm'));
+    const end = setup.indexOf('  ok "K8s secrets ready.', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const printed = spawnSync("bash", ["-c", setup.slice(start, end)], {
+      encoding: "utf8",
+      env: { ...process.env, ENV: environment, TARGET_ID: environment, K8S_NAMESPACE: `octogee-${environment}`, K8S_CONTEXT: "test-context" },
+    });
+    expect(printed.status, printed.stderr).toBe(0);
+    expect(printed.stdout).toContain('scripts/ops/render-release-helm-values.ts "$PLATFORM_SOURCE_SHA" > "$RELEASE_VALUES_FILE" || exit 1');
+    expect(printed.stdout).toContain('-f "$RELEASE_VALUES_FILE"');
+    expect(printed.stdout.indexOf("render-release-helm-values.ts")).toBeLessThan(printed.stdout.indexOf("helm upgrade"));
+    expect(printed.stdout.indexOf('-f "$RELEASE_VALUES_FILE"')).toBeGreaterThan(printed.stdout.indexOf("render-deployment-target-helm-values.js"));
+    const syntax = spawnSync("bash", ["-n"], { input: printed.stdout, encoding: "utf8" });
+    expect(syntax.status, syntax.stderr).toBe(0);
+  });
+
   it("reuses the materialized admin password and restarts Mattermost before bootstrap", () => {
     const setup = read("scripts/setup-mattermost.sh");
 

@@ -575,23 +575,20 @@ describe("deployment target consumers", () => {
     expect(result.status === 0, result.stderr).toBe(valid);
   });
 
-  it("prints a full-rebuild recipe that requires a digest-qualified platform gateway image", () => {
+  it("prints a full-rebuild recipe that resolves one immutable manifest for every platform and gateway image", () => {
     const teardown = source("scripts/teardown-env.sh");
 
     expect(teardown).toContain(
-      "PLATFORM_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
+      "PLATFORM_SOURCE_SHA=<full 40-character source SHA from the tested Central release manifest>",
     );
     expect(teardown).toContain(
-      "PLATFORM_GATEWAY_EDGE_IMAGE=<tested release SHA>@sha256:<gateway-edge digest from release receipt>",
+      "scripts/ops/render-release-helm-values.ts",
     );
     expect(teardown).toContain(
-      "glm-controller.platformRelease.gatewayImageTag=\\$PLATFORM_GATEWAY_IMAGE",
+      "\\\"\\$PLATFORM_SOURCE_SHA\\\" > \\\"\\$RELEASE_VALUES_FILE\\\" || exit 1",
     );
     expect(teardown).toContain(
-      "glm-controller.platformRelease.gatewayEdgeImageTag=\\$PLATFORM_GATEWAY_EDGE_IMAGE",
-    );
-    expect(teardown).toContain(
-      "glm-controller.platformRelease.builderImageTag=\\$PLATFORM_GATEWAY_BUILDER_IMAGE",
+      "-f \\\"\\$RELEASE_VALUES_FILE\\\"",
     );
     expect(teardown).not.toContain("BOOTSTRAP_GATEWAY_TAG=");
     expect(teardown).not.toContain(

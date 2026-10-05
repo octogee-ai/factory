@@ -853,19 +853,19 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.calls).toContainEqual(expect.stringContaining("kubectl wait --for=delete pvc/mattermost-data"));
     expect(result.stdout).toContain("Durable PVCs confirmed absent");
     expect(result.stdout).toContain(
-      "PLATFORM_GATEWAY_IMAGE=<tested release SHA>@sha256:<octogee-gateway digest from release receipt>",
+      "PLATFORM_SOURCE_SHA=<full 40-character source SHA from the tested Central release manifest>",
     );
     expect(result.stdout).toContain(
-      "PLATFORM_GATEWAY_EDGE_IMAGE=<tested release SHA>@sha256:<gateway-edge digest from release receipt>",
+      "RELEASE_VALUES_FILE=$(mktemp)",
     );
     expect(result.stdout).toContain(
-      "glm-controller.platformRelease.gatewayImageTag=$PLATFORM_GATEWAY_IMAGE",
+      "scripts/ops/render-release-helm-values.ts \"$PLATFORM_SOURCE_SHA\"",
     );
     expect(result.stdout).toContain(
-      "glm-controller.platformRelease.builderImageTag=$PLATFORM_GATEWAY_BUILDER_IMAGE",
+      '> "$RELEASE_VALUES_FILE" || exit 1',
     );
     expect(result.stdout).toContain(
-      "glm-controller.platformRelease.gatewayEdgeImageTag=$PLATFORM_GATEWAY_EDGE_IMAGE",
+      '-f "$RELEASE_VALUES_FILE"',
     );
   });
 

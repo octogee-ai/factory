@@ -40,6 +40,7 @@ sharedPool:
 # platform release (Deploy platform) sets the digest-qualified tags from the
 # deployed build's immutable manifest; Cowboy rolls each slot with surge.
 platformRelease:
+  sourceSha: ""
   gatewayImageRepository: ""
   gatewayImageTag: ""
   # Same build's octogee-gateway-builder digest; disposable Builders allocated

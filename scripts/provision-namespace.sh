@@ -47,11 +47,11 @@ set -euo pipefail
 #   kubectl port-forward -n NAMESPACE svc/mattermost 8065:8065
 #
 # Usage:
-#   ./scripts/provision-namespace.sh feat-alice          # interactive (asks)
-#   ./scripts/provision-namespace.sh feat-alice --yes    # non-interactive
+#   ./scripts/provision-namespace.sh feat-alice --sha=<built-full-sha>
+#   ./scripts/provision-namespace.sh feat-alice --sha=<built-full-sha> --yes
 #   ./scripts/provision-namespace.sh --destroy feat-alice
-#   ./scripts/provision-namespace.sh feat-alice --skip-terraform
-#   ./scripts/provision-namespace.sh feat-alice --deployment-target=test-west
+#   ./scripts/provision-namespace.sh feat-alice --sha=<built-full-sha> --skip-terraform
+#   ./scripts/provision-namespace.sh feat-alice --sha=<built-full-sha> --deployment-target=test-west
 #
 # SAFETY GATES:
 #   - PROD deployment namespaces require typed 'DESTROY PROD NAMESPACE' confirmation,
@@ -80,6 +80,7 @@ YES=false
 DESTROY_ONLY=false
 SKIP_TERRAFORM=false
 DEPLOYMENT_TARGET=""
+SOURCE_SHA=""
 
 for arg in "$@"; do
   case $arg in
@@ -87,6 +88,7 @@ for arg in "$@"; do
     --destroy)       DESTROY_ONLY=true ;;
     --skip-terraform) SKIP_TERRAFORM=true ;;
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
+    --sha=*) SOURCE_SHA="${arg#*=}" ;;
     --help|-h)
       sed -n '4,36p' "$0"
       exit 0
@@ -97,9 +99,14 @@ for arg in "$@"; do
 done
 
 [[ -z "$NAMESPACE" ]] && {
-  echo "Usage: $0 <namespace> [--deployment-target=TARGET] [--yes] [--destroy] [--skip-terraform]"
+  echo "Usage: $0 <namespace> --sha=<built-full-source-sha> [--deployment-target=TARGET] [--yes] [--destroy] [--skip-terraform]"
   exit 1
 }
+
+if ! $DESTROY_ONLY && ! [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+  echo "Provisioning requires --sha=<built-full-40-character-source-sha> before any destructive step" >&2
+  exit 1
+fi
 
 # ── Validate namespace name ────────────────────────────────────────────────
 if ! [[ "$NAMESPACE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
@@ -185,6 +192,11 @@ warn() { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "  ${BLUE}ℹ️  $1${NC}"; }
 step() { echo ""; echo -e "${CYAN}▶ $1${NC}"; }
+
+RELEASE_VALUES=""
+if ! $DESTROY_ONLY; then
+  RELEASE_VALUES="$("$SCRIPT_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/ops/render-release-helm-values.ts" "$SOURCE_SHA")"
+fi
 
 confirm() {
   $YES && return 0
@@ -420,6 +432,7 @@ UMBRELLA_CHART="$("$SCRIPT_DIR/package-umbrella-chart.sh" --output-dir "$UMBRELL
 helm upgrade --install octogee "$UMBRELLA_CHART" \
   --server-side=true --force-conflicts \
   -f "$VALUES_OUT" \
+  -f <(printf '%s' "$RELEASE_VALUES") \
   -n "$NAMESPACE" \
   --set "gitea.gitea.config.database.PASSWD=$GITEA_DB_PASS" \
   --kube-context "$K8S_CONTEXT" \
