@@ -333,20 +333,37 @@ function hasPriorCustomerRestoreWork(operation: Record<string, unknown>): boolea
     attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
 }
 
-function resumedRestoreIntent(current: Awaited<ReturnType<typeof readCustomerRestoreAuthority>>, input: CustomerRestoreInput): CustomerRestoreInput {
+function restoreDispatchClaim(operation: Record<string, unknown>, intent: Record<string, unknown>): number | null {
+  if (intent.dispatchClaimStartedAt !== undefined) {
+    return Number.isSafeInteger(intent.dispatchClaimStartedAt) && Number(intent.dispatchClaimStartedAt) > 0
+      ? Number(intent.dispatchClaimStartedAt) : null;
+  }
+  if (Number(intent.dispatchedAt) >= Number(intent.claimStartedAt)) return Number(intent.claimStartedAt);
+  const history = Array.isArray(operation.attemptHistory) ? operation.attemptHistory.map(recordOrEmpty) : [];
+  const candidates = history.filter(attempt => Number.isSafeInteger(attempt.startedAt) &&
+    Number(attempt.startedAt) > 0 && Number(attempt.startedAt) <= Number(intent.dispatchedAt) &&
+    Array.isArray(attempt.steps) && attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
+  return candidates.length === 1 ? Number(candidates[0]!.startedAt) : null;
+}
+
+function resumedRestoreIntent(current: Awaited<ReturnType<typeof readCustomerRestoreAuthority>>, input: CustomerRestoreInput): CustomerRestoreInput & { dispatchClaimStartedAt: number } {
   const prior = recordOrEmpty(current.operation.restoreAttempt);
   const fence = recordOrEmpty(current.openclaw.restoreFence);
   const identity = ["uid", "slug", "gatewayId", "fromGatewayId", "assignmentEpoch", "operationId"] as const;
-  const exact = prior.phase === "dispatched" && fence.phase === "dispatched" &&
+  const dispatchClaimStartedAt = restoreDispatchClaim(current.operation, prior);
+  const validClock = [
+    Number.isSafeInteger(prior.claimStartedAt), Number(prior.claimStartedAt) > 0,
+    Number.isSafeInteger(prior.dispatchedAt), Number(prior.dispatchedAt) > 0,
+    dispatchClaimStartedAt !== null, Number(dispatchClaimStartedAt) <= Number(prior.claimStartedAt),
+    Number(prior.claimStartedAt) <= input.claimStartedAt, Number(prior.dispatchedAt) >= Number(dispatchClaimStartedAt),
+  ].every(Boolean);
+  const exact = prior.phase === "dispatched" && fence.phase === "dispatched" && validClock &&
     identity.every(key => prior[key] === input[key] && fence[key] === prior[key]) &&
     typeof prior.attemptId === "string" && prior.attemptId.trim().length > 0 &&
-    Number.isSafeInteger(prior.claimStartedAt) && Number(prior.claimStartedAt) > 0 &&
-    Number.isSafeInteger(prior.dispatchedAt) && Number(prior.dispatchedAt) > 0 &&
-    Number(prior.claimStartedAt) <= input.claimStartedAt && Number(prior.dispatchedAt) >= Number(prior.claimStartedAt) &&
-    ["attemptId", "claimStartedAt", "dispatchedAt"].every(key => fence[key] === prior[key]);
+    ["attemptId", "claimStartedAt", "dispatchedAt", "dispatchClaimStartedAt"].every(key => fence[key] === prior[key]);
   if (!exact) throw new Error("customer restore resumption does not own the dispatch intent");
   if (Object.hasOwn(current.openclaw, "sourceTransferFence")) throw new Error("customer source transfer outcome is unresolved");
-  return { ...input, attemptId: prior.attemptId as string };
+  return { ...input, attemptId: prior.attemptId as string, dispatchClaimStartedAt: dispatchClaimStartedAt! };
 }
 
 export async function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput, options: { resume?: boolean } = {}): Promise<CustomerRestoreInput> {
@@ -365,7 +382,7 @@ export async function beginCustomerRestore(deps: FleetStateDeps, input: Customer
       throw new Error("customer restore was already dispatched or has unknown prior work");
     }
     const now = deps.now?.().getTime() ?? Date.now();
-    const intent = { ...input, phase: "dispatched", dispatchedAt: now };
+    const intent = { ...input, dispatchClaimStartedAt: input.claimStartedAt, phase: "dispatched", dispatchedAt: now };
     txn.update(current.userRef, { "provisioning.openclaw.restoreFence": intent });
     txn.update(current.operationRef, { restoreAttempt: intent, lastProgressAt: now });
     return input;

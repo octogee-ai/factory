@@ -73,6 +73,9 @@ rules:
     resources: ["pods", "events"]
     verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["patch"]
+  - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
   # The restart-gateway op runs `kubectl exec deploy/octogee-gateway-<inst>

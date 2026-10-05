@@ -464,6 +464,29 @@ function buildAuthority(manifest: ReleaseDigestManifest): CentralReleaseAuthorit
   };
 }
 
+describe('POST /gateways/:id/recover-restore', () => {
+  it('journals exact immutable same-pod recovery inputs without appending a Shared release', async () => {
+    const manifest = immutableBuild();
+    const { app, store } = mkApp(seedNewSchemaGateway('shared-0', sharedPayload()), { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send({ sourceSha: manifest.sourceSha, operationId: 'return-1' }).expect(202);
+    expect(opsIn(store, 'restart-gateway')[0]).toMatchObject({ input: { gatewayId: 'shared-0', restoreRecovery: {
+      operationId: 'return-1', sourceSha: manifest.sourceSha, images: {
+        gateway: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:aaaaaaa-oc2026.8.1@sha256:${'c'.repeat(64)}`,
+        'gateway-edge': `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:aaaaaaa-oc2026.8.1@sha256:${'e'.repeat(64)}`,
+      },
+    } } });
+    expect(store.get('gateways/shared-0')).toMatchObject({ latestRelease: 1 });
+    expect(opsIn(store, 'rollout')).toHaveLength(0);
+    expect(auditsIn(store)).toHaveLength(1);
+  });
+  it.each([{ sourceSha: 'short', operationId: 'return' }, { sourceSha: 'a'.repeat(40), operationId: 'foreign/path' },
+    { sourceSha: 'a'.repeat(40), operationId: 'return', images: {} }])('rejects malformed recovery input %j', async body => {
+    const { app, store } = mkApp(seedNewSchemaGateway('shared-0', sharedPayload()));
+    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(400);
+    expect(opsIn(store, 'restart-gateway')).toHaveLength(0);
+  });
+});
+
 describe("POST /gateways/:id/deploy", () => {
   it("rejects deploying to a shared pool member because the pool rides the platform release", async () => {
     const manifest = immutableBuild();

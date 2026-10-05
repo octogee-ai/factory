@@ -1278,4 +1278,17 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     await Promise.all([global, targeted]);
     expect(started).toEqual([undefined, ["default-b"]]);
   });
+  it('serializes runtime recovery with convergence and releases the turn after failure', async () => {
+    const events: string[] = [];
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const converge = serializeGatewayConvergence(async () => { events.push('converge'); });
+    const recovery = converge.runExclusive(async () => { events.push('recover'); await pending; throw new Error('lost reply'); });
+    const observed = expect(recovery).rejects.toThrow('lost reply');
+    const next = converge();
+    await Promise.resolve();
+    expect(events).toEqual(['recover']);
+    release(); await observed; await next;
+    expect(events).toEqual(['recover', 'converge']);
+  });
 });

@@ -64,7 +64,8 @@ export async function rearmOwnedLegacyMigration(input: {
   return input.db.runTransaction(async (txn) => {
     const snapshot = await txn.get(input.ref);
     const operation = { ...snapshot.data(), id: input.ref.id } as Operation;
-    if (!snapshot.exists || !input.admitted(operation) || !recoverableLegacyScope(operation)) return false;
+    if (!snapshot.exists || operation.kind !== "migrate-customer" || !operation.input ||
+        !input.admitted(operation) || !recoverableLegacyScope(operation)) return false;
     const { uid, fromGatewayId, toGatewayId } = operation.input as { uid: string; fromGatewayId: string; toGatewayId: string };
     const [user, source, target] = await Promise.all([
       txn.get(input.db.collection("users").doc(uid)),

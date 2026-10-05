@@ -216,6 +216,14 @@ const VERBS: readonly VerbHelp[] = [
     writes: true,
   },
   {
+    verb: "gw recover-restore",
+    summary: "Upgrade a fenced Shared restore target without replacing its pod storage.",
+    args: "<gw-id> --sha=<full-main-sha> --operation=<return-operation-id> [--idempotency-key=<key>] [--apply]",
+    description: "Journals a Cowboy recovery that changes only the images of the exact existing Shared pod. Requires a paired pending return fence; never clears customer state or changes release policy. Briefly interrupts the pod's tenants. Dry-run by default.",
+    examples: ["fleet --env=test gw recover-restore shared-example --sha=0123456789abcdef0123456789abcdef01234567 --operation=return-example --apply"],
+    writes: true,
+  },
+  {
     verb: "gw park",
     summary: "Pause a gateway through the Admin API.",
     args: "<gw-id> [--apply]",
@@ -600,6 +608,13 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
         if (value) body[field] = value;
       }
       return withIdempotency({ method: "POST", path: "/api/admin/gateways", body });
+    }
+    case "recover-restore": {
+      const gatewayId = requiredGatewayId(args, "gw recover-restore");
+      const sourceSha = requiredFlag(args, "sha", "gw recover-restore", "full-main-sha");
+      const operationId = requiredFlag(args, "operation", "gw recover-restore", "return-operation-id");
+      if (!/^[a-f0-9]{40}$/.test(sourceSha) || operationId.includes("/")) throw new Error("invalid restore recovery build or operation");
+      return withIdempotency({ method: "POST", path: `/api/admin/gateways/${gatewayId}/recover-restore`, body: { sourceSha, operationId } });
     }
     case "deploy": {
       const gatewayId = requiredGatewayId(args, "gw deploy");

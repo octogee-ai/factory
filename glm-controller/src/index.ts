@@ -173,6 +173,7 @@ import {
   stampGatewayRuntime,
 } from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
+import { recoverSharedRestoreRuntime } from "./lib/shared-restore-runtime.js";
 import { startSchedulerHandoffRelease } from "./scheduler-handoff-release.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
@@ -737,7 +738,7 @@ async function gatewayDesiredRootPresent(db: Firestore, gatewayId: string): Prom
     snap.exists ? snap.data() : undefined,
     gatewayId,
   );
-  return root !== null;
+  return root !== null && snap.data()?.runtimeRestartFence === undefined;
 }
 
 async function syncFleetIngressIfConfigured(
@@ -1416,13 +1417,14 @@ async function convergeGatewaysIfConfigured(
 
 export function serializeGatewayConvergence(
   convergeGateways: (gatewayIds?: readonly string[]) => Promise<void>,
-): (gatewayIds?: readonly string[]) => Promise<void> {
+): ((gatewayIds?: readonly string[]) => Promise<void>) & { runExclusive(work: () => Promise<void>): Promise<void> } {
   let tail = Promise.resolve();
-  return (gatewayIds) => {
-    const work = tail.then(() => convergeGateways(gatewayIds));
+  const runExclusive = (action: () => Promise<void>) => {
+    const work = tail.then(action);
     tail = work.catch(() => undefined);
     return work;
   };
+  return Object.assign((gatewayIds?: readonly string[]) => runExclusive(() => convergeGateways(gatewayIds)), { runExclusive });
 }
 
 async function runReconcilePhase<T>(
@@ -1773,6 +1775,7 @@ export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 // the durable V2 state machine; legacy rollout sub-operations remain rollout-owned.
 const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "rollout",
+  "restart-gateway",
   MIGRATE_CUSTOMER_KIND,
   "suspend-customer",
   "erase-customer",
@@ -2685,20 +2688,6 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     "FLEET_CONTROLLER_PRIVATE_KEY",
     "migrate-customer, deprovision-customer, and operator eviction RPCs require the controller signing key",
   );
-  const handlers = await buildHandlers(
-    db,
-    log,
-    helm,
-    kubeOps,
-    {
-      syncFleetIngress: handlerSyncFleetIngress,
-      privateKey: fleetControllerPrivateKey,
-      modelKeySourceIssuer,
-      prepareGatewayConfig,
-      chartFingerprint,
-    },
-  );
-
   const surgeHandoffDeps = buildSurgeHandoffDeps({
     db,
     runKubectl,
@@ -2716,6 +2705,11 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       log,
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
+  const handlers = await buildHandlers(db, log, helm, kubeOps, {
+    syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
+    modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
+    runRuntimeRecovery: convergeGateways.runExclusive,
+  });
 
   const deps: ControllerDeps = {
     db,
@@ -3059,6 +3053,7 @@ async function buildHandlers(
       config: T,
     ) => Promise<T>;
     chartFingerprint: string;
+    runRuntimeRecovery: (work: () => Promise<void>) => Promise<void>;
   },
 ): Promise<OperationHandlers> {
   const { privateKey, modelKeySourceIssuer } = fleetOps;
@@ -3466,6 +3461,7 @@ async function buildHandlers(
   const eraseCustomer = buildEraseCustomerHandler(db, logFn);
 
   const restartGateway = createRestartGatewayHandler({
+    recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
     kubeOps: {...kubeOps,restartOpenClawInPlace: async ({name}) => {
       const gatewayId=name.slice('octogee-gateway-'.length);
       if(name!==deploymentNameForInstance(gatewayId))throw new Error('gateway restart deployment identity mismatch');

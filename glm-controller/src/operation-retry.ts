@@ -133,6 +133,7 @@ export function operationNeedsDurableRestartResume(op: {
   sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
   return sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
+    (op.kind === "restart-gateway" && op.input?.restoreRecovery !== undefined) ||
     op.kind === "erase-customer" ||
     isLevelTriggeredBuilderReturn(op) ||
     operationNeedsDurableCustomerMigrationV2Resume(op);

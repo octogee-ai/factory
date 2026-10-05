@@ -19,6 +19,7 @@ import {
 
 import { WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { TerminalConversationScope, type TerminalConversation } from "./terminal-conversation.js";
+import { openNativeUserSocket } from "../openclaw-control/native-user-client.js";
 
 export interface TerminalSession {
   conversation?: TerminalConversation;
@@ -26,6 +27,12 @@ export interface TerminalSession {
   gatewayId: string;
   workspaceSlug: string;
   reauthorize(): Promise<boolean>;
+}
+
+export function openTerminalUserSocket(session: TerminalSession, open = openNativeUserSocket): Promise<TerminalUpstream> {
+  return open(session.uid, session.gatewayId, process.env, {
+    ...(session.conversation ? { channelSessionKey: session.conversation.sessionKey } : {}),
+  });
 }
 
 export function terminalAvailable(env: NodeJS.ProcessEnv): boolean {

@@ -66,6 +66,7 @@ import { installGatewayEdgeUnhandledRejectionPolicy } from "./process-rejection-
 import {
   attachTerminalWsRoute,
   createTerminalRouter,
+  openTerminalUserSocket,
   terminalAvailable,
   type TerminalSession,
 } from "./routes/terminal.js";
@@ -83,7 +84,6 @@ import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
 import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
-import { openNativeUserSocket } from "./openclaw-control/native-user-client.js";
 import { createWsTicketStore } from "./lib/ws-ticket-store.js";
 import { workspaceCoachAgentId } from "@octogee/shared/types/identity";
 
@@ -497,7 +497,7 @@ if (process.env.NODE_ENV !== "test") {
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         tickets: terminalTickets,
         defaultAgentId: process.env.GATEWAY_BUILDER_SLUG ? workspaceCoachAgentId(process.env.GATEWAY_BUILDER_SLUG) : null,
-        openUpstream: (session) => openNativeUserSocket(session.uid, session.gatewayId),
+        openUpstream: openTerminalUserSocket,
         isAllowedOrigin: isAllowedWsOrigin,
         log: (message, meta) => logger.warn(message, meta),
       });

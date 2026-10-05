@@ -117,6 +117,13 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it("ignores failed audit entries without migration input", async () => {
+    const audit: FakeOpDoc = { id: "audit-unrelated", data: { status: "failed", recordType: "audit", error: "operator action failed" } };
+    const log = vi.fn();
+    await runStuckOpReaperTick({ db: makeFakeDb([audit]) as never, log, now: () => NOW, stalenessMs: 15 * 60_000 });
+    expect(audit.updated).toBeUndefined();
+    expect(log.mock.calls.flat().join("\n")).not.toContain("recovery admission failed");
+  });
   it("recovers a failed owned rsync conflict on a later tick without restarting Cowboy", async () => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
       kind: "migrate-customer", status: "failed", steps: [{ name: "keys-sync-state", status: "failed" }],

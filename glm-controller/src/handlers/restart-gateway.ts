@@ -8,6 +8,7 @@ export interface RestartGatewayDeps {
   resolveLiveRevisionId: (gatewayId: string) => Promise<string | null>;
   now: () => number;
   log: (msg: string) => void;
+  recoverRestore?: (op: Operation, ctx: OperationContext) => Promise<void>;
 }
 
 interface RestartGatewayInput {
@@ -30,6 +31,16 @@ export function createRestartGatewayHandler(
 
     if (!gatewayId) {
       return { steps: [], success: false, error: "missing gatewayId in op.input" };
+    }
+
+    if (op.input.restoreRecovery !== undefined) {
+      if (!deps.recoverRestore) return { steps: [], success: false, error: "restore runtime recovery is unavailable" };
+      try {
+        await deps.recoverRestore(op, ctx);
+        return { steps: [], success: true };
+      } catch (error) {
+        return { steps: [], success: false, error: error instanceof Error ? error.message : String(error), retryAfterMs: 60_000 };
+      }
     }
 
     const revisionId = await deps.resolveLiveRevisionId(gatewayId);

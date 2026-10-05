@@ -1186,6 +1186,13 @@ describe("fleet CLI args", () => {
   it("maps each existing Admin gateway action to its API request", () => {
     const sourceSha = "a".repeat(40);
     expect(resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1', '--idempotency-key=recovery-1',
+    ]))).toEqual({ method: 'POST', path: '/api/admin/gateways/shared-1/recover-restore',
+      body: { sourceSha, operationId: 'builder-return-1' }, idempotencyKey: 'recovery-1' });
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=foreign/path',
+    ]))).toThrow('invalid restore recovery');
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "deploy", "canary", `--sha=${sourceSha}`,
     ]))).toEqual({
       method: "POST",

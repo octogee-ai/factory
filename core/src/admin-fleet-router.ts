@@ -1916,6 +1916,12 @@ const ERR_GATEWAY_OPERATION_IN_FLIGHT =
 const ERR_USER_NOT_FOUND = "user not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
+
+function validRestoreRecoveryBody(body: { sourceSha?: unknown; operationId?: unknown }): boolean {
+  return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
+    typeof body.operationId === "string" && Boolean(body.operationId) && body.operationId.length <= 256 && !body.operationId.includes("/") &&
+    Object.keys(body).every(key => ["sourceSha", "operationId"].includes(key));
+}
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
   (["prod", "test"] as const).flatMap((environment) =>
@@ -5577,6 +5583,35 @@ router.post(
       }
     },
   );
+
+  router.post("/gateways/:id/recover-restore", async (req, res, next) => {
+    try {
+      const id = req.params.id as string;
+      const { sourceSha, operationId } = req.body ?? {};
+      if (!validRestoreRecoveryBody(req.body ?? {})) {
+        res.status(400).json({ error: "sourceSha and restore operationId are required" }); return;
+      }
+      const gateway = await readGatewayDoc(db, id);
+      if (!gateway || gateway.gatewayClass !== "shared" || gateway.desiredStatus === "retired") {
+        res.status(409).json({ error: "restore recovery requires a live Shared gateway" }); return;
+      }
+      if (!deps.releaseAuthority) { res.status(503).json({ error: "immutable build manifests are unavailable" }); return; }
+      const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
+      const payload = centralGatewayReleasePayload(manifest);
+      const input = { gatewayId: id, restoreRecovery: { operationId, sourceSha,
+        images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
+          "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
+      const queued = await runAdminFleetMutation({ req, what: "recover fenced Shared restore runtime", why: ADMIN_FLEET_REQUEST_REASON,
+        target: { gatewayId: id, operationId }, preActionStatus: { desiredRelease: gateway.desiredRelease },
+        mutation: input, action: async () => createOperation(db, {
+          kind: "restart-gateway", createdBy: (req as ActorRequest).uid ?? "unknown", input,
+        }) });
+      res.status(202).json({ gatewayId: id, sourceSha, operationId: queued });
+    } catch (error) {
+      if (respondCentralReleaseError(res, error)) return;
+      next(error);
+    }
+  });
 
   router.post(
     "/gateways/:id/restart",

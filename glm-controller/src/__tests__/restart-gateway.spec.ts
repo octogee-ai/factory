@@ -46,6 +46,21 @@ function mkDeps(overrides: Partial<RestartGatewayDeps> = {}): RestartGatewayDeps
 }
 
 describe("createRestartGatewayHandler", () => {
+  it('uses only the journaled restore recovery owner rather than the ordinary restart path', async () => {
+    const recoverRestore = vi.fn(async () => {});
+    const deps = mkDeps({ recoverRestore });
+    const op = mkOp({ input: { gatewayId: 'shared-1', restoreRecovery: { operationId: 'return' } } });
+    const { ctx } = mkCtx();
+    expect((await createRestartGatewayHandler(deps)(op, ctx)).success).toBe(true);
+    expect(recoverRestore).toHaveBeenCalledWith(op, ctx);
+    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
+  });
+  it('does not fall back to ordinary restart when restore recovery is unavailable', async () => {
+    const deps = mkDeps();
+    const result = await createRestartGatewayHandler(deps)(mkOp({ input: { gatewayId: 'shared-1', restoreRecovery: {} } }), mkCtx().ctx);
+    expect(result.success).toBe(false);
+    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
+  });
   it("calls kubeOps.restartOpenClawInPlace with the deployment derived from the serving revision", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);

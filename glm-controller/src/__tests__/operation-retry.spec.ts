@@ -79,6 +79,10 @@ describe("shouldPersistClaimedOperationCompletion", () => {
 });
 
 describe("operationNeedsDurableRestartResume", () => {
+  it('re-drives only the journaled Shared restore restart variant after controller loss', () => {
+    expect(operationNeedsDurableRestartResume({ kind: 'restart-gateway', input: { restoreRecovery: {} } })).toBe(true);
+    expect(operationNeedsDurableRestartResume({ kind: 'restart-gateway', input: { gatewayId: 'shared-1' } })).toBe(false);
+  });
   it("resumes an interrupted automatic Builder return rather than reaping its coordinated handoff", () => {
     const op = { id: "builder-return-native", kind: "migrate-customer", origin: "automatic", input: {
       source: "builder-activation-lease", fromGatewayId: "native", toGatewayId: "shared-0",
