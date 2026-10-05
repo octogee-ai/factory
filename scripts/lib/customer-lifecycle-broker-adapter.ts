@@ -1856,9 +1856,13 @@ export function buildBrokeredLifecycleAdapter(
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
     applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
-      applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts),
+      openClawRuntimeUpdateGuard.run(() => applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts), {
+        signal: callOpts?.signal,
+      }),
     reconcileConfiguredBuilderProjectAgents: (snapshot, options) =>
-      reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options),
+      openClawRuntimeUpdateGuard.run(() => reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options), {
+        signal: options?.signal,
+      }),
     applyRemoveCustomerConfigPatch: (slug, agentId, evictionBatch, currentEvictionBatch) =>
       applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch),
     cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),
@@ -1877,7 +1881,7 @@ export function buildBrokeredLifecycleAdapter(
         signal: callOpts?.signal,
       }),
     exportOpenClawActivationManifest: (slug) =>
-      exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug),
+      openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug)),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
       removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch),
     releaseAgent: (agentId) => deleteAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`),

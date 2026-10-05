@@ -31,6 +31,7 @@ import {
 import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch } from "@octogee/core/byot-sync-runtime";
 import { canonicalCustomerModelDefinition } from "../../shared/types/agent-models.js";
 import { _resetBrokerProfileLogStateForTests, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
+import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 
 const testRuntime = await vi.hoisted(async () => {
   const { mkdtempSync } = await import("node:fs");
@@ -82,6 +83,7 @@ const contextFileConvergenceMocks = vi.hoisted(() => ({
   reassertConvergedContextFilesForSlug: vi.fn(() => []),
 }));
 const secretMocks = vi.hoisted(() => ({
+  exportActivationManifestWithSecret: vi.fn(),
   updateMattermostAccountSecrets: vi.fn(async () => ({ changed: true })),
   materializeActivationManifestSecret: vi.fn(async (_dir: string, manifest: unknown) => ({
     manifest,
@@ -170,8 +172,10 @@ vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
 });
 vi.mock("../lib/migration-activation-secrets.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/migration-activation-secrets.js")>();
+  secretMocks.exportActivationManifestWithSecret.mockImplementation(actual.exportActivationManifestWithSecret);
   return {
     ...actual,
+    exportActivationManifestWithSecret: secretMocks.exportActivationManifestWithSecret,
     materializeActivationManifestSecret: secretMocks.materializeActivationManifestSecret,
   };
 });
@@ -2169,6 +2173,88 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { mode: "mount", failPublication: false }, { mode: "configured Builder", failPublication: false },
+    { mode: "mount", failPublication: true }, { mode: "configured Builder", failPublication: true },
+  ])("exports only after $mode project publication settles (failed: $failPublication)", async ({ mode, failPublication }) => {
+    const { updateMattermostAccountSecrets } = await vi.importActual<typeof import("../lib/mattermost-account-secrets.js")>("../lib/mattermost-account-secrets.js");
+    const snapshot = aliceSnapshot({ status: "complete", channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }], projectAgents: [{
+      projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning",
+    }] });
+    const coachId = "octogee-alice-coach";
+    const projectId = "octogee-alice-proj-orbit-coach";
+    let config: Record<string, any> = {
+      agents: { entries: { [coachId]: { workspace: path.join(testRuntime.dir, "customers/alice") } } },
+      channels: { mattermost: { accounts: { "alice-coach": {
+        botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-coach" }, allowFrom: [ALICE_OWNER_MM_ID],
+      } } } },
+      bindings: [{ agentId: coachId, match: { channel: "mattermost", accountId: "alice-coach" } }],
+    };
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    await updateMattermostAccountSecrets(testRuntime.dir, { set: { "alice-coach": "coach-pat" } });
+    saveAppliedFingerprints(path.join(testRuntime.dir, "applied-fingerprints.json"), new Map([["alice", "stable-before-project"]]));
+    secretMocks.updateMattermostAccountSecrets.mockImplementation(updateMattermostAccountSecrets);
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    let releaseProfiles!: () => void;
+    const profiles = new Promise<void>((resolve) => { releaseProfiles = resolve; });
+    brokerCatalogMocks.materializeBrokerProfilesForAgents.mockImplementationOnce(async () => {
+      await profiles;
+      return { materialized: 1, deferred: [] };
+    });
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot(config)),
+      agentsCreate: vi.fn(async ({ name, workspace }) => {
+        if (!config.agents.entries[name]) {
+          config.agents.entries[name] = { workspace };
+          await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+        }
+        return { ok: true, agentId: name, name, workspace };
+      }),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [
+        { accountId: "alice-proj-orbit", running: true, connected: true, lastStartAt: 2 },
+      ] } })),
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      if (failPublication) throw new Error("project configuration refused");
+      const patch = args.buildPatch(config) as Record<string, any>;
+      config = {
+        ...config,
+        agents: { ...config.agents, entries: { ...config.agents.entries, ...patch.agents.entries } },
+        channels: { mattermost: { accounts: { ...config.channels.mattermost.accounts, ...patch.channels.mattermost.accounts } } },
+        bindings: patch.bindings,
+      };
+      await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+    const publishing = mode === "mount"
+      ? adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" })
+      : adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+    const publicationResult = publishing.then(() => undefined, (error) => error);
+    let exported: Promise<unknown> | undefined;
+    try {
+      await vi.waitFor(() => expect(config.agents.entries[projectId]).toBeDefined());
+      expect(config.channels.mattermost.accounts["alice-proj-orbit"]).toBeUndefined();
+      exported = adapter.exportOpenClawActivationManifest!("alice").then((value) => value, (error) => error);
+      expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+    } finally {
+      releaseProfiles();
+      const result = await publicationResult;
+      secretMocks.updateMattermostAccountSecrets.mockReset().mockResolvedValue({ changed: true });
+      if (failPublication) expect(result).toMatchObject({ message: "project configuration refused" });
+      else expect(result).toBeUndefined();
+    }
+    if (failPublication) {
+      await expect(exported).resolves.toMatchObject({ message: expect.stringContaining("missing botToken") });
+      return;
+    }
+    await expect(exported).resolves.toMatchObject({
+      slug: "alice", mattermostAccount: { botToken: "coach-pat" },
+      projectAgents: [{ agentId: projectId, accountId: "alice-proj-orbit", mattermostAccount: { botToken: "project-pat" } }],
+    });
   });
 
   it.each([
