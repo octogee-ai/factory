@@ -2010,16 +2010,17 @@ async function runClaimedOperation(
       },
       begin: async (input) => {
         if (typeof op.startedAt !== "number") throw new Error("customer restore requires an active claim");
+        const { resume, ...scope } = input;
         const restore = {
-          ...input, operationId: op.id, claimStartedAt: op.startedAt, attemptId: randomUUID(),
+          ...scope, operationId: op.id, claimStartedAt: op.startedAt, attemptId: randomUUID(),
         };
         const stateDeps = {
           db: deps.db as unknown as FleetStateFirestore,
           serverTimestamp: () => FieldValue.serverTimestamp(),
           deleteField: () => FieldValue.delete(),
         };
-        await beginCustomerRestore(stateDeps, restore);
-        return () => acknowledgeCustomerRestore(stateDeps, restore);
+        const owned = await beginCustomerRestore(stateDeps, restore, { resume });
+        return () => acknowledgeCustomerRestore(stateDeps, owned);
       },
     },
     persist: async (next) => {

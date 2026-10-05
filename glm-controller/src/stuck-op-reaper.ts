@@ -126,6 +126,7 @@ async function reapWithLegacyGateRecovery(input: {
 export async function runStuckOpReaperTick(
   deps: StuckOpReaperDeps,
 ): Promise<StuckOpReaperResult> {
+  await recoverFailedLegacyMigrations(deps);
   const snap = await deps.db
     .collection(GLM_OPERATIONS_COLLECTION)
     .where("status", "==", "running")

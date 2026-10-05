@@ -74,7 +74,9 @@ export interface CustomerRestoreInput {
     claimStartedAt: number;
     attemptId: string;
 }
-export declare function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void>;
+export declare function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput, options?: {
+    resume?: boolean;
+}): Promise<CustomerRestoreInput>;
 export declare function acknowledgeCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput): Promise<void>;
 export interface HeartbeatSnapshot {
     gatewayId: string;

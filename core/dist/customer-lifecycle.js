@@ -5,7 +5,7 @@ import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
 const CONFIG_PATCH = "config-patch";
-const inFlightUids = new Set();
+const inFlightUids = new Map();
 export class ConcurrentMountError extends Error {
     name = "ConcurrentMountError";
     constructor(uid) {
@@ -33,7 +33,13 @@ async function runUidMountExclusive(uid, opts, work) {
     if (inFlightUids.has(uid)) {
         throw new ConcurrentMountError(uid);
     }
-    inFlightUids.add(uid);
+    const claim = Symbol(uid);
+    inFlightUids.set(uid, claim);
+    const release = () => {
+        if (inFlightUids.get(uid) === claim)
+            inFlightUids.delete(uid);
+    };
+    let workSettled;
     const deadlineMs = opts.mountDeadlineMs ?? ADD_CUSTOMER_DEADLINE_MS;
     const controller = new AbortController();
     let step = "load-snapshot";
@@ -49,7 +55,7 @@ async function runUidMountExclusive(uid, opts, work) {
     }
     let timer = null;
     if (!controller.signal.aborted && Number.isFinite(deadlineMs) && deadlineMs > 0) {
-        timer = setTimeout(() => controller.abort(new Error(`[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — step "${step}" is hung; releasing in-flight lock so the next retry can run`)), deadlineMs);
+        timer = setTimeout(() => controller.abort(new Error(`[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — step "${step}" is hung; retaining in-flight lock until work settles`)), deadlineMs);
     }
     try {
         opts.onSignalCreated?.(controller.signal);
@@ -60,7 +66,8 @@ async function runUidMountExclusive(uid, opts, work) {
         catch (error) {
             workPromise = Promise.reject(error);
         }
-        const workSettled = workPromise.then(() => undefined, () => undefined);
+        workSettled = workPromise.then(() => undefined, () => undefined);
+        void workSettled.then(release);
         opts.onWorkSettled?.(workSettled);
         return await raceWithSignal(workPromise, controller.signal);
     }
@@ -68,7 +75,8 @@ async function runUidMountExclusive(uid, opts, work) {
         if (timer)
             clearTimeout(timer);
         opts.signal?.removeEventListener("abort", externalAbortListener);
-        inFlightUids.delete(uid);
+        if (!workSettled)
+            release();
     }
 }
 function raceWithSignal(work, signal) {

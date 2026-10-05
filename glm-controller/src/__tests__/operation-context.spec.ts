@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
-import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext } from "../operation-context";
+import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext, PendingCustomerRestoreError } from "../operation-context";
 
 function makeDeps() {
   const persistedSnapshots: OperationStep[][] = [];
@@ -243,6 +243,20 @@ describe("settled customer restore", () => {
     expect(() => assertCustomerRestoreSettled({ ...operation, input: {
       uid: "u1", fromGatewayId: "builder-1", toGatewayId: "shared-1",
     } }, acknowledged)).not.toThrow();
+  });
+
+  it("admits only a matching dispatched intent for native resumption", () => {
+    const pending = { ...acknowledged, phase: "dispatched" };
+    expect(() => assertCustomerRestoreSettled(operation, pending)).toThrow(PendingCustomerRestoreError);
+    for (const changed of [{ uid: "foreign" }, { assignmentEpoch: -1 }, { attemptId: " " }, { dispatchedAt: 0 }]) {
+      try {
+        assertCustomerRestoreSettled(operation, { ...pending, ...changed });
+        expect.fail("malformed intent was admitted");
+      } catch (error) {
+        expect(error).not.toBeInstanceOf(PendingCustomerRestoreError);
+        expect(error).toBeInstanceOf(Error);
+      }
+    }
   });
 
   it.each([

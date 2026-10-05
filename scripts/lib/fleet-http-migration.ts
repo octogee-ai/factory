@@ -693,6 +693,7 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
 
 export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
+  const active = new Map<string, { identity: string; result: Promise<RestoreMigrationResponse> }>();
   return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<RestoreMigrationRequestBody>(
       req,
@@ -712,27 +713,36 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
     }
 
     try {
-      await pauseSystemConfigWatchForBuilder(deps, body.slug);
-      deps.adapter.markCustomerMigratingIn?.(body.slug);
-      deps.adapter.seedUserSnapshotForMigration?.(body.snapshot);
-      const adapter: CustomerLifecycleAdapter = {
-        ...deps.adapter,
-        loadUserSnapshot: async (uid) => {
-          const fresh = await deps.adapter.loadUserSnapshot(uid);
-          return uid === snapshot.uid ? fresh ?? snapshot : fresh;
-        },
-        uidForSlug: async (slug) =>
-          slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
-      };
-      const result = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot);
-      const response: RestoreMigrationResponse = {
-        migrationId: body.migrationId,
-        slug: body.slug,
-        restored: result.restored,
-        steps: result.steps,
-      };
+      const identity = JSON.stringify(body);
+      let entry = active.get(body.uid);
+      if (entry && entry.identity !== identity) throw new Error("customer restore is still settling under a different request");
+      if (!entry) {
+        const result = Promise.resolve().then(async () => {
+          await pauseSystemConfigWatchForBuilder(deps, body.slug);
+          deps.adapter.markCustomerMigratingIn?.(body.slug);
+          deps.adapter.seedUserSnapshotForMigration?.(body.snapshot);
+          const adapter: CustomerLifecycleAdapter = {
+            ...deps.adapter,
+            loadUserSnapshot: async (uid) => {
+              const fresh = await deps.adapter.loadUserSnapshot(uid);
+              return uid === snapshot.uid ? fresh ?? snapshot : fresh;
+            },
+            uidForSlug: async (slug) => slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
+          };
+          const restored = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot);
+          return { migrationId: body.migrationId, slug: body.slug, restored: restored.restored, steps: restored.steps };
+        });
+        entry = { identity, result };
+        active.set(body.uid, entry);
+        const owned = entry;
+        const release = () => {
+          if (active.get(body.uid) === owned) active.delete(body.uid);
+        };
+        void result.then(release, release);
+      }
+      const response = await entry.result;
       log(
-        `[migration-http] 🟢 restore migrationId=${body.migrationId} slug=${body.slug} steps=${result.steps.join(",")}`,
+        `[migration-http] 🟢 restore migrationId=${body.migrationId} slug=${body.slug} steps=${response.steps.join(",")}`,
       );
       res.status(200).json(response);
     } catch (err) {

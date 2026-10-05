@@ -4,6 +4,16 @@ import { GLM_OPERATIONS_COLLECTION, type Operation } from "@octogee/shared/types
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 
+export function legacyAttemptNeverQuiesced(operation: Operation): boolean {
+  if (operation.customerMigrationV2 !== undefined ||
+      ![operation.input.fromGatewayId, operation.input.toGatewayId].every((id) => typeof id === "string" && id.startsWith("shared-"))) return false;
+  const attempt = Number(operation.schedulerHandoff?.migrationId.split(":").at(-1));
+  if (!Number.isSafeInteger(attempt) || attempt < 1) return false;
+  const prior = operation.attemptHistory?.slice().reverse().find((entry) => entry.attempt === attempt);
+  const steps = prior?.steps ?? (operation.attempts === attempt ? operation.steps : undefined);
+  return steps?.length === 1 && steps[0]?.name === "keys-sync-state" && steps[0].status === "failed";
+}
+
 function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt?: number }): boolean {
   const input = operation.input;
   const handoff = operation.schedulerHandoff;
@@ -81,7 +91,8 @@ export async function recoverFailedLegacyMigrations(deps: { db: Firestore; log: 
     try {
       const rearmed = await rearmOwnedLegacyMigration({ db: deps.db, ref: doc.ref, now: deps.now(), admitted: (operation) =>
         operation.status === "failed" && typeof operation.error === "string" &&
-        (/^reaped: (?:controller restarted mid-op|op exceeded \d+m running budget)/.test(operation.error) || /gateway starting; retry shortly|rsync import port \d+ is already serving migrationId=/.test(operation.error)),
+        (/^reaped: (?:controller restarted mid-op|op exceeded \d+m running budget)/.test(operation.error) || /gateway starting; retry shortly|rsync import port \d+ is already serving migrationId=/.test(operation.error) ||
+          operation.input.recoverSourceOnly === true && legacyAttemptNeverQuiesced(operation) && /voice migration resume failed: HTTP 409/.test(operation.error)),
       });
       if (rearmed) deps.log(`[migration-recovery] queued native source recovery for ${doc.id}; assignment and marker remain held`);
     } catch (error) {

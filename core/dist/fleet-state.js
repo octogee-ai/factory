@@ -222,9 +222,33 @@ function hasPriorCustomerRestoreWork(operation) {
     return attempts.some(attempt => Array.isArray(attempt.steps) &&
         attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
 }
-export async function beginCustomerRestore(deps, input) {
-    await deps.db.runTransaction(async (txn) => {
+function resumedRestoreIntent(current, input) {
+    const prior = recordOrEmpty(current.operation.restoreAttempt);
+    const fence = recordOrEmpty(current.openclaw.restoreFence);
+    const identity = ["uid", "slug", "gatewayId", "fromGatewayId", "assignmentEpoch", "operationId"];
+    const exact = prior.phase === "dispatched" && fence.phase === "dispatched" &&
+        identity.every(key => prior[key] === input[key] && fence[key] === prior[key]) &&
+        typeof prior.attemptId === "string" && prior.attemptId.trim().length > 0 &&
+        Number.isSafeInteger(prior.claimStartedAt) && Number(prior.claimStartedAt) > 0 &&
+        Number.isSafeInteger(prior.dispatchedAt) && Number(prior.dispatchedAt) > 0 &&
+        Number(prior.claimStartedAt) <= input.claimStartedAt && Number(prior.dispatchedAt) >= Number(prior.claimStartedAt) &&
+        ["attemptId", "claimStartedAt", "dispatchedAt"].every(key => fence[key] === prior[key]);
+    if (!exact)
+        throw new Error("customer restore resumption does not own the dispatch intent");
+    if (Object.hasOwn(current.openclaw, "sourceTransferFence"))
+        throw new Error("customer source transfer outcome is unresolved");
+    return { ...input, attemptId: prior.attemptId };
+}
+export async function beginCustomerRestore(deps, input, options = {}) {
+    return deps.db.runTransaction(async (txn) => {
         const current = await readCustomerRestoreAuthority(deps, txn, input);
+        if (options.resume === true) {
+            const resumed = resumedRestoreIntent(current, input);
+            const intent = { ...recordOrEmpty(current.operation.restoreAttempt), ...resumed };
+            txn.update(current.userRef, { "provisioning.openclaw.restoreFence": intent });
+            txn.update(current.operationRef, { restoreAttempt: intent });
+            return resumed;
+        }
         assertRestoreUnfenced(current.user);
         if (current.operation.restoreAttempt !== undefined ||
             hasPriorCustomerRestoreWork(current.operation)) {
@@ -234,6 +258,7 @@ export async function beginCustomerRestore(deps, input) {
         const intent = { ...input, phase: "dispatched", dispatchedAt: now };
         txn.update(current.userRef, { "provisioning.openclaw.restoreFence": intent });
         txn.update(current.operationRef, { restoreAttempt: intent, lastProgressAt: now });
+        return input;
     });
 }
 export async function acknowledgeCustomerRestore(deps, input) {

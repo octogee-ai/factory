@@ -697,7 +697,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       rpc,
       testRuntime.dir,
       expect.any(Function),
-      { restartAccountIds: [], restartConfiguredPending: false },
+      { restartAccountIds: [], restartConfiguredPending: true },
     );
     expect(rpc.secretsReload).toHaveBeenCalledOnce();
     expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1210,7 +1210,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       rpc,
       testRuntime.dir,
       expect.any(Function),
-      { restartAccountIds: ["tester10-coach"], restartConfiguredPending: false },
+      { restartAccountIds: ["tester10-coach"], restartConfiguredPending: true },
     );
   });
 

@@ -21,6 +21,7 @@ export interface OperationContext {
   assertActiveClaim?: (allowCancelled?: boolean) => Promise<void>;
   assertCustomerRestoreSettled?: () => Promise<void>;
   withCustomerRestoreFence?: (input: {
+    resume?: boolean;
     uid: string;
     slug: string;
     gatewayId: string;

@@ -2185,11 +2185,10 @@ releaseFirst();
     await Promise.resolve();
     expect(workSettled).toBeDefined();
     expect(callbackSettled).toBe(false);
-    expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
+    expect(_inFlightUidsHasForTests("uid-test")).toBe(true);
 
     const state2 = makeState(snap({ status: "" }), emptyDisk());
-    const retry = await addCustomerToGateway(makeAdapter(state2), "uid-test");
-    expect(retry.steps).toContain("verify-channel-ready");
+    await expect(addCustomerToGateway(makeAdapter(state2), "uid-test")).rejects.toBeInstanceOf(ConcurrentMountError);
 
     releaseClone();
     await workSettled;
@@ -2198,6 +2197,8 @@ releaseFirst();
     expect(state.calls).toContain("ensureCustomerDirectories");
     expect(state.calls).toContain("writeCustomerTemplateFiles");
     expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
+    const retry = await addCustomerToGateway(makeAdapter(state2), "uid-test");
+    expect(retry.steps).toContain("verify-channel-ready");
   });
 
   it("names the hung step in the deadline error", async () => {
@@ -2469,7 +2470,7 @@ describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () =
     _resetInFlightUidsForTests();
   });
 
-  it("releases the restore uid after a deadline while reporting work settlement", async () => {
+  it("retains restore exclusivity against both restore and reconcile until late work settles", async () => {
     const state = makeState(snap({ status: "complete" }), emptyDisk());
     const realAdapter = makeAdapter(state);
     let releaseRead!: () => void;
@@ -2496,12 +2497,14 @@ describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () =
       }),
     ).rejects.toThrow(/mountDeadlineMs.*25ms.*exceeded/i);
 
-    expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
+    expect(_inFlightUidsHasForTests("uid-test")).toBe(true);
+    const state2 = makeState(snap({ status: "complete" }), emptyDisk());
+    await expect(addCustomerToGateway(makeAdapter(state2), "uid-test")).rejects.toBeInstanceOf(ConcurrentMountError);
+    await expect(restoreCustomerRuntimeFromSnapshot(makeAdapter(state2), state2.user!)).rejects.toBeInstanceOf(ConcurrentMountError);
     releaseRead();
     await workSettled;
     expect(_inFlightUidsHasForTests("uid-test")).toBe(false);
 
-    const state2 = makeState(snap({ status: "complete" }), emptyDisk());
     const retry = await restoreCustomerRuntimeFromSnapshot(makeAdapter(state2), state2.user!);
     expect(retry.steps).toContain("verify-channel-ready");
   });

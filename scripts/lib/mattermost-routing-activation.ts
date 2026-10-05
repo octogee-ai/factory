@@ -392,6 +392,7 @@ async function restartMattermostAccounts(
 
 async function pendingAccountsToRestart(
   rpc: GatewayRpcClient,
+  pending: PendingActivationBatch,
   accountIds: readonly string[],
   restartAccountIds: readonly string[],
   restartConfiguredPending: boolean,
@@ -399,8 +400,9 @@ async function pendingAccountsToRestart(
   const requested = new Set(restartAccountIds);
   if (restartConfiguredPending) {
     const configured = await configuredMattermostAccountIds(rpc);
+    const statuses = await mattermostAccountStatuses(rpc);
     for (const accountId of accountIds) {
-      if (configured.has(accountId)) requested.add(accountId);
+      if (configured.has(accountId) && !accountsActivated(statuses, [accountId], { accounts: pending.baselineLastStartAt })) requested.add(accountId);
     }
   }
   return accountIds.filter((accountId) => requested.has(accountId));
@@ -470,7 +472,8 @@ export async function activateMattermostRoutingAfterConfigPatch(
   }
   if (!required) return;
   await activatePendingMattermostRouting(rpc, openclawDir, log, {
-    restartAccountIds: params.configNoop ? params.accountIds : params.restartAccountIds ?? [],
+    restartAccountIds: params.restartAccountIds ?? [],
+    restartConfiguredPending: true,
   });
 }
 
@@ -517,6 +520,7 @@ export async function activatePendingMattermostRouting(
     }
     const accountsToRestart = await pendingAccountsToRestart(
       rpc,
+      pending,
       accountIds,
       options.restartAccountIds ?? [],
       options.restartConfiguredPending === true,

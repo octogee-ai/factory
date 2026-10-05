@@ -94,6 +94,10 @@ function nonblankRestoreIdentifier(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+export class PendingCustomerRestoreError extends Error {
+  override readonly name = "PendingCustomerRestoreError";
+}
+
 export function assertCustomerRestoreSettled(operation: Operation, attempt: unknown): void {
   if (attempt === undefined) return;
   if (attempt === null || typeof attempt !== "object" || Array.isArray(attempt)) {
@@ -102,7 +106,7 @@ export function assertCustomerRestoreSettled(operation: Operation, attempt: unkn
   const receipt = attempt as Record<string, unknown>;
   const identifiers = [receipt.slug, receipt.attemptId, receipt.operationId, receipt.uid, receipt.fromGatewayId, receipt.gatewayId];
   const exact = [
-    receipt.phase === "acknowledged",
+    receipt.phase === "acknowledged" || receipt.phase === "dispatched",
     identifiers.every(nonblankRestoreIdentifier),
     receipt.operationId === operation.id,
     receipt.uid === operation.input.uid,
@@ -112,8 +116,10 @@ export function assertCustomerRestoreSettled(operation: Operation, attempt: unkn
     Number.isSafeInteger(receipt.assignmentEpoch) && (receipt.assignmentEpoch as number) >= 0,
     positiveRestoreTimestamp(receipt.claimStartedAt),
     positiveRestoreTimestamp(receipt.dispatchedAt),
-    positiveRestoreTimestamp(receipt.acknowledgedAt),
-    (receipt.acknowledgedAt as number) >= (receipt.dispatchedAt as number),
   ].every(Boolean);
   if (!exact) throw new Error("customer restore delivery remains ambiguous; assignment fence retained");
+  if (receipt.phase === "dispatched") throw new PendingCustomerRestoreError("customer restore awaits native target resumption; assignment fence retained");
+  if (!positiveRestoreTimestamp(receipt.acknowledgedAt) || receipt.acknowledgedAt < (receipt.dispatchedAt as number)) {
+    throw new Error("customer restore acknowledgement is malformed; assignment fence retained");
+  }
 }

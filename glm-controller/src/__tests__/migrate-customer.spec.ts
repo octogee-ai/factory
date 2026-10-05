@@ -11,6 +11,7 @@ import {
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import { classifyOperationFailure } from "../operation-retry";
+import { PendingCustomerRestoreError } from "../operation-context";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
 
@@ -255,6 +256,31 @@ describe("abandoned Shared migration recovery", () => {
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
     expect(h.steps).toContainEqual(expect.objectContaining({ name: "recover-source", status: "done" }));
   });
+  it("does not release unrelated voice ingress when the abandoned attempt failed before quiescence", async () => {
+    const h = recovery();
+    const request = op();
+    request.input.recoverSourceOnly = true;
+    request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000,
+      error: "rsync import port 30873 is already serving migrationId=other slug=bob",
+      classification: "terminal", steps: [{ name: "keys-sync-state", status: "failed" }],
+    }];
+    vi.mocked(h.client.resume).mockRejectedValue(new Error("foreign voice hold"));
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ rolledBack: true });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.scheduler).toHaveBeenCalledWith(expect.objectContaining({ phase: "resume", gatewayId: "shared-blue" }));
+    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+  });
+  it("does not use another attempt's keys-sync failure as proof that the old handoff never quiesced", async () => {
+    const h = recovery();
+    const request = op();
+    request.attempts = 2;
+    request.input.recoverSourceOnly = true;
+    request.steps = [{ name: "keys-sync-state", status: "failed" }];
+    vi.mocked(h.client.resume).mockRejectedValue(new Error("voice hold still owned"));
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, error: "voice hold still owned" });
+    expect(h.client.resume).toHaveBeenCalledOnce();
+    expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+  });
   it.each(["cutover", "source-moved"])("refuses source-only recovery before native RPCs after %s", async (scenario) => {
     const h = recovery();
     const request = op();
@@ -346,6 +372,19 @@ describe("native computer return", () => {
       delete h.ctx.withCustomerRestoreFence;
       expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false });
       expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    });
+
+    it("resumes an exact dispatched restore through the native serialized endpoint before completing the return", async () => {
+      const h = recovery();
+      vi.mocked(h.ctx.assertCustomerRestoreSettled!).mockRejectedValueOnce(new PendingCustomerRestoreError("pending"));
+      vi.mocked(h.client.verifyTarget).mockReset().mockResolvedValue({
+        migrationId: "mig-op-1", slug: "alice", ready: true,
+        checks: { customerDir: true, coachWired: true, mountMarked: true, accountHealthy: true },
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: true });
+      expect(h.ctx.withCustomerRestoreFence).toHaveBeenCalledWith(expect.objectContaining({ resume: true }), expect.any(Function));
+      expect(h.client.restoreTarget).toHaveBeenCalledWith(expect.objectContaining({ resume: true, uid: "uid-alice", gatewayId: "gw-green" }));
+      expect(h.ctx.assertCustomerRestoreSettled).toHaveBeenCalledTimes(2);
     });
 
     it("does not accept ready state after an ambiguous earlier restore", async () => {

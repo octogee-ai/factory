@@ -2,6 +2,8 @@ import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
+import { legacyAttemptNeverQuiesced } from "../legacy-migration-recovery.js";
+import { PendingCustomerRestoreError } from "../operation-context.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
@@ -1199,7 +1201,13 @@ async function completeNativeReturn(
   input: { uid: string; fromGatewayId: string; toGatewayId: string; slug: string; migrationId: string; handoff: SchedulerHandoffState | null },
 ): Promise<OperationResult> {
   try {
-    await ctx.assertCustomerRestoreSettled?.();
+    try {
+      await ctx.assertCustomerRestoreSettled?.();
+    } catch (error) {
+      if (!(error instanceof PendingCustomerRestoreError)) throw error;
+      await restoreInterruptedSharedMount(deps, ctx, input, true);
+      await ctx.assertCustomerRestoreSettled?.();
+    }
     await native.release();
     if (input.handoff) {
       const handoff = input.handoff;
@@ -1252,6 +1260,7 @@ async function restoreInterruptedSharedMount(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   input: NativeReturnTarget,
+  resume = false,
 ): Promise<void> {
   const url = await deps.resolveGatewayUrl(input.toGatewayId);
   const snapshot = await deps.readUserSnapshot(input.uid, input.toGatewayId);
@@ -1267,10 +1276,12 @@ async function restoreInterruptedSharedMount(
   await ctx.withCustomerRestoreFence({
     uid: input.uid, slug: input.slug, gatewayId: input.toGatewayId,
     fromGatewayId: input.fromGatewayId, assignmentEpoch: placement.epoch,
+    ...(resume ? { resume: true } : {}),
   }, () => reportFreshStep(deps, ctx, "restore-target", async () => {
     const result = await deps.buildClient(() => url).restoreTarget({
       migrationId: input.migrationId, gatewayId: input.toGatewayId,
       uid: input.uid, slug: input.slug, snapshot,
+      ...(resume ? { resume: true } : {}),
     });
     if (result.restored !== true || result.migrationId !== input.migrationId || result.slug !== input.slug) {
       throw new Error("Shared restore did not confirm the matching migration");
@@ -1444,7 +1455,9 @@ async function resumePreviousSchedulerAttempt(
   await client.scheduler({
     migrationId: previous.migrationId, slug: previous.slug, gatewayId: previous.fromGatewayId, phase: "resume",
   });
-  await client.resume({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: user.currentGatewayId });
+  if (!legacyAttemptNeverQuiesced(op)) {
+    await client.resume({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: user.currentGatewayId });
+  }
   if (recovery) await deps.completeMigrationRecovery!(recovery);
   return recovery !== undefined;
 }

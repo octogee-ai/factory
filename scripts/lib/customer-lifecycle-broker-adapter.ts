@@ -1609,7 +1609,7 @@ async function settleActivatedImport(
         ctx.log,
         {
           restartAccountIds: patch.restartExistingAccountIds ?? [],
-          restartConfiguredPending: patch.routingActivationRequired === false,
+          restartConfiguredPending: true,
         },
       );
     }

@@ -17,6 +17,16 @@ import {
 } from "../operation-retry";
 
 describe("verifiedDeletionCompletion", () => {
+  it("keeps continuous placement pending while another migration owns the rsync listener", () => {
+    const error = "rsync import port 30873 is already serving migrationId=mig-other slug=bob";
+    expect(classifyOperationFailure(error)).toBe("transient");
+    expect(buildOperationCompletionUpdate({
+      op: { id: `placement-${"a".repeat(32)}`, kind: "migrate-customer", origin: "automatic",
+        input: { source: "continuous-placement-policy" }, startedAt: 1_000, attempts: 3 },
+      result: { success: false, steps: [], error }, steps: [], now: 2_000,
+    })).toMatchObject({ status: "pending", attempts: 4 });
+    expect(classifyOperationFailure("rsync import credentials rejected")).toBe("terminal");
+  });
   it.each([
     "/quiesce/builder: 500 Agent alice-coach has not completed startup inspection and preparation. Inspection and writable admission continue after the Gateway listener binds.",
     "/quiesce/builder: 500 agent alice-coach startup preparation was superseded",

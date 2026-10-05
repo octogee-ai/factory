@@ -132,10 +132,10 @@ export function createMigrationClient(deps) {
             if (result.ready !== true)
                 throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
         },
-        async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
+        async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot, resume }) {
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,
-                path: `/restore/${gatewayId}`,
+                path: `/${resume === true ? "resume-restore" : "restore"}/${gatewayId}`,
                 gatewayId,
                 migrationId,
                 body: { migrationId, uid, slug, snapshot },

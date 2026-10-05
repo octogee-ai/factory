@@ -75,6 +75,7 @@ export interface MigrationClient {
   }): Promise<FlushGatewayResponse>;
 
   restoreTarget(opts: {
+    resume?: boolean;
     migrationId: string;
     gatewayId: string;
     transportId?: string;
@@ -287,10 +288,10 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       });
       if (result.ready !== true) throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
     },
-    async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot }) {
+    async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot, resume }) {
       const res = await postSignedJson<RestoreMigrationResponse>({
         transportId: transportId ?? gatewayId,
-        path: `/restore/${gatewayId}`,
+        path: `/${resume === true ? "resume-restore" : "restore"}/${gatewayId}`,
         gatewayId,
         migrationId,
         body: { migrationId, uid, slug, snapshot },

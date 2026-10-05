@@ -990,6 +990,78 @@ describe("createVerifyHandler", () => {
 });
 
 describe("createRestoreHandler", () => {
+  it("joins a matching restore retry instead of starting competing mount work", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const adapter = mkAdapter({
+      hasCustomerSshKey: vi.fn(() => true),
+      readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TEST"),
+      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 TEST"]),
+      ensureGiteaOrg: vi.fn(async () => undefined),
+      hasWorkspaceGitDir: vi.fn(() => false),
+      cloneWorkspaceRepo: vi.fn(async () => true),
+      ensureCustomerDirectories: vi.fn(),
+      writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      blobSyncForSlug: vi.fn(async () => undefined),
+      restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
+      applyAddCustomerConfigPatch: vi.fn(async () => { await blocked; return { elapsedMs: 1 }; }),
+    });
+    const handler = createRestoreHandler(mkDeps({ adapter }));
+    const body = { migrationId: "mig-1", uid: "uid-chris", slug: "chris", snapshot: RESTORE_SNAPSHOT };
+    const response = () => mkResponse();
+    const one = response(), two = response();
+    const request = () => mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) });
+    const first = handler(request(), one.res, vi.fn());
+    await vi.waitFor(() => expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce());
+    const foreignBody = { ...body, migrationId: "foreign" };
+    const foreign = response();
+    await handler(mkRequest(foreignBody, { signature: signForPod(foreignBody.migrationId, JSON.stringify(foreignBody)) }), foreign.res, vi.fn());
+    expect(foreign.getStatus()).toBe(500);
+    const second = handler(request(), two.res, vi.fn());
+    release();
+    await Promise.all([first, second]);
+    expect(one.getStatus()).toBe(200);
+    expect(two.getStatus()).toBe(200);
+    expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+  });
+  it("keeps late restore work exclusive after its response deadline until the work actually settles", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const adapter = mkAdapter({
+      hasCustomerSshKey: vi.fn(() => true), readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TEST"),
+      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 TEST"]), ensureGiteaOrg: vi.fn(async () => undefined),
+      hasWorkspaceGitDir: vi.fn(() => false), cloneWorkspaceRepo: vi.fn(async () => true),
+      ensureCustomerDirectories: vi.fn(), writeCustomerTemplateFiles: vi.fn(async () => undefined),
+      blobSyncForSlug: vi.fn(async () => undefined), restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
+      applyAddCustomerConfigPatch: vi.fn(async () => { await blocked; return { elapsedMs: 1 }; }),
+    });
+    const handler = createRestoreHandler(mkDeps({ adapter }));
+    const body = { migrationId: "mig-1", uid: "uid-chris", slug: "chris", snapshot: RESTORE_SNAPSHOT };
+    const request = () => mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) });
+    vi.useFakeTimers();
+    try {
+      const first = mkResponse();
+      const pending = handler(request(), first.res, vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(300_001);
+      await pending;
+      expect(first.getStatus()).toBe(500);
+      const second = mkResponse();
+      await handler(request(), second.res, vi.fn());
+      expect(second.getStatus()).toBe(500);
+      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      const third = mkResponse();
+      await handler(request(), third.res, vi.fn());
+      expect(third.getStatus()).toBe(200);
+      expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  });
   it("rejects bad signature with 401", async () => {
     const handler = createRestoreHandler(mkDeps());
     const body = {

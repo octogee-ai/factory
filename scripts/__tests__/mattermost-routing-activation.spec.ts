@@ -67,6 +67,28 @@ afterEach(async () => {
 });
 
 describe("Mattermost routing activation", () => {
+  it("restarts the unchanged coach monitor after a binding-only config patch", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const accountId = "alice-coach";
+    markMattermostRoutingActivationPending(openclawDir, "binding changed", [accountId], { [accountId]: 100 });
+    let start = 100;
+    const rpc = channelOperationRpc([accountId], vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId, running: true, connected: true, lastStartAt: start }] } })));
+    vi.mocked(rpc.channelsStart).mockImplementation(async () => { start++; return { channel: "mattermost", accountId, started: true }; });
+    vi.useFakeTimers();
+    try {
+      const activation = activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
+        accountIds: [accountId], baseline: { [accountId]: 100 }, configNoop: false, required: true,
+        reason: "binding changed", currentSlug: "alice", evictionSlugs: [],
+      });
+      activation.catch(() => undefined);
+      await vi.runAllTimersAsync();
+      await activation;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(rpc.channelsStart).toHaveBeenCalledOnce();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
   it("discards only an unmounted customer's pending accounts before the next import", async () => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
@@ -271,7 +293,7 @@ describe("Mattermost routing activation", () => {
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
-  it("restarts a marked account when persisted config was already a no-op", async () => {
+  it.each([false, true])("adopts an already newer healthy monitor instead of restarting it again (configNoop=%s)", async (configNoop) => {
     const openclawDir = await temporaryOpenClawDir();
     markMattermostRoutingActivationPending(
       openclawDir,
@@ -299,21 +321,13 @@ describe("Mattermost routing activation", () => {
       })),
     );
 
-    await activatePendingMattermostRouting(rpc, openclawDir, vi.fn(), {
-      restartConfiguredPending: true,
-      sleep: async () => undefined,
+    await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
+      configNoop, accountIds: ["ceckert-coach"], baseline: { "ceckert-coach": 100 },
+      required: true, reason: "persisted binding may have a stale monitor", currentSlug: "ceckert", evictionSlugs: [],
     });
 
-    expect(rpc.channelsStop).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "ceckert-coach",
-    });
-    expect(rpc.channelsStop).toHaveBeenCalledOnce();
-    expect(rpc.channelsStart).toHaveBeenCalledOnce();
-    expect(rpc.channelsStart).toHaveBeenCalledWith({
-      channel: "mattermost",
-      accountId: "ceckert-coach",
-    });
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 

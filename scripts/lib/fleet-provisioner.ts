@@ -1966,7 +1966,9 @@ function registerMigrationRoutes(
   migrationDeps: MigrationHandlerDeps,
   processControlDeps: SurgeOpenClawProcessHandlerDeps,
 ): void {
-  app.post("/restore/:gatewayId", createRestoreHandler(migrationDeps));
+  const restore = createRestoreHandler(migrationDeps);
+  app.post("/restore/:gatewayId", restore);
+  app.post("/resume-restore/:gatewayId", restore);
   app.post("/migration-progress/:gatewayId", createMigrationProgressHandler(migrationDeps));
   app.post("/resume/:gatewayId", createResumeHandler(migrationDeps));
   app.post("/scheduler/:gatewayId", createSchedulerMigrationHandler(migrationDeps));

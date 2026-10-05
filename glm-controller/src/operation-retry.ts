@@ -20,6 +20,7 @@ export function isGatewayStartupUnavailable(error: string | undefined): boolean 
 // we recognize as environmental (network/K8s-API hiccups, timeouts, preemption)
 // get an automatic retry.
 const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /rsync import port \d+ is already serving migrationId=/,
   /\btimed?\s?out\b/i,
   /\bsocket closed before connect response\b/i,
   /\bis held for migration\b/i,

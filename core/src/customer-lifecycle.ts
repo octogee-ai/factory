@@ -347,7 +347,7 @@ export interface RemoveCustomerResult {
   retained?: boolean;
 }
 
-const inFlightUids = new Set<string>();
+const inFlightUids = new Map<string, symbol>();
 
 export class ConcurrentMountError extends Error {
   override readonly name = "ConcurrentMountError";
@@ -431,7 +431,12 @@ async function runUidMountExclusive<T>(
   if (inFlightUids.has(uid)) {
     throw new ConcurrentMountError(uid);
   }
-  inFlightUids.add(uid);
+  const claim = Symbol(uid);
+  inFlightUids.set(uid, claim);
+  const release = () => {
+    if (inFlightUids.get(uid) === claim) inFlightUids.delete(uid);
+  };
+  let workSettled: Promise<void> | undefined;
   const deadlineMs = opts.mountDeadlineMs ?? ADD_CUSTOMER_DEADLINE_MS;
   const controller = new AbortController();
   let step: MountStep = "load-snapshot";
@@ -451,7 +456,7 @@ async function runUidMountExclusive<T>(
       () =>
         controller.abort(
           new Error(
-            `[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — step "${step}" is hung; releasing in-flight lock so the next retry can run`,
+            `[add:${uid}] mountDeadlineMs=${deadlineMs}ms exceeded — step "${step}" is hung; retaining in-flight lock until work settles`,
           ),
         ),
       deadlineMs,
@@ -465,16 +470,17 @@ async function runUidMountExclusive<T>(
     } catch (error) {
       workPromise = Promise.reject(error);
     }
-    const workSettled = workPromise.then(
+    workSettled = workPromise.then(
       () => undefined,
       () => undefined,
     );
+    void workSettled.then(release);
     opts.onWorkSettled?.(workSettled);
     return await raceWithSignal(workPromise, controller.signal);
   } finally {
     if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener("abort", externalAbortListener);
-    inFlightUids.delete(uid);
+    if (!workSettled) release();
   }
 }
 

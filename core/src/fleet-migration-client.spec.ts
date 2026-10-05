@@ -387,7 +387,7 @@ describe("MigrationClient verification errors", () => {
 });
 
 describe("MigrationClient.restoreTarget", () => {
-  it("POSTs the durable snapshot to /restore/{gatewayId} signed by the fleet controller key", async () => {
+  it.each([false, true])("POSTs the durable snapshot to the signed native restore endpoint (resume=%s)", async (resume) => {
     const { calls, fakeFetch } = captureFetch(() =>
       new Response(
         JSON.stringify({
@@ -411,9 +411,10 @@ describe("MigrationClient.restoreTarget", () => {
       uid: "uid-alice",
       slug: "alice",
       snapshot: SNAPSHOT,
+      resume,
     });
     expect(res.restored).toBe(true);
-    expect(calls[0].url).toBe("https://fleet.example.com/restore/gw-green");
+    expect(calls[0].url).toBe(`https://fleet.example.com/${resume ? "resume-restore" : "restore"}/gw-green`);
     const parsed = JSON.parse(calls[0].body!);
     expect(parsed).toMatchObject({
       migrationId: "m1",

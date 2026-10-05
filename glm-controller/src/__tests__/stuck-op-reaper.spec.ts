@@ -117,6 +117,23 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it("recovers a failed owned rsync conflict on a later tick without restarting Cowboy", async () => {
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "failed", steps: [{ name: "keys-sync-state", status: "failed" }],
+      error: "rsync import port 30873 is already serving migrationId=other slug=bob",
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id };
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "preparing", operationId: op.id, startedAt: 100 } } } } },
+      assignments: { "shared-a/alice": assignment },
+    });
+    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    expect(op.data.status).toBe("pending");
+    expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+    expect(assignment.state).toBe("serving");
+  });
   it.each(["boot", "budget", "scheduler-only-released"])("requeues an abandoned owned Shared migration without pretending the source is serving: %s", async (scenario) => {
     const op: FakeOpDoc = { id: "placement-owned", data: {
       kind: "migrate-customer", status: "failed", completedAt: NOW - 1_000, steps: [],
