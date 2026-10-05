@@ -20,6 +20,8 @@ export function isGatewayStartupUnavailable(error: string | undefined): boolean 
 // we recognize as environmental (network/K8s-API hiccups, timeouts, preemption)
 // get an automatic retry.
 const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /^restore recovery Kubernetes outcome is unresolved$/,
+  /^restore recovery images are not ready; outcome remains fenced$/,
   /rsync import port \d+ is already serving migrationId=/,
   /\btimed?\s?out\b/i,
   /\bsocket closed before connect response\b/i,

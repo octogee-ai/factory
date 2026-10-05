@@ -265,6 +265,19 @@ describe("buildOperationCompletionUpdate", () => {
   const now = 2_000_000;
 
   it.each([
+    "restore recovery Kubernetes outcome is unresolved",
+    "restore recovery images are not ready; outcome remains fenced",
+  ])("requeues a temporary restore recovery observation without relaxing authority: %s", (error) => {
+    const op = { kind: "restart-gateway", input: { restoreRecovery: {} }, attempts: 0 };
+    const complete = (failure: string) => buildOperationCompletionUpdate({
+      op, result: { steps: [], success: false, error: failure, retryAfterMs: 60_000 }, steps: [], now,
+    });
+    expect(complete(error)).toMatchObject({ status: "pending", nextAttemptAt: now + 60_000 });
+    expect(complete("restore reauthorization requires an unchanged intent and a pending native return").status).toBe("failed");
+    expect(complete("restore recovery pod was replaced; outcome remains fenced").status).toBe("failed");
+  });
+
+  it.each([
     { attempts: 0, status: "pending", delay: 30_000 },
     { attempts: 1, status: "pending", delay: 120_000 },
     { attempts: 2, status: "failed", delay: null },

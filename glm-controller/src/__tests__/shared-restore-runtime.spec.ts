@@ -122,6 +122,15 @@ describe('journaled Shared restore runtime recovery', () => {
     await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('reauthorization');
     expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
   });
+  it('refuses to renew terminally failed returns rather than reporting recovery without a runnable native return', async () => {
+    const h = harness(); const before = reauthorize(h);
+    h.store['glmOperations/return'].status = 'failed';
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('reauthorization');
+    expect(h.store['glmOperations/return'].restoreAttempt).toEqual(before);
+    expect(h.store['users/u'].provisioning.openclaw.restoreFence).toEqual(before);
+    expect(h.store['glmOperations/recover'].restoreRuntimeRecovery).toBeUndefined();
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
   it('keeps both fences when the return is claimed during the image update', async () => {
     const h = harness(); const before = reauthorize(h);
     h.ctx.assertActiveClaim.mockImplementation(async () => {

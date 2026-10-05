@@ -19,8 +19,8 @@ function restoreMatches(receipt: RecordValue, returned: RecordValue, gatewayId: 
     receipt.fromGatewayId !== gatewayId, handoff.uid === receipt.uid, handoff.slug === receipt.slug,
     handoff.toGatewayId === gatewayId, handoff.fromGatewayId === receipt.fromGatewayId].every(Boolean);
 }
-function reauthorizationMatches(input: Recovery, receipt: RecordValue): boolean {
-  return input.reauthorize === undefined || (isDeepStrictEqual(input.reauthorize, receipt) &&
+function reauthorizationMatches(input: Recovery, receipt: RecordValue, status: unknown): boolean {
+  return input.reauthorize === undefined || (status === 'pending' && isDeepStrictEqual(input.reauthorize, receipt) &&
     Number.isSafeInteger(receipt.claimStartedAt) && receipt.claimStartedAt > 0 &&
     Number.isSafeInteger(receipt.dispatchedAt) && receipt.dispatchedAt > 0);
 }
@@ -68,7 +68,7 @@ async function authority(deps: Deps, tx: Transaction, op: Operation, input: Reco
     openclaw.status === 'complete', !Object.hasOwn(openclaw, 'sourceTransferFence'),
   ].every(Boolean);
   if (!exact) throw new Error('paired post-cutover restore authority is unavailable');
-  if (!reauthorizationMatches(input, receipt)) throw new Error('restore reauthorization intent changed');
+  if (!reauthorizationMatches(input, receipt, returned.status)) throw new Error('restore reauthorization requires an unchanged intent and a pending native return');
   const assignment = object((await tx.get(deps.db.doc(`gateways/${gatewayId}/assignments/${uid}`))).data());
   if (assignment.state !== 'serving' || assignment.uid !== uid || assignment.slug !== receipt.slug ||
       assignment.gatewayId !== gatewayId || assignment.epoch !== receipt.assignmentEpoch) throw new Error('restore recovery assignment changed');
