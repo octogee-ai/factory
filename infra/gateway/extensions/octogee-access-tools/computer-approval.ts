@@ -1,10 +1,16 @@
 // @ts-expect-error resolved by the OpenClaw runtime
-import type { PluginHookToolContext, PluginHookBeforeToolCallResult } from "openclaw/plugin-sdk/types";
-// @ts-expect-error resolved by the OpenClaw runtime
-import type { PluginApprovalReviewer } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { computerContext, type ComputerBrokerOptions, type ComputerContext } from "./computer-client.js";
 
 type ComputerConfig = Pick<ComputerBrokerOptions, "brokerUrl" | "tokenPath">;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- Ambient generic instantiation emits no unused runtime binding.
+declare const registerHook: OpenClawPluginApi["on"];
+type BeforeToolCallHook = Parameters<typeof registerHook<"before_tool_call">>[1];
+type PluginHookToolContext = Parameters<BeforeToolCallHook>[1];
+type PluginHookBeforeToolCallResult = Exclude<Awaited<ReturnType<BeforeToolCallHook>>, void>;
+type ApprovalReviewer = Parameters<
+  NonNullable<NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>["reviewerGuard"]>["prepare"]
+>[0];
 
 function channelOwner(identity: { channel?: string; accountId?: string; senderId?: string } | undefined, facts: ComputerContext): boolean {
   return Boolean(identity && identity.channel === "mattermost" && identity.accountId === facts.agentAccountId &&
@@ -60,7 +66,7 @@ export function computerApprovalHook(config: ComputerConfig) {
           reviewerGuard: {
             signal: options.signal,
             assertActive,
-            async prepare(reviewer: PluginApprovalReviewer) {
+            async prepare(reviewer: ApprovalReviewer) {
               assertActive();
               if (reviewer.userId ? reviewer.userId !== facts.ownerUid : !channelOwner(reviewer.channel, facts)) return null;
               const current = await computerContext(options);

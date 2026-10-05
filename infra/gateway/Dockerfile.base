@@ -17,8 +17,8 @@ ENV HOME=/home/node
 FROM gateway-core-system AS gateway-system
 
 ARG FD_VERSION=10.5.0
-ARG CLAUDE_CODE_VERSION=2.1.287
-ARG CODEX_VERSION=0.160.0
+ARG CLAUDE_CODE_VERSION=2.1.289
+ARG CODEX_VERSION=0.160.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv sqlite3 xxd \
