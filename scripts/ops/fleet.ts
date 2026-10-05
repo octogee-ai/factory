@@ -218,8 +218,8 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "gw recover-restore",
     summary: "Upgrade a fenced Shared restore target without replacing its pod storage.",
-    args: "<gw-id> --sha=<full-main-sha> --operation=<return-operation-id> [--reauthorize-attempt=<retained-attempt-id>] [--idempotency-key=<key>] [--apply]",
-    description: "Journals a Cowboy recovery that changes only the images of the exact existing Shared pod. Requires a paired pending return fence; never clears customer state or changes release policy. Briefly interrupts the pod's tenants. Dry-run by default.",
+    args: "<gw-id> --sha=<full-main-sha> --operation=<return-operation-id> [--reauthorize-attempt=<retained-attempt-id>] [--supersede-recovery=<failed-recovery-id>] [--idempotency-key=<key>] [--apply]",
+    description: "Journals a Cowboy recovery that changes only the images of the exact existing Shared pod. Requires a paired pending return fence; never clears customer state or changes release policy. An explicit failed predecessor can transfer its retained runtime fence to this new recovery when the paired restore attempt is reauthorized. Briefly interrupts the pod's tenants. Dry-run by default.",
     examples: ["fleet --env=test gw recover-restore shared-example --sha=0123456789abcdef0123456789abcdef01234567 --operation=return-example --apply"],
     writes: true,
   },
@@ -615,9 +615,12 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
       const operationId = requiredFlag(args, "operation", "gw recover-restore", "return-operation-id");
       const reauthorizeAttemptId = args.flags['reauthorize-attempt'] === undefined ? undefined :
         requiredFlag(args, 'reauthorize-attempt', 'gw recover-restore', 'retained-attempt-id');
-      if (!/^[a-f0-9]{40}$/.test(sourceSha) || operationId.includes("/")) throw new Error("invalid restore recovery build or operation");
+      const supersedeRecoveryId = args.flags['supersede-recovery'] === undefined ? undefined :
+        requiredFlag(args, 'supersede-recovery', 'gw recover-restore', 'failed-recovery-id');
+      if (!/^[a-f0-9]{40}$/.test(sourceSha) || operationId.includes("/") || supersedeRecoveryId?.includes("/")) throw new Error("invalid restore recovery build or operation");
+      if (supersedeRecoveryId && !reauthorizeAttemptId) throw new Error("supersede-recovery requires --reauthorize-attempt");
       return withIdempotency({ method: "POST", path: `/api/admin/gateways/${gatewayId}/recover-restore`,
-        body: { sourceSha, operationId, ...(reauthorizeAttemptId ? { reauthorizeAttemptId } : {}) } });
+        body: { sourceSha, operationId, ...(reauthorizeAttemptId ? { reauthorizeAttemptId } : {}), ...(supersedeRecoveryId ? { supersedeRecoveryId } : {}) } });
     }
     case "deploy": {
       const gatewayId = requiredGatewayId(args, "gw deploy");

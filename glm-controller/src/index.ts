@@ -1,6 +1,6 @@
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
-import { withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
+import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
 import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/retained-source-transfer.js';
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
@@ -741,6 +741,16 @@ async function gatewayDesiredRootPresent(db: Firestore, gatewayId: string): Prom
   return root !== null && snap.data()?.runtimeRestartFence === undefined;
 }
 
+async function gatewayRuntimeMutationAllowed(db: Firestore, gatewayId: string): Promise<boolean> {
+  return withGatewayRuntimeMutation(db, gatewayId, async transaction => {
+    const snap = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
+    return projectGatewayDesiredRootForGateway(
+      snap.exists ? snap.data() : undefined,
+      gatewayId,
+    ) !== null;
+  });
+}
+
 async function syncFleetIngressIfConfigured(
   deps: ControllerDeps,
 ): Promise<void> {
@@ -1249,10 +1259,10 @@ async function uninstallGateway(
   gateway: DurableGateway,
 ): Promise<void> {
   const { db, helm, log } = passDeps;
-  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
+  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
   log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
   await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
-  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
+  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
   await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
 }
 
@@ -1269,7 +1279,7 @@ async function upsertGateway(
   const { db, helm, log } = passDeps;
   const { gateway, artifact, runtime, desiredOpts, replicas } = input;
   if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
-  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
+  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
   log(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
@@ -1294,7 +1304,7 @@ async function upsertGateway(
       }) as unknown as Record<string, unknown>,
       { merge: true },
     );
-  if (!(await gatewayDesiredRootPresent(db, gateway.gatewayId))) return;
+  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
   await helm.upsertInstance(desiredOpts);
 }
 
@@ -1417,14 +1427,10 @@ async function convergeGatewaysIfConfigured(
 
 export function serializeGatewayConvergence(
   convergeGateways: (gatewayIds?: readonly string[]) => Promise<void>,
-): ((gatewayIds?: readonly string[]) => Promise<void>) & { runExclusive(work: () => Promise<void>): Promise<void> } {
-  let tail = Promise.resolve();
-  const runExclusive = (action: () => Promise<void>) => {
-    const work = tail.then(action);
-    tail = work.catch(() => undefined);
-    return work;
-  };
-  return Object.assign((gatewayIds?: readonly string[]) => runExclusive(() => convergeGateways(gatewayIds)), { runExclusive });
+): ((gatewayIds?: readonly string[]) => Promise<void>) & { runExclusive: typeof runGatewayRuntimeExclusive } {
+  return Object.assign((gatewayIds?: readonly string[]) => runGatewayRuntimeExclusive(() => convergeGateways(gatewayIds)), {
+    runExclusive: runGatewayRuntimeExclusive,
+  });
 }
 
 async function runReconcilePhase<T>(
@@ -2022,7 +2028,7 @@ async function runClaimedOperation(
           serverTimestamp: () => FieldValue.serverTimestamp(),
           deleteField: () => FieldValue.delete(),
         };
-        const owned = await beginCustomerRestore(stateDeps, restore, { resume });
+        const owned = await runGatewayRuntimeExclusive(() => beginCustomerRestore(stateDeps, restore, { resume }));
         return () => acknowledgeCustomerRestore(stateDeps, owned);
       },
     },
@@ -2402,7 +2408,12 @@ function startControllerBackgroundTasks({
   const stopHelmRecoverySweeper = startHelmRecoverySweeper({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
     isRecoverableRevision: (gatewayId) => isRecoverableGatewayRelease(db, gatewayId),
-    recover: (revisionId) => helm.recoverRelease({ namespace: NAMESPACE, gatewayId: revisionId }),
+    recover: (gatewayId) => runGatewayRuntimeExclusive(async () => {
+      if (!(await isRecoverableGatewayRelease(db, gatewayId)) || !(await gatewayRuntimeMutationAllowed(db, gatewayId))) {
+        throw new Error('gateway Helm recovery authority unavailable');
+      }
+      return helm.recoverRelease({ namespace: NAMESPACE, gatewayId });
+    }),
     now: () => Date.now(),
     staleMs: HELM_RECOVERY_STALE_MS,
     intervalMs: HELM_RECOVERY_SWEEP_MS,
@@ -3326,7 +3337,10 @@ async function buildHandlers(
       return readMountedCustomers(runtime as unknown as Record<string, unknown>);
     },
     helmUninstallGateway: async (gatewayId) => {
-      await helm.removeInstance({ namespace: NAMESPACE, gatewayId, awaitHomeCheckpoint: true });
+      await runGatewayRuntimeExclusive(async () => {
+        if (!(await gatewayRuntimeMutationAllowed(db, gatewayId))) throw new Error('gateway retirement runtime unavailable');
+        await helm.removeInstance({ namespace: NAMESPACE, gatewayId, awaitHomeCheckpoint: true });
+      });
     },
     readAssignmentsForGateway: async (gatewayId) => {
       const assignments = await readAssignmentDocsForGateway(db, gatewayId);

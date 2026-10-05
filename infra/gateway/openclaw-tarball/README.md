@@ -123,17 +123,20 @@ has one security-fast success and 39 skips; all 40 jobs were inspected.
 The operator chose to qualify this newer native implementation for TEST rather
 than describe its green push badge as full validation.
 Exact overlay:
-[`87e79b6e29d104f5a4282b6ba746dba8848d18b2`](https://github.com/ceckert/openclaw/commit/87e79b6e29d104f5a4282b6ba746dba8848d18b2),
-pushed and read back at `ceckert/openclaw:codex/fix-agent-startup-reload-oct04`.
+[`4695339057046f7169de4981607f7ce3d68e642a`](https://github.com/ceckert/openclaw/commit/4695339057046f7169de4981607f7ce3d68e642a),
+pushed and read back at `ceckert/openclaw:codex/fix-startup-publication-convergence`.
 Package version is `2026.9.8`; this is a main snapshot, not a GA tag.
 
-The October 4 acceptance repair retries only typed config/secrets supersession
-inside native deferred agent startup. It reacquires the native temporary borrow
-while retaining FIFO custody, the original database witness and one database
-open. Genuine preparation failures, replacement, deletion, lost ownership and
-shutdown remain terminal. No Doctor, state reset, timeout extension or schema
-change is added. Browser/Terminal admission and Dashboard membership sync depend
-on the affected agent; successful live tests are still required after deployment.
+The October 5 repair makes explicit secrets reload join the native startup
+admission owner's tracked preparation before opening its publication transaction.
+This removes repeated startup/reload supersession while preserving reload
+coalescing and forced-cold successor transactions. Shutdown cancels waiting
+reloads while custody drains; terminal agent preparation failures stay refused.
+Typed config/secrets supersession during startup still retries with native FIFO
+custody, the original database witness and one database open. No Doctor, state
+reset, timeout extension or schema change is added. Browser/Terminal admission
+and Dashboard membership sync depend on the affected agent; live TEST acceptance
+is still required after deployment.
 
 The overlay retains fork PRs #5/#6, live voice-session grants, native approval
 authority, hosted Automations and final-reply observation. Runtime objects and
@@ -146,7 +149,7 @@ Native line caps and authorization assertions remain unchanged.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-487c810a.tgz` | `487c810a0f0ba2625aee5b54d911e950e55e09752b3c63dd7fbde208677f2ee6` | `1791147947567976` |
+| `openclaw-fork-48940047.tgz` | `489400479e18057431269dd748d66862a967c0d28ac6d8a05ec9834e18012470` | `1791210428004679` |
 | `openclaw-mattermost-e9a9e392.tgz` | `e9a9e392212c0e31c6b5fca2b9db8657812eb0b17187cdb9bca815d1f38e5580` | `1791135976505351` |
 
 Generation-bound downloads match both complete hashes above.
@@ -159,61 +162,48 @@ Preserve native backups and roll forward, not an image-only downgrade or reset.
 
 ### Qualification
 
-The exact repair's clean-source build passes in 10m17s. Native archive integrity and
-isolated matched root/Mattermost installation pass. The actual Linux arm64
-full-plugin-installer passes registry refresh, bundled trust, 167 byte-identical
-Codex runtime files and all three native-hook imports. Its installed build-info
-matches the source above; local proof image is
-`sha256:8ba0029fb2da2b4987d7885811caa357c4b1a04b094868b682cbe03af9288bcf`.
-Mattermost is byte-identical to the selected published object and is reused.
+The exact source's full `pnpm build` passes in 10m29s. Native archive integrity
+and isolated matched root/Mattermost installation pass. The actual Linux arm64
+`openclaw-full-plugin-installer` target passes registry refresh, bundled trust,
+Parallel/Codex source matching and all three native-hook imports. A network-disabled
+container confirms the exact source above. Local proof image:
+`sha256:697edd97ade9adcaa51d580cbcd456d05c33673f629e85c07736394d8281cbd0`.
+This qualifies the installer stage, not the final deployed gateway image. The
+unchanged npm 12 recipe blocks lifecycle scripts by default; its explicit native
+verification gates pass. Mattermost remains byte-identical and is reused.
 
-The repair passes 52 native tests across six files, including real config.patch
-and secrets.reload RED/GREEN cases retaining transcript/auth and restoring
-readiness. The artifact-free test receipt repair passes 52 client tests; all
-62 existing API producer tests and their package-boundary guard pass. Explicitly
-approved isolated Astra source reviews of both repairs have no actionable P0–P2
-findings. Native production and all 27 core-test type graphs, three unused-export
-scans, scoped typed lint, formatting and initial guards pass. Remaining database,
-media, sidecar, cycle, webhook and pairing guards pass independently.
-The full changed-source command stops on an inherited Swift schema marker
-mismatch (Swift supports 20; TypeScript owns 21), unchanged from the parent.
-This repair does not ship or change the Apple reader. Aggregate success is not
-claimed; the Linux installed-image proof above is separate.
+A deterministic real-Gateway control reproduced three reload attempts publishing
+revisions 3, 5 and 7 while startup advanced to 4, 6 and 8: every reload returned
+unavailable. With the repair, concurrent WebSocket reloads join startup, both
+populated agents become admitted, ordinary reloads coalesce, and a subsequent
+reload succeeds. Retained synthetic histories, credentials and prepared models
+remain available. The startup, reload/model and admission suites pass 34 unique
+tests (15 + 11 + 8), including shutdown, terminal failures and forced-cold
+successors. Removing the wait from the final test restores the failure.
 
-The preceding recut's affected cron, storage, tenant, model-reload, Mattermost, Talk and
-sharing regressions pass, with failing controls for the new integration repairs.
-Final cleanup passes 143 backend tests and 18 avatar-auth tests; full native
-production, test, extension, script and UI type graphs pass, as does corrected-file
-typed lint. All native unused-export scans are clean. Native UI E2E passes nine mock-Gateway tests for
-browser width/takeover and authentication recovery. These are not live TEST
-conversations. Both exact-source Octogee voice/Activity SDK checks pass during
-packing; their focused suites pass 67 and 34 tests respectively.
+Native production and all 27 core-test type graphs, scoped typed lint, formatting,
+three unused-export scans and the applicable source guards pass. The full
+changed-source wrapper was intentionally stopped after its initial gates and
+first six test type graphs; the remaining graphs and guards ran separately.
+Aggregate `pnpm check` success is not claimed. The inherited native schema guard
+still fails because Swift supports 20 while TypeScript owns 21; this repair does
+not change the Apple reader or either schema. The full build reports startup JS
+gzip 373518 B against 373454 B, 64 B over the existing budget; the parent was
+already over budget. This repair changes no native UI source or budget.
 
-All seven UI provenance records use the same clean built repair source. The
-previous-pin input audit reports no native UI input changes; only provenance
-and license source lines change. The preceding recut's complete input audit was reviewed;
-the native entries remain wired upstream. The new source adopts model-picker
-focus repair, compact session-list updates, calmer database warmup and current
-Browser/Computer owners. Octogee PWA types, 15 island consumer tests, 135 final
-pin/base/packer tests and 19 base-image recipe tests pass. Voice adopts the
-unchanged streaming resampler from `realtime-voice-provider`, not its retired
-facade export. No duplicate audio implementation is added.
+Both exact-source Octogee voice/Activity SDK checks pass during packing. All seven
+hosted UI provenance records were regenerated from the same clean built source.
+The previous-pin input audit reports no native UI input changes; generated JS/CSS
+are unchanged, with only provenance and license source lines updated. Focused
+artifact/base/packer/pin checks pass 73 tests; hosted island consumer checks pass
+13 tests.
 
-The preceding recut did not claim aggregate `pnpm check` success. Its changed-source preflight
-passes 22 initial gates, then rejects the retained approval-reviewer/consult SDK
-contracts at the public-export budget (3649/3646 exports, 2112/2111 callables).
-The repair's full build reports startup JS gzip 373496 B versus 373454 B, 42 B over;
-the parent was already 29 B over, and this repair changes no UI source.
-Full-tree lint reports inherited file-size violations; the modified sharing
-owner also remains over its inherited cap but shrinks. Owned type/lint issues
-were corrected, without raising caps or weakening assertions. Evidence is recorded in
-[PR #4244](https://github.com/octogee-ai/octogee/pull/4244).
-
-No deployment or live TEST acceptance is claimed. After merge and immutable
-Build main, verify Shared and any active Builder separately: schema upgrade and
-native backups, every mounted agent/account, Mattermost history, queued user
-requests and approvals, authenticated UI, browser takeover and voice. Preserve
-original continuity baselines and recheck concurrent lifecycle operations.
+No deployment or live TEST acceptance is claimed. After approval, immutable Build
+main and TEST rollout, verify eventual startup convergence and an authenticated
+Builder activate → Browser/Terminal/Dashboard → return → reactivate cycle, with
+history continuity against the preserved baseline. Keep PROD on its accepted
+build while qualifying TEST; do not repeat accepted recovery requests or clear
+live custody fences.
 
 ### Patch assessment
 
@@ -242,7 +232,7 @@ API mocks borrow actual native exports, and fixture types follow native leases.
 
 | Behavior | Current consumer | Removal condition |
 | --- | --- | --- |
-| Retry native deferred agent preparation after config/secrets supersession | Builder Coach/project startup, Browser/Terminal admission and Dashboard channel sync | Native startup retries only known generation changes without losing FIFO custody or database/authority guards. |
+| Settle native startup before secrets reload; retry typed startup supersession | Builder Coach/project startup, Browser/Terminal admission and Dashboard channel sync | Native reload joins tracked startup work before publishing. Startup retries only known generation changes without losing FIFO custody or database/authority guards; remove this overlay when the selected upstream supplies equivalent convergence behavior. |
 | Preserve committed hot reload during cron retries and superseding refreshes | Gateway config writes and customer mounts | Native reload preserves committed state, successor scope and genuine failures. |
 | Keep predecessor catalog inventory out of retained auth-reader closures | Long-lived Gateway/account reloads | Native catalog seeding detaches the previous generation without changing inventory or credential retention; #158986 covers this distinct gap. |
 | Read rotated external VNC credentials per observation | Visible desktop proxy | Native reconnect/observe does not retain the old password. |

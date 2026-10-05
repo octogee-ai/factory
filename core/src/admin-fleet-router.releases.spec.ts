@@ -465,6 +465,44 @@ function buildAuthority(manifest: ReleaseDigestManifest): CentralReleaseAuthorit
 }
 
 describe('POST /gateways/:id/recover-restore', () => {
+  function failedRecoverySeed() {
+    const manifest = immutableBuild();
+    const receipt = { uid: 'u', attemptId: 'retained-1', gatewayId: 'shared-0', assignmentEpoch: 3, claimStartedAt: 200, dispatchedAt: 100 };
+    const seed = seedNewSchemaGateway('shared-0', sharedPayload());
+    const recovery = { operationId: 'return-1', sourceSha: 'b'.repeat(40), images: { gateway: 'old-gateway', 'gateway-edge': 'old-edge' }, reauthorize: receipt };
+    const fence = { kind: 'restore-recovery', attemptId: 'failed-recovery', gatewayId: 'shared-0', phase: 'dispatched',
+      target: { podUid: 'retained-pod', restoreOperationId: 'return-1', images: recovery.images } };
+    seed['gateways/shared-0'].runtimeRestartFence = fence;
+    seed['glmOperations/return-1'] = { restoreAttempt: receipt };
+    seed['glmOperations/failed-recovery'] = { kind: 'restart-gateway', status: 'failed', completedAt: 500, input: { gatewayId: 'shared-0', restoreRecovery: recovery } };
+    const body = { sourceSha: manifest.sourceSha, operationId: 'return-1', reauthorizeAttemptId: 'retained-1', supersedeRecoveryId: 'failed-recovery' };
+    return { seed, manifest, receipt, fence, body };
+  }
+  it('journals an explicit failed predecessor without changing its operation or held fence', async () => {
+    const { seed, manifest, fence, body } = failedRecoverySeed();
+    const previous = structuredClone(seed['glmOperations/failed-recovery']);
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(202);
+    expect(opsIn(store, 'restart-gateway').find(op => op.status === 'pending')).toMatchObject({ input: { restoreRecovery: {
+      supersede: { operationId: 'failed-recovery', input: previous.input, completedAt: 500, fence },
+    } } });
+    expect(store.get('glmOperations/failed-recovery')).toEqual(previous);
+    expect(store.get('gateways/shared-0')?.runtimeRestartFence).toEqual(fence);
+    expect(auditsIn(store)).toHaveLength(1);
+  });
+  it.each(['running', 'succeeded', 'missing-fence', 'foreign-fence', 'custody', 'completed', 'unknown'])('refuses to queue successor for %s predecessor', async change => {
+    const { seed, manifest, body } = failedRecoverySeed();
+    if (change === 'running' || change === 'succeeded') seed['glmOperations/failed-recovery'].status = change;
+    if (change === 'missing-fence') delete seed['gateways/shared-0'].runtimeRestartFence;
+    if (change === 'foreign-fence') (seed['gateways/shared-0'].runtimeRestartFence as any).attemptId = 'foreign';
+    if (change === 'custody') (seed['glmOperations/return-1'].restoreAttempt as any) = { ...(seed['glmOperations/return-1'].restoreAttempt as object), claimStartedAt: 201 };
+    if (change === 'completed') seed['glmOperations/failed-recovery'].restoreRuntimeRecovery = { completedAt: 500 };
+    if (change === 'unknown') delete seed['glmOperations/failed-recovery'];
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(409);
+    expect(opsIn(store, 'restart-gateway').filter(op => op.status === 'pending')).toHaveLength(0);
+    expect(auditsIn(store)).toHaveLength(0);
+  });
   it('captures the exact retained attempt only when the operator explicitly reauthorizes its ID', async () => {
     const manifest = immutableBuild();
     const receipt = { uid: 'u', attemptId: 'retained-1', gatewayId: 'shared-0', assignmentEpoch: 3, claimStartedAt: 200, dispatchedAt: 100 };
@@ -500,7 +538,9 @@ describe('POST /gateways/:id/recover-restore', () => {
     expect(auditsIn(store)).toHaveLength(1);
   });
   it.each([{ sourceSha: 'short', operationId: 'return' }, { sourceSha: 'a'.repeat(40), operationId: 'foreign/path' },
-    { sourceSha: 'a'.repeat(40), operationId: 'return', images: {} }])('rejects malformed recovery input %j', async body => {
+    { sourceSha: 'a'.repeat(40), operationId: 'return', images: {} },
+    { sourceSha: 'a'.repeat(40), operationId: 'return', supersedeRecoveryId: 'prior' },
+    { sourceSha: 'a'.repeat(40), operationId: 'return', reauthorizeAttemptId: 'retained', supersedeRecoveryId: 'foreign/path' }])('rejects malformed recovery input %j', async body => {
     const { app, store } = mkApp(seedNewSchemaGateway('shared-0', sharedPayload()));
     await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(400);
     expect(opsIn(store, 'restart-gateway')).toHaveLength(0);

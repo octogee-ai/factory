@@ -4,6 +4,7 @@ import { FieldValue, type Firestore, type Transaction } from 'firebase-admin/fir
 import { assertGatewayRuntimeMutationUnfenced } from '@octogee/core/gateway-retirement-claim';
 import { findActiveGatewayMigration, type FleetOperationLockRef } from '@octogee/core/fleet-operation-lock';
 import { runNormalFleetMutation, type NormalFleetMutationDb } from '@octogee/core/normal-fleet-mutation';
+import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
 export interface RuntimeRestartFence {
   attemptId:string; auditId:string; gatewayId:string; kind:'process'|'deployment'; startedAt:number; phase:'reserved'|'dispatched'|'acknowledged';
@@ -52,7 +53,7 @@ export async function coordinateRuntimeRestart(
         return;
       }
       let current:RuntimeRestartFence={attemptId,auditId:claim.auditId,gatewayId,kind,startedAt:Date.now(),phase:'reserved'};
-      await acquireRuntimeRestart(db,current);
+      await runGatewayRuntimeExclusive(() => acquireRuntimeRestart(db,current));
       try {
         await work(current,async next=>{await updateRuntimeRestart(db,current,next);current=next;});
         if(current.phase!=='acknowledged')throw new Error('gateway restart completion was not acknowledged');

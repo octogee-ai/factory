@@ -5,7 +5,7 @@ import type { OperationContext } from '../operation-router.js';
 import type { KubectlSubprocess } from '../fleet-ingress.js';
 
 type RecordValue = DocumentData;
-interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue }
+interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue; supersede?: RecordValue }
 interface Deps { db: Firestore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
 function object(value: unknown): RecordValue { return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {}; }
 function customerState(user: RecordValue | undefined): RecordValue { return object(object(user?.provisioning).openclaw); }
@@ -24,17 +24,29 @@ function reauthorizationMatches(input: Recovery, receipt: RecordValue, status: u
     Number.isSafeInteger(receipt.claimStartedAt) && receipt.claimStartedAt > 0 &&
     Number.isSafeInteger(receipt.dispatchedAt) && receipt.dispatchedAt > 0);
 }
-function recovery(op: Operation, sourceSha: string): Recovery {
-  const input = object(op.input.restoreRecovery);
+function assertRecoveryBuild(op: Operation, input: RecordValue, sourceSha: string): void {
   if (op.kind !== 'restart-gateway' || typeof op.input.gatewayId !== 'string' ||
       typeof input.operationId !== 'string' || !input.operationId || input.operationId.includes('/') ||
       !/^[a-f0-9]{40}$/.test(input.sourceSha) || input.sourceSha !== sourceSha) throw new Error('restore recovery build identity is unavailable');
-  const images = object(input.images);
+}
+function assertRecoveryImages(images: RecordValue, sourceSha: string): void {
   for (const [name, repository] of [['gateway', 'octogee-gateway'], ['gateway-edge', 'gateway-edge']]) {
     const prefix = `us-central1-docker.pkg.dev/octogee/octogee/${repository}:${sourceSha.slice(0, 7)}`;
     if (typeof images[name!] !== 'string' || !images[name!].startsWith(prefix) ||
         !/^[a-z0-9._-]*@sha256:[a-f0-9]{64}$/.test(images[name!].slice(prefix.length))) throw new Error('restore recovery requires digest-addressed images from the deployed build');
   }
+}
+function assertRecoverySupersession(input: RecordValue, operationId: string): void {
+  const supersede = object(input.supersede);
+  if (input.supersede !== undefined && (!input.reauthorize || typeof supersede.operationId !== 'string' ||
+      !supersede.operationId || supersede.operationId.includes('/') || supersede.operationId === operationId)) throw new Error('restore recovery predecessor is invalid');
+}
+function recovery(op: Operation, sourceSha: string): Recovery {
+  const input = object(op.input.restoreRecovery);
+  assertRecoveryBuild(op, input, sourceSha);
+  const images = object(input.images);
+  assertRecoveryImages(images, sourceSha);
+  assertRecoverySupersession(input, op.id);
   if (Object.keys(images).length !== 2) throw new Error('restore recovery image surface is invalid');
   return input as Recovery;
 }
@@ -79,9 +91,23 @@ async function authority(deps: Deps, tx: Transaction, op: Operation, input: Reco
   if (active.docs.some(row => competingMigration(row.id, row.data(), input.operationId, gatewayId))) throw new Error('another migration is active on the restore target');
   return data;
 }
+function pristineQueuedMigration(row: RecordValue): boolean {
+  const untouched = ['firstStartedAt', 'lastProgressAt', 'lastResumedAt', 'nextAttemptAt', 'error', 'rolledBack', 'output',
+    'customerMigrationV2', 'sourceTransferExecution', 'schedulerHandoff', 'schedulerHandoffReleased',
+    'schedulerHandoffReleasedAt', 'schedulerHandoffLost', 'cutoverCommittedAt', 'restoreAttempt', 'cancellationRequestedAt'];
+  const input = object(row.input);
+  const identity = [input.uid, input.fromGatewayId, input.toGatewayId].every(value => typeof value === 'string' && value.length > 0);
+  return row.status === 'pending' && row.startedAt === null && row.completedAt === null &&
+    Number.isSafeInteger(row.createdAt) && row.createdAt > 0 && identity && input.fromGatewayId !== input.toGatewayId &&
+    Array.isArray(row.steps) && row.steps.length === 0 &&
+    [row.attempts, row.resumeCount].every(value => value === undefined || value === 0) &&
+    (row.attemptHistory === undefined || (Array.isArray(row.attemptHistory) && row.attemptHistory.length === 0)) &&
+    untouched.every(key => row[key] === undefined);
+}
 function competingMigration(id: string, row: RecordValue, operationId: string, gatewayId: string): boolean {
   const input = object(row.input);
-  return id !== operationId && row.kind === 'migrate-customer' && [input.fromGatewayId, input.toGatewayId].includes(gatewayId);
+  return id !== operationId && row.kind === 'migrate-customer' && [input.fromGatewayId, input.toGatewayId].includes(gatewayId) &&
+    !pristineQueuedMigration(row);
 }
 
 async function json(deps: Deps, args: string[]): Promise<RecordValue> {
@@ -122,12 +148,51 @@ async function existingOwnedPod(deps: Deps, gatewayId: string): Promise<RecordVa
       owner.uid === deployment.metadata?.uid) || deployment.metadata?.deletionTimestamp) throw new Error('restore recovery pod deployment changed');
   return pod;
 }
+function recoveryPredecessorOperationMatches(previous: RecordValue, captured: RecordValue, gatewayId: unknown): boolean {
+  return previous.kind === 'restart-gateway' && previous.status === 'failed' && previous.cancellationRequestedAt === undefined &&
+    previous.completedAt > 0 && previous.completedAt === captured.completedAt && previous.restoreRuntimeRecovery === undefined &&
+    isDeepStrictEqual(previous.input, captured.input) && previous.input?.gatewayId === gatewayId;
+}
+function recoveryPredecessorFenceMatches(params: {
+  fence: RecordValue;
+  captured: RecordValue;
+  gatewayId: unknown;
+  operationId: string;
+  pod: RecordValue;
+}): boolean {
+  const { fence, captured, gatewayId, operationId, pod } = params;
+  const target = object(fence.target);
+  return isDeepStrictEqual(fence, captured.fence) && fence.kind === 'restore-recovery' && fence.attemptId === captured.operationId &&
+    fence.gatewayId === gatewayId && fence.phase === 'dispatched' && target.podUid === pod.metadata.uid &&
+    target.podName === pod.metadata.name && target.restoreOperationId === operationId;
+}
+async function assertRecoveryPredecessor(params: {
+  deps: Deps;
+  tx: Transaction;
+  op: Operation;
+  input: Recovery;
+  existing: unknown;
+  pod: RecordValue;
+}): Promise<void> {
+  const { deps, tx, op, input, existing, pod } = params;
+  const captured = input.supersede!;
+  const previous = object((await tx.get(deps.db.doc(`glmOperations/${captured.operationId}`))).data());
+  const fence = object(existing); const target = object(fence.target);
+  if (!recoveryPredecessorOperationMatches(previous, captured, op.input.gatewayId) ||
+      !recoveryPredecessorFenceMatches({ fence, captured, gatewayId: op.input.gatewayId, operationId: input.operationId, pod })) throw new Error('failed restore recovery predecessor changed');
+  const prior = recovery(previous as Operation, previous.input.restoreRecovery?.sourceSha);
+  if (prior.operationId !== input.operationId || !isDeepStrictEqual(prior.images, target.images) ||
+      !isDeepStrictEqual(prior.reauthorize, input.reauthorize)) throw new Error('failed restore recovery custody changed');
+  imagePatch(pod, fence, prior.images);
+}
 async function reserveRecovery(deps: Deps, op: Operation, input: Recovery, pod: RecordValue): Promise<RecordValue> {
   const gatewayId = op.input.gatewayId as string;
   return deps.db.runTransaction(async tx => {
     const root = await authority(deps, tx, op, input);
     const existing = root.runtimeRestartFence;
-    if (existing !== undefined) {
+    if (input.supersede && existing?.attemptId !== op.id) {
+      await assertRecoveryPredecessor({ deps, tx, op, input, existing, pod });
+    } else if (existing !== undefined) {
       if (existing.kind !== 'restore-recovery' || existing.attemptId !== op.id || existing.target?.podUid !== pod.metadata.uid ||
           existing.target?.restoreOperationId !== input.operationId || !isDeepStrictEqual(existing.target?.images, input.images)) throw new Error('another runtime restart outcome is unresolved');
       return existing as RecordValue;
@@ -203,7 +268,9 @@ export async function recoverSharedRestoreRuntime(deps: Deps, op: Operation, ctx
   const patch = imagePatch(current, saved, input.images);
   if (!recoveredPodReady(current, saved.target, input.images)) {
     await update({ ...saved, phase: 'dispatched' });
-    await json(deps, ['patch', 'pod', current.metadata.name, '--type=json', '-p', JSON.stringify(patch)]);
+    if (Object.entries(input.images).some(([name, image]) => current.spec.containers.find((container: RecordValue) => container.name === name)?.image !== image)) {
+      await json(deps, ['patch', 'pod', current.metadata.name, '--type=json', '-p', JSON.stringify(patch)]);
+    }
   }
   await waitForRecovery(deps, ctx, saved, input);
   await update(null);

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 
 
 import {
@@ -8,6 +9,7 @@ import {
 } from "express";
 import {
   FieldValue,
+  type DocumentData,
   type DocumentReference,
   type Firestore,
   type Transaction,
@@ -1916,17 +1918,76 @@ const ERR_GATEWAY_OPERATION_IN_FLIGHT =
 const ERR_USER_NOT_FOUND = "user not found";
 const ERR_TARGET_GATEWAY_NOT_READY = "target gateway not ready";
 const ADMIN_FLEET_REQUEST_REASON = "Admin fleet request";
+const OP_KIND_RESTART_GATEWAY = "restart-gateway";
 
-function validRestoreRecoveryBody(body: { sourceSha?: unknown; operationId?: unknown; reauthorizeAttemptId?: unknown }): boolean {
+interface RestoreRecoveryBody {
+  sourceSha?: unknown;
+  operationId?: unknown;
+  reauthorizeAttemptId?: unknown;
+  supersedeRecoveryId?: unknown;
+}
+function validRecoveryOperationId(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value) && value.length <= 256 && !value.includes("/");
+}
+function validRecoveryAttemptId(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value.trim()) && value.length <= 256;
+}
+function validRecoverySupersession(body: RestoreRecoveryBody): boolean {
+  return body.supersedeRecoveryId === undefined || (validRecoveryAttemptId(body.supersedeRecoveryId) &&
+    !body.supersedeRecoveryId.includes("/") && body.reauthorizeAttemptId !== undefined);
+}
+function validRestoreRecoveryBody(body: RestoreRecoveryBody): boolean {
   return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
-    typeof body.operationId === "string" && Boolean(body.operationId) && body.operationId.length <= 256 && !body.operationId.includes("/") &&
-    (body.reauthorizeAttemptId === undefined || (typeof body.reauthorizeAttemptId === "string" &&
-      Boolean(body.reauthorizeAttemptId.trim()) && body.reauthorizeAttemptId.length <= 256)) &&
-    Object.keys(body).every(key => ["sourceSha", "operationId", "reauthorizeAttemptId"].includes(key));
+    validRecoveryOperationId(body.operationId) &&
+    (body.reauthorizeAttemptId === undefined || validRecoveryAttemptId(body.reauthorizeAttemptId)) &&
+    validRecoverySupersession(body) &&
+    Object.keys(body).every(key => ["sourceSha", "operationId", "reauthorizeAttemptId", "supersedeRecoveryId"].includes(key));
 }
 async function capturedRestoreAttempt(db: Firestore, operationId: string, attemptId: unknown) {
   if (attemptId === undefined) return undefined;
   return (await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()).data()?.restoreAttempt;
+}
+function failedRecoveryOperationMatches(previous: DocumentData | undefined, gatewayId: string): previous is DocumentData {
+  return previous?.kind === OP_KIND_RESTART_GATEWAY && previous.status === "failed" &&
+    previous.cancellationRequestedAt === undefined && previous.completedAt > 0 &&
+    previous.restoreRuntimeRecovery === undefined && previous.input?.gatewayId === gatewayId;
+}
+function recoveryPredecessorFenceMatches(input: {
+  fence: DocumentData | undefined;
+  predecessorId: string;
+  gatewayId: string;
+  operationId: string;
+  images: unknown;
+}): boolean {
+  const { fence, predecessorId, gatewayId, operationId, images } = input;
+  return fence?.kind === "restore-recovery" && fence.attemptId === predecessorId &&
+    fence.gatewayId === gatewayId && fence.phase === "dispatched" &&
+    fence.target?.restoreOperationId === operationId && isDeepStrictEqual(fence.target?.images, images);
+}
+async function capturedRecoveryPredecessor(db: Firestore, gatewayId: string, operationId: string, predecessorId: string, reauthorize: unknown) {
+  const [root, predecessor] = await Promise.all([
+    db.collection("gateways").doc(gatewayId).get(), db.collection(GLM_OPERATIONS_COLLECTION).doc(predecessorId).get(),
+  ]);
+  const previous = predecessor.data(); const fence = root.data()?.runtimeRestartFence;
+  if (!failedRecoveryOperationMatches(previous, gatewayId)) return null;
+  const recovery = previous?.input?.restoreRecovery;
+  if (recovery?.operationId !== operationId || reauthorize === undefined || !isDeepStrictEqual(recovery.reauthorize, reauthorize) ||
+      !recoveryPredecessorFenceMatches({ fence, predecessorId, gatewayId, operationId, images: recovery.images })) return null;
+  return { operationId: predecessorId, input: previous.input, completedAt: previous.completedAt, fence };
+}
+function restoreRecoveryOperationInput(input: {
+  gatewayId: string;
+  sourceSha: string;
+  operationId: string;
+  payload: ReturnType<typeof centralGatewayReleasePayload>;
+  reauthorize: DocumentData | undefined;
+  supersede: Awaited<ReturnType<typeof capturedRecoveryPredecessor>> | undefined;
+}) {
+  const { gatewayId, sourceSha, operationId, payload, reauthorize, supersede } = input;
+  return { gatewayId, restoreRecovery: { operationId, sourceSha,
+    ...(reauthorize ? { reauthorize } : {}), ...(supersede ? { supersede } : {}),
+    images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
+      "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
 }
 const OP_KIND_MIGRATE_CUSTOMER = "migrate-customer";
 const GATEWAY_IMAGE_REPO_PREFIXES = [...new Set(
@@ -1946,7 +2007,7 @@ const OP_KINDS = new Set([
   "add-gateway",
   OP_KIND_MIGRATE_CUSTOMER,
   "retire-gateway",
-  "restart-gateway",
+  OP_KIND_RESTART_GATEWAY,
   "rollout",
   "deprovision-customer",
   "suspend-customer",
@@ -5593,8 +5654,9 @@ router.post(
   router.post("/gateways/:id/recover-restore", async (req, res, next) => {
     try {
       const id = req.params.id as string;
-      const { sourceSha, operationId, reauthorizeAttemptId } = req.body ?? {};
-      if (!validRestoreRecoveryBody(req.body ?? {})) {
+      const body = req.body ?? {};
+      const { sourceSha, operationId, reauthorizeAttemptId, supersedeRecoveryId } = body;
+      if (!validRestoreRecoveryBody(body)) {
         res.status(400).json({ error: "sourceSha and restore operationId are required" }); return;
       }
       const gateway = await readGatewayDoc(db, id);
@@ -5606,15 +5668,18 @@ router.post(
       if (reauthorizeAttemptId !== undefined && reauthorize?.attemptId !== reauthorizeAttemptId) {
         res.status(409).json({ error: "retained restore attempt changed" }); return;
       }
+      const supersede = supersedeRecoveryId === undefined ? undefined :
+        await capturedRecoveryPredecessor(db, id, operationId, supersedeRecoveryId, reauthorize);
+      if (supersedeRecoveryId !== undefined && !supersede) {
+        res.status(409).json({ error: "failed restore recovery predecessor changed" }); return;
+      }
       const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
       const payload = centralGatewayReleasePayload(manifest);
-      const input = { gatewayId: id, restoreRecovery: { operationId, sourceSha, ...(reauthorize ? { reauthorize } : {}),
-        images: { gateway: `${payload.imageRepository}:${payload.imageTag}`,
-          "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}` } } };
+      const input = restoreRecoveryOperationInput({ gatewayId: id, operationId, sourceSha, payload, reauthorize, supersede });
       const queued = await runAdminFleetMutation({ req, what: "recover fenced Shared restore runtime", why: ADMIN_FLEET_REQUEST_REASON,
         target: { gatewayId: id, operationId }, preActionStatus: { desiredRelease: gateway.desiredRelease },
         mutation: input, action: async () => createOperation(db, {
-          kind: "restart-gateway", createdBy: (req as ActorRequest).uid ?? "unknown", input,
+          kind: OP_KIND_RESTART_GATEWAY, createdBy: (req as ActorRequest).uid ?? "unknown", input,
         }) });
       res.status(202).json({ gatewayId: id, sourceSha, operationId: queued });
     } catch (error) {

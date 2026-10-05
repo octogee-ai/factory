@@ -9,6 +9,7 @@ import { slugFromAssignedUser } from '@octogee/core/assigned-roster';
 import type { PushRsyncStateRequestBody } from '@octogee/shared/types/fleet-controller';
 import type { CommandRunner } from './migration-rsync-transfer.js';
 import { planSourceTransfer, observeSourceTransfer, sourceTransferBlocksRelease, type SourceTransferPod } from './source-transfer-execution.js';
+import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
 export interface RetainedSourceContext { op: Operation; state: CustomerMigrationV2State }
 export interface RetainedSourceTarget { name: string; podIP: string; vm: boolean }
@@ -204,23 +205,28 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
     return {planned,sourceIp,resourceAdmission,sourceContainerName:sourceContainer.name};
   }
   return {observe,assertActiveClaim,settledTarget,acknowledgeCleanup, async execute(input) {
-    const targetUid = await targetIdentity(input.target);
-    const previous = await observe();
-    if (previous) {
-      if (previous.targetIdentity !== targetUid) throw new Error('source transfer target identity changed');
-      return transferred(previous);
-    }
-    const {planned,sourceIp,resourceAdmission,sourceContainerName} = await discoverSource(input.target,targetUid);
-    if (!planned.patch) throw new Error('source transfer execution existed before reservation');
-    await deps.db.runTransaction(async txn => {
-      const [operation,user,assignment,root,targetRoot] = await Promise.all([txn.get(ref),txn.get(deps.db.doc(`users/${context.state.uid}`)),txn.get(deps.db.doc(`gateways/${context.state.sourceGatewayId}/assignments/${context.state.uid}`)),txn.get(deps.db.doc(`gateways/${context.state.sourceGatewayId}`)),txn.get(deps.db.doc(`gateways/${context.state.targetGatewayId}`))]);
-      const fresh = operation.data() as Operation;
-      assertRetainedSourceAuthority(context,fresh,user.data() ?? {},assignment.data() ?? {},{source:root.data() ?? {},target:targetRoot.data() ?? {}});
-      if (fresh.sourceTransferExecution) throw new Error('source transfer already reserved');
-      txn.update(ref,{sourceTransferExecution:planned.record,lastProgressAt:deps.now()});
-      const {status: _status,...identity} = planned.record;
-      txn.update(deps.db.doc(`users/${context.state.uid}`),{'provisioning.openclaw.sourceTransferFence':identity});
+    const reservation = await runGatewayRuntimeExclusive(async () => {
+      const targetUid = await targetIdentity(input.target);
+      const previous = await observe();
+      if (previous) {
+        if (previous.targetIdentity !== targetUid) throw new Error('source transfer target identity changed');
+        return { kind: 'existing' as const, previous };
+      }
+      const source = await discoverSource(input.target,targetUid);
+      if (!source.planned.patch) throw new Error('source transfer execution existed before reservation');
+      await deps.db.runTransaction(async txn => {
+        const [operation,user,assignment,root,targetRoot] = await Promise.all([txn.get(ref),txn.get(deps.db.doc(`users/${context.state.uid}`)),txn.get(deps.db.doc(`gateways/${context.state.sourceGatewayId}/assignments/${context.state.uid}`)),txn.get(deps.db.doc(`gateways/${context.state.sourceGatewayId}`)),txn.get(deps.db.doc(`gateways/${context.state.targetGatewayId}`))]);
+        const fresh = operation.data() as Operation;
+        assertRetainedSourceAuthority(context,fresh,user.data() ?? {},assignment.data() ?? {},{source:root.data() ?? {},target:targetRoot.data() ?? {}});
+        if (fresh.sourceTransferExecution) throw new Error('source transfer already reserved');
+        txn.update(ref,{sourceTransferExecution:source.planned.record,lastProgressAt:deps.now()});
+        const {status: _status,...identity} = source.planned.record;
+        txn.update(deps.db.doc(`users/${context.state.uid}`),{'provisioning.openclaw.sourceTransferFence':identity});
+      });
+      return { kind: 'reserved' as const, ...source };
     });
+    if (reservation.kind === 'existing') return transferred(reservation.previous);
+    const {planned,sourceIp,resourceAdmission,sourceContainerName} = reservation;
     let preparing: SourceTransferExecution;
     try {
       preparing=await transitionAuthority(planned.record,'preparing',true);

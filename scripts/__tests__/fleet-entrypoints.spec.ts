@@ -1199,6 +1199,16 @@ describe("fleet CLI args", () => {
       '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1', '--reauthorize-attempt',
     ]))).toThrow('reauthorize-attempt');
     expect(resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1',
+      '--reauthorize-attempt=retained-1', '--supersede-recovery=failed-recovery',
+    ]))).toMatchObject({ body: { sourceSha, operationId: 'builder-return-1', reauthorizeAttemptId: 'retained-1', supersedeRecoveryId: 'failed-recovery' } });
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1', '--supersede-recovery=failed-recovery',
+    ]))).toThrow('reauthorize-attempt');
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      '--env=test', 'gw', 'recover-restore', 'shared-1', `--sha=${sourceSha}`, '--operation=builder-return-1', '--reauthorize-attempt=retained-1', '--supersede-recovery',
+    ]))).toThrow('supersede-recovery');
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
       "--env=test", "gw", "deploy", "canary", `--sha=${sourceSha}`,
     ]))).toEqual({
       method: "POST",

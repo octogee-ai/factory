@@ -2,6 +2,7 @@ import {describe,expect,it,vi} from 'vitest';
 import type {Firestore} from 'firebase-admin/firestore';
 import type {CustomerMigrationV2State,Operation,SourceTransferExecution} from '@octogee/shared/types/glm';
 import {createRetainedSourceTransfer} from './retained-source-transfer.js';
+import {runGatewayRuntimeExclusive} from './gateway-runtime-mutation.js';
 
 function harness() {
  const state = {phase:'sourceQuiesced',operationId:'op-1',migrationId:'mig-1',uid:'uid-1',slug:'builder',sourceGatewayId:'shared-one',sourceEpoch:3,sourceRelease:1,targetRelease:2,sourceAssignmentMode:'assigned',targetGatewayId:'target'} as CustomerMigrationV2State;
@@ -35,6 +36,24 @@ function harness() {
 }
 
 describe('retained source controller',()=>{
+ it('queues source discovery and reservation but releases the queue before target preparation',async()=>{
+  const h=harness();let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  const mutation=runGatewayRuntimeExclusive(()=>held);
+  h.prepare.mockImplementation(async()=>{
+   expect(h.user.provisioning.openclaw).toHaveProperty('sourceTransferFence');
+   await runGatewayRuntimeExclusive(async()=>undefined);
+   throw new Error('prepared outside queue');
+  });
+  const transfer=h.controller().execute(h.input);
+  await Promise.resolve();
+  expect(h.runCommand).not.toHaveBeenCalled();
+  expect(h.record()).toBeUndefined();
+  release();await mutation;
+  await expect(transfer).rejects.toThrow('prepared outside queue');
+  expect(h.prepare).toHaveBeenCalledOnce();
+  expect(h.user.provisioning.openclaw).toHaveProperty('sourceTransferFence');
+ });
  it.each(['source-paused','source-retired','source-retiring','source-unconverged','target-paused','target-retired','target-retiring','target-unconverged','target-wrong-release','target-wrong-class'])('rejects %s before reserving or preparing',async fault=>{
   const h=harness();const root=h.docs.get(fault.startsWith('source')?'gateways/shared-one':'gateways/target')!;
   if(fault.endsWith('paused'))root.desiredStatus='paused';
