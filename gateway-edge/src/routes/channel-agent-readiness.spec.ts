@@ -39,7 +39,19 @@ describe("channel Agent readiness route", () => {
   });
   it.each(["read", "authorize"] as const)("returns a retryable error on %s outage", async (dependency) => {
     const h = setup(); h[dependency].mockRejectedValue(new Error("upstream closed"));
-    expect((await request(h.app).get(path)).status).toBe(503);
+    const r = await request(h.app).get(path);
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({ error: "Agent readiness unavailable", reason: dependency === "authorize" ? "platform-unavailable" : "unavailable" });
     if (dependency === "authorize") expect(h.read).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["Channel session model read failed: prepared model runtime publication was superseded for /home/node/.openclaw/agents/x/agent\nSessions remain unavailable. Stop the Gateway, run \"openclaw doctor --fix\" to inspect and repair this agent database, and restart.", "agent-repair-required"],
+    ["connect ECONNREFUSED 127.0.0.1:18789", "agent-starting"],
+    ["OpenClaw workspace identities are not initialized for this boot", "agent-starting"],
+  ])("names why readiness is unavailable: %s", async (message, reason) => {
+    const h = setup(); h.read.mockRejectedValue(new Error(message));
+    const r = await request(h.app).get(path);
+    expect(r.status).toBe(503);
+    expect(r.body.reason).toBe(reason);
   });
 });

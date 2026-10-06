@@ -138,3 +138,15 @@ describe("native channel readiness snapshot", () => {
     expect(native.close).toHaveBeenCalledOnce();
   });
 });
+
+describe("readiness failure reasons", () => {
+  it("classifies a degraded agent store, a starting gateway, and everything else", async () => {
+    const { readinessFailureReason } = await import("./channel-agent-readiness.js");
+    expect(readinessFailureReason(new Error("prepared model runtime publication was superseded for /x"))).toBe("agent-repair-required");
+    expect(readinessFailureReason(new Error("Sessions remain unavailable. Stop the Gateway, run \"openclaw doctor --fix\""))).toBe("agent-repair-required");
+    expect(readinessFailureReason(new Error("connect ECONNREFUSED 127.0.0.1:18789"))).toBe("agent-starting");
+    expect(readinessFailureReason(new Error("rpc timed out after 1200ms"))).toBe("agent-starting");
+    expect(readinessFailureReason(new Error("Channel routing config read failed: forbidden"))).toBe("unavailable");
+    expect(readinessFailureReason("boom")).toBe("unavailable");
+  });
+});

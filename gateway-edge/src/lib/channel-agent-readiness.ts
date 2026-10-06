@@ -94,6 +94,15 @@ async function readNativeReadiness(scope: ChannelAgentScope, timeoutMs: number):
   }
 }
 
+export type ReadinessFailureReason = "agent-repair-required" | "agent-starting" | "platform-unavailable" | "unavailable";
+
+export function readinessFailureReason(error: unknown): ReadinessFailureReason {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/doctor --fix|publication was superseded|Sessions remain unavailable|agent database/i.test(message)) return "agent-repair-required";
+  if (/ECONNREFUSED|ECONNRESET|timed out|timeout|not initialized|starting/i.test(message)) return "agent-starting";
+  return "unavailable";
+}
+
 export async function readChannelAgentReadiness(scope: ChannelAgentScope): Promise<boolean> {
   return channelAgentReady(scope, await readNativeReadiness(scope, 6_000));
 }
