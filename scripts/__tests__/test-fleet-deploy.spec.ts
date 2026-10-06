@@ -43,7 +43,7 @@ function harness(snapshots: TestFleetSnapshot[]) {
   const run = () => deployTestFleet({ environment: "test", sourceSha: "a".repeat(40), payload, timeoutMs: 500, pollIntervalMs: 100, maxObservationAgeMs: 1000 }, deps);
   return { run, deploy, readSnapshot, deps };
 }
-const snapshot = (...gateways: TestFleetGateway[]): TestFleetSnapshot => ({ gateways, sharedReplacement: null, platform: platformReleaseRecord(payload, 100), retirements: [] });
+const snapshot = (...gateways: TestFleetGateway[]): TestFleetSnapshot => ({ gateways, sharedReplacements: [], platform: platformReleaseRecord(payload, 100), retirements: [] });
 
 describe("complete TEST fleet deployment", () => {
   it("deploys every Builder including paused roots, never shared or retired roots, and reports paused desired-only", async () => {
@@ -123,7 +123,7 @@ describe("complete TEST fleet deployment", () => {
     const oldShared = gateway("shared-old", { desiredStatus: "draining", assignments: [{ slug: "ada", state: "serving" }] });
     const nextShared = gateway("shared-new");
     const h = harness([
-      { platform: platformReleaseRecord(payload, 100), retirements: [], gateways: [oldShared, nextShared], sharedReplacement: { sourceGatewayId: "shared-old", targetGatewayId: "shared-new" } },
+      { platform: platformReleaseRecord(payload, 100), retirements: [], gateways: [oldShared, nextShared], sharedReplacements: [{ sourceGatewayId: "shared-old", targetGatewayId: "shared-new", updatedAt: 0 }] },
       snapshot({ ...oldShared, desiredStatus: "retired", live: { observedAt: 200, instances: [] } }, nextShared),
       snapshot({ ...oldShared, desiredStatus: "retired", assignments: [], live: { observedAt: 300, instances: [] } }, nextShared),
     ]);

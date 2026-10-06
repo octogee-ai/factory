@@ -65,6 +65,7 @@ import {
   type SharedGatewayPoolCandidate,
   type SharedGatewayRebalance,
   type SharedGatewaySelection,
+  type SharedPoolReplacement,
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
   InvalidSharedGatewayAutoscalingConfigError,
@@ -95,6 +96,7 @@ import {
   readBuilderActivityFirestore,
 } from "./disposable-gateway-lifecycle.js";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-pool-replacements.js";
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
 import {
   classifyOperationFailure,
@@ -222,6 +224,7 @@ export interface PlacementPolicySnapshot {
   idleMs: number;
   buildersPerGateway: number;
   platformCurrentGatewayIds: readonly string[];
+  sharedPoolReplacements: readonly SharedPoolReplacement[];
   users: PlacementPolicyUser[];
   gateways: PlacementPolicyGateway[];
   assignments: PlacementPolicyAssignment[];
@@ -235,6 +238,14 @@ export interface EnqueuePlacementMigrationInput {
   toGatewayId: string;
   source: "continuous-placement-policy" | "builder-activation-lease";
   operationId: string;
+  sharedDrain?: { pairedTargetGatewayId: string | null };
+}
+
+export class SharedDrainSupersededError extends Error {
+  constructor(readonly fromGatewayId: string, reason: string) {
+    super(`shared drain of ${fromGatewayId} no longer authorizes this migration: ${reason}`);
+    this.name = "SharedDrainSupersededError";
+  }
 }
 
 export interface AllocateDisposableGatewayInput {
@@ -2279,6 +2290,10 @@ async function reconcileDrainingSharedGateway(
   }));
 
   for (const fromGatewayId of drainingGatewayIds) {
+    const pairedTargetGatewayId = pairedReplacementTarget(context.state.sharedPoolReplacements, fromGatewayId);
+    const candidates = pairedTargetGatewayId === null
+      ? projectedCandidates
+      : projectedCandidates.filter((candidate) => candidate.gatewayId === pairedTargetGatewayId);
     for (const user of [...context.state.users].sort((left, right) =>
       left.uid.localeCompare(right.uid))) {
       const builder = drainingSharedGatewayBuilder(context, user, fromGatewayId);
@@ -2286,21 +2301,28 @@ async function reconcileDrainingSharedGateway(
       const selection = selectPlatformPreferredSharedGateway(context, {
         uid: user.uid,
         purpose: "migration",
-        candidates: projectedCandidates,
+        candidates,
       });
       if (selection.kind !== "selected") continue;
-      await context.deps.enqueueMigration({
-        uid: builder.uid,
-        builderSlug: builder.builderSlug,
-        fromGatewayId,
-        toGatewayId: selection.gatewayId,
-        source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-        operationId: continuousPlacementMigrationOperationId({
-          ...builder,
+      try {
+        await context.deps.enqueueMigration({
+          uid: builder.uid,
+          builderSlug: builder.builderSlug,
           fromGatewayId,
           toGatewayId: selection.gatewayId,
-        }),
-      });
+          source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
+          operationId: continuousPlacementMigrationOperationId({
+            ...builder,
+            fromGatewayId,
+            toGatewayId: selection.gatewayId,
+          }),
+          sharedDrain: { pairedTargetGatewayId },
+        });
+      } catch (error) {
+        if (!(error instanceof SharedDrainSupersededError)) throw error;
+        context.deps.log(`[placement-policy] drain of ${fromGatewayId} stopped: ${error.message}`);
+        break;
+      }
       const target = projectedCandidates.find(
         (candidate) => candidate.gatewayId === selection.gatewayId,
       )!;
@@ -2964,7 +2986,7 @@ async function readPlacementPolicySnapshot(
 ): Promise<PlacementPolicySnapshot> {
   const { db, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
   const now = nowFn();
-  const [configSnap, userDocs, gatewayDocs, runtimeDocs, opsSnap, assignmentDocs] =
+  const [configSnap, userDocs, gatewayDocs, runtimeDocs, opsSnap, assignmentDocs, sharedPoolReplacements] =
     await Promise.all([
       db.doc("config/orchestrator").get(),
       mirroredOrScan(informer.users(), () => db.collection("users").get()),
@@ -2974,6 +2996,7 @@ async function readPlacementPolicySnapshot(
         .where("status", "in", [...PLACEMENT_ACTIVE_OPERATION_STATUSES])
         .get(),
       mirroredOrScan(informer.assignments(), () => db.collectionGroup("assignments").get()),
+      readSharedPoolReplacements(db),
     ]);
   const pool = deriveSharedGatewayPoolConfig(gatewayDocs.map((doc) => {
     const data = doc.data() as Record<string, unknown>;
@@ -3040,6 +3063,7 @@ async function readPlacementPolicySnapshot(
     idleMs,
     buildersPerGateway,
     platformCurrentGatewayIds,
+    sharedPoolReplacements,
     users: userDocs.map((doc) => ({ uid: doc.id, data: doc.data() as Record<string, unknown> })),
     gateways,
     assignments,
@@ -3274,6 +3298,31 @@ async function applyTerminalPlacementRearm(input: {
   transaction.update(ref, rearmedPlacementMigrationPatch());
 }
 
+async function assertSharedDrainAuthority(
+  input: FirestorePlacementPolicyInput,
+  transaction: Transaction,
+  request: EnqueuePlacementMigrationInput & { sharedDrain: { pairedTargetGatewayId: string | null } },
+): Promise<void> {
+  const [source, target, replacements] = await Promise.all([
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId)),
+    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId)),
+    readSharedPoolReplacements(input.db, transaction),
+  ]);
+  if (source.data()?.desiredStatus !== "draining") {
+    throw new SharedDrainSupersededError(request.fromGatewayId, "the source is no longer draining");
+  }
+  if (target.data()?.desiredStatus !== "running") {
+    throw new SharedDrainSupersededError(request.fromGatewayId, `target ${request.toGatewayId} is no longer running`);
+  }
+  const pairedTargetGatewayId = pairedReplacementTarget(replacements, request.fromGatewayId);
+  if (pairedTargetGatewayId !== request.sharedDrain.pairedTargetGatewayId) {
+    throw new SharedDrainSupersededError(request.fromGatewayId, "its replacement pairing changed");
+  }
+  if (pairedTargetGatewayId !== null && pairedTargetGatewayId !== request.toGatewayId) {
+    throw new SharedDrainSupersededError(request.fromGatewayId, `it is paired with ${pairedTargetGatewayId}`);
+  }
+}
+
 export async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
@@ -3300,6 +3349,8 @@ export async function enqueuePlacementMigration(
     inputUid: request.uid,
   };
   await input.db.runTransaction(async (transaction) => {
+    const sharedDrain = request.sharedDrain;
+    if (sharedDrain) await assertSharedDrainAuthority(input, transaction, { ...request, sharedDrain });
     const existing = await transaction.get(ref);
     if (!existing.exists) {
       transaction.create(ref, operation);

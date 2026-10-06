@@ -1,4 +1,5 @@
 import { isReleasePayload, releasePayloadHash, type PlatformReleaseRecord, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
+import type { SharedPoolReplacement } from "@octogee/shared/types/shared-gateway-pool";
 
 export interface TestFleetContainer {
   name: string;
@@ -40,7 +41,7 @@ export interface TestFleetSnapshot {
   platform: PlatformReleaseRecord | null;
   retirements: Array<{ gatewayId: string; operationId: string; completedAt: number; live: TestFleetLiveObservation }>;
   gateways: TestFleetGateway[];
-  sharedReplacement: { sourceGatewayId: string; targetGatewayId: string } | null;
+  sharedReplacements: SharedPoolReplacement[];
 }
 
 export interface TestFleetTargetResult {
@@ -233,7 +234,9 @@ async function deployMissingBuilders(snapshot: TestFleetSnapshot, options: TestF
 
 function snapshotProblems(snapshot: TestFleetSnapshot): string[] {
   const reasons: string[] = [];
-  if (snapshot.sharedReplacement) reasons.push(`Shared replacement ${snapshot.sharedReplacement.sourceGatewayId} → ${snapshot.sharedReplacement.targetGatewayId} is unfinished`);
+  for (const replacement of snapshot.sharedReplacements) {
+    reasons.push(`Shared replacement ${replacement.sourceGatewayId} → ${replacement.targetGatewayId} is unfinished`);
+  }
   if (!snapshot.gateways.some((gateway) => gateway.gatewayClass === "shared" && gateway.desiredStatus === "running")) reasons.push("no running Shared gateway");
   return reasons;
 }

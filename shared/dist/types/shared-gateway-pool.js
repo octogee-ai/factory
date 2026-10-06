@@ -3,6 +3,29 @@ export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-[a-z0-9]+$/;
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
 export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
 const SHARED_POOL_MEMBER_STATUSES = new Set(["running", "draining", "paused"]);
+export const SHARED_POOL_REPLACEMENT_STALL_MS = 30 * 60_000;
+function isSharedPoolReplacement(value) {
+    return isRecord(value) &&
+        isSharedPoolSlotId(value.sourceGatewayId) &&
+        isSharedPoolSlotId(value.targetGatewayId) &&
+        value.sourceGatewayId !== value.targetGatewayId &&
+        typeof value.updatedAt === "number" && Number.isSafeInteger(value.updatedAt) && value.updatedAt >= 0;
+}
+export function parseSharedPoolReplacements(value) {
+    if (value === undefined || value === null)
+        return [];
+    if (!Array.isArray(value) || !value.every(isSharedPoolReplacement)) {
+        throw new Error("shared pool replacement state is malformed");
+    }
+    const sources = new Set(value.map((replacement) => replacement.sourceGatewayId));
+    const targets = new Set(value.map((replacement) => replacement.targetGatewayId));
+    if (sources.size !== value.length ||
+        targets.size !== value.length ||
+        [...sources].some((gatewayId) => targets.has(gatewayId))) {
+        throw new Error("shared pool replacement state pairs a gateway twice");
+    }
+    return value.map(({ sourceGatewayId, targetGatewayId, updatedAt }) => ({ sourceGatewayId, targetGatewayId, updatedAt }));
+}
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }

@@ -288,6 +288,7 @@ export type {
   SharedGatewayRebalance,
   SharedGatewaySelection,
   SharedPoolMemberRoot,
+  SharedPoolReplacement,
   SharedPoolReplicaBounds,
   SharedPoolScalingDecision,
   SharedPoolScalingInput,
@@ -296,6 +297,7 @@ export type {
 export {
   DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED,
   DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY,
+  SHARED_POOL_REPLACEMENT_STALL_MS,
   SHARED_POOL_SLOT_ID_PATTERN,
   authoritativeSharedGatewayLoad,
   compareSharedGatewayIds,
@@ -306,6 +308,7 @@ export {
   isSharedPoolSlotId,
   parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
+  parseSharedPoolReplacements,
   parseSharedPoolReplicaBounds,
   planSharedGatewayRebalance,
   selectSharedGateway,

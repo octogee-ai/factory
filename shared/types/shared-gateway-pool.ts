@@ -28,13 +28,46 @@ export interface SharedPoolScalingMember {
   platformCurrent: boolean;
 }
 
+export const SHARED_POOL_REPLACEMENT_STALL_MS = 30 * 60_000;
+
+export interface SharedPoolReplacement {
+  sourceGatewayId: string;
+  targetGatewayId: string;
+  updatedAt: number;
+}
+
+function isSharedPoolReplacement(value: unknown): value is SharedPoolReplacement {
+  return isRecord(value) &&
+    isSharedPoolSlotId(value.sourceGatewayId) &&
+    isSharedPoolSlotId(value.targetGatewayId) &&
+    value.sourceGatewayId !== value.targetGatewayId &&
+    typeof value.updatedAt === "number" && Number.isSafeInteger(value.updatedAt) && value.updatedAt >= 0;
+}
+
+export function parseSharedPoolReplacements(value: unknown): SharedPoolReplacement[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || !value.every(isSharedPoolReplacement)) {
+    throw new Error("shared pool replacement state is malformed");
+  }
+  const sources = new Set(value.map((replacement) => replacement.sourceGatewayId));
+  const targets = new Set(value.map((replacement) => replacement.targetGatewayId));
+  if (
+    sources.size !== value.length ||
+    targets.size !== value.length ||
+    [...sources].some((gatewayId) => targets.has(gatewayId))
+  ) {
+    throw new Error("shared pool replacement state pairs a gateway twice");
+  }
+  return value.map(({ sourceGatewayId, targetGatewayId, updatedAt }) => ({ sourceGatewayId, targetGatewayId, updatedAt }));
+}
+
 export interface SharedPoolScalingInput {
   config: SharedGatewayAutoscalingConfig;
   bounds: SharedPoolReplicaBounds;
   members: readonly SharedPoolScalingMember[];
   builderDemandCount: number;
-  replacement?: { sourceGatewayId: string; targetGatewayId: string } | null;
-  replacementStalled?: boolean;
+  now: number;
+  replacements?: readonly SharedPoolReplacement[];
 }
 
 export type SharedPoolScalingDecision =
@@ -45,6 +78,7 @@ export type SharedPoolScalingDecision =
         | "steady"
         | "converging"
         | "draining"
+        | "replica-ceiling"
         | "malformed-config"
         | "malformed-state";
     }
@@ -55,7 +89,7 @@ export type SharedPoolScalingDecision =
     }
   | { kind: "mint-slot"; reason: "minimum-replicas" | "scale-out" }
   | { kind: "mint-slot"; reason: "platform-replacement"; replacesGatewayId: string }
-  | { kind: "finish-replacement" }
+  | { kind: "finish-replacement"; sourceGatewayId: string; targetGatewayId: string }
   | { kind: "supersede-replacement"; gatewayId: string }
   | { kind: "begin-drain"; gatewayId: string }
   | { kind: "retire-member"; gatewayId: string }

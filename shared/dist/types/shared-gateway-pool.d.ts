@@ -19,20 +19,24 @@ export interface SharedPoolScalingMember {
     converged: boolean;
     platformCurrent: boolean;
 }
+export declare const SHARED_POOL_REPLACEMENT_STALL_MS: number;
+export interface SharedPoolReplacement {
+    sourceGatewayId: string;
+    targetGatewayId: string;
+    updatedAt: number;
+}
+export declare function parseSharedPoolReplacements(value: unknown): SharedPoolReplacement[];
 export interface SharedPoolScalingInput {
     config: SharedGatewayAutoscalingConfig;
     bounds: SharedPoolReplicaBounds;
     members: readonly SharedPoolScalingMember[];
     builderDemandCount: number;
-    replacement?: {
-        sourceGatewayId: string;
-        targetGatewayId: string;
-    } | null;
-    replacementStalled?: boolean;
+    now: number;
+    replacements?: readonly SharedPoolReplacement[];
 }
 export type SharedPoolScalingDecision = {
     kind: "hold";
-    reason: "disabled" | "steady" | "converging" | "draining" | "malformed-config" | "malformed-state";
+    reason: "disabled" | "steady" | "converging" | "draining" | "replica-ceiling" | "malformed-config" | "malformed-state";
 } | {
     kind: "resume-member";
     gatewayId: string;
@@ -46,6 +50,8 @@ export type SharedPoolScalingDecision = {
     replacesGatewayId: string;
 } | {
     kind: "finish-replacement";
+    sourceGatewayId: string;
+    targetGatewayId: string;
 } | {
     kind: "supersede-replacement";
     gatewayId: string;

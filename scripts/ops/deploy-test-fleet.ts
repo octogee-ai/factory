@@ -11,6 +11,7 @@ import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, St
 import { GatewayRetirementConflictError } from "@octogee/core/gateway-retirement-claim";
 import { runNormalFleetMutation, type NormalFleetMutationDb } from "@octogee/core/normal-fleet-mutation";
 import { timestampMillis } from "@octogee/core/timestamps";
+import { parseSharedPoolReplacements } from "@octogee/shared/types/shared-gateway-pool";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 import {
@@ -54,12 +55,8 @@ function runtimeOf(value: Record<string, unknown>, gatewayId: string): TestFleet
   };
 }
 
-function replacementOf(value: unknown): TestFleetSnapshot["sharedReplacement"] {
-  const replacement = object(value).replacement;
-  if (replacement === undefined || replacement === null) return null;
-  const pair = object(replacement);
-  if (typeof pair.sourceGatewayId !== "string" || typeof pair.targetGatewayId !== "string") throw new Error("Shared replacement state is malformed");
-  return { sourceGatewayId: pair.sourceGatewayId, targetGatewayId: pair.targetGatewayId };
+function replacementsOf(value: unknown): TestFleetSnapshot["sharedReplacements"] {
+  return parseSharedPoolReplacements(object(value).replacements);
 }
 
 async function readGateway(input: {
@@ -97,7 +94,7 @@ async function readGateway(input: {
 
 async function readSnapshot(db: Firestore): Promise<TestFleetSnapshot> {
   const settings = deploymentEnvironmentSettings("test");
-  const [roots, operations, replacement, platform, pods, retired] = await Promise.all([
+  const [roots, operations, scalerState, platform, pods, retired] = await Promise.all([
     db.collection(GATEWAYS_COLLECTION).get(),
     db.collection(GLM_OPERATIONS_COLLECTION).where("kind", "==", "rollout").get(),
     db.doc("glmControllerState/sharedPoolScaler").get(),
@@ -116,7 +113,7 @@ async function readSnapshot(db: Firestore): Promise<TestFleetSnapshot> {
     if (data.status !== "succeeded" || typeof gatewayId !== "string" || completedAt == null) return [];
     return [{ gatewayId, operationId: doc.id, completedAt, live: { observedAt, instances: observations.get(gatewayId)?.instances ?? [] } }];
   });
-  return { gateways, retirements, sharedReplacement: replacementOf(replacement.data()), platform: parsePlatformReleaseRecord(platform.data()) };
+  return { gateways, retirements, sharedReplacements: replacementsOf(scalerState.data()), platform: parsePlatformReleaseRecord(platform.data()) };
 }
 
 async function hasSucceededRetirement(db: Firestore, gatewayId: string): Promise<boolean> {
