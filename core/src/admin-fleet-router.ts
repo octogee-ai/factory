@@ -4056,6 +4056,23 @@ async function requestActivationLeaseTermination(
   return { kind: "requested" };
 }
 
+const WORKSPACE_IDENTITIES_NOT_INITIALIZED =
+  "OpenClaw workspace identities are not initialized for this boot";
+
+function isEndpointPreflightError(error: string, operationInput: GlmDoc): boolean {
+  const { fromGatewayId, toGatewayId } = operationInput;
+  const preflightPrefix = [
+    `source gateway ${fromGatewayId} is not migration-ready (`,
+    `target gateway ${toGatewayId} is not migration-ready (`,
+    `target gateway ${toGatewayId} has no durable placement`,
+    `placement rejected for ${toGatewayId}: `,
+  ].some((prefix) => error.startsWith(prefix));
+  const schedulerIdentityNotReady = [fromGatewayId, toGatewayId].some(
+    (gatewayId) => error.startsWith(`/scheduler/${gatewayId}: 500 `),
+  ) && error.includes(WORKSPACE_IDENTITIES_NOT_INITIALIZED);
+  return preflightPrefix || schedulerIdentityNotReady;
+}
+
 function rearmableBuilderReturnOperation(input: {
   operation: GlmDoc | undefined;
   uid: string;
@@ -4068,12 +4085,7 @@ function rearmableBuilderReturnOperation(input: {
   const steps = operation.steps;
   const error = operation.error;
   const endpointPreflightFailure = Array.isArray(steps) && steps.length === 0 &&
-    typeof error === "string" && [
-      `source gateway ${operationInput.fromGatewayId} is not migration-ready (`,
-      `target gateway ${operationInput.toGatewayId} is not migration-ready (`,
-      `target gateway ${operationInput.toGatewayId} has no durable placement`,
-      `placement rejected for ${operationInput.toGatewayId}: `,
-    ].some((prefix) => error.startsWith(prefix));
+    typeof error === "string" && isEndpointPreflightError(error, operationInput);
   const failedBeforeSourceQuiesce = operation.rolledBack === false &&
     (endpointPreflightFailure || (Array.isArray(steps) && steps.length === 1 &&
       isPlainRecord(steps[0]) && steps[0].name === "keys-sync-state" &&
