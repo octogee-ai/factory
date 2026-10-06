@@ -32,7 +32,7 @@ export interface SharedPoolScalingInput {
   config: SharedGatewayAutoscalingConfig;
   bounds: SharedPoolReplicaBounds;
   members: readonly SharedPoolScalingMember[];
-  unplacedBuilderCount: number;
+  builderDemandCount: number;
   replacement?: { sourceGatewayId: string; targetGatewayId: string } | null;
   replacementStalled?: boolean;
 }
