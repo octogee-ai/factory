@@ -69,7 +69,7 @@ import {
   SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP,
   SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED,
   SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED,
-  SYSTEM_CONFIG_SCHEMA_VERSION_PROJECT_AGENT_HOST_CODE_LOCKDOWN_LIFTED,
+  SYSTEM_CONFIG_SCHEMA_VERSION_BUILDER_AGENT_SHARED_FENCE_LIFTED,
   type ReadSystemConfigCommitBlob,
   type SystemConfigDurableFilename,
   SYSTEM_CONFIG_DURABLE_FILENAMES,
@@ -450,7 +450,7 @@ function liftBuilderCoachToolFences(config: UnknownRecord, env: NodeJS.ProcessEn
   return changed;
 }
 
-function liftBuilderProjectAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
+function liftBuilderAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
   const slug = env.GATEWAY_BUILDER_SLUG?.trim();
   if (!slug) return false;
   const agents = asRecord(config.agents);
@@ -459,7 +459,7 @@ function liftBuilderProjectAgentToolFences(config: UnknownRecord, env: NodeJS.Pr
   const lift = (agentId: string, agent: UnknownRecord): UnknownRecord => {
     const parsed = parseAgentId(agentId);
     if (
-      parsed.kind !== "project" ||
+      (parsed.kind !== "project" && parsed.kind !== "coach") ||
       parsed.username !== slug
     ) return agent;
     const reconciled = reconcileBuilderAgentEntry(agentId, agent);
@@ -531,16 +531,19 @@ function liftCodexGate(config: UnknownRecord): boolean {
 }
 
 // One-time roll-forward for durable Builder configs seeded before Builder
-// gateways ran at full power. Every removal matches the exact shape the
-// platform used to stamp, so anything the Builder authored survives untouched.
+// gateways ran at full power. The owner's coach and project agents drop any
+// tools block carrying the shared host-code fence (deny exec+process with
+// workspaceOnly or exec.mode=deny), including a Builder-authored one of that
+// shape; that whole-block check runs before the field-level coach lift strips
+// its signature. Every other removal matches the exact shape the platform stamped.
 export function liftPlatformHostCodeLockdown(
   config: UnknownRecord,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const changes = [
     liftHostCodeToolFences(asRecord(config.tools)),
+    liftBuilderAgentToolFences(config, env),
     liftBuilderCoachToolFences(config, env),
-    liftBuilderProjectAgentToolFences(config, env),
     liftGatewayCommandFences(config),
     liftAutomationFences(config),
     liftCodexGate(config),
@@ -1023,22 +1026,22 @@ async function reconcileTrackedOpenClawConfig(
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_MAC_LANE_REMOVED;
   const hostCodeLockdownLifted = schemaVersion !== undefined &&
     schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_HOST_CODE_LOCKDOWN_LIFTED;
-  const projectAgentHostCodeLockdownLifted = schemaVersion !== undefined &&
-    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_PROJECT_AGENT_HOST_CODE_LOCKDOWN_LIFTED;
+  const builderAgentSharedFenceLifted = schemaVersion !== undefined &&
+    schemaVersion >= SYSTEM_CONFIG_SCHEMA_VERSION_BUILDER_AGENT_SHARED_FENCE_LIFTED;
   if (!macLaneRemoved) {
     removeLegacyMacConfig(tracked, env);
     const secrets = extractLegacyMattermostAccountSecrets(tracked);
     if (Object.keys(secrets).length > 0) await updateMattermostAccountSecrets(openclawDir, { set: secrets });
   }
   if (!hostCodeLockdownLifted) liftPlatformHostCodeLockdown(tracked, env);
-  if (!projectAgentHostCodeLockdownLifted) liftBuilderProjectAgentToolFences(tracked, env);
+  if (!builderAgentSharedFenceLifted) liftBuilderAgentToolFences(tracked, env);
   enableBuilderBrowser(tracked);
   const after = `${JSON.stringify(tracked, null, 2)}\n`;
   if (after !== before) atomicWrite(repoConfigPath, after);
   const keepPendingCleanup = !macLaneRemoved || metadata?.pendingStateCleanup !== undefined;
   atomicWrite(metadataPath, `${JSON.stringify({
     schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
-    lastMigration: "lift-builder-project-agent-host-code-lockdown",
+    lastMigration: "lift-builder-agent-shared-host-code-fence",
     ...(keepPendingCleanup ? { pendingStateCleanup: SYSTEM_CONFIG_LEGACY_MAC_STATE_CLEANUP } : {}),
   }, null, 2)}\n`);
   ensureSystemConfigGitignore(repoDir);

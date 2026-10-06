@@ -147,7 +147,7 @@ describe("system_config restore", () => {
       id: "/ceckert-coach",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8")))
-      .toMatchObject({ schemaVersion: 4 });
+      .toMatchObject({ schemaVersion: 5 });
     expect(JSON.parse(fs.readFileSync(
       path.join(openclawDir, "secrets", "mattermost-accounts.json"),
       "utf8",
@@ -202,7 +202,7 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("Mac");
     expect(tracked).not.toContain("botToken");
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf-8"))).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       lastMigration: "initial",
     });
     expect(fs.readFileSync(path.join(repoDir, ".gitignore"), "utf-8")).toContain("*.tmp");
@@ -935,8 +935,8 @@ describe("system_config restore", () => {
       "acme-coach": "legacy-coach-pat",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 4,
-      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
       pendingStateCleanup: "legacy-mac",
     });
   });
@@ -996,8 +996,8 @@ describe("system_config restore", () => {
     expect(tracked).not.toContain("must-be-rejected-by-audit");
     expect(fs.existsSync(path.join(openclawDir, "secrets", "mattermost-accounts.json"))).toBe(false);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 4,
-      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
     });
   });
 
@@ -1078,15 +1078,14 @@ describe("system_config restore", () => {
       {
         id: "octogee-acme-coach",
         default: true,
-        tools: { profile: "coding", alsoAllow: ["octogee_project_create"], toolsBySender: {} },
       },
       {
         id: "octogee-acme-proj-garden-coach",
       },
     ]);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 4,
-      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
     });
     await expect(reconcileSystemConfigSchema(openclawDir, {
       GATEWAY_CLASS: "builder",
@@ -1094,7 +1093,7 @@ describe("system_config restore", () => {
     })).resolves.toBe(false);
   });
 
-  it("lifts the coach fences from a keyed agents.entries roster and matches stamps regardless of key order", async () => {
+  it("drops the coach fence from a keyed agents.entries roster", async () => {
     writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: 1 });
     writeJson(path.join(repoDir, "openclaw.json"), {
       skills: {
@@ -1117,10 +1116,7 @@ describe("system_config restore", () => {
 
     const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
     expect(migrated).not.toHaveProperty("skills");
-    expect(migrated.agents.entries["octogee-acme-coach"]).toEqual({
-      default: true,
-      tools: { profile: "coding" },
-    });
+    expect(migrated.agents.entries["octogee-acme-coach"]).toEqual({ default: true });
   });
 
   it("leaves a Builder-authored codex or exec policy alone when lifting the lockdown", async () => {
@@ -1192,8 +1188,8 @@ describe("system_config restore", () => {
       executablePath: "/usr/bin/chromium",
     });
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 4,
-      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
     });
     await expect(reconcileSystemConfigSchema(openclawDir, {
       GATEWAY_CLASS: "builder",
@@ -1232,9 +1228,87 @@ describe("system_config restore", () => {
     expect(migrated.agents.list[0]).not.toHaveProperty("tools");
     expect(migrated.agents.list[1].tools).toEqual(builderTools);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
+    });
+  });
+
+  it("lifts drifted shared host-code fences from the owner's coach and project agents in a v4 Builder config", async () => {
+    writeJson(path.join(repoDir, ".octogee.json"), {
       schemaVersion: 4,
       lastMigration: "lift-builder-project-agent-host-code-lockdown",
     });
+    const builderTools = { profile: "full", deny: ["browser"] };
+    const foreignFence = { deny: ["exec", "process"], fs: { workspaceOnly: true } };
+    writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: {
+        entries: {
+          "octogee-acme-coach": {
+            tools: {
+              profile: "full",
+              alsoAllow: ["browser", "computer", "message"],
+              deny: ["exec", "process", "subagents", "terminal", "automations"],
+              toolsBySender: {},
+              fs: { workspaceOnly: true },
+            },
+          },
+          "octogee-acme-proj-garden-coach": {
+            tools: {
+              deny: ["exec", "process", "terminal", "computer", "nodes", "file-transfer", "ollama"],
+              profile: "minimal",
+              exec: { mode: "deny", host: "node" },
+            },
+          },
+          "octogee-acme-proj-custom-coach": { tools: builderTools },
+          "octogee-other-coach": { tools: foreignFence },
+        },
+      },
+    });
+
+    await expect(reconcileSystemConfigSchema(openclawDir, {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "acme",
+    })).resolves.toBe(true);
+
+    const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(migrated.agents.entries["octogee-acme-coach"]).not.toHaveProperty("tools");
+    expect(migrated.agents.entries["octogee-acme-proj-garden-coach"]).not.toHaveProperty("tools");
+    expect(migrated.agents.entries["octogee-acme-proj-custom-coach"].tools).toEqual(builderTools);
+    expect(migrated.agents.entries["octogee-other-coach"].tools).toEqual(foreignFence);
+    expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
+    });
+  });
+
+  it("drops a drifted shared coach fence whole when migrating a pre-v2 Builder config", async () => {
+    writeJson(path.join(repoDir, ".octogee.json"), {
+      schemaVersion: 1,
+      lastMigration: "remove-mac-and-externalize-mattermost-tokens",
+    });
+    writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: {
+        entries: {
+          "octogee-acme-coach": {
+            tools: {
+              profile: "full",
+              alsoAllow: ["browser", "computer", "message"],
+              deny: ["exec", "process", "subagents", "terminal", "automations"],
+              toolsBySender: {},
+              fs: { workspaceOnly: true },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(reconcileSystemConfigSchema(openclawDir, {
+      GATEWAY_CLASS: "builder",
+      GATEWAY_BUILDER_SLUG: "acme",
+    })).resolves.toBe(true);
+
+    const migrated = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(migrated.agents.entries["octogee-acme-coach"]).not.toHaveProperty("tools");
   });
 
   it("preserves an explicit Builder browser opt-out during the v3 migration", async () => {
@@ -1260,8 +1334,8 @@ describe("system_config restore", () => {
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8")))
       .toEqual(disabled);
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf8"))).toEqual({
-      schemaVersion: 4,
-      lastMigration: "lift-builder-project-agent-host-code-lockdown",
+      schemaVersion: 5,
+      lastMigration: "lift-builder-agent-shared-host-code-fence",
     });
   });
 

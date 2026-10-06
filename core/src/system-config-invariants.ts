@@ -693,39 +693,21 @@ export function reconcileBuilderAgentEntry(
   entry: Record<string, unknown>,
 ): Record<string, unknown> {
   const agent = structuredClone(entry);
-  const sharedCoachTools = {
-    profile: "coding",
-    alsoAllow: [...CUSTOMER_WORKFLOW_TOOLS],
-    deny: [...CUSTOMER_CODE_DENIED_TOOLS],
-    fs: { workspaceOnly: true },
-    toolsBySender: {},
-  };
-  const sharedProjectTools = {
-    profile: "minimal",
-    alsoAllow: [...PROJECT_AGENT_ALLOWED_TOOLS],
-    deny: [...PROJECT_AGENT_DENIED_TOOLS],
-    exec: { mode: "deny", host: "node" },
-    fs: { workspaceOnly: true },
-    toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
-  };
-  const sharedProjectToolsWithoutExec = structuredClone(sharedProjectTools);
-  delete (sharedProjectToolsWithoutExec as JsonObject).exec;
-  const legacyProjectTools = {
-    profile: "minimal",
-    deny: ["exec", "process"],
-    exec: { mode: "deny", host: "node" },
-  };
   const parsed = parseAgentId(agentId);
   const tools = asObject(agent.tools);
-  const platformStamped = parsed.kind === "coach"
-    ? equal(tools, sharedCoachTools)
-    : parsed.kind === "project" && (
-      equal(tools, sharedProjectTools) ||
-      equal(tools, sharedProjectToolsWithoutExec) ||
-      equal(tools, legacyProjectTools)
-    );
-  if (platformStamped) delete agent.tools;
+  if ((parsed.kind === "coach" || parsed.kind === "project") && carriesSharedHostCodeFence(tools)) {
+    delete agent.tools;
+  }
   return agent;
+}
+
+function carriesSharedHostCodeFence(tools: JsonObject | null): boolean {
+  if (!tools) return false;
+  const deny = Array.isArray(tools.deny) ? tools.deny : [];
+  return deny.includes("exec") && deny.includes("process") && (
+    asObject(tools.fs)?.workspaceOnly === true ||
+    asObject(tools.exec)?.mode === "deny"
+  );
 }
 
 

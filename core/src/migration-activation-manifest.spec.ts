@@ -694,6 +694,60 @@ describe("migration activation manifest", () => {
     expect(patch.agents.entries[projectAgentId]).not.toHaveProperty("tools");
   });
 
+  it("lifts drifted shared tool fences when a Builder returns from the Barn", async () => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({
+        hash: "h1",
+        config: {
+          agents: { entries: {} },
+          channels: { mattermost: { accounts: {} } },
+          bindings: [],
+        },
+      })),
+      configPatch,
+      close: vi.fn(async () => undefined),
+    };
+    const projectAgentId = "octogee-alice-proj-orbit-coach";
+    const driftedCoachTools = {
+      profile: "full",
+      alsoAllow: ["octogee_project_create", "delegated_access", "browser", "computer", "message"],
+      deny: [...CUSTOMER_CODE_DENIED_TOOLS, "automations"],
+      toolsBySender: {},
+      fs: { workspaceOnly: true },
+    };
+    const driftedProjectTools = {
+      deny: [...PROJECT_AGENT_DENIED_TOOLS, "computer", "nodes", "file-transfer", "ollama"],
+      profile: "minimal",
+      alsoAllow: [...PROJECT_AGENT_ALLOWED_TOOLS],
+      fs: { workspaceOnly: true },
+      toolsBySender: { "*": { deny: [...PRODUCTIVITY_TOOL_NAMES] } },
+      exec: { mode: "deny", host: "node" },
+    };
+
+    await applyOpenClawActivationManifest({
+      ...manifest(),
+      agent: { ...manifest().agent, tools: driftedCoachTools },
+      projectAgents: [{
+        agentId: projectAgentId,
+        accountId: "alice-proj-orbit",
+        agent: { id: projectAgentId, tools: driftedProjectTools },
+        mattermostAccount: {},
+        bindings: [],
+      }],
+    }, {
+      rpc: rpc as never,
+      log: vi.fn(),
+      gatewayClass: "builder",
+    });
+
+    const patch = configPatch.mock.calls[0]?.[0] as {
+      agents: { entries: Record<string, Record<string, unknown>> };
+    };
+    expect(patch.agents.entries["octogee-alice-coach"]).not.toHaveProperty("tools");
+    expect(patch.agents.entries[projectAgentId]).not.toHaveProperty("tools");
+  });
+
   it("preserves a Builder-owned coach tool policy during activation", async () => {
     const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
     const rpc = {
