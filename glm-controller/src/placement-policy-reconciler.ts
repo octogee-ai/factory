@@ -2304,25 +2304,11 @@ async function reconcileDrainingSharedGateway(
         candidates,
       });
       if (selection.kind !== "selected") continue;
-      try {
-        await context.deps.enqueueMigration({
-          uid: builder.uid,
-          builderSlug: builder.builderSlug,
-          fromGatewayId,
-          toGatewayId: selection.gatewayId,
-          source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
-          operationId: continuousPlacementMigrationOperationId({
-            ...builder,
-            fromGatewayId,
-            toGatewayId: selection.gatewayId,
-          }),
-          sharedDrain: { pairedTargetGatewayId },
-        });
-      } catch (error) {
-        if (!(error instanceof SharedDrainSupersededError)) throw error;
-        context.deps.log(`[placement-policy] drain of ${fromGatewayId} stopped: ${error.message}`);
-        break;
-      }
+      const outcome = await enqueueDrainMove(context, {
+        builder, fromGatewayId, toGatewayId: selection.gatewayId, pairedTargetGatewayId,
+      });
+      if (outcome === "stopped") break;
+      if (outcome === "skipped") continue;
       const target = projectedCandidates.find(
         (candidate) => candidate.gatewayId === selection.gatewayId,
       )!;
@@ -2331,6 +2317,40 @@ async function reconcileDrainingSharedGateway(
     }
   }
   return true;
+}
+
+async function enqueueDrainMove(
+  context: PlacementPolicyReconcileContext,
+  move: {
+    builder: { uid: string; builderSlug: string; sourceAssignmentEpoch: number };
+    fromGatewayId: string;
+    toGatewayId: string;
+    pairedTargetGatewayId: string | null;
+  },
+): Promise<"enqueued" | "skipped" | "stopped"> {
+  const { builder, fromGatewayId, toGatewayId } = move;
+  try {
+    await context.deps.enqueueMigration({
+      uid: builder.uid,
+      builderSlug: builder.builderSlug,
+      fromGatewayId,
+      toGatewayId,
+      source: CONTINUOUS_PLACEMENT_POLICY_SOURCE,
+      operationId: continuousPlacementMigrationOperationId({ ...builder, fromGatewayId, toGatewayId }),
+      sharedDrain: { pairedTargetGatewayId: move.pairedTargetGatewayId },
+    });
+    return "enqueued";
+  } catch (error) {
+    if (error instanceof TerminalPlacementMigrationConflictError) {
+      context.deps.log(
+        `[placement-policy] drain of ${fromGatewayId} skipped uid=${builder.uid}: ${error.message}; an operator move is needed`,
+      );
+      return "skipped";
+    }
+    if (!(error instanceof SharedDrainSupersededError)) throw error;
+    context.deps.log(`[placement-policy] drain of ${fromGatewayId} stopped: ${error.message}`);
+    return "stopped";
+  }
 }
 
 export async function reconcilePlacementPolicyOnce(

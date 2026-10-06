@@ -270,6 +270,45 @@ describe("abandoned Shared migration recovery", () => {
       expect(h.client.scheduler).not.toHaveBeenCalled();
     }
   });
+  it.each([
+    ["failed in pre-sync before any quiesce", [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed" }, { name: "rollback:unmount-gateway", status: "done" }]],
+    ["skipped its quiesce", [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "skipped" }, { name: "pre-sync-state", status: "failed" }]],
+    ["never started its quiesce", [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "pending" }]],
+  ] as const)("retries a move whose previous attempt %s without demanding recovery authority or touching the source", async (_label, steps) => {
+    const h = recovery();
+    const request = op();
+    request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000,
+      error: "/push-rsync-state/shared-blue: 500 Timed out waiting for an OpenClaw runtime update",
+      classification: "transient",
+      steps: [...steps],
+    }];
+    h.deps.assertMigrationRecoveryAuthority = vi.fn().mockRejectedValue(new Error("workspace migration recovery authority changed"));
+
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
+
+    expect(h.deps.assertMigrationRecoveryAuthority).not.toHaveBeenCalled();
+    expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+    expect(h.client.abortImport).toHaveBeenCalledTimes(3);
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-green" }));
+    expect(h.client.scheduler).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue", phase: "resume" }));
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.transferState).toHaveBeenCalled();
+  });
+
+  it("still demands recovery authority when the previous attempt held the source", async () => {
+    const h = recovery();
+    const request = op();
+    request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000, error: "flush failed", classification: "transient",
+      steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "flush-source", status: "failed" }],
+    }];
+    h.deps.assertMigrationRecoveryAuthority = vi.fn().mockRejectedValue(new Error("workspace migration recovery authority changed"));
+
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false });
+
+    expect(h.deps.assertMigrationRecoveryAuthority).toHaveBeenCalledOnce();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+  });
+
   it("aborts all old imports and the target before reopening native source ingress and publishing recovery", async () => {
     const h = recovery();
     const order: string[] = [];

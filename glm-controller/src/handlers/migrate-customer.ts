@@ -2,7 +2,7 @@ import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
-import { builderActivationSourceRecoveryPending, legacyAttemptNeverQuiesced } from "../legacy-migration-recovery.js";
+import { attemptNeverHeldSource, builderActivationSourceRecoveryPending, legacyAttemptNeverQuiesced } from "../legacy-migration-recovery.js";
 import { PendingCustomerRestoreError } from "../operation-context.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
@@ -1448,29 +1448,51 @@ async function resumePreviousSchedulerAttempt(
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
   }
-  const sharedRecovery = ownershipCheckedSourceRecovery(op, previous);
-  let recovery: WorkspaceMigrationRecoveryParams | undefined;
-  if (sharedRecovery) recovery = await sharedRecoveryAuthority(deps, op, user, uid);
+  const scope = previousAttemptScope(op, previous);
+  const recovery = scope.recoveryRequired ? await sharedRecoveryAuthority(deps, op, user, uid) : undefined;
   if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous);
   const url = await deps.resolveGatewayUrl(previous.fromGatewayId);
-  if (sharedRecovery) {
-    const targetUrl = await deps.resolveGatewayUrl(previous.toGatewayId);
-    const target = deps.buildClient(() => targetUrl);
-    for (const mode of ["keys", "pre", "final"] as const) {
-      await target.abortImport({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: previous.toGatewayId, mode });
-    }
-    await target.unmount({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: previous.toGatewayId });
-  }
+  if (scope.sharedScope) await abortSharedTargetLeftovers(deps, op, user.slug, previous.toGatewayId);
   const client = deps.buildClient(() => url);
   if (recovery) await deps.assertMigrationRecoveryAuthority!(recovery);
-  await client.scheduler({
-    migrationId: previous.migrationId, slug: previous.slug, gatewayId: previous.fromGatewayId, phase: "resume",
-  });
-  if (!legacyAttemptNeverQuiesced(op)) {
+  if (scope.resumeSourceScheduler) {
+    await client.scheduler({
+      migrationId: previous.migrationId, slug: previous.slug, gatewayId: previous.fromGatewayId, phase: "resume",
+    });
+  }
+  if (scope.releaseSourceIngress) {
     await client.resume({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: user.currentGatewayId });
   }
   if (recovery) await deps.completeMigrationRecovery!(recovery);
   return recovery !== undefined;
+}
+
+function previousAttemptScope(
+  op: Operation,
+  previous: SchedulerHandoffState,
+): { sharedScope: boolean; recoveryRequired: boolean; resumeSourceScheduler: boolean; releaseSourceIngress: boolean } {
+  const sharedScope = ownershipCheckedSourceRecovery(op, previous);
+  const sourceNeverHeld = op.input.recoverSourceOnly !== true && attemptNeverHeldSource(op);
+  return {
+    sharedScope,
+    recoveryRequired: sharedScope && !sourceNeverHeld,
+    resumeSourceScheduler: !sourceNeverHeld,
+    releaseSourceIngress: !legacyAttemptNeverQuiesced(op) && !sourceNeverHeld,
+  };
+}
+
+async function abortSharedTargetLeftovers(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  slug: string,
+  targetGatewayId: string,
+): Promise<void> {
+  const targetUrl = await deps.resolveGatewayUrl(targetGatewayId);
+  const target = deps.buildClient(() => targetUrl);
+  for (const mode of ["keys", "pre", "final"] as const) {
+    await target.abortImport({ migrationId: deps.genMigrationId(op.id), slug, gatewayId: targetGatewayId, mode });
+  }
+  await target.unmount({ migrationId: deps.genMigrationId(op.id), slug, gatewayId: targetGatewayId });
 }
 
 async function abortPreviousTargetAttempt(deps: MigrateCustomerDeps, previous: SchedulerHandoffState): Promise<void> {

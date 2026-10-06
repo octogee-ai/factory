@@ -18,6 +18,14 @@ function handoffAttemptEvidence(operation: Partial<Operation>) {
   return prior ?? (currentAttempt === attempt ? { steps: operation.steps } : undefined);
 }
 
+const SOURCE_HOLDING_STEP_STATUSES: ReadonlySet<string> = new Set(["running", "done", "failed"]);
+
+export function attemptNeverHeldSource(operation: Partial<Operation>): boolean {
+  const steps = handoffAttemptEvidence(operation)?.steps;
+  return steps !== undefined && steps.length > 0 &&
+    !steps.some((step) => step.name === "quiesce-source" && SOURCE_HOLDING_STEP_STATUSES.has(step.status));
+}
+
 function failedActivationHeldSource(operation: Partial<Operation>): boolean {
   return operation.input?.recoverSourceOnly === true ||
     handoffAttemptEvidence(operation)?.steps?.some((step) => step.name === "quiesce-source") !== false;
