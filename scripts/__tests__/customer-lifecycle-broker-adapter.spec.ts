@@ -30,7 +30,7 @@ import {
 } from "@octogee/core/apply-config-patch";
 import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch } from "@octogee/core/byot-sync-runtime";
 import { canonicalCustomerModelDefinition } from "../../shared/types/agent-models.js";
-import { _resetBrokerProfileLogStateForTests, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
+import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, finalizeConvergedMount, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 
 const testRuntime = await vi.hoisted(async () => {
@@ -1797,6 +1797,39 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     patchMocks.applyConfigPatch.mockClear();
     secretMocks.updateMattermostAccountSecrets.mockClear();
     routingActivationMocks.stopStale.mockClear();
+    routingActivationMocks.discardForCustomers.mockClear();
+  });
+
+  it.each(["ordinary", "orphaned import"])("holds export through %s removal's config and secret mutations", async (mode) => {
+    await fs.mkdir(path.join(testRuntime.dir, "customers", "alice"), { recursive: true });
+    const procRoot = path.join(testRuntime.dir, "removal-proc");
+    await fs.mkdir(procRoot, { recursive: true });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    secretMocks.updateMattermostAccountSecrets.mockImplementationOnce(async () => {
+      await pending;
+      return { changed: true };
+    });
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(["octogee-alice-coach"]) },
+      channels: { mattermost: { accounts: { "alice-coach": {} } } }, bindings: [] });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, procRoot, log: vi.fn() });
+    const removing = mode === "ordinary"
+      ? adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach")
+      : adapter.removeImportedCustomerBySlug!("alice");
+    let exported: Promise<unknown> | undefined;
+    try {
+      await vi.waitFor(() => expect(secretMocks.updateMattermostAccountSecrets).toHaveBeenCalled());
+      exported = adapter.exportOpenClawActivationManifest!("alice").catch((error) => error);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await removing;
+    }
+    await exported;
+    expect(secretMocks.exportActivationManifestWithSecret).toHaveBeenCalledOnce();
   });
 
   // 2026.7.2 refuses any config write whose canonical roster drops entries
@@ -2176,9 +2209,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it.each([
-    { mode: "mount", failPublication: false }, { mode: "configured Builder", failPublication: false },
-    { mode: "mount", failPublication: true }, { mode: "configured Builder", failPublication: true },
-  ])("exports only after $mode project publication settles (failed: $failPublication)", async ({ mode, failPublication }) => {
+    { mode: "mount", failPublication: false, initial: false }, { mode: "configured Builder", failPublication: false, initial: false },
+    { mode: "mount", failPublication: true, initial: false }, { mode: "configured Builder", failPublication: true, initial: false },
+    { mode: "mount", failPublication: false, initial: true }, { mode: "configured Builder", failPublication: false, initial: true },
+    { mode: "mount", failPublication: false, failFinalization: true, initial: false },
+    { mode: "configured Builder", failPublication: false, failFinalization: true, initial: false },
+  ])("exports only after $mode project publication settles (failed: $failPublication, initial: $initial, finalization failed: $failFinalization)", async ({ mode, failPublication, failFinalization, initial }) => {
     const { updateMattermostAccountSecrets } = await vi.importActual<typeof import("../lib/mattermost-account-secrets.js")>("../lib/mattermost-account-secrets.js");
     const snapshot = aliceSnapshot({ status: "complete", channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }], projectAgents: [{
       projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning",
@@ -2195,7 +2231,20 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
     await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
     await updateMattermostAccountSecrets(testRuntime.dir, { set: { "alice-coach": "coach-pat" } });
-    saveAppliedFingerprints(path.join(testRuntime.dir, "applied-fingerprints.json"), new Map([["alice", "stable-before-project"]]));
+    const fingerprints = new Map(initial ? [] : [["alice", "stable-before-project"]]);
+    const fingerprintPath = path.join(testRuntime.dir, "applied-fingerprints.json");
+    saveAppliedFingerprints(fingerprintPath, fingerprints);
+    const hooks = createReconcileConvergenceHooks({
+      fingerprintSource: async () => fingerprints,
+      appliedFp: fingerprints,
+      cloneRetry: new Map(),
+      persistAppliedFp: () => saveAppliedFingerprints(fingerprintPath, fingerprints),
+    });
+    let releasePublication!: () => void;
+    const runtimePublication = {
+      settled: new Promise<void>((resolve) => { releasePublication = resolve; }),
+      invalidateFingerprint: () => hooks.recordApplied("alice", ""),
+    };
     secretMocks.updateMattermostAccountSecrets.mockImplementation(updateMattermostAccountSecrets);
     secretMocks.exportActivationManifestWithSecret.mockClear();
     let releaseProfiles!: () => void;
@@ -2231,9 +2280,9 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
     const publishing = mode === "mount"
-      ? adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" })
-      : adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
-    const publicationResult = publishing.then(() => undefined, (error) => error);
+      ? adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" }, { runtimePublication })
+      : adapter.reconcileConfiguredBuilderProjectAgents!(snapshot, { runtimePublication });
+    const publicationResult = publishing.then((result) => result, (error) => error);
     let exported: Promise<unknown> | undefined;
     try {
       await vi.waitFor(() => expect(config.agents.entries[projectId]).toBeDefined());
@@ -2244,15 +2293,33 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       releaseProfiles();
       const result = await publicationResult;
       secretMocks.updateMattermostAccountSecrets.mockReset().mockResolvedValue({ changed: true });
-      if (failPublication) expect(result).toMatchObject({ message: "project configuration refused" });
-      else expect(result).toBeUndefined();
+      try {
+        expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+        if (failPublication) expect(result).toMatchObject({ message: "project configuration refused" });
+        else {
+          const finalizing = finalizeConvergedMount({
+            now: 1_000, slug: "alice", uid: "uid-alice", prior: undefined,
+            desiredFingerprint: snapshotConfigFingerprint(snapshot),
+            result: { ...result, pendingProjectClones: [] }, hooks,
+            stampMounted: async () => {
+              expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+              if (failFinalization) throw new Error("mount stamp failed");
+            },
+            writeMountMarker: vi.fn(),
+          });
+          if (failFinalization) await expect(finalizing).rejects.toThrow("mount stamp failed");
+          else await finalizing;
+        }
+      } finally {
+        releasePublication();
+      }
     }
-    if (failPublication) {
-      await expect(exported).resolves.toMatchObject({ message: expect.stringContaining("missing botToken") });
+    if (failPublication || failFinalization) {
+      await expect(exported).resolves.toMatchObject({ message: expect.stringContaining("no applied fingerprint") });
       return;
     }
     await expect(exported).resolves.toMatchObject({
-      slug: "alice", mattermostAccount: { botToken: "coach-pat" },
+      slug: "alice", appliedFingerprint: snapshotConfigFingerprint(snapshot), mattermostAccount: { botToken: "coach-pat" },
       projectAgents: [{ agentId: projectId, accountId: "alice-proj-orbit", mattermostAccount: { botToken: "project-pat" } }],
     });
   });

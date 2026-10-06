@@ -237,11 +237,12 @@ opts?: {
   /** Broker profile materialization started at mount start; settles (never rejects)
    *  before the runtime secrets reload that follows the config patch. */
   brokerProfilesReady?: Promise<void>;
+  runtimePublication?: AddCustomerOptions["runtimePublication"];
 },
   ) => Promise<{ elapsedMs: number; appliedFingerprint?: string }>;
   reconcileConfiguredBuilderProjectAgents?: (
     snapshot: UserSnapshot,
-    opts?: { signal?: AbortSignal; withoutProjectIds?: readonly string[] },
+    opts?: { signal?: AbortSignal; withoutProjectIds?: readonly string[]; runtimePublication?: AddCustomerOptions["runtimePublication"] },
   ) => Promise<{ elapsedMs: number; appliedFingerprint?: string }>;
   applyRemoveCustomerConfigPatch: (
     slug: string,
@@ -390,6 +391,8 @@ export interface AddCustomerOptions {
   reclaimExistingSshKey?: boolean;
   evictionBatch?: readonly string[];
   currentEvictionBatch?: () => Promise<readonly string[]>;
+
+  runtimePublication?: { settled: Promise<void>; invalidateFingerprint: () => void };
 
 signal?: AbortSignal;
 
@@ -558,6 +561,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(
     byosActive: byos.present,
     signal,
     withoutProjectIds: projectClones.pending,
+    runtimePublication: opts.runtimePublication,
   });
   steps.push(CONFIG_PATCH);
   throwIfAborted(signal, uid);
@@ -677,6 +681,7 @@ async function attachConfiguredBuilderOverlay(
     reclaimExistingSshKey: boolean | undefined;
     signal: AbortSignal | undefined;
     markStep: MarkStep;
+    runtimePublication?: AddCustomerOptions["runtimePublication"];
   },
 ): Promise<AddCustomerResult> {
   const { slug, uid } = snapshot;
@@ -709,6 +714,7 @@ async function attachConfiguredBuilderOverlay(
     const result = await adapter.reconcileConfiguredBuilderProjectAgents(snapshot, {
       signal: opts.signal,
       withoutProjectIds: projectClones.pending,
+      runtimePublication: opts.runtimePublication,
     });
     appliedFingerprint = result.appliedFingerprint;
     steps.push(CONFIG_PATCH);
@@ -751,6 +757,7 @@ async function addCustomerToGatewayInner(
     reclaimExistingSshKey?: boolean;
     evictionBatch?: readonly string[];
     currentEvictionBatch?: () => Promise<readonly string[]>;
+    runtimePublication?: AddCustomerOptions["runtimePublication"];
   } = {},
 ): Promise<AddCustomerResult> {
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? VERIFY_ACCOUNT_TIMEOUT_MS;
@@ -777,6 +784,7 @@ async function addCustomerToGatewayInner(
       convergeContent: opts.convergeContent,
       deferRuntimeVerification: opts.deferRuntimeVerification,
       reclaimExistingSshKey: opts.reclaimExistingSshKey,
+      runtimePublication: opts.runtimePublication,
       signal,
       markStep,
     });
@@ -812,6 +820,7 @@ async function addCustomerToGatewayInner(
     evictionBatch: opts.evictionBatch,
     currentEvictionBatch: opts.currentEvictionBatch,
     withoutProjectIds: projectClones.pending,
+    runtimePublication: opts.runtimePublication,
     ...(brokerProfilesReady ? { brokerProfilesReady } : {}),
   });
   steps.push(CONFIG_PATCH);
@@ -1292,6 +1301,7 @@ async function applyConfigPatchAndMount(
     currentEvictionBatch?: () => Promise<readonly string[]>;
     withoutProjectIds?: readonly string[];
     brokerProfilesReady?: Promise<void>;
+    runtimePublication?: AddCustomerOptions["runtimePublication"];
   },
 ): Promise<string | undefined> {
   const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
@@ -1301,6 +1311,7 @@ async function applyConfigPatchAndMount(
     currentEvictionBatch: options.currentEvictionBatch,
     withoutProjectIds: options.withoutProjectIds,
     ...(options.brokerProfilesReady ? { brokerProfilesReady: options.brokerProfilesReady } : {}),
+    ...(options.runtimePublication ? { runtimePublication: options.runtimePublication } : {}),
   });
   adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
   if (adapter.onMounted) adapter.onMounted(snapshot.slug);

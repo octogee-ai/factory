@@ -819,6 +819,21 @@ if (ensureIdx !== -1) {
     expect(result.appliedFingerprint).toBe("post-mattermost-fingerprint");
   });
 
+  it("passes publication custody and pending checkouts to the guarded adapter", async () => {
+    const adapter = makeAdapter(state);
+    const runtimePublication = { settled: Promise.resolve(), invalidateFingerprint: vi.fn() };
+    const patch = adapter.applyAddCustomerConfigPatch;
+    adapter.applyAddCustomerConfigPatch = async (...args) => {
+      expect(args[2]?.runtimePublication).toBe(runtimePublication);
+      const result = await patch(...args);
+      return result;
+    };
+
+    await addCustomerToGateway(adapter, "uid-test", { runtimePublication });
+
+    expect(state.lastConfigPatchOpts?.withoutProjectIds).toEqual([]);
+  });
+
   it("refreshes the customer snapshot before reasserting cohort model state", async () => {
     const adapter = makeAdapter(state);
     const applyAddCustomerConfigPatch = adapter.applyAddCustomerConfigPatch;
@@ -933,16 +948,18 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     const state = configuredProjectState();
     state.cloneProjectLands = checkoutLands;
     const adapter = makeAdapter(state);
+    const runtimePublication = { settled: Promise.resolve(), invalidateFingerprint: vi.fn() };
     adapter.isBuilderGateway = () => true;
     adapter.reconcileConfiguredBuilderProjectAgents = async (snapshot, opts) => {
       expect(snapshot).toBe(state.user);
       expect(state.calls).toContain("cloneProjectRepo");
       expect(opts?.withoutProjectIds).toEqual(checkoutLands ? [] : ["launchroom"]);
+      expect(opts?.runtimePublication).toBe(runtimePublication);
       state.calls.push("reconcileConfiguredBuilderProjectAgents");
       return { elapsedMs: 10, appliedFingerprint: "project-activation" };
     };
 
-    const result = await addCustomerToGateway(adapter, "uid-test", { convergeContent: true });
+    const result = await addCustomerToGateway(adapter, "uid-test", { convergeContent: true, runtimePublication });
 
     expect(state.calls).toContain("reconcileConfiguredBuilderProjectAgents");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");

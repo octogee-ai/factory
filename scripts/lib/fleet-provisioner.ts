@@ -1424,7 +1424,7 @@ function createReconcileUnmountSlug(input: {
   };
 }
 
-function createReconcileConvergenceHooks(input: {
+export function createReconcileConvergenceHooks(input: {
   fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
   appliedFp: Map<string, string>;
   cloneRetry: Map<string, CloneRetryState>;
@@ -1432,8 +1432,15 @@ function createReconcileConvergenceHooks(input: {
 }): ConvergenceHooks {
   const recordApplied = (slug: string, fingerprint: string | undefined): void => {
     if (!input.fingerprintSource || fingerprint === undefined) return;
+    const previous = input.appliedFp.get(slug);
     input.appliedFp.set(slug, fingerprint);
-    input.persistAppliedFp();
+    try {
+      input.persistAppliedFp();
+    } catch (error) {
+      if (previous === undefined) input.appliedFp.delete(slug);
+      else input.appliedFp.set(slug, previous);
+      throw error;
+    }
   };
   const rememberRetry = (slug: string, state: CloneRetryState): void => {
     input.cloneRetry.set(slug, state);
@@ -1498,6 +1505,49 @@ function createDesiredRosterReader(input: {
   };
 }
 
+async function mountCustomerWithPublication(input: {
+  adapter: CustomerLifecycleAdapter;
+  uid: string;
+  slug: string;
+  desiredFingerprint: string | undefined;
+  prior: CloneRetryState | undefined;
+  options: AddCustomerOptions;
+  hooks: ConvergenceHooks;
+  stampMounted: (uid: string, mounted: boolean) => Promise<void>;
+  onWorkSettled: (work: Promise<void>) => void;
+}): Promise<EnsureOutcome> {
+  let releasePublication!: () => void;
+  const settled = new Promise<void>((resolve) => { releasePublication = resolve; });
+  let mountSettled = Promise.resolve();
+  try {
+    const result = await addCustomerToGateway(input.adapter, input.uid, {
+      ...input.options,
+      onWorkSettled: (work) => {
+        mountSettled = work;
+        input.onWorkSettled(work);
+      },
+      runtimePublication: {
+        settled,
+        invalidateFingerprint: () => input.hooks.recordApplied(input.slug, NEEDS_FULL_ATTACH_FINGERPRINT),
+      },
+    });
+    await finalizeConvergedMount({
+      now: Date.now(),
+      slug: input.slug,
+      uid: input.uid,
+      desiredFingerprint: input.desiredFingerprint,
+      prior: input.prior,
+      result,
+      hooks: input.hooks,
+      stampMounted: input.stampMounted,
+      writeMountMarker: input.adapter.writeMountMarker,
+    });
+    return result.newCustomer ? "mounted" : "noop";
+  } finally {
+    void mountSettled.then(releasePublication, releasePublication);
+  }
+}
+
 function startMaybeReconcileLoop(params: {
   provision: boolean;
   opts: StartFleetOptions;
@@ -1544,6 +1594,7 @@ function startMaybeReconcileLoop(params: {
       saveAppliedFingerprints(appliedFpFile, appliedFp);
     } catch (err) {
       opts.log(`[reconcile] ⚠ applied-fingerprint persist failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
     }
   };
   const invalidateConfigRemovedSlug = (slug: string): void => {
@@ -1562,13 +1613,6 @@ function startMaybeReconcileLoop(params: {
     permanentConfigPatchRetry = undefined;
     if (appliedFp.delete(slug)) persistAppliedFp();
   };
-  if (fingerprintSource) {
-    wrappedAdapter.recordAppliedFingerprint = (slug, fingerprint) => {
-      appliedFp.set(slug, fingerprint);
-      persistAppliedFp();
-    };
-  }
-
   const readDesired = createDesiredRosterReader({
     opts,
     fingerprintSource,
@@ -1591,6 +1635,7 @@ function startMaybeReconcileLoop(params: {
   const convergenceHooks = createReconcileConvergenceHooks(
     { fingerprintSource, appliedFp, cloneRetry, persistAppliedFp },
   );
+  if (fingerprintSource) wrappedAdapter.recordAppliedFingerprint = convergenceHooks.recordApplied;
   const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: opts.subscribeDesiredChanges ? 60_000 : RECONCILE_LOOP_INTERVAL_MS,
@@ -1663,30 +1708,19 @@ function startMaybeReconcileLoop(params: {
           pendingEvictions,
           cancelPendingEviction,
         });
-        const result = await addCustomerToGateway(
-          wrappedAdapter,
+        return mountCustomerWithPublication({
+          adapter: wrappedAdapter,
           uid,
-          {
-            ...reconcileAddCustomerOptions(
-              fingerprintSource !== undefined,
-              evictionBatch,
-              readCurrentEvictionBatch,
-            ),
-            onWorkSettled,
-          },
-        );
-        await finalizeConvergedMount({
-          now: Date.now(),
           slug,
-          uid,
           desiredFingerprint: desiredFp.get(slug),
           prior: cloneRetry.get(slug),
-          result,
+          options: reconcileAddCustomerOptions(
+            fingerprintSource !== undefined, evictionBatch, readCurrentEvictionBatch,
+          ),
           hooks: convergenceHooks,
           stampMounted,
-          writeMountMarker: wrappedAdapter.writeMountMarker,
+          onWorkSettled,
         });
-        return result.newCustomer ? "mounted" : "noop";
       },
     }),
     onEnsureError: (slug, message, error) => {

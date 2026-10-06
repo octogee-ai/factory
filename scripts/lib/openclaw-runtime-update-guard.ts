@@ -9,27 +9,31 @@ export class OpenClawRuntimeUpdateGuard {
     return this.start(operation);
   }
 
-  async run<T>(operation: () => Promise<T>, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+  async run<T>(operation: () => Promise<T>, options: { signal?: AbortSignal; timeoutMs?: number; holdUntil?: Promise<void> } = {}): Promise<T> {
     const deadline = Date.now() + (options.timeoutMs ?? WAIT_TIMEOUT_MS);
     this.waiting += 1;
     try {
       options.signal?.throwIfAborted();
       while (this.active) await this.wait(this.active, deadline, options.signal);
       options.signal?.throwIfAborted();
-      return this.start(operation);
+      return this.start(operation, options.holdUntil);
     } finally {
       this.waiting -= 1;
     }
   }
 
-  private start<T>(operation: () => Promise<T>): Promise<T> {
+  private start<T>(operation: () => Promise<T>, holdUntil?: Promise<void>): Promise<T> {
     let release!: () => void;
     const active = new Promise<void>((resolve) => { release = resolve; });
     this.active = active;
-    return Promise.resolve().then(operation).finally(() => {
+    const finish = () => {
       if (this.active === active) this.active = null;
       release();
-    });
+    };
+    const work = Promise.resolve().then(operation);
+    if (!holdUntil) return work.finally(finish);
+    void Promise.allSettled([work, holdUntil]).then(finish);
+    return work;
   }
 
   private wait(active: Promise<void>, deadline: number, signal?: AbortSignal): Promise<void> {

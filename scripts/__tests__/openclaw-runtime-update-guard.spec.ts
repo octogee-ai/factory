@@ -60,6 +60,37 @@ describe("OpenClaw runtime update coordination", () => {
     expect(imported).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("holds publication custody after work settles until its fingerprint tail ends (failed: %s)", async (failed) => {
+    const guard = new OpenClawRuntimeUpdateGuard();
+    const tail = deferred();
+    const work = guard.run(async () => {
+      if (failed) throw new Error("publication failed");
+      return "published";
+    }, { holdUntil: tail.promise });
+    if (failed) await expect(work).rejects.toThrow("publication failed");
+    else await expect(work).resolves.toBe("published");
+    const exported = vi.fn(async () => "exported");
+    const waiting = guard.run(exported);
+    expect(exported).not.toHaveBeenCalled();
+    expect(guard.tryRun(exported)).toBeUndefined();
+    tail.resolve();
+    await expect(waiting).resolves.toBe("exported");
+  });
+
+  it("does not release unfinished runtime work when its owner tail ends first", async () => {
+    const guard = new OpenClawRuntimeUpdateGuard();
+    const pending = deferred();
+    const work = guard.run(() => pending.promise, { holdUntil: Promise.resolve() });
+    const exported = vi.fn(async () => undefined);
+    const waiting = guard.run(exported);
+    await Promise.resolve();
+    expect(exported).not.toHaveBeenCalled();
+    pending.resolve();
+    await work;
+    await waiting;
+    expect(exported).toHaveBeenCalledOnce();
+  });
+
   it("releases failed work and gives a waiting import priority over background repair", async () => {
     const guard = new OpenClawRuntimeUpdateGuard();
     const repair = deferred();

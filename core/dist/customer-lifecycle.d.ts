@@ -171,6 +171,7 @@ export interface CustomerLifecycleAdapter {
         /** Broker profile materialization started at mount start; settles (never rejects)
          *  before the runtime secrets reload that follows the config patch. */
         brokerProfilesReady?: Promise<void>;
+        runtimePublication?: AddCustomerOptions["runtimePublication"];
     }) => Promise<{
         elapsedMs: number;
         appliedFingerprint?: string;
@@ -178,6 +179,7 @@ export interface CustomerLifecycleAdapter {
     reconcileConfiguredBuilderProjectAgents?: (snapshot: UserSnapshot, opts?: {
         signal?: AbortSignal;
         withoutProjectIds?: readonly string[];
+        runtimePublication?: AddCustomerOptions["runtimePublication"];
     }) => Promise<{
         elapsedMs: number;
         appliedFingerprint?: string;
@@ -256,6 +258,10 @@ export interface AddCustomerOptions {
     reclaimExistingSshKey?: boolean;
     evictionBatch?: readonly string[];
     currentEvictionBatch?: () => Promise<readonly string[]>;
+    runtimePublication?: {
+        settled: Promise<void>;
+        invalidateFingerprint: () => void;
+    };
     signal?: AbortSignal;
     onSignalCreated?: (signal: AbortSignal) => void;
     onWorkSettled?: (settled: Promise<void>) => void;

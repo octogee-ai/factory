@@ -881,7 +881,7 @@ async function applyAddCustomerConfigPatch(
   snapshot: UserSnapshot,
   mmUpdate: MmUpdate | null,
   callOpts: AddCustomerConfigPatchOptions,
-): Promise<{ elapsedMs: number }> {
+): Promise<{ elapsedMs: number; appliedFingerprint?: string }> {
   let evictionSlugs = evictionSlugsExcept(snapshot.slug, callOpts?.evictionBatch);
   const builderGateway = isConfiguredGatewayBuilder(snapshot.slug);
   const brokerSnapshot = await snapshotForUidWithProjectMembershipIsolation(ctx, snapshot.uid);
@@ -1856,15 +1856,24 @@ export function buildBrokeredLifecycleAdapter(
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
     applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
-      openClawRuntimeUpdateGuard.run(() => applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts), {
+      openClawRuntimeUpdateGuard.run(async () => {
+        callOpts?.runtimePublication?.invalidateFingerprint();
+        return applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts);
+      }, {
         signal: callOpts?.signal,
+        holdUntil: callOpts?.runtimePublication?.settled,
       }),
     reconcileConfiguredBuilderProjectAgents: (snapshot, options) =>
-      openClawRuntimeUpdateGuard.run(() => reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options), {
+      openClawRuntimeUpdateGuard.run(async () => {
+        options?.runtimePublication?.invalidateFingerprint();
+        return reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options);
+      }, {
         signal: options?.signal,
+        holdUntil: options?.runtimePublication?.settled,
       }),
     applyRemoveCustomerConfigPatch: (slug, agentId, evictionBatch, currentEvictionBatch) =>
-      applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch),
+      openClawRuntimeUpdateGuard.run(() =>
+        applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch)),
     cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
@@ -1883,7 +1892,8 @@ export function buildBrokeredLifecycleAdapter(
     exportOpenClawActivationManifest: (slug) =>
       openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug)),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
-      removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch),
+      openClawRuntimeUpdateGuard.run(() =>
+        removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch)),
     releaseAgent: (agentId) => deleteAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`),
   };
   return adapter;

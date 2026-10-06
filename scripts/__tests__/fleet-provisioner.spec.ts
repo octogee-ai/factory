@@ -16,6 +16,7 @@ import {
   cancelRemovedEviction,
   createConfiguredBuilderAssignmentMatcher,
   createConfiguredBuilderReconcileAdmission,
+  createReconcileConvergenceHooks,
   createBuilderSurgeGateWiring,
   createVerifyAttachPending,
   desiredEnsureLaneFingerprint,
@@ -268,6 +269,18 @@ describe("settleConvergence — the applied-fingerprint gate", () => {
 });
 
 describe("finalizeConvergedMount — the durable mount boundary", () => {
+  it.each([undefined, ""])("retains prior retry state %s when fingerprint persistence fails", (previous) => {
+    const appliedFp = new Map<string, string>(previous === undefined ? [] : [["alice", previous]]);
+    const hooks = createReconcileConvergenceHooks({
+      fingerprintSource: async () => new Map([["alice", "new-fp"]]),
+      appliedFp,
+      cloneRetry: new Map(),
+      persistAppliedFp: () => { throw new Error("fingerprint disk unavailable"); },
+    });
+    expect(() => hooks.recordApplied("alice", "new-fp")).toThrow("fingerprint disk unavailable");
+    expect(appliedFp.get("alice")).toBe(previous);
+  });
+
   it("stamps and marks the completed mount even while a project checkout is pending — the retry must be checkout-only, never a full re-attach", async () => {
     const stampMounted = vi.fn(async () => undefined);
     const writeMountMarker = vi.fn();

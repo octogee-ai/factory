@@ -137,6 +137,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
         byosActive: byos.present,
         signal,
         withoutProjectIds: projectClones.pending,
+        runtimePublication: opts.runtimePublication,
     });
     steps.push(CONFIG_PATCH);
     throwIfAborted(signal, uid);
@@ -245,6 +246,7 @@ async function attachConfiguredBuilderOverlay(adapter, snapshot, opts) {
         const result = await adapter.reconcileConfiguredBuilderProjectAgents(snapshot, {
             signal: opts.signal,
             withoutProjectIds: projectClones.pending,
+            runtimePublication: opts.runtimePublication,
         });
         appliedFingerprint = result.appliedFingerprint;
         steps.push(CONFIG_PATCH);
@@ -293,6 +295,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
             convergeContent: opts.convergeContent,
             deferRuntimeVerification: opts.deferRuntimeVerification,
             reclaimExistingSshKey: opts.reclaimExistingSshKey,
+            runtimePublication: opts.runtimePublication,
             signal,
             markStep,
         });
@@ -319,6 +322,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
         evictionBatch: opts.evictionBatch,
         currentEvictionBatch: opts.currentEvictionBatch,
         withoutProjectIds: projectClones.pending,
+        runtimePublication: opts.runtimePublication,
         ...(brokerProfilesReady ? { brokerProfilesReady } : {}),
     });
     steps.push(CONFIG_PATCH);
@@ -664,6 +668,7 @@ async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, options) {
         currentEvictionBatch: options.currentEvictionBatch,
         withoutProjectIds: options.withoutProjectIds,
         ...(options.brokerProfilesReady ? { brokerProfilesReady: options.brokerProfilesReady } : {}),
+        ...(options.runtimePublication ? { runtimePublication: options.runtimePublication } : {}),
     });
     adapter.log(`[add:${snapshot.slug}] config patch in ${patchResult.elapsedMs}ms`);
     if (adapter.onMounted)
