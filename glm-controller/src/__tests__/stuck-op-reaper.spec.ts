@@ -31,6 +31,7 @@ interface FakeOpDoc {
 
 interface FakeDbState {
   users?: Record<string, Record<string, unknown>>;
+  roots?: Record<string, Record<string, unknown>>;
   assignments?: Record<string, Record<string, unknown>>;
   beforeTransaction?: () => void;
   transactionState?: { active: boolean };
@@ -65,6 +66,7 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
       if (name === "gateways") {
         return {
           doc: (gatewayId: string) => ({
+            ...stateRef(state.roots?.[gatewayId]),
             collection: (subcollection: string) => {
               if (subcollection !== "assignments") {
                 throw new Error(`unexpected subcollection: ${subcollection}`);
@@ -117,6 +119,55 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it.each(["quiescing", "acknowledged"])("requeues an interrupted disposable activation before releasing or retiring its source: %s", async (phase) => {
+    const target = "alice-s-12345678";
+    const op: FakeOpDoc = { id: `builder-activate-${target}`, data: {
+      kind: "migrate-customer", status: "running", startedAt: NOW - 1_000, attempts: 0,
+      steps: [{ name: "quiesce-source", status: "done" }],
+      input: { uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: target, source: "builder-activation-lease" },
+      schedulerHandoffReleased: true,
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: target, migrationId: `mig-builder-activate-${target}:scheduler:1`, stageAfterCutover: true },
+    } };
+    const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 4, state: "quiescing", updatedByOperationId: op.id };
+    const marker = { state: "moving", operationId: op.id, startedAt: 100 };
+    if (phase === "acknowledged") assignment.state = "serving";
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", ...(phase === "quiescing" ? { migration: marker } : {}), activationLease: { leaseId: "lease-a", generation: 2, status: "activating", sourceGatewayId: "shared-a", sourceAssignmentEpoch: 4, targetGatewayId: target } } } } },
+      assignments: { "shared-a/alice": assignment },
+      roots: { [target]: { gatewayId: target, gatewayClass: "builder", ownerUid: "alice", allocation: { kind: "disposable-builder", leaseId: "lease-a", generation: 2, claimedByUid: "alice" } } },
+    });
+    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    expect(op.data.status).toBe("pending");
+    expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+    expect(op.data.schedulerHandoffReleased).toBe(false);
+    expect(assignment.state).toBe(phase === "quiescing" ? "quiescing" : "serving");
+  });
+  it.each([
+    { held: true, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }] },
+    { held: false, steps: [{ name: "keys-sync-state", status: "failed" }] },
+  ])("admits a terminally failed disposable activation to source recovery only when its source was held: held=$held", async ({ held, steps }) => {
+    const target = "alice-s-12345678";
+    const id = `builder-activate-${target}`;
+    const op: FakeOpDoc = { id, data: {
+      kind: "migrate-customer", status: "failed", startedAt: NOW - 5_000, completedAt: NOW - 1_000, attempts: 1,
+      error: "target import refused", steps,
+      attemptHistory: [{ attempt: 1, startedAt: NOW - 5_000, completedAt: NOW - 1_000, error: "target import refused", classification: "terminal", steps }],
+      input: { uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: target, source: "builder-activation-lease" },
+      schedulerHandoffReleased: false,
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: target, migrationId: `mig-${id}:scheduler:1`, stageAfterCutover: true },
+    } };
+    const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 4, state: held ? "quiescing" : "serving", updatedByOperationId: id };
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: id, startedAt: 100 },
+        activationLease: { leaseId: "lease-a", generation: 2, status: "activating", sourceGatewayId: "shared-a", sourceAssignmentEpoch: 4, targetGatewayId: target } } } } },
+      assignments: { "shared-a/alice": assignment },
+      roots: { [target]: { gatewayId: target, gatewayClass: "builder", ownerUid: "alice", allocation: { kind: "disposable-builder", leaseId: "lease-a", generation: 2, claimedByUid: "alice" } } },
+    });
+    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    expect(op.data.status).toBe(held ? "pending" : "failed");
+    expect(op.updated?.["input.recoverSourceOnly"]).toBe(held ? true : undefined);
+    expect(assignment.state).toBe(held ? "quiescing" : "serving");
+  });
   it("ignores failed audit entries without migration input", async () => {
     const audit: FakeOpDoc = { id: "audit-unrelated", data: { status: "failed", recordType: "audit", error: "operator action failed" } };
     const log = vi.fn();

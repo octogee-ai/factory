@@ -147,6 +147,7 @@ export interface PlacementPolicyMigration {
   status: "pending" | "running" | "succeeded" | "failed" | "rolled-back";
   error?: string;
   retryRequested?: boolean;
+  sourceRecoveryPending?: boolean;
 }
 
 export type PlacementPolicyKubernetesStatus = "ready" | "not-ready" | "missing" | "unknown";
@@ -1555,6 +1556,7 @@ async function cleanupFailedActivation(
   if (!operation || (operation.status !== "failed" && operation.status !== ROLLED_BACK_STATUS)) {
     return false;
   }
+  if (operation.sourceRecoveryPending) return true;
   if (target.desiredStatus !== "retired") {
     const recoveredRetirement = isSharedPoolGateway(context, current) && !target.ready;
     const retired = recoveredRetirement
@@ -2482,6 +2484,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
     source,
     status,
     ...(typeof data.error === "string" ? { error: data.error } : {}),
+    ...(schedulerHandoffAwaitingRelease({ ...data, id: doc.id }) ? { sourceRecoveryPending: true } : {}),
     ...(millis(data.retryRequestedAt) !== null ? { retryRequested: true } : {}),
   };
 }
@@ -3824,7 +3827,7 @@ async function deleteRetiredDisposableGatewayFirestore(
       ...handoffOperationRefs.map((ref) => transaction.get(ref)),
     ]);
     unreleasedHandoffOperationId = handoffSnapshots.find(
-      (snapshot) => schedulerHandoffAwaitingRelease(snapshot.data()),
+      (snapshot) => schedulerHandoffAwaitingRelease({ ...snapshot.data(), id: snapshot.id }),
     )?.id ?? null;
     const root = projectGatewayDesiredRootForGateway(
       rootSnapshot.exists ? rootSnapshot.data() : undefined,
@@ -3865,8 +3868,6 @@ async function deleteRetiredDisposableGatewayFirestore(
   }
   if (verdict !== "delete") return false;
   await Promise.all([
-    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-activate-${request.gatewayId}`).delete(),
-    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-return-${request.gatewayId}`).delete(),
     input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-recover-${request.gatewayId}`).delete(),
     input.db
       .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)

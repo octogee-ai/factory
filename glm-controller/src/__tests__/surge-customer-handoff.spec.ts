@@ -74,7 +74,7 @@ function harness(input: {
   targetVersion?: string;
   sourceMountedCustomers?: string[];
   targetMountedCustomers?: string[];
-  ownerOperations?: Record<string, { status: OperationStatus } | null>;
+  ownerOperations?: Record<string, { status: OperationStatus; sourceRecoveryPending?: boolean } | null>;
   bootingUids?: string[];
   prelaunchByUid?: Record<string, SurgePodHealth["prelaunchState"]>;
   targetPrelaunchStateAfterRelease?: SurgePodHealth["prelaunchState"];
@@ -1152,6 +1152,16 @@ describe("surge customer handoff", () => {
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
       "owner=placement-f061f700711dbdec1d7f8f2add33d1d3: owning operation is failed",
     ));
+  });
+
+  it("does not reopen a terminal migration's source gate before native recovery", async () => {
+    const owner = "builder-activate-alice-s-12345678";
+    const h = harness({ assignments: [assignment("u1", "alice", { state: "quiescing", updatedByOperationId: owner })],
+      ownerOperations: { [owner]: { status: "failed", sourceRecoveryPending: true } },
+    });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE })).rejects.toThrow(/foreign assignment gate/);
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0].state).toBe("quiescing");
   });
 
   it("reclaims a lease whose owning operation no longer exists", async () => {

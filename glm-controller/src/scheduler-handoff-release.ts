@@ -2,6 +2,8 @@ import type { DocumentData, DocumentReference, Firestore } from "firebase-admin/
 import { GLM_OPERATIONS_COLLECTION, type SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
 import { MigrationRpcError } from "@octogee/core/fleet-migration-client";
+import { builderActivationSourceRecoveryPending } from "./legacy-migration-recovery.js";
+import type { Operation } from "@octogee/shared/types/glm";
 
 export interface SchedulerHandoffReleaseDeps {
   db: Firestore;
@@ -26,6 +28,7 @@ function isHandoff(value: unknown): value is SchedulerHandoffState {
 const UNSETTLED_OPERATION_STATUSES: ReadonlySet<unknown> = new Set(["pending", "running", "failed"]);
 
 export function schedulerHandoffAwaitingRelease(operation: DocumentData | undefined): boolean {
+  if (operation && builderActivationSourceRecoveryPending(operation as Operation)) return true;
   return operation?.schedulerHandoffReleased === false &&
     UNSETTLED_OPERATION_STATUSES.has(operation.status) &&
     isHandoff(operation.schedulerHandoff);
@@ -118,6 +121,7 @@ export async function releaseAbandonedSchedulerHandoffs(
   let released = 0;
   for (const doc of pending.docs) {
     const operation = doc.data();
+    if (builderActivationSourceRecoveryPending({ ...operation, id: doc.id } as Operation)) continue;
     if (operation.input?.recoverSourceOnly === true && typeof operation.cutoverCommittedAt !== "number") continue;
     const handoff = operation.schedulerHandoff;
     if (!isHandoff(handoff)) {

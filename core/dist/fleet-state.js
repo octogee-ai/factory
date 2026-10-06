@@ -49,8 +49,32 @@ export async function setWorkspaceMigrationPhase(deps, params) {
 export async function assertWorkspaceMigrationRecoveryAuthority(deps, params) {
     await workspaceMigrationRecovery(deps, params, false);
 }
+export function builderActivationRecoveryTargetMatches(params) {
+    const { input, openclaw } = params;
+    const lease = recordOrEmpty(openclaw.activationLease);
+    const root = recordOrEmpty(params.targetRoot);
+    const allocation = recordOrEmpty(root.allocation);
+    return [
+        params.operationId === `builder-activate-${input.toGatewayId}`,
+        input.source === "builder-activation-lease",
+        root.gatewayClass === "builder", root.gatewayId === input.toGatewayId, root.ownerUid === input.uid,
+        allocation.kind === "disposable-builder", allocation.claimedByUid === input.uid,
+        typeof lease.leaseId === "string", lease.leaseId !== "", allocation.leaseId === lease.leaseId,
+        Number.isSafeInteger(lease.generation), Number(lease.generation) > 0, allocation.generation === lease.generation,
+        lease.status === "activating" || lease.status === "failed",
+        lease.sourceGatewayId === input.fromGatewayId, lease.sourceAssignmentEpoch === params.sourceEpoch,
+        lease.targetGatewayId === input.toGatewayId,
+    ].every(Boolean);
+}
 export async function completeWorkspaceMigrationRecovery(deps, params) {
     await workspaceMigrationRecovery(deps, params, true);
+}
+function assertRecoveryTarget(params) {
+    const matches = params.input.source === "builder-activation-lease"
+        ? builderActivationRecoveryTargetMatches(params)
+        : projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared";
+    if (!matches)
+        throw new Error("workspace migration recovery target authority changed");
 }
 async function workspaceMigrationRecovery(deps, params, complete) {
     await deps.db.runTransaction(async (txn) => {
@@ -90,8 +114,7 @@ async function workspaceMigrationRecovery(deps, params, complete) {
         ]);
         if (target.exists)
             throw new Error("workspace migration recovery target assignment remains");
-        if (projectGatewayDesiredRootForGateway(targetRoot.data(), String(input.toGatewayId))?.gatewayClass !== "shared")
-            throw new Error("workspace migration recovery target is not Shared");
+        assertRecoveryTarget({ operationId: params.operationId, input, openclaw, sourceEpoch: params.sourceEpoch, targetRoot: targetRoot.data() });
         if (!complete)
             return;
         const completedAt = deps.now ? deps.now().getTime() : Date.now();

@@ -174,7 +174,7 @@ import {
 } from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
 import { recoverSharedRestoreRuntime } from "./lib/shared-restore-runtime.js";
-import { startSchedulerHandoffRelease } from "./scheduler-handoff-release.js";
+import { schedulerHandoffAwaitingRelease, startSchedulerHandoffRelease } from "./scheduler-handoff-release.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
@@ -2573,7 +2573,8 @@ function buildSurgeHandoffDeps(input: {
         .doc(operationId)
         .get();
       if (!snapshot.exists) return null;
-      return { status: (snapshot.data() as Operation).status };
+      const operation = { ...snapshot.data(), id: snapshot.id } as Operation;
+      return { status: operation.status, sourceRecoveryPending: schedulerHandoffAwaitingRelease(operation) };
     },
     log,
   };

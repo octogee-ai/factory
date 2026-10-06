@@ -211,6 +211,37 @@ function mkDeps(options: HarnessOptions = {}) {
 }
 
 describe("abandoned Shared migration recovery", () => {
+  it.each(["success", "resume-failure", "authority-failure", "ownership-changed", "never-quiesced"])("restores a pre-cutover Builder activation through the existing source-only worker: %s", async (scenario) => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const target = "alice-s-12345678";
+    const id = `builder-activate-${target}`;
+    const request = mkOp({ id, status: "running", startedAt: 4_000, attempts: 1,
+      input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
+      schedulerHandoff: { migrationId: `mig-${id}:scheduler:1`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
+    });
+    if (scenario === "resume-failure") h.client.resume = vi.fn().mockRejectedValue(new Error("native resume refused"));
+    if (scenario === "authority-failure") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockRejectedValue(new Error("authority changed"));
+    if (scenario === "ownership-changed") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("authority changed during target cleanup"));
+    if (scenario === "never-quiesced") {
+      request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000, error: "keys failed", classification: "transient", steps: [{ name: "keys-sync-state", status: "failed" }] }];
+      h.client.resume = vi.fn().mockRejectedValue(new Error("foreign voice hold"));
+    }
+    const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
+    expect(result.success).toBe(false);
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    if (scenario === "success" || scenario === "never-quiesced") {
+      expect(result.rolledBack).toBe(true);
+      expect(h.client.abortImport).toHaveBeenCalledTimes(3);
+      if (scenario === "success") expect(h.client.resume).toHaveBeenCalledOnce();
+      else expect(h.client.resume).not.toHaveBeenCalled();
+      expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+      expect(h.steps).toContainEqual(expect.objectContaining({ name: "recover-source", status: "done" }));
+    } else {
+      expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+      if (scenario === "authority-failure" || scenario === "ownership-changed") expect(h.client.resume).not.toHaveBeenCalled();
+    }
+  });
   const previous = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };
   function recovery() {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });

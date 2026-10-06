@@ -179,7 +179,7 @@ export interface SurgeCustomerHandoffDeps {
     pod: SurgePod;
   }) => Promise<void>;
   wait?: (ms: number) => Promise<void>;
-  readOwnerOperation: (operationId: string) => Promise<{ status: OperationStatus } | null>;
+  readOwnerOperation: (operationId: string) => Promise<{ status: OperationStatus; sourceRecoveryPending?: boolean } | null>;
   log: (message: string) => void;
 }
 
@@ -299,6 +299,7 @@ async function abandonedLeaseReason(
   }
   const operation = await deps.readOwnerOperation(owner);
   if (!operation) return "owning operation no longer exists";
+  if (operation.sourceRecoveryPending) return null;
   return operation.status === "pending" || operation.status === "running"
     ? null
     : `owning operation is ${operation.status}`;

@@ -2,7 +2,7 @@ import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
-import { legacyAttemptNeverQuiesced } from "../legacy-migration-recovery.js";
+import { builderActivationSourceRecoveryPending, legacyAttemptNeverQuiesced } from "../legacy-migration-recovery.js";
 import { PendingCustomerRestoreError } from "../operation-context.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
@@ -1427,6 +1427,11 @@ async function sharedRecoveryAuthority(deps: MigrateCustomerDeps, op: Operation,
   return recovery;
 }
 
+function ownershipCheckedSourceRecovery(op: Operation, previous: SchedulerHandoffState): boolean {
+  return !op.customerMigrationV2 && previous.fromGatewayId.startsWith("shared-") &&
+    (previous.toGatewayId.startsWith("shared-") || builderActivationSourceRecoveryPending(op));
+}
+
 async function resumePreviousSchedulerAttempt(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1438,7 +1443,7 @@ async function resumePreviousSchedulerAttempt(
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
   }
-  const sharedRecovery = !op.customerMigrationV2 && previous.fromGatewayId.startsWith("shared-") && previous.toGatewayId.startsWith("shared-");
+  const sharedRecovery = ownershipCheckedSourceRecovery(op, previous);
   let recovery: WorkspaceMigrationRecoveryParams | undefined;
   if (sharedRecovery) recovery = await sharedRecoveryAuthority(deps, op, user, uid);
   if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous);
@@ -1452,6 +1457,7 @@ async function resumePreviousSchedulerAttempt(
     await target.unmount({ migrationId: deps.genMigrationId(op.id), slug: user.slug, gatewayId: previous.toGatewayId });
   }
   const client = deps.buildClient(() => url);
+  if (recovery) await deps.assertMigrationRecoveryAuthority!(recovery);
   await client.scheduler({
     migrationId: previous.migrationId, slug: previous.slug, gatewayId: previous.fromGatewayId, phase: "resume",
   });

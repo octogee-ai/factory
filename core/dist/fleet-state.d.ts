@@ -32,6 +32,13 @@ export interface WorkspaceMigrationRecoveryParams {
     claimStartedAt: number;
 }
 export declare function assertWorkspaceMigrationRecoveryAuthority(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
+export declare function builderActivationRecoveryTargetMatches(params: {
+    operationId: string;
+    input: Record<string, unknown>;
+    openclaw: Record<string, unknown>;
+    sourceEpoch: number;
+    targetRoot: unknown;
+}): boolean;
 export declare function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
 export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps, params: WorkspaceMigrationPreparationParams): Promise<void>;
 export interface FleetStateDocRef {
