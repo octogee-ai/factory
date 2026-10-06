@@ -120,6 +120,7 @@ describe("durable migration root resolution", () => {
       release: 1,
       assignmentMode: "unassigned-live",
       rootUpdatedAt: 17,
+      gatewayClass: "shared",
     });
   });
 
@@ -144,6 +145,7 @@ describe("durable migration root resolution", () => {
       release: 1,
       epoch: 7,
       assignmentMode: "assigned",
+      gatewayClass: "shared",
     });
   });
 

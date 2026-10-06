@@ -178,6 +178,106 @@ describe("runMigration — happy path", () => {
   );
 });
 
+describe("target system-config convergence", () => {
+  const SOURCE_COMMIT = "a".repeat(40);
+  const TARGET_COMMIT = "b".repeat(40);
+
+  function flushesTo(client: MigrationClient, gatewayId: string) {
+    return (client.flushGateway as ReturnType<typeof vi.fn>).mock.calls
+      .map(([request]) => request)
+      .filter((request) => request.gatewayId === gatewayId);
+  }
+
+  it("converges a Builder target on its own accepted commit after a Barn source's final copy, before verify", async () => {
+    const { client, deps, input } = harness();
+    deps.readTargetSystemConfigCommit = vi.fn(async () => TARGET_COMMIT);
+
+    const result = await runMigration({ ...input, convergeTargetSystemConfig: "target-commit" }, deps);
+
+    expect(result.success).toBe(true);
+    expect(deps.readTargetSystemConfigCommit).toHaveBeenCalledWith("gw-green");
+    expect(flushesTo(client, "gw-green")).toEqual([expect.objectContaining({
+      slug: "alice",
+      reason: "migration-converge",
+      expectedSystemConfigCommit: TARGET_COMMIT,
+    })]);
+    const finalSync = client.calls.indexOf("transfer:alice:final");
+    const converge = client.calls.lastIndexOf("flush:alice:migration-converge");
+    expect(converge).toBeGreaterThan(finalSync);
+    expect(client.calls.indexOf("verify:alice")).toBeGreaterThan(converge);
+  });
+
+  it("converges on the commit a Builder source accepted at its final flush", async () => {
+    const client = happyClient();
+    (client.flushGateway as ReturnType<typeof vi.fn>).mockImplementation(async ({ slug, reason }) => {
+      client.calls.push(`flush:${slug}:${reason}`);
+      return {
+        migrationId: "m1", slug, ok: true, durationMs: 1, steps: [],
+        ...(reason === "migration-final" ? { systemConfigCommit: SOURCE_COMMIT } : {}),
+      };
+    });
+    const { deps, input } = harness({ client });
+    deps.readTargetSystemConfigCommit = vi.fn(async () => TARGET_COMMIT);
+
+    await runMigration({ ...input, convergeTargetSystemConfig: "source-commit" }, deps);
+
+    expect(deps.readTargetSystemConfigCommit).not.toHaveBeenCalled();
+    expect(flushesTo(client, "gw-green")).toEqual([expect.objectContaining({
+      reason: "migration-converge",
+      expectedSystemConfigCommit: SOURCE_COMMIT,
+    })]);
+  });
+
+  it("fails and rolls back before cutover when the target has no commit to fence a Barn-source converge", async () => {
+    const { client, deps, input, events } = harness();
+    deps.readTargetSystemConfigCommit = vi.fn(async () => null);
+
+    const result = await runMigration({ ...input, convergeTargetSystemConfig: "target-commit" }, deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt?.error).toMatch(/target gw-green has no accepted system config commit/);
+    expect(flushesTo(client, "gw-green")).toEqual([]);
+    expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
+  });
+
+  it("requires the Builder source's own commit instead of falling back to the target's", async () => {
+    const { client, deps, input, events } = harness();
+    deps.readTargetSystemConfigCommit = vi.fn(async () => TARGET_COMMIT);
+
+    const result = await runMigration({ ...input, convergeTargetSystemConfig: "source-commit" }, deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt?.error).toMatch(/source has no accepted system config commit/);
+    expect(deps.readTargetSystemConfigCommit).not.toHaveBeenCalled();
+    expect(flushesTo(client, "gw-green")).toEqual([]);
+    expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
+  });
+
+  it("fails and rolls back before cutover when the target does not converge", async () => {
+    const client = happyClient();
+    (client.flushGateway as ReturnType<typeof vi.fn>).mockImplementation(async ({ slug, reason }) => {
+      client.calls.push(`flush:${slug}:${reason}`);
+      return { migrationId: "m1", slug, ok: reason !== "migration-converge", durationMs: 1, steps: [] };
+    });
+    const { deps, input, events } = harness({ client });
+    deps.readTargetSystemConfigCommit = vi.fn(async () => TARGET_COMMIT);
+
+    const result = await runMigration({ ...input, convergeTargetSystemConfig: "target-commit" }, deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result.errorAt?.error).toMatch(/did not converge system config/);
+    expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
+  });
+
+  it("never converges a target that holds no durable system config", async () => {
+    const { client, deps, input } = harness();
+
+    await runMigration(input, deps);
+
+    expect(flushesTo(client, "gw-green")).toEqual([]);
+  });
+});
+
 describe("migration preparation", () => {
   it("never fences or drains the source if destination preparation fails", async () => {
     const h = harness({ gateAssignment: true });

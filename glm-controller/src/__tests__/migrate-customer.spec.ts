@@ -14,6 +14,7 @@ import { classifyOperationFailure } from "../operation-retry";
 import { PendingCustomerRestoreError } from "../operation-context";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
+const TARGET_SYSTEM_CONFIG_COMMIT = "c".repeat(40);
 
 const SNAPSHOT: FleetBrokerUserSnapshot = {
   uid: "uid-alice",
@@ -161,6 +162,7 @@ function mkDeps(options: HarnessOptions = {}) {
       options.openclawVersions
         ? options.openclawVersions[gatewayId] ?? null
         : SAME_OPENCLAW),
+    readGatewaySystemConfigCommit: vi.fn(async () => TARGET_SYSTEM_CONFIG_COMMIT),
     readGatewayReleaseArtifact: vi.fn(async (_gatewayId: string, release: number) =>
       release === 2 ? configuredTargetArtifact(options) : null),
     commitCutover: vi.fn(async (commit) => {
@@ -964,6 +966,59 @@ describe("migrate-customer — Builder computer activation", () => {
     expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request).filter((request) => request.phase !== "stage")
       .every((request) => request.retainNonportable === undefined)).toBe(true);
     expect(vi.mocked(h.client.quiesce).mock.calls[0][0].retainNonportable).toBeUndefined();
+  });
+
+  it("converges the Builder's durable config on the source's accepted commit before verifying", async () => {
+    const h = mkDeps();
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+
+    expect(vi.mocked(h.client.flushGateway).mock.calls.map(([request]) => request)
+      .filter((request) => request.gatewayId === "gw-green")).toEqual([expect.objectContaining({
+      reason: "migration-converge",
+      expectedSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT,
+    })]);
+  });
+
+  it("converges a Builder returning from a Barn on the Builder's own accepted commit", async () => {
+    const h = mkDeps();
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, gatewayClass: "shared" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    vi.mocked(h.client.flushGateway).mockImplementation(async ({ migrationId, slug }) => ({
+      migrationId, slug, ok: true, durationMs: 1, steps: [],
+    }));
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+
+    expect(h.deps.readGatewaySystemConfigCommit).toHaveBeenCalledWith("gw-green");
+    expect(vi.mocked(h.client.flushGateway).mock.calls.map(([request]) => request)
+      .filter((request) => request.gatewayId === "gw-green")).toEqual([expect.objectContaining({
+      reason: "migration-converge",
+      expectedSystemConfigCommit: TARGET_SYSTEM_CONFIG_COMMIT,
+    })]);
+  });
+
+  it("fails a Builder-to-Builder activation whose source flush proves no commit", async () => {
+    const h = mkDeps();
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, gatewayClass: "builder" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    vi.mocked(h.client.flushGateway).mockImplementation(async ({ migrationId, slug }) => ({
+      migrationId, slug, ok: true, durationMs: 1, steps: [],
+    }));
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false });
+    expect(h.deps.readGatewaySystemConfigCommit).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+
+  it("never converges a Shared target, which holds no durable config", async () => {
+    const h = mkDeps();
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+
+    expect(vi.mocked(h.client.flushGateway).mock.calls.map(([request]) => request)
+      .filter((request) => request.gatewayId === "gw-green")).toEqual([]);
   });
 
   it("stages onto a Shared target with today's strict conflict rules", async () => {

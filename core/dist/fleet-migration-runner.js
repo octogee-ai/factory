@@ -38,6 +38,37 @@ async function handOffSchedules(params) {
     }
     return { schedulerExportMs, schedulerStageMs: clock() - stageStartedAt };
 }
+async function convergeTargetSystemConfig(input) {
+    const { deps } = input;
+    const expectedSystemConfigCommit = input.systemConfig.convergeTarget === "source-commit"
+        ? input.systemConfig.sourceCommit
+        : await deps.readTargetSystemConfigCommit?.(input.targetGatewayId);
+    if (!expectedSystemConfigCommit) {
+        const holder = input.systemConfig.convergeTarget === "source-commit" ? "source" : `target ${input.targetGatewayId}`;
+        throw new Error(`${holder} has no accepted system config commit to converge ${input.slug} on`);
+    }
+    const converge = await deps.client.flushGateway({
+        migrationId: input.migrationId,
+        gatewayId: input.targetGatewayId,
+        slug: input.slug,
+        reason: "migration-converge",
+        expectedSystemConfigCommit,
+    });
+    if (!converge.ok) {
+        throw new Error(`target ${input.targetGatewayId} did not converge system config for ${input.slug}`);
+    }
+}
+async function convergeTargetAfterFinalCopy(input) {
+    if (input.step.mode !== "final" || !input.systemConfig.convergeTarget)
+        return;
+    await convergeTargetSystemConfig({
+        deps: input.deps,
+        migrationId: input.migrationId,
+        slug: input.step.slug,
+        targetGatewayId: input.step.to,
+        systemConfig: input.systemConfig,
+    });
+}
 async function executeStep(params) {
     const { step, deps, migrationId, slug, projectCheckoutScope, includeActivationManifest, crossGateway, } = params;
     const clock = deps.now ?? Date.now;
@@ -51,14 +82,16 @@ async function executeStep(params) {
                 schedulerMigrationId: params.schedulerMigrationId,
             });
             return;
-        case "flush-source":
-            await deps.client.flushGateway({
+        case "flush-source": {
+            const flush = await deps.client.flushGateway({
                 migrationId,
                 gatewayId: step.gateway,
                 slug: step.slug,
                 reason: "migration-final",
             });
+            params.systemConfig.sourceCommit = flush.systemConfigCommit;
             return;
+        }
         case "sync-state": {
             const timings = crossGateway && step.mode === "final"
                 ? await handOffSchedules({ ...params, from: step.from, to: step.to })
@@ -74,6 +107,7 @@ async function executeStep(params) {
                 projectCheckoutScope,
             });
             timings.transferMs = clock() - transferStartedAt;
+            await convergeTargetAfterFinalCopy({ deps, migrationId, step, systemConfig: params.systemConfig });
             return timings;
         }
         case "verify-target":
@@ -203,6 +237,7 @@ function createMigrationExecution(input, deps) {
         quiesceStarted: false,
         preDrainStarted: false,
         targetScheduler: { mayHoldStage: false },
+        systemConfig: { convergeTarget: input.convergeTargetSystemConfig },
         state: {
             phase: "initial",
             slug: input.slug,
@@ -242,6 +277,7 @@ function executeForwardStep(execution, step) {
         acceptRetainedTargetJobs: input.acceptRetainedTargetJobs === true,
         stageSchedulesAfterCutover: input.stageSchedulesAfterCutover === true,
         targetScheduler: execution.targetScheduler,
+        systemConfig: execution.systemConfig,
     });
 }
 function schedulerMigrationId(input) {
@@ -482,6 +518,7 @@ async function tryRollback(state, deps, migrationId, transports) {
                 acceptRetainedTargetJobs: false,
                 stageSchedulesAfterCutover: false,
                 targetScheduler: transports.targetScheduler,
+                systemConfig: {},
             });
             await report(deps, { name: rbName, status: "done" });
             deps.log(`[migration-runner] rollback ${step.action} ok`);

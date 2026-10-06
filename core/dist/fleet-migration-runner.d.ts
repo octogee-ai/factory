@@ -25,6 +25,7 @@ export interface MigrationRunnerDeps {
     reportStep?: (step: ReportedStep) => Promise<void> | void;
     recordSchedulesStaged?: () => Promise<void>;
     setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
+    readTargetSystemConfigCommit?: (gatewayId: string) => Promise<string | null>;
     now?: () => number;
     wait?: (delayMs: number) => Promise<void>;
 }
@@ -42,7 +43,9 @@ export interface MigrationRunnerInput {
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     includeActivationManifest?: boolean;
     stageSchedulesAfterCutover?: boolean;
+    convergeTargetSystemConfig?: TargetSystemConfigConvergence;
 }
+export type TargetSystemConfigConvergence = "source-commit" | "target-commit";
 export interface MigrationRunnerResult {
     waitingForBuilderIdle?: boolean;
     success: boolean;

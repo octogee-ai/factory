@@ -48,6 +48,7 @@ import {
   type CutoverCommit,
   type MigrationRunnerDeps,
   type ReportedStep,
+  type TargetSystemConfigConvergence,
 } from "@octogee/core/fleet-migration-runner";
 import {
   decideRollStateMigration,
@@ -72,6 +73,7 @@ export interface UserGatewayInfo {
 
 export interface SourcePlacement {
   release: number;
+  gatewayClass?: GatewayClass;
   epoch?: number;
   assignmentMode?: "assigned" | "unassigned-live";
   rootUpdatedAt?: number;
@@ -94,6 +96,7 @@ export interface MigrateCustomerDeps {
 
   /** The openclaw version a live gateway reports through its heartbeat. */
   readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
+  readGatewaySystemConfigCommit: (gatewayId: string) => Promise<string | null>;
 
   readGatewayReleaseArtifact: (
     gatewayId: string,
@@ -560,6 +563,7 @@ interface MigrationTargets {
   toGatewayId: string;
   toGatewayClass: GatewayClass;
   fromGatewayId: string;
+  fromGatewayClass?: GatewayClass;
   toRelease: number | null;
   fromRelease: number;
   fromEpoch: number;
@@ -595,6 +599,7 @@ async function resolveMigrationTargets(
       toGatewayId,
       toGatewayClass: placement.gatewayClass,
       fromGatewayId: user.currentGatewayId,
+      ...(source.gatewayClass ? { fromGatewayClass: source.gatewayClass } : {}),
       toRelease: placement.release,
       fromRelease: source.release,
       fromEpoch: source.epoch ?? 0,
@@ -620,6 +625,10 @@ async function recordCutoverCommitted(
   }
 }
 
+function targetConvergence(sourceClass: GatewayClass | undefined): TargetSystemConfigConvergence {
+  return sourceClass === "shared" ? "target-commit" : "source-commit";
+}
+
 function buildRunnerDeps(
   input: {
     deps: MigrateCustomerDeps;
@@ -635,6 +644,7 @@ function buildRunnerDeps(
   return {
     client,
     setMigrationPhase: (phase) => deps.setMigrationPhase?.({ uid: input.uid, sourceGatewayId: input.sourceGatewayId, operationId: input.operationId, phase }) ?? Promise.resolve(),
+    readTargetSystemConfigCommit: deps.readGatewaySystemConfigCommit,
     commitCutover: async (commit) => {
       await deps.commitCutover({ ...commit, automatic: input.automatic });
       await recordCutoverCommitted(deps, ctx, input.operationId);
@@ -1755,6 +1765,7 @@ async function executeMigration(
       crossGateway: prepared.user.currentGatewayId !== prepared.toGatewayId,
       acceptRetainedTargetJobs: heldTarget,
       stageSchedulesAfterCutover: heldTarget,
+      ...(heldTarget ? { convergeTargetSystemConfig: targetConvergence(prepared.targets.fromGatewayClass) } : {}),
       gateAssignment: true,
       projectCheckoutScope: prepared.projectCheckoutScope,
       includeActivationManifest: true,

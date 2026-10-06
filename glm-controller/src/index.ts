@@ -633,6 +633,17 @@ async function readReleasePayloadFromFirestore(
   return readGatewayArtifact(db, gatewayId, release);
 }
 
+async function readGatewaySystemConfigCommitFromFirestore(
+  db: Firestore,
+  gatewayId: string,
+): Promise<string | null> {
+  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const runtime = snap.exists ? snap.data() : undefined;
+  if (!isGatewayRuntimeDoc(runtime)) return null;
+  const configStatus = runtime.heartbeat?.configStatus as { acceptedCommit?: unknown } | undefined;
+  return typeof configStatus?.acceptedCommit === "string" ? configStatus.acceptedCommit : null;
+}
+
 async function readGatewayOpenclawVersionFromFirestore(
   db: Firestore,
   gatewayId: string,
@@ -3147,6 +3158,8 @@ async function buildHandlers(
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
     readGatewayOpenclawVersion: (gatewayId) =>
       readGatewayOpenclawVersionFromFirestore(db, gatewayId),
+    readGatewaySystemConfigCommit: (gatewayId) =>
+      readGatewaySystemConfigCommitFromFirestore(db, gatewayId),
     readGatewayReleaseArtifact: (gatewayId, release) =>
       readGatewayArtifact(db, gatewayId, release),
     commitCutover: async (commit) => {
@@ -3191,6 +3204,7 @@ async function buildHandlers(
       if (!source) return null;
       return {
         release: source.release,
+        ...(source.gatewayClass ? { gatewayClass: source.gatewayClass } : {}),
         ...(source.epoch !== undefined ? { epoch: source.epoch } : {}),
         assignmentMode: source.assignmentMode,
         ...(source.rootUpdatedAt !== undefined ? { rootUpdatedAt: source.rootUpdatedAt } : {}),
@@ -4230,6 +4244,7 @@ export async function resolveLiveRevisionAsSource(
   epoch?: number;
   assignmentMode: "unassigned-live";
   rootUpdatedAt: number;
+  gatewayClass?: GatewayClass;
 } | null> {
   const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
   if (!snap.exists) return null;
@@ -4251,6 +4266,7 @@ export async function resolveLiveRevisionAsSource(
         release: gateway.liveRelease,
         assignmentMode: "unassigned-live",
         rootUpdatedAt: gateway.updatedAt,
+        ...(gateway.gatewayClass ? { gatewayClass: gateway.gatewayClass } : {}),
       }
     : null;
 }
@@ -4265,6 +4281,7 @@ export async function resolveSourceRevisionFromFirestore(
   epoch?: number;
   assignmentMode: "assigned" | "unassigned-live";
   rootUpdatedAt?: number;
+  gatewayClass?: GatewayClass;
 } | null> {
   const assignment = await readAssignmentDoc(db, gatewayId, uid);
   if (!assignment) return resolveLiveRevisionAsSource(db, gatewayId);
@@ -4289,6 +4306,7 @@ export async function resolveSourceRevisionFromFirestore(
     release: gateway.liveRelease,
     epoch: assignment.epoch,
     assignmentMode: "assigned",
+    ...(gateway.gatewayClass ? { gatewayClass: gateway.gatewayClass } : {}),
   };
 }
 
