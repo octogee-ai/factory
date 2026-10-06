@@ -1060,18 +1060,10 @@ function initializeFleetCli(argv: string[]): void {
   KUBE_NS = target.namespace;
 }
 
-export function resolveFleetOperatorUidFromUserConfigs(
-  configs: readonly { uid: string; role: unknown; disabled: boolean }[],
-): string {
-  const operatorUids = configs
-    .filter((config) => config.role === "admin" && !config.disabled)
-    .map((config) => config.uid);
-  if (operatorUids.length !== 1) {
-    throw new Error(
-      `OPERATOR_UID or OPERATOR_EMAIL is required when Firebase Auth does not identify exactly one enabled Firestore admin (found ${operatorUids.length})`,
-    );
-  }
-  return operatorUids[0]!;
+const FLEET_OPERATOR_EMAIL = "christopher.k.eckert@gmail.com";
+
+export function resolveFleetOperatorEmail(env: NodeJS.ProcessEnv): string {
+  return env.OPERATOR_EMAIL || FLEET_OPERATOR_EMAIL;
 }
 
 export function resolveExplicitFleetOperatorUid(input: {
@@ -1084,33 +1076,32 @@ export function resolveExplicitFleetOperatorUid(input: {
   return input.uid;
 }
 
-async function fleetOperatorUid(): Promise<string> {
-  const explicit = process.env.OPERATOR_UID;
-  if (explicit) return explicit;
-  const explicitEmail = process.env.OPERATOR_EMAIL;
-  if (explicitEmail) {
-    const authUser = await getAuth().getUserByEmail(explicitEmail);
-    const config = await db.doc(`users/${authUser.uid}/system/config`).get();
-    return resolveExplicitFleetOperatorUid({
-      uid: authUser.uid,
-      role: config.get("role"),
-      disabled: authUser.disabled,
-    });
-  }
-  if (!resolvedOperatorUid) {
-    resolvedOperatorUid = (async () => {
-      const users = await db.collection("users").get();
-      const configs = await Promise.all(
-        users.docs.map((user) => user.ref.collection("system").doc("config").get()),
-      );
-      const authUsers = await Promise.all(users.docs.map((user) => getAuth().getUser(user.id)));
-      return resolveFleetOperatorUidFromUserConfigs(configs.map((config, index) => ({
-        uid: users.docs[index]!.id,
-        role: config.get("role"),
-        disabled: authUsers[index]!.disabled,
-      })));
-    })();
-  }
+interface FleetOperatorLookups {
+  getUser(uid: string): Promise<{ uid: string; disabled: boolean }>;
+  getUserByEmail(email: string): Promise<{ uid: string; disabled: boolean }>;
+  readRole(uid: string): Promise<unknown>;
+}
+
+export async function resolveFleetOperatorUid(
+  env: NodeJS.ProcessEnv,
+  lookups: FleetOperatorLookups,
+): Promise<string> {
+  const authUser = env.OPERATOR_UID
+    ? await lookups.getUser(env.OPERATOR_UID)
+    : await lookups.getUserByEmail(resolveFleetOperatorEmail(env));
+  return resolveExplicitFleetOperatorUid({
+    uid: authUser.uid,
+    role: await lookups.readRole(authUser.uid),
+    disabled: authUser.disabled,
+  });
+}
+
+function fleetOperatorUid(): Promise<string> {
+  resolvedOperatorUid ??= resolveFleetOperatorUid(process.env, {
+    getUser: (uid) => getAuth().getUser(uid),
+    getUserByEmail: (email) => getAuth().getUserByEmail(email),
+    readRole: async (uid) => (await db.doc(`users/${uid}/system/config`).get()).get("role"),
+  });
   return resolvedOperatorUid;
 }
 

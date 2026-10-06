@@ -37,7 +37,8 @@ import {
   resolveFleetVerb,
   resolveFleetDeploymentTarget,
   resolveExplicitFleetOperatorUid,
-  resolveFleetOperatorUidFromUserConfigs,
+  resolveFleetOperatorEmail,
+  resolveFleetOperatorUid,
 } from "../ops/fleet.js";
 
 describe("fleet-controller entrypoint config", () => {
@@ -1079,17 +1080,30 @@ describe("fleet CLI args", () => {
     );
   });
 
-  it("uses the sole enabled Firestore admin only as the unspecified-actor fallback", () => {
-    expect(resolveFleetOperatorUidFromUserConfigs([
-      { uid: "builder", role: "builder", disabled: false },
-      { uid: "retired-operator", role: "admin", disabled: true },
-      { uid: "operator", role: "admin", disabled: false },
-    ])).toBe("operator");
-    expect(() => resolveFleetOperatorUidFromUserConfigs([])).toThrow(/found 0/);
-    expect(() => resolveFleetOperatorUidFromUserConfigs([
-      { uid: "operator-a", role: "admin", disabled: false },
-      { uid: "operator-b", role: "admin", disabled: false },
-    ])).toThrow(/found 2/);
+  it("acts as Chris's admin account on every environment unless OPERATOR_EMAIL names another", () => {
+    expect(resolveFleetOperatorEmail({})).toBe("christopher.k.eckert@gmail.com");
+    expect(resolveFleetOperatorEmail({ OPERATOR_EMAIL: "" })).toBe("christopher.k.eckert@gmail.com");
+    expect(resolveFleetOperatorEmail({ OPERATOR_EMAIL: "ops@example.com" })).toBe("ops@example.com");
+  });
+
+  it("validates every operator source as an enabled admin before the token is minted", async () => {
+    const users: Record<string, { uid: string; email: string; disabled: boolean; role: string }> = {
+      chris: { uid: "chris", email: "christopher.k.eckert@gmail.com", disabled: false, role: "admin" },
+      builder: { uid: "builder", email: "builder@example.com", disabled: false, role: "builder" },
+      retired: { uid: "retired", email: "retired@example.com", disabled: true, role: "admin" },
+    };
+    const lookups = {
+      getUser: async (uid: string) => users[uid]!,
+      getUserByEmail: async (email: string) => Object.values(users).find((user) => user.email === email)!,
+      readRole: async (uid: string) => users[uid]!.role,
+    };
+
+    await expect(resolveFleetOperatorUid({}, lookups)).resolves.toBe("chris");
+    await expect(resolveFleetOperatorUid({ OPERATOR_UID: "chris" }, lookups)).resolves.toBe("chris");
+    await expect(resolveFleetOperatorUid({ OPERATOR_UID: "builder" }, lookups)).rejects.toThrow(/admin role/);
+    await expect(resolveFleetOperatorUid({ OPERATOR_UID: "retired" }, lookups)).rejects.toThrow(/disabled/);
+    await expect(resolveFleetOperatorUid({ OPERATOR_EMAIL: "builder@example.com" }, lookups))
+      .rejects.toThrow(/admin role/);
   });
 
   it("accepts an explicit enabled admin when other active admins exist", () => {
