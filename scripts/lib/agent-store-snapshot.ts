@@ -199,7 +199,7 @@ async function sha256OfFile(file: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function landOlderSchemaSnapshot(snapshot: StagedAgentSnapshot, restoredPath: string): Promise<void> {
+async function landRepairableAgentSnapshot(snapshot: StagedAgentSnapshot, restoredPath: string): Promise<void> {
   const mismatch = () => new Error(`carried snapshot of ${snapshot.agentId} does not match its manifest`);
   let manifest: unknown;
   try {
@@ -265,7 +265,7 @@ export async function prepareAgentStoreSnapshots(
       );
     } else {
       requiresUpgrade = true;
-      await landOlderSchemaSnapshot(snapshot, restoredPath);
+      await landRepairableAgentSnapshot(snapshot, restoredPath);
     }
     await fs.rm(path.dirname(snapshot.snapshotDir), { recursive: true, force: true });
     stores.push({
