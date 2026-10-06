@@ -45,6 +45,7 @@ import {
   type RollRosterUpgradeGate,
 } from "./roll-roster.js";
 import { createBrokerRollRosterSubscription } from "./broker-roll-roster.js";
+import { workspaceServingResolver } from "./openclaw-control/workspace-serving.js";
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
@@ -440,12 +441,14 @@ if (process.env.NODE_ENV !== "test") {
   const selfRevisionId = process.env.GATEWAY_REVISION_ID ?? "";
   const rosterGatewayId = process.env.GATEWAY_ID ?? "";
   let rollRosterUpgradeGate: RollRosterUpgradeGate | null = null;
+  let rosterFacade: Pick<RollRosterStore, "loaded" | "get"> | null = null;
   if (selfRevisionId && rosterGatewayId) {
     let rosterStore: RollRosterStore | null = null;
     const storeFacade = {
       loaded: () => rosterStore?.loaded() ?? false,
       get: (uid: string) => rosterStore?.get(uid),
     };
+    rosterFacade = storeFacade;
     installRollRosterGate(
       createRollRosterGate({
         store: storeFacade,
@@ -508,6 +511,7 @@ if (process.env.NODE_ENV !== "test") {
         env: process.env,
         metrics: activeOpenClawControlMetrics,
         authorizationCache: openClawControlAuthorizationCache,
+        workspaceServing: workspaceServingResolver(process.env, rosterFacade),
       });
       const dashboardHeartbeat = startOpenClawDashboardCapabilityHeartbeat({
         env: process.env,

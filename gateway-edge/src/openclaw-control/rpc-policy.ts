@@ -21,6 +21,8 @@ export interface OpenClawControlRpcDecision {
     | "invalid-frame"
     | "method-unavailable"
     | "config-frozen"
+    | "workspace-not-serving"
+    | "roster-loading"
     | "config-base-mismatch"
     | "config-invalid"
     | "config-unsafe-path"

@@ -2117,6 +2117,73 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
+  it.each(["not-serving", "roster-loading", "flips-after-admission"] as const)("refuses dashboard config writes while the workspace is %s on this gateway, but keeps reads", async (scenario) => {
+    let servingChecks = 0;
+    const workspaceServing = (): "serving" | "not-serving" | "roster-loading" => {
+      servingChecks += 1;
+      if (scenario === "flips-after-admission") return servingChecks === 1 ? "serving" : "not-serving";
+      return scenario;
+    };
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fence-"));
+    tempDirs.push(openclawDir);
+    const config: Record<string, unknown> = { agents: { defaults: { timeoutSeconds: 60 } } };
+    reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" });
+    const calls: string[] = [];
+    const upstream = http.createServer();
+    const wss = new WebSocketServer({ server: upstream });
+    wss.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "n" } }));
+      ws.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        calls.push(frame.method);
+        let payload: unknown = { applied: true };
+        if (frame.method === "connect") payload = { type: "hello-ok", auth: { scopes: ["operator.admin"] }, features: { methods: [...OPENCLAW_TEST_METHODS] } };
+        else if (frame.method === "config.get") payload = { raw: JSON.stringify(config), hash: "hash-1" };
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload }));
+      });
+    });
+    const upstreamPort = await listen(upstream);
+    const manager = sessions();
+    const testEnv = { ...env(upstreamPort, openclawDir), OPENCLAW_CONTROL_IDENTITY: "per-user" };
+    const device = generateIdentity();
+    const edge = http.createServer();
+    const router = new WsUpgradeRouter();
+    attachOpenClawControlWsRoute({ router, env: testEnv, sessions: manager, authorize: async () => true,
+      proxyIdentity: {
+        enabled: true, userHeaders: () => ({ "x-octogee-user": "uid-helper" }),
+        serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge" }), deviceIdentity: () => device,
+        connectScopes: () => ["operator.read", "operator.write"], resolveChatProfile: async () => null, syncChannelMemberships: async () => {}, syncProfile: async () => {},
+      }, rpcTimeoutMs: 300, workspaceServing,
+    });
+    router.attach(edge);
+    const edgePort = await listen(edge);
+    const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, { headers: { cookie: issue(manager), origin: "https://api.octogee.com" } });
+    const seen: Record<string, Record<string, unknown>> = {};
+    const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      browser.once("error", reject);
+      browser.on("message", (data) => {
+        const frame = JSON.parse(data.toString());
+        if (frame.event === "connect.challenge") browser.send(JSON.stringify({ type: "req", id: "connect", method: "connect", params: {} }));
+        else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "read", method: "config.get", params: {} }));
+        else if (frame.id === "read") {
+          seen.read = frame;
+          browser.send(JSON.stringify({ type: "req", id: "write", method: "config.patch", params: { raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 90 } } }), baseHash: "hash-1" } }));
+        } else if (frame.id === "write") resolve(frame);
+      });
+    });
+    browser.terminate();
+    for (const client of wss.clients) client.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    expect(seen.read?.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect((result.error as { message: string }).message).toContain(scenario === "roster-loading" ? "roster-loading" : "workspace-not-serving");
+    expect(calls).not.toContain("config.patch");
+    expect(servingChecks).toBe(scenario === "flips-after-admission" ? 2 : 1);
+    const retryLease = acquireSystemConfigSyncLeaseSync({ openclawDir });
+    expect(retryLease).not.toBeNull();
+    retryLease?.release();
+  });
+
   it.each([
     ["admin", "allowed"],
     ["member", "denied"], ["admin", "unsafe"],

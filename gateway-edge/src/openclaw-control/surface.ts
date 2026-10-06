@@ -24,6 +24,7 @@ import {
 
 import { fetchGatewayToken } from "../chat-proxy/openclaw/gateway-token.js";
 import { logger } from "../middleware/logging.js";
+import { workspaceServingDenial, type WorkspaceServingResolver } from "./workspace-serving.js";
 import {
   authorizeOpenClawControlSession,
   createOpenClawControlAuthorizationCache,
@@ -1035,6 +1036,7 @@ interface BridgeControlSocketArgs {
   authorizationIntervalMs: number;
   metrics?: OpenClawControlMetrics;
   mattermostChat: MattermostControlChat;
+  workspaceServing: WorkspaceServingResolver;
   retainMutationLeaseUntilProcessReplacement: (
     lease: SystemConfigMutationLease,
     reason: string,
@@ -1605,6 +1607,13 @@ class OpenClawControlSocketBridge {
   private evaluateAndForward(frame: BrowserRpcFrame): void {
     const category = openClawControlRpcCategory(frame.method);
     const managedConfigWrite = category === "config_mutation";
+    if (managedConfigWrite) {
+      const denial = workspaceServingDenial(this.args.workspaceServing());
+      if (denial) {
+        this.deny(frame, { allowed: false, category, reason: denial }, denial);
+        return;
+      }
+    }
     const decision: OpenClawControlRpcDecision = this.args.proxyIdentity.enabled && !managedConfigWrite
       ? { allowed: true, category, outbound: frame }
       : evaluateOpenClawControlRpc(frame, {
@@ -1832,6 +1841,13 @@ class OpenClawControlSocketBridge {
       await acquired.lease.release();
       return null;
     }
+    const denial = workspaceServingDenial(this.args.workspaceServing());
+    if (denial) {
+      lease.release();
+      await acquired.lease.release();
+      this.deny(frame, { allowed: false, category: decision.category, reason: denial }, denial);
+      return null;
+    }
     return acquired.lease;
   }
 }
@@ -1853,6 +1869,7 @@ export interface AttachOpenClawControlWsRouteOptions {
   authorizationIntervalMs?: number;
   metrics?: OpenClawControlMetrics;
   mattermostChat?: MattermostControlChat;
+  workspaceServing?: WorkspaceServingResolver;
   retainMutationLeaseUntilProcessReplacement?: (
     lease: SystemConfigMutationLease,
     reason: string,
@@ -1866,6 +1883,10 @@ function identityMattermostChat(proxyIdentity: OpenClawControlProxyIdentity): Ma
   });
 }
 
+function workspaceServingOf(options: Pick<AttachOpenClawControlWsRouteOptions, "workspaceServing">): WorkspaceServingResolver {
+  return options.workspaceServing ?? (() => "serving");
+}
+
 export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRouteOptions): void {
   const env = options.env ?? process.env;
   const sessions = options.sessions ?? defaultSessions;
@@ -1877,6 +1898,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
   const proxyIdentity = options.proxyIdentity ?? defaultProxyIdentity(env);
   const limiter = options.resourceLimiter ?? defaultLimiter;
   const mattermostChat = options.mattermostChat ?? identityMattermostChat(proxyIdentity);
+  const workspaceServing = workspaceServingOf(options);
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   const authorizationIntervalMs = options.authorizationIntervalMs ?? DEFAULT_AUTHORIZATION_INTERVAL_MS;
   if (!Number.isSafeInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 ||
@@ -1982,6 +2004,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
         authorizationIntervalMs,
         metrics: options.metrics,
         mattermostChat,
+        workspaceServing,
         retainMutationLeaseUntilProcessReplacement:
           options.retainMutationLeaseUntilProcessReplacement ?? retainMutationLeaseUntilProcessReplacement,
       }).catch(() => {
