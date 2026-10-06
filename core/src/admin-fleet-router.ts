@@ -39,10 +39,7 @@ import {
   type OperationAuditAliasPlan,
   type OperationAuditDocument,
 } from "@octogee/shared/types/glm";
-import {
-  deploymentSettingsForRuntime,
-  deploymentTargetsForEnvironment,
-} from "./deployment-environment.js";
+import { deploymentTargetsForEnvironment } from "./deployment-environment.js";
 import {
   DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS,
   type PlatformRuntimeConfig,
@@ -318,20 +315,6 @@ export function resolveFleetNamespace(env: NodeJS.ProcessEnv = process.env): str
   return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
 }
 
-export function resolveFleetDeploymentSettings(
-  namespace = resolveFleetNamespace(),
-  targetId = process.env.DEPLOYMENT_TARGET_ID,
-) {
-  try {
-    return deploymentSettingsForRuntime({ namespace, targetId });
-  } catch (error) {
-    if (targetId === undefined && error instanceof Error && error.message.startsWith("Unknown deployment environment")) {
-      throw new Error(`Unknown deployment environment for fleet namespace: ${namespace}`);
-    }
-    throw error;
-  }
-}
-
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike { id: string; data(): GlmDoc }
 const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
@@ -342,10 +325,6 @@ interface DurableGatewayRuntime {
   root: DurableGatewayRoot;
   runtime: GatewayRuntimeDoc | null;
   heartbeat: GlmDoc | null;
-}
-
-export interface FleetRuntimeSettings {
-  gatewayImageRepository: string;
 }
 
 type AdminOnboardingDriftState =
@@ -1017,13 +996,6 @@ async function readAdminOnboardingPlacementResponse(
     operationDocs: operationsSnap.docs,
     assignmentDocs: assignmentSnap.docs,
   });
-}
-
-async function readFleetRuntimeSettings(): Promise<FleetRuntimeSettings> {
-  const deployment = resolveFleetDeploymentSettings();
-  return {
-    gatewayImageRepository: `${deployment.artifactRegistryRepository}/octogee-gateway`,
-  };
 }
 
 function indexGlmDocs(docs: ReadonlyArray<FirestoreDocLike>): Map<string, GlmDoc> {
@@ -4423,11 +4395,10 @@ router.get(
     "/gateways",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [gwSnap, glmSnap, usersSnap, settings] = await Promise.all([
+        const [gwSnap, glmSnap, usersSnap] = await Promise.all([
           db.collection("gateways").get(),
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
           db.collection("users").get(),
-          readFleetRuntimeSettings(),
         ]);
         const glmByGatewayId = indexAdminGatewayRuntimeDocs({
           gatewayDocs: gwSnap.docs,
@@ -4534,8 +4505,9 @@ router.get(
             builderRuntimeViews,
             parkedBuilders,
           ),
-          stats: rollupFleetStats(gateways),
-          settings,
+          stats: rollupFleetStats(
+            gateways.filter((gateway) => gateway.desiredStatus !== "retired"),
+          ),
           namespace: resolveFleetNamespace(),
           generatedAt: new Date().toISOString(),
         });

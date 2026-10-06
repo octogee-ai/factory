@@ -86,16 +86,12 @@ declare function resolveSizingForResponse(glmDoc: Record<string, unknown> | unde
     };
 };
 export declare function resolveFleetNamespace(env?: NodeJS.ProcessEnv): string;
-export declare function resolveFleetDeploymentSettings(namespace?: string, targetId?: string | undefined): import("./deployment-environment.js").DeploymentEnvironmentSettings;
 type GlmDoc = Record<string, unknown>;
 interface FirestoreDocLike {
     id: string;
     data(): GlmDoc;
 }
 export declare const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
-export interface FleetRuntimeSettings {
-    gatewayImageRepository: string;
-}
 type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 declare function projectLastError(raw: unknown): {
     slug?: string;

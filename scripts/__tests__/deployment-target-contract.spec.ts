@@ -491,18 +491,6 @@ describe("deployment target consumers", () => {
     expect(contents).not.toContain("-docker.pkg.dev/octogee/octogee");
   });
 
-  it("delivers the active gateway repository to the Admin fleet UI", () => {
-    const router = source("core/src/admin-fleet-router.ts");
-    const adminTypes = source("app/src/types/admin.ts");
-    const fleetPanel = source("app/src/components/admin/fleet/FleetPanel.tsx");
-
-    expect(router).toContain("gatewayImageRepository");
-    expect(router).not.toContain("us-central1");
-    expect(adminTypes).toContain("gatewayImageRepository");
-    expect(fleetPanel).toContain("settings.gatewayImageRepository");
-    expect(fleetPanel).not.toContain("us-central1");
-  });
-
   it("passes the exact deployment target into platform runtimes", () => {
     const workflow = source(".github/workflows/build-and-deploy.yml");
     const glmDeployment = source("helm/octogee/charts/glm-controller/templates/deployment.yaml");

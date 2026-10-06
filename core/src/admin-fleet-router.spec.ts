@@ -10,7 +10,6 @@ import {
   projectGatewayReservation,
   projectGatewayControl,
   projectGatewaySummary,
-  resolveFleetDeploymentSettings,
   scheduleCustomerSelfDeletion,
   shapeOperationsHistoryRecord,
   type GatewayPodDiagnostics,
@@ -99,34 +98,6 @@ describe("projectGatewayReservation", () => {
       priceMultiplier: 1,
       source: "kubernetes",
     });
-  });
-});
-
-describe("resolveFleetDeploymentSettings", () => {
-  it("uses the active deployment target for the fleet namespace", () => {
-    expect(resolveFleetDeploymentSettings("octogee-test")).toMatchObject({
-      targetId: "test-central",
-      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
-    });
-  });
-
-  it("accepts an explicit target matching the runtime namespace", () => {
-    expect(resolveFleetDeploymentSettings("octogee", "prod-central")).toMatchObject({
-      targetId: "prod-central",
-      artifactRegistryRepository: "us-central1-docker.pkg.dev/octogee/octogee",
-    });
-  });
-
-  it("rejects an explicit target from another runtime namespace", () => {
-    expect(() => resolveFleetDeploymentSettings("octogee-test", "prod-central")).toThrow(
-      "Deployment target prod-central belongs to namespace octogee, not octogee-test",
-    );
-  });
-
-  it("fails closed for a namespace outside the deployment contract", () => {
-    expect(() => resolveFleetDeploymentSettings("feat-alice")).toThrow(
-      "Unknown deployment environment for fleet namespace: feat-alice",
-    );
   });
 });
 
@@ -1139,6 +1110,10 @@ describe("fleet gateway projection", () => {
       ]),
     );
     expect(fleet.body.disposableCapacity.disposableInstances).toBe(1);
+    const operational = fleet.body.gateways.filter(
+      (gateway: { desiredStatus: string }) => gateway.desiredStatus !== "retired",
+    );
+    expect(fleet.body.stats.gateways.total).toBe(operational.length);
   });
 
   it("offers retry only after the retired target has an explicit zero-pod proof", async () => {

@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
-import { deploymentSettingsForRuntime, deploymentTargetsForEnvironment, } from "./deployment-environment.js";
+import { deploymentTargetsForEnvironment } from "./deployment-environment.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -112,17 +112,6 @@ function isTruthyQueryFlag(value) {
 export function resolveFleetNamespace(env = process.env) {
     const ns = env.K8S_NAMESPACE;
     return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
-}
-export function resolveFleetDeploymentSettings(namespace = resolveFleetNamespace(), targetId = process.env.DEPLOYMENT_TARGET_ID) {
-    try {
-        return deploymentSettingsForRuntime({ namespace, targetId });
-    }
-    catch (error) {
-        if (targetId === undefined && error instanceof Error && error.message.startsWith("Unknown deployment environment")) {
-            throw new Error(`Unknown deployment environment for fleet namespace: ${namespace}`);
-        }
-        throw error;
-    }
 }
 const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
 export const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
@@ -557,12 +546,6 @@ async function readAdminOnboardingPlacementResponse(deps) {
         operationDocs: operationsSnap.docs,
         assignmentDocs: assignmentSnap.docs,
     });
-}
-async function readFleetRuntimeSettings() {
-    const deployment = resolveFleetDeploymentSettings();
-    return {
-        gatewayImageRepository: `${deployment.artifactRegistryRepository}/octogee-gateway`,
-    };
 }
 function indexGlmDocs(docs) {
     const out = new Map();
@@ -3031,11 +3014,10 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/gateways", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap, settings] = await Promise.all([
+            const [gwSnap, glmSnap, usersSnap] = await Promise.all([
                 db.collection("gateways").get(),
                 db.collection(GLM_GATEWAYS_COLLECTION).get(),
                 db.collection("users").get(),
-                readFleetRuntimeSettings(),
             ]);
             const glmByGatewayId = indexAdminGatewayRuntimeDocs({
                 gatewayDocs: gwSnap.docs,
@@ -3109,8 +3091,7 @@ export function addAdminFleetRoutes(router, deps) {
                 gateways,
                 builderRuntimes: builderRuntimeViews,
                 disposableCapacity: projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
-                stats: rollupFleetStats(gateways),
-                settings,
+                stats: rollupFleetStats(gateways.filter((gateway) => gateway.desiredStatus !== "retired")),
                 namespace: resolveFleetNamespace(),
                 generatedAt: new Date().toISOString(),
             });
