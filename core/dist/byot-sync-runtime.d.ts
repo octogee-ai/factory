@@ -1,4 +1,4 @@
-import { applyByotState, deriveDesiredByotState, type CoachModelInput } from "./byot-sync.js";
+import { applyByotState, deriveDesiredByotState, type CoachModelInput, type CodexAppServerPatch } from "./byot-sync.js";
 import { type GatewayRpcClient } from "./gateway-rpc.js";
 import { type ByosubProvider } from "./byosub-restore.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
@@ -17,7 +17,7 @@ export declare function applyAgentModelOverrides(slug: string, agentModels: Agen
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
 }): Promise<boolean>;
-export declare function applyOauthRuntimeModelAllowlist(providers: readonly ByosubProvider[], deps?: {
+export declare function applyOauthRuntimeModelAllowlist(providers: readonly ByosubProvider[], codexAppServer: CodexAppServerPatch, deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
 }): Promise<OauthRuntimeModelAllowlistResult>;

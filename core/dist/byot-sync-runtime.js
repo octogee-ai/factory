@@ -2,7 +2,7 @@ import * as path from "path";
 import { mattermostAccountIdForAgentId } from "@octogee/shared/types/identity";
 import * as os from "os";
 import * as fs from "fs";
-import { applyByotState, byosCoachConfigPatch, coachAgentExists, coachAgentPatch, coachAgentPatchReplacePaths, deriveDesiredByotState, FREE_TIER_COACH_TOOLS, isPlatformProviderRef, platformCoachModelInputForUser, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
+import { applyByotState, byosCoachConfigPatch, coachAgentExists, coachAgentPatch, coachAgentPatchReplacePaths, deriveDesiredByotState, FREE_TIER_COACH_TOOLS, isPlatformProviderRef, platformCoachModelInputForUser, BUILDER_CODEX_APP_SERVER, STANDARD_CODEX_APP_SERVER, } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
@@ -153,7 +153,7 @@ export async function applyAgentModelOverrides(slug, agentModels, opts, deps) {
     }
     return patched;
 }
-export async function applyOauthRuntimeModelAllowlist(providers, deps) {
+export async function applyOauthRuntimeModelAllowlist(providers, codexAppServer, deps) {
     const uniqueProviders = Array.from(new Set(providers));
     const models = {};
     let enableCodex = false;
@@ -177,7 +177,7 @@ export async function applyOauthRuntimeModelAllowlist(providers, deps) {
                     entries: {
                         codex: {
                             enabled: true,
-                            config: { appServer: STANDARD_CODEX_APP_SERVER },
+                            config: { appServer: codexAppServer },
                         },
                     },
                 },
@@ -1301,7 +1301,7 @@ function syncActions(deps) {
         applyCoachToolsConvergence: deps?.applyCoachToolsConvergence ??
             ((slug, houseOnly) => applyCoachToolsConvergence(slug, houseOnly, patchDeps)),
         applyOauthRuntimeModelAllowlist: deps?.applyOauthRuntimeModelAllowlist ??
-            ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
+            ((providers, codexAppServer) => applyOauthRuntimeModelAllowlist(providers, codexAppServer, patchDeps)),
         requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
         triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
         materializePlatformBrokerSurfaces: deps?.materializePlatformBrokerSurfaces ?? materializePlatformBrokerSurfaces,
@@ -1321,10 +1321,10 @@ function syncActions(deps) {
         clearPlatformCatalogRestartPending: deps?.clearPlatformCatalogRestartPending ?? clearPlatformCatalogRestartPending,
     };
 }
-async function applyRestoredOauthRuntimeAllowlist(restore, actions) {
+async function applyRestoredOauthRuntimeAllowlist(restore, actions, codexAppServer) {
     if (!restore.present)
         return { patched: false, changed: false, restartRequired: false };
-    return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? []);
+    return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? [], codexAppServer);
 }
 async function requestRestartIfRequired(runtimePatch, actions, reason, platformCatalogRestartPending = false) {
     if (!runtimePatch.restartRequired && !platformCatalogRestartPending)
@@ -1369,7 +1369,7 @@ async function syncStandardByotState(slug, desired, actions, opts) {
         ? actions.applyByotState(slug, desired.input, undefined, { preserveAuthProfileStore: false })
         : actions.applyByotState(slug, desired.input);
     const restore = await restoreOauthIfNeeded(slug, desired, actions);
-    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions, STANDARD_CODEX_APP_SERVER);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
         : false;
@@ -1388,7 +1388,7 @@ async function syncStandardByotState(slug, desired, actions, opts) {
 async function syncBuilderByotState(slug, desired, actions) {
     const restore = await restoreOauthIfNeeded(slug, desired, actions);
     const catalog = await materializePlatformCatalog(slug, actions);
-    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions, BUILDER_CODEX_APP_SERVER);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
         : false;
@@ -1429,7 +1429,7 @@ async function syncSharedBrokerByotState(slug, desired, actions, opts) {
     // store — purge it; every other shared path preserves the store.
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true });
     const catalog = await materializePlatformCatalog(slug, actions);
-    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions, STANDARD_CODEX_APP_SERVER);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
         : false;

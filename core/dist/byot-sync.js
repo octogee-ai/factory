@@ -88,6 +88,10 @@ export const STANDARD_CODEX_APP_SERVER = {
     sandbox: "workspace-write",
     approvalPolicy: "never",
 };
+export const BUILDER_CODEX_APP_SERVER = {
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+};
 // The always-available platform house model: the operator's free-tier dial
 // (snapshot freeTierModelRef), compiled default DEFAULT_FREE_TIER_MODEL_REF.
 // A failed/exhausted BYOK provider degrades here rather than leaving the

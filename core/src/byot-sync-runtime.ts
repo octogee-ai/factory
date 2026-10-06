@@ -12,8 +12,10 @@ import {
   FREE_TIER_COACH_TOOLS,
   isPlatformProviderRef,
   platformCoachModelInputForUser,
+  BUILDER_CODEX_APP_SERVER,
   STANDARD_CODEX_APP_SERVER,
   type CoachModelInput,
+  type CodexAppServerPatch,
 } from "./byot-sync.js";
 import { createGatewayRpc, OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
 import {
@@ -263,6 +265,7 @@ export async function applyAgentModelOverrides(
 
 export async function applyOauthRuntimeModelAllowlist(
   providers: readonly ByosubProvider[],
+  codexAppServer: CodexAppServerPatch,
   deps?: {
     applyConfigPatch?: typeof applyConfigPatch;
     logFn?: (m: string) => void;
@@ -292,7 +295,7 @@ export async function applyOauthRuntimeModelAllowlist(
             entries: {
               codex: {
                 enabled: true,
-                config: { appServer: STANDARD_CODEX_APP_SERVER },
+                config: { appServer: codexAppServer },
               },
             },
           },
@@ -1747,7 +1750,8 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
       ((slug, houseOnly) => applyCoachToolsConvergence(slug, houseOnly, patchDeps)),
     applyOauthRuntimeModelAllowlist:
       deps?.applyOauthRuntimeModelAllowlist ??
-      ((providers) => applyOauthRuntimeModelAllowlist(providers, patchDeps)),
+      ((providers, codexAppServer) =>
+        applyOauthRuntimeModelAllowlist(providers, codexAppServer, patchDeps)),
     requestGatewayRestart: deps?.requestGatewayRestart ?? requestGatewayRestartForRuntimeChange,
     triggerSecretsReload: deps?.triggerSecretsReload ?? triggerSecretsReload,
     materializePlatformBrokerSurfaces:
@@ -1778,9 +1782,10 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
 async function applyRestoredOauthRuntimeAllowlist(
   restore: OauthStoreRestoreResult,
   actions: SyncByotActions,
+  codexAppServer: CodexAppServerPatch,
 ): Promise<OauthRuntimeModelAllowlistResult> {
   if (!restore.present) return { patched: false, changed: false, restartRequired: false };
-  return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? []);
+  return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? [], codexAppServer);
 }
 
 async function requestRestartIfRequired(
@@ -1864,7 +1869,11 @@ async function syncStandardByotState(
     ? actions.applyByotState(slug, desired.input, undefined, { preserveAuthProfileStore: false })
     : actions.applyByotState(slug, desired.input);
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
-  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(
+    restore,
+    actions,
+    STANDARD_CODEX_APP_SERVER,
+  );
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
@@ -1896,7 +1905,11 @@ async function syncBuilderByotState(
 ): Promise<void> {
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
   const catalog = await materializePlatformCatalog(slug, actions);
-  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(
+    restore,
+    actions,
+    BUILDER_CODEX_APP_SERVER,
+  );
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
@@ -1964,7 +1977,11 @@ async function syncSharedBrokerByotState(
   );
 
   const catalog = await materializePlatformCatalog(slug, actions);
-  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions);
+  const runtimePatched = await applyRestoredOauthRuntimeAllowlist(
+    restore,
+    actions,
+    STANDARD_CODEX_APP_SERVER,
+  );
 
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)

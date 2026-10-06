@@ -19,7 +19,7 @@ type CoachModelRef = string | {
     primary: string;
     fallbacks: string[];
 };
-interface CodexAppServerPatch {
+export interface CodexAppServerPatch {
     sandbox: string;
     approvalPolicy: string;
 }
@@ -41,6 +41,7 @@ export interface CoachModelPatch {
     };
 }
 export declare const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch;
+export declare const BUILDER_CODEX_APP_SERVER: CodexAppServerPatch;
 export declare function isPlatformProviderRef(ref: string): boolean;
 export declare function byosCoachConfigPatch(input: CoachModelInput | null): CoachModelPatch | null;
 export declare function convergedCoachToolsValue(existing: unknown, tools: FreeTierCoachToolsBlock | null): Record<string, unknown> | undefined;

@@ -59,7 +59,7 @@ export type CoachModelInput = ByotCoachModelInput | FreeTierCoachModelInput;
 // (the prefix selects the runtime) — so agentRuntime is optional.
 type RuntimeModelsDef = Record<string, { agentRuntime?: { id: string } }>;
 type CoachModelRef = string | { primary: string; fallbacks: string[] };
-interface CodexAppServerPatch {
+export interface CodexAppServerPatch {
   sandbox: string;
   approvalPolicy: string;
 }
@@ -157,6 +157,11 @@ export interface CoachModelPatch {
 
 export const STANDARD_CODEX_APP_SERVER: CodexAppServerPatch = {
   sandbox: "workspace-write",
+  approvalPolicy: "never",
+};
+
+export const BUILDER_CODEX_APP_SERVER: CodexAppServerPatch = {
+  sandbox: "danger-full-access",
   approvalPolicy: "never",
 };
 

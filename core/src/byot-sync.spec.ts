@@ -61,10 +61,12 @@ vi.mock("child_process", async () => {
 vi.mock("./internal-fetch", () => ({ internalFetch: vi.fn() }));
 
 import {
+  BUILDER_CODEX_APP_SERVER,
   deriveDesiredByotState,
   byosCoachConfigPatch,
   coachFullAgentList,
   FREE_TIER_COACH_TOOLS,
+  STANDARD_CODEX_APP_SERVER,
 } from "./byot-sync.js";
 import {
   triggerSecretsReload,
@@ -1559,7 +1561,7 @@ describe("applyCoachModelPatch — applies the durable patch, best-effort", () =
 describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", () => {
   it("allowlists every restored BYOSUB runtime without changing the coach primary model", async () => {
     const calls: object[] = [];
-    const r = await applyOauthRuntimeModelAllowlist(["openai", "anthropic"], {
+    const r = await applyOauthRuntimeModelAllowlist(["openai", "anthropic"], STANDARD_CODEX_APP_SERVER, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch({}));
         return { mode: "rpc", attempts: 1 };
@@ -1589,9 +1591,9 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
     ]);
   });
 
-  it("resets an existing Codex sandbox to the platform policy while adding runtime defaults", async () => {
+  it("stamps the gateway class's Codex sandbox over an existing one while adding runtime defaults", async () => {
     const calls: object[] = [];
-    const r = await applyOauthRuntimeModelAllowlist(["openai"], {
+    const r = await applyOauthRuntimeModelAllowlist(["openai"], BUILDER_CODEX_APP_SERVER, {
       applyConfigPatch: async (args) => {
         calls.push(args.buildPatch({
           plugins: {
@@ -1599,7 +1601,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
               codex: {
                 config: {
                   appServer: {
-                    sandbox: "danger-full-access",
+                    sandbox: "workspace-write",
                     approvalPolicy: "never",
                   },
                 },
@@ -1627,7 +1629,7 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
               enabled: true,
               config: {
                 appServer: {
-                  sandbox: "workspace-write",
+                  sandbox: "danger-full-access",
                   approvalPolicy: "never",
                 },
               },
@@ -1641,13 +1643,15 @@ describe("applyOauthRuntimeModelAllowlist — provider-set runtime defaults", ()
   it("does nothing when no OAuth providers were restored", async () => {
     const applyConfigPatchFn = vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 }));
     await expect(
-      applyOauthRuntimeModelAllowlist([], { applyConfigPatch: applyConfigPatchFn }),
+      applyOauthRuntimeModelAllowlist([], STANDARD_CODEX_APP_SERVER, {
+        applyConfigPatch: applyConfigPatchFn,
+      }),
     ).resolves.toEqual({ patched: false, changed: false, restartRequired: false });
     expect(applyConfigPatchFn).not.toHaveBeenCalled();
   });
 
   it("does not require a restart when config.patch reports a no-op", async () => {
-    const r = await applyOauthRuntimeModelAllowlist(["anthropic"], {
+    const r = await applyOauthRuntimeModelAllowlist(["anthropic"], STANDARD_CODEX_APP_SERVER, {
       applyConfigPatch: async () => ({ mode: "rpc", attempts: 1, noop: true }),
     });
     expect(r).toEqual({ patched: true, changed: false, restartRequired: false });
@@ -2612,7 +2616,7 @@ describe("standard gateway — BYOS materialization", () => {
       preserveAuthProfileStore: false,
     });
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith([]);
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith([], STANDARD_CODEX_APP_SERVER);
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       model: "platform-openrouter/deepseek/deepseek-v4-pro",
@@ -2712,7 +2716,7 @@ describe("Builder gateway — native subscription runtime", () => {
     expect(purgeCustomerOauthRuntimeFn).not.toHaveBeenCalled();
     expect(applyByotStateFn).not.toHaveBeenCalled();
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
-    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai"]);
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai"], BUILDER_CODEX_APP_SERVER);
     expect(applyCoachModelPatchFn).toHaveBeenCalledTimes(1);
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith("tester-70", agentModels, {
       houseOnly: false,
@@ -2948,7 +2952,10 @@ describe("operator gateway — runtime sync stays narrow", () => {
 
     expect(applyByotStateFn).not.toHaveBeenCalled();
     expect(restoreOauthFn).toHaveBeenCalledWith("tester-70");
-    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(["openai", "anthropic"]);
+    expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith(
+      ["openai", "anthropic"],
+      BUILDER_CODEX_APP_SERVER,
+    );
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
       provider: "openai-codex",
@@ -3055,7 +3062,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
     ]);
   });
 
-  it("syncByotForCustomer: restores OAuth without widening the Codex sandbox", async () => {
+  it("syncByotForCustomer: a Builder OAuth restore runs Codex without the bwrap sandbox", async () => {
     const currentConfig = {
       agents: {
         list: [
@@ -3068,7 +3075,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
             enabled: true,
             config: {
               appServer: {
-                sandbox: "danger-full-access",
+                sandbox: "workspace-write",
                 approvalPolicy: "never",
               },
             },
@@ -3095,8 +3102,8 @@ describe("operator gateway — runtime sync stays narrow", () => {
           providers: ["openai"] as const,
         })),
         materializePlatformBrokerSurfaces: vi.fn(async () => false),
-        applyOauthRuntimeModelAllowlist: (providers) =>
-          applyOauthRuntimeModelAllowlist(providers, {
+        applyOauthRuntimeModelAllowlist: (providers, codexAppServer) =>
+          applyOauthRuntimeModelAllowlist(providers, codexAppServer, {
             applyConfigPatch: async (args) => {
               patches.push(args.buildPatch(currentConfig));
               return { mode: "rpc", attempts: 1 };
@@ -3128,7 +3135,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
               enabled: true,
               config: {
                 appServer: {
-                  sandbox: "workspace-write",
+                  sandbox: "danger-full-access",
                   approvalPolicy: "never",
                 },
               },
