@@ -8,6 +8,7 @@ import type {
   OperationStep,
 } from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
+import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 
 export type OperationFailureClassification = "transient" | "terminal";
 
@@ -123,7 +124,7 @@ export function operationNeedsDurableCustomerMigrationV2Resume(op: {
   customerMigrationV2?: CustomerMigrationV2State;
   sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
-  return op.kind === "migrate-customer" && op.customerMigrationV2 !== undefined;
+  return op.kind === MIGRATE_CUSTOMER_KIND && op.customerMigrationV2 !== undefined;
 }
 
 export function operationNeedsDurableRestartResume(op: {
@@ -234,7 +235,7 @@ function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
 
 function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): boolean {
   const fromGatewayId = op.input?.fromGatewayId;
-  return op.kind === "migrate-customer" &&
+  return op.kind === MIGRATE_CUSTOMER_KIND &&
     op.origin === "automatic" &&
     op.input?.source === "builder-activation-lease" &&
     typeof fromGatewayId === "string" &&
@@ -256,7 +257,7 @@ function isGatewayMigrationReadinessFailure(error: string): boolean {
 function isLevelTriggeredContinuousPlacement(
   op: OperationCompletionInput["op"],
 ): boolean {
-  return op.kind === "migrate-customer" &&
+  return op.kind === MIGRATE_CUSTOMER_KIND &&
     op.origin === "automatic" &&
     op.input?.source === "continuous-placement-policy" &&
     typeof op.id === "string" &&
@@ -361,7 +362,7 @@ export function buildOperationCompletionUpdate(
     nextAttemptAt:input.now+30_000,lastProgressAt:input.now,error:'source transfer termination not observed',
   };
   if (result.waitingForBuilderIdle === true) {
-    if (op.kind !== "migrate-customer" || result.success) throw new Error("only pending customer migrations can wait for active Builder work");
+    if (op.kind !== MIGRATE_CUSTOMER_KIND || result.success) throw new Error("only pending customer migrations can wait for active Builder work");
     return {
       status: "pending", startedAt: null, completedAt: null, expireAt: FieldValue.delete(),
       steps: persistedSteps, nextAttemptAt: input.now + 15_000, lastProgressAt: input.now,
@@ -376,7 +377,7 @@ export function buildOperationCompletionUpdate(
     (isComputerPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
     (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
     isLevelTriggeredContinuousPlacement(op);
-  const retry = shouldRetry(
+  const retry = !needsSharedRollbackRecovery(input, persistedSteps) && shouldRetry(
     op,
     result,
     failure.classification,
@@ -407,4 +408,14 @@ function shouldRetry(
     hasDurableCleanup ||
     retryBeyondCap ||
     hasActiveCustomerMigrationV2;
+}
+
+function needsSharedRollbackRecovery(input: OperationCompletionInput, steps: OperationStep[]): boolean {
+  return input.op.kind === MIGRATE_CUSTOMER_KIND &&
+    input.op.customerMigrationV2 === undefined &&
+    typeof input.op.input?.fromGatewayId === "string" &&
+    input.op.input.fromGatewayId.startsWith("shared-") &&
+    input.result.rolledBack !== true &&
+    (input.op.input.recoverSourceOnly === true || input.result.rolledBack === false &&
+      steps.some((step) => step.name.startsWith("rollback:") && step.status === "failed"));
 }

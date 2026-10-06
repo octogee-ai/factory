@@ -547,9 +547,9 @@ async function handleStepFailure(
   await report(deps, { name, status: "failed", error: message });
   deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${message}`);
   const rollback = await rollbackExecution(execution);
-  if (rollback.unreleased) {
+  if (rollback.error) {
     deps.log(
-      `[migration-runner] ❌ rollback left the source fenced migrationId=${input.migrationId} slug=${input.slug}: ${rollback.unreleased}`,
+      `[migration-runner] ❌ rollback incomplete migrationId=${input.migrationId} slug=${input.slug}: ${rollback.error}`,
     );
   }
   return {
@@ -557,7 +557,7 @@ async function handleStepFailure(
     finalPhase: execution.state.phase,
     errorAt: {
       phase: phaseAtStart,
-      error: rollback.unreleased ? `${message} — ${rollback.unreleased}` : message,
+      error: rollback.error ? `${message} — ${rollback.error}` : message,
     },
     rolledBack: rollback.rolledBack,
   };
@@ -565,7 +565,7 @@ async function handleStepFailure(
 
 interface RollbackOutcome {
   rolledBack: boolean;
-  unreleased?: string;
+  error?: string;
 }
 
 function rollbackServingTarget(
@@ -690,7 +690,8 @@ async function tryRollback(
     return { rolledBack: false };
   }
   const abortUnconfirmed = transports.quiesceStarted ? await abortTargetScheduler(state, deps, transports) : null;
-  if (abortUnconfirmed) return { rolledBack: false, unreleased: abortUnconfirmed };
+  if (abortUnconfirmed) return { rolledBack: false, error: abortUnconfirmed };
+  const failures: string[] = [];
   for (const step of plan) {
     const rbName = `rollback:${reportName(step)}`;
     await report(deps, { name: rbName, status: "running" });
@@ -715,16 +716,20 @@ async function tryRollback(
       deps.log(`[migration-runner] rollback ${step.action} ok`);
     } catch (rbErr) {
       const msg = rbErr instanceof Error ? rbErr.message : String(rbErr);
+      failures.push(`${rbName}: ${msg}`);
       await report(deps, { name: rbName, status: "failed", error: msg });
       deps.log(`[migration-runner] ⚠ rollback warn: ${step.action} failed: ${msg}`);
     }
   }
   if (transports.quiesceStarted) {
     const unreleased = await releaseSource(state, deps, migrationId, transports);
-    if (unreleased.length > 0) return { rolledBack: false, unreleased: unreleased.join("; ") };
+    if (unreleased.length > 0) return { rolledBack: false, error: [...failures, ...unreleased].join("; ") };
   }
   await restoreSourceServing(deps, transports.restoreServing);
-  return { rolledBack: true };
+  return {
+    rolledBack: failures.length === 0 || !state.fromGatewayId.startsWith("shared-"),
+    ...(failures.length > 0 ? { error: failures.join("; ") } : {}),
+  };
 }
 
 // Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving

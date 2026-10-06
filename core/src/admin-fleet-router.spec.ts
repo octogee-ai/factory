@@ -21,6 +21,8 @@ import {
 } from "@octogee/shared/types/glm";
 import { SPOT_PRICE_MULTIPLIER } from "@octogee/shared/types/cost-estimator";
 import { ACCOUNT_DELETION_RETENTION_MS } from "@octogee/shared/types/account-lifecycle";
+import { runMigration, type ReportedStep } from "./fleet-migration-runner.js";
+import type { MigrationClient } from "./fleet-migration-client.js";
 
 describe("projectGatewayControl", () => {
   const root = {
@@ -1936,9 +1938,28 @@ describe("manual disposable runtime return", () => {
     { label: "another gateway readiness failure", rolledBack: false, steps: [], error: "source gateway run-bob is not migration-ready (desiredStatus=running)", expected: 409 },
     { label: "unknown failure without rollback", rolledBack: false, steps: [], expected: 409 },
     { label: "source quiesce without rollback", rolledBack: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "failed" }], expected: 409 },
-  ])("safely handles return retry after $label", async ({ rolledBack, steps, expected, error = "checkpoint failed" }) => {
+    { label: "legacy source restored after target cleanup fails", rolledBack: true, steps: [], expected: 202, runFailedReturn: true },
+  ])("safely handles return retry after $label", async ({ rolledBack, steps, expected, error = "checkpoint failed", ...scenario }) => {
     const targetGatewayId = "run-alice";
     const operationId = `builder-return-${targetGatewayId}`;
+    if ("runFailedReturn" in scenario) {
+      const journal: ReportedStep[] = [];
+      const assignments: string[] = [];
+      const result = await runMigration({ migrationId: operationId, uid: "uid-alice", slug: "alice", fromGatewayId: targetGatewayId, toGatewayId: "shared-blue", gateAssignment: true }, {
+        client: {
+          transferState: vi.fn(async ({ mode }) => { if (mode === "pre") { throw new Error("request timed out"); } return {}; }),
+          unmount: vi.fn(async () => { throw new Error("agent database files are still held open"); }),
+        } as unknown as MigrationClient,
+        commitCutover: vi.fn(), log: vi.fn(),
+        setAssignmentState: async ({ state }) => { assignments.push(state); },
+        reportStep: (step) => { const index = journal.findIndex((entry) => entry.name === step.name); if (index < 0) journal.push(step); else journal[index] = step; },
+      });
+      expect(assignments).toEqual([]);
+      expect(result.rolledBack).toBe(rolledBack);
+      expect(journal.at(-1)).toMatchObject({ name: "rollback:unmount-target", status: "failed" });
+      steps = journal;
+      error = result.errorAt!.error;
+    }
     const { app, state } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {

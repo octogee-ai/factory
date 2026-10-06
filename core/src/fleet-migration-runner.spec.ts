@@ -58,6 +58,7 @@ interface HarnessOptions {
   client?: MigrationClient & { calls: string[] };
   gateAssignment?: boolean;
   toGatewayId?: string;
+  fromGatewayId?: string;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -82,7 +83,7 @@ function harness(options: HarnessOptions = {}) {
     migrationId: "m1",
     uid: "uid-alice",
     slug: "alice",
-    fromGatewayId: "gw-blue",
+    fromGatewayId: options.fromGatewayId ?? "gw-blue",
     toGatewayId: options.toGatewayId ?? "gw-green",
     includeActivationManifest: true,
     ...(options.gateAssignment !== undefined ? { gateAssignment: options.gateAssignment } : {}),
@@ -233,16 +234,40 @@ describe("runMigration — failures", () => {
     expect(events.some((event) => event.startsWith("log:") && event.includes("cleanup failed after durable cutover") && event.includes(message))).toBe(true);
   });
 
-  it("treats a rollback step that itself fails as a logged warning, not a thrown error", async () => {
+  it("reports failed destination cleanup without claiming rollback completed", async () => {
     const client = happyClient();
     (client.verifyTarget as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("verify broke"));
     (client.unmount as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("target also broke"));
-    const { deps, input, events } = harness({ client });
+    const { deps, input, events } = harness({ client, gateAssignment: true, fromGatewayId: "shared-blue" });
 
     const result = await runMigration(input, deps);
 
-    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.errorAt?.error).toContain("target also broke");
+    expect(events).toContain("report:rollback:unmount-target:failed");
+    expect(events).toContain("assignment:shared-blue:serving");
     expect(events.some((event) => event.includes("rollback warn"))).toBe(true);
+  });
+
+  it("preserves pre-quiesce source ownership when held target state prevents import and rollback cleanup", async () => {
+    const client = happyClient();
+    const held = "agent database files are still held open: /state/agents/octogee-alice-coach/agent/openclaw-agent.sqlite";
+    (client.transferState as ReturnType<typeof vi.fn>).mockImplementation(async ({ mode }) => {
+      if (mode === "pre") throw new Error(held);
+      return { migrationId: "m1", slug: "alice", imported: true };
+    });
+    (client.unmount as ReturnType<typeof vi.fn>).mockRejectedValue(new Error(held));
+    const { deps, input, events } = harness({ client, gateAssignment: true, fromGatewayId: "shared-blue" });
+
+    const result = await runMigration(input, deps);
+
+    expect(result).toMatchObject({ success: false, finalPhase: "keys-synced", rolledBack: false });
+    expect(result.errorAt?.error).toContain(`rollback:unmount-target: ${held}`);
+    expect(client.quiesce).not.toHaveBeenCalled();
+    expect(client.scheduler).not.toHaveBeenCalled();
+    expect(deps.commitCutover).not.toHaveBeenCalled();
+    expect(events).toContain("report:rollback:unmount-target:failed");
+    expect(events).not.toContain("assignment:shared-blue:quiescing");
   });
 });
 

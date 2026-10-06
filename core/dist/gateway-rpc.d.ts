@@ -157,6 +157,7 @@ export interface GatewayAgentsDeleteResult {
         method: "trash" | "missing";
     }>;
     failed?: unknown[];
+    purgeFailed?: boolean;
     [extra: string]: unknown;
 }
 export interface GatewayAgentsCreateParams {

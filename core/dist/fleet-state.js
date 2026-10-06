@@ -92,7 +92,17 @@ async function workspaceMigrationRecovery(deps, params, complete) {
         const input = recordOrEmpty(operation.input);
         const source = recordOrEmpty(sourceSnapshot.data());
         const marker = readWorkspaceMigrationMarker(openclaw);
+        const handoff = recordOrEmpty(operation.schedulerHandoff);
+        const recovery = recordOrEmpty(handoff.sourceRecovery);
+        const handoffAttempt = typeof handoff.migrationId === "string" ? Number(handoff.migrationId.split(":").at(-1)) : NaN;
+        const recoveryIntentMatches = input.recoverSourceOnly !== true || [
+            handoff.uid === params.uid, handoff.fromGatewayId === params.sourceGatewayId, handoff.toGatewayId === input.toGatewayId,
+            Number.isSafeInteger(handoffAttempt), handoffAttempt > 0,
+            handoff.migrationId === `mig-${params.operationId}:scheduler:${handoffAttempt}`, recovery.migrationId === handoff.migrationId,
+            recovery.sourceEpoch === params.sourceEpoch, Array.isArray(recovery.steps),
+        ].every(Boolean);
         const exact = [
+            recoveryIntentMatches,
             operation.kind === MIGRATE_CUSTOMER_OPERATION_KIND, operation.status === "running",
             operation.startedAt === params.claimStartedAt, Number.isFinite(params.claimStartedAt), params.claimStartedAt > 0,
             operation.cutoverCommittedAt === undefined, operation.customerMigrationV2 === undefined,

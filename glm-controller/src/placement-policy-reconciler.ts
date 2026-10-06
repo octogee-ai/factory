@@ -6,6 +6,7 @@ import type {
   Transaction,
 } from "firebase-admin/firestore";
 import { isReapedOperationError } from "./stuck-op-reaper.js";
+import { sourceRecoveryForwardRetryable } from "./legacy-migration-recovery.js";
 import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
 import { FieldValue } from "firebase-admin/firestore";
 import { createHash } from "node:crypto";
@@ -3184,6 +3185,7 @@ function sourceOnlyRollbackCompleted(data: Record<string, unknown>, request: Enq
   const steps = Array.isArray(data.steps) ? data.steps : [];
   const step = record(steps[0]);
   return isAutomaticRolledBackPlacement(data, request) && record(data.input)?.recoverSourceOnly === true &&
+    sourceRecoveryForwardRetryable(data as unknown as Parameters<typeof sourceRecoveryForwardRetryable>[0]) &&
     data.cutoverCommittedAt === undefined && data.cancellationRequestedAt === undefined && steps.length === 1 &&
     step?.name === "recover-source" && step.status === "done";
 }

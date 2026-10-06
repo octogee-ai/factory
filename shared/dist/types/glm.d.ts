@@ -365,6 +365,11 @@ export interface SchedulerHandoffState {
     slug: string;
     stageAfterCutover?: true;
     stagedAt?: number;
+    sourceRecovery?: {
+        migrationId: string;
+        sourceEpoch: number;
+        steps: OperationStep[];
+    };
 }
 export interface SourceTransferAuthority {
     targetIdentity: string;

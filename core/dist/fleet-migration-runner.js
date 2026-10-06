@@ -347,15 +347,15 @@ async function handleStepFailure(execution, failure) {
     await report(deps, { name, status: "failed", error: message });
     deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${message}`);
     const rollback = await rollbackExecution(execution);
-    if (rollback.unreleased) {
-        deps.log(`[migration-runner] ❌ rollback left the source fenced migrationId=${input.migrationId} slug=${input.slug}: ${rollback.unreleased}`);
+    if (rollback.error) {
+        deps.log(`[migration-runner] ❌ rollback incomplete migrationId=${input.migrationId} slug=${input.slug}: ${rollback.error}`);
     }
     return {
         success: false,
         finalPhase: execution.state.phase,
         errorAt: {
             phase: phaseAtStart,
-            error: rollback.unreleased ? `${message} — ${rollback.unreleased}` : message,
+            error: rollback.error ? `${message} — ${rollback.error}` : message,
         },
         rolledBack: rollback.rolledBack,
     };
@@ -447,7 +447,8 @@ async function tryRollback(state, deps, migrationId, transports) {
     }
     const abortUnconfirmed = transports.quiesceStarted ? await abortTargetScheduler(state, deps, transports) : null;
     if (abortUnconfirmed)
-        return { rolledBack: false, unreleased: abortUnconfirmed };
+        return { rolledBack: false, error: abortUnconfirmed };
+    const failures = [];
     for (const step of plan) {
         const rbName = `rollback:${reportName(step)}`;
         await report(deps, { name: rbName, status: "running" });
@@ -473,6 +474,7 @@ async function tryRollback(state, deps, migrationId, transports) {
         }
         catch (rbErr) {
             const msg = rbErr instanceof Error ? rbErr.message : String(rbErr);
+            failures.push(`${rbName}: ${msg}`);
             await report(deps, { name: rbName, status: "failed", error: msg });
             deps.log(`[migration-runner] ⚠ rollback warn: ${step.action} failed: ${msg}`);
         }
@@ -480,10 +482,13 @@ async function tryRollback(state, deps, migrationId, transports) {
     if (transports.quiesceStarted) {
         const unreleased = await releaseSource(state, deps, migrationId, transports);
         if (unreleased.length > 0)
-            return { rolledBack: false, unreleased: unreleased.join("; ") };
+            return { rolledBack: false, error: [...failures, ...unreleased].join("; ") };
     }
     await restoreSourceServing(deps, transports.restoreServing);
-    return { rolledBack: true };
+    return {
+        rolledBack: failures.length === 0 || !state.fromGatewayId.startsWith("shared-"),
+        ...(failures.length > 0 ? { error: failures.join("; ") } : {}),
+    };
 }
 // Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving
 // on the source after a pre-cutover rollback. Failure here is LOUD (the edge

@@ -219,11 +219,13 @@ describe("abandoned Shared migration recovery", () => {
       input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
       schedulerHandoff: { migrationId: `mig-${id}:scheduler:1`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
     });
+    request.schedulerHandoff!.sourceRecovery = { migrationId: request.schedulerHandoff!.migrationId, sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" }] };
     if (scenario === "resume-failure") h.client.resume = vi.fn().mockRejectedValue(new Error("native resume refused"));
     if (scenario === "authority-failure") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockRejectedValue(new Error("authority changed"));
     if (scenario === "ownership-changed") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("authority changed during target cleanup"));
     if (scenario === "never-quiesced") {
       request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000, error: "keys failed", classification: "transient", steps: [{ name: "keys-sync-state", status: "failed" }] }];
+      request.schedulerHandoff!.sourceRecovery.steps = request.attemptHistory[0].steps;
       h.client.resume = vi.fn().mockRejectedValue(new Error("foreign voice hold"));
     }
     const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
@@ -248,6 +250,26 @@ describe("abandoned Shared migration recovery", () => {
     return h;
   }
   const op = () => mkOp({ status: "running", startedAt: 4_000, schedulerHandoff: previous, attempts: 1, input: { uid: "uid-alice", fromGatewayId: "shared-blue", toGatewayId: "shared-green" } });
+  it.each(["missing", "foreign-id", "changed-epoch", "history-evicted"])("requires exact durable recovery intent before native mutation: %s", async (scenario) => {
+    const h = recovery();
+    const request = op();
+    request.input.recoverSourceOnly = true;
+    const steps: OperationStep[] = [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed", error: "agent database files are still held open: /state/agent.sqlite" }, { name: "rollback:unmount-target", status: "failed" }];
+    request.schedulerHandoff = { ...previous, sourceRecovery: { migrationId: previous.migrationId, sourceEpoch: 4, steps } };
+    if (scenario === "missing") delete request.schedulerHandoff.sourceRecovery;
+    if (scenario === "foreign-id") request.schedulerHandoff.sourceRecovery!.migrationId = "mig-other:scheduler:1";
+    if (scenario === "changed-epoch") request.schedulerHandoff.sourceRecovery!.sourceEpoch = 3;
+    request.attemptHistory = Array.from({ length: 20 }, (_, index) => ({ attempt: 4 + index, startedAt: 1_000, completedAt: 2_000, error: "cleanup failed", classification: "terminal", steps: [] }));
+    vi.mocked(h.client.resume).mockRejectedValue(new Error("foreign voice hold"));
+    const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
+    expect(result.rolledBack === true).toBe(scenario === "history-evicted");
+    expect(h.client.resume).not.toHaveBeenCalled();
+    if (scenario !== "history-evicted") {
+      expect(h.client.abortImport).not.toHaveBeenCalled();
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.client.scheduler).not.toHaveBeenCalled();
+    }
+  });
   it("aborts all old imports and the target before reopening native source ingress and publishing recovery", async () => {
     const h = recovery();
     const order: string[] = [];
@@ -280,6 +302,7 @@ describe("abandoned Shared migration recovery", () => {
     const h = recovery();
     const request = op();
     request.input.recoverSourceOnly = true;
+    request.schedulerHandoff = { ...previous, sourceRecovery: { migrationId: previous.migrationId, sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" }] } };
     expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "abandoned Shared migration rolled back; native source recovery completed" });
     expect(h.client.transferState).not.toHaveBeenCalled();
     expect(h.client.quiesce).not.toHaveBeenCalled();
@@ -295,21 +318,49 @@ describe("abandoned Shared migration recovery", () => {
       error: "rsync import port 30873 is already serving migrationId=other slug=bob",
       classification: "terminal", steps: [{ name: "keys-sync-state", status: "failed" }],
     }];
+    request.schedulerHandoff = { ...previous, sourceRecovery: { migrationId: previous.migrationId, sourceEpoch: 4, steps: request.attemptHistory[0].steps } };
     vi.mocked(h.client.resume).mockRejectedValue(new Error("foreign voice hold"));
     expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ rolledBack: true });
     expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.client.scheduler).toHaveBeenCalledWith(expect.objectContaining({ phase: "resume", gatewayId: "shared-blue" }));
     expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
   });
-  it("does not use another attempt's keys-sync failure as proof that the old handoff never quiesced", async () => {
+  it.each(["released", "still-held", "purge-failed", "failed-entry", "transient"])("retries held target cleanup before publishing pre-quiesce source recovery: %s", async (scenario) => {
+    const h = recovery();
+    const request = op();
+    request.input.recoverSourceOnly = true;
+    request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000,
+      error: "agent database files are still held open: /state/agents/alice/agent/openclaw-agent.sqlite",
+      classification: "terminal", steps: [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed" }, { name: "rollback:unmount-target", status: "failed" }],
+    }];
+    if (scenario === "purge-failed") request.attemptHistory[0].error = "native cleanup incomplete: purgeFailed=true failed=[]";
+    if (scenario === "failed-entry") request.attemptHistory[0].error = 'native cleanup incomplete: purgeFailed=false failed=["database purge failed"]';
+    if (scenario === "transient") request.attemptHistory[0].error = "request timed out";
+    request.attemptHistory[0].steps[1].error = request.attemptHistory[0].error;
+    request.schedulerHandoff = { ...previous, sourceRecovery: { migrationId: previous.migrationId, sourceEpoch: 4, steps: request.attemptHistory[0].steps } };
+    vi.mocked(h.client.resume).mockRejectedValue(new Error("foreign voice hold"));
+    if (scenario === "still-held") vi.mocked(h.client.unmount).mockRejectedValue(new Error("agent database files are still held open"));
+
+    const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
+
+    expect(result.rolledBack === true).toBe(scenario !== "still-held");
+    if (scenario === "still-held") expect(result).toMatchObject({ success: false, error: "agent database files are still held open" });
+    expect(h.client.abortImport).toHaveBeenCalledTimes(3);
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-green" }));
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledTimes(scenario !== "still-held" ? 1 : 0);
+  });
+
+  it("refuses source-only recovery without original evidence despite another attempt's keys-sync failure", async () => {
     const h = recovery();
     const request = op();
     request.attempts = 2;
     request.input.recoverSourceOnly = true;
     request.steps = [{ name: "keys-sync-state", status: "failed" }];
     vi.mocked(h.client.resume).mockRejectedValue(new Error("voice hold still owned"));
-    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, error: "voice hold still owned" });
-    expect(h.client.resume).toHaveBeenCalledOnce();
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, error: "Shared migration recovery intent missing or changed" });
+    expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
   });
   it.each(["cutover", "source-moved"])("refuses source-only recovery before native RPCs after %s", async (scenario) => {

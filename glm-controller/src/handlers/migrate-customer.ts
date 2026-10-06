@@ -1422,6 +1422,11 @@ async function sharedRecoveryAuthority(deps: MigrateCustomerDeps, op: Operation,
   }
   const source = await deps.resolveSourcePlacement(uid, user.currentGatewayId);
   if (!source || source.assignmentMode !== "assigned" || source.epoch === undefined) throw new Error("Shared migration recovery source assignment disappeared");
+  const handoff = op.schedulerHandoff!;
+  const intent = handoff.sourceRecovery;
+  if (op.input.recoverSourceOnly === true && (!intent || intent.migrationId !== handoff.migrationId || intent.sourceEpoch !== source.epoch || !Array.isArray(intent.steps))) {
+    throw new Error("Shared migration recovery intent missing or changed");
+  }
   const recovery = { uid, sourceGatewayId: user.currentGatewayId, operationId: op.id, sourceEpoch: source.epoch, claimStartedAt: op.startedAt };
   await deps.assertMigrationRecoveryAuthority(recovery);
   return recovery;

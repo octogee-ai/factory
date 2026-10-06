@@ -410,7 +410,14 @@ async function callAgentsCreate(call, params) {
     return payload;
 }
 async function callAgentsDelete(call, params) {
-    return (await callOkPayload(call, "agents.delete", params));
+    const payload = await callOkPayload(call, "agents.delete", params);
+    if (payload.purgeFailed !== undefined && typeof payload.purgeFailed !== "boolean") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload has invalid `purgeFailed`");
+    }
+    if (payload.failed !== undefined && !Array.isArray(payload.failed)) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload has invalid `failed` array");
+    }
+    return payload;
 }
 export function createGatewayRpc(opts = {}) {
     const url = opts.url ??

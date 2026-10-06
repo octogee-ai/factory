@@ -67,7 +67,12 @@ export async function deleteRosterAgents(
       );
     }, AGENT_DELETE_PROGRESS_INTERVAL_MS);
     try {
-      await opts.rpc.agentsDelete({ agentId, deleteFiles: false });
+      const result = await opts.rpc.agentsDelete({ agentId, deleteFiles: false });
+      if (result.purgeFailed === true || (result.failed?.length ?? 0) > 0) {
+        throw new Error(
+          `native cleanup incomplete: purgeFailed=${result.purgeFailed === true} failed=${JSON.stringify(result.failed ?? [])}`,
+        );
+      }
       log(
         `${prefix}agents.delete completed agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
       );

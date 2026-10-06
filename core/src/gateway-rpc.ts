@@ -213,6 +213,7 @@ export interface GatewayAgentsDeleteResult {
   removedBindings?: number;
   removed?: Array<{ path: string; method: "trash" | "missing" }>;
   failed?: unknown[];
+  purgeFailed?: boolean;
   [extra: string]: unknown;
 }
 
@@ -808,7 +809,14 @@ async function callAgentsDelete(
   call: GatewayCall,
   params: GatewayAgentsDeleteParams,
 ): Promise<GatewayAgentsDeleteResult> {
-  return (await callOkPayload(call, "agents.delete", params)) as GatewayAgentsDeleteResult;
+  const payload = await callOkPayload(call, "agents.delete", params);
+  if (payload.purgeFailed !== undefined && typeof payload.purgeFailed !== "boolean") {
+    throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload has invalid `purgeFailed`");
+  }
+  if (payload.failed !== undefined && !Array.isArray(payload.failed)) {
+    throw new OpenclawWireError(INVALID_RESPONSE, "agents.delete payload has invalid `failed` array");
+  }
+  return payload as GatewayAgentsDeleteResult;
 }
 
 export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpcClient {

@@ -841,6 +841,26 @@ describe("gateway-rpc", () => {
   });
 
   describe("agentsDelete", () => {
+    it.each([
+      { purgeFailed: "true" }, { purgeFailed: null }, { purgeFailed: 0 },
+      { failed: {} }, { failed: "" }, { failed: null }, { failed: 0 },
+    ])("rejects malformed cleanup metadata: %j", async (cleanup) => {
+      server.setHandler("agents.delete", () => ({
+        ok: true, payload: { ok: true, agentId: "octogee-alice-coach", ...cleanup },
+      }));
+      await expect(client.agentsDelete({ agentId: "octogee-alice-coach" })).rejects.toMatchObject({
+        name: "OpenclawWireError", code: "invalid-response",
+      });
+    });
+
+    it.each([
+      { purgeFailed: false, failed: [] },
+      { purgeFailed: true, failed: [{ path: "/state/agent.sqlite", error: "held" }] },
+    ])("preserves typed native cleanup metadata: %j", async (cleanup) => {
+      server.setHandler("agents.delete", () => ({ ok: true, payload: { ok: true, ...cleanup } }));
+      await expect(client.agentsDelete({ agentId: "octogee-alice-coach" })).resolves.toMatchObject(cleanup);
+    });
+
     it("calls `agents.delete` with the agent id and returns the gateway payload", async () => {
       let captured: unknown = "not-called";
       server.setHandler("agents.delete", (params) => {

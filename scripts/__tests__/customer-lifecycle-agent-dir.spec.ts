@@ -351,6 +351,59 @@ describe("customer lifecycle config patch agent directories", () => {
     });
   });
 
+  it("broker import preparation preserves state until native deletion cleanup completes", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
+      const database = path.join(agentDir, "openclaw-agent.sqlite");
+      const customerFile = path.join(tempRoot, "customers", "alice", "notes.md");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(database, "retained state");
+      await fs.mkdir(path.dirname(customerFile), { recursive: true });
+      await fs.writeFile(customerFile, "notes");
+      const { buildBrokeredLifecycleAdapter } = await import(
+        "../lib/customer-lifecycle-broker-adapter.js"
+      );
+      const agentsDelete = vi.fn()
+        .mockResolvedValueOnce({ ok: true, purgeFailed: true, failed: [] })
+        .mockResolvedValue({ ok: true, failed: [] });
+      const adapter = buildBrokeredLifecycleAdapter({
+        client: mkClient(brokerSnapshot),
+        rpc: { agentsDelete } as unknown as GatewayRpcClient,
+        log: vi.fn(),
+        procRoot: await procRootHolding(tempRoot, []),
+      });
+
+      await expect(adapter.prepareImportDir("alice", "pre")).rejects.toThrow("native cleanup incomplete");
+      expect(await fs.readFile(database, "utf8")).toBe("retained state");
+      expect(await fs.readFile(customerFile, "utf8")).toBe("notes");
+
+      await adapter.prepareImportDir("alice", "pre");
+      expect(agentsDelete).toHaveBeenCalledTimes(2);
+      expect(fsSync.existsSync(database)).toBe(false);
+    });
+  });
+
+  it("does not mistake not-found after partial native deletion for closed database files", async () => {
+    await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
+      process.env.OPENCLAW_STATE_DIR = tempRoot;
+      const database = path.join(agentsDir, "octogee-alice-coach", "agent", "openclaw-agent.sqlite");
+      await fs.mkdir(path.dirname(database), { recursive: true });
+      await fs.writeFile(database, "retained state");
+      const procRoot = await procRootHolding(tempRoot, [database]);
+      const { OpenclawWireError } = await import("../lib/gateway-rpc.js");
+      const agentsDelete = vi.fn()
+        .mockResolvedValueOnce({ ok: true, purgeFailed: true, failed: [] })
+        .mockRejectedValue(new OpenclawWireError("rpc-error", 'agent "octogee-alice-coach" not found', { serverCode: "INVALID_REQUEST" }));
+      const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(brokerSnapshot), rpc: { agentsDelete } as unknown as GatewayRpcClient, log: vi.fn(), procRoot });
+      await expect(adapter.prepareImportDir("alice", "pre")).rejects.toThrow("native cleanup incomplete");
+      await expect(adapter.prepareImportDir("alice", "pre")).rejects.toThrow("agent database files are still held open");
+      expect(await fs.readFile(database, "utf8")).toBe("retained state");
+      expect(agentsDelete).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("broker import preparation refuses to wipe an agent dir a process still holds", async () => {
     await withRuntimeMock(async ({ tempRoot, agentsDir }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;

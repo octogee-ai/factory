@@ -264,6 +264,40 @@ describe("MAX_OPERATION_ATTEMPTS", () => {
 describe("buildOperationCompletionUpdate", () => {
   const now = 2_000_000;
 
+  it.each(["target verification refused", "pre-sync request timed out"].flatMap((forwardError) =>
+    ["unmount-target", "scheduler-abort", "scheduler-resume", "resume-ingress"].map((rollback) => ({ forwardError, rollback })),
+  ))("holds incomplete Shared rollback for source-only recovery: $forwardError/$rollback", ({ forwardError, rollback }) => {
+    const steps = [
+      { name: "verify-target", status: "failed" as const, error: forwardError },
+      { name: `rollback:${rollback}`, status: "failed" as const, error: "request timed out" },
+    ];
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", origin: "automatic", input: { fromGatewayId: "shared-a", source: "continuous-placement-policy" }, attempts: 0 },
+      result: { steps, success: false, rolledBack: false, error: `${forwardError}; rollback: request timed out` }, steps, now,
+    });
+    expect(update).toMatchObject({ status: "failed", rolledBack: false, steps });
+    expect(update.attemptHistory).toEqual([expect.objectContaining({ steps })]);
+  });
+
+  it("leaves a transient source-only recovery failure to the fenced recovery scanner", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", input: { fromGatewayId: "shared-a", recoverSourceOnly: true }, attempts: 1 },
+      result: { success: false, error: "request timed out", steps: [] }, steps: [], now,
+    });
+    expect(update).toMatchObject({ status: "failed", attempts: 2, rolledBack: false });
+  });
+
+  it.each([
+    { fromGatewayId: "alice-s-12345678", rolledBack: false },
+    { fromGatewayId: "shared-a", rolledBack: true },
+  ])("preserves ordinary retry outside incomplete Shared rollback: %j", ({ fromGatewayId, rolledBack }) => {
+    const steps = [{ name: "rollback:unmount-target", status: "failed" as const, error: "request timed out" }];
+    expect(buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", input: { fromGatewayId }, attempts: 0 },
+      result: { success: false, error: "request timed out", rolledBack, steps }, steps, now,
+    })).toMatchObject({ status: "pending", nextAttemptAt: now + 30_000 });
+  });
+
   it.each([
     "restore recovery Kubernetes outcome is unresolved",
     "restore recovery images are not ready; outcome remains fenced",

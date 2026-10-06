@@ -1,4 +1,4 @@
-import type { DocumentData, DocumentReference, Firestore } from "firebase-admin/firestore";
+import type { DocumentData, DocumentReference, Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { GLM_OPERATIONS_COLLECTION, type SchedulerHandoffState } from "@octogee/shared/types/glm";
 import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
 import { MigrationRpcError } from "@octogee/core/fleet-migration-client";
@@ -110,6 +110,29 @@ async function rollBackHandoff(
   if (await deps.gatewayExists(handoff.fromGatewayId)) await deps.scheduler(handoff.fromGatewayId, { ...request, phase: "resume" });
 }
 
+async function acknowledgeCurrentHandoff(
+  deps: SchedulerHandoffReleaseDeps,
+  doc: QueryDocumentSnapshot,
+  progress: HandoffProgress,
+  lost: string | undefined,
+): Promise<boolean> {
+  const update = {
+    schedulerHandoffReleased: true,
+    schedulerHandoffReleasedAt: deps.now(),
+    ...(lost === undefined ? {} : { schedulerHandoffLost: lost }),
+  };
+  if (progress === "cut-over") {
+    await doc.ref.update(update);
+    return true;
+  }
+  return deps.db.runTransaction(async (txn) => {
+    const current = await txn.get(doc.ref);
+    if (!current.exists || !current.updateTime?.isEqual(doc.updateTime)) return false;
+    txn.update(doc.ref, update);
+    return true;
+  });
+}
+
 export async function releaseAbandonedSchedulerHandoffs(
   deps: SchedulerHandoffReleaseDeps,
 ): Promise<{ released: number }> {
@@ -140,11 +163,10 @@ export async function releaseAbandonedSchedulerHandoffs(
       );
       continue;
     }
-    await doc.ref.update({
-      schedulerHandoffReleased: true,
-      schedulerHandoffReleasedAt: deps.now(),
-      ...(lost === undefined ? {} : { schedulerHandoffLost: lost }),
-    });
+    if (!await acknowledgeCurrentHandoff(deps, doc, progress, lost)) {
+      deps.log(`[scheduler-handoff-release] ${doc.id} changed during rollback release; acknowledgment withheld`);
+      continue;
+    }
     deps.log(
       `[scheduler-handoff-release] ${progress === "cut-over" ? "completed" : "released"} (${progress}) ${handoff.migrationId} slug=${handoff.slug} ` +
         `source=${handoff.fromGatewayId} target=${handoff.toGatewayId} op=${doc.id}`,

@@ -123,6 +123,27 @@ describe("deleteRosterAgents", () => {
     expect(rpc.agentsDelete).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { purgeFailed: true, failed: [] },
+    { failed: [{ path: "/state/agents/alice", error: "database is held" }] },
+  ])("rejects incomplete native cleanup and still attempts the other agents: %j", async (partial) => {
+    const log = vi.fn();
+    const rpc = mkRpc(async ({ agentId }) => ({
+      ok: true,
+      agentId,
+      ...(agentId === "octogee-alice-coach" ? partial : { failed: [] }),
+    }));
+
+    await expect(deleteRosterAgents(
+      ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"],
+      { rpc, log },
+    )).rejects.toThrow(/octogee-alice-coach.*cleanup incomplete/);
+
+    expect(rpc.agentsDelete).toHaveBeenCalledTimes(2);
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("completed agentId=octogee-alice-coach "));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("completed agentId=octogee-alice-proj-orbit-coach "));
+  });
+
   it("fails the eviction when a delete is refused for a non-not-found reason", async () => {
     const rpc = mkRpc(async ({ agentId }) => {
       throw new OpenclawWireError(

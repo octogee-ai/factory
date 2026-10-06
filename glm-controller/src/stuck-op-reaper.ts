@@ -114,12 +114,16 @@ async function reapWithLegacyGateRecovery(input: {
       logLabel: input.logLabel,
     });
     if ("reaped" in admission) return admission;
+    const releasedRecovery = admission.operation.input.recoverSourceOnly === true && admission.operation.schedulerHandoffReleased === true;
     txn.update(input.doc.ref, {
       status: "failed",
       completedAt: input.now,
-      error: input.error,
+      error: releasedRecovery ? "abandoned Shared migration rolled back; native source recovery completed" : input.error,
+      ...(releasedRecovery ? { rolledBack: true, steps: [{ name: "recover-source", status: "done", startedAt: input.now, completedAt: input.now }] } : {}),
     });
-    return { reaped: true, gateMessage: `[${input.logLabel}] source recovery remains unacknowledged for ${input.doc.id}; assignment and marker unchanged` };
+    return { reaped: true, gateMessage: releasedRecovery
+      ? `[${input.logLabel}] recorded already acknowledged source recovery for ${input.doc.id}; no native replay`
+      : `[${input.logLabel}] source recovery remains unacknowledged for ${input.doc.id}; assignment and marker unchanged` };
   });
 }
 

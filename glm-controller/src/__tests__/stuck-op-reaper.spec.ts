@@ -16,13 +16,14 @@ interface FakeOpDoc {
     customerMigrationV2?: { phase: string };
     recordType?: string;
     input?: Record<string, unknown>;
-    steps?: Array<{ name: string; status: string }>;
+    steps?: Array<{ name: string; status: string; error?: string }>;
     cutoverCommittedAt?: number;
     schedulerHandoffReleased?: boolean;
     schedulerHandoff?: Record<string, unknown>;
     completedAt?: number;
     error?: unknown;
     attempts?: number;
+    rolledBack?: boolean;
     attemptHistory?: unknown[];
     cancellationRequestedAt?: number;
   };
@@ -119,6 +120,106 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
+  it.each(["owned", "purge-failed", "failed-entry", "transient-cleanup", "clean-envelope", "rollback-only", "quiesced", "foreign-marker", "target-assigned", "cutover", "cancelled", "other-attempt"])(
+    "recovers held target cleanup only for the exact pre-quiesce Shared attempt: %s", async (scenario) => {
+      const held = "agent database files are still held open: /state/agents/octogee-alice-coach/agent/openclaw-agent.sqlite";
+      const op: FakeOpDoc = { id: "placement-owned", data: {
+        kind: "migrate-customer", status: "failed", attempts: 1, rolledBack: true,
+        steps: [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed" }, { name: "rollback:unmount-target", status: "failed" }],
+        error: held,
+        input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+        schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+      } };
+      if (scenario === "purge-failed") op.data.error = "native cleanup incomplete: purgeFailed=true failed=[]";
+      if (scenario === "failed-entry") op.data.error = 'native cleanup incomplete: purgeFailed=false failed=[{"path":"/state/agent.sqlite"}]';
+      if (scenario === "clean-envelope") op.data.error = "native cleanup incomplete: purgeFailed=false failed=[]";
+      if (scenario === "transient-cleanup") op.data.error = "request timed out — rollback:unmount-target: target cleanup refused";
+      op.data.steps![1].error = scenario === "rollback-only" ? "workspace migration phase authority changed" : String(op.data.error);
+      const admitted = ["owned", "purge-failed", "failed-entry", "transient-cleanup"].includes(scenario);
+      const marker = { state: "preparing", operationId: scenario === "foreign-marker" ? "other" : op.id, startedAt: 100 };
+      const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id };
+      if (scenario === "quiesced") op.data.steps!.push({ name: "quiesce-source", status: "running" });
+      if (scenario === "cutover") op.data.cutoverCommittedAt = 200;
+      if (scenario === "cancelled") op.data.cancellationRequestedAt = 200;
+      if (scenario === "other-attempt") op.data.attempts = 2;
+      const db = makeFakeDb([op], {
+        users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: marker } } } },
+        assignments: { "shared-a/alice": assignment, ...(scenario === "target-assigned" ? { "shared-b/alice": { state: "serving" } } : {}) },
+      });
+
+      await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+
+      expect(op.data.status).toBe(admitted ? "pending" : "failed");
+      expect(assignment.state).toBe("serving");
+      expect(marker.operationId).toBe(scenario === "foreign-marker" ? "other" : op.id);
+      if (admitted) {
+        expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+        expect(op.data.attemptHistory).toEqual([expect.objectContaining({ attempt: 1, steps: expect.arrayContaining([expect.objectContaining({ name: "pre-sync-state", status: "failed" })]) })]);
+      } else expect(op.updated).toBeUndefined();
+    },
+  );
+
+  it("retains exact recovery evidence beyond the diagnostic history limit and backs off failed cleanup", async () => {
+    const held = "agent database files are still held open: /state/agent.sqlite";
+    const steps = [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed", error: held }, { name: "rollback:unmount-target", status: "failed", error: held }];
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "failed", attempts: 1, error: held, steps,
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    const openclaw: Record<string, unknown> = { gatewayId: "shared-a", migration: { state: "preparing", operationId: op.id, startedAt: 100 } };
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw } } },
+      assignments: { "shared-a/alice": { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id } },
+    });
+    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    expect(op.data.schedulerHandoff?.sourceRecovery).toEqual({ migrationId: "mig-placement-owned:scheduler:1", sourceEpoch: 1, steps });
+    for (let attempt = 2; attempt <= 23; attempt++) {
+      Object.assign(op.data, { status: "failed", attempts: attempt, steps: [], error: "target cleanup refused", completedAt: NOW + attempt * 600_000 });
+      op.data.input!.recoverSourceOnly = true;
+      op.data.attemptHistory = Array.from({ length: 20 }, (_, index) => ({ attempt: attempt + index, steps: [], error: "target cleanup refused" }));
+      await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW + attempt * 600_000, stalenessMs: 15 * 60_000 });
+      expect(op.data.status).toBe("pending");
+      expect(op.updated?.nextAttemptAt).toBeGreaterThan(NOW + attempt * 600_000);
+      expect(op.data.schedulerHandoff?.sourceRecovery).toEqual({ migrationId: "mig-placement-owned:scheduler:1", sourceEpoch: 1, steps });
+    }
+    Object.assign(op.data, { status: "failed", rolledBack: true, schedulerHandoffReleased: true, error: "abandoned Shared migration rolled back; native source recovery completed" });
+    op.updated = undefined;
+    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW + 30 * 600_000, stalenessMs: 15 * 60_000 });
+    expect(op.data.status).toBe("failed");
+    expect(op.updated).toBeUndefined();
+    Object.assign(op.data, { status: "running", rolledBack: undefined, startedAt: NOW, schedulerHandoffReleased: true });
+    delete openclaw.migration;
+    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW + 30 * 600_000, controllerStartedAt: NOW + 1_000 });
+    expect(op.data).toMatchObject({ status: "failed", rolledBack: true, steps: [{ name: "recover-source", status: "done" }] });
+    expect(op.data.schedulerHandoffReleased).toBe(true);
+  });
+
+  it.each([
+    ["held", "agent database files are still held open: /state/agent.sqlite", true],
+    ["partial", "native cleanup incomplete: purgeFailed=true failed=[]", true],
+    ["failed-entry", 'native cleanup incomplete: purgeFailed=false failed=["purge failed"]', true],
+    ["transient", "request timed out", true],
+    ["unknown", "workspace migration authority changed", false],
+    ["complete", "native cleanup incomplete: purgeFailed=false failed=[]", false],
+  ])("recovers a terminal forward failure only for recoverable target cleanup: %s", async (_label, cleanupError, admitted) => {
+    const op: FakeOpDoc = { id: "placement-owned", data: {
+      kind: "migrate-customer", status: "failed", attempts: 1, rolledBack: false, error: "target verification refused",
+      steps: [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "done" }, { name: "quiesce-source", status: "done" },
+        { name: "verify-target", status: "failed", error: "target verification refused" }, { name: "rollback:unmount-target", status: "failed", error: String(cleanupError) }],
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1" },
+    } };
+    const db = makeFakeDb([op], {
+      users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "preparing", operationId: op.id, startedAt: 100 } } } } },
+      assignments: { "shared-a/alice": { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id } },
+    });
+    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    expect(op.data.status).toBe(admitted ? "pending" : "failed");
+    if (admitted) expect(op.data.schedulerHandoff?.sourceRecovery?.steps).toEqual(op.data.attemptHistory![0].steps);
+    else expect(op.updated).toBeUndefined();
+  });
+
   it.each(["quiescing", "acknowledged"])("requeues an interrupted disposable activation before releasing or retiring its source: %s", async (phase) => {
     const target = "alice-s-12345678";
     const op: FakeOpDoc = { id: `builder-activate-${target}`, data: {
@@ -143,9 +244,11 @@ describe("runStuckOpReaperTick", () => {
     expect(assignment.state).toBe(phase === "quiescing" ? "quiescing" : "serving");
   });
   it.each([
-    { held: true, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }] },
-    { held: false, steps: [{ name: "keys-sync-state", status: "failed" }] },
-  ])("admits a terminally failed disposable activation to source recovery only when its source was held: held=$held", async ({ held, steps }) => {
+    { held: true, retry: false, legacyQueued: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }] },
+    { held: false, retry: false, legacyQueued: false, steps: [{ name: "keys-sync-state", status: "failed" }] },
+    { held: true, retry: true, legacyQueued: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }, { name: "rollback:unmount-target", status: "failed" }] },
+    { held: true, retry: true, legacyQueued: true, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }] },
+  ])("admits a terminally failed disposable activation to source recovery only when its source was held: held=$held retry=$retry legacyQueued=$legacyQueued", async ({ held, retry, legacyQueued, steps }) => {
     const target = "alice-s-12345678";
     const id = `builder-activate-${target}`;
     const op: FakeOpDoc = { id, data: {
@@ -167,6 +270,15 @@ describe("runStuckOpReaperTick", () => {
     expect(op.data.status).toBe(held ? "pending" : "failed");
     expect(op.updated?.["input.recoverSourceOnly"]).toBe(held ? true : undefined);
     expect(assignment.state).toBe(held ? "quiescing" : "serving");
+    if (retry) {
+      Object.assign(op.data, { status: "failed", attempts: 2, steps: [], error: "target cleanup refused" });
+      op.data.input!.recoverSourceOnly = true;
+      if (legacyQueued) delete op.data.schedulerHandoff!.sourceRecovery;
+      await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+      expect(op.data.status).toBe("pending");
+      if (!legacyQueued) expect(op.updated?.nextAttemptAt).toBeGreaterThan(NOW);
+      expect(assignment.state).toBe("quiescing");
+    }
   });
   it("ignores failed audit entries without migration input", async () => {
     const audit: FakeOpDoc = { id: "audit-unrelated", data: { status: "failed", recordType: "audit", error: "operator action failed" } };
