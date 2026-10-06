@@ -272,6 +272,7 @@ describe("abandoned Shared migration recovery", () => {
   });
   it.each([
     ["failed in pre-sync before any quiesce", [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed" }, { name: "rollback:unmount-gateway", status: "done" }]],
+    ["failed its pre-drain probe", [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "done" }, { name: "target-scheduler-ready", status: "done" }, { name: "wait-for-active-work", status: "failed" }, { name: "rollback:unmount-gateway", status: "done" }]],
     ["skipped its quiesce", [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "skipped" }, { name: "pre-sync-state", status: "failed" }]],
     ["never started its quiesce", [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "pending" }]],
   ] as const)("retries a move whose previous attempt %s without demanding recovery authority or touching the source", async (_label, steps) => {
@@ -293,6 +294,21 @@ describe("abandoned Shared migration recovery", () => {
     expect(h.client.scheduler).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue", phase: "resume" }));
     expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.client.transferState).toHaveBeenCalled();
+  });
+
+  it("releases source ingress, without recovery authority, when the previous attempt died after its probe acquired the hold", async () => {
+    const h = recovery();
+    const request = op();
+    request.attemptHistory = [{ attempt: 1, startedAt: 1_000, completedAt: 2_000, error: "controller restarted", classification: "transient",
+      steps: [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "done" }, { name: "wait-for-active-work", status: "done" }],
+    }];
+    h.deps.assertMigrationRecoveryAuthority = vi.fn().mockRejectedValue(new Error("workspace migration recovery authority changed"));
+
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
+
+    expect(h.deps.assertMigrationRecoveryAuthority).not.toHaveBeenCalled();
+    expect(h.client.resume).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue" }));
+    expect(h.client.scheduler).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue", phase: "resume" }));
   });
 
   it("still demands recovery authority when the previous attempt held the source", async () => {

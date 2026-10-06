@@ -2,7 +2,12 @@ import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
-import { attemptNeverHeldSource, builderActivationSourceRecoveryPending, legacyAttemptNeverQuiesced } from "../legacy-migration-recovery.js";
+import {
+  attemptMayHoldSourceIngress,
+  attemptNeverHeldSource,
+  builderActivationSourceRecoveryPending,
+  legacyAttemptNeverQuiesced,
+} from "../legacy-migration-recovery.js";
 import { PendingCustomerRestoreError } from "../operation-context.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
@@ -1477,7 +1482,7 @@ function previousAttemptScope(
     sharedScope,
     recoveryRequired: sharedScope && !sourceNeverHeld,
     resumeSourceScheduler: !sourceNeverHeld,
-    releaseSourceIngress: !legacyAttemptNeverQuiesced(op) && !sourceNeverHeld,
+    releaseSourceIngress: !legacyAttemptNeverQuiesced(op) && (!sourceNeverHeld || attemptMayHoldSourceIngress(op)),
   };
 }
 

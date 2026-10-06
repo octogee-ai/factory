@@ -26,6 +26,12 @@ export function attemptNeverHeldSource(operation: Partial<Operation>): boolean {
     !steps.some((step) => step.name === "quiesce-source" && SOURCE_HOLDING_STEP_STATUSES.has(step.status));
 }
 
+export function attemptMayHoldSourceIngress(operation: Partial<Operation>): boolean {
+  const steps = handoffAttemptEvidence(operation)?.steps ?? [];
+  return steps.some((step) =>
+    step.name === "wait-for-active-work" && (step.status === "running" || step.status === "done"));
+}
+
 function failedActivationHeldSource(operation: Partial<Operation>): boolean {
   return operation.input?.recoverSourceOnly === true ||
     handoffAttemptEvidence(operation)?.steps?.some((step) => step.name === "quiesce-source") !== false;

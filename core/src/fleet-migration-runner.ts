@@ -57,6 +57,7 @@ export interface MigrationRunnerDeps {
 }
 
 const QUIESCE_SOURCE = "quiesce-source";
+const WAIT_FOR_ACTIVE_WORK = "wait-for-active-work";
 const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_DELAY_MS = 2_000;
 const TARGET_SCHEDULER_READY_TIMEOUT_MS = 120_000;
@@ -471,14 +472,13 @@ async function runNextMigrationStep(
     }
   }
   const name = reportName(step);
+  if (step.action === QUIESCE_SOURCE) {
+    const deferred = await awaitActiveWorkDrained(execution, step, phaseAtStart);
+    if (deferred) return deferred;
+  }
   await report(execution.deps, { name, status: "running" });
   try {
     if (step.action === "sync-state" && step.mode === "keys") await execution.deps.setMigrationPhase?.("preparing");
-    if (step.action === QUIESCE_SOURCE) {
-      await execution.deps.setMigrationPhase?.("waiting");
-      execution.preDrainStarted = true;
-      await execution.deps.client.quiesce({ migrationId: execution.input.migrationId, gatewayId: step.gateway, slug: step.slug, timeoutMs: 30_000, stopMattermost: false });
-    }
     if (step.action === "verify-target") await execution.deps.setMigrationPhase?.("connecting");
     await markSourceQuiescing(execution, step);
     if (step.action === QUIESCE_SOURCE) execution.quiesceStarted = true;
@@ -489,6 +489,23 @@ async function runNextMigrationStep(
   } catch (error) {
     return handleStepFailure(execution, { step, name, phaseAtStart, error });
   }
+}
+
+async function awaitActiveWorkDrained(
+  execution: MigrationExecution,
+  step: Extract<MigrationStep, { action: "quiesce-source" }>,
+  phaseAtStart: MigrationPhase,
+): Promise<MigrationRunnerResult | null> {
+  await report(execution.deps, { name: WAIT_FOR_ACTIVE_WORK, status: "running" });
+  try {
+    await execution.deps.setMigrationPhase?.("waiting");
+    execution.preDrainStarted = true;
+    await execution.deps.client.quiesce({ migrationId: execution.input.migrationId, gatewayId: step.gateway, slug: step.slug, timeoutMs: 30_000, stopMattermost: false });
+  } catch (error) {
+    return handleStepFailure(execution, { step, name: WAIT_FOR_ACTIVE_WORK, phaseAtStart, error });
+  }
+  await report(execution.deps, { name: WAIT_FOR_ACTIVE_WORK, status: "done" });
+  return null;
 }
 
 function formatTimings(timings: StepTimings | undefined): string {

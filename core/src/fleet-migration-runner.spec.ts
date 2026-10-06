@@ -122,6 +122,7 @@ describe("runMigration — happy path", () => {
       "report:keys-sync-state:running", "report:keys-sync-state:done",
       "report:pre-sync-state:running", "report:pre-sync-state:done",
       "report:target-scheduler-ready:running", "report:target-scheduler-ready:done",
+      "report:wait-for-active-work:running", "report:wait-for-active-work:done",
       "report:quiesce-source:running", "report:quiesce-source:done",
       "report:flush-source:running", "report:flush-source:done",
       "report:final-sync-state:running", "report:final-sync-state:done",
@@ -858,4 +859,40 @@ describe("held Builder target", () => {
   expect(h.client.resume).toHaveBeenCalled();
   expect(h.deps.commitCutover).not.toHaveBeenCalled();
   expect(h.assignmentWrites).toEqual(fenced ? [expect.objectContaining({ state: "quiescing" }), expect.objectContaining({ state: "serving" })] : []);
+});
+
+describe("pre-drain probe journaling", () => {
+  it("reports a probe failure under wait-for-active-work, never as a quiesce-source step, and resumes ingress", async () => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.quiesce).mockRejectedValueOnce(new Error("Timed out waiting for an OpenClaw runtime update"));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
+
+    expect(h.events).toContain("report:wait-for-active-work:failed");
+    expect(h.events.some((event) => event.startsWith("report:quiesce-source"))).toBe(false);
+    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
+    expect(h.assignmentWrites).toEqual([]);
+  });
+
+  it("journals a phase-write failure during the probe and rolls back instead of rejecting", async () => {
+    const h = harness({ gateAssignment: true });
+    h.deps.setMigrationPhase = vi.fn(async (phase: string) => { if (phase === "waiting") throw new Error("firestore unavailable"); });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
+
+    expect(h.events).toContain("report:wait-for-active-work:failed");
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.events).toContain("report:rollback:unmount-target:done");
+  });
+
+  it("reports a probe deferral under wait-for-active-work as skipped", async () => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.quiesce).mockRejectedValueOnce(new MigrationDrainPendingError("coach is active"));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, waitingForBuilderIdle: true });
+
+    expect(h.events).toContain("report:wait-for-active-work:skipped");
+    expect(h.events.some((event) => event.startsWith("report:quiesce-source"))).toBe(false);
+  });
 });
