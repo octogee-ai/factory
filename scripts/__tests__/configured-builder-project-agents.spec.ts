@@ -77,6 +77,59 @@ describe("configuredBuilderWorkspacePatch", () => {
 });
 
 describe("configuredBuilderProjectAgentPatch", () => {
+  it.each(["list", "entries"] as const)("binds new sessions of a ready project without replacing its account or existing routes (%s)", (representation) => {
+    const current = currentConfig(representation, desired.projectAgentEntries);
+    const customAccount = { botToken: "owner-managed-token", allowFrom: ["custom-owner"], groupPolicy: "allowlist" };
+    current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, "alice-proj-launch": customAccount };
+    const projectRoutes = buildCustomerBindings([{ slug, channels, agentProjects: new Set([projectId]) }]).filter(binding => binding.agentId === agentId);
+    current.bindings = [...current.bindings, ...projectRoutes];
+    const session = { channelId: "project-session", scope: "project" as const, projectId, kind: "session" };
+    const input = { ...desired, activationProjectIds: [], channels: [...channels, session] };
+    const before = structuredClone(current);
+    const first = configuredBuilderProjectAgentPatch(current, input).patch;
+    const expected = { agentId, match: { channel: "mattermost", accountId: "alice-proj-launch", peer: { kind: "group", id: "project-session" } } };
+
+    expect(current).toEqual(before);
+    expect(first.bindings).toContainEqual(expected);
+    for (const route of projectRoutes) expect(first.bindings).toContainEqual(route);
+    expect(first.channels.mattermost.accounts["alice-proj-launch"]).toEqual(customAccount);
+    const second = configuredBuilderProjectAgentPatch({ ...current, bindings: first.bindings }, input).patch;
+    expect(second.bindings).toBe(first.bindings);
+    expect(second.bindings.filter(binding => JSON.stringify(binding) === JSON.stringify(expected))).toHaveLength(1);
+  });
+
+  it("preserves a ready project's custom session route while adding only its missing peers", () => {
+    const custom = { agentId: "owner-agent", match: { channel: "mattermost", accountId: "alice-proj-launch", peer: { kind: "group", id: "custom-session" } } };
+    const current = currentConfig("entries", desired.projectAgentEntries);
+    current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, ...desired.projectAccounts };
+    current.bindings = [custom];
+    const input = { ...desired, activationProjectIds: [], channels: [
+      { channelId: "custom-session", scope: "project" as const, projectId, kind: "session" },
+      { channelId: "missing-session", scope: "project" as const, projectId, kind: "session" },
+    ] };
+    const { patch } = configuredBuilderProjectAgentPatch(current, input);
+
+    expect(patch.bindings).toEqual([custom, { agentId, match: { channel: "mattermost", accountId: "alice-proj-launch", peer: { kind: "group", id: "missing-session" } } }]);
+    expect(patch.bindings).not.toContainEqual({ agentId, match: { channel: "mattermost", accountId: "alice-proj-launch" } });
+  });
+
+  it.each(["list", "entries"] as const)("keeps a custom direct peer without suppressing the same ID's project group route (%s)", (representation) => {
+    const custom = { agentId: "owner-agent", match: { channel: "mattermost", accountId: "alice-proj-launch", peer: { kind: "direct", id: "project-session" } } };
+    const current = currentConfig(representation, desired.projectAgentEntries);
+    current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, ...desired.projectAccounts };
+    current.bindings = [custom];
+    const input = { ...desired, activationProjectIds: [], channels: [
+      { channelId: "project-session", scope: "project" as const, projectId, kind: "session" },
+    ] };
+    const expected = { agentId, match: { channel: "mattermost", accountId: "alice-proj-launch", peer: { kind: "group", id: "project-session" } } };
+    const first = configuredBuilderProjectAgentPatch(current, input).patch;
+
+    expect(first.bindings).toEqual([custom, expected]);
+    const second = configuredBuilderProjectAgentPatch({ ...current, bindings: first.bindings }, input).patch;
+    expect(second.bindings).toBe(first.bindings);
+    expect(second.bindings.filter(binding => JSON.stringify(binding) === JSON.stringify(expected))).toHaveLength(1);
+  });
+
   it("removes coach project bindings even when no project activation is pending", () => {
     const current = currentConfig("entries", desired.projectAgentEntries);
     current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, ...desired.projectAccounts };

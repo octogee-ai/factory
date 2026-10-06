@@ -165,7 +165,14 @@ function projectBindings(current: unknown, input: ConfiguredBuilderProjectAgentI
     return match.channel !== "mattermost" || !(coachProjectRoute || agentIds.has(String(entry.agentId)) || accountIds.has(String(match.accountId)) || channelIds.has(String(record(match.peer).id)));
   });
   const desired = buildCustomerBindings([{ slug: input.slug, channels: input.channels, agentProjects: active }]);
-  const projectRoutes = desired.filter((binding) => agentIds.has(binding.agentId));
+  const activeAgentIds = new Set([...active].map(id => projectAgentId(input.slug, id)));
+  const projectRoutes = desired.filter((binding) => agentIds.has(binding.agentId) ||
+    (activeAgentIds.has(binding.agentId) && binding.match.peer !== undefined && !kept.some(existing => {
+      const match = record(record(existing).match);
+      const peer = record(match.peer);
+      return match.channel === binding.match.channel && match.accountId === binding.match.accountId &&
+        peer.kind === binding.match.peer?.kind && peer.id === binding.match.peer?.id;
+    })));
   const workspaceChannelIds = new Set(input.channels.filter((channel) => channel.scope === "workspace").map((channel) => channel.channelId));
   const routedPeers = new Set([...kept, ...projectRoutes].map((binding) => {
     const match = record(record(binding).match);
