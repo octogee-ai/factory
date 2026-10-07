@@ -1459,7 +1459,11 @@ async function resumePreviousSchedulerAttempt(
   uid: string,
 ): Promise<boolean> {
   const previous = op.schedulerHandoff;
-  if (!previous || previous.migrationId === `${deps.genMigrationId(op.id)}:scheduler:${(op.attempts ?? 0) + 1}`) return false;
+  if (
+    !previous ||
+    op.schedulerHandoffReleased === true ||
+    previous.migrationId === `${deps.genMigrationId(op.id)}:scheduler:${(op.attempts ?? 0) + 1}`
+  ) return false;
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
   }

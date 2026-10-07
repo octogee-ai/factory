@@ -1695,6 +1695,34 @@ describe("migrate-customer — durable V2 migration", () => {
 describe("scheduler handoff recovery", () => {
   const schedulerHandoff = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
 
+  it.each([true, false, undefined])("retries a retargeted return only after its old scheduler handoff is released (%s)", async (released) => {
+    const h = mkDeps();
+    const previous = { ...schedulerHandoff, toGatewayId: "shared-retired" };
+    vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async (gatewayId) => {
+      if (gatewayId === previous.toGatewayId) throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
+      return `http://${gatewayId}.svc:3003`;
+    });
+
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({
+      schedulerHandoff: previous,
+      schedulerHandoffReleased: released,
+      attempts: 2,
+      input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" },
+    }), h.ctx);
+
+    if (released === true) {
+      expect(result).toMatchObject({ success: true });
+      expect(h.deps.resolveGatewayUrl).not.toHaveBeenCalledWith(previous.toGatewayId);
+      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ ...schedulerHandoff, migrationId: "mig-op-1:scheduler:3" });
+      expect(h.deps.commitCutover).toHaveBeenCalledWith(expect.objectContaining({ toGatewayId: "gw-green" }));
+    } else {
+      expect(result).toMatchObject({ success: false, error: `gateway not registered in glmGateways: ${previous.toGatewayId}` });
+      expect(h.ctx.persistSchedulerHandoff).not.toHaveBeenCalled();
+      expect(h.client.quiesce).not.toHaveBeenCalled();
+      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    }
+  });
+
   it("persists its scheduler attempt before contacting the scheduler", async () => {
     const h = mkDeps();
     vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
