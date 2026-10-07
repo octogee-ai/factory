@@ -8,6 +8,16 @@ import {
 
 const EXPECTED_AGENT = 'octogee-acme-coach';
 
+it('makes a channel-scoped Activity connection read-only even after observing a run or approval', () => {
+  const state = createGateState(EXPECTED_AGENT);
+  state.readOnly = true;
+  state.observedRunIds.add('run-1');
+  state.observedApprovalIds.add('approval-1');
+  for (const method of ['chat.abort', 'exec.approval.resolve', 'plugin.approval.resolve', 'sessions.subscribe', 'sessions.messages.subscribe']) {
+    expect(evaluateInboundFrame(frame(method, { runId: 'run-1', approvalId: 'approval-1' }), false, state).accept).toBe(false);
+  }
+});
+
 function makeState(overrides: Partial<{ runIds: string[]; approvalIds: string[] }> = {}): GateState {
   const state = createGateState(EXPECTED_AGENT);
   for (const r of overrides.runIds ?? []) state.observedRunIds.add(r);

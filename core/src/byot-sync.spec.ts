@@ -132,7 +132,7 @@ describe("customer mount configuration projection", () => {
     expect(patch.plugins.allow).toContain("octogee-activity-tools");
     expect(patch.plugins.entries["octogee-activity-tools"]).not.toBeNull();
     const fresh = customerMountConfigPatch({ plugins: { allow: [], entries: {} } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
-    expect(fresh.plugins.entries["octogee-activity-tools"]).toEqual({ enabled: true, config: { activityEnabled: false, heartbeatMs: 5000 } });
+    expect(fresh.plugins.entries["octogee-activity-tools"]).toEqual({ enabled: true, config: { heartbeatMs: 5000 } });
   });
 
   it("leaves a plugin token path that already resolves to its placeholder untouched", () => {

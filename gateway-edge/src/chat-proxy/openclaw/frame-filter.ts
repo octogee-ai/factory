@@ -1,3 +1,5 @@
+import { redactStructuredSecrets } from '@octogee/shared/types/secret-redaction';
+
 export type ForwardReason =
   | "matched-identity"
   | "system-event"
@@ -7,6 +9,7 @@ export type ForwardReason =
 export type DropReason =
   | "identity-mismatch"
   | "missing-identity"
+  | "invalid-payload"
   | "unknown-event-class";
 
 export type FrameDecision =
@@ -15,6 +18,7 @@ export type FrameDecision =
 
 export interface FilterContext {
   expectedAgentId: string;
+  sessionKey?: string;
 }
 
 export const PER_USER_EVENTS = new Set<string>([
@@ -47,6 +51,40 @@ const SYSTEM_EVENTS = new Set<string>([
   "node.pair.resolved",
 ]);
 
+const MISSING_ACTIVITY_IDENTITY: FrameDecision = { forward: false, reason: 'missing-identity' };
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isEventEnvelope(raw: unknown): raw is { type: 'event'; event?: unknown; payload?: unknown } {
+  return isObjectRecord(raw) && raw.type === 'event';
+}
+
+function activityFrameDecision(raw: unknown, expectedKey: string): FrameDecision {
+  if (!isEventEnvelope(raw)) return MISSING_ACTIVITY_IDENTITY;
+  if (!['agent', 'session.tool'].includes(String(raw.event))) return { forward: false, reason: 'unknown-event-class' };
+  const payload = raw.payload;
+  if (!isObjectRecord(payload) || !isObjectRecord(payload.data)) return { forward: false, reason: 'invalid-payload' };
+  const key = payload.sessionKey;
+  if (typeof key !== 'string' || !key) return MISSING_ACTIVITY_IDENTITY;
+  const prefix = `${expectedKey}:thread:`;
+  const matches = key === expectedKey || key.startsWith(prefix) && /^[a-z0-9]{26}$/u.test(key.slice(prefix.length));
+  return matches && ['lifecycle', 'tool', 'plan'].includes(String(payload.stream))
+    ? { forward: true, reason: 'matched-identity' }
+    : { forward: false, reason: 'identity-mismatch' };
+}
+
+export function sanitizeActivityFrame(raw: string): string {
+  const frame = JSON.parse(raw) as { type: string; event: string; payload: Record<string, unknown> };
+  const { runId, sessionKey, seq, ts, stream } = frame.payload;
+  const data = frame.payload.data as Record<string, unknown> | undefined;
+  const displayFields = ['phase', 'name', 'args', 'result', 'partialResult', 'isError', 'steps', 'status', 'aborted', 'stopReason', 'timeoutPhase', 'providerStarted', 'error', 'executionSettled', 'fallbackExhaustedFailure'];
+  const safe = redactStructuredSecrets(Object.fromEntries(displayFields.filter(key => data && key in data).map(key => [key, data![key]]))) as Record<string, unknown>;
+  if (data?.toolCallId !== undefined) safe.toolCallId = data.toolCallId;
+  return JSON.stringify({ type: frame.type, event: frame.event, payload: { runId, sessionKey, seq, ts, stream, data: safe } });
+}
+
 export function shouldForwardFrame(
   rawFrame: string,
   ctx: FilterContext,
@@ -55,15 +93,12 @@ export function shouldForwardFrame(
   try {
     parsed = JSON.parse(rawFrame);
   } catch {
+    if (ctx.sessionKey) return MISSING_ACTIVITY_IDENTITY;
     return { forward: true, reason: "unparseable" };
   }
 
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    (parsed as { type?: unknown }).type !== "event"
-  ) {
+  if (ctx.sessionKey) return activityFrameDecision(parsed, ctx.sessionKey);
+  if (!isEventEnvelope(parsed)) {
     return { forward: true, reason: "non-event-frame" };
   }
 

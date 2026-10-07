@@ -29,6 +29,18 @@ function brokerWithRedeemStatus(
 }
 
 describe("redeemOpenClawWs outcome", () => {
+  it('preserves only the validated native Activity scope', async () => {
+    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}` };
+    const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-bob-coach', activityConversation: { ...activityConversation, unexpected: 'discard' } });
+    expect(await broker.redeemOpenClawWs('ticket')).toMatchObject({ kind: 'redeemed', redeemed: { activityConversation } });
+    const result = await brokerWithRedeemStatus(200, activityConversation).getActivityConversation?.('member', activityConversation.channelId);
+    expect(result).toEqual(activityConversation);
+  });
+  it.each([{ gatewayId: 'foreign' }, { expectedAgentId: 'other' }, { sessionKey: 'agent:octogee-bob-coach:main' }])('rejects mismatched native Activity scope %j', async patch => {
+    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}`, ...patch };
+    const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-bob-coach', activityConversation });
+    await expect(broker.redeemOpenClawWs('ticket')).rejects.toThrow('malformed Activity conversation');
+  });
   it("200 → redeemed", async () => {
     const broker = brokerWithRedeemStatus(200, {
       uid: "uid-bob",

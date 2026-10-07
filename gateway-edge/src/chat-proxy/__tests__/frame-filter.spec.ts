@@ -4,10 +4,54 @@ import {
   deriveExpectedAgentId,
   resolveExpectedAgentId,
   ExpectedAgentIdError,
+  sanitizeActivityFrame,
 } from "../openclaw/frame-filter.js";
 
 const EXPECTED = "octogee-dave-coach";
 const ctx = { expectedAgentId: EXPECTED };
+
+describe('read-only native Activity scope', () => {
+  const sessionKey = `agent:${EXPECTED}:mattermost:group:${'c'.repeat(26)}`;
+  const scope = { ...ctx, sessionKey };
+  it.each([undefined, null, true, 1, 'malformed', []].map(data => ({ data })))('drops malformed native Activity data $data before sanitizing', ({ data }) => {
+    for (const event of ['agent', 'session.tool']) {
+      const raw = eventFrame(event, { sessionKey, stream: 'tool', data });
+      const decision = shouldForwardFrame(raw, scope);
+      expect(decision).toEqual({ forward: false, reason: 'invalid-payload' });
+      expect(() => { if (decision.forward) sanitizeActivityFrame(raw); }).not.toThrow();
+    }
+  });
+  it('redacts structured tool arguments and results before browser transmission without changing native identity', () => {
+    const raw = eventFrame('agent', {
+      sessionKey, runId: 'r'.repeat(45), seq: 1, ts: 1000, stream: 'tool',
+      data: { phase: 'start', name: 'exec', toolCallId: 't'.repeat(45),
+        args: { token: 'short-secret', command: 'curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456"' },
+        result: { content: [{ type: 'text', text: 'github_pat_abcdefghijklmnopqrstuvwxyz123456789' }] },
+        extra: { private: 'not a display field' },
+      },
+    });
+    const safe = sanitizeActivityFrame(raw);
+    expect(safe).not.toContain('short-secret');
+    expect(safe).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
+    expect(safe).not.toContain('not a display field');
+    expect(JSON.parse(safe).payload).toMatchObject({ sessionKey, runId: 'r'.repeat(45), data: { toolCallId: 't'.repeat(45), name: 'exec', args: { token: '[redacted]' } } });
+  });
+  it('allows only native tool/lifecycle/plan events in the selected channel or its thread', () => {
+    for (const key of [sessionKey, `${sessionKey}:thread:${'r'.repeat(26)}`]) {
+      expect(shouldForwardFrame(eventFrame('session.tool', { sessionKey: key, stream: 'tool', data: { phase: 'start' } }), scope).forward).toBe(true);
+    }
+    for (const key of [sessionKey + 'evil', sessionKey.replace('c'.repeat(26), 'd'.repeat(26)), `agent:${EXPECTED}:main`, `${sessionKey}:thread:untrusted`]) {
+      expect(shouldForwardFrame(eventFrame('agent', { sessionKey: key, stream: 'tool' }), scope).forward).toBe(false);
+    }
+    expect(shouldForwardFrame(eventFrame('agent', { sessionKey, stream: 'assistant' }), scope).forward).toBe(false);
+    expect(shouldForwardFrame(eventFrame('session.message', { sessionKey, message: 'private transcript' }), scope).forward).toBe(false);
+  });
+  it('does not pass RPC snapshots, unparsed frames, health or global metadata', () => {
+    for (const raw of ['invalid', JSON.stringify({ type: 'res', id: 'list', ok: true, payload: { sessions: ['foreign'] } }), eventFrame('health', { agents: ['foreign'] }), eventFrame('sessions.changed', { sessionKey, stream: 'tool' }), eventFrame('tick', {}), eventFrame('shutdown', { restart: true })]) {
+      expect(shouldForwardFrame(raw, scope).forward).toBe(false);
+    }
+  });
+});
 
 function eventFrame(event: string, payload: Record<string, unknown>): string {
   return JSON.stringify({ type: "event", event, payload });

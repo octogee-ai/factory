@@ -384,7 +384,6 @@
       "octogee-activity-tools": {
         "enabled": true,
         "config": {
-          "activityEnabled": false,
           "heartbeatMs": 5000
         }
       },

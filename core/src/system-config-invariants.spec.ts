@@ -82,7 +82,7 @@ describe("system config platform invariants", () => {
     expect(plugins.allow).toContain("octogee-activity-tools");
     expect(plugins.entries["octogee-activity-tools"]).toEqual({
       enabled: true,
-      config: { activityEnabled: false, heartbeatMs: 5_000 },
+      config: { heartbeatMs: 5_000 },
     });
     expect(plugins.entries["octogee-activity-tools"].config).not.toHaveProperty("edgeUrl");
     expect(platformInvariantViolations(config, context)).toEqual([]);

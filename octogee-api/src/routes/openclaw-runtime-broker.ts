@@ -6,6 +6,7 @@ import { fanOutNotification } from "../../../gateway-edge/src/notifications/pipe
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { createVoicePostingGrant } from "../lib/voice-posting-grant.js";
 import { resolveWorkspaceConversationScope } from "../lib/workspace-conversation.js";
+import { resolveActivityConversation, type ActivityConversation } from '../../../gateway-edge/src/lib/activity-conversation.js';
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
@@ -904,17 +905,36 @@ export async function resolveRedeemGatewayUrl(input: {
   return { url };
 }
 
+function matchesActivityTicket(scope: ActivityConversation, gatewayId: string, payload: Record<string, unknown>): boolean {
+  return scope.gatewayId === gatewayId && scope.ownerUid === payload.ownerUid && scope.expectedAgentId === payload.expectedAgentId && scope.sessionKey === payload.sessionKey;
+}
+
+async function redeemActivityIdentity(db: Firestore, tx: Transaction, payload: Record<string, unknown>, uid: string, gatewayId: string) {
+  if (Object.keys(payload).some(key => !['channelId', 'ownerUid', 'expectedAgentId', 'sessionKey'].includes(key)) || typeof payload.channelId !== 'string' || !MATTERMOST_ID_RE.test(payload.channelId)) return null;
+  const scope = await resolveActivityConversation({ db, uid, channelId: payload.channelId });
+  if (!scope || !matchesActivityTicket(scope, gatewayId, payload)) return null;
+  const owner = await tx.get(db.doc(`users/${scope.ownerUid}`));
+  if (readPath(owner.data() ?? {}, 'provisioning.openclaw.gatewayId') !== gatewayId) return null;
+  return { expectedAgentId: scope.expectedAgentId, activityConversation: scope };
+}
+
+async function redeemVoiceIdentity(db: Firestore, tx: Transaction, payload: Record<string, unknown> | undefined, uid: string, gatewayId: string) {
+  if (!payload || Object.keys(payload).some(key => !["workspaceSlug", "ownerUid", "channelId", "sessionKey"].includes(key)) ||
+    typeof payload.channelId !== "string" || !MATTERMOST_ID_RE.test(payload.channelId) ||
+    typeof payload.workspaceSlug !== "string" || typeof payload.ownerUid !== "string") return null;
+  const { workspaceSlug, ownerUid, channelId, sessionKey } = payload;
+  if (typeof sessionKey !== "string" || !["channel", "group"].some(kind => sessionKey === `agent:octogee-${workspaceSlug}-coach:mattermost:${kind}:${channelId}`)) return null;
+  const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid });
+  return scope ? { expectedAgentId: `octogee-${workspaceSlug}-coach`, voiceConversation: { workspaceSlug, ownerUid, channelId, sessionKey } } : null;
+}
+
 async function redeemWsIdentity(db: Firestore, tx: Transaction, ticket: Record<string, unknown>, uid: string, gatewayId: string) {
   if (ticket.gatewayId !== gatewayId) return null;
+  if (ticket.purpose === 'openclaw-ws' && (ticket.payload as Record<string, unknown> | undefined)?.channelId !== undefined) {
+    return redeemActivityIdentity(db, tx, ticket.payload as Record<string, unknown>, uid, gatewayId);
+  }
   if (ticket.purpose === "voice-ws") {
-    const payload = ticket.payload as Record<string, unknown> | undefined;
-    if (!payload || Object.keys(payload).some(key => !["workspaceSlug", "ownerUid", "channelId", "sessionKey"].includes(key)) ||
-      typeof payload.channelId !== "string" || !MATTERMOST_ID_RE.test(payload.channelId) ||
-      typeof payload.workspaceSlug !== "string" || typeof payload.ownerUid !== "string") return null;
-    const { workspaceSlug, ownerUid, channelId, sessionKey } = payload;
-    if (typeof sessionKey !== "string" || !["channel", "group"].some(kind => sessionKey === `agent:octogee-${workspaceSlug}-coach:mattermost:${kind}:${channelId}`)) return null;
-    const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid });
-    return scope ? { expectedAgentId: `octogee-${workspaceSlug}-coach`, voiceConversation: { workspaceSlug, ownerUid, channelId, sessionKey } } : null;
+    return redeemVoiceIdentity(db, tx, ticket.payload as Record<string, unknown> | undefined, uid, gatewayId);
   }
   const user = await tx.get(db.doc(`users/${uid}`));
   const userData = user.data() ?? {};
@@ -923,6 +943,16 @@ async function redeemWsIdentity(db: Firestore, tx: Transaction, ticket: Record<s
 }
 
 function mountUserAndWsRoutes(router: Router, db: Firestore): void {
+  router.post('/activity/conversation-access', async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const uid = stringBody(req, 'uid');
+    const channelId = stringBody(req, 'channelId');
+    if (!safeDocId(uid) || !MATTERMOST_ID_RE.test(channelId)) { res.status(400).json({ error: 'invalid_activity_channel' }); return; }
+    const scope = await resolveActivityConversation({ db, uid, channelId });
+    if (!scope || scope.gatewayId !== bound.gatewayId) { forbidden(res); return; }
+    res.set('Cache-Control', 'no-store').json(scope);
+  });
   router.post("/previews/authorize", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1016,7 +1046,7 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
         };
       }
       const gatewayUrl = urlResult.url;
-      const grant = identity.voiceConversation ? createVoicePostingGrant({ uid, gatewayId: bound.gatewayId, agentId: identity.expectedAgentId, ...identity.voiceConversation }) : null;
+      const grant = 'voiceConversation' in identity ? createVoicePostingGrant({ uid, gatewayId: bound.gatewayId, agentId: identity.expectedAgentId, ...identity.voiceConversation }) : null;
       if (grant) tx.set(db.doc(grant.path), grant.document);
       tx.delete(ticketRef);
       return {

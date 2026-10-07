@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
+import { resolveActivityConversation } from "../lib/activity-conversation.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
@@ -65,6 +66,17 @@ async function requestRuntimeDemand(input: {
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
+    if (req.body?.channelId !== undefined) {
+      if (typeof req.body.channelId !== 'string' || !/^[a-z0-9]{26}$/u.test(req.body.channelId) || Object.keys(req.body).some(key => key !== 'channelId')) {
+        res.status(400).json({ error: 'invalid_activity_channel' }); return;
+      }
+      const scope = await resolveActivityConversation({ db, uid, channelId: req.body.channelId });
+      if (!scope) { res.status(403).json({ error: 'activity_channel_forbidden' }); return; }
+      const { gatewayId, ...payload } = scope;
+      const ticket = await mintTicket({ uid, gatewayId, purpose: 'openclaw-ws', payload });
+      res.set('Cache-Control', 'no-store').json({ wsTicket: ticket.ticket, proxyUrl: process.env.API_PUBLIC_URL || '', gatewayId, sessionKey: scope.sessionKey });
+      return;
+    }
     const provisioning = req.user?.provisioning as { openclaw?: { gatewayId?: unknown } } | undefined;
     const rawGatewayId = provisioning?.openclaw?.gatewayId;
     const gatewayId =

@@ -10,6 +10,7 @@ import { Registry, Counter, Gauge } from "prom-client";
 import { WsUpgradeRouter } from "@octogee/core/ws/upgrade-router";
 import { publicAppOrigins } from "@octogee/core/deployment-environment";
 import { OpenclawWireError } from "./openclaw/upstream.js";
+import { attachActivitySubscription } from './openclaw/activity-subscription.js';
 import {
   clearGatewayDeviceToken,
   fetchGatewayAuth,
@@ -18,7 +19,7 @@ import {
   type GatewayOpenClawAuth,
 } from "./openclaw/gateway-token.js";
 import { openUpstreamWithGatewayAuth } from "./openclaw/authenticated-upstream.js";
-import { shouldForwardFrame } from "./openclaw/frame-filter.js";
+import { shouldForwardFrame, sanitizeActivityFrame } from "./openclaw/frame-filter.js";
 import {
   createGateState,
   evaluateInboundFrame,
@@ -713,13 +714,14 @@ function handleOpenClawWsUpgrade(
       const uid = redeemed.uid;
       const gatewayId = redeemed.gatewayId;
       const expectedAgentId = redeemed.expectedAgentId;
+      const activityScope = redeemed.activityConversation;
 
       // Post-auth roster verdict (the ticket just resolved the customer): a
       // quiescing customer or one serving on another revision must never
       // attach here — refuse so the client reconnects via the serving
       // revision.
       if (upgradeGate) {
-        const verdict = upgradeGate.checkUid(uid);
+        const verdict = upgradeGate.checkUid(activityScope?.ownerUid ?? uid);
         if (!verdict.allow) {
           upgradeGate.refuse(socket, verdict);
           return;
@@ -735,13 +737,14 @@ function handleOpenClawWsUpgrade(
       const upstream = outcome.upstream;
 
       const gateState = createGateState(expectedAgentId);
+      gateState.readOnly = Boolean(activityScope);
 
       wss.handleUpgrade(req, socket, head, (clientWs) => {
         ocWsConnectionsActive.inc();
 
         const stopGatewayWatch = watchBrokerGatewayIdChange(
           runtimeBroker,
-          uid,
+          activityScope?.ownerUid ?? uid,
           gatewayId,
           (newGatewayId) => {
             const destination = newGatewayId ?? "not-assigned-here";
@@ -781,18 +784,19 @@ function handleOpenClawWsUpgrade(
         upstream.on("message", (data, isBinary) => {
           if (clientWs.readyState !== WebSocket.OPEN) return;
           if (isBinary) {
+            if (activityScope) return;
             clientWs.send(data, { binary: true });
             return;
           }
           const text = data.toString();
-          const decision = shouldForwardFrame(text, { expectedAgentId });
+          const decision = shouldForwardFrame(text, { expectedAgentId, ...(activityScope ? { sessionKey: activityScope.sessionKey } : {}) });
           ocWsFrameFilterTotal.inc({
             decision: decision.forward ? "forward" : "drop",
             reason: decision.reason,
           });
           if (decision.forward) {
             observeOutboundForState(text, gateState);
-            clientWs.send(text);
+            clientWs.send(activityScope ? sanitizeActivityFrame(text) : text);
           } else {
             bumpFilteredFrameCount(uid, decision.reason);
             const now = Date.now();
@@ -811,11 +815,13 @@ function handleOpenClawWsUpgrade(
         clientWs.on("close", () => {
           ocWsConnectionsActive.dec();
           stopGatewayWatch();
+          stopActivity?.();
           try {
             upstream.close();
           } catch {}
         });
         upstream.on("close", () => clientWs.close());
+        const stopActivity = activityScope ? attachActivitySubscription({ upstream, client: clientWs, scope: activityScope, uid, broker: runtimeBroker, warn: (message, metadata) => logger.warn(message, metadata) }) : undefined;
         clientWs.on("error", () => {
           try {
             upstream.close();

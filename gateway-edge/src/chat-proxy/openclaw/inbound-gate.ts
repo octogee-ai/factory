@@ -2,6 +2,7 @@ import { PER_USER_EVENTS } from './frame-filter.js';
 
 export interface GateState {
   expectedAgentId: string;
+  readOnly?: boolean;
   observedRunIds: Set<string>;
   observedApprovalIds: Set<string>;
 }
@@ -61,6 +62,7 @@ export function evaluateInboundFrame(
   if (parsed.type !== 'req' || typeof parsed.method !== 'string') return reject('wrong-type');
 
   const method = parsed.method;
+  if (state.readOnly) return reject('method-not-allowlisted');
   if (!ALLOWED_METHODS.has(method)) return reject('method-not-allowlisted');
 
   const params = isRecord(parsed.params) ? parsed.params : {};

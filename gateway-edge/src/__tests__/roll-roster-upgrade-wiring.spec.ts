@@ -28,8 +28,8 @@ describe("roll-roster upgrade gate wiring (Codex P0)", () => {
     expect(gateCall).toBeLessThan(firstDispatch);
   });
 
-  it("the OpenClaw WS attach re-checks the redeemed uid (post-auth per-customer verdict)", () => {
-    expect(proxySource).toContain("checkUid(uid)");
+  it("the OpenClaw WS attach re-checks the conversation owner, or the redeemed uid for owner control", () => {
+    expect(proxySource).toContain("checkUid(activityScope?.ownerUid ?? uid)");
   });
 
   it("the MM WS bridge gates at the auth-late seam: rosterVerdict threaded from the SAME shared gate (checkUid), resolving mmUser→uid through the BROKER not direct Firestore", () => {

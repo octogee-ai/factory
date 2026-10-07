@@ -1,6 +1,7 @@
 import { ReplyBindingDeniedError, type NativeFinalReply } from "@octogee/core/native-final-reply";
 import { internalFetch } from "../../lib/internal-fetch.js";
 import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
+import type { ActivityConversation } from '../../lib/activity-conversation.js';
 import type {
   AgentIdentity,
   AuthorizedConversationTarget,
@@ -31,11 +32,24 @@ function voiceRedeemScope(body: Record<string, unknown> | null, expectedAgentId:
   return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId, sessionKey: scope.sessionKey as string };
 }
 
+function parseActivityConversation(value: unknown, gatewayId: string, expectedAgentId?: string): ActivityConversation {
+  const scope = value as Partial<ActivityConversation> | null;
+  if (!scope || scope.gatewayId !== gatewayId || typeof scope.ownerUid !== 'string' || !scope.ownerUid || scope.ownerUid.includes('/') ||
+    typeof scope.channelId !== 'string' || !/^[a-z0-9]{26}$/u.test(scope.channelId) ||
+    typeof scope.expectedAgentId !== 'string' || !/^octogee-[a-z0-9-]+$/u.test(scope.expectedAgentId) ||
+    (expectedAgentId !== undefined && scope.expectedAgentId !== expectedAgentId) ||
+    typeof scope.sessionKey !== 'string' || !scope.sessionKey.startsWith(`agent:${scope.expectedAgentId}:mattermost:`) || !/^(?:direct|group|channel):[a-z0-9]{26}$/u.test(scope.sessionKey.slice(`agent:${scope.expectedAgentId}:mattermost:`.length))) {
+    throw new OpenClawRuntimeBrokerError(502, 'malformed Activity conversation');
+  }
+  return { gatewayId, ownerUid: scope.ownerUid, channelId: scope.channelId, expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey };
+}
+
 export interface RedeemedOpenClawWs {
   uid: string;
   gatewayId: string;
   gatewayUrl: string;
   expectedAgentId: string;
+  activityConversation?: ActivityConversation;
   voiceConversation?: { ownerUid: string; workspaceSlug: string; channelId: string; sessionKey: string };
   voiceGrant?: string;
   voiceGrantExpiresAt?: number;
@@ -73,6 +87,7 @@ export type ChatActivityReport =
   | (ChatActivityReportBase & { kind: "reaction"; emojiName: string; createdAt: number });
 
 export interface OpenClawRuntimeBroker {
+  getActivityConversation?(uid: string, channelId: string): Promise<ActivityConversation | null>;
   notifyFinalReply(input: NativeFinalReply): Promise<void>;
   redeemOpenClawWs(ticketId: string, purpose?: RedeemableWsTicketPurpose): Promise<RedeemOpenClawWsOutcome>;
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
@@ -333,8 +348,13 @@ export function createOpenClawRuntimeBroker(opts: {
       }
       return {
         kind: "redeemed",
-        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId, ...(purpose === "voice-ws" ? voiceRedeemCustody(body, expectedAgentId) : {}) },
+        redeemed: { uid, gatewayId: redeemedGatewayId, gatewayUrl, expectedAgentId, ...(body?.activityConversation ? { activityConversation: parseActivityConversation(body.activityConversation, redeemedGatewayId, expectedAgentId) } : {}), ...(purpose === "voice-ws" ? voiceRedeemCustody(body, expectedAgentId) : {}) },
       };
+    },
+    async getActivityConversation(uid, channelId) {
+      const response = await post('/internal/openclaw/activity/conversation-access', { uid, channelId }, new Set([200, 403, 404]));
+      if (response.status !== 200) return null;
+      return parseActivityConversation(await readJsonOrNull(response), gatewayId);
     },
     async authorizePreviewAccess(
       uid: string,

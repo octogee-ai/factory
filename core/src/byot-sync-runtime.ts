@@ -753,7 +753,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
   anthropic: { enabled: true },
   "octogee-activity-tools": {
     enabled: true,
-    config: { activityEnabled: false, heartbeatMs: 5000 },
+    config: { heartbeatMs: 5000 },
   },
   "octogee-chat-tools": {
     enabled: true,
