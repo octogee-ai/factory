@@ -1,7 +1,7 @@
 {
   "source": "b18683f9924bcb8351bdd0513c006cb9d0e16d93",
   "inputs": {
-    "sha256": "77525b85372a354e20c703689cd34cb889a930a4a5665085750104237e14ae74",
+    "sha256": "dd4779973c1f91e1152c523a992dd72a9b2bca581ed123cfedc6dca6b74c0b76",
     "files": [
       "octogee/app/openclaw-automations/entry.ts",
       "octogee/app/openclaw-browser/entry.ts",
@@ -12,6 +12,7 @@
       "octogee/app/openclaw-islands/i18n.ts",
       "octogee/app/openclaw-islands/provenance.mjs",
       "octogee/app/openclaw-model-picker/entry.ts",
+      "octogee/app/openclaw-tool-icons/entry.ts",
       "octogee/app/openclaw-workbench/entry.ts",
       "octogee/app/openclaw-workbench/theme-bootstrap.template.js",
       "octogee/app/src/appearance/appearance.css"
