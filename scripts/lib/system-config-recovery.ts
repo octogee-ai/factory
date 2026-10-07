@@ -258,6 +258,28 @@ function isAttributedMigrationReplay(
   return targetGateway && (migrationCheckpoint || bootCheckpoint);
 }
 
+type FetchedRemoteCommit =
+  | { outcome: "fetched"; adoptedCommit: string; replayedTargetCommit: boolean }
+  | { outcome: "unavailable"; errorCode: string };
+
+function fetchAdoptableRemoteCommit(
+  options: SystemConfigRemoteConvergenceOptions,
+  execGit: GitExec,
+  keyPath: string,
+): FetchedRemoteCommit {
+  if (execGit(options.repoDir, ["fetch", "origin", "main"], keyPath) === null) {
+    return { outcome: "unavailable", errorCode: "remote-fetch-failed" };
+  }
+  const fetchedCommit = execGit(options.repoDir, ["rev-parse", "FETCH_HEAD"], keyPath);
+  if (fetchedCommit === options.expectedCommit) {
+    return { outcome: "fetched", adoptedCommit: fetchedCommit, replayedTargetCommit: false };
+  }
+  if (fetchedCommit !== null && isAttributedMigrationReplay(options, execGit, keyPath, fetchedCommit)) {
+    return { outcome: "fetched", adoptedCommit: fetchedCommit, replayedTargetCommit: true };
+  }
+  return { outcome: "unavailable", errorCode: "remote-commit-mismatch" };
+}
+
 export function convergeSystemConfigToRemoteCommit(
   options: SystemConfigRemoteConvergenceOptions,
 ): SystemConfigRemoteConvergenceResult {
@@ -266,16 +288,12 @@ export function convergeSystemConfigToRemoteCommit(
   }
   const execGit = options.gitExec ?? defaultGitExec;
   const keyPath = options.keyPath ?? customerSshKeyPath(options.slug);
-  if (execGit(options.repoDir, ["fetch", "origin", "main"], keyPath) === null) {
-    return { outcome: "unavailable", errorCode: "remote-fetch-failed" };
+  const fetched = fetchAdoptableRemoteCommit(options, execGit, keyPath);
+  if (fetched.outcome === "unavailable") return fetched;
+  const { adoptedCommit, replayedTargetCommit } = fetched;
+  if (execGit(options.repoDir, ["rev-parse", "HEAD"], keyPath) === adoptedCommit) {
+    return { outcome: "adopted", adoptedCommit };
   }
-  const fetchedCommit = execGit(options.repoDir, ["rev-parse", "FETCH_HEAD"], keyPath);
-  const replayedTargetCommit = fetchedCommit !== null && fetchedCommit !== options.expectedCommit &&
-    isAttributedMigrationReplay(options, execGit, keyPath, fetchedCommit);
-  if (fetchedCommit !== options.expectedCommit && !replayedTargetCommit) {
-    return { outcome: "unavailable", errorCode: "remote-commit-mismatch" };
-  }
-  const adoptedCommit = replayedTargetCommit ? fetchedCommit : options.expectedCommit;
   const candidate = historyCandidate(
     {
       ...options,

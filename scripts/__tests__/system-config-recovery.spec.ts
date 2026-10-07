@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { reconcilePlatformInvariants } from "../lib/system-config-invariants.js";
 import { readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
+import { checkpointDurableSystemConfigForSlug } from "../lib/system-config.js";
 import {
   convergeSystemConfigToRemoteCommit,
   recoverSystemConfigHead,
@@ -79,6 +80,7 @@ describe("system config accepted-head recovery", () => {
     fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
     fs.writeFileSync(secretsPath, '{"alice-coach":"secret-token"}\n', { mode: 0o600 });
     const commands: string[] = [];
+    let head = "f".repeat(40);
     const gitExec = vi.fn((_cwd: string, commandArgv: string[]) => {
       const command = commandArgv.join(" ");
       commands.push(command);
@@ -89,8 +91,11 @@ describe("system config accepted-head recovery", () => {
       }
       if (command === `show ${expectedCommit}:.octogee.json`) return '{"schemaVersion":1}\n';
       if (command === `show ${expectedCommit}:.gitignore`) return "*.bak\n*.tmp\n";
-      if (command === `reset --hard ${expectedCommit}`) return "";
-      if (command === "rev-parse HEAD") return expectedCommit;
+      if (command === `reset --hard ${expectedCommit}`) {
+        head = expectedCommit;
+        return "";
+      }
+      if (command === "rev-parse HEAD") return head;
       return null;
     });
 
@@ -116,6 +121,7 @@ describe("system config accepted-head recovery", () => {
     expect(commands).toEqual([
       "fetch origin main",
       "rev-parse FETCH_HEAD",
+      "rev-parse HEAD",
       `show ${expectedCommit}:openclaw.json`,
       `show ${expectedCommit}:.octogee.json`,
       `show ${expectedCommit}:.gitignore`,
@@ -130,6 +136,7 @@ describe("system config accepted-head recovery", () => {
     const sourceCommit = "a".repeat(40);
     const targetCommit = "b".repeat(40);
     const targetConfig = validConfig({ sourceFinal: true });
+    let head = "f".repeat(40);
     const commitMessage = [
       "migration-checkpoint: sync openclaw config 2026-07-21T10:00:00.000Z",
       "",
@@ -149,8 +156,11 @@ describe("system config accepted-head recovery", () => {
       if (command === `show ${targetCommit}:openclaw.json`) return targetConfig;
       if (command === `show ${targetCommit}:.octogee.json`) return '{"schemaVersion":1}\n';
       if (command === `show ${targetCommit}:.gitignore`) return "*.bak\n*.tmp\n";
-      if (command === `reset --hard ${targetCommit}`) return "";
-      if (command === "rev-parse HEAD") return targetCommit;
+      if (command === `reset --hard ${targetCommit}`) {
+        head = targetCommit;
+        return "";
+      }
+      if (command === "rev-parse HEAD") return head;
       return null;
     });
 
@@ -170,6 +180,7 @@ describe("system config accepted-head recovery", () => {
     const sourceCommit = "a".repeat(40);
     const targetCommit = "b".repeat(40);
     const targetConfig = validConfig({ sourceFinal: true });
+    let head = "f".repeat(40);
     const commitMessage = [
       "boot-migration: sync openclaw config 2026-07-21T10:00:00.000Z",
       "",
@@ -186,8 +197,11 @@ describe("system config accepted-head recovery", () => {
       if (command === `show ${targetCommit}:openclaw.json`) return targetConfig;
       if (command === `show ${targetCommit}:.octogee.json`) return '{"schemaVersion":1}\n';
       if (command === `show ${targetCommit}:.gitignore`) return "*.bak\n*.tmp\n";
-      if (command === `reset --hard ${targetCommit}`) return "";
-      if (command === "rev-parse HEAD") return targetCommit;
+      if (command === `reset --hard ${targetCommit}`) {
+        head = targetCommit;
+        return "";
+      }
+      if (command === "rev-parse HEAD") return head;
       return null;
     });
 
@@ -249,6 +263,39 @@ describe("system config accepted-head recovery", () => {
       ["reset", "--hard", targetCommit],
       expect.any(String),
     );
+  });
+
+  it("checkpoints activation edits made on top of the fenced commit instead of discarding them", () => {
+    const h = realGitFixture(validConfig({ seeded: true }));
+    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-config-real-remote-"));
+    dirs.push(remoteDir);
+    execFileSync("git", ["init", "--bare", "-b", "main", remoteDir]);
+    git(h.repoDir, "remote", "add", "origin", remoteDir);
+    git(h.repoDir, "push", "-u", "origin", "main");
+    const activated = validConfig({
+      seeded: true,
+      channels: { mattermost: { accounts: { "oct06-coach": { enabled: true } } } },
+    });
+    fs.writeFileSync(h.configPath, activated);
+
+    const result = checkpointDurableSystemConfigForSlug("oct06", {
+      openclawDir: h.openclawDir,
+      expectedRemoteCommit: h.acceptedCommit,
+      env,
+      gitExec: localGitExec,
+      readCommitBlob: readSystemConfigCommitBlob,
+      validateConfig: vi.fn(),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      log: () => {},
+    });
+
+    expect(fs.readFileSync(h.configPath, "utf8")).toBe(activated);
+    expect(execFileSync("git", ["--git-dir", remoteDir, "show", "main:openclaw.json"], { encoding: "utf8" }))
+      .toBe(activated);
+    expect(execFileSync("git", ["--git-dir", remoteDir, "rev-parse", "main^"], { encoding: "utf8" }).trim())
+      .toBe(h.acceptedCommit);
+    expect(result.acceptedCommit).toBe(git(h.repoDir, "rev-parse", "HEAD"));
   });
 
   it("rejects an invalid pinned commit before fetching or changing the checkout", () => {
