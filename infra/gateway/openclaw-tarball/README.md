@@ -5,13 +5,15 @@ plus the smallest overlay required by its consumers. `current.json` selects
 two write-once GCS artifacts. Build main resolves their generations and produces
 an immutable, digest-addressed image family. Building never deploys TEST or PROD.
 
-## Refresh a tag or green main snapshot
+## Refresh a tag or selected main snapshot
 
 1. Fetch upstream in a clean OpenClaw checkout (`origin`: `openclaw/openclaw`,
    `ceckert`: the fork). For a tag, record the annotated tag object and peeled
    commit. For main, inspect the jobs of the most recent successful **full** CI
    run, not just a green fast/security-only push run. Record its exact head SHA,
    run URL and skipped jobs. A newer tip is not automatically a better candidate.
+   An operator may instead select a newer main for independent qualification;
+   record that exception and its CI limitations explicitly.
 2. Lock that full SHA before starting. Rebase the prior overlay onto it, checking
    each changed boundary. Do not chase a moving tip during the build. Drop
    adopted behavior, unused capabilities and optimizations that change upstream
@@ -31,8 +33,8 @@ an immutable, digest-addressed image family. Building never deploys TEST or PROD
 
 ```bash
 git fetch origin main
-# Set this to the inspected full-CI run's 40-character head SHA, not FETCH_HEAD.
-UPSTREAM_SHA=<verified-full-green-sha>
+# Set this to the selected and qualified 40-character SHA, not FETCH_HEAD.
+UPSTREAM_SHA=<selected-and-qualified-sha>
 git rebase --onto "$UPSTREAM_SHA" <previous-upstream-base> <overlay-branch>
 pnpm install --frozen-lockfile
 pnpm tsgo:prod
@@ -116,16 +118,17 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream: operator-selected main
-[`d1ea49abc634222cbf207b3a7964385539d61e3e`](https://github.com/openclaw/openclaw/commit/d1ea49abc634222cbf207b3a7964385539d61e3e),
-locked for the October 5 recut. This is not a full-CI-green base.
-[Push CI 37369141356](https://github.com/openclaw/openclaw/actions/runs/37369141356)
+[`f0c9bcfbe30ffd0fc71148c93517c2df997a3834`](https://github.com/openclaw/openclaw/commit/f0c9bcfbe30ffd0fc71148c93517c2df997a3834),
+locked for the October 6 recut. This is not a full-CI-green base.
+[Push CI 37557841533](https://github.com/openclaw/openclaw/actions/runs/37557841533)
 has one security-fast success and 39 skips; all 40 jobs were inspected.
 The operator chose this newer native implementation for independent qualification,
-not to describe its green push badge as full validation. This recut does not
-merge or deploy; a separate task owns the existing TEST recovery.
+not to describe its green push badge as full validation. The operator explicitly
+chose to finish this independently qualified candidate rather than chase newer
+red main or return to the older fully green base. This recut does not merge or deploy.
 Exact overlay:
-[`b9b2026d829ebcc841783757b4e83c80339b4841`](https://github.com/ceckert/openclaw/commit/b9b2026d829ebcc841783757b4e83c80339b4841),
-pushed and read back at `ceckert/openclaw:codex/openclaw-main-oct05-refresh`.
+[`b18683f9924bcb8351bdd0513c006cb9d0e16d93`](https://github.com/ceckert/openclaw/commit/b18683f9924bcb8351bdd0513c006cb9d0e16d93),
+pushed and read back at `ceckert/openclaw:codex/openclaw-main-oct06`.
 Package version is `2026.9.8`; this is a main snapshot, not a GA tag.
 
 The recut includes the complete `99541ca8` repair. Explicit secrets reload joins the native startup
@@ -142,12 +145,15 @@ startup admission context when enqueued, retaining it when the worker replies.
 The captured guard still checks live revocation and tenant ownership; it cannot
 borrow another agent's startup authority.
 
-Selected main separates native agent opening, migration and readiness
-publication. The overlay uses those phases instead of restoring the old combined
-startup callback: successful opening/migration occurs once, while only typed
-config/secrets supersession retries publication under fresh native admission
-scope. Model-publication rejection rechecks the same live guard; genuine model
-failures, revoked ownership and shutdown stay terminal.
+Selected main's startup and Talk owners remain authoritative. The overlay keeps
+typed startup retry and authority checks without restoring removed lifecycle
+APIs. Run adoption uses the existing run-state completion claim and progress
+probe; duplicated relay cancellation fixtures use native support registration.
+The actual lazy dispatcher now loads `sessions.channel.sync` from its existing
+handler owner. Explicit grants use the native storage provenance decoder and
+replacement API, so synchronizing or removing channel membership cannot revoke
+an owner's explicit sharing grant. A single-owner membership helper is private,
+eliminating an overlay import cycle without changing its authorization checks.
 
 Committed model-refresh supersession retains unfinished service work in the
 existing hot-reload owner. Neutral and identical successors consult that owner,
@@ -166,12 +172,14 @@ Native line caps and authorization assertions remain unchanged.
 
 | Selected write-once object | SHA-256 | GCS generation |
 | --- | --- | --- |
-| `openclaw-fork-b1ee7667.tgz` | `b1ee7667afd8da89d689a59c1694c5abd7ed6cd4f7fa704b3ba5283fd39d5fe3` | `1791237182581118` |
-| `openclaw-mattermost-2046d3c9.tgz` | `2046d3c91da87cb671e0eb86da41dd2d77a43525627911f8569f23d72cbc8164` | `1791237185743175` |
+| `openclaw-fork-46ed76dc.tgz` | `46ed76dc0736ab75a60f98c108826174df64635319912f510508ae64424b148a` | `1791376529548962` |
+| `openclaw-mattermost-56f2899f.tgz` | `56f2899f8c6dd4577c44a0e23bc955a6f5bd102e7a749a1079b0e5757c2353d7` | `1791376533057025` |
 
-Generation-bound downloads match both complete hashes above.
+Both objects were published with generation-zero preconditions using the
+operator-selected publisher. Generation-bound downloads match both complete
+hashes above; no prior object was overwritten.
 
-Shared-state schema advances to 21; agent schema stays 24. The native migration
+Shared-state schema stays 21, agent schema 24 and protocol 4. The native migration
 owner reconciles both shipped schema-20 layouts while retaining receipts,
 handoff journals, fences, jobs and scratch. Synthetic populated-state tests
 prove upgrade and downgrade refusal; they are not live continuity proof.
@@ -179,18 +187,19 @@ Preserve native backups and roll forward, not an image-only downgrade or reset.
 
 ### Qualification
 
-The exact source's full `pnpm build` passes in 11m22s. Its build-info records
-the exact overlay above. Native archive integrity and isolated matched
-installation pass: 14,019 core files and 874 Mattermost files are byte-identical
-to their archives. The native lifecycle consumes its one pending-install marker;
-that marker is checked separately, not counted as an installed runtime file.
-Both native Voice and Activity source/compiler contract gates pass during packing.
+The exact clean source's full `pnpm build` passes in 2m41.7s. Its build-info
+records the exact overlay above. Both maintained packers, native archive
+integrity and isolated matched installation pass: all 14,094 root files and
+874 Mattermost files are byte-identical to their archives. The isolated npm
+comparison disables install scripts; native installation is checked separately
+by the image target below. Both native Voice and Activity source/compiler
+contract gates pass during final-source packing.
 
 The actual Linux arm64 `openclaw-full-plugin-installer` target passes native
 registry refresh, bundled trust, nine Parallel files, 173 Codex files and all
 three native-hook imports. Network-disabled inspection confirms the exact
 source above. Local installer proof image:
-`sha256:013cf1611154e0fcb3b04d21b6cf68d3760f5319a938e2d85c2ecc69057a5aaf`.
+`sha256:b09260fb4792c3d73a35a629434f751e5d5f7b4e9c733c469834d6a890055833`.
 This is installer proof, not a final Build main manifest or live TEST acceptance.
 
 The retained startup/reload proof reproduces concurrent reloads repeatedly
@@ -198,31 +207,42 @@ superseding native preparation, then verifies eventual admission and later reloa
 success after the repair. The queued-worker regression uses the real worker and
 broker: releasing the worker under a sibling context cannot replace the opening
 agent's authority, and revoking the original admission still refuses the open.
-Final startup/lifecycle/state qualification passes 59 native cases across six
-files; the managed reload composition passes another 70 cases across four files.
-Approval, session, cron, browser, Talk, Mattermost and header boundary suites
-pass. All verified isolated Astra findings were corrected with failing controls;
-the last scoped review finds no runtime issue. The final documentation correction
-uses contextual inference for reviewer types rather than a private SDK import.
-Production and affected test types, scoped typed lint, formatting and source guards pass.
-Aggregate `pnpm check` success is not claimed. The inherited schema guard still
-reports Swift schema 20 versus TypeScript 21; neither schema changes here. The
-full build reports startup JS gzip 372985 B against the unchanged 373454 B
-enforcement limit. Startup CSS is above its advisory target but below its hard
-ceiling; no UI budget was increased.
+The current-source checks cover startup admission, real queued worker custody,
+reload composition, cron handoff and schema preservation. The final replays
+pass 102 sharing/grant cases across seven files, 179 run/relay cases across four
+files, 39 adoption controls across three files and 21 sharing-owner cases across
+three files. These overlapping suites are not an aggregate test count. The
+cron/schema batch passes 72 cases across seven files. The missing real RPC
+dispatch and lost explicit-grant distinction each have failing controls before
+their corrections; tests no longer silently skip absent handlers.
+
+Production types, affected test types, scoped typed lint, formatting and the
+252-file overlay line-cap ratchet pass. The final runtime import graph has zero
+value cycles. No cap was weakened and no authority test was dropped. Earlier
+scoped reviews are prior evidence, not a fresh Astra review of this source.
+Aggregate `pnpm check` success is not claimed. The inherited Swift schema 20
+versus TypeScript 21 mismatch remains outside the Linux shipping path; neither
+schema changes here. Startup JS gzip is 372889 B against the unchanged 373454 B
+enforcement limit. Startup CSS gzip is 50749 B, above its advisory target but
+below the unchanged 51200 B hard ceiling; no UI budget was increased.
 
 All seven hosted UI provenance records were regenerated from the exact source.
-The input audit adopts native sustained browser-input feedback, the model-picker
-spinner correction, desktop fullscreen ownership and current UI simplifications.
-The native entry points remain wired; removed question helper code is not restored.
-The unchanged Octogee adapters produce five entries sharing 360 generated chunks.
-Hosted island consumers pass 15 tests; native browser E2E passes five scenarios
-in 19.42s. The genuine previous-source desktop/mobile takeover control passes
-two scenarios in 13.57s; synthetic before/after captures were inspected.
-The strict computer-approval consumer typecheck resolves only the actual
-installed public SDK, with no missing-module suppression. Computer hook behavior
-passes 23 cases. Final artifact/pin qualification passes 135 cases; base/toolchain
-qualification passes 66 cases, with the final selected four suites replayed (53).
+The input audit adopts native terminal-dock fixes, current browser/device
+connection owners, placement/worker/bootstrap protocol contracts and model
+effort availability. Native entry points remain wired; deleted device helpers
+are not restored. The final backend-only corrections do not change island
+inputs. Unchanged Octogee adapters produce five entries sharing 362 generated
+chunks. Hosted island consumers pass 15 tests and app types pass; native browser
+E2E passes five scenarios in 17.85s. Synthetic desktop/mobile captures were
+inspected; this is not authenticated live UI proof. Final artifact/image-recipe
+and same-source pin qualification passes 135 cases across eight files; the
+base-image suite passes 19 cases. Immutable publication and readback are complete.
+
+Before a separately authorized rollout, address the acceptance investigation's
+lossy Octogee project-agent restore snapshot. This runtime does not repair that
+platform defect. Config RPCs still await runtime application while managed
+reload has separate root admission; a suspected request-drain dependency cycle
+needs focused reproduction and is not claimed fixed by this recut.
 
 After the immutable Build main and authorized TEST rollout, verify eventual
 startup convergence and an authenticated Builder activate → Browser/Terminal/
@@ -232,7 +252,7 @@ recovery requests or clear live custody fences.
 
 ### Patch assessment
 
-Rechecked against `d1ea49ab`: merged native deleted-agent cleanup replaces the
+Rechecked against `f0c9bcfb`: merged native deleted-agent cleanup replaces the
 entire old cleanup family. Native Skill Workshop lifetime and published model
 advancement replace their duplicate overlay owners. Native member readers and
 the existing reservation worker are reused. The unused request-authority shim
@@ -250,6 +270,10 @@ already adopted: its transport has no diff from the selected upstream base.
 
 This recut removes obsolete implementations and duplicated test scaffolding;
 it does not drop real SQLite, worker, tenant or execution-authority controls.
+It is not an overall overlay reduction: the selected base still needs the
+consumer contracts below. The exact diff has 265 files, 13,201 insertions and
+938 deletions, including tests. Native run-state, progress probes and relay test
+support replace duplicate owners rather than adding another lifecycle layer.
 Narrow retained regressions cover same-owner cron grants, delivered terminal
 consult replies, successor-owned service refresh, member publication and stale
 observations. Native removed exports are not restored for old mocks. Removed
@@ -353,8 +377,8 @@ same-owner jobs and eligible grants through the native worker.
 
 ### Base-image inputs
 
-The October 5 recut updates Claude Code to 2.1.289, Codex CLI to
-0.160.1 and Builder pnpm to 12.9.1, with matching locks and install-script
+This recut preserves main's October 5 tool updates: Claude Code 2.1.289, Codex CLI
+0.160.1 and Builder pnpm 12.9.1, with matching locks and install-script
 approvals. The base uses gcloud 587.0.0, GitHub CLI 2.102.0 and yq 4.54.1; Builder Firebase CLI
 is 15.32.1 and npm is 12.2.0. Builder Terraform advances to 1.16.5;
 Node 26.10.0 and inherited fd 10.5.0 stay unchanged. The native CUA driver
@@ -374,6 +398,8 @@ time of inspection. npm's proposed Firebase 6.8.0 downgrade is not adopted.
 This is an unresolved inherited tool dependency, not a zero-vulnerability audit.
 Published metadata confirms Node, gcloud, the four Python pins and GitHub CLI/Helm/yq pins
 remain current; the earlier Debian audit is prior evidence, not a fresh claim.
+Those version/audit observations are October 5 evidence, not a new latest-version
+or vulnerability-clearance claim for this runtime-only recut.
 
 Native package verification uses a fresh disposable `OPENCLAW_STATE_DIR` in
 the same image-build instruction. Reopening an inherited Docker-layer SQLite
