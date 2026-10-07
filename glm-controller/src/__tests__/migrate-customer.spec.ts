@@ -3,7 +3,7 @@ import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
-import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
@@ -441,6 +441,197 @@ describe("native computer return", () => {
     return native;
   }
 
+  describe("checkpoint release readiness", () => {
+    const handoff = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+    const op = () => mkOp({ attempts: 1, schedulerHandoff: handoff, input: {
+      uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
+    } });
+
+    it.each([
+      new MigrationRpcError("VM containers paused", { status: 503 }),
+      new MigrationRpcError("WS open failed: Unexpected server response: 503", { status: 500 }),
+      new MigrationTransportError("VM containers paused"),
+    ])("waits for released containers before activating schedules or unmounting: %s", async (unavailable) => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      const native = nativeReturn(h);
+      const order: string[] = [];
+      native.release.mockImplementation(async () => { order.push("release"); });
+      const scheduler = h.client.scheduler;
+      h.client.scheduler = vi.fn(async (request) => {
+        if (request.phase === "retire") {
+          if (order.at(-1) === "release") {
+            expect(h.client.unmount).not.toHaveBeenCalled();
+            order.push("paused");
+            throw unavailable;
+          }
+          order.push("retired");
+        } else {
+          expect(order.at(-1)).toBe("retired");
+          order.push("activated");
+        }
+        return scheduler(request);
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
+      expect(order).toEqual(["release", "paused", "retired", "activated"]);
+      expect(h.deps.sleep).toHaveBeenCalledOnce();
+      expect(h.client.unmount).toHaveBeenCalledOnce();
+    });
+
+    it("does not require a new endpoint on an older native source", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      nativeReturn(h);
+      vi.mocked(h.client.schedulerReady).mockRejectedValue(new MigrationRpcError("missing route", { status: 404 }));
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
+      expect(h.client.schedulerReady).not.toHaveBeenCalled();
+      expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).toEqual(["retire", "activate"]);
+      expect(h.client.unmount).toHaveBeenCalledOnce();
+    });
+
+    it("leaves the committed return pending if the VM does not resume before the deadline", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      nativeReturn(h);
+      let clock = 5_000;
+      vi.mocked(h.deps.now).mockImplementation(() => clock);
+      vi.mocked(h.deps.sleep).mockImplementation(async (ms) => { clock += ms; });
+      vi.mocked(h.client.scheduler).mockRejectedValue(new MigrationRpcError("VM paused", { status: 503 }));
+      const result = await createMigrateCustomerHandler(h.deps)(op(), h.ctx);
+      expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("did not resume") });
+      expect(classifyOperationFailure(result.error)).toBe("transient");
+      expect(clock).toBe(65_000);
+      expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("activate");
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    });
+
+    it("waits for released source cleanup when no scheduler handoff was retained", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      nativeReturn(h);
+      const unmount = h.client.unmount;
+      h.client.unmount = vi.fn().mockRejectedValueOnce(new MigrationRpcError("paused", { status: 503 })).mockImplementation(unmount);
+      const request = op();
+      delete request.schedulerHandoff;
+      expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
+      expect(h.client.unmount).toHaveBeenCalledTimes(2);
+      expect(h.deps.sleep).toHaveBeenCalledOnce();
+    });
+
+    it("waits for checkpoint writers to resume before rolling back a failed checkpoint", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      let ready = false;
+      native.checkpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+      const scheduler = h.client.scheduler;
+      let resuming = false;
+      h.client.scheduler = vi.fn(async (request) => {
+        if (request.phase === "resume") {
+          if (!resuming) { resuming = true; throw new MigrationRpcError("still paused", { status: 503 }); }
+          ready = true;
+        }
+        return scheduler(request);
+      });
+      vi.mocked(h.client.resume).mockImplementation(async () => { expect(ready).toBe(true); });
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "checkpoint upload failed" });
+      expect(native.release).toHaveBeenCalledOnce();
+      expect(h.deps.sleep).toHaveBeenCalledOnce();
+      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])("releases an earlier checkpoint before deferring an active Builder (source fenced=%s)", async (fenced) => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.checkpointRequested = true;
+      const order: string[] = [];
+      native.release.mockImplementation(async () => { order.push("release"); });
+      const quiesce = h.client.quiesce;
+      let calls = 0;
+      h.client.quiesce = vi.fn(async (request) => {
+        calls++;
+        if (calls === (fenced ? 2 : 1)) throw new MigrationDrainPendingError("active Builder");
+        return quiesce(request);
+      });
+      const scheduler = h.client.scheduler;
+      h.client.scheduler = vi.fn(async (request) => {
+        if (request.phase === "resume") expect(order).toContain("release");
+        return scheduler(request);
+      });
+      h.client.resume = vi.fn(async () => {
+        expect(order).toContain("release");
+        if (order.at(-1) === "release") { order.push("paused"); throw new MigrationRpcError("paused", { status: 503 }); }
+        order.push("resumed");
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ waitingForBuilderIdle: true, rolledBack: false });
+      expect(order).toEqual(["release", "paused", "resumed"]);
+      expect(native.checkpoint).not.toHaveBeenCalled();
+      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    });
+
+    it("preserves authorization failure classification during native rollback", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.checkpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+      h.client.resume = vi.fn().mockRejectedValue(new MigrationRpcError("unauthorized", { status: 401 }));
+      const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+      expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("unauthorized") });
+      expect(classifyOperationFailure(result.error)).toBe("terminal");
+      expect(h.deps.sleep).not.toHaveBeenCalled();
+      expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+    });
+
+    it("does not resume a rollback until the running source is reachable", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      native.checkpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+      let clock = 5_000;
+      vi.mocked(h.deps.now).mockImplementation(() => clock);
+      vi.mocked(h.deps.sleep).mockImplementation(async (ms) => { clock += ms; });
+      const scheduler = h.client.scheduler;
+      h.client.scheduler = vi.fn(async (request) => {
+        if (request.phase === "resume") throw new MigrationRpcError("still paused", { status: 503 });
+        return scheduler(request);
+      });
+      const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+      expect(result).toMatchObject({ success: false, rolledBack: false });
+      expect(classifyOperationFailure(result.error)).toBe("transient");
+      expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+      expect(h.client.resume).not.toHaveBeenCalled();
+    });
+
+    it("stops cleanup if the operation claim changes while waiting for the VM", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      nativeReturn(h);
+      let claimLost = false;
+      h.ctx.assertActiveClaim = vi.fn(async () => { if (claimLost) throw new Error("operation re-claimed"); });
+      vi.mocked(h.client.scheduler).mockRejectedValueOnce(new MigrationRpcError("paused", { status: 503 }));
+      vi.mocked(h.deps.sleep).mockImplementation(async () => { claimLost = true; });
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("operation re-claimed") });
+      expect(h.client.scheduler).toHaveBeenCalledOnce();
+      expect(h.client.unmount).not.toHaveBeenCalled();
+    });
+
+    it("does not let a stopped-source proof bypass a lost operation claim", async () => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      const native = nativeReturn(h);
+      native.isSourceFencedOff.mockResolvedValue(true);
+      h.ctx.assertActiveClaim = vi.fn().mockRejectedValue(new Error("operation re-claimed"));
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("operation re-claimed") });
+      expect(h.client.scheduler).not.toHaveBeenCalled();
+      expect(h.client.unmount).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      new MigrationRpcError("unauthorized", { status: 401 }),
+      new MigrationRpcError("held database files", { status: 500 }),
+    ])("does not poll away an unrelated failure: %s", async (error) => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      nativeReturn(h);
+      vi.mocked(h.client.scheduler).mockRejectedValue(error);
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining(error.message) });
+      expect(h.deps.sleep).not.toHaveBeenCalled();
+      expect(h.client.scheduler).toHaveBeenCalledOnce();
+      expect(h.client.unmount).not.toHaveBeenCalled();
+    });
+  });
+
   it("joins Shared channel readiness after source cleanup without starting a competing restore", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);
@@ -611,8 +802,14 @@ describe("native computer return", () => {
 
     it("does not verify completion when the claim is lost during restore", async () => {
       const h = recovery();
-      vi.mocked(h.ctx.assertActiveClaim!).mockResolvedValueOnce(undefined)
-        .mockRejectedValue(new Error("operation re-claimed"));
+      let claimLost = false;
+      vi.mocked(h.client.restoreTarget).mockImplementation(async (request) => {
+        claimLost = true;
+        return { migrationId: request.migrationId, slug: request.slug, restored: true, steps: [] };
+      });
+      vi.mocked(h.ctx.assertActiveClaim!).mockImplementation(async () => {
+        if (claimLost) throw new Error("operation re-claimed");
+      });
       expect(await createMigrateCustomerHandler(h.deps)(operation(), h.ctx)).toMatchObject({ success: false, error: expect.stringContaining("operation re-claimed") });
       expect(h.client.restoreTarget).toHaveBeenCalledOnce();
       expect(h.client.verifyTarget).toHaveBeenCalledOnce();
@@ -870,7 +1067,8 @@ describe("native computer return", () => {
       expect(result).toMatchObject({ success: false, rolledBack: false });
       expect(result.error).toContain("checkpoint timed out");
       expect(result.error).toContain("computer unreachable");
-      expect(h.client.resume).toHaveBeenCalledOnce();
+      expect(h.client.resume).not.toHaveBeenCalled();
+      expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
     });
 
     it("keeps the return pending while the computer's schedules are not retired", async () => {

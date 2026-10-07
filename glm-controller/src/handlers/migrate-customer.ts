@@ -11,6 +11,7 @@ import {
 import { PendingCustomerRestoreError } from "../operation-context.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
+  MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   type MigrationProgressRequestBody,
 } from "@octogee/shared/types/fleet-controller";
@@ -31,7 +32,7 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import { computerPreemptionError } from "../operation-retry.js";
-import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import type { WorkspaceMigrationPreparationParams, WorkspaceMigrationRecoveryParams } from "@octogee/core/fleet-state";
 import {
@@ -743,7 +744,7 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
       const settled = await settleNativeReturnAfterFailure(input, ctx, input.nativeReturn, handoff);
       if (settled) return settled;
     }
-    return rollbackFreshProvision({ deps, client, handoff, sourceAssignment, migrationId, slug, error });
+    return rollbackFreshProvision({ deps, ctx, native: input.nativeReturn, client, handoff, sourceAssignment, migrationId, slug, error });
   }
   if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, uid, migrationId, slug, handoff });
   await discardSourceFootprint(deps, ctx, {
@@ -763,13 +764,21 @@ async function deferFreshProvision(
   sourceFenced: boolean,
 ): Promise<OperationResult> {
   const { deps, targets, uid, slug, migrationId, operationId } = input;
+  await input.nativeReturn?.release();
   if (sourceFenced && handoff) {
-    const failure = await reopenSourceScheduler(deps, client, handoff);
-    if (failure) throw new Error(failure);
+    const failure = await reopenSourceScheduler(deps, client, handoff, input.nativeReturn ? input.ctx : undefined);
+    if (failure) return { steps: [], success: false, rolledBack: false, error: failure };
+  }
+  if (input.nativeReturn) {
+    try {
+      await runReleasedNativeSource(deps, input.ctx, targets.fromGatewayId, slug,
+        () => client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug }));
+    } catch (error) {
+      return failure(`native return deferral pending: ${errorMessage(error)}`, false);
+    }
   }
   if (sourceFenced) await restoreSourceServing(deps, { ...sourceAssignment, state: "serving", createIfMissing: false });
-  await client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug });
-  await input.nativeReturn?.release();
+  if (!input.nativeReturn) await client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug });
   await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId, phase: "waiting" });
   return { steps: [], success: false, waitingForBuilderIdle: true, rolledBack: false };
 }
@@ -819,6 +828,8 @@ async function settleNativeReturnAfterFailure(
 
 async function rollbackFreshProvision(input: {
   deps: MigrateCustomerDeps;
+  ctx: OperationContext;
+  native?: NativeComputerReturn | null;
   client: MigrationClient;
   handoff: SchedulerHandoffState | null;
   sourceAssignment: SourceAssignment;
@@ -831,6 +842,20 @@ async function rollbackFreshProvision(input: {
   if (handoff) {
     const abortFailed = await abortStagedSchedules(deps, client, handoff);
     if (abortFailed) return failure(`${cause}; ${abortFailed}`, false);
+  }
+  if (input.native) {
+    try {
+      if (handoff) {
+        const unreleased = await reopenSourceScheduler(deps, client, handoff, input.ctx);
+        if (unreleased) return failure(`${cause}; ${unreleased}`, false);
+      }
+      await runReleasedNativeSource(deps, input.ctx, input.sourceAssignment.gatewayId, slug,
+        () => client.resume({ migrationId, gatewayId: input.sourceAssignment.gatewayId, slug }));
+      await restoreSourceServing(deps, { ...input.sourceAssignment, state: "serving", createIfMissing: false });
+      return { steps: [], success: false, error: cause, rolledBack: true };
+    } catch (error) {
+      return failure(`${cause}; native return source recovery pending: ${errorMessage(error)}`, false);
+    }
   }
   await restoreSourceServing(deps, {
     ...input.sourceAssignment,
@@ -919,9 +944,12 @@ async function reopenSourceScheduler(
   deps: MigrateCustomerDeps,
   client: MigrationClient,
   handoff: SchedulerHandoffState,
+  ctx?: OperationContext,
 ): Promise<string | null> {
   try {
-    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "resume" });
+    const resume = () => client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "resume" });
+    if (ctx) await runReleasedNativeSource(deps, ctx, handoff.fromGatewayId, handoff.slug, resume);
+    else await resume();
     return null;
   } catch (resumeError) {
     const message = `scheduler fence ${handoff.migrationId} on ${handoff.fromGatewayId} not released: ${errorMessage(resumeError)}`;
@@ -932,13 +960,15 @@ async function reopenSourceScheduler(
 
 async function activateHandedOffSchedules(
   deps: MigrateCustomerDeps,
+  ctx: OperationContext,
   native: NativeComputerReturn,
   handoff: SchedulerHandoffState,
 ): Promise<void> {
   const { migrationId, slug } = handoff;
   try {
     const source = await gatewayClient(deps, [handoff.fromGatewayId]);
-    await source.scheduler({ migrationId, slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
+    await runReleasedNativeSource(deps, ctx, handoff.fromGatewayId, slug,
+      () => source.scheduler({ migrationId, slug, gatewayId: handoff.fromGatewayId, phase: "retire" }));
   } catch (error) {
     if (!await native.isSourceFencedOff()) throw error;
     deps.log(
@@ -946,6 +976,7 @@ async function activateHandedOffSchedules(
       `its exported copies stay fenced under ${migrationId} on ${handoff.fromGatewayId} until an operator retires that handoff: ${errorMessage(error)}`,
     );
   }
+  await ctx.assertActiveClaim?.();
   const target = await gatewayClient(deps, [handoff.toGatewayId]);
   await target.scheduler({ migrationId, slug, gatewayId: handoff.toGatewayId, phase: "activate" });
 }
@@ -1209,6 +1240,36 @@ async function preparedStateMigration(
   return native ? nativeReturnDecision() : decideCustomerStateMigration(deps, targets);
 }
 
+async function runReleasedNativeSource(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  gatewayId: string,
+  slug: string,
+  call: () => Promise<unknown>,
+): Promise<void> {
+  const deadline = deps.now() + MIGRATION_QUIESCE_TIMEOUT_MS;
+  while (true) {
+    await ctx.assertActiveClaim?.();
+    try {
+      await call();
+    } catch (error) {
+      const unavailable = error instanceof MigrationTransportError ||
+        (error instanceof MigrationRpcError && [502, 503, 504].includes(error.status ?? 0)) ||
+        (error instanceof MigrationRpcError && error.status === 500 && /WS open failed|socket closed before connect response/i.test(error.message)) ||
+        isTargetSchedulerNotReady(error);
+      if (!unavailable) throw error;
+      if (deps.now() >= deadline) {
+        throw new Error(`native source ${gatewayId} did not resume after checkpoint release (timed out): ${errorMessage(error)}`);
+      }
+      deps.log(`native return ${slug}: waiting for released source ${gatewayId}: ${errorMessage(error)}`);
+      await deps.sleep(Math.min(COACH_ATTACH_POLL_MS, deadline - deps.now()));
+      continue;
+    }
+    await ctx.assertActiveClaim?.();
+    return;
+  }
+}
+
 async function completeNativeReturn(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
@@ -1226,18 +1287,20 @@ async function completeNativeReturn(
     await native.release();
     if (input.handoff) {
       const handoff = input.handoff;
-      await reportFreshStep(deps, ctx, "activate-scheduler", () => activateHandedOffSchedules(deps, native, handoff));
+      await reportFreshStep(deps, ctx, "activate-scheduler", () => activateHandedOffSchedules(deps, ctx, native, handoff));
     }
     await reportFreshStep(deps, ctx, "unmount-source", async () => {
       try {
         const url = await deps.resolveGatewayUrl(input.fromGatewayId);
-        await deps.buildClient(() => url).unmount({
-          migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug,
-        });
+        await runReleasedNativeSource(deps, ctx, input.fromGatewayId, input.slug,
+          () => deps.buildClient(() => url).unmount({
+            migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug,
+          }));
       } catch (error) {
         if (!await native.isSourceFencedOff()) throw error;
         deps.log(`native return ${input.slug}: paused/retired source confirmed stopped by Compute; cleanup RPC skipped: ${errorMessage(error)}`);
       }
+      await ctx.assertActiveClaim?.();
     });
     await reportFreshStep(deps, ctx, "verify-target", () => verifyOrRestoreNativeReturnTarget(deps, ctx, input));
     return { steps: [], success: true, rolledBack: false };
