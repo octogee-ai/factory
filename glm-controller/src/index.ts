@@ -137,6 +137,7 @@ import {
 } from "./operation-router.js";
 import { assertActiveOperationClaim, assertCustomerRestoreSettled, createOperationContext } from "./operation-context.js";
 import {
+  compareOperationQueueOrder,
   decideOperationClaim,
   isSeriallyExclusiveKind,
   type OperationRef,
@@ -1848,6 +1849,7 @@ async function attemptClaimOrQueueOperation(
             input: pendingOperation.input,
             output: pendingOperation.output,
             createdAt: pendingOperation.createdAt,
+            queuedAt: pendingOperation.queuedAt,
             nextAttemptAt: pendingOperation.nextAttemptAt,
             customerMigrationV2: pendingOperation.customerMigrationV2,
             cutoverCommittedAt: pendingOperation.cutoverCommittedAt,
@@ -1866,6 +1868,7 @@ async function attemptClaimOrQueueOperation(
           kind: op.kind,
           status: freshOperation.status,
           createdAt: freshOperation.createdAt,
+          queuedAt: freshOperation.queuedAt,
           nextAttemptAt: freshOperation.nextAttemptAt,
           input: freshOperation.input,
           customerMigrationV2: freshOperation.customerMigrationV2,
@@ -1892,6 +1895,7 @@ async function attemptClaimOrQueueOperation(
         lastProgressAt: now,
         waitingOn: FieldValue.delete(),
         nextAttemptAt: FieldValue.delete(),
+        queuedAt: FieldValue.delete(),
       });
       // The completion write derives attempts/attemptHistory from the op the
       // handler ran with — hand back the transaction's fresh read so a stale
@@ -1924,7 +1928,7 @@ export async function processOperation(
   await runClaimedOperation(claim.fresh, ref, deps);
 }
 
-// Re-scan every pending op (FIFO by createdAt) and try to claim each. The
+// Re-scan every pending op and try to claim each. The
 // correctness net for (a) an op queued behind a since-finished conflicting op,
 // and (b) a retry whose backoff window has elapsed — see OPERATION_QUEUE_DRAIN_MS_DEFAULT.
 export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<void> {
@@ -1941,7 +1945,7 @@ export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<
       if (isOperationAuditRow(data)) return [];
       return [{ op: { ...(data as Operation), id: doc.id }, ref: doc.ref }];
     })
-    .sort((a, b) => (a.op.createdAt ?? 0) - (b.op.createdAt ?? 0));
+    .sort((a, b) => compareOperationQueueOrder(a.op, b.op));
   for (const { op, ref } of ops) {
     await processOperation(op, ref, deps);
   }

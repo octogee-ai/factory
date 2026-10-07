@@ -404,6 +404,7 @@ export interface Operation {
     origin?: OperationOrigin;
     createdAt: number;
     startedAt: number | null;
+    queuedAt?: number;
     firstStartedAt?: number | null;
     lastResumedAt?: number;
     completedAt: number | null;

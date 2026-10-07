@@ -626,6 +626,55 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     vi.useRealTimers();
   });
 
+  it.each([1_010_000, 1_031_000])("moves a rolled-back failure behind queued Builders at %i", async (retryAt) => {
+    vi.setSystemTime(1_000_000);
+    const calls: string[] = [];
+    let failed = false;
+    const handler: OperationHandler = vi.fn(async (op) => {
+      calls.push(op.id);
+      if (op.id === "retry" && !failed) {
+        failed = true;
+        return { steps: [], success: false, error: "runtime-update timed out", rolledBack: true };
+      }
+      return { steps: [], success: true };
+    });
+    const { db, store } = createFakeGlmOperationsDb({
+      retry: baseOp({ id: "retry", kind: "migrate-customer", createdAt: 1,
+        input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
+      healthy: baseOp({ id: "healthy", kind: "migrate-customer", createdAt: 2,
+        input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }),
+    });
+    const deps = buildDeps(db, { "migrate-customer": handler });
+    await processOperation({ ...store.get("retry"), id: "retry" } as unknown as Operation,
+      db.collection(GLM_OPERATIONS_COLLECTION).doc("retry"), deps);
+    expect(store.get("retry")).toMatchObject({ status: "pending", createdAt: 1, queuedAt: 1_000_000 });
+    vi.setSystemTime(retryAt);
+    await drainPendingOperationsOnce(deps);
+    expect(calls.slice(0, 2)).toEqual(["retry", "healthy"]);
+    expect(store.get("healthy")?.status).toBe("succeeded");
+    vi.setSystemTime(1_032_000);
+    await drainPendingOperationsOnce(deps);
+    expect(calls).toEqual(["retry", "healthy", "retry"]);
+    expect(store.get("retry")).toMatchObject({ status: "succeeded", attempts: 2 });
+    expect(store.get("retry")?.queuedAt).toBeUndefined();
+  });
+
+  it("admits new snapshot work while a rolled-back migration backs off", async () => {
+    vi.setSystemTime(1_010_000);
+    const handler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
+    const { db, store } = createFakeGlmOperationsDb({
+      retry: baseOp({ id: "retry", kind: "migrate-customer", createdAt: 1, queuedAt: 1_000_000,
+        nextAttemptAt: 1_030_000, input: { uid: "alice", toGatewayId: "shared-b" } }),
+      newcomer: baseOp({ id: "newcomer", kind: "migrate-customer", createdAt: 1_005_000,
+        input: { uid: "bob", toGatewayId: "shared-b" } }),
+    });
+    await processOperation({ ...store.get("newcomer"), id: "newcomer" } as unknown as Operation,
+      db.collection(GLM_OPERATIONS_COLLECTION).doc("newcomer"), buildDeps(db, { "migrate-customer": handler }));
+    expect(handler).toHaveBeenCalledOnce();
+    expect(store.get("newcomer")?.status).toBe("succeeded");
+    expect(store.get("retry")?.status).toBe("pending");
+  });
+
   it("requeues a transient failure with backoff and attempts, then succeeds once the backoff elapses", async () => {
     vi.setSystemTime(1_000_000);
     let calls = 0;

@@ -94,6 +94,7 @@ function describeWaitingOn(op: OperationRef): string {
 
 export interface PendingOperationRef extends OperationRef {
   createdAt: number;
+  queuedAt?: number;
   nextAttemptAt?: number | null;
 }
 
@@ -103,6 +104,7 @@ export interface OperationClaimCandidate {
   kind: string;
   status: string;
   createdAt: number;
+  queuedAt?: number;
   nextAttemptAt?: number | null;
   input?: Record<string, unknown>;
   customerMigrationV2?: OperationRef["customerMigrationV2"];
@@ -121,27 +123,25 @@ export type OperationClaimDecision =
   | { outcome: "claim" }
   | { outcome: "queue"; waitingOn: string };
 
-function isOlderThanCandidate(
-  other: { createdAt: number; id: string },
-  candidate: { createdAt: number; id: string },
-): boolean {
-  if (other.createdAt !== candidate.createdAt) return other.createdAt < candidate.createdAt;
-  return other.id < candidate.id;
+export function compareOperationQueueOrder(
+  a: { createdAt: number; queuedAt?: number; id: string },
+  b: { createdAt: number; queuedAt?: number; id: string },
+): number {
+  const timeDifference = (a.queuedAt ?? a.createdAt) - (b.queuedAt ?? b.createdAt);
+  if (timeDifference !== 0) return timeDifference;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
 }
 
-// An OLDER same-scope pending op is a conflict too: the onSnapshot fast path
-// claims a NEWLY created doc immediately, and without this check it would jump
-// ahead of an op already queued for the same scope (whose blocker finished
-// without any event waking it) — starving the queue head. Together with the
-// drain's createdAt-asc scan this makes claiming jointly FIFO per scope.
-function isBackingOffSuspension(pending: PendingOperationRef, now: number): boolean {
-  return pending.kind === ACCOUNT_SUSPENSION_KIND &&
+function isBackingOffReleasedOperation(pending: PendingOperationRef, now: number): boolean {
+  return (pending.kind === ACCOUNT_SUSPENSION_KIND ||
+    pending.kind === "migrate-customer" && pending.queuedAt !== undefined) &&
     typeof pending.nextAttemptAt === "number" &&
     pending.nextAttemptAt > now;
 }
 
 function findOlderPendingSameScope(
-  candidate: OperationRef & { createdAt: number },
+  candidate: PendingOperationRef,
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
   now: number,
 ): SerialConflict | null {
@@ -149,11 +149,11 @@ function findOlderPendingSameScope(
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
-        !isBackingOffSuspension(pending, now) &&
+        !isBackingOffReleasedOperation(pending, now) &&
         operationsConflict(candidate, pending) &&
-        isOlderThanCandidate(pending, candidate),
+        compareOperationQueueOrder(pending, candidate) < 0,
     )
-    .sort((a, b) => (isOlderThanCandidate(a, b) ? -1 : 1))[0];
+    .sort(compareOperationQueueOrder)[0];
   if (!older) return null;
   return { conflictingOpId: older.id, waitingOn: describeWaitingOn(older) };
 }

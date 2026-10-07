@@ -316,6 +316,10 @@ function pendingCompletion(
     expireAt: FieldValue.delete(),
     attempts,
     attemptHistory: failure.attemptHistory,
+    queuedAt: input.op.kind === MIGRATE_CUSTOMER_KIND && input.result.rolledBack === true &&
+      !recordOutput(input.result.output?.configCleanup) &&
+      (input.op.customerMigrationV2 === undefined || input.op.customerMigrationV2.phase === "aborted")
+      ? input.now : FieldValue.delete(),
     nextAttemptAt: input.now + backoffMs,
     waitingOn: FieldValue.delete(),
     error: `attempt ${attempts} failed (transient): ${failure.error} — retrying in ${Math.round(backoffMs / 1000)}s`,

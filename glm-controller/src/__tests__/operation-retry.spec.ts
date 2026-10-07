@@ -16,6 +16,50 @@ import {
   verifiedDeletionCompletion,
 } from "../operation-retry";
 
+describe("migration retry queue position", () => {
+  it("requeues a fully rolled-back migration at the time of each failed attempt", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", attempts: 1 },
+      result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
+      steps: [], now: 10_000,
+    });
+    expect(update).toMatchObject({ status: "pending", queuedAt: 10_000, nextAttemptAt: 130_000 });
+  });
+
+  it.each([
+    { rolledBack: false },
+    {},
+    { rolledBack: true, output: { configCleanup: { migrationId: "held" } } },
+  ])("does not release a migration with unconfirmed cleanup: %j", (result) => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer" },
+      result: { success: false, error: "runtime-update timed out", steps: [], ...result },
+      steps: [], now: 10_000,
+    });
+    expect(update.queuedAt).toEqual(FieldValue.delete());
+  });
+
+  it.each(["initialized", "promotionIntent", "aborting"])("keeps durable migration authority during %s", (phase) => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", customerMigrationV2: { phase } as never },
+      result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
+      steps: [], now: 10_000,
+    });
+    expect(update.queuedAt).toEqual(FieldValue.delete());
+  });
+
+  it("moves an aborted durable migration to the queue tail after cleanup", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", customerMigrationV2: { phase: "aborted" } as never },
+      result: { success: false, rolledBack: true, error: "runtime-update timed out", steps: [] },
+      steps: [], now: 10_000,
+    });
+    expect(update).toMatchObject({ status: "pending", queuedAt: 10_000,
+      customerMigrationV2: FieldValue.delete() });
+  });
+
+});
+
 describe("verifiedDeletionCompletion", () => {
   it("keeps continuous placement pending while another migration owns the rsync listener", () => {
     const error = "rsync import port 30873 is already serving migrationId=mig-other slug=bob";

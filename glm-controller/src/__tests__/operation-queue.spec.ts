@@ -232,6 +232,48 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
 });
 
 describe("decideOperationClaim", () => {
+  it.each([5_000, -1])("lets another Builder pass a rolled-back retry with delay %i", (delay) => {
+    expect(decideOperationClaim({
+      op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 2,
+        input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" } },
+      now: 10_000,
+      runningOpsSameKind: [],
+      pendingOpsSameKind: [{ id: "retry", kind: "migrate-customer", createdAt: 1,
+        queuedAt: 3, nextAttemptAt: 10_000 + delay,
+        input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" } }],
+    })).toEqual({ outcome: "claim" });
+  });
+
+  it("admits newly queued work during a rolled-back migration's backoff", () => {
+    expect(decideOperationClaim({
+      op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 4,
+        input: { uid: "bob", toGatewayId: "shared-b" } },
+      now: 10_000, runningOpsSameKind: [],
+      pendingOpsSameKind: [{ id: "retry", kind: "migrate-customer", createdAt: 1,
+        queuedAt: 3, nextAttemptAt: 15_000, input: { uid: "alice", toGatewayId: "shared-b" } }],
+    })).toEqual({ outcome: "claim" });
+  });
+
+  it("queues an eligible retry behind work already waiting when it failed", () => {
+    expect(decideOperationClaim({
+      op: { id: "retry", kind: "migrate-customer", status: "pending", createdAt: 1,
+        queuedAt: 3, nextAttemptAt: 9_000, input: { toGatewayId: "shared-b" } },
+      now: 10_000, runningOpsSameKind: [],
+      pendingOpsSameKind: [{ id: "healthy", kind: "migrate-customer", createdAt: 2,
+        input: { toGatewayId: "shared-b" } }],
+    })).toEqual({ outcome: "queue", waitingOn: "migration → shared-b" });
+  });
+
+  it("keeps FIFO for work arriving after an eligible retry was requeued", () => {
+    expect(decideOperationClaim({
+      op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 4,
+        input: { toGatewayId: "shared-b" } },
+      now: 10_000, runningOpsSameKind: [],
+      pendingOpsSameKind: [{ id: "retry", kind: "migrate-customer", createdAt: 1,
+        queuedAt: 3, nextAttemptAt: 9_000, input: { toGatewayId: "shared-b" } }],
+    })).toEqual({ outcome: "queue", waitingOn: "migration → shared-b" });
+  });
+
   const now = 1_000_000;
 
   it("skips a doc that is no longer pending (already claimed by another process)", () => {
