@@ -10,7 +10,7 @@ import {
   configuredBuilderWorkspacePatch,
   validOwnerMmUserId,
 } from "./configured-builder-project-agents.js";
-import { reportProjectAgentReadiness } from "./project-agent-readiness.js";
+import { projectAgentsRuntimeReady, reportProjectAgentReadiness } from "./project-agent-readiness.js";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -1876,6 +1876,7 @@ export function buildBrokeredLifecycleAdapter(
         applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch)),
     cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
+    projectAgentsHealthy: (snapshot) => projectAgentsRuntimeReady({ ...snapshot, rpc: ctx.rpc }),
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),

@@ -191,6 +191,7 @@ export interface CustomerLifecycleAdapter {
         slug: string;
         timeoutMs: number;
     }) => Promise<boolean>;
+    projectAgentsHealthy: (snapshot: UserSnapshot) => Promise<boolean>;
     notifyOpsOfSignup: (ctx: CustomerContext) => Promise<void>;
     onMounted?: (slug: string) => void;
     onUnmounted?: (slug: string) => void;

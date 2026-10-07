@@ -236,6 +236,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     onMounted: vi.fn(),
     isConfiguredBuilderCustomer: vi.fn(() => true),
     waitForAccountHealthy: vi.fn(async () => true),
+    projectAgentsHealthy: vi.fn(async () => true),
     hasCustomerDir: vi.fn(() => true),
     customerCoachWiredInOpenclawConfig: vi.fn(() => true),
     customerMountMarked: vi.fn(() => true),
@@ -835,6 +836,19 @@ describe("createFlushHandler", () => {
 });
 
 describe("createVerifyHandler", () => {
+  it("preserves Coach verification before the target can read the assignment-gated snapshot", async () => {
+    const adapter = mkAdapter({ uidForSlug: vi.fn(async () => null) });
+    const body = { migrationId: "mig-before-cutover", slug: "chris" };
+    const response = mkResponse();
+    await createVerifyHandler(mkDeps({ adapter }))(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toMatchObject({ ready: true, checks: { accountHealthy: true } });
+    expect(adapter.uidForSlug).not.toHaveBeenCalled();
+    expect(adapter.loadUserSnapshot).not.toHaveBeenCalled();
+    expect(adapter.projectAgentsHealthy).not.toHaveBeenCalled();
+  });
   it("rejects bad signature with 401", async () => {
     const handler = createVerifyHandler(mkDeps());
     const body = { migrationId: "mig-1", slug: "chris" };
@@ -1111,6 +1125,9 @@ describe("createRestoreHandler", () => {
       uid: "uid-chris",
       snapshot: {
         ...RESTORE_SNAPSHOT,
+        projectCheckoutScope: "workspace-and-projects",
+        projects: [{ projectSlug: "demo", giteaRepoName: "chris-demo" }],
+        projectAgents: [{ projectId: "demo", enabled: true, token: "pat-demo", mmUserId: "bot-demo", status: "ready", activationId: "activation-demo" }],
         selectedTier: "personal_free",
         builderSubscription: { tier: "pro", status: "trialing" },
         trialGrant: {
@@ -1146,7 +1163,10 @@ describe("createRestoreHandler", () => {
         "git@gitea:octogee/chris.git",
       );
       expect(adapter.applyAddCustomerConfigPatch).toHaveBeenCalledWith(
-        expect.objectContaining({ uid: "uid-chris", slug: "chris" }),
+        expect.objectContaining({
+          uid: "uid-chris", slug: "chris", projectCheckoutScope: "workspace-and-projects",
+          projectAgents: body.snapshot.projectAgents,
+        }),
         null,
         expect.objectContaining({ byosActive: false }),
       );
@@ -1171,6 +1191,7 @@ describe("createRestoreHandler", () => {
         }),
       );
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+      expect(adapter.cloneProjectRepo).toHaveBeenCalledWith("chris", "demo", "chris-demo", undefined);
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
       expect(pauseSystemConfigWatch).toHaveBeenCalledOnce();

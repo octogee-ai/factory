@@ -2208,6 +2208,35 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
+  it("retains a ready project agent when restoring a seeded migration snapshot", async () => {
+    const projectId = "octogee-alice-proj-orbit-coach";
+    const snapshot = aliceSnapshot({
+      status: "complete",
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", status: "ready" }],
+    });
+    const config = { agents: { entries: keyedRoster(["octogee-alice-coach", projectId]) } };
+    const rpc = mkGatewayRpc(rosterRpc(config));
+    const client = mkClient();
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    adapter.seedUserSnapshotForMigration!(snapshot);
+    let patch: Record<string, any>;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch(config) as Record<string, any>;
+      return { mode: "rpc", attempts: 1 };
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, null);
+
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(patch!.agents.entries).toHaveProperty(projectId);
+    expect(patch!.channels.mattermost.accounts).toHaveProperty("alice-proj-orbit");
+    expect(patch!.bindings).toContainEqual({
+      agentId: projectId,
+      match: { channel: "mattermost", accountId: "alice-proj-orbit", peer: { kind: "group", id: "orbit-general" } },
+    });
+  });
+
   it.each([
     { mode: "mount", failPublication: false, initial: false }, { mode: "configured Builder", failPublication: false, initial: false },
     { mode: "mount", failPublication: true, initial: false }, { mode: "configured Builder", failPublication: true, initial: false },

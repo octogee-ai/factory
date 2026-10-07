@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { reportProjectAgentReadiness } from "../lib/project-agent-readiness.js";
+import { projectAgentsRuntimeReady, reportProjectAgentReadiness } from "../lib/project-agent-readiness.js";
 
 const agent = { projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "pat-orbit", activationId: "activation-1", status: "provisioning" as const };
 const binding = { agentId: "octogee-alice-proj-orbit-coach", match: { channel: "mattermost", accountId: "alice-proj-orbit", peer: { kind: "group", id: "channel-orbit" } } };
@@ -22,6 +22,39 @@ function fixture() {
 }
 
 describe("project agent runtime readiness", () => {
+  it.each([false, true])("verifies list-shaped project rosters without overriding keyed entries (keyed present: %s)", async (keyedPresent) => {
+    const f = fixture();
+    const config = {
+      ...f.config,
+      agents: { list: [{ id: binding.agentId }], ...(keyedPresent ? { entries: {} } : {}) },
+    };
+    expect(await projectAgentsRuntimeReady({
+      rpc: { ...f.rpc, configGet: async () => ({ config, configRevisionHash: "revision-1", appliedConfigHash: "revision-1" }) },
+      slug: "alice", projectAgents: [{ ...agent, status: "ready" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "channel-orbit" }],
+    })).toBe(!keyedPresent);
+  });
+
+  it.each(["missing-agent", "missing-account", "wrong-binding", "disconnected", "applying", "ready"])("verifies an already-ready project during migration: %s", async (state) => {
+    const f = fixture();
+    if (state === "missing-agent") f.config.agents.entries = {};
+    if (state === "missing-account") f.config.channels.mattermost.accounts = {};
+    if (state === "wrong-binding") f.config.bindings[0] = { ...binding, agentId: "octogee-alice-coach" };
+    if (state === "disconnected") f.rpc.channelsStatus.mockResolvedValue({ channelAccounts: { mattermost: [{ accountId: "alice-proj-orbit", running: true, connected: false, lastStartAt: 2 }] } });
+    if (state === "applying") f.rpc.configGet.mockResolvedValue({ config: f.config, configRevisionHash: "revision-2", appliedConfigHash: "revision-1" });
+    expect(await projectAgentsRuntimeReady({
+      rpc: f.rpc, slug: "alice", projectAgents: [{ ...agent, status: "ready" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "channel-orbit" }],
+    })).toBe(state === "ready");
+    expect(f.report).not.toHaveBeenCalled();
+  });
+  it("does not require retired project agents during migration", async () => {
+    const f = fixture();
+    expect(await projectAgentsRuntimeReady({
+      rpc: f.rpc, slug: "alice", projectAgents: [{ ...agent, enabled: false }], channels: [],
+    })).toBe(true);
+    expect(f.rpc.configGet).not.toHaveBeenCalled();
+  });
   it("reports the minted activation only after the project account is bound, running and connected", async () => {
     const f = fixture();
     await f.run();

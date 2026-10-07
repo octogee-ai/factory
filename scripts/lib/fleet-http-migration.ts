@@ -659,6 +659,10 @@ export function createFlushHandler(deps: MigrationHandlerDeps): RequestHandler {
   });
 }
 
+function restoreProjectCheckoutScope(value: unknown): UserSnapshot["projectCheckoutScope"] {
+  return value === "workspace-and-projects" || value === "workspace-only" ? value : undefined;
+}
+
 function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapshot | null {
   const snapshot: unknown = body.snapshot;
   if (!isRecord(snapshot)) return null;
@@ -678,6 +682,8 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     channels: Array.isArray(snapshot.channels) ? snapshot.channels as UserSnapshot["channels"] : [],
     ownerName: typeof snapshot.ownerName === "string" ? snapshot.ownerName : body.slug,
     projects: Array.isArray(snapshot.projects) ? snapshot.projects as UserSnapshot["projects"] : [],
+    projectAgents: Array.isArray(snapshot.projectAgents) ? snapshot.projectAgents as UserSnapshot["projectAgents"] : [],
+    projectCheckoutScope: restoreProjectCheckoutScope(snapshot.projectCheckoutScope),
     ...pickPlanInputs(snapshot),
     freeTierModelRef:
       typeof snapshot.freeTierModelRef === "string" ? snapshot.freeTierModelRef : undefined,

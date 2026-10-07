@@ -151,6 +151,14 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     await verifyChannelReady(adapter, slug, verifyTimeoutMs);
     steps.push(VERIFY_CHANNEL_READY);
     throwIfAborted(signal, uid);
+    const admittedSnapshot = {
+        ...snapshot,
+        projectAgents: snapshot.projectAgents?.filter((agent) => !projectClones.pending.includes(agent.projectId)),
+    };
+    if (!await adapter.projectAgentsHealthy(admittedSnapshot)) {
+        throw new Error(`[restore:${slug}] project agents are not connected to their configured channels`);
+    }
+    throwIfAborted(signal, uid);
     adapter.writeMountMarker?.(slug);
     adapter.log(`[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`);
     return { restored: true, steps };

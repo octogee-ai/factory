@@ -248,6 +248,7 @@ return "ssh-pubkey";
       record("waitForAccountHealthy");
       return state.healthy;
     },
+    projectAgentsHealthy: async () => true,
     materializeBrokerProfiles: () => record("materializeBrokerProfiles"),
 
     notifyOpsOfSignup: async () => {
@@ -2320,6 +2321,50 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     _resetInFlightUidsForTests();
   });
 
+  it("does not publish a restored mount when an active project runtime is missing", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    const adapter = makeAdapter(state);
+    adapter.projectAgentsHealthy = async () => false;
+    adapter.writeMountMarker = () => { throw new Error("must not mark an incomplete restore"); };
+    await expect(restoreCustomerRuntimeFromSnapshot(adapter, state.user!)).rejects.toThrow("project agents are not connected");
+  });
+
+  it("verifies only project agents admitted after checkout restoration", async () => {
+    const state = makeState(snap({
+      status: "complete",
+      projects: [{ projectSlug: "pending", giteaRepoName: "test-pending" }],
+      projectAgents: [
+        { projectId: "pending", enabled: true, mmUserId: "pending-bot", token: "pending-pat", status: "ready" },
+        { projectId: "ready", enabled: true, mmUserId: "ready-bot", token: "ready-pat", status: "ready" },
+      ],
+    }), emptyDisk());
+    state.cloneProjectLands = false;
+    const adapter = makeAdapter(state);
+    const verified: UserSnapshot[] = [];
+    adapter.projectAgentsHealthy = async (snapshot) => {
+      verified.push(snapshot);
+      return !snapshot.projectAgents?.some((agent) => agent.projectId === "pending");
+    };
+    const result = await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+    expect(result.restored).toBe(true);
+    expect(state.configPatchWithoutProjectIds).toEqual([["pending"]]);
+    expect(verified[0].projectAgents?.map((agent) => agent.projectId)).toEqual(["ready"]);
+  });
+
+  it("does not publish a restored mount after cancellation during project verification", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    const adapter = makeAdapter(state);
+    const controller = new AbortController();
+    adapter.projectAgentsHealthy = async () => {
+      controller.abort(new Error("restore cancelled"));
+      return true;
+    };
+    let marked = false;
+    adapter.writeMountMarker = () => { marked = true; };
+    await expect(restoreCustomerRuntimeFromSnapshot(adapter, state.user!, { signal: controller.signal })).rejects.toThrow("restore cancelled");
+    expect(marked).toBe(false);
+  });
+
   it("does not call blobSyncForSlug during restore — the source rsync + the post-online loop own blob backfill", async () => {
     const state = makeState(snap({ status: "complete" }), emptyDisk());
 
@@ -2594,6 +2639,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     applyAddCustomerConfigPatch: false,
     applyRemoveCustomerConfigPatch: false,
     waitForAccountHealthy: false,
+    projectAgentsHealthy: false,
     notifyOpsOfSignup: false,
     onMounted: false,
     onUnmounted: false,

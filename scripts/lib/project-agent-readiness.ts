@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
 import { projectAgentId } from "../../shared/types/identity.js";
 import type { FleetBrokerChannelBinding, FleetBrokerProjectAgent, FleetBrokerProjectAgentReadiness } from "../../shared/types/fleet-broker.js";
+import { activeAgentProjectIds } from "./openclaw-config-builders.js";
+import { agentIdsFromConfig } from "./byosub-restore.js";
 
 interface AccountStatus { accountId?: string; running?: boolean; connected?: boolean; lastStartAt?: number | null }
 
 interface RuntimeConfig {
-  agents?: { entries?: Record<string, unknown> };
+  agents?: { entries?: Record<string, unknown>; list?: unknown[] };
   channels?: { mattermost?: { accounts?: Record<string, unknown> } };
   bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string; peer?: { kind?: string; id?: string } } }>;
 }
 
 function runtimeProjectBound(config: RuntimeConfig, agentId: string, accountId: string, channelIds: string[]): boolean {
-  if (!config.agents?.entries?.[agentId] || !config.channels?.mattermost?.accounts?.[accountId] || channelIds.length === 0) return false;
+  if (!agentIdsFromConfig(config).includes(agentId) || !config.channels?.mattermost?.accounts?.[accountId] || channelIds.length === 0) return false;
   const bindings = config.bindings?.filter((binding) => binding.agentId === agentId &&
     binding.match?.channel === "mattermost" && binding.match.accountId === accountId) ?? [];
   return bindings.some((binding) => !binding.match?.peer) && channelIds.every((channelId) =>
@@ -21,6 +23,30 @@ function runtimeProjectBound(config: RuntimeConfig, agentId: string, accountId: 
 function accountActivated(account: AccountStatus | undefined, baseline: number | undefined): boolean {
   return account?.running === true && account.connected === true &&
     typeof account.lastStartAt === "number" && Number.isFinite(baseline) && account.lastStartAt > baseline!;
+}
+
+export async function projectAgentsRuntimeReady(input: {
+  slug: string;
+  projectAgents?: readonly FleetBrokerProjectAgent[];
+  channels: readonly FleetBrokerChannelBinding[];
+  rpc: { configGet(): Promise<{ config: unknown; configRevisionHash?: string; appliedConfigHash?: string | null }>; channelsStatus(): Promise<unknown> };
+}): Promise<boolean> {
+  const agents = input.projectAgents ?? [];
+  const active = activeAgentProjectIds(agents);
+  if (active.size === 0) return true;
+  const snapshot = await input.rpc.configGet();
+  if (!snapshot.configRevisionHash || snapshot.appliedConfigHash !== snapshot.configRevisionHash) return false;
+  const config = snapshot.config as RuntimeConfig;
+  const status = await input.rpc.channelsStatus() as { channelAccounts?: { mattermost?: AccountStatus[] } };
+  return [...active].every((projectId) => {
+    const accountId = `${input.slug}-proj-${projectId}`;
+    const account = status.channelAccounts?.mattermost?.find((entry) => entry.accountId === accountId);
+    const channelIds = input.channels.filter((channel) =>
+      channel.scope === "project" && channel.projectId === projectId && channel.kind !== "admin"
+    ).map((channel) => channel.channelId);
+    return runtimeProjectBound(config, projectAgentId(input.slug, projectId), accountId, channelIds)
+      && account?.running === true && account.connected === true;
+  });
 }
 
 export async function reportProjectAgentReadiness(input: {

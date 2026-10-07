@@ -228,6 +228,7 @@ import {
 } from "@octogee/core/assignment-doc";
 import {
   byotSystemConfigFromDoc,
+  collectProjectAgentStates,
   mapProjectChannelDoc,
   mapWorkspaceChannelDoc,
 } from "@octogee/core/customer-snapshot-mapping";
@@ -2999,7 +3000,7 @@ export async function readMigrationUserSnapshot(
   const slug = slugFromAssignedUser(data);
   if (!slug) return null;
   const workspaceRef = db.collection("workspaces").doc(slug);
-  const [workspaceChannels, projectSnap, coachSecret, agentSnap, sysConfig, targetGateway] = await Promise.all([
+  const [workspaceChannels, projectSnap, coachSecret, agentSnap, sysConfig, targetGateway, projectAgents] = await Promise.all([
     workspaceRef.collection("channels").get(),
     workspaceRef.collection("projects").get(),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
@@ -3008,6 +3009,7 @@ export async function readMigrationUserSnapshot(
     toGatewayId
       ? db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get()
       : Promise.resolve(null),
+    collectProjectAgentStates(db, uid, slug),
   ]);
   const projectDocs = projectSnap.docs;
   const channels = await collectMigrationChannelBindings(workspaceChannels.docs, projectDocs);
@@ -3044,6 +3046,7 @@ export async function readMigrationUserSnapshot(
     channels,
     projectCheckoutScope,
     projects,
+    projectAgents,
     ownerName: stringAt(data, "displayName") || stringAt(data, "username") || slug,
     email: stringAt(data, "email"),
     displayName: stringAt(data, "displayName"),

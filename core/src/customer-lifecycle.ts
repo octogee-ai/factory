@@ -254,6 +254,7 @@ opts?: {
   clearMountMarker?: (slug: string) => void;
 
   waitForAccountHealthy: (params: { slug: string; timeoutMs: number }) => Promise<boolean>;
+  projectAgentsHealthy: (snapshot: UserSnapshot) => Promise<boolean>;
 
   notifyOpsOfSignup: (ctx: CustomerContext) => Promise<void>;
 
@@ -577,6 +578,15 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   markStep(VERIFY_CHANNEL_READY);
   await verifyChannelReady(adapter, slug, verifyTimeoutMs);
   steps.push(VERIFY_CHANNEL_READY);
+  throwIfAborted(signal, uid);
+
+  const admittedSnapshot = {
+    ...snapshot,
+    projectAgents: snapshot.projectAgents?.filter((agent) => !projectClones.pending.includes(agent.projectId)),
+  };
+  if (!await adapter.projectAgentsHealthy(admittedSnapshot)) {
+    throw new Error(`[restore:${slug}] project agents are not connected to their configured channels`);
+  }
   throwIfAborted(signal, uid);
 
   adapter.writeMountMarker?.(slug);
