@@ -13,6 +13,62 @@ const ctx = { expectedAgentId: EXPECTED };
 describe('read-only native Activity scope', () => {
   const sessionKey = `agent:${EXPECTED}:mattermost:group:${'c'.repeat(26)}`;
   const scope = { ...ctx, sessionKey };
+  it.each(['text', 'input_text', 'output_text'])('projects native public %s blocks', type => {
+    const raw = eventFrame('session.message', { sessionKey, message: { role: 'assistant', timestamp: 1000,
+      content: [{ type, text: 'The public answer' }], text: 'Not the selected answer' } });
+    expect(shouldForwardFrame(raw, scope).forward).toBe(true);
+    expect(JSON.parse(sanitizeActivityFrame(raw)).payload.message.content).toBe('The public answer');
+  });
+  it('uses native message.text when content has no public text without admitting reasoning or tool calls', () => {
+    const message = { role: 'assistant', timestamp: 1000, content: [{ type: 'image', data: 'private image' }], text: 'The public answer' };
+    const raw = eventFrame('session.message', { sessionKey, message });
+    expect(shouldForwardFrame(raw, scope).forward).toBe(true);
+    expect(JSON.parse(sanitizeActivityFrame(raw)).payload.message.content).toBe('The public answer');
+    for (const type of ['thinking', 'reasoning', 'redacted_thinking', 'toolCall']) {
+      expect(shouldForwardFrame(eventFrame('session.message', { sessionKey, message: { ...message, content: [{ type, text: 'private' }] } }), scope).forward).toBe(false);
+    }
+  });
+  it.each(['message', 'idempotencyKey', 'clientRunId'])('preserves bounded %s execution-owner fallback', owner => {
+    const message = { role: 'user', timestamp: 1000, content: 'A question', ...(owner === 'message' ? { idempotencyKey: 'run-1:user' } : {}) };
+    const raw = eventFrame('session.message', { sessionKey, message, ...(owner === 'message' ? {} : { [owner]: 'run-1:user' }) });
+    const safe = JSON.parse(sanitizeActivityFrame(raw)).payload;
+    expect(owner === 'message' ? safe.message.idempotencyKey : safe[owner]).toBe('run-1:user');
+    const malformed = JSON.parse(raw);
+    for (const value of [{ token: 'private' }, 'x'.repeat(513)]) {
+      (owner === 'message' ? malformed.payload.message : malformed.payload)[owner === 'message' ? 'idempotencyKey' : owner] = value;
+      const sanitized = JSON.parse(sanitizeActivityFrame(JSON.stringify(malformed))).payload;
+      expect(owner === 'message' ? sanitized.message.idempotencyKey : sanitized[owner]).toBeUndefined();
+    }
+  });
+  it('forwards bounded public conversation text with exact identities, but not transcript internals', () => {
+    const raw = eventFrame('session.message', { sessionKey, runId: 'run-1', messageId: 'm', messageSeq: 2,
+      sessionSnapshot: { secrets: 'private snapshot' },
+      message: { role: 'assistant', timestamp: 1000, content: [{ type: 'text', text: `Bearer abcdefghijklmnopqrstuvwxyz123456 ${'x'.repeat(6000)}` }, { type: 'image', data: 'private image' }],
+        __openclaw: { runId: 'run-1', id: 'm', seq: 2, idempotencyKey: 'send-1', internal: 'private metadata' }, reasoning: 'private thought' },
+    });
+    expect(shouldForwardFrame(raw, scope).forward).toBe(true);
+    const safe = JSON.parse(sanitizeActivityFrame(raw));
+    expect(safe.payload.message).toMatchObject({ role: 'assistant', __openclaw: { runId: 'run-1', id: 'm', seq: 2 } });
+    expect(safe.payload.message.content.length).toBeLessThanOrEqual(4000);
+    expect(JSON.stringify(safe)).not.toMatch(/private|abcdefghijklmnopqrstuvwxyz123456/);
+    expect(shouldForwardFrame(eventFrame('session.message', { ...JSON.parse(raw).payload, sessionKey: sessionKey + 'evil' }), scope).forward).toBe(false);
+  });
+  it.each([
+    { role: 'toolResult', content: 'tool result' },
+    { role: 'assistant', phase: 'commentary', content: 'private narration' },
+    { role: 'assistant', content: [{ type: 'toolCall', name: 'read' }] },
+    { role: 'assistant', content: 'imported', __openclaw: { importedFrom: 'cli' } },
+  ])('does not admit non-conversation projections $role $phase', message => {
+    expect(shouldForwardFrame(eventFrame('session.message', { sessionKey, message }), scope).forward).toBe(false);
+  });
+  it('does not transmit malformed identity objects or timestamps as message metadata', () => {
+    const payload = { sessionKey, runId: { token: 'private' }, messageId: { token: 'private' }, messageSeq: { token: 'private' },
+      message: { role: 'user', timestamp: 1000, content: 'A question', __openclaw: { id: { token: 'private' }, runId: { token: 'private' }, seq: { token: 'private' } } } };
+    const raw = eventFrame('session.message', payload);
+    expect(shouldForwardFrame(raw, scope).forward).toBe(true);
+    expect(sanitizeActivityFrame(raw)).not.toContain('private');
+    expect(shouldForwardFrame(eventFrame('session.message', { ...payload, message: { ...payload.message, timestamp: { token: 'private' } } }), scope).forward).toBe(false);
+  });
   it.each([undefined, null, true, 1, 'malformed', []].map(data => ({ data })))('drops malformed native Activity data $data before sanitizing', ({ data }) => {
     for (const event of ['agent', 'session.tool']) {
       const raw = eventFrame(event, { sessionKey, stream: 'tool', data });

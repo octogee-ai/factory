@@ -1,4 +1,5 @@
 import { redactStructuredSecrets } from '@octogee/shared/types/secret-redaction';
+import { activityConversationMessage } from './activity-message.js';
 
 export type ForwardReason =
   | "matched-identity"
@@ -63,20 +64,34 @@ function isEventEnvelope(raw: unknown): raw is { type: 'event'; event?: unknown;
 
 function activityFrameDecision(raw: unknown, expectedKey: string): FrameDecision {
   if (!isEventEnvelope(raw)) return MISSING_ACTIVITY_IDENTITY;
-  if (!['agent', 'session.tool'].includes(String(raw.event))) return { forward: false, reason: 'unknown-event-class' };
+  if (!['agent', 'session.tool', 'session.message'].includes(String(raw.event))) return { forward: false, reason: 'unknown-event-class' };
   const payload = raw.payload;
-  if (!isObjectRecord(payload) || !isObjectRecord(payload.data)) return { forward: false, reason: 'invalid-payload' };
+  if (!isObjectRecord(payload)) return { forward: false, reason: 'invalid-payload' };
   const key = payload.sessionKey;
   if (typeof key !== 'string' || !key) return MISSING_ACTIVITY_IDENTITY;
   const prefix = `${expectedKey}:thread:`;
   const matches = key === expectedKey || key.startsWith(prefix) && /^[a-z0-9]{26}$/u.test(key.slice(prefix.length));
-  return matches && ['lifecycle', 'tool', 'plan'].includes(String(payload.stream))
+  if (!matches) return { forward: false, reason: 'identity-mismatch' };
+  if (raw.event === 'session.message') return activityConversationMessage(payload.message)
+    ? { forward: true, reason: 'matched-identity' } : { forward: false, reason: 'invalid-payload' };
+  if (!isObjectRecord(payload.data)) return { forward: false, reason: 'invalid-payload' };
+  return ['lifecycle', 'tool', 'plan'].includes(String(payload.stream))
     ? { forward: true, reason: 'matched-identity' }
     : { forward: false, reason: 'identity-mismatch' };
 }
 
 export function sanitizeActivityFrame(raw: string): string {
   const frame = JSON.parse(raw) as { type: string; event: string; payload: Record<string, unknown> };
+  if (frame.event === 'session.message') {
+    const { sessionKey } = frame.payload;
+    const identity = Object.fromEntries(['runId', 'messageId', 'idempotencyKey', 'clientRunId'].flatMap(key => {
+      const value = frame.payload[key];
+      return typeof value === 'string' && value.length <= 512 ? [[key, value]] : [];
+    }));
+    const seq = frame.payload.messageSeq;
+    const messageSeq = typeof seq === 'number' && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+    return JSON.stringify({ type: frame.type, event: frame.event, payload: { sessionKey, ...identity, messageSeq, message: activityConversationMessage(frame.payload.message) } });
+  }
   const { runId, sessionKey, seq, ts, stream } = frame.payload;
   const data = frame.payload.data as Record<string, unknown> | undefined;
   const displayFields = ['phase', 'name', 'args', 'result', 'partialResult', 'isError', 'steps', 'status', 'aborted', 'stopReason', 'timeoutPhase', 'providerStarted', 'error', 'executionSettled', 'fallbackExhaustedFailure'];
