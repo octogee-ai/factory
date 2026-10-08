@@ -104,7 +104,7 @@ describe("buildCustomerAgent", () => {
     expect(agent.name).toBe("Scout (chris-shop)");
   });
 
-  it("preserves caller-provided memory search config", () => {
+  it("emits caller-provided memory search at the native canonical path", () => {
     const memorySearch = platformOpenAiEmbeddingMemorySearch(
       "octogee-chris-builds-a3f2-coach",
       {},
@@ -112,7 +112,8 @@ describe("buildCustomerAgent", () => {
 
     const agent = buildCustomerAgent(mkCustomer({ memorySearch }));
 
-    expect(agent.memorySearch).toEqual({
+    expect(agent).not.toHaveProperty("memorySearch");
+    expect(agent).toHaveProperty("memory.search", {
       provider: "openai-compatible",
       remote: {
         baseUrl: "http://llm-broker:3010/v1",

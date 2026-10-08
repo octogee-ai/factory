@@ -380,7 +380,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.cron).toEqual({ triggers: { enabled: false }, keep: true });
     expect(out.skills).toEqual({
       load: { watch: true },
-      workshop: { autonomous: { mode: "off" }, approvalPolicy: "pending", maxPending: 10 },
+      workshop: { autonomous: { mode: "off" } },
     });
     expect(out.channels.mattermost).toMatchObject({
       baseUrl: "${MM_URL}",

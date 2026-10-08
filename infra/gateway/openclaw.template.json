@@ -202,8 +202,7 @@
     "workshop": {
       "autonomous": {
         "mode": "off"
-      },
-      "approvalPolicy": "pending"
+      }
     }
   },
   "bindings": [],

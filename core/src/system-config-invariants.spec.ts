@@ -415,9 +415,6 @@ describe("system config platform invariants", () => {
         load: { watch: true },
         workshop: {
           autonomous: { mode: "off" },
-          approvalPolicy: "pending",
-          allowSymlinkTargetWrites: false,
-          maxPending: 10,
         },
       },
       plugins: {
@@ -437,6 +434,9 @@ describe("system config platform invariants", () => {
         debug: false,
       },
     });
+    expect(config).not.toHaveProperty("skills.workshop.approvalPolicy");
+    expect(config).not.toHaveProperty("skills.workshop.allowSymlinkTargetWrites");
+    expect(config).not.toHaveProperty("skills.workshop.maxPending");
     expect((config.tools as { deny: string[] }).deny).not.toEqual(
       expect.arrayContaining(["workspace_commit", "octogee_project_commit"]),
     );

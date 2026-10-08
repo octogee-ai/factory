@@ -568,7 +568,8 @@ function disableCustomerAutomationsAndSkillWrites(config) {
   delete config.skills.load.extraDirs;
   config.skills.workshop ??= {};
   config.skills.workshop.autonomous = { mode: "off" };
-  config.skills.workshop.approvalPolicy = "pending";
+  delete config.skills.workshop.approvalPolicy;
+  delete config.skills.workshop.maxPending;
   delete config.skills.workshop.allowSymlinkTargetWrites;
 }
 

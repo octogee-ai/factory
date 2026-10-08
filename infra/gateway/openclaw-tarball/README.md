@@ -22,6 +22,11 @@ an immutable, digest-addressed image family. Building never deploys TEST or PROD
    native type, lint, generated-output and package checks. Reuse upstream
    coverage instead of copying whole suites. Keep real resource/authorization
    boundary tests even when trimming fixtures.
+   Materialize both gateway classes through their real policy/pre-boot writers,
+   including generated agents, and validate them against the exact built gateway.
+   An isolated Doctor comparison must not need to translate default config keys;
+   correct their writers during this recut instead. Keep full Doctor off healthy
+   boots, without removing bounded failed-boot recovery or driver-artifact checks.
 4. Commit the final source and build with `pnpm build`. Verify
    `dist/build-info.json.commit` equals the clean checkout's HEAD. Use the
    repository-pinned package manager and frozen lockfile. `build:docker` is not
@@ -118,29 +123,36 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`5fa9edbad09902107a2ac64d7d7d7ae08b58a416`](https://github.com/openclaw/openclaw/commit/5fa9edbad09902107a2ac64d7d7d7ae08b58a416),
-locked for the October 7 recut. Its
-[push CI](https://github.com/openclaw/openclaw/actions/runs/37703965004)
+[`a07a06ec94d2eda4ba1a7cab869395d5222092bf`](https://github.com/openclaw/openclaw/commit/a07a06ec94d2eda4ba1a7cab869395d5222092bf),
+locked for the October 8 recut, 277 commits after the previous base. Its
+[push CI](https://github.com/openclaw/openclaw/actions/runs/37807391210)
 has one security-fast success and 39 skips, not full-CI green. The operator
 selected this newer native implementation for independent qualification.
-Exact overlay: `687bfec2f0a25adb9620e17fc715d60fd8eb42eb`, at
-`ceckert/openclaw:codex/openclaw-current-oct07`.
-Package version `2026.9.8` identifies a main snapshot, not the released tag.
+Exact overlay: `1a18e6a826886a87c0318a0b58524fca31b2e5b7`, at
+`ceckert/openclaw:codex/openclaw-current-oct08`.
+Package version `2026.9.9` identifies a main snapshot, not a released tag.
+Recent full upstream CI remains red; the scheduled run
+[37801957966](https://github.com/openclaw/openclaw/actions/runs/37801957966)
+failed a Control UI instant-thread test and a Crabbox hook timeout. A local
+39-case UI replay passes, but does not establish why that hosted run failed.
 
 Runtime artifacts and every hosted UI provenance record use that same clean,
 built source. Schema 21, agent schema 24 and protocol 4 remain unchanged.
 The schema repair preserves both shipped schema-20 layouts and refuses
 downgrades; it does not reset or repair live state. Preserve native backups
 and settle old-version in-flight cron handoffs before a separately authorized
-rollout. No merge, deployment or live-state mutation is part of this recut.
+rollout. No deployment or live-state mutation is part of this recut.
 
 ### Patch assessment
 
 The selected main owns approval completion and compare-and-swap, atomic
 session-member reads, phased startup, shared profiles, plugin registry reuse,
 deleted-agent cleanup, current conversation-turn contracts and OpenRouter
-catalog v2. Duplicate owners and obsolete fixture APIs are removed. Main's
-worker computer takeover transport remains unchanged.
+catalog v2. This pass adapts approval contracts to native completion ownership,
+session sharing to the native durable-entry owner, and catalog callers to the
+current publication API. Retired Workshop config, code and tests are removed.
+Duplicate owners and obsolete fixture APIs stay removed. Main's worker
+computer takeover transport remains unchanged.
 
 Explicit grants now reuse native atomic membership reads and storage provenance:
 channel synchronization cannot revoke an owner's explicit grant. Session facts
@@ -149,7 +161,7 @@ worker; empty native membership is authoritative, not a fallback trigger.
 
 Ian F's contribution in
 [#163685](https://github.com/openclaw/openclaw/pull/163685)
-is included and adapted to the current native plugin lifetime owner. Public
+includes the latest contributed delta, adapted to the current native plugin lifetime owner. Public
 channel dispatch retains the original instance through provider finalization,
 then releases custody. Native scoped bindings preserve class/private callback
 receivers; noncallable data such as AbortSignal keeps its original identity.
@@ -179,51 +191,83 @@ not replaced by weaker assertions or raised line caps.
 
 ### Qualification
 
-Exact clean-source build passed in 3m 59.5s. The matched packers, native archive
-integrity, strict Voice/Activity SDK checks, isolated install and real Linux
-arm64 full-plugin-installer passed. Installed build-info and all companions
-identify the same source; a network-disabled node-user check passed.
-Installer proof image:
-`sha256:51c36a36494ca05310384e67cadfea7197c45b5c59ab49e4d1dac167e8a3fac1`.
-Codex has 174 matching runtime files, Parallel nine, bundled trust passes,
-and all three native-hook modules import.
+Exact clean-source build passed in 3m 27.4s; build-info matches the source above.
+The sequential matched packers, native archive integrity, strict Voice/Activity
+SDK checks and isolated pair installation pass. The native package lifecycle
+completes, not merely npm installation. Exact-generation downloads verify:
 
-Root `openclaw-fork-ac9fe889.tgz`, generation `1791431347971708`, SHA-256
-`ac9fe8894d7b1e3de2f2b62f3cc11ba1483b9f47c1aefd8bcf74afa9aced37a2`.
-Mattermost is byte-identical and reuses `openclaw-mattermost-56f2899f.tgz`,
-generation `1791376533057025`, SHA-256
-`56f2899f8c6dd4577c44a0e23bc955a6f5bd102e7a749a1079b0e5757c2353d7`.
-Publication used a generation-zero precondition; exact-generation readbacks
-match both complete hashes. No moving object or overwrite is used.
+| Artifact | Generation | SHA-256 |
+| --- | --- | --- |
+| `openclaw-fork-8837a0dd.tgz` | `1791485382033189` | `8837a0dd0c2f40fd34be21d86b3d33450c27e94cefd4360a4342c99983f1318c` |
+| `openclaw-mattermost-0ae3f884.tgz` | `1791482748004373` | `0ae3f8847fd6635204a4e3083566eda219dfc864e68e20662d809dcbce95536c` |
 
-All seven affected backend families pass: 1,591 distinct cases across 77 files.
-Sixteen public channel-custody cases exercise real native instances and
-generations, private/prototype callbacks, retirement, cancellation, concurrent
-same-ID isolation and cleanup. The callback receiver defect has real-entry
-RED/GREEN proof. Fresh, explicitly approved isolated Astra review of the
-corrected overlay is scoped-clean; no private TEST data was sent.
+The actual Linux arm64 full-plugin-installer image is
+`sha256:d9455571675d62eff1eb03de92eb226a05e73843fb1215c4d68726cc7340ba38`.
+Native registry refresh and bundled trust pass; all 174 Codex runtime files and
+nine Parallel files match the source, and all three native hooks import.
+The full gateway proof image is
+`sha256:83bbfa034d2d2add14a34175eba4eee6055f698a6bf020a3e44f28fc8d5bbf41`.
+These are local qualification images, not the post-merge Build main family.
+
+Affected native lanes pass: startup/schema (75 cases), cron/sharing (178),
+catalog/queued delivery (84), channel routing (311), and the approval/Talk/
+computer/Browser/Codex boundary union (729 distinct cases). These lane counts
+overlap and are not an aggregate distinct-test total. The final correction
+replay passes 172 cases. Synthetic old schema-21 state retains 135 tables,
+22 populated rows and retired Workshop records; native schema-20 admission
+refuses it. No live stores were opened or repaired. Explicitly approved isolated
+Astra overlay review is scoped-clean; no private TEST data was sent.
+
+Fresh default writers have RED/GREEN proof and 356 focused core/scripts/image
+policy cases pass. Empty and populated Shared and Builder configs in the exact
+full gateway pass native strict validation and both selected read-only Doctor
+config checks with no
+findings; the real author chain is idempotent. Generated agents use native
+`memory.search`; retired Workshop keys are absent. The synthetic fixture uses
+native merge-patch semantics: `groups: null` removes stale group policy, rather
+than becoming a literal config value.
+
+Full `doctor --fix` is not a no-op: the isolated comparison detects model-ref
+canonicalization, environment-dependent skill disabling, account promotion,
+optional Codex enablement and wizard/meta updates. Empty Shared's deliberately
+unmatched default agent lacks customer model catalogs, so Doctor also changes
+its model allowlist. This is not a passing semantic-no-op comparison or a reason
+to widen Shared provider authority. Healthy boots skip full Doctor; bounded
+native failed-boot recovery remains for old or hand-edited Builder config.
+The fixture's deferred synthetic secret resolution is not credential or channel
+acceptance proof.
 
 Native synthetic UI proof covers a genuine prior-source Browser baseline
-(nine tests), current Browser/model-picker/Automations/header E2E (40 tests),
-and component/consumer contracts (86 tests). Desktop/mobile before-and-after
-captures are inspected. This is not authenticated TEST or desktop-driver proof.
-The final island generator's upstream input audit is read, native entry points
-remain wired, and all generated provenance and adapter digests are refreshed.
+(five tests) and current Browser/model-picker/Automations/header E2E (39 tests).
+Desktop/mobile before-and-after captures are inspected. This is not
+authenticated TEST or desktop-driver proof. The island-input audit is read:
+Browser/terminal resume, commentary deduplication, picker toggles and mobile
+highlight changes remain wired into native owners. Every generated source and
+adapter digest is refreshed from the exact packed checkout.
 
-Production core/UI/extensions types, all 27 core-test type graphs, scoped typed
-lint, formatting and the native line-cap ratchet pass. Five overlay-only static
-cycles were removed by narrowing imports into existing native owners; both
-static and value-cycle checks pass. All three unused-export scans are empty.
-The final correction replay passes 120 cases across ten files, and its fresh
-isolated Astra review has no actionable findings. The full changed-source
-driver was stopped after its type chain passed; separately completed gates
-are evidence, not aggregate command success.
+Production core/UI/extensions types, all 27 core-test type graphs, scripts/test
+roots and three unused-export scans pass. Scoped typed lint, formatting and the
+line-cap ratchet pass. Both import-cycle checks, storage/media/sidecar, webhook
+and pairing guards pass. The complete changed-source driver exits 1 on 12
+inherited max-lines violations; the ratchet confirms no new over-cap growth.
+Its one overlay type error was fixed by keeping durable session `ensure` out
+of the existing incognito mutation union. No incognito capability was added.
+There is no aggregate `pnpm check` success claim.
 
-The build reports a nonfatal Control UI startup-size warning: 373561 gzip bytes
+The build reports a nonfatal Control UI startup-size warning: 373646 gzip bytes
 against the native 373454-byte budget. No budget, guard or line cap was raised.
-Octogee's 111 artifact/pin/base-image cases, 57 native island/tool/Browser/
-Automations consumers, 34 final-reply Activity cases, and app and edge
-typechecks pass after regeneration. Final hosted CI is recorded in the recut PR.
+Final Octogee artifact/pin checks pass 112 cases across nine files. Native island,
+Activity, icon and RPC consumers pass 95 cases across ten files; app and edge
+types pass. Final-head hosted CI and reviews are recorded in the recut PR.
+The same-system, network-disabled Linux arm64 native startup comparison uses
+two CPU cores, 4 GiB memory, one warmup and three measured runs per source.
+Median `/readyz` is 7.89s on previous source `687bfec2f0a25adb9620e17fc715d60fd8eb42eb`
+and 7.98s on this source; ranges are 7.07–8.17s and 7.73–8.65s respectively.
+All six runs produce successful health/readiness probes and CPU/RSS metrics.
+This does not demonstrate faster startup. It measures minimal native process
+readiness, not populated Octogee, Mattermost, provisioning or Builder activation.
+Healthy boots already skip full Doctor; the new default writers avoid legacy
+key translation without claiming this comparison proves faster fleet boot.
 
 After merge, Build main produces an immutable image family; it never deploys.
 Full authenticated Builder activation, Browser/Terminal/Dashboard, return,
@@ -251,8 +295,8 @@ The base retains the existing immutable Node 26.10.0 image, which satisfies
 the selected OpenClaw engine requirement. A release announcement without the
 official image's immutable multiarchitecture digest is not an image input.
 
-The actual October 7 Linux arm64 `gateway-system` image
-`sha256:c4ff7a4157a3d81393fb014e44f0fc4739219db665764f7ea0137dffb7cc1569`
+The actual October 8 Linux arm64 `gateway-system` image
+`sha256:02b8ad11df29643fb686c6011d1c05199eec330b3eb6d5f62246cd0ae9889ae5`
 passes network-disabled CLI smoke as the `node` user, including both updated
 CLIs and npm. The supported amd64 Builder npm/native and base-system stages
 also pass actual image builds and pinned tool checks. Network-disabled smoke

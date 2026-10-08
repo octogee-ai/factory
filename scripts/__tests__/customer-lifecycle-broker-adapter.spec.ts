@@ -3188,10 +3188,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       "octogee-bob-coach",
     ]);
     const rebuiltCoach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach") as
-      | { model?: string; memorySearch?: unknown }
+      | { model?: string; memory?: { search?: unknown } }
       | undefined;
     expect(rebuiltCoach?.model).toEqual({ primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] });
-    expect(rebuiltCoach?.memorySearch).toEqual({
+    expect(rebuiltCoach?.memory?.search).toEqual({
       provider: "openai-compatible",
       remote: {
         baseUrl: "http://llm-broker:3010/v1",
@@ -4008,7 +4008,11 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const call = vi.mocked(applyConfigPatch).mock.calls.at(-1)!;
     const args = call[0] as {
       buildPatch: (current: unknown) => {
-        agents: { list: Array<{ id?: string; memorySearch?: { remote?: { apiKey?: { id?: string } } } }> };
+        agents: { list: Array<{
+          id?: string;
+          memorySearch?: { remote?: { apiKey?: { id?: string } } };
+          memory?: { search?: { remote?: { apiKey?: { id?: string } } } };
+        }> };
       };
     };
     const current = {
@@ -4031,7 +4035,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       platformOpenAiEmbeddingSecretId("octogee-bob-coach"),
     );
     const alice = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach");
-    expect(alice?.memorySearch?.remote?.apiKey?.id).toBe(
+    expect(alice?.memory?.search?.remote?.apiKey?.id).toBe(
       platformOpenAiEmbeddingSecretId("octogee-alice-coach"),
     );
   });

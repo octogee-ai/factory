@@ -135,7 +135,7 @@ export function buildCustomerAgent(
     agent.default = true;
   }
   if (c.memorySearch) {
-    agent.memorySearch = c.memorySearch;
+    agent.memory = { search: c.memorySearch };
   }
   return agent;
 }

@@ -13,6 +13,18 @@ Container image for the OpenClaw gateway + Firestore provisioner. Deployed to GK
 - Watches Firestore — auto-provisions workspaces when customers sign up
 - No manual steps, no container restart needed for new customers
 
+## Default configuration
+
+Shared and Builder seeds, class policy, and generated agent entries must use the
+current native OpenClaw config schema. During a runtime recut, validate the
+materialized defaults against that exact built source; update their writers
+instead of relying on Doctor to translate them at every boot. Pre-boot supplies
+runtime bindings and reconciles platform-owned policy. Native startup validation,
+the bounded Builder failed-boot Doctor recovery, and CUA driver-artifact lint
+remain enabled.
+Older or hand-edited Builder configuration may still need native Doctor repair;
+the no-transformation requirement applies to freshly authored platform defaults.
+
 ## Build
 
 The gateway image is built via Cloud Build:

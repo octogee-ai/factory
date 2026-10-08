@@ -281,8 +281,9 @@ function customerToolInvariants() {
         { kind: "exact", path: "skills.load.allowSymlinkTargets", value: ABSENT },
         { kind: "exact", path: "skills.load.extraDirs", value: ABSENT },
         { kind: "exact", path: "skills.workshop.autonomous", value: { mode: "off" } },
-        { kind: "exact", path: "skills.workshop.approvalPolicy", value: "pending" },
-        { kind: "exact", path: "skills.workshop.allowSymlinkTargetWrites", value: false },
+        { kind: "exact", path: "skills.workshop.approvalPolicy", value: ABSENT },
+        { kind: "exact", path: "skills.workshop.maxPending", value: ABSENT },
+        { kind: "exact", path: "skills.workshop.allowSymlinkTargetWrites", value: ABSENT },
         { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: ["codex"] },
         {
             kind: "exact",
