@@ -795,7 +795,7 @@ async function controlMattermostRequest(
       return;
     }
     const channel = await mattermost.authorize(uid, body.channelId as string, workspaceSlug, {
-      requireActiveLedger: body.requireActiveLedger === true, signal,
+      requireActiveLedger: body.requireActiveLedger === true, includeCoachConversation: true, signal,
     });
     if (!channel || channel.forbidden) {
       res.status(channel?.forbidden ? 403 : 404).json({ error: "channel-unavailable" });

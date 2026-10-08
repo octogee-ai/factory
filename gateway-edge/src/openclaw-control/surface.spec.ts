@@ -2269,7 +2269,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
   it(
     "leaves per-user RPC authority and server capabilities with OpenClaw", async () => {
       const received: unknown[] = [];
-      const hello = { type: "hello-ok", auth: { role: "operator", scopes: ["operator.read", "operator.questions"] },
+      const hello = { type: "hello-ok", auth: { role: "operator", scopes: ["operator.read", "operator.questions"], recoveryScope: "r".repeat(43) },
         snapshot: { presence: [{ id: "permitted-user" }] },
         features: { methods: ["config.get", "session.members.list"], events: ["session.members.changed"] } };
       const config = { raw: '{"agents":{"list":[{"id":"upstream-authorized-project"}]}}',

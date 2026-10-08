@@ -32,6 +32,28 @@ function decodeBase64Url(value: string): Buffer {
 }
 
 describe("trusted OpenClaw Dashboard connect rewrite", () => {
+  it("preserves the native account recovery scope without exposing device credentials", () => {
+    const recoveryScope = `${"r".repeat(41)}_-`;
+    const sanitized = sanitizeOpenClawControlServerFrame({
+      type: "res", id: "connect", ok: true,
+      payload: { type: "hello-ok", auth: {
+        role: "operator", scopes: ["operator.read", "operator.write"],
+        recoveryScope, recoveryMigrationAllowed: true, deviceToken: "private-device-token",
+      } },
+    }, ["private-device-token"]);
+    expect(JSON.parse(sanitized).payload.auth).toEqual({
+      role: "operator", scopes: ["operator.read", "operator.write"], recoveryScope,
+    });
+    expect(sanitized).not.toContain("private-device-token");
+  });
+
+  it.each([null, 42, "", "private\nidentity", "x".repeat(257), "x".repeat(42), `${"x".repeat(42)}!`])("drops malformed recovery identity %j", recoveryScope => {
+    const sanitized = sanitizeOpenClawControlServerFrame({ payload: { type: "hello-ok",
+      auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
+    } });
+    expect(JSON.parse(sanitized).payload.auth).toEqual({ role: "operator", scopes: ["operator.read"] });
+  });
+
   it("replaces all browser identity and auth with the pinned loopback backend contract", () => {
     const gatewayToken = "server-gateway-token";
     const rewritten = JSON.parse(rewriteTrustedOpenClawConnect({

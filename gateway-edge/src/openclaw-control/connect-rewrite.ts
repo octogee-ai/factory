@@ -122,7 +122,11 @@ export function sanitizeOpenClawControlServerFrame(
       ? auth.scopes
       : null;
     if (auth?.role === "operator" && scopes) {
-      payload.auth = { role: "operator", scopes };
+      const recoveryScope = typeof auth.recoveryScope === "string" &&
+          /^[a-zA-Z0-9_-]{43}$/u.test(auth.recoveryScope)
+        ? auth.recoveryScope
+        : null;
+      payload.auth = { role: "operator", scopes, ...(recoveryScope ? { recoveryScope } : {}) };
     } else {
       delete payload.auth;
     }
