@@ -19,6 +19,13 @@ describe('read-only native Activity scope', () => {
     expect(shouldForwardFrame(raw, scope).forward).toBe(true);
     expect(JSON.parse(sanitizeActivityFrame(raw)).payload.message.content).toBe('The public answer');
   });
+  it.each(['thinking', 'reasoning', 'redacted_thinking'])('retains adjacent public answer text while stripping %s blocks', type => {
+    const raw = eventFrame('session.message', { sessionKey, message: { role: 'assistant', timestamp: 1000,
+      content: [{ type, text: 'private reasoning' }, { type: 'output_text', text: 'The public answer' }] } });
+    expect(shouldForwardFrame(raw, scope).forward).toBe(true);
+    expect(JSON.parse(sanitizeActivityFrame(raw)).payload.message.content).toBe('The public answer');
+    expect(sanitizeActivityFrame(raw)).not.toContain('private reasoning');
+  });
   it('uses native message.text when content has no public text without admitting reasoning or tool calls', () => {
     const message = { role: 'assistant', timestamp: 1000, content: [{ type: 'image', data: 'private image' }], text: 'The public answer' };
     const raw = eventFrame('session.message', { sessionKey, message });

@@ -6,14 +6,15 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function conversationText(message: Record<string, unknown>): string {
   const blocks = Array.isArray(message.content) ? message.content : [message.content];
-  if (blocks.some(block => ['toolCall', 'toolUse', 'functionCall', 'thinking', 'reasoning', 'redacted_thinking'].includes(String(record(block)?.type)))) return '';
   const content = blocks.flatMap(block => {
     const part = record(block);
     let value = block;
     if (part) value = ['text', 'input_text', 'output_text'].includes(String(part.type)) ? part.text : undefined;
     return typeof value === 'string' && value.trim() ? [value.trim()] : [];
   }).join('\n');
-  return content || (typeof message.text === 'string' ? message.text : '');
+  if (content) return content;
+  if (blocks.some(block => ['toolCall', 'toolUse', 'functionCall', 'thinking', 'reasoning', 'redacted_thinking'].includes(String(record(block)?.type)))) return '';
+  return typeof message.text === 'string' ? message.text : '';
 }
 
 function identityFields(metadata: Record<string, unknown> | undefined): Record<string, string | number> {
