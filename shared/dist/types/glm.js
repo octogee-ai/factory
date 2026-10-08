@@ -424,6 +424,18 @@ export function isOperationAuditRecord(value) {
         hasValidOptionalAuditRecoveryCount(value) &&
         hasLegalAuditState(value);
 }
+const MIGRATION_PROGRESS_STATUSES = new Set(["pending", "running", "done", "failed", "skipped"]);
+export function isMigrationProgressRecord(value) {
+    if (typeof value !== "object" || value === null)
+        return false;
+    const record = value;
+    return typeof record.phase === "string" &&
+        typeof record.status === "string" && MIGRATION_PROGRESS_STATUSES.has(record.status) &&
+        typeof record.at === "number" &&
+        typeof record.migrationId === "string" &&
+        typeof record.slug === "string" &&
+        typeof record.source === "string";
+}
 export const GLM_GATEWAYS_COLLECTION = "glmGateways";
 export const GLM_OPERATIONS_COLLECTION = "glmOperations";
 export const GLM_MIGRATION_TRANSFER_TASKS_COLLECTION = "glmMigrationTransferTasks";

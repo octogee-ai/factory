@@ -67,6 +67,7 @@ import {
   type GatewayPodReplacementSummary,
 } from "@octogee/shared/types/gateway-pod-replacements";
 import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
+import type { MigrationProgressRecord } from "@octogee/shared/types/glm";
 import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
   InitialGatewayReleaseConflictError,
@@ -1370,6 +1371,7 @@ export function projectGatewaySummary(
   desiredStatus: AdminGatewayDesiredStatus | null;
   imageTag: string | null; openclawVersion: string | null;
   mountedCustomers: unknown[];
+  handoffProgress?: Record<string, MigrationProgressRecord[]>;
   lastHeartbeatAt: string | null; heartbeatAgeMs: number | null;
   startedAt: string | null; uptimeMs: number | null;
   lastError: ReturnType<typeof projectLastError>;
@@ -2645,14 +2647,36 @@ function shapeValidOperationAuditHistoryRecord(
 
 type OperationDocLike = { id: string; data: () => Record<string, unknown> };
 
+function attachHandoffProgress(
+  gateways: Array<{ gateway: string; handoffProgress?: Record<string, MigrationProgressRecord[]> }>,
+  byGateway: ReadonlyMap<string, Record<string, MigrationProgressRecord[]>>,
+): void {
+  for (const gateway of gateways) {
+    gateway.handoffProgress = byGateway.get(gateway.gateway) ?? {};
+  }
+}
+
+export function projectHandoffProgress(
+  assignmentDocs: ReadonlyArray<FirestoreDocLike>,
+): Map<string, Record<string, MigrationProgressRecord[]>> {
+  const byGateway = new Map<string, Record<string, MigrationProgressRecord[]>>();
+  for (const doc of assignmentDocs) {
+    const assignment = parseAssignmentDoc(doc.id, doc.data());
+    const progress = assignment?.handoffProgress;
+    if (!assignment || !progress || progress.length === 0) continue;
+    const newest = [...progress].sort((a, b) => b.at - a.at)[0];
+    if (assignment.state === "serving" && newest.status !== "failed") continue;
+    const slugs = byGateway.get(assignment.gatewayId) ?? {};
+    slugs[assignment.slug] = progress;
+    byGateway.set(assignment.gatewayId, slugs);
+  }
+  return byGateway;
+}
+
 function isUnresolvedMigrationFailure(data: Record<string, unknown>): boolean {
   return data.kind === OP_KIND_MIGRATE_CUSTOMER && (data.status === "failed" || data.status === "rolled-back");
 }
 
-// In-flight operations plus, per builder, the terminal migration failure the
-// roster still points at: an assignment's updatedByOperationId is rewritten by
-// the next operation that touches that builder and deleted by unassign, so it
-// outlives the bounded history window as the durable "unresolved" signal.
 async function listUnresolvedOperationDocs(
   db: Firestore,
   limit: number,
@@ -2672,12 +2696,15 @@ async function listUnresolvedOperationDocs(
   const snaps = await Promise.all(
     [...pointed].map((operationId) => db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()),
   );
+  const pointedFailures: OperationDocLike[] = [];
   for (const snap of snaps) {
     const data = (snap.data() ?? {}) as Record<string, unknown>;
-    if (snap.exists && isUnresolvedMigrationFailure(data)) byId.set(snap.id, { id: snap.id, data: () => data });
+    if (snap.exists && isUnresolvedMigrationFailure(data)) pointedFailures.push({ id: snap.id, data: () => data });
   }
   const createdAt = (doc: OperationDocLike): number => coerceNumberOrNull(doc.data().createdAt) ?? 0;
-  return [...byId.values()].sort((a, b) => createdAt(b) - createdAt(a)).slice(0, limit);
+  const newestFirst = (docs: OperationDocLike[]): OperationDocLike[] => docs.sort((a, b) => createdAt(b) - createdAt(a));
+  const inFlightCapped = newestFirst([...byId.values()]).slice(0, limit);
+  return newestFirst([...pointedFailures, ...inFlightCapped]);
 }
 
 export function shapeOperationsHistoryRecord(
@@ -4432,11 +4459,13 @@ router.get(
     "/gateways",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const [gwSnap, glmSnap, usersSnap] = await Promise.all([
+        const [gwSnap, glmSnap, usersSnap, assignmentSnap] = await Promise.all([
           db.collection("gateways").get(),
           db.collection(GLM_GATEWAYS_COLLECTION).get(),
           db.collection("users").get(),
+          db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
         ]);
+        const handoffProgressByGateway = projectHandoffProgress(assignmentSnap.docs);
         const glmByGatewayId = indexAdminGatewayRuntimeDocs({
           gatewayDocs: gwSnap.docs,
           glmDocs: glmSnap.docs,
@@ -4512,6 +4541,7 @@ router.get(
                 projectGatewaySummaryWithDiagnostics(deps, doc, glmDoc, now),
               ),
             );
+        attachHandoffProgress(gateways, handoffProgressByGateway);
         const gatewayById = new Map(
           gateways.map((gateway) => [gateway.gatewayId, gateway]),
         );

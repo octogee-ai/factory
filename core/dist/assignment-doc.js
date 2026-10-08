@@ -1,3 +1,4 @@
+import { isMigrationProgressRecord } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, isAssignmentState, } from "@octogee/shared/types/gateway-releases";
 function assignmentsCollection(db, gatewayId) {
@@ -43,6 +44,9 @@ export function parseAssignmentDoc(uid, data) {
         createdAt: assignmentCreatedAt(data),
         updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
         updatedByOperationId: typeof data.updatedByOperationId === "string" ? data.updatedByOperationId : null,
+        ...(Array.isArray(data.handoffProgress)
+            ? { handoffProgress: data.handoffProgress.filter(isMigrationProgressRecord) }
+            : {}),
     };
 }
 export async function readAssignmentDocsForGateway(db, gatewayId) {

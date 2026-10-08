@@ -1,3 +1,4 @@
+import type { MigrationProgressRecord } from "./glm.js";
 import { createHash } from "node:crypto";
 import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
@@ -272,6 +273,7 @@ export interface AssignmentDoc {
   createdAt: number;
   updatedAt: number;
   updatedByOperationId: string | null;
+  handoffProgress?: MigrationProgressRecord[];
 }
 
 export type GatewayRuntimeLifecycle =

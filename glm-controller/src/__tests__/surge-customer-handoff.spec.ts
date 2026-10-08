@@ -95,6 +95,7 @@ function harness(input: {
   const operationId = "surge-default-target-uid";
   const deps: SurgeCustomerHandoffDeps = {
     reportMigrationProgress: vi.fn(async () => undefined),
+    recordMigrationProgress: vi.fn(async () => undefined),
     listPods: vi.fn(async () => {
       const pods = input.pods ?? [oldPod, targetPod];
       return {
@@ -253,6 +254,11 @@ describe("surge customer handoff", () => {
     expect(h.deps.resumeSourceIngress).toHaveBeenCalledWith(expect.objectContaining({ slug: "alice", sourcePod: oldPod }));
     expect(h.assignments().every((item) => item.state === "serving")).toBe(true);
     expect(h.deps.reportMigrationProgress).toHaveBeenCalledWith(expect.objectContaining({ event: expect.objectContaining({ phase: "waiting-for-builder-idle", status: "pending" }) }));
+    expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
+      gatewayId: "default",
+      uid: h.assignments()[0].uid,
+      event: expect.objectContaining({ phase: "waiting-for-builder-idle", status: "pending", source: oldPod.name, migrationId: h.operationId }),
+    });
   });
 
   it("checks every mounted Builder before gating anyone and releases all earlier voice holds on defer", async () => {

@@ -846,6 +846,30 @@ export function isOperationAuditRecord(value: unknown): value is OperationAuditD
 
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
+export interface MigrationProgressRecord {
+  phase: string;
+  status: "pending" | "running" | "done" | "failed" | "skipped";
+  at: number;
+  elapsedMs?: number;
+  migrationId: string;
+  slug: string;
+  source: string;
+  attempt?: number;
+}
+
+const MIGRATION_PROGRESS_STATUSES = new Set(["pending", "running", "done", "failed", "skipped"]);
+
+export function isMigrationProgressRecord(value: unknown): value is MigrationProgressRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.phase === "string" &&
+    typeof record.status === "string" && MIGRATION_PROGRESS_STATUSES.has(record.status) &&
+    typeof record.at === "number" &&
+    typeof record.migrationId === "string" &&
+    typeof record.slug === "string" &&
+    typeof record.source === "string";
+}
+
 export interface OperationStep {
   name: string;
   status: StepStatus;
@@ -933,6 +957,7 @@ export interface Operation {
   // completions append nothing.
   attemptHistory?: OperationAttemptRecord[];
   output?: Record<string, unknown>;
+  progress?: MigrationProgressRecord[];
   customerMigrationV2?: CustomerMigrationV2State;
   sourceTransferExecution?: SourceTransferExecution;
   schedulerHandoff?: SchedulerHandoffState;

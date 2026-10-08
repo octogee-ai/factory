@@ -120,6 +120,7 @@ describe("first-boot VM gateway handoff", () => {
   function handoffDeps(input: { ready: boolean; health: SurgePodHealth }) {
     const listPods = vi.fn(async () => { throw new Error("kubectl must not run for a VM gateway"); });
     const deps: SurgeCustomerHandoffDeps = {
+      recordMigrationProgress: vi.fn(async () => undefined),
       listPods: createSurgeEndpointLister({
         readRuntimeDoc: async () => ({ runtime: "gce-vm", vm }),
         listPods,

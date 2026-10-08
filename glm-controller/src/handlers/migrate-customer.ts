@@ -1,6 +1,6 @@
 import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js';
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
-import type { SourceTransferExecution } from '@octogee/shared/types/glm';
+import type { MigrationProgressRecord, SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
 import {
   attemptMayHoldSourceIngress,
@@ -86,6 +86,7 @@ type PlacementResolution =
 
 export interface MigrateCustomerDeps {
   reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
+  recordMigrationProgress: (input: { operation: Operation; event: MigrationProgressRecord }) => Promise<void>;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
@@ -199,6 +200,10 @@ async function runOrdinaryMigrationV2(input: {
       log: (message) => input.deps.log(`${message} migrationId=${input.migrationId} builder=${input.slug}`),
       send: (event) => input.deps.reportMigrationProgress(input.targets.toGatewayId, {
         ...event, migrationId: input.migrationId, slug: input.slug, source: input.targets.fromGatewayId,
+      }),
+      persist: (event) => input.deps.recordMigrationProgress({
+        operation: input.op,
+        event: { ...event, migrationId: input.migrationId, slug: input.slug, source: input.targets.fromGatewayId, attempt: (input.op.attempts ?? 0) + 1 },
       }),
     }),
   };
@@ -681,6 +686,7 @@ interface PreparedMigration {
 interface FreshProvision {
   deps: MigrateCustomerDeps;
   ctx: OperationContext;
+  op: Operation;
   operationId: string;
   attempt: number;
   targets: MigrationTargets;
@@ -992,13 +998,19 @@ interface MigrationExecutionInput {
   automatic: boolean;
 }
 
-function destinationProgressContext(input: Pick<MigrationExecutionInput, "deps" | "ctx" | "targets" | "slug" | "migrationId">): OperationContext {
-  const { deps, ctx, targets, slug, migrationId } = input;
+function destinationProgressContext(
+  input: Pick<MigrationExecutionInput, "deps" | "ctx" | "op" | "targets" | "slug" | "migrationId">,
+): OperationContext {
+  const { deps, ctx, op, targets, slug, migrationId } = input;
   const progress = createMigrationProgress({
     now: deps.now,
     log: (message) => deps.log(`${message} migrationId=${migrationId} builder=${slug}`),
     send: (event) => deps.reportMigrationProgress(targets.toGatewayId, {
       ...event, migrationId, slug, source: targets.fromGatewayId,
+    }),
+    persist: (event) => deps.recordMigrationProgress({
+      operation: op,
+      event: { ...event, migrationId, slug, source: targets.fromGatewayId, attempt: (op.attempts ?? 0) + 1 },
     }),
   });
   return {
@@ -1211,6 +1223,7 @@ async function executeProvisionFresh(input: MigrationExecutionInput & {
   return provisionCustomerOnTarget({
     deps: input.deps,
     ctx: input.ctx,
+    op: input.op,
     operationId: input.op.id,
     attempt: (input.op.attempts ?? 0) + 1,
     targets: input.targets,
@@ -1797,6 +1810,10 @@ async function executeMigration(
       migrationId: prepared.migrationId,
       slug: prepared.user.slug,
       source: prepared.user.currentGatewayId,
+    }),
+    persist: (event) => deps.recordMigrationProgress({
+      operation: op,
+      event: { ...event, migrationId: prepared.migrationId, slug: prepared.user.slug, source: prepared.user.currentGatewayId, attempt },
     }),
   });
   let targetUnmountConfirmed = false;

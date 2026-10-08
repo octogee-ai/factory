@@ -118,6 +118,20 @@ describe("readAssignmentDocsForGateway", () => {
   });
 });
 
+describe("parseAssignmentDoc handoff progress", () => {
+  const base = { slug: "alice", gatewayId: "shared-0", source: "onboarding", state: "quiescing" };
+  const record = { phase: "gate-source", status: "running", at: 1_000, migrationId: "surge-shared-0-pod", slug: "alice", source: "pod-old" };
+
+  it("keeps well-formed handoff progress records and drops malformed entries", () => {
+    const parsed = assignmentDoc.parseAssignmentDoc("u1", { ...base, handoffProgress: [record, { phase: "x" }, "junk"] });
+    expect(parsed?.handoffProgress).toEqual([record]);
+  });
+
+  it("omits the field when the document has none", () => {
+    expect(assignmentDoc.parseAssignmentDoc("u1", base)).not.toHaveProperty("handoffProgress");
+  });
+});
+
 describe("readAssignmentDoc", () => {
   it("reads a single assignment by uid", async () => {
     const { db } = mkAssignmentDb({ "default/uid-alice": ASSIGNMENT });

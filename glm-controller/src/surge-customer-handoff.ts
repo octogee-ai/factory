@@ -3,7 +3,7 @@ import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client
 import { createMigrationProgress } from "./migration-progress.js";
 import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
-import type { OperationStatus } from "@octogee/shared/types/glm";
+import type { MigrationProgressRecord, OperationStatus } from "@octogee/shared/types/glm";
 import type {
   MigrationConfigTransferMode,
   MigrationLoadStrategy,
@@ -96,6 +96,7 @@ interface SurgeSourceControlInput {
 
 export interface SurgeCustomerHandoffDeps {
   reportMigrationProgress: (input: { gatewayId: string; targetPod: SurgePod; event: MigrationProgressRequestBody }) => Promise<unknown>;
+  recordMigrationProgress: (input: { gatewayId: string; uid: string; event: MigrationProgressRecord }) => Promise<unknown>;
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
   readPodHealth: (pod: SurgePod, gatewayId: string) => Promise<SurgePodHealth | null>;
   deleteCrashLoopingPod: (input: { gatewayId: string; pod: SurgePod }) => Promise<void>;
@@ -591,10 +592,15 @@ async function waitForSourceAssignments(
   for (const assignment of context.assignments) {
     context.sourceDrainSlugs.push(assignment.slug);
     const progress = createMigrationProgress({
-      log: deps.log,
+      log: (message) => deps.log(`${message} migrationId=${context.ownedBy} builder=${assignment.slug}`),
       send: (event) => deps.reportMigrationProgress({
         gatewayId: context.input.gatewayId,
         targetPod: context.targetPod,
+        event: { ...event, migrationId: context.ownedBy, slug: assignment.slug, source: context.sourcePod.name },
+      }),
+      persist: (event) => deps.recordMigrationProgress({
+        gatewayId: context.input.gatewayId,
+        uid: assignment.uid,
         event: { ...event, migrationId: context.ownedBy, slug: assignment.slug, source: context.sourcePod.name },
       }),
     });
@@ -618,6 +624,11 @@ async function transferAssignments(
         send: (event) => deps.reportMigrationProgress({
           gatewayId: input.gatewayId,
           targetPod,
+          event: { ...event, migrationId: ownedBy, slug: assignment.slug, source: context.sourcePod.name },
+        }),
+        persist: (event) => deps.recordMigrationProgress({
+          gatewayId: input.gatewayId,
+          uid: assignment.uid,
           event: { ...event, migrationId: ownedBy, slug: assignment.slug, source: context.sourcePod.name },
         }),
       });
@@ -1168,6 +1179,11 @@ async function settleReleasedTarget(
       send: (event) => deps.reportMigrationProgress({
         gatewayId: input.gatewayId,
         targetPod: context.target,
+        event: { ...event, migrationId: ownedBy, slug: assignment.slug, source: input.gatewayId },
+      }),
+      persist: (event) => deps.recordMigrationProgress({
+        gatewayId: input.gatewayId,
+        uid: assignment.uid,
         event: { ...event, migrationId: ownedBy, slug: assignment.slug, source: input.gatewayId },
       }),
     });

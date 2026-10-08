@@ -170,6 +170,7 @@ function mkDeps(options: HarnessOptions = {}) {
     }),
     resolveGatewayUrl: vi.fn(async (gatewayId: string) => `http://${gatewayId}.svc:3003`),
     reportMigrationProgress: vi.fn(async () => undefined),
+    recordMigrationProgress: vi.fn(async () => undefined),
     buildClient: vi.fn(() => client),
     assertMigrationRecoveryAuthority: vi.fn(async () => undefined),
     completeMigrationRecovery: vi.fn(async () => undefined),
@@ -648,6 +649,10 @@ describe("native computer return", () => {
 
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
     expect(order).toEqual(["checkpoint", "cutover", "release", "verify"]);
+    expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
+      operation: expect.objectContaining({ id: "op-1" }),
+      event: expect.objectContaining({ status: "running", slug: "alice", at: expect.any(Number) }),
+    });
     expect(h.client.restoreTarget).not.toHaveBeenCalled();
     expect(h.client.transferState).not.toHaveBeenCalled();
     expect(h.deps.readGatewayOpenclawVersion).not.toHaveBeenCalled();

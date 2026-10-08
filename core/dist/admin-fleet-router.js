@@ -1660,13 +1660,30 @@ function shapeValidOperationAuditHistoryRecord(id, data) {
         ...shapeAuditHistoryErrorField(data),
     };
 }
+function attachHandoffProgress(gateways, byGateway) {
+    for (const gateway of gateways) {
+        gateway.handoffProgress = byGateway.get(gateway.gateway) ?? {};
+    }
+}
+export function projectHandoffProgress(assignmentDocs) {
+    const byGateway = new Map();
+    for (const doc of assignmentDocs) {
+        const assignment = parseAssignmentDoc(doc.id, doc.data());
+        const progress = assignment?.handoffProgress;
+        if (!assignment || !progress || progress.length === 0)
+            continue;
+        const newest = [...progress].sort((a, b) => b.at - a.at)[0];
+        if (assignment.state === "serving" && newest.status !== "failed")
+            continue;
+        const slugs = byGateway.get(assignment.gatewayId) ?? {};
+        slugs[assignment.slug] = progress;
+        byGateway.set(assignment.gatewayId, slugs);
+    }
+    return byGateway;
+}
 function isUnresolvedMigrationFailure(data) {
     return data.kind === OP_KIND_MIGRATE_CUSTOMER && (data.status === "failed" || data.status === "rolled-back");
 }
-// In-flight operations plus, per builder, the terminal migration failure the
-// roster still points at: an assignment's updatedByOperationId is rewritten by
-// the next operation that touches that builder and deleted by unassign, so it
-// outlives the bounded history window as the durable "unresolved" signal.
 async function listUnresolvedOperationDocs(db, limit) {
     const [inFlight, assignments] = await Promise.all([
         db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]).get(),
@@ -1680,13 +1697,16 @@ async function listUnresolvedOperationDocs(db, limit) {
             pointed.add(operationId);
     }
     const snaps = await Promise.all([...pointed].map((operationId) => db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()));
+    const pointedFailures = [];
     for (const snap of snaps) {
         const data = (snap.data() ?? {});
         if (snap.exists && isUnresolvedMigrationFailure(data))
-            byId.set(snap.id, { id: snap.id, data: () => data });
+            pointedFailures.push({ id: snap.id, data: () => data });
     }
     const createdAt = (doc) => coerceNumberOrNull(doc.data().createdAt) ?? 0;
-    return [...byId.values()].sort((a, b) => createdAt(b) - createdAt(a)).slice(0, limit);
+    const newestFirst = (docs) => docs.sort((a, b) => createdAt(b) - createdAt(a));
+    const inFlightCapped = newestFirst([...byId.values()]).slice(0, limit);
+    return newestFirst([...pointedFailures, ...inFlightCapped]);
 }
 export function shapeOperationsHistoryRecord(id, data) {
     if (isOperationAuditRow(data) && !isOperationAuditRecord(data)) {
@@ -3042,11 +3062,13 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/gateways", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap] = await Promise.all([
+            const [gwSnap, glmSnap, usersSnap, assignmentSnap] = await Promise.all([
                 db.collection("gateways").get(),
                 db.collection(GLM_GATEWAYS_COLLECTION).get(),
                 db.collection("users").get(),
+                db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
             ]);
+            const handoffProgressByGateway = projectHandoffProgress(assignmentSnap.docs);
             const glmByGatewayId = indexAdminGatewayRuntimeDocs({
                 gatewayDocs: gwSnap.docs,
                 glmDocs: glmSnap.docs,
@@ -3097,6 +3119,7 @@ export function addAdminFleetRoutes(router, deps) {
             const gateways = readBatch
                 ? await projectGatewaySummariesWithDiagnostics(deps, summaries, readBatch)
                 : await Promise.all(gatewayInputs.map(({ doc, glmDoc }) => projectGatewaySummaryWithDiagnostics(deps, doc, glmDoc, now)));
+            attachHandoffProgress(gateways, handoffProgressByGateway);
             const gatewayById = new Map(gateways.map((gateway) => [gateway.gatewayId, gateway]));
             const builderRuntimeViews = builderRuntimes.map((runtime) => {
                 const target = runtime.targetGatewayId

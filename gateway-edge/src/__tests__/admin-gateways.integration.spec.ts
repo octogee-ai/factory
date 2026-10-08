@@ -131,6 +131,7 @@ vi.mock("../lib/db", () => {
   return {
     db: {
       collection,
+      collectionGroup: () => makeQuery([]),
       doc: (_path: string) => ({
         get: async () => ({ exists: false, data: () => undefined }),
       }),

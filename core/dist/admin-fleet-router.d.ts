@@ -2,6 +2,7 @@ import { Router } from "express";
 import { type Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
 import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
+import type { MigrationProgressRecord } from "@octogee/shared/types/glm";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type DurableGatewayRoot } from "./gateway-release-append.js";
@@ -124,6 +125,7 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     imageTag: string | null;
     openclawVersion: string | null;
     mountedCustomers: unknown[];
+    handoffProgress?: Record<string, MigrationProgressRecord[]>;
     lastHeartbeatAt: string | null;
     heartbeatAgeMs: number | null;
     startedAt: string | null;
@@ -224,6 +226,7 @@ export declare function validateDeployBody(body: unknown): {
         sourceSha: string;
     };
 };
+export declare function projectHandoffProgress(assignmentDocs: ReadonlyArray<FirestoreDocLike>): Map<string, Record<string, MigrationProgressRecord[]>>;
 export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
 export type CustomerSelfDeletionOutcome = {
     kind: "not-found";

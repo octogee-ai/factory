@@ -1,3 +1,4 @@
+import type { MigrationProgressRecord } from "./glm.js";
 import type { GatewayPodPlacement, GatewayPodReplacements } from "./gateway-pod-replacements.js";
 import { type GatewayMutableConfig } from "./gateway-mutable-config.js";
 import type { GatewayDesiredStatus } from "./glm.js";
@@ -87,6 +88,7 @@ export interface AssignmentDoc {
     createdAt: number;
     updatedAt: number;
     updatedByOperationId: string | null;
+    handoffProgress?: MigrationProgressRecord[];
 }
 export type GatewayRuntimeLifecycle = "provisioning" | "serving" | "failed";
 export type GatewayHeartbeatStatus = "unknown" | "booting" | "ready" | "unreachable" | "error";

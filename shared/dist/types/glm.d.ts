@@ -349,6 +349,17 @@ export declare function isOperationAuditRow(value: unknown): value is Record<str
 };
 export declare function isOperationAuditRecord(value: unknown): value is OperationAuditDocument;
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+export interface MigrationProgressRecord {
+    phase: string;
+    status: "pending" | "running" | "done" | "failed" | "skipped";
+    at: number;
+    elapsedMs?: number;
+    migrationId: string;
+    slug: string;
+    source: string;
+    attempt?: number;
+}
+export declare function isMigrationProgressRecord(value: unknown): value is MigrationProgressRecord;
 export interface OperationStep {
     name: string;
     status: StepStatus;
@@ -419,6 +430,7 @@ export interface Operation {
     attempts?: number;
     attemptHistory?: OperationAttemptRecord[];
     output?: Record<string, unknown>;
+    progress?: MigrationProgressRecord[];
     customerMigrationV2?: CustomerMigrationV2State;
     sourceTransferExecution?: SourceTransferExecution;
     schedulerHandoff?: SchedulerHandoffState;

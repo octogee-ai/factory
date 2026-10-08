@@ -4,6 +4,7 @@ import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/ga
 import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/retained-source-transfer.js';
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
+import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
@@ -2518,6 +2519,13 @@ interface ControllerRuntime {
   chartFingerprint: string;
 }
 
+function progressJournalDeps(db: Firestore, logFn: (message: string) => void): ProgressJournalDeps {
+  return {
+    db: db as unknown as FleetStateFirestore,
+    log: logFn,
+  };
+}
+
 function buildSurgeHandoffDeps(input: {
   db: Firestore;
   runKubectl: KubectlSubprocess;
@@ -2529,6 +2537,8 @@ function buildSurgeHandoffDeps(input: {
       privateKey,
       log,
     }),
+    recordMigrationProgress: ({ gatewayId, uid, event }) =>
+      journalHandoffProgress(progressJournalDeps(db, log), { gatewayId, uid }, event),
     listPods: createSurgeEndpointLister({
       readRuntimeDoc: async (gatewayId) =>
         (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data(),
@@ -3146,6 +3156,8 @@ async function buildHandlers(
       const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
       await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);
     },
+    recordMigrationProgress: ({ operation, event }) =>
+      journalOperationProgress(progressJournalDeps(db, logFn), operation, event),
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
       db, vm: createGatewayComputeClient(logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

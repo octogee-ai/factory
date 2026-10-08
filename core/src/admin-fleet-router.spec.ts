@@ -3160,6 +3160,31 @@ describe("account deletion revokes connector grants at the provider first", () =
   });
 });
 
+describe("roll handoff progress on the fleet response", () => {
+  const record = (slug: string, phase: string, status: string, at: number) =>
+    ({ phase, status, at, migrationId: "surge-shared-blue-pod", slug, source: "pod-old" });
+
+  it("shows a handoff while the roster holds the builder out of serving or its last report failed, never a finished one", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {},
+      gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
+      assignments: {
+        "shared-blue": {
+          u1: { uid: "u1", slug: "alice", gatewayId: "shared-blue", source: "onboarding", state: "quiescing", handoffProgress: [record("alice", "gate-source", "done", 1_000), record("alice", "transfer-and-verify", "running", 2_000)] },
+          u2: { uid: "u2", slug: "bob", gatewayId: "shared-blue", source: "onboarding", state: "serving", handoffProgress: [record("bob", "gate-source", "failed", 3_000)] },
+          u3: { uid: "u3", slug: "carol", gatewayId: "shared-blue", source: "onboarding", state: "serving", handoffProgress: [record("carol", "serving-handoff", "done", 4_000)] },
+          u4: { uid: "u4", slug: "dora", gatewayId: "shared-blue", source: "onboarding", state: "serving" },
+        },
+      },
+    });
+    const fleet = await request(app).get("/gateways").expect(200);
+    const gateway = fleet.body.gateways.find((g: { gatewayId: string }) => g.gatewayId === "shared-blue");
+    expect(Object.keys(gateway.handoffProgress).sort()).toEqual(["alice", "bob"]);
+    expect(gateway.handoffProgress.alice.map((r: { phase: string }) => r.phase)).toEqual(["gate-source", "transfer-and-verify"]);
+  });
+});
+
 describe("operations history route", () => {
   function operationsApp(assignments: Record<string, Record<string, Record<string, unknown>>> = {}) {
     return mkAdminFleetRouteApp({
@@ -3198,6 +3223,25 @@ describe("operations history route", () => {
     });
     const res = await request(app).get("/operations?status=unresolved&limit=100").expect(200);
     expect(ids(res)).toEqual(["rolled-back", "failed", "newer-pending", "old-running"]);
+  });
+
+  it("returns every roster-pointed failure even when in-flight operations fill the limit", async () => {
+    const { app } = mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {},
+      gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
+      operations: {
+        "old-failed": { kind: "migrate-customer", status: "failed", createdAt: 10, input: { uid: "u1" }, steps: [] },
+        ...Object.fromEntries(Array.from({ length: 101 }, (_, index) => [
+          `pending-${index}`,
+          { kind: "rollout", status: "pending", createdAt: 1_000 + index, input: { gatewayId: "shared-blue" }, steps: [] },
+        ])),
+      },
+      assignments: { "shared-blue": { u1: { uid: "u1", slug: "alice", gatewayId: "shared-blue", source: "onboarding", state: "serving", updatedByOperationId: "old-failed" } } },
+    });
+    const res = await request(app).get("/operations?status=unresolved&limit=100").expect(200);
+    expect(res.body.operations).toHaveLength(101);
+    expect(ids(res).at(-1)).toBe("old-failed");
   });
 
   it("caps unresolved results at the requested limit", async () => {
