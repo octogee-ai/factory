@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const [vendoredDir, hostDir, listFile] = process.argv.slice(2);
 if (!vendoredDir || !hostDir || !listFile) {
@@ -29,6 +30,16 @@ if (hostPackage.name !== "openclaw" || sourcePackage.name !== "@openclaw/paralle
     sourcePackage.version !== hostPackage.version) {
   throw new Error("Parallel companion identity/version does not match the OpenClaw package");
 }
+const installedPackage = JSON.parse(readFileSync(path.join(installedRoot, "package.json"), "utf8"));
+if (installedPackage.openclaw?.build?.bundledDist !== true) {
+  throw new Error("Parallel bundled distribution ownership is missing");
+}
+const expectedPackage = structuredClone(sourcePackage);
+expectedPackage.openclaw ??= {};
+expectedPackage.openclaw.build = { ...expectedPackage.openclaw.build, bundledDist: true };
+if (!isDeepStrictEqual(installedPackage, expectedPackage)) {
+  throw new Error("Parallel source match: package.json: content differs outside bundled distribution ownership");
+}
 
 function runtimeDigests(packageDir) {
   const digests = new Map();
@@ -48,7 +59,6 @@ function runtimeDigests(packageDir) {
   if (![...digests.keys()].some((file) => /\.[cm]?js$/u.test(file))) {
     throw new Error("Parallel package has no dist modules");
   }
-  add("package.json");
   add("openclaw.plugin.json");
   return digests;
 }
@@ -73,4 +83,4 @@ if (mismatches.length > 0) {
   console.error(`Parallel source match: FAIL\n${details}`);
   process.exit(1);
 }
-console.log(`Parallel source match: PASS (${vendored.size} runtime files identical; origin=bundled)`);
+console.log(`Parallel source match: PASS (${vendored.size + 1} source-matched files; origin=bundled; bundledDist=true)`);

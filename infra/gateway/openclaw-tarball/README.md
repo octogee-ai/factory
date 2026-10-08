@@ -402,6 +402,14 @@ It vendors root
 `workspace:*` dependencies and always compiles Codex/Parallel companions from
 the same checkout, independently of npm publication status.
 
+Image assembly installs Parallel into the host's bundled plugin tree and sets
+its native `openclaw.build.bundledDist` declaration to `true`. Source-match
+verification permits only that distribution-ownership metadata change; all
+other package fields, runtime files and the plugin manifest must match the
+packed companion. OpenClaw's Doctor then owns retiring an obsolete exact-package
+npm install record and certifying any retained upgrade obligation. Discovery
+as `origin=bundled` alone does not transfer that repair ownership.
+
 `pack-mattermost-tarball.sh` runs OpenClaw's plugin packer and verifies compiled
 runtime output. Mattermost stays separate so its exact native channel runtime
 is content-addressed independently from the root package.

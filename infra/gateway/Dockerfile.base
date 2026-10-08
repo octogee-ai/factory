@@ -116,6 +116,7 @@ RUN set -e; \
     npm install --prefix "$PARALLEL_BUNDLED_DIR" --omit=dev --include=optional --ignore-scripts --package-lock=false --no-audit --no-fund > /tmp/oc-plugin.log 2>&1 \
       || { echo "FATAL: source-matched Parallel dependencies failed"; tail -n 20 /tmp/oc-plugin.log; exit 1; }; \
     cp "$PARALLEL_VENDORED/package/package.json" "$PARALLEL_BUNDLED_DIR/package.json"; \
+    node -e 'const fs = require("node:fs"); const file = process.argv[1]; const pkg = JSON.parse(fs.readFileSync(file, "utf8")); pkg.openclaw ??= {}; pkg.openclaw.build = { ...pkg.openclaw.build, bundledDist: true }; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$PARALLEL_BUNDLED_DIR/package.json"; \
     test ! -e "$PARALLEL_BUNDLED_DIR/node_modules/openclaw"; \
     PARALLEL_STATE="$(mktemp -d)"; \
     OPENCLAW_STATE_DIR="$PARALLEL_STATE" openclaw plugins list --json > /tmp/oc-parallel-list.json 2>/tmp/oc-plugin.log \

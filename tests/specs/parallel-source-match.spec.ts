@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,7 +26,11 @@ function fixture() {
   const installed = path.join(host, "dist/extensions/parallel");
   const report = path.join(root, "list.json");
   const files = {
-    "package.json": JSON.stringify({ name: "@openclaw/parallel-plugin", version: "2026.9.5" }),
+    "package.json": JSON.stringify({
+      name: "@openclaw/parallel-plugin",
+      version: "2026.9.5",
+      openclaw: { build: { bundledDist: false } },
+    }),
     "openclaw.plugin.json": JSON.stringify({ id: "parallel", contracts: { webSearchProviders: ["parallel", "parallel-free"] } }),
     "dist/index.js": "export const a = 1;\n",
     "dist/catalog.worker.cjs": "exports.a = 1;\n",
@@ -34,6 +38,9 @@ function fixture() {
   };
   writeFiles(vendored, files);
   writeFiles(installed, files);
+  const bundledPackage = JSON.parse(files["package.json"]);
+  bundledPackage.openclaw.build.bundledDist = true;
+  writeFiles(installed, { "package.json": JSON.stringify(bundledPackage) });
   writeFiles(host, { "package.json": JSON.stringify({ name: "openclaw", version: "2026.9.5" }) });
   const plugin = {
     id: "parallel",
@@ -58,13 +65,13 @@ function run(f: ReturnType<typeof fixture>): { ok: boolean; output: string } {
 }
 
 describe("Parallel companion source match and bundled ownership", () => {
-  it("accepts identical source bytes discovered in the running host's bundled tree", () => {
+  it("accepts source-matched bytes with native bundled distribution ownership", () => {
     const result = run(fixture());
     expect(result.ok, result.output).toBe(true);
-    expect(result.output).toContain("PASS (5 runtime files identical; origin=bundled)");
+    expect(result.output).toContain("PASS (5 source-matched files; origin=bundled; bundledDist=true)");
   });
 
-  it.each(["dist/index.js", "dist/catalog.worker.cjs", "dist/data.bin", "package.json"])(
+  it.each(["dist/index.js", "dist/catalog.worker.cjs", "dist/data.bin"])(
     "rejects changed %s even when the package version still matches",
     (file) => {
       const f = fixture();
@@ -74,6 +81,24 @@ describe("Parallel companion source match and bundled ownership", () => {
       expect(result.output).toContain(file + ": content differs");
     },
   );
+
+  it("rejects bundled discovery that still declares external distribution ownership", () => {
+    const f = fixture();
+    writeFiles(f.installed, { "package.json": readFileSync(path.join(f.vendored, "package.json"), "utf8") });
+    const result = run(f);
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("Parallel bundled distribution ownership is missing");
+  });
+
+  it("rejects package metadata differences other than bundled distribution ownership", () => {
+    const f = fixture();
+    const pkg = JSON.parse(readFileSync(path.join(f.installed, "package.json"), "utf8"));
+    pkg.dependencies = { unexpected: "1.0.0" };
+    writeFiles(f.installed, { "package.json": JSON.stringify(pkg) });
+    const result = run(f);
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("package.json: content differs");
+  });
 
   it("rejects discovery with no Parallel provider", () => {
     const f = fixture();
