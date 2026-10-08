@@ -1660,6 +1660,34 @@ function shapeValidOperationAuditHistoryRecord(id, data) {
         ...shapeAuditHistoryErrorField(data),
     };
 }
+function isUnresolvedMigrationFailure(data) {
+    return data.kind === OP_KIND_MIGRATE_CUSTOMER && (data.status === "failed" || data.status === "rolled-back");
+}
+// In-flight operations plus, per builder, the terminal migration failure the
+// roster still points at: an assignment's updatedByOperationId is rewritten by
+// the next operation that touches that builder and deleted by unassign, so it
+// outlives the bounded history window as the durable "unresolved" signal.
+async function listUnresolvedOperationDocs(db, limit) {
+    const [inFlight, assignments] = await Promise.all([
+        db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]).get(),
+        db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
+    ]);
+    const byId = new Map(inFlight.docs.map((doc) => [doc.id, { id: doc.id, data: () => (doc.data() ?? {}) }]));
+    const pointed = new Set();
+    for (const assignment of assignments.docs) {
+        const operationId = asStringOrNull(assignment.data()?.updatedByOperationId);
+        if (operationId && !byId.has(operationId))
+            pointed.add(operationId);
+    }
+    const snaps = await Promise.all([...pointed].map((operationId) => db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()));
+    for (const snap of snaps) {
+        const data = (snap.data() ?? {});
+        if (snap.exists && isUnresolvedMigrationFailure(data))
+            byId.set(snap.id, { id: snap.id, data: () => data });
+    }
+    const createdAt = (doc) => coerceNumberOrNull(doc.data().createdAt) ?? 0;
+    return [...byId.values()].sort((a, b) => createdAt(b) - createdAt(a)).slice(0, limit);
+}
 export function shapeOperationsHistoryRecord(id, data) {
     if (isOperationAuditRow(data) && !isOperationAuditRecord(data)) {
         return shapeInvalidOperationAuditHistoryRecord(id, data);
@@ -4690,12 +4718,19 @@ export function addAdminFleetRoutes(router, deps) {
     router.get("/operations", async (req, res, next) => {
         try {
             const limit = Math.min(100, Math.max(1, parseInt(req.query.limit ?? "25", 10)));
-            const snap = await db
-                .collection(GLM_OPERATIONS_COLLECTION)
-                .orderBy("createdAt", "desc")
-                .limit(limit)
-                .get();
-            const operations = snap.docs.map((doc) => shapeOperationsHistoryRecord(doc.id, doc.data()));
+            const status = req.query.status;
+            if (status !== undefined && status !== "unresolved") {
+                res.status(400).json({ error: "status must be omitted or \"unresolved\"", got: status });
+                return;
+            }
+            const docs = status === "unresolved"
+                ? await listUnresolvedOperationDocs(db, limit)
+                : (await db
+                    .collection(GLM_OPERATIONS_COLLECTION)
+                    .orderBy("createdAt", "desc")
+                    .limit(limit)
+                    .get()).docs;
+            const operations = docs.map((doc) => shapeOperationsHistoryRecord(doc.id, doc.data()));
             res.json({ operations, generatedAt: new Date().toISOString() });
         }
         catch (e) {

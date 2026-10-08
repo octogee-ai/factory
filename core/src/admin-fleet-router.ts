@@ -2643,6 +2643,43 @@ function shapeValidOperationAuditHistoryRecord(
   };
 }
 
+type OperationDocLike = { id: string; data: () => Record<string, unknown> };
+
+function isUnresolvedMigrationFailure(data: Record<string, unknown>): boolean {
+  return data.kind === OP_KIND_MIGRATE_CUSTOMER && (data.status === "failed" || data.status === "rolled-back");
+}
+
+// In-flight operations plus, per builder, the terminal migration failure the
+// roster still points at: an assignment's updatedByOperationId is rewritten by
+// the next operation that touches that builder and deleted by unassign, so it
+// outlives the bounded history window as the durable "unresolved" signal.
+async function listUnresolvedOperationDocs(
+  db: Firestore,
+  limit: number,
+): Promise<OperationDocLike[]> {
+  const [inFlight, assignments] = await Promise.all([
+    db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]).get(),
+    db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
+  ]);
+  const byId = new Map<string, OperationDocLike>(
+    inFlight.docs.map((doc) => [doc.id, { id: doc.id, data: () => (doc.data() ?? {}) as Record<string, unknown> }]),
+  );
+  const pointed = new Set<string>();
+  for (const assignment of assignments.docs) {
+    const operationId = asStringOrNull((assignment.data() as Record<string, unknown> | undefined)?.updatedByOperationId);
+    if (operationId && !byId.has(operationId)) pointed.add(operationId);
+  }
+  const snaps = await Promise.all(
+    [...pointed].map((operationId) => db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()),
+  );
+  for (const snap of snaps) {
+    const data = (snap.data() ?? {}) as Record<string, unknown>;
+    if (snap.exists && isUnresolvedMigrationFailure(data)) byId.set(snap.id, { id: snap.id, data: () => data });
+  }
+  const createdAt = (doc: OperationDocLike): number => coerceNumberOrNull(doc.data().createdAt) ?? 0;
+  return [...byId.values()].sort((a, b) => createdAt(b) - createdAt(a)).slice(0, limit);
+}
+
 export function shapeOperationsHistoryRecord(
   id: string,
   data: Record<string, unknown>,
@@ -6279,12 +6316,19 @@ router.get(
           100,
           Math.max(1, parseInt((req.query.limit as string) ?? "25", 10)),
         );
-        const snap = await db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .orderBy("createdAt", "desc")
-          .limit(limit)
-          .get();
-        const operations = snap.docs.map((doc) =>
+        const status = req.query.status;
+        if (status !== undefined && status !== "unresolved") {
+          res.status(400).json({ error: "status must be omitted or \"unresolved\"", got: status });
+          return;
+        }
+        const docs = status === "unresolved"
+          ? await listUnresolvedOperationDocs(db, limit)
+          : (await db
+              .collection(GLM_OPERATIONS_COLLECTION)
+              .orderBy("createdAt", "desc")
+              .limit(limit)
+              .get()).docs;
+        const operations = docs.map((doc) =>
           shapeOperationsHistoryRecord(doc.id, doc.data() as Record<string, unknown>),
         );
         res.json({ operations, generatedAt: new Date().toISOString() });

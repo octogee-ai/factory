@@ -3159,3 +3159,55 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(calls).not.toContain("revoke:u3");
   });
 });
+
+describe("operations history route", () => {
+  function operationsApp(assignments: Record<string, Record<string, Record<string, unknown>>> = {}) {
+    return mkAdminFleetRouteApp({
+      config: { defaultGatewayId: "shared-blue" },
+      users: {},
+      gateways: { "shared-blue": durableGatewayRoot("shared-blue") },
+      operations: {
+        "old-running": { kind: "migrate-customer", status: "running", createdAt: 1_000, input: { uid: "u1" }, steps: [] },
+        "newer-pending": { kind: "rollout", status: "pending", createdAt: 3_000, input: { gatewayId: "shared-blue" }, steps: [] },
+        "done": { kind: "migrate-customer", status: "succeeded", createdAt: 2_000, input: { uid: "u2" }, steps: [] },
+        "failed": { kind: "migrate-customer", status: "failed", createdAt: 4_000, input: { uid: "u3" }, steps: [] },
+        "rolled-back": { kind: "migrate-customer", status: "rolled-back", createdAt: 5_000, input: { uid: "u4" }, steps: [] },
+        "restart-failed": { kind: "restart-gateway", status: "failed", createdAt: 6_000, input: { gatewayId: "shared-blue" }, steps: [] },
+      },
+      assignments,
+    });
+  }
+  const ids = (res: { body: { operations: Array<{ id: string }> } }) => res.body.operations.map((op) => op.id);
+
+  it("returns only in-flight operations, newest first, when no roster entry points at a failure", async () => {
+    const { app } = operationsApp();
+    const res = await request(app).get("/operations?status=unresolved&limit=100").expect(200);
+    expect(ids(res)).toEqual(["newer-pending", "old-running"]);
+  });
+
+  it("keeps a rolled-back or failed migration the roster still points at, however old the history window", async () => {
+    const { app } = operationsApp({
+      "shared-blue": {
+        u4: { uid: "u4", slug: "dora", state: "serving", updatedByOperationId: "rolled-back" },
+        u3: { uid: "u3", slug: "carol", state: "quiescing", updatedByOperationId: "failed" },
+        u2: { uid: "u2", slug: "bob", state: "serving", updatedByOperationId: "done" },
+        u1: { uid: "u1", slug: "alice", state: "migrating", updatedByOperationId: "old-running" },
+        u5: { uid: "u5", slug: "erin", state: "serving", updatedByOperationId: "restart-failed" },
+        u6: { uid: "u6", slug: "fay", state: "serving", updatedByOperationId: "surge-shared-blue-pod" },
+      },
+    });
+    const res = await request(app).get("/operations?status=unresolved&limit=100").expect(200);
+    expect(ids(res)).toEqual(["rolled-back", "failed", "newer-pending", "old-running"]);
+  });
+
+  it("caps unresolved results at the requested limit", async () => {
+    const { app } = operationsApp();
+    const res = await request(app).get("/operations?status=unresolved&limit=1").expect(200);
+    expect(ids(res)).toEqual(["newer-pending"]);
+  });
+
+  it("rejects an unknown status filter", async () => {
+    const { app } = operationsApp();
+    await request(app).get("/operations?status=failed").expect(400);
+  });
+});
