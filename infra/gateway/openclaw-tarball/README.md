@@ -128,8 +128,8 @@ locked for the October 8 recut, 277 commits after the previous base. Its
 [push CI](https://github.com/openclaw/openclaw/actions/runs/37807391210)
 has one security-fast success and 39 skips, not full-CI green. The operator
 selected this newer native implementation for independent qualification.
-Exact overlay: `1a18e6a826886a87c0318a0b58524fca31b2e5b7`, at
-`ceckert/openclaw:codex/openclaw-current-oct08`.
+Exact overlay: `0f41d1c5d331cbb65aea35eb1d23318c3e31f439`, at
+`ceckert/openclaw:codex/openclaw-account-removal-oct08`.
 Package version `2026.9.9` identifies a main snapshot, not a released tag.
 Recent full upstream CI remains red; the scheduled run
 [37801957966](https://github.com/openclaw/openclaw/actions/runs/37801957966)
@@ -141,7 +141,8 @@ built source. Schema 21, agent schema 24 and protocol 4 remain unchanged.
 The schema repair preserves both shipped schema-20 layouts and refuses
 downgrades; it does not reset or repair live state. Preserve native backups
 and settle old-version in-flight cron handoffs before a separately authorized
-rollout. No deployment or live-state mutation is part of this recut.
+rollout. Packaging does not change live state; environment deployment requires
+the successful immutable Build main family and separate rollout verification.
 
 ### Patch assessment
 
@@ -189,25 +190,76 @@ The overlay is not an overall line reduction. Required boundary tests remain;
 large repeated fixture scaffolding is extracted into existing support owners,
 not replaced by weaker assertions or raised line caps.
 
+The account-removal follow-up stacks
+[#167431](https://github.com/openclaw/openclaw/pull/167431) at
+`2c508beafdf1efb663562f72e6e602979b804691` and its exact canonical-account
+correction `5456ef17` on the qualified overlay
+`1a18e6a826886a87c0318a0b58524fca31b2e5b7`, preserving its author. That PR is
+still open upstream, so this is a local adoption, not an upstream merge claim.
+Removing a named account now stops only that account, without waiting for
+unrelated Gateway work or restarting healthy siblings. Failed teardown retains
+the captured account/plugin owner for retry; global changes and account
+resolution errors retain full-channel, fail-safe handling. Three verified
+follow-up repairs preserve strict removal custody when either a running account
+task or pending startup times out, and route dotted account-path ambiguity to
+the existing whole-channel fail-safe. Explicit route handoffs remain unchanged.
+The upstream author adopted these coordinated repairs at
+`07bf5349987ff546914599901768d7daf2de0e17` and published
+[real-Gateway IRC proof](https://github.com/openclaw/openclaw/pull/167431#issuecomment-6069141812):
+two removals complete while an unrelated 45-second RPC remains pending;
+the healthy sibling exchanges four messages on its original socket with zero
+reconnects. This is independent upstream proof, not live Octogee acceptance.
+
 ### Qualification
 
-Exact clean-source build passed in 3m 27.4s; build-info matches the source above.
+The account-removal follow-up's exact clean-source build passed in 3m 57.1s;
+build-info matches the source above. Two real managed config-write regressions
+fail on the old planner behavior (`applied` becomes `deferred`) and pass with
+the patch. Additional RED controls reproduce task timeout, pending preparation
+timeout, dotted IDs and sibling-prefix ambiguity. The corrected reload/channel
+union passes 402 tests across six files. Four existing planner cases move intact
+to the existing planner-test owner to avoid over-cap growth; its post-extraction
+replay passes 159 tests across two files without weakening assertions or budgets.
+Production core types, both owning Gateway test-type graphs, scoped typed lint,
+formatting and the line-cap ratchet pass. The final explicitly approved isolated
+Astra review is scoped-clean and used only source and synthetic tests.
+
 The sequential matched packers, native archive integrity, strict Voice/Activity
-SDK checks and isolated pair installation pass. The native package lifecycle
-completes, not merely npm installation. Exact-generation downloads verify:
+SDK checks and isolated pair installation pass. Native prepack/postpack completes
+and leaves the source clean. npm reports install scripts outside its allow-list;
+they are not claimed executed. The compiled runtime and real installed-image
+checks below pass without changing that policy. Mattermost is byte-identical to
+the prior object and reused. Exact-generation downloads verify:
 
 | Artifact | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-8837a0dd.tgz` | `1791485382033189` | `8837a0dd0c2f40fd34be21d86b3d33450c27e94cefd4360a4342c99983f1318c` |
+| `openclaw-fork-7d6e73d7.tgz` | `1791494011023627` | `7d6e73d7b7c153184d63bc463d864d7794a7417e530bed72c6ba013956eaf475` |
 | `openclaw-mattermost-0ae3f884.tgz` | `1791482748004373` | `0ae3f8847fd6635204a4e3083566eda219dfc864e68e20662d809dcbce95536c` |
 
 The actual Linux arm64 full-plugin-installer image is
-`sha256:d9455571675d62eff1eb03de92eb226a05e73843fb1215c4d68726cc7340ba38`.
+`sha256:da80862ba769e515de85313f98c39871013a61b31b9fbd6720e76e1e12a239ee`.
 Native registry refresh and bundled trust pass; all 174 Codex runtime files and
 nine Parallel files match the source, and all three native hooks import.
 The full gateway proof image is
-`sha256:83bbfa034d2d2add14a34175eba4eee6055f698a6bf020a3e44f28fc8d5bbf41`.
+`sha256:2540441f7a3a7afd854eac51dbd46dfc46eadaed04264b806ad8d287212eb3e2`.
+Network-disabled installed-source/version verification passes as the `node` user.
 These are local qualification images, not the post-merge Build main family.
+
+The island-input audit from `1a18e6a` to the initial adoption, and from that
+adoption to this final source, reports no native UI input changes. All eight
+provenance records are regenerated from the same clean, built source as the
+tarballs. Initial checkout-dependent shared chunk names change; the final
+correction changes only provenance and license source lines.
+No UI behavior change or new visual acceptance is claimed.
+Fresh Octogee artifact/pin tests pass 52 cases across five files; the six islands'
+exports and shared module ownership pass seven cases across two files. App types
+pass. Final-head hosted CI and configured reviews remain the merge gate.
+
+#### Retained prior qualification
+
+The following unchanged contracts were qualified on parent overlay
+`1a18e6a826886a87c0318a0b58524fca31b2e5b7`; they are not fresh executions of
+those complete lanes on this account-removal follow-up.
 
 Affected native lanes pass: startup/schema (75 cases), cron/sharing (178),
 catalog/queued delivery (84), channel routing (311), and the approval/Talk/
@@ -262,7 +314,8 @@ types pass. Final-head hosted CI and reviews are recorded in the recut PR.
 The same-system, network-disabled Linux arm64 native startup comparison uses
 two CPU cores, 4 GiB memory, one warmup and three measured runs per source.
 Median `/readyz` is 7.89s on previous source `687bfec2f0a25adb9620e17fc715d60fd8eb42eb`
-and 7.98s on this source; ranges are 7.07–8.17s and 7.73–8.65s respectively.
+and 7.98s on parent source `1a18e6a826886a87c0318a0b58524fca31b2e5b7`;
+ranges are 7.07–8.17s and 7.73–8.65s respectively.
 All six runs produce successful health/readiness probes and CPU/RSS metrics.
 This does not demonstrate faster startup. It measures minimal native process
 readiness, not populated Octogee, Mattermost, provisioning or Builder activation.
