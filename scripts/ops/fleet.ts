@@ -156,14 +156,15 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "logs",
     summary: "Tail Shared (GKE) and Builder (GCE VM) gateway logs together, live.",
-    args: "[--level=<level>] [--service=<names>] [--builder=<slugs>] [options]",
+    args: "[--level=<level>] [--service=<names>] [--builder=<slugs>] [--migration=<id>] [options]",
     description:
-      "Streams Cloud Logging from GKE and Builder VMs using your gcloud credentials.\n--level=<level> Minimum severity (default info); --level-exact=<levels> selects exact levels.\n--service=<names> and --builder=<slugs> accept comma lists (OR within a list, AND between filters).\nServices: api, cowboy, gateway, gateway-edge, provisioner, mattermost, gitea, nginx, or emitted service name.\nBuilder filtering matches structured builderSlug or explicit dedicated VM labels; untagged events are excluded.\n--gateway=<id> / --container=<name> narrow the Cloud Logging query.\n--no-follow reads recent history; --since=10m and --limit=1000 control the fetched records, before local filters.\n--format=pretty|json (JSON Lines); --timestamps=short|full; --color=auto|always|never.\n--buffer-window=2s sets live arrival ordering (0s–60s). DEFAULT entries remain visible at info.\nLive tail requires gcloud alpha and its gRPC prerequisites: https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing",
+      "Streams Cloud Logging from GKE and Builder VMs using your gcloud credentials.\n--level=<level> Minimum severity (default info); --level-exact=<levels> selects exact levels.\n--service=<names> and --builder=<slugs> accept comma lists (OR within a list, AND between filters).\nServices: api, cowboy, gateway, gateway-edge, provisioner, mattermost, gitea, nginx, or emitted service name.\nBuilder filtering matches structured builderSlug or explicit dedicated VM labels; untagged events are excluded.\n--gateway=<id> / --container=<name> narrow the Cloud Logging query.\n--migration=<id> keeps only lines mentioning that operation id: Cowboy tags every migrate-customer and surge-handoff line with op=<id>, and gateway-side migration ids embed it.\n--no-follow reads recent history; --since=10m and --limit=1000 control the fetched records, before local filters.\n--format=pretty|json (JSON Lines); --timestamps=short|full; --color=auto|always|never.\n--buffer-window=2s sets live arrival ordering (0s–60s). DEFAULT entries remain visible at info.\nLive tail requires gcloud alpha and its gRPC prerequisites: https://cloud.google.com/logging/docs/reference/tools/gcloud-logging#live-tailing",
     examples: [
       "fleet --env=prod logs",
       "fleet --env=prod logs --gateway=shared-0",
       "fleet --env=test logs --service=api,gateway-edge --level=warn",
       "fleet --env=prod logs --builder=ceckert",
+      "fleet --env=prod logs --migration=Ab12cd34 --no-follow --since=2h",
       "fleet --env=prod logs --no-follow --since=30m --format=json",
     ],
     writes: false,

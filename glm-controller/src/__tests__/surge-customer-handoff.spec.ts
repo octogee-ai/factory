@@ -240,6 +240,20 @@ describe("surge customer handoff", () => {
     expect(h.assignments()[0].state).toBe("quiescing");
   });
 
+  it("tags post-observation handoff lines and nested progress lines with the owning operation id", async () => {
+    const h = harness();
+    vi.mocked(h.deps.reportMigrationProgress).mockRejectedValueOnce(new Error("pod gone"));
+    vi.mocked(h.deps.waitForSourceIdle).mockRejectedValueOnce(new MigrationDrainPendingError("coach is active"));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: false, stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    const lines = vi.mocked(h.deps.log).mock.calls.map(([message]) => message);
+    expect(lines).toContainEqual(expect.stringMatching(/^\[surge-handoff\] waiting for Builder activity to finish gateway=default: coach is active op=surge-default-target-uid$/u));
+    expect(lines).toContainEqual(expect.stringMatching(/^🔴 \[migration\] destination progress unavailable: Error: pod gone;.* migrationId=surge-default-target-uid builder=alice op=surge-default-target-uid$/u));
+    expect(lines.filter((line) => line.includes(" op=")).every((line) => line.match(/ op=/gu)?.length === 1)).toBe(true);
+  });
+
   it.each([false, true])("keeps source assignments serving when coach or voice work defers a roll (Builder=%s)", async (builder) => {
     const h = harness();
     vi.mocked(h.deps.waitForSourceIdle).mockRejectedValueOnce(new MigrationDrainPendingError("coach is active"));

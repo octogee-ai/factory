@@ -653,6 +653,9 @@ describe("native computer return", () => {
       operation: expect.objectContaining({ id: "op-1" }),
       event: expect.objectContaining({ status: "running", slug: "alice", at: expect.any(Number) }),
     });
+    const lines = vi.mocked(h.deps.log).mock.calls.map(([message]) => message);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((line) => line.endsWith(" op=op-1") && line.match(/ op=/gu)?.length === 1)).toBe(true);
     expect(h.client.restoreTarget).not.toHaveBeenCalled();
     expect(h.client.transferState).not.toHaveBeenCalled();
     expect(h.deps.readGatewayOpenclawVersion).not.toHaveBeenCalled();
@@ -1964,7 +1967,7 @@ describe("scheduler handoff recovery", () => {
       ["gw-blue", "retire"], ["gw-green", "activate"],
     ]);
     expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue", slug: "alice" }));
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/unmount-source cleanup failed after durable cutover.*alice.*held open.*target remains serving/));
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/unmount-source cleanup failed after durable cutover.*alice.*held open.*target remains serving op=op-1$/u));
   });
 
   it("closes a failed scheduler attempt before reusing the customer on a new attempt", async () => {
@@ -2056,7 +2059,7 @@ describe("migrate-customer — preempted computers", () => {
     const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
 
     expect(result.error).toBe(rsyncReset);
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403/));
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403 op=builder-activate-gw-green$/u));
   });
 });
 

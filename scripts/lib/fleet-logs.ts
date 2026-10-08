@@ -3,6 +3,7 @@ import { JSONParser } from "@streamparser/json";
 import pc from "picocolors";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/i;
+const MIGRATION_ID_PATTERN = /^[a-z0-9][a-z0-9:_-]*$/i;
 const LEVELS = ["DEFAULT", "DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL", "ALERT", "EMERGENCY"];
 const ALIASES: Record<string, string> = { WARN: "WARNING", FATAL: "CRITICAL", TRACE: "DEBUG" };
 const SERVICE_NAMES: Record<string, string> = { "octogee-api": "api", "glm-controller": "cowboy", "octogee-gateway": "gateway", "octogee-gateway-edge": "gateway-edge", "octogee-gitea": "gitea" };
@@ -24,6 +25,11 @@ function name(value: string, what: string): string {
   return value;
 }
 
+function migrationId(value: string): string {
+  if (!MIGRATION_ID_PATTERN.test(value)) throw new Error(`Invalid migration id '${value}'; use an operation id or migration id`);
+  return value;
+}
+
 function list(value: string | undefined, what: string): string[] | undefined {
   return value === undefined ? undefined : value.split(",").map(v => name(v.trim(), what));
 }
@@ -36,6 +42,7 @@ export interface FleetLogsOptions {
   builders?: string[];
   gatewayId?: string;
   container?: string;
+  migrationId?: string;
   follow: boolean;
   since?: string;
   limit: number;
@@ -71,7 +78,7 @@ function bufferWindowOption(value = "2s"): string {
 function parseLogArguments(argv: string[]) {
   const { values: v, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true, options: {
     env: { type: "string" }, level: { type: "string" }, "level-exact": { type: "string" },
-    service: { type: "string" }, builder: { type: "string" }, gateway: { type: "string" }, container: { type: "string" },
+    service: { type: "string" }, builder: { type: "string" }, gateway: { type: "string" }, container: { type: "string" }, migration: { type: "string" },
     "no-follow": { type: "boolean" }, since: { type: "string" }, limit: { type: "string" },
     format: { type: "string" }, timestamps: { type: "string" }, color: { type: "string" }, "buffer-window": { type: "string" },
   } });
@@ -94,6 +101,7 @@ export function parseFleetLogsOptions(argv: string[]): FleetLogsOptions {
     levelExact: v["level-exact"]?.split(",").map(validatedLevel),
     services: list(v.service, "service")?.map(s => SERVICE_NAMES[s] ?? s), builders: list(v.builder, "Builder slug"),
     gatewayId: optionalName(v.gateway, "gateway"), container: optionalName(v.container, "container"),
+    migrationId: v.migration === undefined ? undefined : migrationId(v.migration),
     ...historyOptions(v.since, v["no-follow"], v.limit),
     format: choice(v.format, "pretty", ["pretty", "json"], "format"),
     timestamps: choice(v.timestamps, "short", ["short", "full"], "timestamps"),
@@ -102,7 +110,7 @@ export function parseFleetLogsOptions(argv: string[]): FleetLogsOptions {
   };
 }
 
-export function buildFleetLogsFilter(query: { namespace: string; gatewayId?: string; container?: string }): string {
+export function buildFleetLogsFilter(query: { namespace: string; gatewayId?: string; container?: string; migrationId?: string }): string {
   const namespace = name(query.namespace, "namespace");
   const vm = (label: string) => `jsonPayload.container.metadata."ai.octogee.${label}"`;
   const clauses = [`((resource.type="k8s_container" AND resource.labels.namespace_name="${namespace}") OR (resource.type="gce_instance" AND ${vm("namespace")}="${namespace}"))`];
@@ -114,6 +122,7 @@ export function buildFleetLogsFilter(query: { namespace: string; gatewayId?: str
     const container = name(query.container, "container");
     clauses.push(`(resource.labels.container_name="${container}" OR ${vm("container")}="${container}")`);
   }
+  if (query.migrationId) clauses.push(`"${migrationId(query.migrationId)}"`);
   return clauses.join(" AND ");
 }
 

@@ -5,7 +5,7 @@ import { type FleetLogsOptions, type FleetLogLine, buildFleetLogsFilter, createF
 
 function startLogTransport(options: FleetLogsOptions, diagnostics: Writable) {
   const target = deploymentEnvironmentSettings(options.environment);
-  const filter = buildFleetLogsFilter({ namespace: target.namespace, gatewayId: options.gatewayId, container: options.container });
+  const filter = buildFleetLogsFilter({ namespace: target.namespace, gatewayId: options.gatewayId, container: options.container, migrationId: options.migrationId });
   const gcloudArgs = options.follow
     ? fleetLogsTailArgs({ projectId: target.clusterProjectId, filter, bufferWindow: options.bufferWindow })
     : ["logging", "read", filter, `--project=${target.clusterProjectId}`, `--freshness=${options.since ?? "10m"}`, `--limit=${options.limit}`, "--order=desc", "--format=json"];

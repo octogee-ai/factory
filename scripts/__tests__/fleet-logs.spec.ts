@@ -86,6 +86,13 @@ describe("fleet logs CLI", () => {
     expect(buildFleetLogsFilter({ namespace: "octogee" })).toContain('jsonPayload.container.metadata."ai.octogee.namespace"="octogee"');
     expect(fleetLogsTailArgs({ projectId: "octogee", filter: "filter" })).toContain("--format=json");
   });
+  it("narrows to one migration by its operation id across Cowboy, pods and VMs", () => {
+    expect(parseFleetLogsOptions(["--env=test", "logs", "--migration=placement-retire-uid-1:scheduler:2"])).toMatchObject({ migrationId: "placement-retire-uid-1:scheduler:2" });
+    expect(() => parseFleetLogsOptions(["--env=test", "logs", '--migration=a"b'])).toThrow();
+    const filter = buildFleetLogsFilter({ namespace: "octogee-test", migrationId: "abc123" });
+    expect(filter.split(" AND ").at(-1)).toBe('"abc123"');
+    expect(buildFleetLogsFilter({ namespace: "octogee-test" })).not.toContain('"abc123"');
+  });
   it("includes revisioned gateway pods without matching a different gateway", () => {
     const filter = buildFleetLogsFilter({ namespace: "octogee", gatewayId: "shared-a" });
     const pattern = new RegExp(filter.match(/pod_name=~"([^"]+)"/)![1]);

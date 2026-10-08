@@ -1,6 +1,7 @@
 import type { CrashLoopEvictionClaim } from "./surge-crashloop-eviction.js";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import { createMigrationProgress } from "./migration-progress.js";
+import { operationScopedLog, withOperationLogScope } from "./operation-log-scope.js";
 import type { MigrationProgressRequestBody } from "@octogee/shared/types/fleet-controller";
 import type { AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { MigrationProgressRecord, OperationStatus } from "@octogee/shared/types/glm";
@@ -1430,68 +1431,71 @@ export async function reconcileSurgeCustomerHandoff(
   const { pods, observedPodUids, healthByUid, target, targetHealth } = observation;
 
   const ownedBy = operationId(input.gatewayId, target.uid);
-  const source = selectSource(pods, target);
-  const sourceHealth = source.kind === "missing" ? undefined : healthByUid.get(source.pod.uid);
-  if (hasLegacyFleetSignatureCapability(targetHealth, sourceHealth)) {
-    return { ready: false };
-  }
-  const settled = await settleOrGateTarget(deps, input, {
-    target,
-    targetHealth,
-    source,
-    ownedBy,
-    observedPodUids,
-  });
-  // A settled target is a handoff that already finished — the release it proves
-  // still marks live, because withholding that would gate the Dashboard behind a
-  // queue this gateway is not waiting on.
-  if (settled?.ready) return settled;
-  if (input.supersedingImageTag) {
-    return standDownForSupersedingRelease(deps, input, {
-      source,
+  const scoped: SurgeCustomerHandoffDeps = { ...deps, log: operationScopedLog(deps.log) };
+  return withOperationLogScope(ownedBy, async () => {
+    const source = selectSource(pods, target);
+    const sourceHealth = source.kind === "missing" ? undefined : healthByUid.get(source.pod.uid);
+    if (hasLegacyFleetSignatureCapability(targetHealth, sourceHealth)) {
+      return { ready: false };
+    }
+    const settled = await settleOrGateTarget(scoped, input, {
       target,
       targetHealth,
-      healthByUid,
+      source,
       ownedBy,
       observedPodUids,
     });
-  }
-  if (settled) return settled;
+    // A settled target is a handoff that already finished — the release it proves
+    // still marks live, because withholding that would gate the Dashboard behind a
+    // queue this gateway is not waiting on.
+    if (settled?.ready) return settled;
+    if (input.supersedingImageTag) {
+      return standDownForSupersedingRelease(scoped, input, {
+        source,
+        target,
+        targetHealth,
+        healthByUid,
+        ownedBy,
+        observedPodUids,
+      });
+    }
+    if (settled) return settled;
 
-  let assignments: SurgeAssignment[] | null = null;
-  if (input.requiresCustomerMigration && input.ownerlessOperatorPrewarm === true) {
-    assignments = await deps.readAssignments(input.gatewayId);
-    if (assignments.length === 0) {
-      await releaseTargetWithConfirmation(deps, {
-        gatewayId: input.gatewayId,
-        operationId: ownedBy,
-        pod: target,
+    let assignments: SurgeAssignment[] | null = null;
+    if (input.requiresCustomerMigration && input.ownerlessOperatorPrewarm === true) {
+      assignments = await scoped.readAssignments(input.gatewayId);
+      if (assignments.length === 0) {
+        await releaseTargetWithConfirmation(scoped, {
+          gatewayId: input.gatewayId,
+          operationId: ownedBy,
+          pod: target,
+        });
+        return { ready: false };
+      }
+    }
+
+    const sourcePod = sourceForTransfer(scoped, input, source);
+    if (!sourcePod) {
+      await tendSourcelessTarget(scoped, input, {
+        source,
+        target,
+        targetHealth,
+        healthByUid,
+        ownedBy,
+        ...(assignments ? { assignments } : {}),
       });
       return { ready: false };
     }
-  }
 
-  const sourcePod = sourceForTransfer(deps, input, source);
-  if (!sourcePod) {
-    await tendSourcelessTarget(deps, input, {
-      source,
-      target,
-      targetHealth,
-      healthByUid,
+    assignments ??= await scoped.readAssignments(input.gatewayId);
+    await migrateAssignmentsAndReleaseTarget(scoped, {
+      input,
+      assignments,
+      sourcePod,
+      targetPod: target,
       ownedBy,
-      ...(assignments ? { assignments } : {}),
+      observedPodUids,
     });
     return { ready: false };
-  }
-
-  assignments ??= await deps.readAssignments(input.gatewayId);
-  await migrateAssignmentsAndReleaseTarget(deps, {
-    input,
-    assignments,
-    sourcePod,
-    targetPod: target,
-    ownedBy,
-    observedPodUids,
   });
-  return { ready: false };
 }

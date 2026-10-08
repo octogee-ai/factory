@@ -5,6 +5,7 @@ import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
 import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
+import { operationScopedLog } from "./operation-log-scope.js";
 import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
@@ -370,7 +371,7 @@ import type {
 const logger = createLogger({
   debug: debugFromEnv(),
 });
-const log = (msg: string) => logger.legacy(msg);
+const log = operationScopedLog((msg: string) => logger.legacy(msg));
 const RECONCILE_DEBOUNCE_MS = 1_000;
 const RECONCILE_RETRY_MS_DEFAULT = 30_000;
 const SHARED_POOL_SCALER_MS = parseNonNegativeInt(

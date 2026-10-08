@@ -2,6 +2,7 @@ import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { MigrationProgressRecord, SourceTransferExecution } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
+import { operationScopedLog, withOperationLogScope } from "../operation-log-scope.js";
 import {
   attemptMayHoldSourceIngress,
   attemptNeverHeldSource,
@@ -618,14 +619,13 @@ async function resolveMigrationTargets(
 async function recordCutoverCommitted(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
-  operationId: string,
 ): Promise<void> {
   if (!ctx.persistCutoverCommitted) return;
   try {
     await ctx.persistCutoverCommitted(deps.now());
   } catch (error) {
     deps.log(
-      `[migrate-customer] ❌ op=${operationId} cutover committed but could not be recorded — the serial lock stays held ` +
+      `[migrate-customer] ❌ cutover committed but could not be recorded — the serial lock stays held ` +
       `until this operation completes: ${errorMessage(error)}`,
     );
   }
@@ -653,7 +653,7 @@ function buildRunnerDeps(
     readTargetSystemConfigCommit: deps.readGatewaySystemConfigCommit,
     commitCutover: async (commit) => {
       await deps.commitCutover({ ...commit, automatic: input.automatic });
-      await recordCutoverCommitted(deps, ctx, input.operationId);
+      await recordCutoverCommitted(deps, ctx);
     },
     setAssignmentState: (assignment) =>
       deps.setAssignmentState({
@@ -740,7 +740,7 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
         flipMirror: targets.fromGatewayId !== targets.toGatewayId,
         automatic,
       });
-      await recordCutoverCommitted(deps, ctx, input.operationId);
+      await recordCutoverCommitted(deps, ctx);
     });
   } catch (error) {
     if (error instanceof MigrationDrainPendingError) {
@@ -1961,7 +1961,7 @@ async function preemptedComputer(
       const instanceName = await deps.findPreemptedComputer(gatewayId, since);
       if (instanceName) return { role, instanceName };
     } catch (error) {
-      deps.log(`[migrate-customer] ⚠ op=${op.id} could not check whether ${gatewayId}'s computer was preempted: ${errorMessage(error)}`);
+      deps.log(`[migrate-customer] ⚠ could not check whether ${gatewayId}'s computer was preempted: ${errorMessage(error)}`);
     }
   }
   return null;
@@ -1985,6 +1985,9 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     if (op.input.sourceTransferMode !== undefined && op.input.sourceTransferMode !== RETAINED_POD) throw new Error('unsupported source transfer mode');
     if (op.input.sourceTransferMode === RETAINED_POD && (!deps.observeSourceTransfer || (typeof op.input.fromGatewayId !== 'string' || !op.input.fromGatewayId.startsWith('shared-')))) throw new Error('retained source transfer requires a Shared source');
-    return attributePreemption(deps, op, await runMigrateCustomer(deps, op, ctx));
+    const scoped: MigrateCustomerDeps = { ...deps, log: operationScopedLog(deps.log) };
+    return withOperationLogScope(op.id, async () =>
+      attributePreemption(scoped, op, await runMigrateCustomer(scoped, op, ctx)),
+    );
   };
 }
