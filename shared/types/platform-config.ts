@@ -254,7 +254,7 @@ export function googleConnectAllowed(
 // The free-tier house model: DeepSeek V4 Pro on the OpenRouter platform key
 // (operator default 2026-07-08; the dial can point anywhere in the catalog).
 export const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
-export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/minimax/minimax-m3";
+export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
 
 // The platform default every Builder's Agent starts on until they pick their
 // own model in Account → Models. Fallback ref null = no fallback.

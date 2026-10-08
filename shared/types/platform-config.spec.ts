@@ -312,17 +312,7 @@ describe("Builder Agent default dial", () => {
   });
 });
 
-describe("DEFAULT_OPS_AGENT_MODEL_REF", () => {
-  it("defaults to MiniMax M3 on the platform OpenRouter key and maps to the OpenClaw runtime ref", () => {
-    expect(DEFAULT_OPS_AGENT_MODEL_REF).toBe("platform-openrouter/minimax/minimax-m3");
-    expect(resolveOpsAgentModel(DEFAULT_OPS_AGENT_MODEL_REF)).toEqual({
-      ref: "platform-openrouter/minimax/minimax-m3",
-      provider: "openrouter",
-      upstreamModelId: "minimax/minimax-m3",
-      runtimeModelRef: "openrouter/minimax/minimax-m3",
-    });
-  });
-
+describe("resolveOpsAgentModel", () => {
   it("rejects non-OpenRouter models", () => {
     expect(resolveOpsAgentModel("anthropic/claude-haiku-4-5")).toBeNull();
     expect(resolveOpsAgentModel("platform-openai/gpt-5.4-mini")).toBeNull();

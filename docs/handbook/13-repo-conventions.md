@@ -67,6 +67,13 @@ do not create a standing ceremony or bump unrelated packages on touch.
 Stateful-service upgrades deserve a focused rollback check because their data
 may not roll back with the image.
 
+During the Monday Dependabot dependency review, reevaluate the Ops Agent model
+alongside its GA OpenClaw runtime. Compare current pricing, latency, tool-call
+reliability, and answer quality on a short source/log support question. Record
+“keep GPT-6 Luna” or a proposed replacement in the dependency PR review; the
+operator confirms any model switch. Dependabot updates the runtime image pin,
+not the model selection. This review adds no scheduled build or model sweep.
+
 ## Lint
 
 Run the owning package's lint when code changes. Fix new warnings in the code;

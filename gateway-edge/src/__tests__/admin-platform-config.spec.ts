@@ -1,4 +1,4 @@
-import { DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/platform-config";
+import { DEFAULT_OPS_AGENT_MODEL_REF, DEFAULT_PLATFORM_TRIAL_CONFIG } from "@octogee/shared/types/platform-config";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -99,8 +99,8 @@ describe("admin platform-config", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
     expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
     expect(res.body.defaultFreeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
-    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/minimax/minimax-m3");
-    expect(res.body.defaultOpsAgentModelRef).toBe("platform-openrouter/minimax/minimax-m3");
+    expect(res.body.opsAgentModelRef).toBe(DEFAULT_OPS_AGENT_MODEL_REF);
+    expect(res.body.defaultOpsAgentModelRef).toBe(DEFAULT_OPS_AGENT_MODEL_REF);
     const refs = res.body.catalog.map((c: { ref: string }) => c.ref);
     expect(refs).toContain("anthropic/claude-haiku-4-5");
     expect(refs).toContain("platform-openrouter/z-ai/glm-5.2");
@@ -145,7 +145,7 @@ describe("admin platform-config", () => {
     };
     let res = await request(app).get("/api/admin/platform-config");
     expect(res.body.freeTierModelRef).toBe("anthropic/claude-haiku-4-5");
-    expect(res.body.opsAgentModelRef).toBe("platform-openrouter/minimax/minimax-m3");
+    expect(res.body.opsAgentModelRef).toBe(DEFAULT_OPS_AGENT_MODEL_REF);
 
     platformDocs["platformConfig/models"] = {
       freeTierModelRef: "invalid/model",
