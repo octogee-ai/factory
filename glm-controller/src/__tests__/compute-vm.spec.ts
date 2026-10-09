@@ -138,7 +138,7 @@ describe("createGatewayVmClient.create", () => {
     expect(result.fellBackToStandard).toBe(false);
     expect(result.provisioningModel).toBe("SPOT");
     expect(result.description).toEqual({
-      name: input.instanceName,
+      machineType: null,      name: input.instanceName,
       zone: "us-west1-b",
       status: "RUNNING",
       instanceId: "1234567890",
@@ -414,7 +414,7 @@ describe("createGatewayVmClient pool primitives", () => {
     const { client } = clientWith(request);
 
     expect(await client.describe(pooled.name, "us-west1-b")).toEqual({
-      name: pooled.name,
+      machineType: null,      name: pooled.name,
       zone: "us-west1-b",
       status: "RUNNING",
       instanceId: "777",
@@ -758,3 +758,20 @@ describe("createGatewayVmClient boot image currency", () => {
     ]);
   });
 });
+
+ it("reads the observed machine type and resizes a stopped VM through the Compute operation", async () => {
+   const { request, calls } = fakeCompute((call) => call.method === "GET" ? instance({ machineType: `${BASE}/zones/us-west1-b/machineTypes/n2-standard-4` }) : { status: 200, data: { name: "resize-1", status: "DONE" } });
+   const { client } = clientWith(request);
+   expect((await client.describe(input.instanceName, "us-west1-b"))?.machineType).toBe("n2-standard-4");
+   await client.setMachineType(input.instanceName, "us-west1-b", "n2-standard-2");
+   expect(calls.at(-1)).toEqual({ url: `${BASE}/zones/us-west1-b/instances/${input.instanceName}/setMachineType`, method: "POST", body: { machineType: "zones/us-west1-b/machineTypes/n2-standard-2" } });
+ });
+
+ it("journals a capacity change before issuing the Compute mutation", async () => {
+   const request = vi.fn(async () => ({ status: 200, data: { name: "resize", status: "DONE" } }));
+   const journalMachineType = vi.fn(async (_input, action) => action());
+   const client = createGatewayVmClient({ request, projectId: "octogee-test", log: vi.fn(), wait: async () => {}, now: () => 0, journalMachineType });
+   await client.setMachineType("computer", "us-central1-a", "n2-standard-2");
+   expect(journalMachineType).toHaveBeenCalledWith({ instanceName: "computer", zone: "us-central1-a", machineType: "n2-standard-2" }, expect.any(Function));
+   expect(journalMachineType.mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0]);
+ });

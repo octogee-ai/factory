@@ -45,7 +45,7 @@ describe("native Mattermost base image", () => {
       ".github/actions/openclaw-base-key/base-key.mjs github-output",
     );
     expect(rebuild).toContain(
-      "infra/gateway/Dockerfile.base \\\n      infra/gateway/install-cua-driver-patch.mjs \\\n      infra/gateway/verify-codex-native-hook-runtime.mjs \\\n      infra/gateway/verify-codex-source-match.mjs \\\n      infra/gateway/verify-parallel-source-match.mjs \\\n      cloudbuild-base.yaml",
+      "infra/gateway/Dockerfile.base \\\n      infra/gateway/install-cua-driver-patch.mjs \\\n      infra/gateway/cua-desktop-discovery.patch \\\n      infra/gateway/verify-codex-native-hook-runtime.mjs \\\n      infra/gateway/verify-codex-source-match.mjs \\\n      infra/gateway/verify-parallel-source-match.mjs \\\n      cloudbuild-base.yaml",
     );
     expect(rebuild).toContain(
       "_BASE_TAG=${CURRENT_BASE_TAG},_OPENCLAW_FORK_OBJECT=${CURRENT_OPENCLAW_OBJECT},_OPENCLAW_FORK_GENERATION=${CURRENT_OPENCLAW_GENERATION},_OPENCLAW_MATTERMOST_OBJECT=${CURRENT_MATTERMOST_OBJECT},_OPENCLAW_MATTERMOST_GENERATION=${CURRENT_MATTERMOST_GENERATION}",

@@ -41,6 +41,12 @@ describe("surge OpenClaw supervisor process environment", () => {
     expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("pod-token");
   });
 
+  it("gives the production Hobby gateway the same local-direct credential as its desktop node", () => {
+    const env = openClawProcessEnv({ OPENCLAW_GATEWAY_TOKEN: "pod-token", OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_COMPUTER_DESKTOP: "x11" });
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("pod-token");
+    expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
+  });
+
   it("keeps cluster Builder gateways password-free", () => {
     const env = openClawProcessEnv({
       OPENCLAW_GATEWAY_TOKEN: "pod-token",

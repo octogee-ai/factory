@@ -25,6 +25,7 @@ function stringList(parent: JsonObject, key: string): string[] {
 export const DESKTOP_TOOLS = ["browser", "computer", "nodes", "file-transfer", "ollama"] as const;
 export const GATEWAY_HOST_DESKTOP_AUTH_DIR = "/run/octogee-desktop-vnc";
 export const COMPUTER_SKILLS_DIR = "/opt/octogee/skills/computer";
+export const HOBBY_COMPUTER_SKILLS_DIR = "/opt/octogee/skills/computer-x11";
 const FILE_TRANSFER_NODE_COMMANDS = [
   "file.stat",
   "file.fetch",
@@ -37,7 +38,8 @@ const FILE_TRANSFER_NODE_COMMANDS = [
 ] as const;
 
 function builderComputer(env: NodeJS.ProcessEnv): boolean {
-  return env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "gce-vm";
+  return env.GATEWAY_CLASS === "builder" && (env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
+    (env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11"));
 }
 
 export function applyComputerBrowserAgentPolicy(
@@ -72,7 +74,9 @@ export function applyOpenClawComputerBrowserConfig(
     enabled: true,
     managed: false,
     port: 5901,
-    passwordFile: `${GATEWAY_HOST_DESKTOP_AUTH_DIR}/password`,
+    passwordFile: env.GATEWAY_COMPUTER_DESKTOP === "x11"
+      ? "/run/user/1000/octogee-openclaw-vnc/password"
+      : `${GATEWAY_HOST_DESKTOP_AUTH_DIR}/password`,
   });
   const browser = objectAt(config, "browser");
   Object.assign(browser, {
@@ -100,7 +104,8 @@ export function applyOpenClawComputerBrowserConfig(
   tools.profile = "full";
   Reflect.deleteProperty(tools, "allow");
   const skillLoad = objectAt(objectAt(config, "skills"), "load");
-  skillLoad.extraDirs = [...new Set([...stringList(skillLoad, "extraDirs"), COMPUTER_SKILLS_DIR])];
+  const computerSkills = env.GATEWAY_COMPUTER_DESKTOP === "x11" ? HOBBY_COMPUTER_SKILLS_DIR : COMPUTER_SKILLS_DIR;
+  skillLoad.extraDirs = [...new Set([...stringList(skillLoad, "extraDirs").filter((dir) => ![COMPUTER_SKILLS_DIR, HOBBY_COMPUTER_SKILLS_DIR].includes(dir)), computerSkills])];
   const nodes = objectAt(objectAt(config, "gateway"), "nodes");
   nodes.browser = { mode: "off" };
   const commands = objectAt(nodes, "commands");

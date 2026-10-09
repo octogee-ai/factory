@@ -1,3 +1,4 @@
+import { isBuilderComputer } from "./lib/builder-computer.js";
 import { createChannelAgentReadinessRouter } from "./routes/channel-agent-readiness.js";
 import express, { Express, Request, RequestHandler, Response, Router } from "express";
 import http from "node:http";
@@ -120,7 +121,6 @@ const toolSurface = createToolSurface({ egressReport: () => {
   const status = computerEgress.status();
   return status.listener === "off" ? null : { mode: status.mode, shell: status.shell, listener: status.listener };
 } });
-const isBuilderComputer = () => process.env.GATEWAY_CLASS === "builder" && process.env.GATEWAY_RUNTIME_KIND === "gce-vm";
 const computerPasskeys = createPasskeyLinkHost({ log: (message, meta) => logger.warn(message, meta) });
 const computerPasskeyRoutes = createComputerPasskeysRouter({ host: computerPasskeys, available: isBuilderComputer });
 const computerWebAuthn = createWebAuthnCdpProxy({

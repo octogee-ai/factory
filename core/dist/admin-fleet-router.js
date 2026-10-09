@@ -2041,6 +2041,9 @@ function buildDurableGatewayPatch(args) {
             },
         };
     }
+    if (args.current.gatewayClass === "builder" && args.body.sizingTier === "xs") {
+        return { error: { status: 400, body: { error: "Builder sizingTier must be s, m, or l" } } };
+    }
     const configPatch = mutableConfigPatchFromBody(args.body);
     const patch = { ...configPatch };
     if (args.body.desiredStatus !== undefined) {
@@ -2944,7 +2947,7 @@ export function addAdminFleetRoutes(router, deps) {
                 : {}),
         });
     }
-    addAdminComputerRoutes(router, { db, journal: runAdminFleetMutation });
+    addAdminComputerRoutes(router, { db, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
     router.get("/platform-runtime-config", async (_req, res, next) => {
         try {
             res.json(await readPlatformRuntimeConfig(db));

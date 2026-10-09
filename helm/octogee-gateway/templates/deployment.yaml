@@ -4,6 +4,8 @@
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
+{{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
+{{- $hobbyComputer := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
 {{- if ne (empty .Values.ownerUid) (empty .Values.builderSlug) -}}
@@ -30,7 +32,7 @@ spec:
   # Use kindIs to distinguish "explicit 0 (paused)" from "unset (default to 1)" —
   # helm's `default` treats 0 as falsy and would replace it with the fallback.
   replicas: {{ if kindIs "invalid" .Values.replicas }}1{{ else }}{{ .Values.replicas }}{{ end }}
-  {{- $rollStrategy := .Values.rollStrategy | default "recreate" }}
+  {{- $rollStrategy := ternary "recreate" (.Values.rollStrategy | default "recreate") $hobbyComputer }}
   {{- if eq $rollStrategy "surge" }}
   strategy:
     type: RollingUpdate
@@ -125,7 +127,15 @@ spec:
             - |
               set -eu
               chown 1000:1000 /home/node
+              {{- if $hobbyComputer }}
+              chmod 2770 /home/node
+              {{- else }}
               chmod 0755 /home/node
+              {{- end }}
+              {{- if $hobbyComputer }}
+              chown 1000:1000 /run/user/1000
+              chmod 0700 /run/user/1000
+              {{- end }}
               exec setpriv --reuid=1000 --regid=1000 --keep-groups sh -c '
                 set -eu
                 cp -rn /etc/skel/. /home/node/
@@ -155,6 +165,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            {{- if $hobbyComputer }}
+            - name: desktop-runtime
+              mountPath: /run/user/1000
+            {{- end }}
             - name: secret-resolver
               mountPath: /octogee-secret-resolver
           resources:
@@ -243,6 +257,18 @@ spec:
             {{- end }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
+            {{- if $hobbyComputer }}
+            - name: GATEWAY_RUNTIME_KIND
+              value: cluster
+            - name: GATEWAY_COMPUTER_DESKTOP
+              value: x11
+            - name: OCTOGEE_DESKTOP_NODE_NAME
+              value: octogee-desktop
+            - name: OCTOGEE_DESKTOP_NODE_IDENTITY_PATH
+              value: /run/octogee/desktop-node-identity/identity.json
+            - name: GATEWAY_COMPUTER_CONTROL_URL
+              value: http://127.0.0.1:7777
+            {{- end }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
             {{- $llmBrokerUrl := .Values.env.llmBrokerUrl | default (printf "http://llm-broker.%s.svc.cluster.local:3010" .Release.Namespace) }}
@@ -343,6 +369,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            {{- if $hobbyComputer }}
+            - name: desktop-node-identity
+              mountPath: /run/octogee/desktop-node-identity
+            - name: desktop-runtime
+              mountPath: /run/user/1000
+            - name: desktop-shm
+              mountPath: /dev/shm
+            {{- end }}
             # OpenClaw's exec secret provider requires the resolver to be owned
             # by the runtime uid, so the image cannot make it root-owned. The
             # init container stages the bundle into a pod-local volume and this
@@ -463,6 +497,18 @@ spec:
               value: {{ .Values.ownerUid | quote }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
+            {{- if $hobbyComputer }}
+            - name: GATEWAY_RUNTIME_KIND
+              value: cluster
+            - name: GATEWAY_COMPUTER_DESKTOP
+              value: x11
+            - name: OCTOGEE_DESKTOP_NODE_NAME
+              value: octogee-desktop
+            - name: OCTOGEE_DESKTOP_NODE_IDENTITY_PATH
+              value: /run/octogee/desktop-node-identity/identity.json
+            - name: GATEWAY_COMPUTER_CONTROL_URL
+              value: http://127.0.0.1:7777
+            {{- end }}
             - name: GATEWAY_CLASS
               value: {{ $gatewayClass | quote }}
             - name: OPENROUTER_BASE_URL
@@ -538,6 +584,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+            {{- if $hobbyComputer }}
+            - name: desktop-node-identity
+              mountPath: /run/octogee/desktop-node-identity
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
             - name: openclaw-device-auth
@@ -576,9 +627,25 @@ spec:
             periodSeconds: {{ .Values.gatewayEdge.probes.liveness.periodSeconds }}
         {{- end }}
       volumes:
-        # Durable product state is substrate-backed; every pod disk is disposable.
         - name: data
+          {{- if $hobbyComputer }}
+          persistentVolumeClaim:
+            claimName: octogee-builder-{{ required "builderSlug is required for Hobby home" .Values.builderSlug }}-home
+          {{- else }}
           emptyDir: {}
+          {{- end }}
+        {{- if $hobbyComputer }}
+        - name: desktop-node-identity
+          emptyDir: {}
+        - name: desktop-runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        - name: desktop-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        {{- end }}
         - name: secret-resolver
           emptyDir: {}
         - name: tmp

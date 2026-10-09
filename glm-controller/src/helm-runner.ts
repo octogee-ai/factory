@@ -122,6 +122,7 @@ export interface HelmSubprocessRunnerDeps {
     annotations?: Record<string, string>;
   }) => Promise<void>;
 
+  ensureHobbyHome?: (input: { namespace: string; ownerUid: string; builderSlug: string }) => Promise<void>;
   runKubectl?: KubectlSubprocess;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
@@ -756,6 +757,12 @@ const hist = await deps.runHelm([
   return `rolled back ${release} to revision ${target}`;
 }
 
+async function ensureBuilderHome(deps: HelmSubprocessRunnerDeps, opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<void> {
+  if (!deps.ensureHobbyHome || opts.gatewayClass !== "builder") return;
+  if (!opts.ownerUid || !opts.builderSlug) throw new Error(`Hobby gateway ${opts.gatewayId} requires its owner and Builder slug`);
+  await deps.ensureHobbyHome({ namespace: opts.namespace, ownerUid: opts.ownerUid, builderSlug: opts.builderSlug });
+}
+
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
   const uninstallTimeout = deps.uninstallTimeout ?? "5m";
@@ -807,6 +814,8 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
           annotations: opts.serviceAccount?.annotations,
         });
       };
+
+      await ensureBuilderHome(deps, opts);
 
       await ensureServiceAccount();
 

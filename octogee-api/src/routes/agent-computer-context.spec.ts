@@ -100,6 +100,7 @@ function app(
   harness: ReturnType<typeof fakeDb>,
   options: {
     gatewayId?: string;
+    podUid?: string;
   } = {},
 ) {
   const target = express();
@@ -109,6 +110,7 @@ function app(
       kind: "gateway",
       gatewayId: options.gatewayId ?? "bender",
       ownerUid: "owner",
+      podUid: options.podUid,
     };
     next();
   });
@@ -122,6 +124,28 @@ function app(
 const agentId = "octogee-alex-coach";
 
 describe("agent computer context", () => {
+  it.each(["s", "m", "l"])("preserves authenticated X11 computer authority on retained cluster runtime at tier %s", async (sizingTier) => {
+    const h = fakeDb();
+    const podUid = "12345678-1234-1234-1234-123456789abc";
+    h.docs.get("gateways/bender")!.sizingTier = sizingTier;
+    h.docs.set("glmGateways/bender", { runtime: "cluster", kubernetes: { status: "ready", totalPods: 1, readyPods: 1, pods: [{ uid: podUid }] } });
+    const response = await request(app(h, { podUid })).post("/internal/computer/agent-context").send({ agentId });
+    expect(response.status).toBe(200);
+    expect(response.body.computerInstanceId).toBe(`cluster:${podUid}`);
+    expect((await request(app(h, { podUid: "other-pod" })).post("/internal/computer/agent-context").send({ agentId })).status).toBe(409);
+  });
+
+  it.each([
+    { status: "not-ready", totalPods: 1, readyPods: 0 },
+    { status: "ready", totalPods: 2, readyPods: 1 },
+  ])("rejects unavailable or overlapping Hobby pods", async (observation) => {
+    const h = fakeDb();
+    const podUid = "12345678-1234-1234-1234-123456789abc";
+    h.docs.get("gateways/bender")!.sizingTier = "s";
+    h.docs.set("glmGateways/bender", { runtime: "cluster", kubernetes: { ...observation, pods: [{ uid: podUid }] } });
+    await request(app(h, { podUid })).post("/internal/computer/agent-context").send({ agentId }).expect(409);
+  });
+
   it("binds computer authority to the desired gateway root and observed running VM", async () => {
     const h = fakeDb();
     h.docs.set("glmGateways/bender", { runtime: "gce-vm", vm: { instanceId: "123", status: "RUNNING" } });
@@ -131,9 +155,9 @@ describe("agent computer context", () => {
     expect(response.status).toBe(200);
     expect((await request(app(h)).post("/internal/computer/agent-context")
       .send({ agentId, gatewayId: "other" })).status).toBe(403);
-    expect(response.body).toEqual({ gatewayId: "bender", ownerUid: "owner", ownerMattermostUserId: "o".repeat(26), vmInstanceId: "123", agentAccountId: "alex-coach" });
+    expect(response.body).toEqual({ gatewayId: "bender", ownerUid: "owner", ownerMattermostUserId: "o".repeat(26), computerInstanceId: "gce-vm:123", vmInstanceId: "123", agentAccountId: "alex-coach" });
     h.docs.get("glmGateways/bender")!.vm = { instanceId: "456", status: "RUNNING" };
-    expect((await request(app(h)).post("/internal/computer/agent-context").send({ agentId })).body.vmInstanceId).toBe("456");
+    expect((await request(app(h)).post("/internal/computer/agent-context").send({ agentId })).body.computerInstanceId).toBe("gce-vm:456");
     expect((await request(app(h, { gatewayId: "other" })).post("/internal/computer/agent-context").send({ agentId })).status).toBe(403);
   });
 

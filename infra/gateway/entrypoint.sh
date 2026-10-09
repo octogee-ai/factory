@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+if [ "${GATEWAY_CLASS:-shared}" = builder ] && [ "${GATEWAY_RUNTIME_KIND:-}" = cluster ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" = x11 ] && [ "${OCTOGEE_X11_SESSION:-0}" != 1 ]; then
+  exec /usr/local/bin/octogee-hobby-desktop
+fi
+
 # OPENCLAW_DIR must be `export`ed: subprocesses (python in the openclaw.json
 # re-sync block below, publish-gateway-token.mjs, and openclaw itself) read it
 # from their environment. Caught by independent audit on PR #1166 — the

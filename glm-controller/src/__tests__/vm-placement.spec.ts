@@ -6,7 +6,7 @@ const ZONES = ["us-central1-b", "us-central1-c", "us-central1-f"];
 
 function computer(name: string, zone: string, labels: Record<string, string> = {}): GatewayVmDescription {
   return {
-    name, zone, status: "RUNNING", instanceId: `id-${name}`, internalIp: null, provisioningModel: "SPOT", gatewayId: null,
+    name, zone, machineType: "n2-standard-2", status: "RUNNING", instanceId: `id-${name}`, internalIp: null, provisioningModel: "SPOT", gatewayId: null,
     labels: { "octogee-environment": "prod", purpose: "octogee-computer", ...labels }, labelFingerprint: "lf",
     metadata: {}, metadataFingerprint: "mf", creationTimestamp: null, serviceAccounts: [],
   };

@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 export async function loadOpenClawBundledFunction(packageRoot: string, filePrefix: string, functionName: string) {
-  const files = (await readdir(`${packageRoot}/dist`)).filter((file) => file.startsWith(filePrefix) && file.endsWith(".js")).sort();
+  const files = (await readdir(`${packageRoot}/dist`)).filter((file) => file.startsWith(filePrefix) && /\.m?js$/u.test(file)).sort();
   for (const file of files) {
     const modulePath = `${packageRoot}/dist/${file}`;
     const text = await readFile(modulePath, "utf8");

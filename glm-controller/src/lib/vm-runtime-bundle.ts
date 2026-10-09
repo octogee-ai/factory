@@ -216,13 +216,14 @@ async function renderContainer(
       ...env,
       ...GATEWAY_COMPUTER_ENV,
       GATEWAY_RUNTIME_KIND: "gce-vm",
+      GATEWAY_COMPUTER_DESKTOP: "omarchy",
       OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: input.computer.serviceAccountEmail,
       GATEWAY_COMPUTER_PROJECT_ID: input.computer.projectId,
       GATEWAY_COMPUTER_INSTANCE_ID: VM_INSTANCE_ID_PLACEHOLDER,
     };
   }
-  else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm" };
+  else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_DESKTOP: "omarchy" };
   return {
     name: container.name,
     image: container.image,

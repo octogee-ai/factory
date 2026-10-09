@@ -12,6 +12,18 @@ const template = (): Record<string, any> => JSON.parse(readFileSync(
 describe("computer browser runtime", () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it("enables Hobby's GKE X11 desktop with the same owner-only browser policy", () => {
+    const config = template();
+    config.agents.entries = { "octogee-owner-coach": {}, "octogee-owner-proj-site-coach": {} };
+    config.skills = { load: { extraDirs: ["/opt/octogee/skills/computer", "/home/node/custom-skills"] } };
+    expect(applyOpenClawComputerBrowserConfig(config, { ...vmEnv, GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_COMPUTER_DESKTOP: "x11" })).toBe(true);
+    expect(config.browser.profiles.computer.attachOnly).toBe(true);
+    expect(config.desktop.host.passwordFile).toBe("/run/user/1000/octogee-openclaw-vnc/password");
+    expect(config.skills.load.extraDirs).toEqual(["/home/node/custom-skills", "/opt/octogee/skills/computer-x11"]);
+    expect(config.tools.profile).toBe("full");
+    expect(config.agents.entries["octogee-owner-proj-site-coach"].tools.deny).toContain("computer");
+  });
+
   it("enables the built-in browser on the same attach-only desktop CDP profile", () => {
     const config = template();
     config.agents.list = [{ id: "octogee-owner-coach" }, { id: "octogee-owner-proj-site-coach" }];

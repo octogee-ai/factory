@@ -37,3 +37,13 @@ export async function deleteComputerHomeObjects(
   } while (pageToken);
   return { deleted };
 }
+
+export async function deleteBuilderComputerHome(input: {
+  bucket: ComputerHomeBucket;
+  slug: string;
+  deleteHobbyHome: (slug: string) => Promise<void>;
+}): Promise<{ deleted: number }> {
+  if (!input.slug) throw new Error("computer-home erase requires the Builder slug");
+  await input.deleteHobbyHome(input.slug);
+  return deleteComputerHomeObjects(input.bucket, input.slug);
+}

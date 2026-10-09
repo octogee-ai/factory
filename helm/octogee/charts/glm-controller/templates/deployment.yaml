@@ -65,8 +65,6 @@ spec:
               value: {{ required "glm-controller.workloadIdentityProject is required" .Values.workloadIdentityProject | quote }}
             {{- $computer := (.Values.global).computer | default dict }}
             {{- if $computer.enabled }}
-            - name: GATEWAY_BUILDER_RUNTIME
-              value: "gce-vm"
             - name: GATEWAY_COMPUTE_PROJECT_ID
               value: {{ required "global.computer.projectId is required" $computer.projectId | quote }}
             - name: GATEWAY_VM_SPEC_JSON

@@ -156,7 +156,8 @@ RUN chmod 1777 /tmp \
     && apt-get update && apt-get install -y --no-install-recommends btrfs-progs gettext-base libx11-6 libxi6 libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Computer-use skills (loaded only by VM Builder gateways) ────────────────
+# ── Computer-use skills ────────────────────────────────────────────────────
+COPY infra/gateway/hobby-skills /opt/octogee/skills/computer-x11
 COPY infra/gateway/cua-skills /tmp/cua-skills
 COPY infra/gateway/install-cua-skills.mjs /tmp/install-cua-skills.mjs
 RUN node /tmp/install-cua-skills.mjs "$(npm root -g)/openclaw" /tmp/cua-skills /opt/octogee/skills/computer \
@@ -169,6 +170,11 @@ COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/inf
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/gateway/desktop-node.sh /usr/local/bin/octogee-desktop-node
+COPY infra/gateway/hobby-desktop.sh /usr/local/bin/octogee-hobby-desktop
+COPY infra/gateway/hobby-session.sh /usr/local/bin/octogee-hobby-session
+COPY infra/desktop/rootfs/usr/local/bin/octo-desktop-browser /usr/local/bin/octo-desktop-browser
+COPY infra/desktop/rootfs/usr/local/bin/octo-desktop-control /usr/local/bin/octo-desktop-control
+COPY infra/desktop/rootfs/usr/share/omarchy/octo-desktop/desk /usr/share/omarchy/octo-desktop/desk
 COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/octo-desk /usr/local/bin/octo-desk
 COPY infra/gateway/octo-desktop-style /usr/local/bin/octo-desktop-style
@@ -177,13 +183,18 @@ COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-opencla
 COPY infra/gateway/verify-runtime-image.sh /usr/local/bin/verify-runtime-image
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
 ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/octo-desk /usr/local/bin/octo-desktop-style /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
+RUN chmod 755 /usr/local/bin/octogee-hobby-desktop /usr/local/bin/octogee-hobby-session /usr/local/bin/octo-desktop-browser /usr/local/bin/octo-desktop-control /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/octo-desk /usr/local/bin/octo-desktop-style /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
       false) \
-        test -x /usr/local/bin/claude \
+        apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server tigervnc-tools openbox xterm pcmanfm dbus-x11 at-spi2-core wmctrl x11-utils x11-xserver-utils xdotool imagemagick libglib2.0-bin libgtk-3-bin \
+        && rm -rf /var/lib/apt/lists/* \
+        && test -x /usr/local/bin/claude \
         && test -x /usr/local/bin/codex \
         && test -x /usr/bin/chromium \
+        && test -x /usr/bin/gtk-launch \
+        && sed -i 's|^Exec=/usr/bin/chromium %U$|Exec=/usr/local/bin/octo-desktop-browser --new-window %U|' /usr/share/applications/chromium.desktop \
+        && grep -qxF 'Exec=/usr/local/bin/octo-desktop-browser --new-window %U' /usr/share/applications/chromium.desktop \
         ;; \
       true) \
         rm -f /usr/local/bin/claude /usr/local/bin/codex /usr/bin/chromium \

@@ -128,8 +128,8 @@ locked for the October 8 recut, 277 commits after the previous base. Its
 [push CI](https://github.com/openclaw/openclaw/actions/runs/37807391210)
 has one security-fast success and 39 skips, not full-CI green. The operator
 selected this newer native implementation for independent qualification.
-Exact overlay: `0f41d1c5d331cbb65aea35eb1d23318c3e31f439`, at
-`ceckert/openclaw:codex/openclaw-account-removal-oct08`.
+Exact overlay: `9d9f2ac96d6379e1fbde66984f6c04d6393e2536`, at
+`ceckert/openclaw:codex/native-node-pairing-metadata`.
 Package version `2026.9.9` identifies a main snapshot, not a released tag.
 Recent full upstream CI remains red; the scheduled run
 [37801957966](https://github.com/openclaw/openclaw/actions/runs/37801957966)
@@ -212,8 +212,23 @@ reconnects. This is independent upstream proof, not live Octogee acceptance.
 
 ### Qualification
 
-The account-removal follow-up's exact clean-source build passed in 3m 57.1s;
-build-info matches the source above. Two real managed config-write regressions
+The native pairing follow-up keeps node authority available while queued token
+verification, metadata/presence writes and operator-token issuance preserve its
+binding. Node token replacement and revocation still invalidate authority before
+dispatch. The same native TEST VM and retained home reproduced result rejection
+on both the prior `b18683f9` runtime and `0f41d1c5`; this is an existing runtime
+race exposed by sustained commands, not evidence that a boot-disk change caused
+pairing failure. Five new queued-write cases fail before the fix. All 25 pairing
+publication cases pass afterward, including the node-token replacement control;
+core and owning test types, typed lint, formatting and line-cap checks pass.
+The full clean-source build passed in 4m 14.8s. Sequential companion packaging,
+Voice/Activity contracts and native archive integrity pass. Hosted UI inputs
+are unchanged; regenerated chunks are identical after normalizing chunk names,
+and all 16 native-island compatibility tests pass. Live installed-image
+qualification is recorded in the Builder PR evidence.
+
+The account-removal follow-up's clean-source build at
+`0f41d1c5d331cbb65aea35eb1d23318c3e31f439` passed in 3m 57.1s. Two real managed config-write regressions
 fail on the old planner behavior (`applied` becomes `deferred`) and pass with
 the patch. Additional RED controls reproduce task timeout, pending preparation
 timeout, dotted IDs and sibling-prefix ambiguity. The corrected reload/channel

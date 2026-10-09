@@ -238,7 +238,7 @@ export interface GatewayUpsertOpts {
   deploymentTargetId?: string;
   deploymentProjectId?: string;
   gatewayServiceAccount?: string;
-  rollStrategy: "surge";
+  rollStrategy: "surge" | "recreate";
   waitForReady: false;
   deploymentIntentFingerprint: string;
 }
@@ -335,7 +335,7 @@ export function gatewayUpsertOptsFromRelease(input: {
     deploymentTargetId: input.deploymentTargetId,
     deploymentProjectId: input.deploymentProjectId,
     gatewayServiceAccount: input.gatewayServiceAccount,
-    rollStrategy: "surge",
+    rollStrategy: gateway.gatewayClass === "builder" ? "recreate" : "surge",
     waitForReady: false,
   };
   return {

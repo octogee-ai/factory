@@ -33,7 +33,7 @@ if (( $# == 0 )); then
 fi
 
 export ACCESSIBILITY_ENABLED=1
-exec chromium --ozone-platform=wayland --disable-gpu "${sandbox_args[@]}" "${proxy_args[@]}" --no-first-run --password-store=basic \
+exec chromium --ozone-platform="${OCTO_CHROMIUM_PLATFORM:-wayland}" --disable-gpu "${sandbox_args[@]}" "${proxy_args[@]}" --no-first-run --password-store=basic \
   --force-renderer-accessibility \
   --user-data-dir="$HOME/.config/octogee-chromium" \
   --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 "$@"

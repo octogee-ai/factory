@@ -68,10 +68,11 @@ replicas: 1
 
 # Roll strategy — "recreate" (default) or "surge" (RollingUpdate maxSurge=1 /
 # maxUnavailable=0: new pod Ready before the old one dies). Cowboy passes
-# surge for stable-name gateway releases (GATEWAY-SIMPLE-ROLL-SPEC).
+# surge for shared releases and recreate for the exclusive Hobby home.
 rollStrategy: recreate
 
 computeClass: octogee-gateway
+computerDesktop: auto
 
 # Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and
 # counts it against terminationGracePeriodSeconds, so keep timeoutSeconds below

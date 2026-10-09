@@ -1,3 +1,6 @@
+import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
+import { runNormalFleetMutation, type NormalFleetMutationDb } from "@octogee/core/normal-fleet-mutation";
+import { createHobbyHomeDeleter, createHobbyHomeEnsurer } from "./hobby-home.js";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
@@ -172,7 +175,6 @@ import {
   createVmGatewayRuntime,
   type VmGatewayRuntime,
   parseGatewayVmSpec,
-  resolveBuilderRuntimePolicy,
   stampGatewayRuntime,
 } from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
@@ -219,7 +221,7 @@ import {
   verifyCustomerFirestoreErasure,
 } from "./lib/customer-ops/customer-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
-import { deleteComputerHomeObjects } from "./lib/customer-ops/computer-home.js";
+import { deleteBuilderComputerHome } from "./lib/customer-ops/computer-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
   readAssignedSlugsForGateway,
@@ -385,8 +387,7 @@ const DISRUPTION_OBSERVER_MS = parseNonNegativeInt(
 const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
-const BUILDER_RUNTIME_POLICY = resolveBuilderRuntimePolicy(process.env);
-const BUILDER_VM_SPEC = BUILDER_RUNTIME_POLICY === "gce-vm" ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
+const BUILDER_VM_SPEC = process.env.GATEWAY_VM_SPEC_JSON ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
 const BUILDER_VM_WARM_POOL = parseVmWarmPoolConfig(process.env);
 const VM_WARM_POOL_RECONCILE_MS = 60_000;
 const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker", "octogee-npm-cache-proxy"] as const;
@@ -546,6 +547,9 @@ export function gatewayComputeProjectId(env: Record<string, string | undefined> 
 function createGatewayComputeClient(logFn: (msg: string) => void) {
   return createGatewayVmClient({
     projectId: gatewayComputeProjectId(),
+    journalMachineType: (input, action) => runNormalFleetMutation(getFirestore() as unknown as NormalFleetMutationDb, {
+      actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the Builder tier capacity before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
+    }),
     log: logFn,
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: () => Date.now(),
@@ -1299,14 +1303,18 @@ async function upsertGateway(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
   );
-  await stampGatewayRuntime({
+  const selectedRuntime = await stampGatewayRuntime({
     db,
     gatewayId: gateway.gatewayId,
     gatewayClass: gateway.gatewayClass,
-    policy: BUILDER_RUNTIME_POLICY,
+    sizingTier: gateway.sizingTier,
     vmSpec: BUILDER_VM_SPEC,
     log,
   });
+  if (gateway.gatewayClass === "builder" && replicas > 0) {
+    await assertBuilderRuntimeStorage({ db, runtime: selectedRuntime, ownerUid: gateway.ownerUid,
+      builderSlug: gateway.builderSlug, namespace: NAMESPACE, runKubectl: spawnKubectl });
+  }
   await db
     .collection(GLM_GATEWAYS_COLLECTION)
     .doc(gateway.gatewayId)
@@ -2652,6 +2660,12 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       : createHelmSubprocessRunner({
           runHelm: spawnHelm,
           log,
+          ensureHobbyHome: createHobbyHomeEnsurer({
+            runKubectl, log,
+            journalCreate: (manifest, action) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+              actor: "cowboy", forced: false, what: "create-hobby-home", why: "Persist the Builder computer home across allocations", target: manifest.metadata as Record<string, unknown>, preActionStatus: { exists: false }, mutation: manifest.spec as Record<string, unknown>, action,
+            }),
+          }),
           ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
           ensureServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
           runKubectl,
@@ -4070,7 +4084,16 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
     deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
-    deleteComputerHome: (slug: string) => deleteComputerHomeObjects(getStorage().bucket(), slug),
+    deleteComputerHome: (slug: string) => deleteBuilderComputerHome({
+      bucket: getStorage().bucket(), slug,
+      deleteHobbyHome: createHobbyHomeDeleter({
+        namespace: NAMESPACE,
+        deleteClaim: target => createKubeSubprocessRunner({ runKubectl: spawnKubectl, log: logFn }).deletePersistentVolumeClaim(target),
+        journalDelete: (target, action) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+          actor: "cowboy", forced: false, what: "delete-hobby-home", why: "Erase the Builder computer home with the account", target, preActionStatus: { deletionRequested: true }, mutation: { delete: true }, action,
+        }),
+      }),
+    }),
     ...(BUILDER_VM_SPEC
       ? {
           deleteComputer: async (uid: string) => {

@@ -148,3 +148,14 @@ tier isn't declared in `.Values.tiers`.
 {{- printf "sha256-%s" (trunc 56 (sha256sum $imageTag)) -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "octogee-gateway.computerDesktop" -}}
+{{- $class := include "octogee-gateway.gatewayClass" . -}}
+{{- $tier := include "octogee-gateway.effectiveTier" . -}}
+{{- $desktop := .Values.computerDesktop | default "auto" -}}
+{{- if eq $desktop "auto" -}}
+{{- if eq $class "builder" -}}x11{{- else -}}none{{- end -}}
+{{- else if has $desktop (list "none" "x11" "omarchy") -}}
+{{- $desktop -}}
+{{- else -}}{{- fail "computerDesktop must be auto, none, x11, or omarchy" -}}{{- end -}}
+{{- end -}}

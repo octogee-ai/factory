@@ -40,6 +40,7 @@ export interface GatewayPodDiagnostics {
     error?: string;
 }
 export interface FleetRouterDeps {
+    computerReplacementEnabled?: boolean;
     db: Firestore;
     logger: FleetLogger;
     workspaceSlugsForUser: (data: {

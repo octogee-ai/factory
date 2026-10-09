@@ -14,6 +14,7 @@ interface ComputerReplacementMutation {
 }
 
 interface ComputerRouterDeps {
+  replacementEnabled?: boolean;
   db: Firestore;
   journal: (input: ComputerReplacementMutation) => Promise<string>;
 }
@@ -111,6 +112,7 @@ export function addAdminComputerRoutes(router: Router, deps: ComputerRouterDeps)
         const actor = req as Request & { uid?: string; isAdmin?: boolean };
         if (!actor.uid) { res.status(401).json({ error: "Unauthenticated" }); return; }
         if (!actor.isAdmin) { res.status(403).json({ error: "Admin access required" }); return; }
+        if (!deps.replacementEnabled) throw new ComputerAdmissionError(409, "Computer replacement is unavailable in this release; the existing computer and home are retained.");
         const requested = requestedComputer(req, key);
         const operationId = await deps.journal({
           req, what: "replace computer", why: "admin fleet request", target: requested,

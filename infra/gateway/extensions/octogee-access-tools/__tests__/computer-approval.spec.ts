@@ -7,7 +7,7 @@ vi.mock("openclaw/plugin-sdk/core", () => ({
 const broker = vi.hoisted(() => ({ context: vi.fn() }));
 vi.mock("../computer-client.js", () => ({ computerContext: broker.context }));
 
-const facts = { gatewayId: "gateway", ownerUid: "owner", vmInstanceId: "123", agentAccountId: "alex-coach", ownerMattermostUserId: "o".repeat(26) };
+const facts = { gatewayId: "gateway", ownerUid: "owner", computerInstanceId: "gce-vm:123", agentAccountId: "alex-coach", ownerMattermostUserId: "o".repeat(26) };
 const channelRequester = { channel: "mattermost", accountId: "alex-coach", senderId: "m".repeat(26) };
 
 async function registeredHook() {
@@ -44,6 +44,15 @@ describe("registered computer owner approval", () => {
     expect(await hook({ toolName: "nodes", params: { action: "invoke", invokeCommand: "computer.act" } }, context({ ...channelRequester, senderId: facts.ownerMattermostUserId }))).toBeUndefined();
   });
 
+  it("authorizes the Hobby owner and invalidates pending approval after pod replacement", async () => {
+    broker.context.mockResolvedValue({ ...facts, computerInstanceId: "cluster:12345678-1234-1234-1234-123456789abc" });
+    const hook = await registeredHook();
+    expect(await hook({ toolName: "computer" }, context({ getAuthenticatedIdentity: () => ({ profileId: "profile", userId: "owner" }) }))).toBeUndefined();
+    const result = await hook({ toolName: "browser" }, context());
+    broker.context.mockResolvedValue({ ...facts, computerInstanceId: "cluster:87654321-1234-1234-1234-123456789abc" });
+    await expect(result.requireApproval.reviewerGuard.prepare({ decision: "allow-once", userId: "owner" })).rejects.toThrow("instance changed");
+  });
+
   it.each(["computer.act", "system.execApprovals.set"])("requires the same owner approval for nodes invoking %s", async (invokeCommand) => {
     const hook = await registeredHook();
     const event = { toolName: "nodes", params: { action: "invoke", invokeCommand } };
@@ -63,7 +72,7 @@ describe("registered computer owner approval", () => {
     expect(await guard.prepare({ decision: "allow-once", userId: "member", channel: { channel: "mattermost", accountId: facts.agentAccountId, senderId: facts.ownerMattermostUserId } })).toBeNull();
   });
 
-  it.each(["ownerUid", "vmInstanceId"])("rejects approval after %s changes", async (field) => {
+  it.each(["ownerUid", "computerInstanceId"])("rejects approval after %s changes", async (field) => {
     const result = await (await registeredHook())({ toolName: "computer" }, context());
     broker.context.mockResolvedValue({ ...facts, [field]: "replacement" });
     await expect(result.requireApproval.reviewerGuard.prepare({ decision: "allow-once", userId: "owner" })).rejects.toThrow("changed");

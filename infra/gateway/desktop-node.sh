@@ -21,9 +21,13 @@ rm -f -- "$identity" "$identity_pending"
 : "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}"
 : "${OPENCLAW_GATEWAY_PASSWORD:?OPENCLAW_GATEWAY_PASSWORD is required}"
 
-if ! command -v wtype >/dev/null 2>&1; then
-  echo "desktop-node: wtype is required for CUA Wayland keyboard input" >&2
-  exit 1
+if [ "${GATEWAY_COMPUTER_DESKTOP:-omarchy}" = x11 ]; then
+  command -v xdotool >/dev/null
+else
+  if ! command -v wtype >/dev/null 2>&1; then
+    echo "desktop-node: wtype is required for CUA Wayland keyboard input" >&2
+    exit 1
+  fi
 fi
 if ! command -v dbus-send >/dev/null 2>&1; then
   echo "desktop-node: dbus-send is required to reach the desktop's accessibility bus" >&2
@@ -31,7 +35,7 @@ if ! command -v dbus-send >/dev/null 2>&1; then
 fi
 
 export HOME="${HOME:-/home/node}"
-state="$HOME/.openclaw"
+state="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 mkdir -p "$state"
 node --input-type=module - "$state/openclaw.json" <<'JS'
 import fs from "node:fs";
@@ -52,6 +56,14 @@ JS
 wayland_socket() {
   ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -E '^wayland-[0-9]+$' | head -n1
 }
+if [ "${GATEWAY_COMPUTER_DESKTOP:-omarchy}" = x11 ]; then
+  export DISPLAY="${DISPLAY:-:0}" XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=Openbox
+  unset WAYLAND_DISPLAY CUA_DRIVER_RS_ENABLE_WAYLAND
+  until xdpyinfo >/dev/null 2>&1; do
+    echo "desktop-node: waiting for X11 on $DISPLAY"
+    sleep 2
+  done
+else
 until socket="$(wayland_socket)" && [ -n "$socket" ]; do
   echo "desktop-node: waiting for a Wayland socket in $XDG_RUNTIME_DIR"
   sleep 2
@@ -62,6 +74,8 @@ export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=Hyprland
 export CUA_DRIVER_RS_ENABLE_WAYLAND=1
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+
+fi
 
 until dbus-send --session --print-reply --reply-timeout=5000 --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress >/dev/null; do
   echo "desktop-node: waiting for the accessibility bus (org.a11y.Bus) on $DBUS_SESSION_BUS_ADDRESS"

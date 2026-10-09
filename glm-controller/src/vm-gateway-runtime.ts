@@ -1,4 +1,6 @@
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+import type { SizingTier } from "@octogee/shared/types/sizing";
 import {
   GLM_GATEWAYS_COLLECTION,
   gatewayVmRuntimeDocPath,
@@ -51,11 +53,11 @@ export interface VmGatewayRuntimeDeps {
   log: (msg: string) => void;
 }
 
-export function resolveBuilderRuntimePolicy(env: Record<string, string | undefined>): GatewayRuntime {
-  const raw = env.GATEWAY_BUILDER_RUNTIME?.trim();
-  if (!raw) return "cluster";
-  if (!isGatewayRuntime(raw)) throw new Error(`GATEWAY_BUILDER_RUNTIME must be one of cluster, gce-vm (got ${raw})`);
-  return raw;
+export function resolveBuilderComputerPolicy(sizingTier: SizingTier | null | undefined) {
+  const tier = sizingTier ?? "s";
+  const computer = Object.values(BUILDER_TIERS).find((entry) => entry.instance === tier)?.computer;
+  if (!computer) throw new Error(`No Builder computer policy for sizing tier ${tier}`);
+  return computer;
 }
 
 function assertZones(zones: unknown): void {
@@ -66,7 +68,7 @@ function assertZones(zones: unknown): void {
 }
 
 export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
-  if (!raw?.trim()) throw new Error("GATEWAY_VM_SPEC_JSON is required when GATEWAY_BUILDER_RUNTIME=gce-vm");
+  if (!raw?.trim()) throw new Error("GATEWAY_VM_SPEC_JSON is required for GCE Builder computers");
   const spec = JSON.parse(raw) as Partial<GatewayVmSpec>;
   const strings = ["machineType", "imageFamily", "serviceAccountEmail", "subnetwork"] as const;
   for (const key of strings) {
@@ -113,23 +115,40 @@ function validateRuntimeObservation(data: Record<string, unknown>, gatewayId: st
   }
 }
 
-export async function stampGatewayRuntime(input: {
+interface GatewayRuntimeStampInput {
   db: Pick<Firestore, "collection">;
   gatewayId: string;
   gatewayClass: string | null | undefined;
-  policy: GatewayRuntime;
+  sizingTier?: SizingTier | null;
   vmSpec: GatewayVmSpec | null;
   log: (msg: string) => void;
-}): Promise<GatewayRuntime> {
+}
+
+async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Record<string, unknown>): Promise<void> {
+  if (data.runtime !== "gce-vm" || input.gatewayClass !== "builder" || !input.vmSpec) return;
+  const computer = resolveBuilderComputerPolicy(input.sizingTier);
+  if (computer.runtime !== "gce-vm") return;
+  const prior = runtimeRecord(data.vmSpec);
+  if (prior.machineType === computer.machineType) return;
+  await input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId).set({
+    vmSpec: { ...input.vmSpec, ...prior, machineType: computer.machineType },
+  }, { merge: true });
+}
+
+export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Promise<GatewayRuntime> {
   const ref = input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
   const snap = await ref.get();
   const data = runtimeRecord(snap.data());
   validateRuntimeObservation(data, input.gatewayId);
-  if (isGatewayRuntime(data.runtime)) return data.runtime;
+  if (isGatewayRuntime(data.runtime)) {
+    await reconcileStampedVmSpec(input, data);
+    return data.runtime;
+  }
   const deployedCluster = hasObservedClusterPods(data) || hasPriorClusterDeployment(data, input.gatewayId);
-  const runtime: GatewayRuntime = input.gatewayClass === "builder" && !deployedCluster ? input.policy : "cluster";
+  const computer = input.gatewayClass === "builder" && !deployedCluster ? resolveBuilderComputerPolicy(input.sizingTier) : null;
+  const runtime: GatewayRuntime = computer?.runtime ?? "cluster";
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
-  await ref.set({ runtime, ...(runtime === "gce-vm" ? { vmSpec: input.vmSpec } : {}) }, { merge: true });
+  await ref.set({ runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec, machineType: computer?.machineType } } : {}) }, { merge: true });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;
 }
@@ -177,7 +196,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
 
   async function renderManifests(opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<unknown[]> {
     const release = `octogee-gw-${opts.revisionId ?? opts.gatewayId}`;
-    const args = helmTemplateArgsFromUpgradeArgs(buildUpgradeArgs({ ...opts, release, upgradeTimeout }));
+    const args = [...helmTemplateArgsFromUpgradeArgs(buildUpgradeArgs({ ...opts, release, upgradeTimeout })), "--set", "computerDesktop=omarchy"];
     const rendered = await deps.runHelm(args);
     if (rendered.code !== 0) {
       throw new Error(`helm template ${release} failed (code=${rendered.code}): ${rendered.stderr.trim() || rendered.stdout.trim()}`);

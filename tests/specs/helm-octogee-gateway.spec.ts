@@ -391,7 +391,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
   });
 
   it("hands /home/node to the runtime user before seeding it as that user", () => {
-    const profiles: Record<string, string>[] = [{}, { profile: "builder" }];
+    const profiles: Record<string, string>[] = [{}, { profile: "builder" }, { gatewayClass: "builder", imageProfile: "builder", sizingTier: "s", builderSlug: "alice", ownerUid: "uid-alice", computerDesktop: "x11" }];
     for (const values of profiles) {
       const dep = findDoc(helmTemplate("octogee-gw-default", values), "Deployment", "octogee-gateway-default")!;
       const init = containerBlock(dep, "fix-perms");
@@ -401,7 +401,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       expect(init).toMatch(/drop: \[ALL\]/);
       expect(init).toMatch(/add: \[CHOWN, FOWNER, SETUID, SETGID\]/);
       const handOff = init.indexOf("chown 1000:1000 /home/node");
-      const mode = init.indexOf("chmod 0755 /home/node");
+      const mode = init.indexOf(`chmod ${values.profile === "builder" || values.gatewayClass === "builder" ? "2770" : "0755"} /home/node`);
       const drop = init.indexOf("exec setpriv --reuid=1000 --regid=1000 --keep-groups");
       const seed = init.indexOf("cp -rn /etc/skel/. /home/node/");
       expect(handOff).toBeGreaterThan(-1);
@@ -1466,7 +1466,36 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
 });
 
 describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
-  it("every gateway class uses emptyDir with no PVC and a locked-down securityContext", () => {
+  it.each(["s", "m", "l"])("preserves all X11 surfaces and the owner home on retained cluster runtime at tier %s", (sizingTier) => {
+    const out = helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", ownerUid: "UidA", builderSlug: "builder", sizingTier, rollStrategy: "surge", "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" });
+    const dep = parseDocument(findDoc(out, "Deployment", "octogee-gateway-hobby")!).toJSON();
+    const pod = dep.spec.template.spec;
+    expect(dep.spec.strategy).toEqual({ type: "Recreate" });
+    expect(pod.runtimeClassName).toBe("gvisor");
+    expect(pod.volumes).toContainEqual({ name: "data", persistentVolumeClaim: { claimName: "octogee-builder-builder-home" } });
+    expect(findDoc(out, "PersistentVolumeClaim", "octogee-builder-builder-home")).toBeNull();
+    for (const name of ["gateway", "gateway-edge"]) {
+      const container = pod.containers.find((entry: any) => entry.name === name);
+      expect(container.env).toEqual(expect.arrayContaining([
+        { name: "GATEWAY_RUNTIME_KIND", value: "cluster" }, { name: "GATEWAY_COMPUTER_DESKTOP", value: "x11" },
+        { name: "GATEWAY_COMPUTER_CONTROL_URL", value: "http://127.0.0.1:7777" },
+        { name: "OCTOGEE_DESKTOP_NODE_IDENTITY_PATH", value: "/run/octogee/desktop-node-identity/identity.json" },
+        { name: "OPENCLAW_CONTROL_IDENTITY", value: "per-user" },
+      ]));
+      expect(container.volumeMounts).toContainEqual(expect.objectContaining({ name: "desktop-node-identity" }));
+    }
+    expect(pod.containers.find((entry: any) => entry.name === "gateway").env).toContainEqual({ name: "OPENCLAW_DASHBOARD_BRIDGE_REQUIRED", value: "true" });
+  });
+
+  it("renders the Omarchy VM runtime without Hobby pods or disks, including existing Hobby VMs", () => {
+    const out = helmTemplate("octogee-gw-omarchy", { gatewayId: "omarchy", gatewayClass: "builder", sizingTier: "s", computerDesktop: "omarchy" });
+    const pod = parseDocument(findDoc(out, "Deployment", "octogee-gateway-omarchy")!).toJSON().spec.template.spec;
+    expect(findDoc(out, "PersistentVolumeClaim", "octogee-gateway-omarchy-data")).toBeNull();
+    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: {} });
+    expect(pod.volumes.map((entry: any) => entry.name)).not.toContain("desktop-runtime");
+  });
+
+  it("shared gateways use emptyDir with no PVC and a locked-down securityContext", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";
     expect(dep).toMatch(/emptyDir:\s*\{\}/);

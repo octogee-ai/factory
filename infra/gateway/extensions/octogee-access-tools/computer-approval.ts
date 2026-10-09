@@ -19,7 +19,7 @@ function channelOwner(identity: { channel?: string; accountId?: string; senderId
 
 function sameComputer(before: ComputerContext, after: ComputerContext): boolean {
   return before.gatewayId === after.gatewayId && before.ownerUid === after.ownerUid &&
-    before.vmInstanceId === after.vmInstanceId && before.agentAccountId === after.agentAccountId &&
+    before.computerInstanceId === after.computerInstanceId && before.agentAccountId === after.agentAccountId &&
     before.ownerMattermostUserId === after.ownerMattermostUserId;
 }
 
@@ -71,7 +71,7 @@ export function computerApprovalHook(config: ComputerConfig) {
               if (reviewer.userId ? reviewer.userId !== facts.ownerUid : !channelOwner(reviewer.channel, facts)) return null;
               const current = await computerContext(options);
               assertActive();
-              if (!sameComputer(facts, current)) throw new Error("Computer owner or VM changed; request approval again");
+              if (!sameComputer(facts, current)) throw new Error("Computer owner or instance changed; request approval again");
               return assertActive;
             },
           },

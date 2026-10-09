@@ -240,6 +240,19 @@ class DeskStateTest(unittest.TestCase):
 
 
 class StyleTest(unittest.TestCase):
+    def test_hobby_style_is_explicitly_unsupported_without_calling_the_proxy(self):
+        with patch.object(control, 'COMPOSITOR', 'openbox'), patch.object(control, 'run') as run:
+            with self.assertRaises(NotImplementedError):
+                control.set_style('familiar', '#0ea5e9')
+            run.assert_not_called()
+
+    def test_hobby_style_http_response_does_not_reenter_the_action_lock(self):
+        h = handler('/style', {'style': 'familiar'}, CONTROL_CALLER)
+        with patch.object(control, 'COMPOSITOR', 'openbox'), patch.object(control, 'run') as run, patch.object(h, '_send') as send:
+            h.do_POST()
+        self.assertEqual(send.call_args.args[0], 501)
+        run.assert_not_called()
+
     def test_runs_octo_desktop_style_with_a_validated_accent(self):
         with patch.object(control, 'run') as run:
             run.return_value.returncode = 0

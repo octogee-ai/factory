@@ -91,11 +91,21 @@ async function assignedAgentOwnerContext(
   };
 }
 
-function runningComputerInstanceId(live: Record<string, unknown> | undefined): string | null {
+function runningPodInstanceId(live: Record<string, unknown>, podUid: string | undefined): string | null {
+  if (!podUid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(podUid)) return null;
+  const observed = record(live.kubernetes);
+  if (!observed || observed.status !== "ready" || observed.totalPods !== 1 || observed.readyPods !== 1) return null;
+  const pods = observed.pods;
+  if (!Array.isArray(pods) || pods.length !== 1 || record(pods[0])?.uid !== podUid) return null;
+  return `cluster:${podUid}`;
+}
+
+function runningComputerInstanceId(live: Record<string, unknown> | undefined, podUid: string | undefined): string | null {
+  if (live?.runtime === "cluster") return runningPodInstanceId(live, podUid);
   const vm = record(live?.vm);
   if (live?.runtime !== "gce-vm" || vm?.status !== "RUNNING" ||
     typeof vm.instanceId !== "string" || !/^\d+$/u.test(vm.instanceId)) return null;
-  return vm.instanceId;
+  return `gce-vm:${vm.instanceId}`;
 }
 
 export function createAgentComputerContextRoutes(args: { db: Firestore }): Router {
@@ -110,17 +120,19 @@ export function createAgentComputerContextRoutes(args: { db: Firestore }): Route
       args.db.doc(`glmGateways/${context.gatewayId}`).get(),
     ]);
     const authorization = root.exists ? gatewayAuthorizationFromRootDocument(root.data(), context.gatewayId) : null;
-    const vmInstanceId = runningComputerInstanceId(fleet.data());
     const agentAccountId = mattermostAccountIdForAgentId(context.agentId);
     if (!authorization || authorization.config.ownerUid !== context.ownerUid || !agentAccountId) {
       res.status(403).json(FORBIDDEN); return;
     }
-    if (authorization.gateway.desiredStatus !== "running" || !vmInstanceId) {
+    const bound = req.boundTenant;
+    const computerInstanceId = runningComputerInstanceId(fleet.data(), bound?.kind === "gateway" ? bound.podUid : undefined);
+    if (authorization.gateway.desiredStatus !== "running" || !computerInstanceId) {
       res.status(409).json({ error: "computer-unavailable" }); return;
     }
     const ownerMattermostUserId = record(context.assignedData.mattermost)?.userId;
     res.json({
-      gatewayId: context.gatewayId, ownerUid: context.ownerUid, vmInstanceId, agentAccountId,
+      gatewayId: context.gatewayId, ownerUid: context.ownerUid, computerInstanceId, agentAccountId,
+      ...(computerInstanceId.startsWith("gce-vm:") ? { vmInstanceId: computerInstanceId.slice("gce-vm:".length) } : {}),
       ownerMattermostUserId: typeof ownerMattermostUserId === "string" && /^[a-z0-9]{26}$/u.test(ownerMattermostUserId)
         ? ownerMattermostUserId : null,
     });

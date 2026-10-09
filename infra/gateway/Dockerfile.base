@@ -71,12 +71,15 @@ RUN git init && git remote add origin https://github.com/ceckert/cua.git \
     && git fetch --depth=1 --filter=blob:none origin "$CUA_SOURCE_SHA" \
     && git checkout --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "$CUA_SOURCE_SHA"
+COPY infra/gateway/cua-desktop-discovery.patch /tmp/cua-desktop-discovery.patch
+RUN git apply --check /tmp/cua-desktop-discovery.patch && git apply /tmp/cua-desktop-discovery.patch
 WORKDIR /src/libs/cua-driver/rust
 RUN cargo test --locked -p platform-linux --lib wayland::tests --features portal-input \
+    && cargo test --locked -p platform-linux --lib list_windows_tests --features portal-input \
     && cargo build --locked --release -p cua-driver-sdk --features portal-input \
     && mkdir /out \
     && install -m 755 target/release/libcua_driver_sdk.so /out/ \
-    && printf '{"version":"0.28.2","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659"}\n' "$CUA_SOURCE_SHA" > /out/octogee-patch.json
+    && printf '{"version":"0.28.2","sourceCommit":"%s","upstreamPr":"https://github.com/trycua/cua/pull/3659","desktopDiscoveryPatchSha256":"%s"}\n' "$CUA_SOURCE_SHA" "$(sha256sum /tmp/cua-desktop-discovery.patch | cut -d' ' -f1)" > /out/octogee-patch.json
 
 FROM gateway-core-system AS openclaw-installer
 

@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hobby-computer-bench-home
+  namespace: octogee-test
+  labels: {app: hobby-computer-benchmark}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard-rwo
+  resources:
+    requests: {storage: 10Gi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hobby-computer-benchmark
+  namespace: octogee-test
+spec:
+  podSelector:
+    matchLabels: {app: hobby-computer-benchmark}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+    ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
+  - ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hobby-computer-bench
+  namespace: octogee-test
+  labels: {app: hobby-computer-benchmark}
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 20
+  nodeSelector:
+    cloud.google.com/compute-class: octogee-gateway-test
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+  - name: computer
+    image: us-central1-docker.pkg.dev/octogee/octogee/octogee-hobby-benchmark@sha256:REPLACE_WITH_BUILT_DIGEST
+    env:
+    - {name: BENCH_CASE, value: "1cpu-4g"}
+    - {name: NODE_OPTIONS, value: "--max-old-space-size=2048"}
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities: {drop: [ALL]}
+    resources:
+      requests: {cpu: "1", memory: 4Gi, ephemeral-storage: 4Gi}
+      limits: {cpu: "1", memory: 4Gi, ephemeral-storage: 4Gi}
+    volumeMounts:
+    - {name: scripts, mountPath: /benchmark/workload.sh, subPath: workload.sh}
+    - {name: scripts, mountPath: /benchmark/desktop-apps.py, subPath: desktop-apps.py}
+    - {name: scripts, mountPath: /benchmark/agent-model.py, subPath: agent-model.py}
+    - {name: scripts, mountPath: /benchmark/browser-load.mjs, subPath: browser-load.mjs}
+    - {name: scripts, mountPath: /benchmark/collect.py, subPath: collect.py}
+    - {name: scripts, mountPath: /benchmark/control.py, subPath: control.py}
+    - {name: scripts, mountPath: /benchmark/native.mjs, subPath: native.mjs}
+    - {name: scripts, mountPath: /benchmark/oc.sh, subPath: oc.sh}
+    - {name: scripts, mountPath: /benchmark/pair.mjs, subPath: pair.mjs}
+    - {name: scripts, mountPath: /benchmark/session.sh, subPath: session.sh}
+    - {name: scripts, mountPath: /benchmark/start.sh, subPath: start.sh}
+    - {name: scripts, mountPath: /benchmark/summarize.py, subPath: summarize.py}
+    - {name: home, mountPath: /home/node}
+    - {name: runtime, mountPath: /home/node/runtime}
+    - {name: shm, mountPath: /dev/shm}
+  volumes:
+  - name: scripts
+    configMap: {name: hobby-computer-benchmark-scripts, defaultMode: 365}
+  - name: home
+    persistentVolumeClaim: {claimName: hobby-computer-bench-home}
+  - name: runtime
+    emptyDir: {medium: Memory, sizeLimit: 64Mi}
+  - name: shm
+    emptyDir: {medium: Memory, sizeLimit: 256Mi}

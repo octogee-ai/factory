@@ -1030,6 +1030,15 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     expect(store.get("gateways/bench")).toMatchObject({ gatewayClass: "shared" });
   });
 
+  it("rejects an XS Builder tier before saving or journaling a release", async () => {
+    const seed = seedNewSchemaGateway("builder", sharedPayload(), { gatewayClass: "builder", imageProfile: "builder", profile: "builder", ownerUid: "uid-builder", builderSlug: "builder", sizingTier: "s" });
+    const { app, store } = mkApp(seed);
+    const before = { ...store.get("gateways/builder") };
+    await request(app).patch("/gateways/builder").send({ sizingTier: "xs" }).expect(400);
+    expect(store.get("gateways/builder")).toEqual(before);
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("refuses a malformed durable root rather than mutating it", async () => {
     const seed = seedNewSchemaGateway("zeta", sharedPayload());
     seed["gateways/zeta"] = { ...seed["gateways/zeta"], gatewayId: "other" };

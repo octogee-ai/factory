@@ -25,7 +25,7 @@ STYLES = ("familiar", "omarchy")
 HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$")
 ENTRY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 ICON_EXTENSIONS = (".svg", ".png", ".xpm")
-CURRENT_DESKTOP = "Hyprland"
+CURRENT_DESKTOP = "Openbox" if COMPOSITOR == "openbox" else "Hyprland"
 APPLICATION_CATEGORIES = {
     "Office", "Graphics", "AudioVideo", "Audio", "Video", "Network", "InstantMessaging",
     "Game", "Education", "Science", "Development", "TextEditor", "Viewer", "Calculator",
@@ -92,6 +92,12 @@ def hyprctl_json(*args):
 
 
 def windows():
+    if COMPOSITOR == "openbox":
+        out = run(["wmctrl", "-lx"])
+        if out.returncode != 0:
+            raise RuntimeError(out.stderr.decode(errors="replace"))
+        return [{"address": parts[0], "class": parts[2], "title": parts[4] if len(parts) == 5 else ""}
+                for line in out.stdout.decode(errors="replace").splitlines() if len(parts := line.split(None, 4)) >= 4]
     if COMPOSITOR == "hyprland":
         return hyprctl_json("clients")
     out = run(["wlrctl", "toplevel", "list"])
@@ -105,6 +111,11 @@ def windows():
 
 
 def monitors():
+    if COMPOSITOR == "openbox":
+        out = run(["xrandr", "--query"])
+        if out.returncode != 0:
+            raise RuntimeError(out.stderr.decode(errors="replace"))
+        return re.findall(r"^(\S+) connected", out.stdout.decode(errors="replace"), re.MULTILINE)
     if COMPOSITOR == "hyprland":
         return [m.get("name") for m in hyprctl_json("monitors", "all")]
     out = run(["wlr-randr", "--json"])
@@ -116,6 +127,36 @@ def monitors():
 def resize(width, height):
     if type(width) is not int or type(height) is not int or not (320 <= width <= 3840 and 240 <= height <= 2160):
         raise ValueError("display size must be integers within 320x240 and 3840x2160")
+    if COMPOSITOR == "openbox":
+        current = run(["xrandr", "--query"])
+        if current.returncode != 0:
+            raise RuntimeError(current.stderr.decode(errors="replace"))
+        modes = re.findall(r"^\s+(\S+)\s+\d", current.stdout.decode(errors="replace"), re.MULTILINE)
+        mode = f"{width}x{height}"
+        commands = []
+        if mode not in modes:
+            mode = f"octogee-{width}x{height}"
+            if mode not in modes:
+                clock = (width + 3) * (height + 3) * 60 / 1000000
+                commands.extend([
+                    ["xrandr", "--newmode", mode, f"{clock:.6f}", str(width), str(width + 1), str(width + 2), str(width + 3),
+                     str(height), str(height + 1), str(height + 2), str(height + 3)],
+                    ["xrandr", "--addmode", "VNC-0", mode],
+                ])
+        commands.append(["xrandr", "--output", "VNC-0", "--mode", mode])
+        for command in commands:
+            out = run(command)
+            if out.returncode != 0:
+                raise RuntimeError(out.stderr.decode(errors="replace"))
+        actual = run(["xrandr", "--query"])
+        if actual.returncode != 0 or not re.search(rf"^VNC-0 connected {width}x{height}\+0\+0", actual.stdout.decode(errors="replace"), re.MULTILINE):
+            raise RuntimeError("X11 did not apply requested display size")
+        for obsolete in (m for m in modes if m.startswith("octogee-") and m != mode):
+            for command in (["xrandr", "--delmode", "VNC-0", obsolete], ["xrandr", "--rmmode", obsolete]):
+                out = run(command)
+                if out.returncode != 0:
+                    raise RuntimeError(out.stderr.decode(errors="replace"))
+        return {"width": width, "height": height}
     if COMPOSITOR != "hyprland":
         raise RuntimeError("display resizing requires Hyprland")
     expression = 'hl.monitor({ output = %s, mode = "%dx%d@30", position = "0x0", scale = 1 })' % (json.dumps(OUTPUT), width, height)
@@ -131,7 +172,7 @@ def resize(width, height):
 
 
 def screenshot_png():
-    out = run(["grim", "-o", OUTPUT, "-t", "png", "-"], timeout=30)
+    out = run(["import", "-window", "root", "png:-"] if COMPOSITOR == "openbox" else ["grim", "-o", OUTPUT, "-t", "png", "-"], timeout=30)
     if out.returncode != 0:
         raise RuntimeError(out.stderr.decode(errors="replace"))
     return out.stdout
@@ -274,7 +315,7 @@ def launch(entry_id):
     if not any(app["id"] == entry_id for app in desktop_entries()):
         raise ValueError("no such desktop entry: %s" % entry_id)
     subprocess.Popen(
-        ["uwsm-app", "--", "gtk-launch", entry_id + ".desktop"],
+        (["gtk-launch", entry_id + ".desktop"] if COMPOSITOR == "openbox" else ["uwsm-app", "--", "gtk-launch", entry_id + ".desktop"]),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     return {"launched": entry_id}
@@ -358,6 +399,8 @@ def set_style(style, accent):
         raise ValueError("style must be one of: %s" % ", ".join(STYLES))
     if accent is not None and (style != "familiar" or not isinstance(accent, str) or not HEX_COLOR.match(accent)):
         raise ValueError("accent must be a lowercase #rrggbb colour and applies to the familiar style only")
+    if COMPOSITOR == "openbox":
+        raise NotImplementedError("Desktop style changes are unavailable on the X11 desktop")
     argv = ["octo-desktop-style", style] + (["--accent", accent] if accent else [])
     out = run(argv, timeout=120)
     if out.returncode != 0:
@@ -518,6 +561,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "not found"})
                 return
             self._send(200, result)
+        except NotImplementedError as exc:
+            self._send(501, {"error": str(exc)})
         except ValueError as exc:
             self._send(400, {"error": str(exc)})
         except Exception as exc:

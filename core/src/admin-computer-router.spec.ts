@@ -18,7 +18,7 @@ const gateway = {
 const vm = { instanceName: "octo-fixture", zone: "us-central1-a", instanceId: "123", status: "RUNNING" };
 const parked = { ...vm, gatewayId: GATEWAY, parkedAt: 100, checkpoint: { outcome: "fresh", requestedAt: 90, completedAt: 95 } };
 
-function harness(overrides: Record<string, Record<string, unknown> | null> = {}, role = "admin") {
+function harness(overrides: Record<string, Record<string, unknown> | null> = {}, role = "admin", computerReplacementEnabled: boolean | undefined = true) {
   const store = new Map<string, Record<string, unknown>>(Object.entries({
     [`gateways/${GATEWAY}`]: gateway,
     [`glmGateways/${GATEWAY}`]: { gatewayId: GATEWAY, runtime: "gce-vm", vm },
@@ -62,7 +62,7 @@ function harness(overrides: Record<string, Record<string, unknown> | null> = {},
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { Object.assign(req, { uid: role === "anonymous" ? undefined : "operator", isAdmin: role === "admin" }); next(); });
-  addAdminFleetRoutes(app, { db, logger: { info: vi.fn(), warn: vi.fn() }, workspaceSlugsForUser: () => ["fixture"], provisionGatewayAuthSecret: vi.fn(), listGatewayBuilds: vi.fn(), suspendAuthUser: vi.fn(), revokeConnectorGrantsForUser: vi.fn() });
+  addAdminFleetRoutes(app, { db, computerReplacementEnabled, logger: { info: vi.fn(), warn: vi.fn() }, workspaceSlugsForUser: () => ["fixture"], provisionGatewayAuthSecret: vi.fn(), listGatewayBuilds: vi.fn(), suspendAuthUser: vi.fn(), revokeConnectorGrantsForUser: vi.fn() });
   app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(500).json({ error: error.message }));
   return { app, store, operations: () => [...store.values()].filter((value) => value.kind === "gateway-vm"), audits: () => [...store.values()].filter((value) => value.recordType === "audit") };
 }
@@ -70,6 +70,13 @@ const livePath = `/gateways/${GATEWAY}/computer/replace`;
 const parkedPath = `/customers/${OWNER}/computer/replace`;
 
 describe("admin computer replacement", () => {
+  it.each([livePath, parkedPath])("rejects unavailable replacement before admission: %s", async (path) => {
+    const h = harness({}, "admin", false);
+    const result = await request(h.app).post(path).send({}).expect(409);
+    expect(result.body.error).toContain("unavailable in this release");
+    expect(h.audits()).toHaveLength(0);
+    expect(h.operations()).toHaveLength(0);
+  });
   it("journals and enqueues only checkpoint-gated replacement for the currently bound VM", async () => {
     const h = harness();
     const res = await request(h.app).post(livePath).set("Idempotency-Key", "one-replacement").send({}).expect(202);

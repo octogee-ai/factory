@@ -10,6 +10,7 @@ interface ComputerReplacementMutation {
     action: () => Promise<string>;
 }
 interface ComputerRouterDeps {
+    replacementEnabled?: boolean;
     db: Firestore;
     journal: (input: ComputerReplacementMutation) => Promise<string>;
 }

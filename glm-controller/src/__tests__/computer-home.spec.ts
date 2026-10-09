@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   computerHomePrefix,
   deleteComputerHomeObjects,
+  deleteBuilderComputerHome,
   type ComputerHomeBucket,
 } from "../lib/customer-ops/computer-home";
 
@@ -69,5 +70,21 @@ describe("deleteComputerHomeObjects", () => {
     const bucket = mkBucket([[]]);
     await expect(deleteComputerHomeObjects(bucket, "")).rejects.toThrow(/slug/);
     expect(bucket.getFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("Builder computer home erasure", () => {
+  it("deletes the owner PVC even after disposable gateway records are gone", async () => {
+    const deleteHobbyHome = vi.fn(async () => {});
+    expect(await deleteBuilderComputerHome({ bucket: mkBucket([[]]), slug: "alice", deleteHobbyHome })).toEqual({ deleted: 0 });
+    expect(deleteHobbyHome).toHaveBeenCalledWith("alice");
+  });
+
+  it("reports PVC deletion failures and refuses an empty owner slug", async () => {
+    const deleteHobbyHome = vi.fn(async () => { throw new Error("kubernetes 403"); });
+    await expect(deleteBuilderComputerHome({ bucket: mkBucket([[]]), slug: "alice", deleteHobbyHome })).rejects.toThrow(/403/);
+    deleteHobbyHome.mockClear();
+    await expect(deleteBuilderComputerHome({ bucket: mkBucket([[]]), slug: "", deleteHobbyHome })).rejects.toThrow(/slug/);
+    expect(deleteHobbyHome).not.toHaveBeenCalled();
   });
 });

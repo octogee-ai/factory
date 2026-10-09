@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 export interface ComputerContext {
   gatewayId: string;
   ownerUid: string;
-  vmInstanceId: string;
+  computerInstanceId: string;
   agentAccountId: string;
   ownerMattermostUserId: string | null;
 }
@@ -17,17 +17,28 @@ export interface ComputerBrokerOptions {
   readTokenImpl?: (path: string) => Promise<string>;
 }
 
+const INVALID_COMPUTER_CONTEXT = "Invalid computer context";
+
+function resolveComputerInstanceId(data: Record<string, unknown>): string {
+  const legacyId = data.vmInstanceId;
+  if (legacyId !== undefined && (typeof legacyId !== "string" || !/^\d+$/u.test(legacyId))) throw new Error(INVALID_COMPUTER_CONTEXT);
+  const computerInstanceId = data.computerInstanceId ?? (legacyId ? `gce-vm:${legacyId}` : undefined);
+  if (legacyId !== undefined && computerInstanceId !== `gce-vm:${legacyId}`) throw new Error(INVALID_COMPUTER_CONTEXT);
+  if (typeof computerInstanceId !== "string" || !/^(gce-vm:\d+|cluster:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/u.test(computerInstanceId)) throw new Error(INVALID_COMPUTER_CONTEXT);
+  return computerInstanceId;
+}
+
 function parseComputerContext(body: unknown): ComputerContext {
-  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid computer context");
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error(INVALID_COMPUTER_CONTEXT);
   const data = body as Record<string, unknown>;
+  const computerInstanceId = resolveComputerInstanceId(data);
   if (typeof data.gatewayId !== "string" || !data.gatewayId ||
     typeof data.ownerUid !== "string" || !data.ownerUid ||
-    typeof data.vmInstanceId !== "string" || !/^\d+$/u.test(data.vmInstanceId) ||
     typeof data.agentAccountId !== "string" || !data.agentAccountId ||
     (data.ownerMattermostUserId !== null && (typeof data.ownerMattermostUserId !== "string" || !/^[a-z0-9]{26}$/u.test(data.ownerMattermostUserId)))) {
-    throw new Error("Invalid computer context");
+    throw new Error(INVALID_COMPUTER_CONTEXT);
   }
-  return { gatewayId: data.gatewayId, ownerUid: data.ownerUid, vmInstanceId: data.vmInstanceId,
+  return { gatewayId: data.gatewayId, ownerUid: data.ownerUid, computerInstanceId,
     agentAccountId: data.agentAccountId, ownerMattermostUserId: data.ownerMattermostUserId };
 }
 
@@ -41,7 +52,7 @@ async function computerContextFailure(response: Response): Promise<Error> {
     return failure;
   }
   if (body && typeof body === "object" && "error" in body && body.error === "computer-unavailable") {
-    return new Error("Computer is unavailable (computer-unavailable): the gateway or VM is not ready. Retry when the computer is running.");
+    return new Error("Computer is unavailable (computer-unavailable): the gateway computer is not ready. Retry when the computer is running.");
   }
   return failure;
 }

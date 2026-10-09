@@ -190,6 +190,7 @@ export interface GatewayPodDiagnostics {
 }
 
 export interface FleetRouterDeps {
+  computerReplacementEnabled?: boolean;
   db: Firestore;
   logger: FleetLogger;
   workspaceSlugsForUser: (data: { username?: string | null }) => string[];
@@ -3121,6 +3122,9 @@ function buildDurableGatewayPatch(args: {
       },
     };
   }
+  if (args.current.gatewayClass === "builder" && args.body.sizingTier === "xs") {
+    return { error: { status: 400, body: { error: "Builder sizingTier must be s, m, or l" } } };
+  }
   const configPatch = mutableConfigPatchFromBody(args.body);
   const patch: Record<string, unknown> = { ...configPatch };
   if (args.body.desiredStatus !== undefined) {
@@ -4327,7 +4331,7 @@ export function addAdminFleetRoutes(
     });
   }
 
-  addAdminComputerRoutes(router, { db, journal: runAdminFleetMutation });
+  addAdminComputerRoutes(router, { db, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
 
   router.get("/platform-runtime-config", async (_req, res, next) => {
     try {

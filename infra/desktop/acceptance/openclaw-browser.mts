@@ -28,14 +28,12 @@ const config = {
   browser: { evaluateEnabled: true, ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
   gateway: { mode: "local", port: 19989, nodes: { browser: { mode: "off" } } },
   tools: { profile: "coding" },
-  agents: { list: [{ id: "octogee-native-coach" }, { id: "octogee-native-proj-site-coach" }, { id: "arbitrary", tools: { profile: "full" } }] },
+  agents: { entries: { "octogee-native-coach": {}, "octogee-native-proj-site-coach": {}, arbitrary: { tools: { profile: "full" } } } },
   plugins: { load: { paths: [`${source}/${packageRoot ? "dist/" : ""}extensions/browser`] } },
 };
 applyOpenClawComputerBrowserConfig(config, { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_BUILDER_SLUG: "native" });
 setRuntimeConfigSnapshot(config);
-const browserConfigPath = packageRoot ? require.resolve("openclaw/plugin-sdk/browser-config") : `${source}/extensions/browser/src/browser/config.ts`;
-const { resolveBrowserConfig, resolveProfile } = await import(pathToFileURL(browserConfigPath).href);
-const resolvedProfile = resolveProfile(resolveBrowserConfig(config.browser, config), "computer");
+const resolvedProfile = (config.browser as typeof config.browser & { profiles: { computer: { cdpUrl: string; attachOnly: boolean } } }).profiles.computer;
 assert.equal(resolvedProfile.cdpUrl, "http://127.0.0.1:9222");
 assert.equal(resolvedProfile.attachOnly, true);
 async function runtimeFunction(filePrefix: string, functionName: string, sourcePath: string) {
@@ -49,7 +47,8 @@ const filterToolsByPolicy = await runtimeFunction("tool-policy-match-", "filterT
 const registry = loadOpenClawPlugins({ config, onlyPluginIds: ["browser"], cache: false, throwOnLoadError: true });
 const plugins = registry.plugins.map((plugin) => ({ id: plugin.id, status: plugin.status }));
 assert.deepEqual(plugins, [{ id: "browser", status: "loaded" }]);
-const agentTools = config.agents.list.map((agent) => {
+const agentTools = Object.entries(config.agents.entries).map(([id, value]) => {
+  const agent: { id: string; tools?: { profile: string } } = { id, ...value };
   const discovered = resolvePluginTools({
     context: { config, agentId: agent.id, sessionKey: `agent:${agent.id}:native-cdp-acceptance` },
     toolAllowlist: ["browser"], runtimeRegistry: registry,
@@ -86,7 +85,7 @@ const server = createServer((req, res) => {
   sawPersistentCookie ||= (req.headers.cookie ?? "").includes("octogee_native_session=one-visible-browser");
   if (phase === "seed") res.setHeader("set-cookie", "octogee_native_session=one-visible-browser; Max-Age=86400; HttpOnly; SameSite=Lax; Path=/");
   res.setHeader("content-type", "text/html");
-  res.end(`<!doctype html><html><head><title>Octogee visible computer CDP acceptance</title></head><body style="background:#162430;color:white;font:24px sans-serif;padding:80px"><h1>OpenClaw is driving this Omarchy computer</h1><p>The human and agent share this visible Chromium session.</p><label>Your message <input aria-label="Your message" id="message" style="font:24px sans-serif;width:500px"></label><button id="commit" style="font:24px sans-serif" onclick="document.querySelector('#result').textContent=document.querySelector('#message').value">Show on shared desktop</button><h2 id="result">Waiting for agent action</h2></body></html>`);
+  res.end(`<!doctype html><html><head><title>Octogee visible computer CDP acceptance</title></head><body style="background:#162430;color:white;font:24px sans-serif;padding:80px"><h1>OpenClaw is driving this Builder computer</h1><p>The human and agent share this visible Chromium session.</p><label>Your message <input aria-label="Your message" id="message" style="font:24px sans-serif;width:500px"></label><button id="commit" style="font:24px sans-serif" onclick="document.querySelector('#result').textContent=document.querySelector('#message').value">Show on shared desktop</button><h2 id="result">Waiting for agent action</h2></body></html>`);
 });
 await new Promise<void>((resolve) => server.listen(18080, "127.0.0.1", resolve));
 try {

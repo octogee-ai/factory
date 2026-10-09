@@ -117,7 +117,8 @@ const OPENCLAW_BINARY = "/usr/local/bin/openclaw";
 export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   if (!isPerUserControlIdentity(env)) return { ...env };
   const { OPENCLAW_GATEWAY_TOKEN: podToken, ...rest } = env;
-  if (env.GATEWAY_RUNTIME_KIND === "gce-vm" && podToken) {
+  if ((env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
+    (env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11")) && podToken) {
     return { ...rest, OPENCLAW_GATEWAY_PASSWORD: podToken };
   }
   return rest;

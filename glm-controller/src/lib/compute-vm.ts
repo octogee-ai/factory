@@ -10,6 +10,7 @@ export interface GatewayVmClientDeps {
   log: (msg: string) => void;
   wait: (ms: number) => Promise<void>;
   now: () => number;
+  journalMachineType?: (input: { instanceName: string; zone: string; machineType: string }, action: () => Promise<void>) => Promise<void>;
   operationTimeoutMs?: number;
   pollIntervalMs?: number;
 }
@@ -30,6 +31,7 @@ export interface CreateGatewayVmInput {
 }
 
 export interface GatewayVmDescription {
+  machineType: string | null;
   name: string;
   zone: string;
   status: string;
@@ -81,6 +83,7 @@ export interface GatewayVmClient {
   list(input: ListGatewayVmsInput): Promise<GatewayVmDescription[]>;
   bind(instanceName: string, zone: string, input: BindGatewayVmInput): Promise<void>;
   setServiceAccount(instanceName: string, zone: string, email: string): Promise<void>;
+  setMachineType(instanceName: string, zone: string, machineType: string): Promise<void>;
   setMetadata(instanceName: string, zone: string, input: { fingerprint: string; items: Record<string, string> }): Promise<GuardedWriteOutcome>;
   setLabels(instanceName: string, zone: string, input: { fingerprint: string; labels: Record<string, string> }): Promise<GuardedWriteOutcome>;
   stop(instanceName: string, zone: string): Promise<void>;
@@ -125,6 +128,7 @@ interface ComputeMetadataItem {
 }
 
 interface ComputeInstance {
+  machineType?: string;
   id?: string;
   name?: string;
   zone?: string;
@@ -235,6 +239,7 @@ function describeInstance(instance: ComputeInstance, instanceName: string, zone:
   const model = instance.scheduling?.provisioningModel;
   const metadata = metadataRecord(instance.metadata?.items);
   return {
+    machineType: nonEmpty(instance.machineType)?.split("/").at(-1) ?? null,
     name: instance.name ?? instanceName,
     zone,
     status: instance.status ?? "UNKNOWN",
@@ -383,12 +388,10 @@ async function readFamilyImage(request: ComputeRequest, family: string, project:
   return { name, id };
 }
 
-export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClient {
-  const base = `https://compute.googleapis.com/compute/v1/projects/${deps.projectId}`;
+function operationWaiter(deps: GatewayVmClientDeps, base: string) {
   const operationTimeoutMs = deps.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-
-  async function waitForOperation(zone: string, operation: ComputeOperation, what: string): Promise<void> {
+  return async function waitForOperation(zone: string, operation: ComputeOperation, what: string): Promise<void> {
     const name = operation.name;
     if (!name) throw new Error(`${what}: compute returned an operation without a name`);
     const deadline = deps.now() + operationTimeoutMs;
@@ -407,7 +410,13 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
       const detail = errors.map((e) => [e.code ?? "UNKNOWN", e.message ?? ""].join(": ")).join("; ");
       throw new ComputeOperationError(`${what}: ${detail}`, codes);
     }
-  }
+  };
+}
+
+export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClient {
+  const base = `https://compute.googleapis.com/compute/v1/projects/${deps.projectId}`;
+
+  const waitForOperation = operationWaiter(deps, base);
 
   async function readInstance(instanceName: string, zone: string): Promise<ComputeInstance | null> {
     try {
@@ -551,6 +560,15 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setServiceAccount ${instanceName}`);
   }
 
+  async function setMachineType(instanceName: string, zone: string, machineType: string): Promise<void> {
+    const action = async () => {
+      const res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/setMachineType`, method: "POST", body: { machineType: `zones/${zone}/machineTypes/${machineType}` } });
+      await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setMachineType ${instanceName}`);
+    };
+    if (deps.journalMachineType) await deps.journalMachineType({ instanceName, zone, machineType }, action);
+    else await action();
+  }
+
   async function start(instanceName: string, zone: string): Promise<StartGatewayVmResult> {
     try {
       await lifecycle("start", instanceName, zone);
@@ -592,6 +610,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     list,
     bind,
     setServiceAccount,
+    setMachineType,
     setMetadata: (name, zone, input) => guardedWrite(name, zone, "setMetadata", { fingerprint: input.fingerprint, items: metadataItems(input.items) }),
     setLabels: (name, zone, input) => guardedWrite(name, zone, "setLabels", { labelFingerprint: input.fingerprint, labels: input.labels }),
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
