@@ -149,6 +149,10 @@ export interface FleetBrokerComputerHomeCheckpointCommit {
     completedAt: number;
 }
 export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHomeCheckpointCommit {
+    coverage?: "builder-home-v2";
+    writerProtocol?: 2 | 3;
+    instanceId?: string | null;
+    generation?: string;
     download: FleetBrokerBlobSignedUrl;
 }
 export interface FleetBrokerComputerHomePruneResult {

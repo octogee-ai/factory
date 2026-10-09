@@ -20,6 +20,18 @@ import { bundleFixture } from "./fixture";
 const ctx = { stateRoot: "/srv/octogee", instanceId: "4242", desktopAuth: true };
 
 describe("planBundle", () => {
+  it("uses a new project working set after a verified home migration on the same computer", () => {
+    const bundle = bundleFixture();
+    bundle.volumes.push({ name: "project-materializations", kind: "ephemeral" });
+    bundle.containers[0].mounts.push({ volume: "project-materializations", mountPath: "/work/materialized", readOnly: false, subPath: null });
+    const backing = () => (planBundle(bundle, ctx).services[0].config.HostConfig as { Binds: string[] }).Binds.find(value => value.endsWith(":/work/materialized"));
+    const original = backing();
+    bundle.containers[0].env.OCTOGEE_HOME_STORAGE_ID = "100";
+    expect(backing()).not.toBe(original);
+    const first = backing();
+    bundle.containers[0].env.OCTOGEE_HOME_STORAGE_ID = "200";
+    expect(backing()).not.toBe(first);
+  });
   it("maps the pod contract onto host-network containers with bound volumes, tokens, and aliases", () => {
     const plan = planBundle(bundleFixture(), ctx);
 
@@ -58,9 +70,44 @@ describe("planBundle", () => {
       "KUBERNETES_SERVICE_PORT_HTTPS=443",
     ]));
     expect((edge.config.HostConfig as { Binds: string[] }).Binds).toContain("/srv/octogee/tokens/k8s-api-token:/var/run/secrets/kubernetes.io/serviceaccount:ro");
-    expect((edge.config.HostConfig as { RestartPolicy: { Name: string } }).RestartPolicy).toEqual({ Name: "unless-stopped" });
+    expect((edge.config.HostConfig as { RestartPolicy: { Name: string } }).RestartPolicy).toEqual({ Name: "on-failure" });
   });
 
+
+  it("keeps customer home durable while ephemeral cache/project materializations use platform boot storage", () => {
+    const bundle = bundleFixture();
+    bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" }, { name: "project-materializations", kind: "ephemeral" });
+    bundle.containers[0].mounts.push(
+      { volume: "builder-cache", mountPath: "/work/cache", readOnly: false, subPath: null },
+      { volume: "project-materializations", mountPath: "/work/materialized", readOnly: true, subPath: null },
+    );
+    const config = planBundle(bundle, ctx).services[0].config;
+    expect((config.HostConfig as { Binds: string[] }).Binds).toEqual(expect.arrayContaining([
+      "/srv/octogee/volumes/data:/home/node",
+      expect.stringMatching(/^octogee-scratch-[a-f0-9]+-builder-cache:\/work\/cache$/),
+      expect.stringMatching(/^octogee-scratch-[a-f0-9]+-project-materializations:\/work\/materialized:ro$/),
+    ]));
+  });
+  it("keeps the same scratch backing across gateway rebindings on one computer, and isolates another computer", () => {
+    const bundle = bundleFixture();
+    bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" });
+    bundle.containers[0].mounts.push({ volume: "builder-cache", mountPath: "/work/cache", readOnly: false, subPath: null });
+    const scratch = (gatewayId: string, instanceId: string) => (planBundle({ ...bundle, gatewayId }, { ...ctx, instanceId }).services[0].config.HostConfig as { Binds: string[] }).Binds.find(bind => bind.endsWith(":/work/cache"));
+    expect(scratch("b-first", "4242")).toBe(scratch("b-next", "4242"));
+    expect(scratch("b-first", "4243")).not.toBe(scratch("b-first", "4242"));
+  });
+  it("binds the active project subdirectory at both canonical and materialized paths", () => {
+    const bundle = bundleFixture();
+    bundle.volumes.push({ name: "project-materializations", kind: "ephemeral" });
+    bundle.containers[0].mounts.push(...["/work/materialized", "/home/node/.openclaw/customers/alice/projects"].map(mountPath => ({ volume: "project-materializations", mountPath, readOnly: false, subPath: "projects" })));
+    const mounts = (planBundle(bundle, ctx).services[0].config.HostConfig as { Mounts: Array<Record<string, unknown>> }).Mounts;
+    expect(mounts.filter(mount => mount.Type === "volume")).toEqual([
+      expect.objectContaining({ Target: "/work/materialized", VolumeOptions: { Subpath: "projects", NoCopy: true }, ReadOnly: false }),
+      expect.objectContaining({ Target: "/home/node/.openclaw/customers/alice/projects", VolumeOptions: { Subpath: "projects", NoCopy: true }, ReadOnly: false }),
+    ]);
+    bundle.containers[0].mounts.at(-1)!.subPath = "../home";
+    expect(() => planBundle(bundle, ctx)).toThrow(/subPath/);
+  });
   it("labels dedicated Builder container logs with the configured slug", () => {
     const bundle = bundleFixture();
     bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
@@ -176,7 +223,7 @@ describe("planBundle", () => {
     expect(plan.services[2].config).toMatchObject({
       User: "1000:1000",
       Entrypoint: ["/usr/local/bin/octogee-desktop-node"],
-      HostConfig: { NetworkMode: "host", PidMode: "host", RestartPolicy: { Name: "unless-stopped" } },
+      HostConfig: { NetworkMode: "host", PidMode: "host", RestartPolicy: { Name: "on-failure" } },
     });
     const pidMode = (index: number) => (plan.services[index].config.HostConfig as { PidMode?: string }).PidMode;
     expect(pidMode(0)).toBeUndefined();

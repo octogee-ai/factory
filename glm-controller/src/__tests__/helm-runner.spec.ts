@@ -2000,13 +2000,15 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
 });
 
  it("preserves the cluster owner home through a Hobby tier upgrade", async () => {
-   const ensureHobbyHome = vi.fn(async () => {});
+   const ensureHobbyHome = vi.fn(async () => "home-copy-second-home");
    const { runHelm } = mockSubprocess([{ stdout: "ok" }, { stdout: "ok" }, { stdout: "ok" }]);
    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ensureHobbyHome });
    const opts = { namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder" as const, ownerUid: "UidA", builderSlug: "builder", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" };
    await runner.upsertInstance({ ...opts, sizingTier: "s" });
-   expect(ensureHobbyHome).toHaveBeenCalledWith({ namespace: "octogee", ownerUid: "UidA", builderSlug: "builder" });
+   expect(ensureHobbyHome).toHaveBeenCalledWith({ namespace: "octogee", ownerUid: "UidA", builderSlug: "builder", sizeGiB: 10 });
    expect(ensureHobbyHome.mock.invocationCallOrder[0]).toBeLessThan(runHelm.mock.invocationCallOrder[0]);
    await runner.upsertInstance({ ...opts, sizingTier: "m" });
+   expect(ensureHobbyHome).toHaveBeenLastCalledWith({ namespace: "octogee", ownerUid: "UidA", builderSlug: "builder", sizeGiB: 50 });
    expect(ensureHobbyHome).toHaveBeenCalledTimes(2);
+   expect(runHelm.mock.calls.filter(([args])=>args.includes("upgrade")).every(([args])=>args.includes("builderHomeClaimName=home-copy-second-home"))).toBe(true);
  });

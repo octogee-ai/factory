@@ -1,3 +1,6 @@
+import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
+import { prepareBuilderProjectAssets } from "./builder-project-assets.js";
+import { createBrokeredProjectBlobHydrator } from "./project-blob-materialization.js";
 import { sharedMigrationAgentIds, sharedMigrationExportPaths } from "./source-transfer-plan.js";
 import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
 import { quiesceCustomerSessionsBounded, sessionStoreForPath } from "./customer-session-quiesce.js";
@@ -500,7 +503,7 @@ async function listProjectsNeedingClone(
 ): Promise<ProjectCloneTarget[]> {
   const snapshot = await snapshotForSlug(ctx, slug);
   if (!snapshot) return [];
-  return snapshot.projects.flatMap((p) => {
+  return (await Promise.all(snapshot.projects.map(async (p) => {
     if (p.provisioningState !== undefined && p.provisioningState !== "active") return [];
     if (!projectCheckoutEnabled(p.checkoutEnabled)) {
       ctx.log(`[add:${slug}/${p.projectSlug}] project checkout is turned off by its owner`);
@@ -529,19 +532,30 @@ async function listProjectsNeedingClone(
         path.join(CUSTOMERS_DIR, slug, "projects", p.projectSlug),
       )
     ) {
+      await restoreBuilderProjectAssets(ctx, slug, p.projectSlug);
       return [];
     }
     return [target];
-  });
+  }))).flat();
 }
 
-function cloneProjectRepoForTarget(
+async function restoreBuilderProjectAssets(ctx: BrokerCtx, slug: string, project: string): Promise<void> {
+  if (!ctx.isBuilderGateway() || !process.env.OCTOGEE_PROJECTS_MOUNT) return;
+  const projects = path.join(CUSTOMERS_DIR, slug, "projects");
+  if (await readProjectRestoreReady(path.join(projects, project), slug, project)) return;
+  await prepareBuilderProjectAssets({ projects, slug, project, hydrate: createBrokeredProjectBlobHydrator(ctx.client), log: ctx.log });
+}
+
+async function cloneProjectRepoForTarget(
+  ctx: BrokerCtx,
   customerSlug: string,
   projectSlug: string,
   giteaRepoName: string | null,
   opts?: ProjectCloneOptions,
 ): Promise<boolean> {
-  return cloneProjectRepo(customerSlug, projectSlug, giteaRepoName ?? "", opts);
+  const cloned = await cloneProjectRepo(customerSlug, projectSlug, giteaRepoName ?? "", opts);
+  if (cloned) await restoreBuilderProjectAssets(ctx, customerSlug, projectSlug);
+  return cloned;
 }
 
 function coachToken(
@@ -1849,7 +1863,7 @@ export function buildBrokeredLifecycleAdapter(
       );
     },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
-    cloneProjectRepo: cloneProjectRepoForTarget,
+    cloneProjectRepo: (slug, project, repo, options) => cloneProjectRepoForTarget(ctx, slug, project, repo, options),
     seedDeferredProjectWorkspace: async (slug, projectSlug) => {
       seedDeferredProjectWorkspace(slug, projectSlug);
     },

@@ -1,4 +1,6 @@
 import { db, storage } from "./db.js";
+import { uploadProjectBlobViaBroker } from "./project-blob-upload.js";
+import { createHash } from "node:crypto";
 import { readPlatformFreeConfig } from "./platform-free-config.js";
 import { logger } from "../middleware/logging.js";
 import {
@@ -45,10 +47,12 @@ export interface StoredWorkspaceBlob {
   size: number;
   thumbnailUrl?: string;
   thumbnailError?: string;
+  sha256?: string;
 }
 
 export interface WorkspaceBlobOptions {
   maxStorageBytes?: number;
+  immutable?: boolean;
 }
 
 export const BLOB_SIGNED_URL_TTL_MS = 60 * 60 * 1000;
@@ -140,6 +144,21 @@ async function rollbackReservation(
   throw error;
 }
 
+async function saveBlobObject(file: ReturnType<ReturnType<typeof storage.bucket>["file"]>, fileBuffer: Buffer, contentType: string, sha256?: string): Promise<void> {
+    try {
+      await file.save(fileBuffer, { metadata: { contentType }, ...(sha256 ? { preconditionOpts: { ifGenerationMatch: 0 } } : {}) });
+    } catch (error) {
+      if (!sha256 || String((error as { code?: unknown }).code) !== "412") throw error;
+    }
+    if (sha256) {
+      const [metadata] = await file.getMetadata();
+      // eslint-disable-next-line sonarjs/hashing -- GCS MD5 is a transport checksum; immutable identity uses SHA-256
+      if (Number(metadata.size) !== fileBuffer.length || metadata.md5Hash !== createHash("md5").update(fileBuffer).digest("base64")) {
+        throw new Error("immutable asset size or checksum mismatch");
+      }
+    }
+}
+
 /**
  * The single way a binary lands in a workspace: save to GCS, generate a 128²
  * thumbnail for images, and write the `.files/manifest.json` placeholder in
@@ -154,6 +173,12 @@ export async function storeWorkspaceBlob(
   mimeType?: string,
   options: WorkspaceBlobOptions = {},
 ): Promise<StoredWorkspaceBlob> {
+  const ext = getExtension(filePath);
+  const contentType = mimeType || getMimeType(ext);
+  if (options.immutable && process.env.FLEET_BROKER_URL) {
+    return uploadProjectBlobViaBroker(process.env.FLEET_BROKER_URL, target, fileBuffer, contentType);
+  }
+  const sha256 = options.immutable ? createHash("sha256").update(fileBuffer).digest("hex") : undefined;
   const maxStorageBytes = options.maxStorageBytes ??
     await configuredWorkspaceStorageLimitBytes(target);
   const reservation = await reserveBlobStorage(
@@ -164,11 +189,9 @@ export async function storeWorkspaceBlob(
   );
   try {
     const bucket = storage.bucket();
-    const gcsPath = `${target.gcsPrefix}/${filePath}`;
-    const ext = getExtension(filePath);
-    const contentType = mimeType || getMimeType(ext);
-
-    await bucket.file(gcsPath).save(fileBuffer, { metadata: { contentType } });
+    const gcsPath = sha256 ? `${target.gcsPrefix}/.objects/${sha256}` : `${target.gcsPrefix}/${filePath}`;
+    const file = bucket.file(gcsPath);
+    await saveBlobObject(file, fileBuffer, contentType, sha256);
 
     const { hasThumbnail, thumbnailUrl, thumbnailError } = await createBlobThumbnail(
       target,
@@ -185,6 +208,7 @@ export async function storeWorkspaceBlob(
         size: fileBuffer.length,
         mimeType: contentType,
         uploadedAt: new Date().toISOString(),
+        ...(sha256 ? { sha256 } : {}),
         ...(hasThumbnail ? { hasThumbnail: true } : {}),
       },
     });
@@ -194,6 +218,7 @@ export async function storeWorkspaceBlob(
     return {
       gcsPath,
       size: fileBuffer.length,
+      ...(sha256 ? { sha256 } : {}),
       ...(thumbnailUrl ? { thumbnailUrl } : {}),
       ...(thumbnailError ? { thumbnailError } : {}),
     };

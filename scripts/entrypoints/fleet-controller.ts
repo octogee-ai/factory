@@ -1,3 +1,5 @@
+import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
+import { persistBuilderProjects, startProjectAutosave } from "../lib/project-persistence.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("provisioner");
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
@@ -307,6 +309,7 @@ async function main(): Promise<void> {
     version: entrypointConfig.version,
     openclawVersion,
     openclawDir: OPENCLAW_DIR,
+    projectBlobHydrator: builder ? createBrokeredProjectBlobHydrator(brokerClient) : undefined,
     platformState: !builder,
     localReconcile: true,
     subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
@@ -325,7 +328,7 @@ async function main(): Promise<void> {
       gatewayClass: GATEWAY_CLASS,
       builderSlug: entrypointConfig.builderSlug,
       builder,
-      flushFiles: (slug) => flushCustomerFiles(slug),
+      flushFiles: (slug) => flushCustomerFiles(slug, { persistProjects: builder ? persistBuilderProjects : undefined }),
       syncBlobs: builder
         ? undefined
         : (slug) => blobSyncForSlug(slug, {
@@ -364,6 +367,9 @@ async function main(): Promise<void> {
     }),
     log,
   }, BLOB_SYNC_INTERVAL_MS);
+  const stopProjectAutosave = builder && entrypointConfig.builderSlug
+    ? startProjectAutosave({ save: () => persistBuilderProjects(entrypointConfig.builderSlug), log })
+    : undefined;
   const usageTimer = builder
     ? null
     : startUsageEventTailer({
@@ -380,6 +386,7 @@ async function main(): Promise<void> {
       });
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
+    stopProjectAutosave?.();
     runtimeHealthPublisher?.close();
     clearInterval(blobSyncTimer);
     if (usageTimer) clearInterval(usageTimer);

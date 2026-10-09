@@ -45,6 +45,19 @@ describe("fleet broker npm cache client", () => {
     );
   });
 
+  it("requests held project reads with the purpose credential while keeping ordinary manifest reads on the assigned route", async () => {
+    vi.mocked(internalFetch).mockImplementation(async () => new Response("{}", { status: 200 }));
+    const client = createFleetBrokerClient("builder-alice", "builder-alice", { gatewayCredentialHeaders: async () => ({ [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt" }) });
+    await client.workspaceManifestReadUrl({ slug: "alice", projectSlug: "app" });
+    await client.blobMaterializationReadUrl({ slug: "alice", path: "projects/app/a.png", size: 3 });
+    await client.workspaceManifestReadUrl({ slug: "alice" });
+    const calls = vi.mocked(internalFetch).mock.calls;
+    expect(calls.slice(0, 2).map(([url]) => url)).toEqual(["http://broker/internal/fleet/blob/materialization/manifest/read-url", "http://broker/internal/fleet/blob/materialization/read-url"]);
+    for (const [, init] of calls.slice(0, 2)) expect(init?.headers).toMatchObject({ [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt" });
+    expect(calls[2][0]).toBe("http://broker/internal/fleet/blob/manifest/read-url");
+    expect(calls[2][1]?.headers).not.toHaveProperty(GATEWAY_CREDENTIAL_TOKEN_HEADER);
+  });
+
   it("does not copy a failed broker response body into an exception", async () => {
     vi.mocked(internalFetch).mockResolvedValueOnce(new Response(
       JSON.stringify({ error: "opaque-capability-secret" }),

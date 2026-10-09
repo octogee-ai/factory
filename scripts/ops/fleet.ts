@@ -250,7 +250,7 @@ const VERBS: readonly VerbHelp[] = [
     summary: "Replace a VM gateway's computer with a fresh one from the current image family.",
     args: "<gw-id> [--idempotency-key=<key>] [--apply]",
     description:
-      "Uses POST /api/admin/gateways/:id/computer/replace. Cowboy takes a final desktop-home checkpoint, deletes the VM, and the next convergence creates one from the current octogee-computer image and restores the checkpoint. Dry-run by default; pass --apply to send the request.",
+      "Uses POST /api/admin/gateways/:id/computer/replace. Requires a paused gateway and verified stopped computer. Cowboy retains the exact home disk, pins an admitted platform image and deletes only boot storage. Resume attaches that home; native recovery/migration and current SSH authority run before customer admission. Boot/system customizations are outside this home contract. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e",
       "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e --apply",

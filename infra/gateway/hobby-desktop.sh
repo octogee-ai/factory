@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export HOME=/home/octo
 export DISPLAY=:0 XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=Openbox
 export XDG_RUNTIME_DIR=/run/user/1000
 export OCTO_COMPOSITOR=openbox OCTO_CHROMIUM_PLATFORM=x11 OCTO_BIND=127.0.0.1

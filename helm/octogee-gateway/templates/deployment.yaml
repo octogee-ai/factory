@@ -119,6 +119,21 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
+        {{- if $hobbyComputer }}
+        - name: prepare-home
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
+          command: ["/octogee/scripts/node_modules/.bin/tsx", "/octogee/scripts/entrypoints/prepare-home-storage.ts"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, FOWNER, DAC_OVERRIDE]
+          volumeMounts:
+            - name: data
+              mountPath: /home/storage
+        {{- end }}
         - name: fix-perms
           image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           command:
@@ -140,9 +155,16 @@ spec:
                 set -eu
                 cp -rn /etc/skel/. /home/node/
                 mkdir -p /home/node/.npm-cache
+                {{- if eq $gatewayClass "builder" }}
+                /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prepare-project-storage.ts
+                {{- end }}
                 install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
               '
           env:
+            {{- if eq $gatewayClass "builder" }}
+            - name: GATEWAY_BUILDER_SLUG
+              value: {{ .Values.builderSlug | quote }}
+            {{- end }}
             # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
             # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
             # random hex value before this chart installs, and the same
@@ -165,6 +187,15 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+              {{- if $hobbyComputer }}
+              subPath: volumes/data
+              {{- end }}
+            {{- if eq $gatewayClass "builder" }}
+            - name: builder-cache
+              mountPath: /work/cache
+            - name: project-materializations
+              mountPath: /work/materialized
+            {{- end }}
             {{- if $hobbyComputer }}
             - name: desktop-runtime
               mountPath: /run/user/1000
@@ -216,7 +247,13 @@ spec:
             - name: OPENCLAW_CONTROL_IDENTITY
               value: {{ $controlIdentity | quote }}
             - name: NPM_CONFIG_CACHE
-              value: "/home/node/.npm-cache"
+              value: {{ ternary "/work/cache/npm" "/home/node/.npm-cache" (eq $gatewayClass "builder") | quote }}
+            {{- if eq $gatewayClass "builder" }}
+            - name: OCTOGEE_BUILDER_TOOLCHAIN_ROOT
+              value: "/work/cache/toolchains"
+            - name: OCTOGEE_PROJECTS_MOUNT
+              value: "/work/materialized"
+            {{- end }}
             - name: CUSTOMERS_DIR
               value: "/home/node/.openclaw/customers"
             - name: AGENTS_DIR
@@ -369,7 +406,23 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+              {{- if $hobbyComputer }}
+              subPath: volumes/data
+              {{- end }}
+            {{- if eq $gatewayClass "builder" }}
+            - name: builder-cache
+              mountPath: /work/cache
+            - name: project-materializations
+              mountPath: /work/materialized
+              subPath: projects
+            - name: project-materializations
+              mountPath: /home/node/.openclaw/customers/{{ .Values.builderSlug }}/projects
+              subPath: projects
+            {{- end }}
             {{- if $hobbyComputer }}
+            - name: data
+              mountPath: /home/octo
+              subPath: desktop-home
             - name: desktop-node-identity
               mountPath: /run/octogee/desktop-node-identity
             - name: desktop-runtime
@@ -439,7 +492,11 @@ spec:
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
             successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
           resources:
+            {{- if eq $gatewayClass "builder" }}
+            {{- toYaml (mergeOverwrite (deepCopy $preset.resources) (dict "requests" (dict "ephemeral-storage" "1Gi") "limits" (dict "ephemeral-storage" "10Gi"))) | nindent 12 }}
+            {{- else }}
             {{- toYaml $preset.resources | nindent 12 }}
+            {{- end }}
 
         {{- if .Values.gatewayEdge.enabled }}
         # chat-proxy folded in — one container, one port (3001) serves the
@@ -459,6 +516,10 @@ spec:
               value: {{ .Values.env.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.gatewayEdge.port }}"
+            {{- if eq $gatewayClass "builder" }}
+            - name: OCTOGEE_PROJECTS_MOUNT
+              value: "/work/materialized"
+            {{- end }}
             - name: K8S_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -584,6 +645,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
+              {{- if $hobbyComputer }}
+              subPath: volumes/data
+              {{- end }}
+            {{- if eq $gatewayClass "builder" }}
+            - name: builder-cache
+              mountPath: /work/cache
+            - name: project-materializations
+              mountPath: /work/materialized
+              subPath: projects
+            - name: project-materializations
+              mountPath: /home/node/.openclaw/customers/{{ .Values.builderSlug }}/projects
+              subPath: projects
+            {{- end }}
             {{- if $hobbyComputer }}
             - name: desktop-node-identity
               mountPath: /run/octogee/desktop-node-identity
@@ -627,10 +701,23 @@ spec:
             periodSeconds: {{ .Values.gatewayEdge.probes.liveness.periodSeconds }}
         {{- end }}
       volumes:
+        {{- if eq $gatewayClass "builder" }}
+        - name: builder-cache
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: project-materializations
+          {{- if $hobbyComputer }}
+          persistentVolumeClaim:
+            claimName: octogee-builder-{{ .Values.builderSlug }}-projects
+          {{- else }}
+          emptyDir:
+            sizeLimit: 4Gi
+          {{- end }}
+        {{- end }}
         - name: data
           {{- if $hobbyComputer }}
           persistentVolumeClaim:
-            claimName: octogee-builder-{{ required "builderSlug is required for Hobby home" .Values.builderSlug }}-home
+            claimName: {{ .Values.builderHomeClaimName | default (printf "octogee-builder-%s-home" (required "builderSlug is required for Hobby home" .Values.builderSlug)) | quote }}
           {{- else }}
           emptyDir: {}
           {{- end }}

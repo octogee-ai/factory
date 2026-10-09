@@ -65,6 +65,10 @@ spec:
               value: {{ required "glm-controller.workloadIdentityProject is required" .Values.workloadIdentityProject | quote }}
             {{- $computer := (.Values.global).computer | default dict }}
             {{- if $computer.enabled }}
+            - name: GATEWAY_BUILDER_DISPOSABLE_PARKING
+              value: {{ .Values.computerParking.disposable | quote }}
+            - name: GATEWAY_BUILDER_DISPOSABLE_STATE_CONTRACT
+              value: {{ .Values.computerParking.stateContract | quote }}
             - name: GATEWAY_COMPUTE_PROJECT_ID
               value: {{ required "global.computer.projectId is required" $computer.projectId | quote }}
             - name: GATEWAY_VM_SPEC_JSON

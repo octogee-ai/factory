@@ -372,6 +372,7 @@ describe("binary diversion on the commit path", () => {
 
   it("uses the project's blob prefix on the project lane", async () => {
     h.resolveProjectDir.mockResolvedValue("/customers/acme/projects/orbit");
+    h.divertWorktreeBinaries.mockResolvedValue({ diverted: [{ path: "asset.png", size: 12 }], failures: [], failedPaths: [] });
 
     await request(app())
       .post("/internal/workspace/commit")
@@ -382,7 +383,9 @@ describe("binary diversion on the commit path", () => {
       slug: "acme",
       projectSlug: "orbit",
       gcsPrefix: "customers/acme/projects/orbit",
-    });
+    }, undefined, { retainLocalFiles: true });
+    const options = h.commitAndPushWorkspace.mock.calls.at(-1)![1];
+    expect(await options.beforeCommit()).toEqual({ ok: true, excludePaths: ["asset.png"] });
   });
 
   it("stores GitHub-backed checkout binaries with the rest of the workspace blobs", async () => {

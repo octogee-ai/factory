@@ -12,6 +12,9 @@ novnc_port="${OCTO_NOVNC_PORT:-6080}"
 control_port="${OCTO_CONTROL_PORT:-7777}"
 bind="${OCTO_BIND:-0.0.0.0}"
 
+exec 9>"$XDG_RUNTIME_DIR/octo-desktop.lock"
+flock -n 9 || { echo 'ERROR: desktop session already running' >&2; exit 1; }
+
 stamp() { printf '%s %s\n' "$(date +%s.%N)" "$*" | tee -a "$log_dir/timeline.log"; }
 
 children=()
@@ -164,6 +167,9 @@ OCTO_BIND="$bind" OCTO_SUPERVISOR_PID="$$" python3 /usr/local/bin/octo-desktop-c
 children+=($!)
 stamp "control api on ${control_port}"
 
+rm -f "$HOME/.config/octogee-chromium/SingletonLock" \
+  "$HOME/.config/octogee-chromium/SingletonCookie" \
+  "$HOME/.config/octogee-chromium/SingletonSocket"
 launch_browser
 
 while true; do

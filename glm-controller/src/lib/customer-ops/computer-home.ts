@@ -40,10 +40,12 @@ export async function deleteComputerHomeObjects(
 
 export async function deleteBuilderComputerHome(input: {
   bucket: ComputerHomeBucket;
+  uid: string;
   slug: string;
-  deleteHobbyHome: (slug: string) => Promise<void>;
+  deleteHobbyHome: (uid: string, slug: string) => Promise<void>;
 }): Promise<{ deleted: number }> {
   if (!input.slug) throw new Error("computer-home erase requires the Builder slug");
-  await input.deleteHobbyHome(input.slug);
+  if (!input.uid) throw new Error("computer-home erase requires the Builder owner UID");
+  await input.deleteHobbyHome(input.uid, input.slug);
   return deleteComputerHomeObjects(input.bucket, input.slug);
 }

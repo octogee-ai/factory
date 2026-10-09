@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   DockerEngineError,
   containerPathExists,
+  createContainer,
   createDockerEngine,
   imagePullPath,
   inspectContainer,
@@ -33,6 +34,34 @@ it("inspects containers through a Docker 29 daemon that rejects retired API vers
     expect(await inspectContainer(createDockerEngine({ socketPath }), "octogee-gateway")).toEqual({ Id: "container-on-docker-29" });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("creates a project mount through the Docker API that supports volume subpaths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "octogee-docker-subpath-"));
+  const socketPath = join(root, "docker.sock");
+  const server = createServer((req, res) => {
+    const minor = Number(/^\/v1\.(\d+)\//u.exec(req.url ?? "")?.[1]);
+    const chunks: Buffer[] = [];
+    req.on("data", chunk => chunks.push(chunk));
+    req.on("end", () => {
+      const config = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      res.setHeader("content-type", "application/json");
+      if (config.HostConfig.Mounts[0].VolumeOptions.Subpath !== "projects" || minor < 45) {
+        res.writeHead(400).end(JSON.stringify({ message: "VolumeOptions.Subpath needs API v1.45 or newer" }));
+      } else {
+        res.writeHead(201).end(JSON.stringify({ Id: "gateway-with-project-subpath" }));
+      }
+    });
+  });
+  await new Promise<void>(resolve => server.listen(socketPath, resolve));
+  try {
+    await expect(createContainer(createDockerEngine({ socketPath }), "octogee-gateway", {
+      HostConfig: { Mounts: [{ Type: "volume", Source: "project-materializations", Target: "/work/materialized", VolumeOptions: { Subpath: "projects", NoCopy: true } }] },
+    })).resolves.toBe("gateway-with-project-subpath");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

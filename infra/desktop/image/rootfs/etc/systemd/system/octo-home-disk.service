@@ -7,6 +7,9 @@ Before=docker.service octo-gateway-agent.service octo-desktop.service user@1000.
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/octo-home-disk
+ExecStartPost=/usr/local/bin/octo-home-migrate
+ExecStartPost=/usr/local/bin/octo-scratch-storage
+TimeoutStartSec=20min
 StandardOutput=journal+console
 StandardError=journal+console
 

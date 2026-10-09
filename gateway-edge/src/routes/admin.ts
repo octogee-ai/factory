@@ -90,6 +90,7 @@ addAdminCustomerRoutes(router, {
 });
 
 addAdminFleetRoutes(router, {
+    computerReplacementEnabled: true,
   db,
   logger,
   workspaceSlugsForUser,

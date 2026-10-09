@@ -1,6 +1,7 @@
 [Unit]
 Description=Install SSH keys for octo from GCE instance metadata
-After=network-online.target
+Requires=octo-home-disk.service
+After=network-online.target octo-home-disk.service
 Wants=network-online.target
 
 [Service]

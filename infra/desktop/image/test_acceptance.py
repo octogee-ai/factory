@@ -51,6 +51,9 @@ elif name == 'ssh':
         if case == 'missing-resize': sys.exit(22)
         if case == 'resize-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists(): sys.exit(22)
         print('display resize verified: 1440x900')
+    elif '/etc/octogee-gateway-image' in command:
+        if case == 'gateway-cache-missing' or (case == 'gateway-cache-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists()): sys.exit(1)
+        print('us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + ('b' if case == 'gateway-cache-wrong' else 'a') * 64)
     elif 'cat /etc/octogee-computer-image' in command: print('fixture-image')
     elif 'systemd-analyze verify' in command:
         if case == 'nonexecutable-agent':
@@ -91,7 +94,7 @@ class ImageAcceptanceTests(unittest.TestCase):
                 ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', '--stop-start', '--zone', 'us-central1-a', '--fallback-zones', 'us-central1-b,us-central1-c'],
                 env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
                      'ACCEPTANCE_CASE': case, 'OCTOGEE_IMAGE_RUN_ID': '123-1' if ci else 'manual', 'ACCEPTANCE_MARKER': str(root / 'marker'),
-                     'ACCEPTANCE_EXPECTED_ZONE': expected_zone},
+                     'ACCEPTANCE_EXPECTED_ZONE': expected_zone, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64},
                 capture_output=True, text=True, timeout=15,
             )
 
@@ -184,6 +187,13 @@ class ImageAcceptanceTests(unittest.TestCase):
     def test_inactive_registration_agent_fails_acceptance(self):
         result = self.run_acceptance('inactive-agent')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_gateway_cache_must_contain_the_exact_digest_before_boot_and_after_restart(self):
+        for case in ('gateway-cache-missing', 'gateway-cache-wrong', 'gateway-cache-lost-after-reboot'):
+            with self.subTest(case=case):
+                result = self.run_acceptance(case)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('gateway image preload', result.stderr)
 
 
 if __name__ == '__main__':

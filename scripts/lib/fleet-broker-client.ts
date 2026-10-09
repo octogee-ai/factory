@@ -102,6 +102,13 @@ async function postNoContent(
   if (!resp.ok) throw await brokerHttpError(path, resp);
 }
 
+export interface FleetBrokerBlobMaterialization {
+  download: FleetBrokerBlobSignedUrl;
+  generation: string;
+  size: number;
+  md5Hash: string;
+}
+
 export interface FleetBrokerClient {
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
@@ -137,6 +144,7 @@ export interface FleetBrokerClient {
     slug: string;
     path: string;
   }): Promise<FleetBrokerBlobSignedUrl>;
+  blobMaterializationReadUrl(input: { slug: string; path: string; size: number; sha256?: string }): Promise<FleetBrokerBlobMaterialization>;
   blobUploadUrl(input: {
     slug: string;
     path: string;
@@ -145,6 +153,7 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBlobSignedUrl>;
   workspaceManifestReadUrl(input: {
     slug: string;
+    projectSlug?: string;
   }): Promise<FleetBrokerBlobSignedUrl>;
   workspaceManifestWriteUrl(input: {
     slug: string;
@@ -417,16 +426,22 @@ export function createFleetBrokerClient(
         { gatewayId, ...input },
       );
     },
+    async blobMaterializationReadUrl(input) {
+      return postJson<FleetBrokerBlobMaterialization>(
+        "/internal/fleet/blob/materialization/read-url", { gatewayId, ...input }, await gatewayCredentialHeaders(),
+      );
+    },
     blobUploadUrl(input) {
       return postJson<FleetBrokerBlobSignedUrl>(
         "/internal/fleet/blob/upload-url",
         { gatewayId, ...input },
       );
     },
-    workspaceManifestReadUrl(input) {
+    async workspaceManifestReadUrl(input) {
+      const project = input.projectSlug !== undefined;
       return postJson<FleetBrokerBlobSignedUrl>(
-        "/internal/fleet/blob/manifest/read-url",
-        { gatewayId, ...input },
+        project ? "/internal/fleet/blob/materialization/manifest/read-url" : "/internal/fleet/blob/manifest/read-url",
+        { gatewayId, ...input }, project ? await gatewayCredentialHeaders() : {},
       );
     },
     workspaceManifestWriteUrl(input) {

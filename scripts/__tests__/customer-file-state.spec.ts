@@ -8,6 +8,16 @@ import { customerFileStatePaths, flushCustomerFiles, removeDepartedCustomerFileS
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+it("fails the lifecycle flush if project publication fails and preserves local data", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  const project = path.join(root, "customers/alice/projects/demo");
+  await fs.mkdir(project, { recursive: true });
+  await fs.writeFile(path.join(project, "edit.txt"), "unsaved");
+  const persistProjects = vi.fn(async () => { throw new Error("remote unavailable"); });
+  await expect(flushCustomerFiles("alice", { root, persistProjects })).rejects.toThrow("remote unavailable");
+  expect(persistProjects).toHaveBeenCalledWith("alice");
+  expect(await fs.readFile(path.join(project, "edit.txt"), "utf8")).toBe("unsaved");
+});
 it("preserves branches, staging, untracked files and unpublished commits across two transfers without publishing", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
   const remote = path.join(root, "remote.git");

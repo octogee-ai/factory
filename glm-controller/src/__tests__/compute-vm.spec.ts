@@ -7,6 +7,8 @@ import {
   type CreateGatewayVmInput,
 } from "../lib/compute-vm";
 
+const IMAGE = { name: "octogee-computer-20260927", id: "222" };
+
 const BASE = "https://compute.googleapis.com/compute/v1/projects/octogee-test";
 
 const input: CreateGatewayVmInput = {
@@ -24,10 +26,11 @@ const input: CreateGatewayVmInput = {
 
 type Call = { url: string; method: string; body?: unknown };
 
-function fakeCompute(script: (call: Call, calls: Call[]) => { status: number; data?: unknown } | Error) {
+function fakeCompute(script: (call: Call, calls: Call[]) => { status: number; data?: unknown } | Error, image: typeof IMAGE | null = IMAGE) {
   const calls: Call[] = [];
   const request: ComputeRequest = vi.fn(async (call: Call) => {
     calls.push(call);
+    if (image && call.method === "GET" && call.url.includes("/images/family/")) return { status: 200, data: image };
     const out = script(call, calls);
     if (out instanceof Error) throw out;
     return out;
@@ -67,11 +70,26 @@ const instance = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("instanceInsertBody", () => {
-  it("renders a Spot VM from the image family with no external IP and the gateway identity", () => {
-    const body = instanceInsertBody("octogee-test", input, "us-west1-b", "SPOT") as Record<string, any>;
+  it("retains an owned home disk independently of the disposable boot disk", () => {
+    const body = instanceInsertBody("octogee-test", { ...input, homeDiskSizeGb: 10,
+      labels: { ...input.labels, "octogee-owner-uid": "owner-a" } }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
+    expect(body.disks[0].autoDelete).toBe(true);
+    expect(body.disks[1]).toMatchObject({ autoDelete: false,
+      initializeParams: { diskSizeGb: "10", diskType: "zones/us-west1-b/diskTypes/pd-balanced",
+        labels: { "octogee-owner-uid": "owner-a", "octogee-storage": "customer-home" } } });
+  });
+
+  it("leaves an unowned warm-pool home disposable", () => {
+    const body = instanceInsertBody("octogee-test", { ...input,
+      labels: { purpose: "octogee-warm-pool" } }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
+    expect(body.disks[1].autoDelete).toBe(true);
+  });
+
+  it("renders a Spot VM from a selected named image with no external IP and the gateway identity", () => {
+    const body = instanceInsertBody("octogee-test", input, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
     expect(body.name).toBe(input.instanceName);
     expect(body.machineType).toBe("zones/us-west1-b/machineTypes/n2-standard-4");
-    expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/family/octogee-computer");
+    expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/octogee-computer-20260927");
     expect(body.disks[0].initializeParams.diskSizeGb).toBe("40");
     expect(body.disks[0].autoDelete).toBe(true);
     expect(body.disks[1]).toEqual({
@@ -81,7 +99,7 @@ describe("instanceInsertBody", () => {
       initializeParams: {
         diskName: `${input.instanceName}-home`,
         diskSizeGb: "20",
-        diskType: "zones/us-west1-b/diskTypes/pd-ssd",
+        diskType: "zones/us-west1-b/diskTypes/pd-balanced",
       },
     });
     expect(body.networkInterfaces).toEqual([{ subnetwork: input.subnetwork }]);
@@ -106,12 +124,12 @@ describe("instanceInsertBody", () => {
   });
 
   it("sources the image from another project when the spec names one", () => {
-    const body = instanceInsertBody("octogee", { ...input, imageProject: "octogee-test" }, "us-west1-b", "SPOT") as Record<string, any>;
-    expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/family/octogee-computer");
+    const body = instanceInsertBody("octogee", { ...input, imageProject: "octogee-test" }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
+    expect(body.disks[0].initializeParams.sourceImage).toBe("projects/octogee-test/global/images/octogee-computer-20260927");
   });
 
   it("renders on-demand scheduling for STANDARD", () => {
-    const body = instanceInsertBody("octogee-test", input, "us-west1-b", "STANDARD") as Record<string, any>;
+    const body = instanceInsertBody("octogee-test", input, "us-west1-b", "STANDARD", IMAGE) as Record<string, any>;
     expect(body.scheduling).toEqual({ provisioningModel: "STANDARD", automaticRestart: true, onHostMaintenance: "MIGRATE" });
   });
 });
@@ -746,7 +764,7 @@ describe("createGatewayVmClient boot image currency", () => {
   });
 
   it("resolves an image family's current member in the named project, defaulting to the client's", async () => {
-    const { request, calls } = fakeCompute(() => ({ status: 200, data: { name: "octogee-computer-20260927", id: "222" } }));
+    const { request, calls } = fakeCompute(() => ({ status: 200, data: { name: "octogee-computer-20260927", id: "222" } }), null);
     const { client } = clientWith(request);
 
     expect(await client.readFamilyImage("octogee-computer", "octogee")).toEqual({ name: "octogee-computer-20260927", id: "222" });
@@ -775,3 +793,102 @@ describe("createGatewayVmClient boot image currency", () => {
    expect(journalMachineType).toHaveBeenCalledWith({ instanceName: "computer", zone: "us-central1-a", machineType: "n2-standard-2" }, expect.any(Function));
    expect(journalMachineType.mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0]);
  });
+
+
+describe("verified home retention", () => {
+  const source = `${BASE}/zones/us-west1-b/disks/customer-home`;
+  const home = { projectId: "octogee-test", zone: "us-west1-b", name: "customer-home", id: "777", sizeGb: 30, diskType: "pd-ssd" as const, source: "projects/octogee-test/zones/us-west1-b/disks/customer-home" };
+  const disk = (extra = {}) => ({ name: home.name, id: home.id, sizeGb: "30", type: "zones/us-west1-b/diskTypes/pd-ssd", labelFingerprint: "disk-fp", labels: { "octogee-owner-uid": "uida", "octogee-storage": "customer-home" }, ...extra });
+  it("disables home auto-delete and confirms the same owned disk without resizing it", async () => {
+    let autoDelete = true;
+    const { request, calls } = fakeCompute(call => {
+      if (call.method === "GET" && call.url.endsWith(`/instances/${input.instanceName}`)) return instance({ metadata: { items: [{ key: "octogee-owner-uid", value: "UidA" }] }, disks: [{ deviceName: "octogee-home", source, autoDelete }] });
+      if (call.method === "GET" && call.url === source) return { status: 200, data: disk() };
+      if (call.method === "POST" && call.url.includes("/setDiskAutoDelete?")) { autoDelete = false; return { status: 200, data: { name: "keep", status: "DONE" } }; }
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    });
+    await expect(clientWith(request).client.retainHome(input.instanceName, home.zone, "UidA")).resolves.toEqual(home);
+    expect(calls.filter(call => call.method !== "GET")).toEqual([{ method: "POST", url: `${BASE}/zones/us-west1-b/instances/${input.instanceName}/setDiskAutoDelete?autoDelete=false&deviceName=octogee-home` }]);
+  });
+  it.each([{ id: "wrong" }, { users: ["another-instance"] }, { labels: { "octogee-owner-uid": "another-owner" } }])("refuses an unverified detached source before any deletion: %j", async extra => {
+    const { request, calls } = fakeCompute(_call => ({ status: 200, data: disk(extra) }));
+    await expect(clientWith(request).client.deleteRetainedHome(home, "UidA")).rejects.toThrow(/unverified/);
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+  });
+  it("finishes erasure after a lost successful-delete acknowledgement without re-deleting", async () => {
+    let exists = true;
+    const { request, calls } = fakeCompute(call => {
+      if (call.method === "GET") return exists ? { status: 200, data: disk() } : http(404);
+      if (call.method === "DELETE") { exists = false; return http(503); }
+      return new Error("unexpected request");
+    });
+    const client = clientWith(request).client;
+    await expect(client.deleteRetainedHome(home, "UidA")).rejects.toThrow("503");
+    await expect(client.deleteRetainedHome(home, "UidA")).resolves.toBeUndefined();
+    expect(calls.filter(call => call.method === "DELETE")).toHaveLength(1);
+  });
+  it.each([403, 500, 503])("does not treat HTTP %i as completed erasure", async code => {
+    const { request, calls } = fakeCompute(() => http(code));
+    await expect(clientWith(request).client.deleteRetainedHome(home, "UidA")).rejects.toThrow(String(code));
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+  });
+  it.each([home.source, source, source.replace("compute.googleapis.com", "www.googleapis.com")])("deletes only a verified stopped boot with normalized home self-link %s", async attachedSource => {
+    const { request, calls } = fakeCompute(call => {
+      if (call.method === "GET" && call.url.includes("/instances/")) return instance({ id: "4242", status: "TERMINATED", metadata: { items: [{ key: "octogee-owner-uid", value: "UidA" }] }, disks: [{ boot: true, autoDelete: true }, { deviceName: "octogee-home", source: attachedSource, autoDelete: false }] });
+      if (call.method === "GET") return { status: 200, data: disk() };
+      return { status: 200, data: { name: "delete-boot", status: "DONE" } };
+    });
+    await clientWith(request).client.deleteRetainingHome(input.instanceName, home.zone, "UidA", home, "4242");
+    expect(calls.filter(call => call.method === "DELETE")).toEqual([{ url: `${BASE}/zones/${home.zone}/instances/${input.instanceName}`, method: "DELETE" }]);
+  });
+  it.each(["running", "instance-changed", "owner-changed", "home-auto-delete", "other-auto-delete", "disk-changed", "other-project", "other-zone"])("refuses unsafe retained-boot deletion before any DELETE: %s", async scenario => {
+    const disks = [{ boot: true, autoDelete: true }, { deviceName: "octogee-home", source: scenario === "other-project" ? source.replace("octogee-test", "another-project") : scenario === "other-zone" ? source.replace(home.zone, "us-west1-c") : home.source, autoDelete: scenario === "home-auto-delete" }];
+    if (scenario === "other-auto-delete") disks.push({ deviceName: "unverified-user-disk", source: "extra", autoDelete: true });
+    const { request, calls } = fakeCompute(call => call.url.includes("/instances/")
+      ? instance({ id: scenario === "instance-changed" ? "999" : "4242", status: scenario === "running" ? "RUNNING" : "TERMINATED", metadata: { items: [{ key: "octogee-owner-uid", value: scenario === "owner-changed" ? "Other" : "UidA" }] }, disks })
+      : { status: 200, data: disk(scenario === "disk-changed" ? { id: "888" } : {}) });
+    await expect(clientWith(request).client.deleteRetainingHome(input.instanceName, home.zone, "UidA", home, "4242")).rejects.toThrow();
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+  });
+  it("attaches an existing 30-GiB home while leaving its capacity and contents intact", () => {
+    const body = instanceInsertBody("octogee-test", { ...input, homeDiskSizeGb: 10, retainedHome: home }, home.zone, "SPOT", IMAGE) as Record<string, any>;
+    expect(body.disks[1]).toEqual({ boot: false, autoDelete: false, deviceName: "octogee-home", source: home.source, mode: "READ_WRITE" });
+    expect(body.disks[1]).not.toHaveProperty("initializeParams");
+  });
+});
+
+
+describe("cold placement image identity", () => {
+  it("resolves one named image before every zone/model attempt even when the family advances during fallback", async () => {
+    const posts: Array<Record<string, any>> = [];
+    const familyReads: string[] = [];
+    const request: ComputeRequest = vi.fn(async call => {
+      if (call.url.includes("/images/family/")) {
+        familyReads.push(call.url);
+        return { status: 200, data: { name: familyReads.length === 1 ? "computer-image-a" : "computer-image-b", id: "111" } };
+      }
+      if (call.method === "POST" && call.url.endsWith("/instances")) {
+        posts.push(call.body as Record<string, any>);
+        if (posts.length < 3) throw new ComputeOperationError("no capacity", ["ZONE_RESOURCE_POOL_EXHAUSTED"]);
+        return { status: 200, data: { name: "created", status: "DONE" } };
+      }
+      return instance({ scheduling: { provisioningModel: "STANDARD" } });
+    });
+    await clientWith(request).client.create({ ...input, zones: ["us-west1-b", "us-west1-c"], imageProject: "octogee" });
+    expect(familyReads).toEqual(["https://compute.googleapis.com/compute/v1/projects/octogee/global/images/family/octogee-computer"]);
+    expect(posts).toHaveLength(3);
+    expect(posts.map(post => post.disks[0].initializeParams.sourceImage)).toEqual(Array(3).fill("projects/octogee/global/images/computer-image-a"));
+  });
+  it.each(["changed-id", "missing-admission"])("rejects an unsafe pinned retained-home image before insertion: %s", async scenario => {
+    const request: ComputeRequest = vi.fn(async () => ({ status: 200, data: { ...IMAGE, id: scenario === "changed-id" ? "333" : IMAGE.id } }));
+    await expect(clientWith(request).client.create({ ...input, image: IMAGE, retainedHome: { projectId: "octogee-test", zone: input.zones[0], name: "home", id: "777", sizeGb: 30, diskType: "pd-ssd", source: "projects/octogee-test/zones/us-west1-b/disks/home" } })).rejects.toThrow(/identity changed|admission contract/);
+    expect(vi.mocked(request).mock.calls.every(([call]) => call.method === "GET")).toBe(true);
+    expect(vi.mocked(request).mock.calls[0][0].url).toBe(`${BASE}/global/images/${IMAGE.name}`);
+  });
+  it.each([{}, { name: "computer-image-a" }, { name: "../family/other", id: "111" }])("rejects an unresolvable image identity before Compute mutations", async data => {
+    const request: ComputeRequest = vi.fn(async call => call.url.includes("/images/family/") ? { status: 200, data }
+      : call.method === "POST" ? { status: 200, data: { name: "created", status: "DONE" } } : instance());
+    await expect(clientWith(request).client.create(input)).rejects.toThrow(/image/);
+    expect(vi.mocked(request).mock.calls.every(([call]) => call.method === "GET")).toBe(true);
+  });
+});

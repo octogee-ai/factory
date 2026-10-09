@@ -177,6 +177,7 @@ COPY infra/desktop/rootfs/usr/local/bin/octo-desktop-control /usr/local/bin/octo
 COPY infra/desktop/rootfs/usr/share/omarchy/octo-desktop/desk /usr/share/omarchy/octo-desktop/desk
 COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/octo-desk /usr/local/bin/octo-desk
+COPY --chmod=755 infra/gateway/octo-project /usr/local/bin/octo-project
 COPY infra/gateway/octo-desktop-style /usr/local/bin/octo-desktop-style
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
@@ -214,6 +215,7 @@ RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE" \
     && cd /octogee/scripts \
     && node --input-type=module -e 'import { beginWorkspaceIdentityBoot } from "@octogee/core/openclaw-workspace-bootstrap"; beginWorkspaceIdentityBoot({ GATEWAY_CLASS: "shared" });'
 
+COPY infra/gateway/.bashrc /etc/skel/.bashrc
 COPY infra/gateway/.bashrc /home/node/.bashrc
 RUN chown node:node /home/node/.bashrc
 
@@ -222,7 +224,7 @@ WORKDIR /home/node
 USER node
 
 ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
-ENV PATH=/home/node/.octogee/toolchains/active/bin:${PATH}
+ENV PATH=/work/cache/toolchains/active/bin:${PATH}
 
 # Suppress Node.js deprecation warnings (punycode etc.) from third-party deps
 ENV NODE_OPTIONS=--no-deprecation

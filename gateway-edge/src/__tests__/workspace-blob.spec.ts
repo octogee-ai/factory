@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { FileTarget } from "../lib/fileTarget.js";
 
 const h = vi.hoisted(() => ({
   save: vi.fn(),
+  brokerUpload: vi.fn(),
+  getMetadata: vi.fn(),
   delete: vi.fn(),
   getSignedUrl: vi.fn(),
   file: vi.fn(),
@@ -16,6 +19,7 @@ const h = vi.hoisted(() => ({
   rollbackWorkspaceStorageReservation: vi.fn(),
   releaseWorkspaceStorage: vi.fn(),
 }));
+vi.mock("../lib/project-blob-upload.js", () => ({ uploadProjectBlobViaBroker: h.brokerUpload }));
 
 vi.mock("../lib/db.js", () => ({
   db: {},
@@ -66,6 +70,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.file.mockReturnValue({
     save: h.save,
+    getMetadata: h.getMetadata,
     delete: h.delete,
     getSignedUrl: h.getSignedUrl,
   });
@@ -106,6 +111,33 @@ beforeEach(() => {
   h.finalizeWorkspaceStorageReservation.mockResolvedValue(undefined);
   h.rollbackWorkspaceStorageReservation.mockResolvedValue(undefined);
   h.releaseWorkspaceStorage.mockResolvedValue(undefined);
+});
+afterEach(() => { vi.unstubAllEnvs(); });
+
+it("saves runtime project assets through the broker without broad cloud credentials", async () => {
+  vi.stubEnv("FLEET_BROKER_URL", "http://tenant-api");
+  h.save.mockRejectedValue(new Error("storage.objects.create denied"));
+  h.brokerUpload.mockResolvedValue({ gcsPath: "immutable-project-object", sha256: "a".repeat(64), size: 3 });
+  await expect(storeWorkspaceBlob(target, "asset.bin", Buffer.from("abc"), "application/octet-stream", { immutable: true }))
+    .resolves.toMatchObject({ gcsPath: "immutable-project-object" });
+  expect(h.brokerUpload).toHaveBeenCalledWith("http://tenant-api", target, Buffer.from("abc"), "application/octet-stream");
+  expect(h.bucket).not.toHaveBeenCalled();
+  expect(h.updateManifest).not.toHaveBeenCalled();
+});
+
+it("stores an immutable project asset with create-only semantics and verifies a deduplicated object", async () => {
+  const contents = Buffer.from("abc");
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  h.getMetadata.mockResolvedValue([{ size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" }]);
+  const saved = await storeWorkspaceBlob(target, "asset.bin", contents, "application/octet-stream", { immutable: true });
+  expect(saved).toMatchObject({ gcsPath: `${target.gcsPrefix}/.objects/${sha256}`, sha256, size: 3 });
+  expect(h.save).toHaveBeenCalledWith(contents, expect.objectContaining({ preconditionOpts: { ifGenerationMatch: 0 } }));
+  expect(h.updateManifest).toHaveBeenCalledWith(target.gcsPrefix, expect.objectContaining({ "asset.bin": expect.objectContaining({ sha256 }) }));
+  h.save.mockRejectedValueOnce(Object.assign(new Error("already exists"), { code: 412 }));
+  await expect(storeWorkspaceBlob(target, "asset.bin", contents, "application/octet-stream", { immutable: true })).resolves.toMatchObject({ sha256 });
+  h.save.mockRejectedValueOnce(Object.assign(new Error("already exists"), { code: 412 }));
+  h.getMetadata.mockResolvedValueOnce([{ size: "3", md5Hash: "wrong" }]);
+  await expect(storeWorkspaceBlob(target, "asset.bin", contents, "application/octet-stream", { immutable: true })).rejects.toThrow(/checksum/);
 });
 
 describe("storeWorkspaceBlob", () => {

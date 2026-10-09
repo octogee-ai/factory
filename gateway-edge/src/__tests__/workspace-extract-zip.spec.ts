@@ -16,8 +16,8 @@ vi.mock("../lib/manifest", () => ({
 }));
 
 const storeWorkspaceBlob = vi.fn();
-vi.mock("../lib/workspace-blob.js", () => ({
-  storeWorkspaceBlob: (...args: unknown[]) => storeWorkspaceBlob(...args),
+vi.mock("../lib/project-blob-edit.js", () => ({
+  storeUploadedWorkspaceBlob: (...args: unknown[]) => storeWorkspaceBlob(...args),
   WorkspaceStorageQuotaError: class WorkspaceStorageQuotaError extends Error {},
 }));
 

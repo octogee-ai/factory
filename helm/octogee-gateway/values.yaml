@@ -28,6 +28,7 @@ ownerUid: ""
 # openclaw.json from that builder's Gitea system_config repo before OpenClaw
 # starts.
 builderSlug: ""
+builderHomeClaimName: ""
 
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take

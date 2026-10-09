@@ -118,6 +118,7 @@ export interface GatewayComputerIdentity {
 
 export interface RenderVmRuntimeBundleInput {
   gatewayId: string;
+  homeStorageId?: string;
   namespace: string;
   imageRepository: string;
   imageTag: string;
@@ -187,7 +188,7 @@ function renderMounts(mounts: K8sVolumeMount[] | undefined, volumes: Set<string>
 }
 
 function renderVolume(volume: K8sVolume): GatewayVmRuntimeVolume {
-  if (volume.emptyDir) return { name: volume.name, kind: "emptyDir" };
+  if (volume.emptyDir) return { name: volume.name, kind: ["builder-cache", "project-materializations"].includes(volume.name) ? "ephemeral" : "emptyDir" };
   const sources = volume.projected?.sources ?? [];
   const token = sources.find((source) => source.serviceAccountToken)?.serviceAccountToken;
   if (!token) throw new Error(`volume ${volume.name}: only emptyDir and projected service-account-token volumes are supported`);
@@ -277,6 +278,7 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
   const gateway = containers.find((container) => container.name === GATEWAY_CONTAINER_NAME);
   if (!gateway) throw new Error("rendered Deployment has no gateway container");
   containers.push(renderDesktopNode(gateway));
+  configureHomeIdentity(input.homeStorageId, init, containers);
   volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" }, { name: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, kind: "emptyDir" });
   const unversioned = {
     gatewayId: input.gatewayId,
@@ -290,4 +292,11 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
     kubernetes: input.kubernetes,
   };
   return { version: bundleVersion(unversioned), ...unversioned, renderedAt: input.now() };
+}
+
+function configureHomeIdentity(homeStorageId: string | undefined, init: GatewayVmRuntimeContainer | null, containers: GatewayVmRuntimeContainer[]): void {
+  if (homeStorageId !== undefined) {
+    if (!/^\d+$/u.test(homeStorageId)) throw new Error("invalid home storage identity");
+    for (const container of [...(init ? [init] : []), ...containers]) container.env.OCTOGEE_HOME_STORAGE_ID = homeStorageId;
+  }
 }

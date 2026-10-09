@@ -1,4 +1,5 @@
-import type { GatewayVmProvisioningModel } from "@octogee/shared/types/glm";
+import { createComputerHomeClient } from "./compute-home.js";
+import type { GatewayVmProvisioningModel, RetainedBuilderHome } from "@octogee/shared/types/glm";
 
 export interface ComputeRequest {
   (opts: { url: string; method: string; body?: unknown }): Promise<{ status: number; data?: unknown }>;
@@ -11,6 +12,7 @@ export interface GatewayVmClientDeps {
   wait: (ms: number) => Promise<void>;
   now: () => number;
   journalMachineType?: (input: { instanceName: string; zone: string; machineType: string }, action: () => Promise<void>) => Promise<void>;
+  journalHomeResize?: (input: { home: RetainedBuilderHome; ownerUid: string; sizeGb: number }, action: () => Promise<void>) => Promise<void>;
   operationTimeoutMs?: number;
   pollIntervalMs?: number;
 }
@@ -23,6 +25,8 @@ export interface CreateGatewayVmInput {
   imageProject?: string;
   diskSizeGb: number;
   homeDiskSizeGb: number;
+  retainedHome?: RetainedBuilderHome;
+  image?: ComputeImageRef;
   provisioningModel: GatewayVmProvisioningModel;
   serviceAccountEmail: string;
   subnetwork: string;
@@ -66,6 +70,7 @@ export interface BindGatewayVmInput {
 export interface ComputeImageRef {
   name: string;
   id: string;
+  homeAdmission?: true;
 }
 
 export interface CreateGatewayVmResult {
@@ -76,6 +81,11 @@ export interface CreateGatewayVmResult {
 }
 
 export interface GatewayVmClient {
+  expandHome(home: RetainedBuilderHome, ownerUid: string, sizeGb: number): Promise<RetainedBuilderHome>;
+  retainHome(instanceName: string, zone: string, ownerUid: string): Promise<RetainedBuilderHome>;
+  verifyDetachedHome(home: RetainedBuilderHome, ownerUid: string): Promise<void>;
+  deleteRetainedHome(home: RetainedBuilderHome, ownerUid: string): Promise<void>;
+  deleteRetainingHome(instanceName: string, zone: string, ownerUid: string, home: RetainedBuilderHome, instanceId: string): Promise<void>;
   create(input: CreateGatewayVmInput): Promise<CreateGatewayVmResult>;
   describe(instanceName: string, zone: string): Promise<GatewayVmDescription | null>;
   find(instanceName: string): Promise<GatewayVmDescription | null>;
@@ -92,6 +102,7 @@ export interface GatewayVmClient {
   lastPreemptedAt(instanceName: string, zone: string): Promise<number | null>;
   readBootImage(instanceName: string, zone: string): Promise<ComputeImageRef>;
   readFamilyImage(family: string, project?: string): Promise<ComputeImageRef>;
+  readImage(name: string, project?: string): Promise<ComputeImageRef>;
 }
 
 export class ComputeOperationError extends Error {
@@ -141,7 +152,7 @@ interface ComputeInstance {
   labelFingerprint?: string;
   metadata?: { fingerprint?: string; items?: ComputeMetadataItem[] };
   serviceAccounts?: Array<{ email?: string; scopes?: string[] }>;
-  disks?: Array<{ boot?: boolean; source?: string }>;
+  disks?: Array<{ boot?: boolean; source?: string; deviceName?: string; autoDelete?: boolean }>;
 }
 
 interface ComputeDisk {
@@ -152,6 +163,7 @@ interface ComputeDisk {
 interface ComputeImage {
   name?: string;
   id?: string;
+  labels?: Record<string, string>;
 }
 
 interface ComputeOperationList {
@@ -276,7 +288,6 @@ function modelAttempts(model: GatewayVmProvisioningModel): GatewayVmProvisioning
 // caller's order, and spot pays the ~4x on-demand rate only once every zone
 // has refused it.
 async function placeAcrossZones(input: CreateGatewayVmInput, insert: InsertInZone, log: (msg: string) => void): Promise<VmPlacement> {
-  if (input.zones.length === 0) throw new Error(`${input.instanceName}: no zones to place it in`);
   const attempts = modelAttempts(input.provisioningModel).flatMap((model) => input.zones.map((zone) => ({ model, zone })));
   let lastError: unknown;
   for (const [index, { model, zone }] of attempts.entries()) {
@@ -314,6 +325,7 @@ export function instanceInsertBody(
   input: CreateGatewayVmInput,
   zone: string,
   provisioningModel: GatewayVmProvisioningModel,
+  image: ComputeImageRef,
 ): Record<string, unknown> {
   return {
     name: input.instanceName,
@@ -323,19 +335,26 @@ export function instanceInsertBody(
         boot: true,
         autoDelete: true,
         initializeParams: {
-          sourceImage: `projects/${input.imageProject ?? projectId}/global/images/family/${input.imageFamily}`,
+          sourceImage: `projects/${input.imageProject ?? projectId}/global/images/${image.name}`,
           diskSizeGb: String(input.diskSizeGb),
           diskType: `zones/${zone}/diskTypes/pd-ssd`,
         },
       },
-      {
+      input.retainedHome ? {
+        boot: false, autoDelete: false, deviceName: COMPUTER_HOME_DISK_DEVICE_NAME,
+        source: input.retainedHome.source, mode: "READ_WRITE",
+      } : {
         boot: false,
-        autoDelete: true,
+        autoDelete: !input.labels["octogee-owner-uid"],
         deviceName: COMPUTER_HOME_DISK_DEVICE_NAME,
         initializeParams: {
           diskName: `${input.instanceName}-home`,
           diskSizeGb: String(input.homeDiskSizeGb),
-          diskType: `zones/${zone}/diskTypes/pd-ssd`,
+          diskType: `zones/${zone}/diskTypes/pd-balanced`,
+          ...(input.labels["octogee-owner-uid"] ? { labels: {
+            "octogee-owner-uid": input.labels["octogee-owner-uid"],
+            "octogee-storage": "customer-home",
+          } } : {}),
         },
       },
     ],
@@ -379,13 +398,17 @@ async function readBootImage(request: ComputeRequest, base: string, instanceName
   return { name, id };
 }
 
-async function readFamilyImage(request: ComputeRequest, family: string, project: string): Promise<ComputeImageRef> {
-  const res = await request({ url: `https://compute.googleapis.com/compute/v1/projects/${project}/global/images/family/${family}`, method: "GET" });
+async function readImageRef(request: ComputeRequest, path: string, project: string): Promise<ComputeImageRef> {
+  const res = await request({ url: `https://compute.googleapis.com/compute/v1/projects/${project}/global/images/${path}`, method: "GET" });
   const image = (res.data ?? {}) as ComputeImage;
   const name = nonEmpty(image.name);
   const id = nonEmpty(image.id);
-  if (!name || !id) throw new Error(`image family ${project}/${family}: compute returned no current image`);
-  return { name, id };
+  if (!name || !/^[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/u.test(name) || !id || !/^[1-9]\d{0,19}$/u.test(id)) throw new Error(`image ${project}/${path}: compute returned no valid current image`);
+  return { name, id, ...(image.labels?.["home-admission"] === "retained-v1" ? { homeAdmission: true as const } : {}) };
+}
+
+async function readFamilyImage(request: ComputeRequest, family: string, project: string): Promise<ComputeImageRef> {
+  return readImageRef(request, `family/${family}`, project);
 }
 
 function operationWaiter(deps: GatewayVmClientDeps, base: string) {
@@ -513,13 +536,13 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     await waitForOperation(zone, (metadataRes.data ?? {}) as ComputeOperation, `setMetadata ${instanceName}`);
   }
 
-  async function insert(input: CreateGatewayVmInput, zone: string, provisioningModel: GatewayVmProvisioningModel): Promise<"created" | "exists"> {
+  async function insert(input: CreateGatewayVmInput, zone: string, provisioningModel: GatewayVmProvisioningModel, image: ComputeImageRef): Promise<"created" | "exists"> {
     let res: { status: number; data?: unknown };
     try {
       res = await deps.request({
         url: `${base}/zones/${zone}/instances`,
         method: "POST",
-        body: instanceInsertBody(deps.projectId, input, zone, provisioningModel),
+        body: instanceInsertBody(deps.projectId, input, zone, provisioningModel, image),
       });
     } catch (err) {
       if (statusOf(err) === 409) return "exists";
@@ -531,7 +554,13 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
   }
 
   async function create(input: CreateGatewayVmInput): Promise<CreateGatewayVmResult> {
-    const placement = await placeAcrossZones(input, (zone, model) => insert(input, zone, model), deps.log);
+    if (input.zones.length === 0) throw new Error(`${input.instanceName}: no zones to place it in`);
+    const image = input.image
+      ? await readImageRef(deps.request, input.image.name, input.imageProject ?? deps.projectId)
+      : await readFamilyImage(deps.request, input.imageFamily, input.imageProject ?? deps.projectId);
+    if (input.image && (image.name !== input.image.name || image.id !== input.image.id)) throw new Error("pinned computer image identity changed before creation");
+    if (input.retainedHome && !image.homeAdmission) throw new Error("retained home requires the platform image's native migration and current-SSH admission contract");
+    const placement = await placeAcrossZones(input, (zone, model) => insert(input, zone, model, image), deps.log);
     const { outcome, zone, provisioningModel, fellBackToStandard } = placement;
     const description = await describe(input.instanceName, zone);
     if (!description) throw new Error(`insert ${input.instanceName}: instance vanished after ${outcome}`);
@@ -602,7 +631,10 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     return true;
   }
 
+
   return {
+    ...createComputerHomeClient({ request: deps.request, projectId: deps.projectId, readInstance, journalHomeResize: deps.journalHomeResize,
+      waitForOperation: (zone, operation, what) => waitForOperation(zone, operation as ComputeOperation, what) }),
     create,
     describe,
     find,
@@ -616,6 +648,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
     start,
     delete: remove, lastPreemptedAt: (instanceName, zone) => readLastPreemptedAt(deps.request, base, instanceName, zone),
+    readImage: (name, project = deps.projectId) => readImageRef(deps.request, name, project),
     readBootImage: (name, zone) => readBootImage(deps.request, base, name, zone), readFamilyImage: (family, project = deps.projectId) => readFamilyImage(deps.request, family, project),
   };
 }

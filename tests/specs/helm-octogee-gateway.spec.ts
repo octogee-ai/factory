@@ -564,6 +564,16 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(findDoc(helmTemplate(), "ClusterRoleBinding", "octogee-gateway-tokenreview-octogee-test-default")).toBeNull();
   });
 
+  it("routes Builder sidecar asset edits through the canonical project mount", () => {
+    const dep = findDoc(helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "builder" }), "Deployment", "octogee-gateway-bender") ?? "";
+    const pod = parseDocument(dep).toJSON().spec.template.spec;
+    for (const name of ["gateway", "gateway-edge"]) {
+      const container = pod.containers.find((entry: any) => entry.name === name);
+      expect(container.env).toContainEqual({ name: "OCTOGEE_PROJECTS_MOUNT", value: "/work/materialized" });
+      expect(container.volumeMounts).toContainEqual(expect.objectContaining({ mountPath: "/work/materialized" }));
+    }
+  });
+
   it("mounts the OpenClaw device-token cache only on gateway-edge", () => {
     const dep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
     const gw = containerBlock(dep, "gateway");
@@ -725,13 +735,13 @@ const out = helmTemplate();
     expect(shared).not.toMatch(/^ {6}runtimeClassName:/m);
   });
 
-  it("renders every builder-gateway container Restricted-compliant, with fix-perms as the one init exception", () => {
+  it("renders Restricted-compliant runtime containers and bounded home initialization capabilities", () => {
     const output = helmTemplate("octogee-gw-builder", {
       gatewayId: "builder",
       gatewayClass: "builder",
     });
     const deployment = parseAllDocuments(output)
-      .map((document) => document.toJSON() as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: { securityContext?: Record<string, unknown>; containers?: Array<{ securityContext?: Record<string, unknown> }>; initContainers?: Array<{ securityContext?: Record<string, unknown> }> } } } })
+      .map((document) => document.toJSON() as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: { securityContext?: Record<string, unknown>; containers?: Array<{ securityContext?: Record<string, unknown> }>; initContainers?: Array<{ name: string; securityContext?: Record<string, unknown> }> } } } })
       .find((document) => document.kind === "Deployment" && document.metadata?.name === "octogee-gateway-builder");
     const pod = deployment?.spec?.template?.spec;
 
@@ -741,12 +751,26 @@ const out = helmTemplate();
       expect(container.securityContext?.allowPrivilegeEscalation).toBe(false);
       expect(container.securityContext?.capabilities).toEqual({ drop: ["ALL"] });
     }
-    expect(pod?.initContainers?.map((container) => container.securityContext)).toEqual([{
-      runAsUser: 0,
-      runAsNonRoot: false,
-      allowPrivilegeEscalation: false,
-      capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "SETUID", "SETGID"] },
-    }]);
+    expect(pod?.initContainers?.map(({ name, securityContext }) => ({ name, securityContext }))).toEqual([
+      {
+        name: "prepare-home",
+        securityContext: {
+          runAsUser: 0,
+          runAsNonRoot: false,
+          allowPrivilegeEscalation: false,
+          capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"] },
+        },
+      },
+      {
+        name: "fix-perms",
+        securityContext: {
+          runAsUser: 0,
+          runAsNonRoot: false,
+          allowPrivilegeEscalation: false,
+          capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "SETUID", "SETGID"] },
+        },
+      },
+    ]);
   });
 
   it("renders a PodDisruptionBudget keyed by gateway-instance for an isolated gateway", () => {

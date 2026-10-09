@@ -1,6 +1,9 @@
 import { constants, type Stats } from "node:fs";
+import { createHash } from "node:crypto";
+import { withProjectAssetManifest, projectAssetEntry } from "./project-asset-manifest.js";
+import { withMaterializedProjectAssets } from "@octogee/core/project-asset-state";
 import { dirname, join } from "node:path";
-import { link, mkdtemp, open, rename, rmdir, unlink, type FileHandle } from "node:fs/promises";
+import { link, lstat, mkdtemp, open, rename, rmdir, unlink, type FileHandle } from "node:fs/promises";
 
 import {
   isDivertableWorkspacePath,
@@ -41,6 +44,30 @@ export interface DivertBinariesDeps {
 }
 
 const DEFAULT_DEPS: DivertBinariesDeps = { gitStatus, storeWorkspaceBlob };
+type FileSnapshot = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
+const retainedSnapshots = new Map<string, { snapshot: FileSnapshot; manifest: string }>();
+const MAX_RETAINED_SNAPSHOTS = 100_000;
+function rememberRetainedSnapshot(key: string, snapshot: Stats, manifest: string): void {
+  retainedSnapshots.delete(key);
+  if (retainedSnapshots.size >= MAX_RETAINED_SNAPSHOTS) retainedSnapshots.delete(retainedSnapshots.keys().next().value!);
+  const { dev, ino, size, mtimeMs, ctimeMs } = snapshot;
+  retainedSnapshots.set(key, { snapshot: { dev, ino, size, mtimeMs, ctimeMs }, manifest });
+}
+
+function reuseRetainedSnapshot(key: string, stats: Stats, options: { retainLocalFiles?: boolean; materializedManifest?: string }): boolean {
+  const cached = options.retainLocalFiles ? retainedSnapshots.get(key) : undefined;
+  if (cached && cached.manifest === options.materializedManifest && sameFileSnapshot(cached.snapshot, stats)) {
+    rememberRetainedSnapshot(key, stats, cached.manifest);
+    return true;
+  }
+  retainedSnapshots.delete(key);
+  return false;
+}
+
+async function recordRetainedSnapshot(key: string, snapshot: Stats, manifest: string, handle: FileHandle): Promise<void> {
+  if (!sameFileSnapshot(snapshot, await handle.stat())) throw new Error("file changed while recording materialization");
+  rememberRetainedSnapshot(key, snapshot, manifest);
+}
 
 interface ConfinedFile {
   handle: FileHandle;
@@ -135,14 +162,18 @@ async function openConfinedFile(customerDir: string, relativePath: string): Prom
 }
 
 function sameFileSnapshot(
-  left: Stats,
-  right: Stats,
+  left: FileSnapshot,
+  right: FileSnapshot,
 ): boolean {
   return left.dev === right.dev &&
     left.ino === right.ino &&
     left.size === right.size &&
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs;
+}
+
+function assertStableRead(contents: Buffer, before: Stats, after: Stats): void {
+  if (contents.length !== before.size || !sameFileSnapshot(before, after)) throw new Error("file changed while reading");
 }
 
 function sameFileIdentity(left: Stats, right: Stats): boolean {
@@ -163,11 +194,32 @@ async function restoreStagedEntry(stagedPath: string, entryPath: string): Promis
   await unlink(stagedPath);
 }
 
+async function retainProjectBinary(input: {
+  customerDir: string; relativePath: string; target: WorkspaceBlobTarget; deps: DivertBinariesDeps;
+  contents: Buffer; confined: Awaited<ReturnType<typeof openConfinedFile>>; afterRead: Stats;
+}): Promise<string> {
+  const { customerDir, relativePath, target, deps, contents, confined, afterRead } = input;
+      let saved;
+      await withProjectAssetManifest(customerDir, target.gcsPrefix, async manifest => {
+        const sha256 = createHash("sha256").update(contents).digest("hex");
+        if (manifest[relativePath]?.sha256 === sha256) { saved = manifest[relativePath]; return; }
+        const mimeType = getMimeType(getExtension(relativePath));
+        const stored = await deps.storeWorkspaceBlob(target, relativePath, contents, mimeType, { immutable: true });
+        if (!sameFileSnapshot(afterRead, await confined.handle.stat())) throw new Error("file changed during remote save");
+        if (stored.sha256 !== sha256 || stored.size !== contents.length) throw new Error("project asset upload identity mismatch");
+        manifest[relativePath] = projectAssetEntry(stored, mimeType);
+        saved = manifest[relativePath];
+      });
+      await withMaterializedProjectAssets(customerDir, target.gcsPrefix, async files => { files[relativePath] = saved!; });
+      return JSON.stringify(saved);
+}
+
 async function divertBinaryEntry(
   customerDir: string,
   relativePath: string,
   target: WorkspaceBlobTarget,
   deps: DivertBinariesDeps,
+  options: { retainLocalFiles?: boolean; knownAsset?: boolean; materializedManifest?: string } = {},
 ): Promise<DivertedBlob | null> {
   const confined = await openConfinedFile(customerDir, relativePath);
   let stagedPath: string | null = null;
@@ -178,12 +230,18 @@ async function divertBinaryEntry(
     if (stats.size > MAX_DIVERTED_BLOB_BYTES) {
       throw new Error(`${stats.size} bytes exceeds the blob limit`);
     }
+    const cacheKey = JSON.stringify([customerDir, target.gcsPrefix, relativePath]);
+    if (reuseRetainedSnapshot(cacheKey, stats, options)) return null;
     const contents = await confined.handle.readFile();
     const afterRead = await confined.handle.stat();
-    if (contents.length !== stats.size || !sameFileSnapshot(stats, afterRead)) {
-      throw new Error("file changed while reading");
+    assertStableRead(contents, stats, afterRead);
+    if (!options.knownAsset && !looksBinary(contents.subarray(0, BINARY_SNIFF_BYTES))) return null;
+
+    if (options.retainLocalFiles) {
+      const manifest = await retainProjectBinary({ customerDir, relativePath, target, deps, contents, confined, afterRead });
+      await recordRetainedSnapshot(cacheKey, afterRead, manifest, confined.handle);
+      return { path: relativePath, size: stats.size };
     }
-    if (!looksBinary(contents.subarray(0, BINARY_SNIFF_BYTES))) return null;
 
     stagingDir = await mkdtemp(join(dirname(customerDir), ".octogee-diversion-"));
     stagedPath = join(stagingDir, "payload");
@@ -232,6 +290,7 @@ export async function divertWorktreeBinaries(
   customerDir: string,
   target: WorkspaceBlobTarget,
   deps: DivertBinariesDeps = DEFAULT_DEPS,
+  options: { retainLocalFiles?: boolean } = {},
 ): Promise<DivertBinariesResult> {
   const status = await deps.gitStatus(customerDir, { untracked: "all" });
   if (!status.ok) {
@@ -241,15 +300,44 @@ export async function divertWorktreeBinaries(
   const diverted: DivertedBlob[] = [];
   const failures: string[] = [];
   const failedPaths: string[] = [];
+  const assetPaths = new Set<string>();
+  const materializedManifests = new Map<string, string>();
 
-  for (const entry of status.entries) {
-    if (entry.change === "deleted" || !isDivertablePath(entry.path)) continue;
+  if (options.retainLocalFiles) {
+    await withMaterializedProjectAssets(customerDir, target.gcsPrefix, async files => {
+      await withProjectAssetManifest(customerDir, target.gcsPrefix, async manifest => {
+        for (const [name, prior] of Object.entries(files)) {
+          if (!manifest[name]) { delete files[name]; continue; }
+          if (manifest[name].gcsPath !== prior.gcsPath || manifest[name].uploadedAt !== prior.uploadedAt) continue;
+          let entry;
+          try {
+            entry = await openConfinedEntry(customerDir, name);
+            await lstat(entry.entryPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            delete manifest[name];
+            delete files[name];
+          } finally { await entry?.close(); }
+        }
+        for (const name of Object.keys(manifest)) {
+          assetPaths.add(name);
+          const version = JSON.stringify(manifest[name]);
+          if (JSON.stringify(files[name]) === version) materializedManifests.set(name, version);
+        }
+      });
+    });
+  }
+
+  const candidates = new Set([...status.entries.filter(entry => entry.change !== "deleted").map(entry => entry.path), ...assetPaths]);
+  for (const name of candidates) {
+    if (!isDivertablePath(name)) continue;
     try {
-      const divertedBlob = await divertBinaryEntry(customerDir, entry.path, target, deps);
+      const divertedBlob = await divertBinaryEntry(customerDir, name, target, deps, { retainLocalFiles: options.retainLocalFiles, knownAsset: assetPaths.has(name), materializedManifest: materializedManifests.get(name) });
       if (divertedBlob) diverted.push(divertedBlob);
     } catch (err) {
-      failures.push(`${entry.path}: ${err instanceof Error ? err.message : String(err)}`);
-      failedPaths.push(entry.path);
+      if (assetPaths.has(name) && (err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      failedPaths.push(name);
     }
   }
 

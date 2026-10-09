@@ -32,7 +32,7 @@ class CandidateBuildTests(unittest.TestCase):
         key.touch()
         (root / "key.pub").write_text("ssh-ed25519 fixture")
         return subprocess.run(['bash', str(Path(__file__).with_name('build.sh')), '--project', 'fixture', *extra_args],
-            env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'OCTOGEE_GCE_SSH_KEY': str(key), 'BUILD_CALLS': str(root / 'calls'), 'OCTOGEE_IMAGE_RUN_ID': run_id, 'BUILD_CASE': case}, capture_output=True, text=True, timeout=10)
+            env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'OCTOGEE_GCE_SSH_KEY': str(key), 'BUILD_CALLS': str(root / 'calls'), 'OCTOGEE_IMAGE_RUN_ID': run_id, 'BUILD_CASE': case, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64}, capture_output=True, text=True, timeout=10)
 
     def test_exhausted_zone_falls_back_and_addresses_the_builder_there(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -83,6 +83,7 @@ class CandidateBuildTests(unittest.TestCase):
             pipeline = next(args for args in calls if 'ssh' in args and 'pipeline.sh' in args[-1])[-1]
             self.assertIn("IMAGE_DEVICE='/dev/disk/by-id/google-octogee-image'", pipeline)
             self.assertIn("DISK_GB='40'", pipeline)
+            self.assertIn("OCTOGEE_DESKTOP_GATEWAY_IMAGE='us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:" + "a" * 64 + "'", pipeline)
             stop = calls.index(['compute', 'instances', 'stop', 'builder-x', '--zone', 'us-central1-b', '--project', 'fixture', '--quiet'])
             registration = next(i for i, args in enumerate(calls) if args[:3] == ['compute', 'images', 'create'])
             self.assertLess(stop, registration)

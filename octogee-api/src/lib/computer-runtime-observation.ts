@@ -1,11 +1,14 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction, DocumentData } from "firebase-admin/firestore";
 import {
   GLM_GATEWAYS_COLLECTION,
   isGatewayVmDiskObservation,
+  isDisposableHomeCheckpoint,
   resolveGatewayRuntime,
   vmDiskFreePercent,
   type GatewayVmDiskObservation,
+  type GatewayVmBootRecoverySample,
   type GatewayVmHomeState,
+  type GatewayVmHomeCheckpoint,
   type GatewayVmImageObservation,
   type GatewayVmPreemptionNotice,
 } from "@octogee/shared/types/glm";
@@ -28,18 +31,48 @@ export async function readComputerRuntimeObservation(db: Pick<Firestore, "doc">,
   return snap.exists ? snap.data() : undefined;
 }
 
-export async function recordComputerHomeCheckpoint(db: Pick<Firestore, "doc" | "runTransaction">, gatewayId: string, home: Partial<GatewayVmHomeState>): Promise<void> {
+type CheckpointOwner = { uid: string; instanceId: string };
+
+function runtimeCheckpointMatches(data: DocumentData | undefined, owner: CheckpointOwner): boolean {
+  return data?.runtime === "gce-vm" && data?.vm?.instanceId === owner.instanceId;
+}
+
+async function checkpointOwnerAuthority(tx: Transaction, db: Pick<Firestore, "doc">, gatewayId: string, owner?: CheckpointOwner) {
+  if (!owner) return { userRef: null, userData: undefined };
+  const userRef = db.doc(`users/${owner.uid}`);
+  const user = await tx.get(userRef);
+  const gateway = await tx.get(db.doc(`gateways/${gatewayId}`));
+  if (!user.exists || gateway.data()?.ownerUid !== owner.uid) throw new Error("computer checkpoint owner changed before acceptance");
+  return { userRef, userData: user.data() };
+}
+
+function checkpointObservationAdvances(previous: Partial<GatewayVmHomeState> | undefined, home: Partial<GatewayVmHomeState>, incoming: GatewayVmHomeCheckpoint): boolean {
+  const previousName = previous?.lastCheckpoint?.name;
+  if (previousName && previousName > incoming.name) return false;
+  return previousName !== incoming.name || (previous?.checkpointAcknowledgedAt ?? -1) < (home.checkpointAcknowledgedAt ?? -1);
+}
+
+function nextHomeRecovery(userData: DocumentData | undefined, incoming: GatewayVmHomeCheckpoint): GatewayVmHomeCheckpoint | null {
+  if (!isDisposableHomeCheckpoint(incoming)) return null;
+  const recovery = userData?.provisioning?.homeCheckpoint;
+  if (recovery === undefined) return incoming;
+  if (!isDisposableHomeCheckpoint(recovery)) throw new Error("Builder home recovery checkpoint is malformed");
+  return recovery.name <= incoming.name ? incoming : null;
+}
+
+export async function recordComputerHomeCheckpoint(db: Pick<Firestore, "doc" | "runTransaction">, gatewayId: string, home: Partial<GatewayVmHomeState>, owner?: CheckpointOwner): Promise<void> {
   const incoming = home.lastCheckpoint;
   if (!incoming) throw new Error("cannot record an empty computer checkpoint");
   const ref = db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`);
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return;
-    const previous = snap.data()?.vmHome as Partial<GatewayVmHomeState> | undefined;
-    const previousName = previous?.lastCheckpoint?.name;
-    if (previousName && previousName > incoming.name) return;
-    if (previousName === incoming.name && (previous?.checkpointAcknowledgedAt ?? -1) >= (home.checkpointAcknowledgedAt ?? -1)) return;
+    if (owner && !runtimeCheckpointMatches(snap.data(), owner)) throw new Error("computer checkpoint binding changed before acceptance");
+    const { userRef, userData } = await checkpointOwnerAuthority(tx, db, gatewayId, owner);
+    if (!checkpointObservationAdvances(snap.data()?.vmHome, home, incoming)) return;
+    const recovery = userRef ? nextHomeRecovery(userData, incoming) : null;
     tx.set(ref, { vmHome: home }, { merge: true });
+    if (userRef && recovery) tx.set(userRef, { provisioning: { homeCheckpoint: recovery } }, { merge: true });
   });
 }
 
@@ -81,5 +114,20 @@ export async function recordComputerImageObservation(
     const previous = data.vmImages as Partial<GatewayVmImageObservation> | undefined;
     if (typeof previous?.observedAt === "number" && previous.instanceId === next.instanceId && previous.observedAt > next.observedAt) return;
     tx.set(ref, { vmImages: next }, { merge: true });
+  });
+}
+
+export async function recordComputerBootRecovery(
+  db: Pick<Firestore, "doc" | "runTransaction">,
+  gatewayId: string,
+  next: GatewayVmBootRecoverySample & { instanceId: string; observedAt: number },
+): Promise<void> {
+  const ref = db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`);
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    const data = snap.data();
+    if (!snap.exists || data?.gatewayId !== gatewayId || data.runtime !== "gce-vm" || data.vm?.instanceId !== next.instanceId) return;
+    if (data.vmBootRecovery?.observedAt > next.observedAt) return;
+    tx.set(ref, { vmBootRecovery: next }, { merge: true });
   });
 }

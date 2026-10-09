@@ -119,3 +119,7 @@ backendConfig:
 disposableGateway:
   idleMs: "5400000"
   idleWarningMs: "300000"
+
+computerParking:
+  disposable: false
+  stateContract: unverified

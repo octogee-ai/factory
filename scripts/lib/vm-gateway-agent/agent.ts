@@ -1,3 +1,6 @@
+import { scratchOwner } from "./plan.js";
+import { bootRecoveryReport } from "./boot-recovery.js";
+import { prepareScratchVolumes, inspectInactiveScratchVolumes } from "./scratch.js";
 import { captureHomeSnapshot, discardHomeSnapshot } from "./home-snapshot.js";
 import { basename, dirname } from "node:path";
 import {
@@ -19,6 +22,7 @@ import {
   startContainer,
   waitContainer,
   setContainerPaused,
+  setContainerRestartPolicy,
   type DockerEngine,
 } from "./docker-engine.js";
 import {
@@ -35,6 +39,7 @@ import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 import type { DesktopControl } from "./desktop-control.js";
 import {
   CA_FILE,
+  SERVICE_RESTART_POLICY,
   containerName,
   TOKEN_FILE,
   imagesToPull,
@@ -117,8 +122,8 @@ async function imageReport(deps: VmAgentDeps): Promise<GatewayVmRuntimeRequest> 
 }
 
 export async function fetchRuntimeBundle(deps: VmAgentDeps): Promise<BundleFetch> {
-  const [disk, images] = await Promise.all([diskReport(deps), imageReport(deps)]);
-  const res = await brokerPost(deps, "vm-runtime", { ...disk, ...images });
+  const [disk, images, recovery] = await Promise.all([diskReport(deps), imageReport(deps), bootRecoveryReport(deps)]);
+  const res = await brokerPost(deps, "vm-runtime", { ...disk, ...images, ...recovery });
   if (res.status === 404) return { kind: "not-rendered" };
   if (!res.ok) throw await brokerFailure("vm-runtime", res);
   const body = (await res.json()) as Partial<GatewayVmRuntimeResponse>;
@@ -143,6 +148,7 @@ async function writeReadable(deps: VmAgentDeps, dir: string, file: string, conte
 export async function writeTokens(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
   let accessToken: string | null = null;
   for (const volume of bundle.volumes) {
+    if (volume.kind !== "identityToken" && volume.kind !== "kubernetesApi") continue;
     const dir = volumeHostPath(deps.stateRoot, volume);
     if (volume.kind === "identityToken") {
       await writeReadable(deps, dir, TOKEN_FILE, await deps.metadata.identityToken(volume.audience));
@@ -154,7 +160,23 @@ export async function writeTokens(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
   }
 }
 
-export async function ensureVolumes(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
+export async function ensureVolumes(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, computerId: string): Promise<void> {
+  const names = bundle.volumes.filter(volume => volume.kind === "ephemeral").map(volume => volume.name);
+  if (names.length) {
+    const agent = await inspectContainer(deps.engine, AGENT_CONTAINER);
+    if (!agent?.Image) throw new Error("scratch preparation requires the running platform agent image");
+    const groups = new Map<string, string[]>();
+    for (const name of names) {
+      const owner = scratchOwner(bundle, computerId, name);
+      groups.set(owner, [...(groups.get(owner) ?? []), name]);
+    }
+    for (const [owner, selected] of groups) await prepareScratchVolumes({ engine: deps.engine, image: agent.Image, computerId: owner, stateRoot: deps.stateRoot, names: selected,
+      beforeCreate: async () => {
+        const boot = await deps.fs.diskUsage("/");
+        if (!Number.isFinite(boot.freeBytes) || boot.freeBytes < 2 * 1024 ** 3) throw new Error("scratch preparation requires at least 2 GiB boot headroom; retained home and existing scratch kept");
+      },
+    });
+  }
   for (const volume of bundle.volumes) {
     if (volume.kind !== "emptyDir") continue;
     const dir = volumeHostPath(deps.stateRoot, volume);
@@ -201,7 +223,7 @@ async function replaceContainer(engine: DockerEngine, spec: DockerContainerSpec)
 
 async function resumeWriters(deps: VmAgentDeps, names: string[]): Promise<void> {
   const results = await Promise.allSettled([
-    ...names.map((name) => setContainerPaused(deps.engine, name, false)),
+    ...names.map(async (name) => { await setContainerRestartPolicy(deps.engine, name, SERVICE_RESTART_POLICY); await setContainerPaused(deps.engine, name, false); }),
     deps.home.desktop.run("thaw"),
   ]);
   const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
@@ -222,6 +244,7 @@ function homeDeps(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, holdAfterSn
         for (const container of bundle.containers) {
           const name = containerName(container);
           paused.push(name);
+          if (holdAfterSnapshot) await setContainerRestartPolicy(deps.engine, name, "no");
           if (!(await inspectContainer(deps.engine, name))?.State?.Paused) await setContainerPaused(deps.engine, name, true);
         }
         await work();
@@ -327,6 +350,30 @@ export async function checkpointHomeIfDue(
   return { ...state, homeCheckpointCheckedAt: now };
 }
 
+function allHomeWritersHeld(running: ContainerInspection[]): boolean {
+  return running.every((inspection) => inspection?.State?.Running && inspection.State.Paused);
+}
+
+async function keepAcknowledgedCheckpointHeld(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, running: ContainerInspection[], signal: HomeCheckpointSignal): Promise<boolean> {
+  if (signal.requestedAt === null || signal.completedAt === null || signal.completedAt < signal.requestedAt) return false;
+  await deps.home.desktop.run("freeze");
+  for (const [index, inspection] of running.entries()) {
+    if (!inspection?.State?.Running) continue;
+    await setContainerRestartPolicy(deps.engine, containerName(bundle.containers[index]), "no");
+    if (!inspection.State.Paused) await setContainerPaused(deps.engine, containerName(bundle.containers[index]), true);
+  }
+  return true;
+}
+
+async function releaseHomeWriterHold(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, running: ContainerInspection[]): Promise<void> {
+  for (const [index, inspection] of running.entries()) {
+    if (!inspection?.State?.Paused) continue;
+    await setContainerRestartPolicy(deps.engine, containerName(bundle.containers[index]), SERVICE_RESTART_POLICY);
+    await setContainerPaused(deps.engine, containerName(bundle.containers[index]), false);
+  }
+  await deps.home.desktop.run("thaw");
+}
+
 export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Promise<VmAgentState> {
   const fetched = await fetchRuntimeBundle(deps);
   if (fetched.kind === "not-rendered") {
@@ -344,19 +391,14 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
     await writeTokens(deps, bundle);
     next = { ...next, tokensWrittenAt: now };
   }
-  await ensureVolumes(deps, bundle);
+  await ensureVolumes(deps, bundle, identity.instanceId);
   const running = await Promise.all(bundle.containers.map((c) => inspectContainer(deps.engine, `octogee-${c.name}`)));
   const signal = fetched.homeCheckpoint;
-  const finalCheckpointHeld = signal.requestedAt !== null
-    && running.every((inspection) => inspection?.State?.Running && inspection.State.Paused);
-  if (finalCheckpointHeld) {
-    if (signal.completedAt !== null && signal.completedAt >= signal.requestedAt!) return next;
+  if (await keepAcknowledgedCheckpointHeld(deps, bundle, running, signal)) return next;
+  if (signal.requestedAt !== null && allHomeWritersHeld(running)) {
     return checkpointHomeIfDue(deps, bundle, signal, next);
   }
-  for (const [index, inspection] of running.entries()) {
-    if (inspection?.State?.Paused) await setContainerPaused(deps.engine, containerName(bundle.containers[index]), false);
-  }
-  await deps.home.desktop.run("thaw");
+  await releaseHomeWriterHold(deps, bundle, running);
   const desktopAuth = await hostDesktopAuth(deps, next);
   next = { ...next, hostDesktopAuth: desktopAuth };
   const plan = planBundle(bundle, { stateRoot: deps.stateRoot, instanceId: identity.instanceId, desktopAuth });
@@ -364,9 +406,10 @@ export async function convergeOnce(deps: VmAgentDeps, state: VmAgentState): Prom
   if (decision.kind === "steady") {
     if (next.appliedVersion !== bundle.version) next = { ...next, appliedVersion: bundle.version };
     await syncBuilderDesk(deps, bundle);
+    await inspectUnusedScratch(deps, identity.instanceId);
     return checkpointHomeIfDue(deps, bundle, fetched.homeCheckpoint, next);
   }
-  await applyDecision(deps, bundle, plan, decision, running);
+  await applyDecision(deps, bundle, plan, decision, { running, computerId: identity.instanceId });
   await syncBuilderDesk(deps, bundle);
   return { ...next, appliedVersion: bundle.version };
 }
@@ -383,14 +426,24 @@ async function applyDecision(
   bundle: GatewayVmRuntimeBundle,
   plan: BundlePlan,
   decision: Exclude<ConvergenceDecision, { kind: "steady" }>,
-  running: ContainerInspection[],
+  computer: { running: ContainerInspection[]; computerId: string },
 ): Promise<void> {
+  const { running, computerId } = computer;
   const runningVersions = running.map((inspection) => runningVersion(inspection) ?? "none").join(",");
   const action = decision.kind === "full" ? "full apply" : `replacing ${decision.services.map((service) => service.name).join(",")}`;
   deps.log(`[vm-agent] converging to bundle ${bundle.version} (running: ${runningVersions}; ${action})`);
   if (decision.kind === "full") await applyBundle(deps, bundle, plan);
   else await applyServices(deps, bundle, decision.services);
+  await inspectUnusedScratch(deps, computerId);
   await reclaimUnusedImages(deps, bundle);
+}
+
+async function inspectUnusedScratch(deps: VmAgentDeps, computerId: string): Promise<void> {
+  try {
+    await inspectInactiveScratchVolumes({ ...deps, computerId });
+  } catch (error) {
+    deps.log(`[vm-agent] scratch inspection failed; preserving storage for retry: ${String(error)}`);
+  }
 }
 
 async function reclaimUnusedImages(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {

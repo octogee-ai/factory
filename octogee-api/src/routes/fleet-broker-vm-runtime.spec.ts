@@ -66,6 +66,29 @@ describe("POST /internal/fleet/vm-runtime", () => {
     expect((await request(appWith({ "glmGateways/b-x/vm/runtime": bundle }, { kind: "platform", actor: "cron" })).post("/internal/fleet/vm-runtime").send({})).status).toBe(403);
   });
 
+  it("binds boot-recovery capacity/readiness to the same instance/version and server time", async () => {
+    const docs = { "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242" } } };
+    const sample = { currentPointId: "image-one-" + "a".repeat(32), retainedPoints: 1, ready: true, bundleVersion: "v1", freeBytes: 3 * 1024 ** 3 };
+    const writes: Array<[string, unknown]> = [];
+    const result = await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" }, writes)).post("/internal/fleet/vm-runtime").send({ bootRecovery: { ...sample, instanceId: "forged", observedAt: 99999 } });
+    expect(result.status).toBe(200);
+    expect(writes).toEqual([["glmGateways/b-x", { vmBootRecovery: { ...sample, instanceId: "4242", observedAt: 5000 } }]]);
+    for (const [podUid, bundleVersion] of [["other", "v1"], ["4242", "old"]]) {
+      const other: Array<[string, unknown]> = [];
+      expect((await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid }, other)).post("/internal/fleet/vm-runtime").send({ bootRecovery: { ...sample, bundleVersion } })).status).toBe(200);
+      expect(other).toEqual([]);
+    }
+    expect((await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" })).post("/internal/fleet/vm-runtime").send({ bootRecovery: { ...sample, retainedPoints: -1 } })).status).toBe(400);
+    const failed: Array<[string, unknown]> = [];
+    expect((await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" }, failed)).post("/internal/fleet/vm-runtime").send({ bootRecovery: { ...sample, ready: false, bundleVersion: "unavailable" } })).status).toBe(200);
+    expect(failed).toEqual([["glmGateways/b-x", { vmBootRecovery: { ...sample, ready: false, bundleVersion: "unavailable", instanceId: "4242", observedAt: 5000 } }]]);
+    expect((await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" }, [], true)).post("/internal/fleet/vm-runtime").send({ bootRecovery: sample })).status).toBe(503);
+    const raced: Array<[string, unknown]> = [];
+    const response = await request(appWith(docs, { kind: "gateway", gatewayId: "b-x", podUid: "4242" }, raced, false, () => { docs["glmGateways/b-x"].vm.instanceId = "new"; })).post("/internal/fleet/vm-runtime").send({ bootRecovery: sample });
+    expect(response.status).toBe(200);
+    expect(raced).toEqual([]);
+  });
+
   it("records the bound instance's disk report on the runtime doc, ignores another instance's, and rejects a malformed one", async () => {
     const vmBound: BoundTenant = { kind: "gateway", gatewayId: "b-x", podUid: "4242" };
     const glm = { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242", status: "RUNNING" } };
@@ -164,4 +187,15 @@ describe("POST /internal/fleet/vm-runtime", () => {
     expect(unrecorded.status).toBe(503);
     expect(unrecorded.body).toEqual({ error: "preemption_notice_unrecorded" });
   });
+  it("carries a valid recovery obligation to the agent and refuses corrupt metadata", async () => {
+    const saved = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), instanceId: "previous", generation: "9007199254740995", completedAt: 1000 };
+    const bound: BoundTenant = { kind: "gateway", gatewayId: "b-x", podUid: "4242" };
+    const docs = { "glmGateways/b-x/vm/runtime": bundle, "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: { instanceId: "4242" }, vmHome: { restoreCheckpoint: saved } } };
+    const response = await request(appWith(docs, bound)).post("/internal/fleet/vm-runtime").send({});
+    expect(response.status).toBe(200);
+    expect(response.body.bundle.homeRestoreCheckpoint).toEqual(saved);
+    const malformed = { ...docs, "glmGateways/b-x": { ...docs["glmGateways/b-x"], vmHome: { restoreCheckpoint: { ...saved, generation: 123 } } } };
+    expect((await request(appWith(malformed, bound)).post("/internal/fleet/vm-runtime").send({})).status).toBe(409);
+  });
+
 });

@@ -6,7 +6,7 @@ import {
 
 export class ComputerHomeCheckpointError extends Error {
   constructor(
-    readonly code: "checkpoint_not_uploaded" | "checkpoint_size_mismatch" | "current_pointer_corrupt"
+    readonly code: "checkpoint_not_uploaded" | "checkpoint_size_mismatch" | "checkpoint_generation_invalid" | "current_pointer_corrupt"
       | "checkpoint_stale" | "checkpoint_conflict" | "checkpoint_commit_conflict",
     message: string,
   ) {
@@ -88,11 +88,13 @@ async function bucket() {
 
 type ComputerHomeBucket = Awaited<ReturnType<typeof bucket>>;
 
-async function verifyUploadedCheckpoint(store: ComputerHomeBucket, checkpointPath: string, expectedSize: number): Promise<void> {
+async function verifyUploadedCheckpoint(store: ComputerHomeBucket, checkpointPath: string, expectedSize: number): Promise<string> {
   let size: unknown;
+  let generation: unknown;
   try {
     const [metadata] = await store.file(checkpointPath).getMetadata();
     size = metadata.size;
+    generation = metadata.generation;
   } catch (error) {
     if (statusOf(error) === 404) {
       throw new ComputerHomeCheckpointError("checkpoint_not_uploaded", `computer-home checkpoint ${checkpointPath} is not in the bucket`);
@@ -105,6 +107,10 @@ async function verifyUploadedCheckpoint(store: ComputerHomeBucket, checkpointPat
       `computer-home checkpoint ${checkpointPath} is ${String(size)} bytes, commit claims ${expectedSize}`,
     );
   }
+  if (typeof generation !== "string" || !/^[1-9]\d*$/u.test(generation)) {
+    throw new ComputerHomeCheckpointError("checkpoint_generation_invalid", `computer-home checkpoint ${checkpointPath} has an invalid generation`);
+  }
+  return generation;
 }
 
 async function currentGeneration(store: ComputerHomeBucket, currentPath: string): Promise<string | 0> {
@@ -125,7 +131,7 @@ function alreadyCommitted(current: GatewayVmHomeCheckpoint, checkpoint: GatewayV
     throw new ComputerHomeCheckpointError("checkpoint_stale", `computer-home checkpoint ${checkpoint.name} precedes current ${current.name}`);
   }
   if (current.name !== checkpoint.name) return false;
-  if (current.size !== checkpoint.size || current.sha256 !== checkpoint.sha256 || current.instanceId !== checkpoint.instanceId) {
+  if (current.size !== checkpoint.size || current.sha256 !== checkpoint.sha256 || current.instanceId !== checkpoint.instanceId || current.generation !== checkpoint.generation) {
     throw new ComputerHomeCheckpointError("checkpoint_conflict", `computer-home checkpoint ${checkpoint.name} was committed with different content or provenance`);
   }
   return true;
@@ -135,7 +141,7 @@ export function createGcsComputerHomeStore(): ComputerHomeStore {
   return {
     async commit({ checkpointPath, currentPath, checkpoint }) {
       const store = await bucket();
-      await verifyUploadedCheckpoint(store, checkpointPath, checkpoint.size);
+      checkpoint = { ...checkpoint, generation: await verifyUploadedCheckpoint(store, checkpointPath, checkpoint.size) };
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const generation = await currentGeneration(store, currentPath);
         if (typeof generation === "string") {

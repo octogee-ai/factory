@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   acquireWorkspaceMutationLeaseSync,
+  projectMutationLeaseGitDir,
   workspaceMutationLockPath,
 } from "./workspace-mutation-lease.js";
 
@@ -23,6 +24,20 @@ afterEach(() => {
 });
 
 describe("workspace mutation lease", () => {
+  it("serializes restoration and commits independently of a project's external Git pointer", () => {
+    const root = workspace("external-project");
+    const customers = path.join(root, "customers");
+    const project = path.join(customers, "alice/projects/demo");
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(project, ".git"), "gitdir: /untrusted/destination\n");
+    const gitDir = projectMutationLeaseGitDir(project, customers)!;
+    expect(gitDir).toBe(path.join(root, "git-source-switch-locks/alice/demo.git"));
+    const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: project, gitDir });
+    expect(lease).not.toBeNull();
+    expect(acquireWorkspaceMutationLeaseSync({ workspaceDir: project, gitDir })).toBeNull();
+    lease!.release();
+    expect(projectMutationLeaseGitDir(path.join(customers, "../other/projects/demo"), customers)).toBeNull();
+  });
   it("serializes writers across processes through a lock inside git metadata", () => {
     const root = workspace("workspace-mutation");
     const first = acquireWorkspaceMutationLeaseSync({ workspaceDir: root });

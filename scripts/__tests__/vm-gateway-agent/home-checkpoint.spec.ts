@@ -58,9 +58,10 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
     },
     fs: {
       listDir: async () => world.dataEntries,
-      exists: async (path) => path.endsWith("/data") || (path.endsWith("home-checkpoint.marker") && world.markerExists),
+      exists: async (path) => path.endsWith("/data") || path.endsWith("/desktop-home") || (path.endsWith("home-checkpoint.marker") && world.markerExists),
       mkdir: async () => {},
       replaceDirectory: async () => {},
+        replaceDirectoryContents: async () => {},
       fileSize: async (path) => (path.includes("home-restore") ? world.savedSize : world.archiveSize),
       sha256: async () => SHA,
       mkdtemp: async (prefix) => `/tmp/${prefix}xyz`,
@@ -126,7 +127,8 @@ describe("checkpointHome", () => {
     const h = fakeHome({ dirty: false });
     expect(await checkpointHome(h.deps, h.scope, { force: false })).toEqual({ status: "clean" });
     expect(h.shell).toEqual([
-      "find /srv/octogee/volumes/data ( -name node_modules -o -name .npm -o -name .npm-cache -o -name .cache -o -name .pnpm-store -o -name Trash -o -name Cache -o -name Code Cache -o -name GPUCache -o -name DawnCache -o -name GrShaderCache -o -name ShaderCache -o -name CacheStorage -o -name SingletonLock -o -name SingletonCookie -o -name SingletonSocket -o -name DevToolsActivePort ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
+      "find /srv/octogee/volumes/data ( -path /srv/octogee/volumes/data/.octogee/toolchains/npm-cache ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
+      "find /srv/octogee/desktop-home ( -path /srv/octogee/desktop-home/.config/octogee-chromium/Default/Cache -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonLock -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonCookie -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonSocket -o -path /srv/octogee/desktop-home/.config/octogee-chromium/DevToolsActivePort -o -path /srv/octogee/desktop-home/.ssh/authorized_keys -o -path /srv/octogee/desktop-home/.ssh/authorized_keys.metadata ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
     ]);
     expect(h.fetches).toEqual([]);
   });
@@ -143,11 +145,11 @@ describe("checkpointHome", () => {
     h.deps.fs.exists = async (path) => present.has(path) || baseExists(path);
     await checkpointHome(h.deps, h.scope, { force: true });
     const tar = h.shell.find((line) => line.startsWith("tar "))!;
-    expect(tar).toContain("-C /srv/octogee/.home-checkpoint/snapshot/desktop-home/.. desktop-home/.config/octogee desktop-home/Documents");
+    expect(tar).toContain("-C /srv/octogee/.home-checkpoint/snapshot/desktop-home/.. desktop-home");
     expect(tar).not.toContain("desktop-home/.config/hypr");
   });
 
-  it("archives the home without caches, uploads to the signed create-only URL, commits, marks the start time, and prunes", async () => {
+  it("archives arbitrary user paths while excluding only explicit platform runtime state, uploads to the signed create-only URL, commits, marks the start time, and prunes", async () => {
     const h = fakeHome({}, {
       "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: NAME, upload: signedUpload } }),
       "/internal/fleet/computer-home/commit": () => ({ status: 200, body: { name: NAME, size: 2048, sha256: SHA, completedAt: 5 } }),
@@ -159,8 +161,10 @@ describe("checkpointHome", () => {
     expect(tar).toContain("--create --gzip --numeric-owner");
     expect(tar).toContain("--file=/tmp/octogee-home-checkpoint-xyz/home.tar.gz");
     expect(tar).toContain("-C /srv/octogee/.home-checkpoint/snapshot/volumes/data/.. data");
-    expect(tar).toContain("--exclude=node_modules");
-    expect(tar).toContain("--exclude=Code Cache");
+    expect(tar).not.toContain("--exclude=node_modules");
+    expect(tar).not.toContain("--exclude=Code Cache");
+    expect(tar).toContain("--anchored");
+    expect(tar).toContain("--exclude=desktop-home/.config/octogee-chromium/Default/Cache");
     expect(tar).not.toContain("--ignore-failed-read");
 
     const [url, upload, commit, prune] = h.fetches;
@@ -169,7 +173,7 @@ describe("checkpointHome", () => {
     expect(url.init.headers).toMatchObject({ "x-k8s-sa-token": "id-octogee-api", "x-octogee-gateway-credential-token": "id-octogee-api-gateway-credentials" });
     expect(upload).toMatchObject({ url: signedUpload.url, init: { method: "PUT", body: "body:/tmp/octogee-home-checkpoint-xyz/home.tar.gz" } });
     expect(upload.init.headers).toEqual({ "content-type": "application/gzip", "x-goog-if-generation-match": "0" });
-    expect(JSON.parse(String(commit.init.body))).toEqual({ gatewayId: "b-x", slug: "bob", name: NAME, size: 2048, sha256: SHA, requestedAt: null });
+    expect(JSON.parse(String(commit.init.body))).toEqual({ gatewayId: "b-x", slug: "bob", name: NAME, size: 2048, sha256: SHA, requestedAt: null, coverage: "builder-home-v2", writerProtocol: 2 });
     expect(JSON.parse(String(prune.init.body))).toEqual({ gatewayId: "b-x", slug: "bob" });
     expect(h.touched).toEqual([{ path: "/srv/octogee/home-checkpoint.marker", at: 1_700_000_000_000 }]);
     expect(h.removed).toEqual(["/tmp/octogee-home-checkpoint-xyz"]);
@@ -246,4 +250,34 @@ describe("restoreHome", () => {
     expect(digest.shell).toEqual([]);
     expect(h.removed).toEqual(["/tmp/octogee-home-restore-xyz"]);
   });
+});
+
+
+describe("required disposable home restore", () => {
+  const expected = { name: NAME, size: 2048, sha256: SHA, instanceId: "4242", completedAt: 1000, generation: "9007199254740993" };
+  it("rejects a missing checkpoint even when the image seeded a nonempty home", async () => {
+    const h = fakeHome({}, { "/internal/fleet/computer-home/download-url": () => ({ status: 404, body: { error: "no_checkpoint" } }) });
+    Object.assign(h.scope, { restoreCheckpoint: expected });
+    await expect(restoreHome(h.deps, h.scope)).rejects.toThrow(/checkpoint.*unavailable/);
+    expect(h.deps.desktop.run).not.toHaveBeenCalled();
+  });
+  it.each(["generation", "instanceId", "sha256", "name", "size", "completedAt"] as const)("refuses changed %s before downloading or installing", async (field) => {
+    const h = fakeHome({}, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: { ...expected, [field]: field === "size" || field === "completedAt" ? 7 : "different", download: { url: "https://storage.example/download", method: "GET" } } }) });
+    h.scope.restoreCheckpoint = expected;
+    await expect(restoreHome(h.deps, h.scope)).rejects.toThrow(/invalid checkpoint|match the required checkpoint/);
+    expect(h.fetches).toHaveLength(1);
+    expect(h.deps.desktop.run).not.toHaveBeenCalled();
+  });
+  it("restores a seeded home and writes a receipt only after installation succeeds", async () => {
+    const h = fakeHome({}, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: { ...expected, download: { url: "https://storage.example/download", method: "GET" } } }) });
+    h.scope.restoreCheckpoint = expected;
+    expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
+    expect(h.touched.at(-1)?.path).toContain(`home-restored-${NAME}-${expected.generation}-${SHA}.marker`);
+    h.deps.fs.exists = async (path) => path.endsWith("/data") || path.includes("home-restored-");
+    expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "preserved" });
+    expect(h.fetches).toHaveLength(2);
+    h.deps.fs.exists = async (path) => path.endsWith("/data") || path.includes("home-restored-") || path === h.scope.restorePending;
+    expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
+  });
+
 });

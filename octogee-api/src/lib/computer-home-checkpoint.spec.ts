@@ -24,7 +24,7 @@ const storage = vi.hoisted(() => ({ bucket: vi.fn() }));
 vi.mock("firebase-admin/storage", () => ({ getStorage: () => storage }));
 
 function checkpoint(name = "20260905T101500Z.tar.gz"): GatewayVmHomeCheckpoint {
-  return { name, size: 123, sha256: "a".repeat(64), instanceId: "123", completedAt: 1000 };
+  return { generation: "9007199254740995", name, size: 123, sha256: "a".repeat(64), instanceId: "123", completedAt: 1000 };
 }
 
 function checkpointBucket() {
@@ -40,6 +40,7 @@ function checkpointBucket() {
     afterSaveError?: number;
     invalidGeneration?: unknown;
     checkpointSize?: number;
+    archiveGeneration?: unknown;
   } = {};
   const missing = () => Object.assign(new Error("missing"), { code: 404 });
   const bucket = {
@@ -47,7 +48,7 @@ function checkpointBucket() {
       return {
         async getMetadata() {
           if (hooks.metadataError) throw Object.assign(new Error("metadata unavailable"), { code: hooks.metadataError });
-          if (path !== currentPath) return [{ size: String(hooks.checkpointSize ?? 123) }];
+          if (path !== currentPath) return [{ size: String(hooks.checkpointSize ?? 123), generation: hooks.archiveGeneration ?? "9007199254740995" }];
           if (hooks.currentMetadataError) throw Object.assign(new Error("current metadata unavailable"), { code: hooks.currentMetadataError });
           if (!current) throw missing();
           return [{ generation: hooks.invalidGeneration ?? current.generation }];
@@ -253,5 +254,21 @@ describe("computerHomePruneCandidates", () => {
     expect(computerHomePruneCandidates({ checkpointsPrefix: prefix, objectPaths, currentName: "20260902T000000Z.tar.gz", keep: 2 }))
       .toEqual([at(1)]);
     expect(computerHomePruneCandidates({ checkpointsPrefix: prefix, objectPaths, currentName: null, keep: 2 })).toEqual([]);
+  });
+});
+
+
+describe("archive generation identity", () => {
+  it("rejects invalid archive metadata without publishing a pointer", async () => {
+    const h = checkpointBucket();
+    h.hooks.archiveGeneration = Number("9007199254740995");
+    await expect(h.commit(checkpoint())).rejects.toMatchObject({ code: "checkpoint_generation_invalid" });
+    expect(h.writes).toEqual([]);
+  });
+  it("records the exact archive generation without converting it to a number", async () => {
+    const h = checkpointBucket();
+    const record = checkpoint();
+    delete record.generation;
+    expect(await h.commit(record)).toMatchObject({ generation: "9007199254740995" });
   });
 });

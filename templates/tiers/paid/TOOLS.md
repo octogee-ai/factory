@@ -12,6 +12,15 @@ Your workspace root is the current directory. Everything lives here:
 - Never use absolute paths (`~/.openclaw/...`) — use relative paths only
 - Project files go in `projects/{project-name}/`
 
+## Builder Storage
+
+`projects/{project-name}/` is the durable working tree, including local commits,
+untracked and ignored files. Keep the latest editable work there. Builder home
+storage persists independently of runtime placement. Platform toolchains live in
+the computer image; `/work/cache` and `/work/materialized` are disposable caches.
+A materialized project is a committed copy, not the authoritative working tree.
+Cache eviction must not require Git push or discard unpublished work.
+
 ## Technical Notes
 
 ### Media/Images

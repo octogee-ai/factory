@@ -54,6 +54,15 @@ describe("manifestObjectPath", () => {
 });
 
 describe("parseManifest", () => {
+  it("accepts immutable assets only under the same project and exact content hash", () => {
+    const prefix = "customers/alice/projects/site";
+    const sha256 = "a".repeat(64);
+    const asset = { ...entry(`${prefix}/.objects/${sha256}`), sha256 };
+    expect(parseManifest(manifestObjectPath(prefix), JSON.stringify({ "a.png": asset }))["a.png"]).toEqual(asset);
+    for (const gcsPath of [`customers/bob/projects/site/.objects/${sha256}`, `${prefix}/.objects/${"b".repeat(64)}`]) {
+      expect(() => parseManifest(manifestObjectPath(prefix), JSON.stringify({ "a.png": { ...asset, gcsPath } }))).toThrow(ManifestCorruptError);
+    }
+  });
   it("rejects malformed entries rather than handing back junk", () => {
     const objectPath = manifestObjectPath("customers/x");
     expect(() => parseManifest(objectPath, '{"a.png":{"type":"blob"}}')).toThrow(ManifestCorruptError);

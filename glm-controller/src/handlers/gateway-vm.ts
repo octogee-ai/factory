@@ -20,6 +20,7 @@ export interface GatewayVmRecord {
 
 export interface GatewayVmDeps {
   vm: GatewayVmClient;
+  replaceStoppedComputer?: (gatewayId: string, operationId: string, assertAuthority: () => Promise<void>) => Promise<Record<string, unknown>>;
   readGateway: (gatewayId: string) => Promise<GatewayVmRecord | null>;
   writeVmState: (gatewayId: string, vm: GatewayVmState | null) => Promise<void>;
   requestHomeCheckpoint: (gatewayId: string, requestedAt: number) => Promise<void>;
@@ -77,7 +78,10 @@ export function createGatewayVmHandler(deps: GatewayVmDeps): OperationHandler {
     const ownerUid = nonEmptyString(input.ownerUid);
     if (!gatewayId && ownerUid) {
       if (input.action !== "replace") return { steps: [], success: false, error: "gateway-vm ownerUid form supports only replace" };
-      return { steps: [], success: false, error: REPLACE_DISABLED };
+      if (!deps.replaceStoppedComputer) return { steps: [], success: false, error: REPLACE_DISABLED };
+      const parked = await deps.readParkedComputer(ownerUid);
+      if (!parked) return { steps: [], success: false, error: `Builder ${ownerUid} has no parked computer` };
+      return replaceStopped(deps, parked.gatewayId, op, ctx);
     }
     if (!gatewayId) return { steps: [], success: false, error: "missing gatewayId in op.input" };
     if (!isAction(input.action)) {
@@ -85,11 +89,12 @@ export function createGatewayVmHandler(deps: GatewayVmDeps): OperationHandler {
     }
     const action = input.action;
     const record = await deps.readGateway(gatewayId);
+    if (!record && action === "replace") return replaceStopped(deps, gatewayId, op, ctx);
     if (!record) return { steps: [], success: false, error: `gateway ${gatewayId} does not exist` };
     if (resolveGatewayRuntime(record.runtime) !== "gce-vm") {
       return { steps: [], success: false, error: `gateway ${gatewayId} runtime is ${resolveGatewayRuntime(record.runtime)}, not gce-vm` };
     }
-    if (action === "replace") return { steps: [], success: false, error: REPLACE_DISABLED };
+    if (action === "replace") return replaceStopped(deps, gatewayId, op, ctx);
 
     const startedAt = deps.now();
     const stepName = `vm-${action}`;
@@ -105,6 +110,25 @@ export function createGatewayVmHandler(deps: GatewayVmDeps): OperationHandler {
       return { steps: [failed], success: false, error: message };
     }
   };
+}
+
+async function replaceStopped(deps: GatewayVmDeps, gatewayId: string, op: Operation, ctx: OperationContext): Promise<OperationResult> {
+  if (!deps.replaceStoppedComputer) return { steps: [], success: false, error: REPLACE_DISABLED };
+  const startedAt = deps.now();
+  try {
+    const output = await deps.replaceStoppedComputer(gatewayId, op.id, async () => {
+      await ctx.assertActiveClaim?.();
+      if (await ctx.cancellationRequested?.()) throw new Error("boot replacement cancelled; retained home and source computer kept");
+    });
+    const done = step("vm-replace-boot", "done", startedAt, deps.now());
+    await ctx.reportStep(done);
+    return { steps: [done], success: true, output };
+  } catch (error) {
+    const message = errorMessage(error);
+    const failed = step("vm-replace-boot", "failed", startedAt, deps.now(), message);
+    await ctx.reportStep(failed);
+    return { steps: [failed], success: false, error: message };
+  }
 }
 
 async function run(

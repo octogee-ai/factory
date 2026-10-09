@@ -312,6 +312,38 @@ describe("Builder npm toolchain lock", () => {
     await expect(readToolchainStatus(root)).resolves.toMatchObject({ status: "ready" });
   });
 
+
+  it("uses an image-pinned preinstalled payload with fresh ephemeral activation and no npm or broker", async () => {
+    const home = await tempRoot();
+    const pin = await writePinnedInputs(home);
+    const buildRoot = path.join(home, "image-build");
+    await hydrateBuilderToolchain({ root: buildRoot, ...pin, registryCredentialsProvider: registryCredentials, installDependencies: fakeInstall });
+    const preinstalledRoot = path.join(buildRoot, "objects", `sha256-${pin.bundleSha256}`);
+    await fs.writeFile(path.join(preinstalledRoot, "node_modules", "@sparticuz", "chromium", "build", "index.js"),
+      sparticuzChromiumModule(path.join(preinstalledRoot, "chromium")));
+    const root = path.join(home, "ephemeral", "toolchains");
+    const installDependencies = vi.fn(async () => { throw new Error("unexpected network install"); });
+    const registryCredentialsProvider = vi.fn(async () => { throw new Error("broker unavailable"); });
+    await expect(hydrateBuilderToolchain({ root, preinstalledRoot, ...pin, installDependencies, registryCredentialsProvider })).resolves.toMatchObject({ status: "ready" });
+    expect(installDependencies).not.toHaveBeenCalled();
+    expect(registryCredentialsProvider).not.toHaveBeenCalled();
+    await expect(resolveToolchainCommand({ root, preinstalledRoot, command: "claude" })).resolves.toMatchObject({ kind: "ready" });
+    expect(await fs.readdir(root)).not.toContain("objects");
+    await fs.rm(root, { recursive: true });
+    await expect(hydrateBuilderToolchain({ root, preinstalledRoot, ...pin, installDependencies })).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("refuses a mismatched image payload without deleting it or installing into customer home", async () => {
+    const home = await tempRoot();
+    const pin = await writePinnedInputs(home);
+    const preinstalledRoot = path.join(home, "image-tools");
+    await fs.mkdir(preinstalledRoot);
+    await fs.writeFile(path.join(preinstalledRoot, "customer-marker"), "preserve");
+    const installDependencies = vi.fn(fakeInstall);
+    await expect(hydrateBuilderToolchain({ root: path.join(home, "runtime"), preinstalledRoot, ...pin, installDependencies })).rejects.toMatchObject({ reasonCode: "invalid-preinstalled-toolchain" });
+    expect(installDependencies).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(preinstalledRoot, "customer-marker"), "utf8")).toBe("preserve");
+  });
   it("fails hydration when an enabled npm group does not expose its declared command", async () => {
     const home = await tempRoot();
     const root = path.join(home, ".octogee", "toolchains");

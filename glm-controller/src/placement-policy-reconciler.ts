@@ -90,6 +90,8 @@ import type { SizingTier } from "@octogee/shared/types/sizing";
 import type { BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import {
   advanceActivationLeaseFirestore,
+  requestTierTransitionFirestore,
+  refreshRequestedTierFirestore,
   allocateDisposableGatewayFirestore,
   completeActivationLeaseFirestore,
   failActivationLeaseFirestore,
@@ -259,6 +261,14 @@ export interface AllocateDisposableGatewayInput {
   sizingTier: SizingTier;
 }
 
+export interface TierTransitionInput {
+  uid: string;
+  leaseId: string;
+  generation: number;
+  targetGatewayId: string;
+  tier: BuilderTierName;
+}
+
 export interface AdvanceActivationLeaseInput {
   uid: string;
   leaseId: string;
@@ -336,8 +346,9 @@ export interface PlacementPolicyReconcilerDeps {
   debug?(message: string): void;
   readSnapshot(): Promise<PlacementPolicySnapshot>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
-  allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string>;
+  allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string | null>;
   advanceActivationLease(input: AdvanceActivationLeaseInput): Promise<void>;
+  requestTierTransition(input: TierTransitionInput): Promise<void>;
   completeActivationLease(input: CompleteActivationLeaseInput): Promise<void>;
   failActivationLease(input: FailActivationLeaseInput): Promise<void>;
   recoverUnavailableGateway(input: RecoverUnavailableGatewayInput): Promise<{ operationId: string }>;
@@ -1709,6 +1720,10 @@ function builderActivityRequiresRuntime(
   );
 }
 
+function leaseTierChanged(lease: BuilderActivationLease, tier: string): boolean {
+  return typeof lease.raw.entitlementTier === "string" && lease.raw.entitlementTier !== tier;
+}
+
 async function reconcileActiveLease(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
@@ -1746,9 +1761,14 @@ async function reconcileActiveLease(
     });
     return;
   }
-  const authorized = accountAllowsInteractiveAccess(user.data) &&
-    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+  const tier = resolveBuilderTier(user.data, new Date(context.deps.now()));
+  const authorized = accountAllowsInteractiveAccess(user.data) && tier !== null;
   if (!authorized) {
+    await queueLeaseReturn(context, user, builderSlug, lease);
+    return;
+  }
+  if (leaseTierChanged(lease, tier!)) {
+    await context.deps.requestTierTransition({ uid: user.uid, leaseId: lease.leaseId, generation: lease.generation, targetGatewayId: targetGatewayId!, tier: tier! });
     await queueLeaseReturn(context, user, builderSlug, lease);
     return;
   }
@@ -2534,6 +2554,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
+  prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
   idleMs: number;
@@ -3963,8 +3984,13 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     debug: input.debug,
     readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
-    allocateDisposableGateway: (request) => allocateDisposableGatewayFirestore(input, request),
+    allocateDisposableGateway: async (request) => {
+      if (await refreshRequestedTierFirestore(input, request)) return null;
+      if (input.prepareBuilderHome && !await input.prepareBuilderHome(request)) return null;
+      return allocateDisposableGatewayFirestore(input, request);
+    },
     advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
+    requestTierTransition: (request) => requestTierTransitionFirestore(input, request),
     completeActivationLease: (request) => completeActivationLeaseFirestore(input, request),
     failActivationLease: (request) => failActivationLeaseFirestore(input, request),
     recoverUnavailableGateway: (request) => commitUnavailableGatewayRecoveryAtomic({

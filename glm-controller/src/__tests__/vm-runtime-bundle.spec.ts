@@ -72,6 +72,16 @@ describe("renderVmRuntimeBundle", () => {
     expect(readSecret).not.toHaveBeenCalledWith(name, key);
   });
 
+  it("keeps home durable while translating Builder scratch volumes to boot storage", async () => {
+    const changed = structuredClone(manifests) as Array<{ kind: string; spec?: { template: { spec: { volumes: unknown[] } } } }>;
+    const pod = changed.find(item => item.kind === "Deployment")!.spec!.template.spec;
+    pod.volumes.push({ name: "builder-cache", emptyDir: { sizeLimit: "4Gi" } }, { name: "project-materializations", emptyDir: { sizeLimit: "4Gi" } });
+    const bundle = await render({ manifests: changed });
+    expect(bundle.volumes).toContainEqual({ name: "data", kind: "emptyDir" });
+    expect(bundle.volumes).toContainEqual({ name: "builder-cache", kind: "ephemeral" });
+    expect(bundle.volumes).toContainEqual({ name: "project-materializations", kind: "ephemeral" });
+  });
+
   it("renders the chart's pod into containers, resolved secrets, token volumes, and mounts", async () => {
     const bundle = await render();
     expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);

@@ -134,6 +134,10 @@ COPY --chown=node:node infra/gateway/builder-toolchain/package.json /octogee/too
 COPY --chown=node:node infra/gateway/builder-toolchain/package-lock.json /octogee/toolchain/package-lock.json
 COPY --chown=node:node infra/gateway/builder-toolchain/groups.json /octogee/toolchain/groups.json
 COPY --chown=node:node infra/gateway/stamp-claude-first-run.mjs /octogee/infra/gateway/stamp-claude-first-run.mjs
+COPY --from=builder-toolchain-validation /tmp/builder-toolchain-validation/ /opt/octogee/toolchains/image/
+COPY infra/gateway/builder-toolchain/preinstall.mjs /octogee/toolchain/preinstall.mjs
+RUN node /octogee/toolchain/preinstall.mjs /opt/octogee/toolchains/image \
+    && chmod -R a+rX /opt/octogee/toolchains/image
 COPY --from=builder-toolchain-validation --chown=node:node /tmp/builder-toolchain-verified /octogee/toolchain/.install-verified
 
 RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \
@@ -141,6 +145,8 @@ RUN test -n "$BUILDER_TOOLCHAIN_LOCK_SHA256" \
     && echo "$BUILDER_TOOLCHAIN_LOCK_SHA256  /octogee/toolchain/package-lock.json" | sha256sum -c -
 RUN echo "$BUILDER_TOOL_GROUPS_SHA256  /octogee/toolchain/groups.json" | sha256sum -c -
 
+ENV OCTOGEE_BUILDER_PREINSTALLED_TOOLCHAIN=/opt/octogee/toolchains/image
+ENV OCTOGEE_BUILDER_TOOLCHAIN_ROOT=/work/cache/toolchains
 ENV OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH=/octogee/toolchain/package.json
 ENV OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH=/octogee/toolchain/package-lock.json
 ENV OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256=${BUILDER_TOOLCHAIN_LOCK_SHA256}

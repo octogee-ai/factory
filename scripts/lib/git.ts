@@ -223,9 +223,31 @@ function customerGitRefreshMarker(target: string): string {
   return `${target}.octogee-refresh-required`;
 }
 
+function moveQuarantinedGitEntry(source: string, target: string, sourceDevice = fs.lstatSync(source).dev): void {
+  if (sourceDevice === fs.statSync(path.dirname(target)).dev) {
+    fs.renameSync(source, target);
+  } else {
+    try {
+      fs.lstatSync(target);
+      throw new Error("Git quarantine target already exists");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    try {
+      fs.cpSync(source, target, { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false });
+    } catch (error) {
+      try { fs.rmSync(target, { recursive: true, force: true }); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Git quarantine copy and partial-copy cleanup failed"); }
+      throw error;
+    }
+    fs.rmSync(source, { recursive: true });
+  }
+}
+
 function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentity): void {
+  let sourceStat: fs.Stats;
   try {
-    fs.lstatSync(source);
+    sourceStat = fs.lstatSync(source);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
@@ -236,7 +258,7 @@ function quarantineCustomerGitEntry(source: string, identity: CustomerGitIdentit
     quarantineRoot,
     `${path.basename(identity.metadataDir)}-${randomUUID()}`,
   );
-  fs.renameSync(source, quarantine);
+  moveQuarantinedGitEntry(source, quarantine, sourceStat.dev);
   const stat = fs.lstatSync(quarantine);
   if (stat.isSymbolicLink()) return;
   if (stat.isDirectory()) {
@@ -914,6 +936,17 @@ function restoreMissingProjectGitMetadata(
   return true;
 }
 
+function projectCloneStaging(parent: string, projectSlug: string): string {
+  const state = path.join(parent, ".octogee-state");
+  try {
+    fs.mkdirSync(state, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  if (!fs.lstatSync(state).isDirectory()) throw new Error("project state is not a directory");
+  return fs.mkdtempSync(path.join(state, `${projectSlug}-clone-`));
+}
+
 // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- source switching is a rollback-capable filesystem state machine
 async function replaceProjectRepoCheckout(
   slug: string,
@@ -936,7 +969,7 @@ async function replaceProjectRepoCheckout(
   }
 
   const parent = path.dirname(dest);
-  const staging = fs.mkdtempSync(path.join(parent, `.${projectSlug}-source-`));
+  const staging = projectCloneStaging(parent, projectSlug);
   const clone = runGit(
     parent,
     ["clone", source.remoteUrl, staging],
@@ -998,7 +1031,7 @@ async function replaceProjectRepoCheckout(
         metadataBackups.push({ original, backup });
       }
     }
-    fs.renameSync(dest, quarantine);
+    moveQuarantinedGitEntry(dest, quarantine);
     previousMoved = true;
     fs.renameSync(staging, dest);
     replacementInstalled = true;
@@ -1018,7 +1051,7 @@ async function replaceProjectRepoCheckout(
   } catch (error) {
     if (replacementInstalled && fs.existsSync(dest)) {
       try {
-        fs.renameSync(dest, path.join(quarantineRoot, `${projectSlug}-failed-${randomUUID()}`));
+        moveQuarantinedGitEntry(dest, path.join(quarantineRoot, `${projectSlug}-failed-${randomUUID()}`));
       } catch (rollbackError) {
         log(`⚠ [git] Failed to quarantine replacement for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
       }
@@ -1046,7 +1079,7 @@ async function replaceProjectRepoCheckout(
     }
     if (previousMoved && !fs.existsSync(dest) && fs.existsSync(quarantine)) {
       try {
-        fs.renameSync(quarantine, dest);
+        moveQuarantinedGitEntry(quarantine, dest);
       } catch (rollbackError) {
         log(`⚠ [git] Failed to restore prior checkout for ${slug}/${projectSlug}: ${errMessage(rollbackError)}`);
       }
@@ -1054,7 +1087,11 @@ async function replaceProjectRepoCheckout(
     log(`⚠ [git] Failed to switch ${slug}/${projectSlug}: ${errMessage(error)}`);
     return false;
   } finally {
-    lease.release();
+    try {
+      fs.rmSync(staging, { recursive: true, force: true });
+    } finally {
+      lease.release();
+    }
   }
 }
 
@@ -1266,7 +1303,7 @@ async function switchProjectCheckoutViaBroker(
         quarantineCustomerGitEntry(entry, identity);
       }
     }
-    fs.renameSync(dest, quarantine);
+    moveQuarantinedGitEntry(dest, quarantine);
   } catch (error) {
     log(`⚠ [git] Cannot set aside ${label} before the brokered clone: ${errMessage(error)}`);
     return false;
@@ -1398,7 +1435,7 @@ function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
   const parent = path.dirname(dest);
   fs.mkdirSync(parent, { recursive: true });
   const cloneDir = fs.existsSync(dest)
-    ? fs.mkdtempSync(path.join(parent, `.${projectSlug}-clone-`))
+    ? projectCloneStaging(parent, projectSlug)
     : dest;
 
   const result = runGit(parent, ["clone", remoteUrl, cloneDir], sshKey, githubToken);
@@ -1420,7 +1457,7 @@ function checkoutProjectRepo(checkout: ProjectCheckout): boolean {
         }
         try {
           fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
-          fs.renameSync(dest, path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`));
+          moveQuarantinedGitEntry(dest, path.join(quarantineRoot, `${projectSlug}-${randomUUID()}`));
           fs.renameSync(cloneDir, dest);
         } finally {
           lease?.release();

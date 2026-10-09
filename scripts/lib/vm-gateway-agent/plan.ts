@@ -1,3 +1,4 @@
+import { scratchVolumeName } from "./scratch.js";
 import { createHash } from "node:crypto";
 import {
   GATEWAY_DESKTOP_NODE_CONTAINER,
@@ -20,6 +21,10 @@ export const CONTAINER_ROLE_LABEL = "ai.octogee.role";
 export const BUILDER_SLUG_LABEL = "ai.octogee.builder-slug";
 export const LOGGED_LABELS = [GATEWAY_ID_LABEL, NAMESPACE_LABEL, CONTAINER_NAME_LABEL, CONTAINER_ROLE_LABEL] as const;
 
+function homeRestoreVersion(bundle: GatewayVmRuntimeBundle): string | null {
+  return bundle.homeRestoreCheckpoint ? createHash("sha256").update(JSON.stringify(bundle.homeRestoreCheckpoint)).digest("hex") : null;
+}
+
 function bundleBuilderSlug(bundle: Pick<GatewayVmRuntimeBundle, "containers" | "init">): string | undefined {
   const slugs = new Set([bundle.init, ...bundle.containers].flatMap(container => container?.env.GATEWAY_BUILDER_SLUG ? [container.env.GATEWAY_BUILDER_SLUG] : []));
   if (slugs.size > 1) throw new Error("VM bundle contains conflicting Builder slugs");
@@ -33,6 +38,7 @@ export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace"
   ];
 }
 export const RUNTIME_UID = "1000:1000";
+export const SERVICE_RESTART_POLICY = "on-failure";
 export const TOKEN_FILE = "token";
 export const CA_FILE = "ca.crt";
 
@@ -57,6 +63,7 @@ export function containerName(container: Pick<GatewayVmRuntimeContainer, "name">
 }
 
 export function volumeHostPath(stateRoot: string, volume: GatewayVmRuntimeVolume): string {
+  if (volume.kind === "ephemeral") throw new Error("Docker scratch volumes have no agent-local host path");
   return volume.kind === "emptyDir" ? `${stateRoot}/volumes/${volume.name}` : `${stateRoot}/tokens/${volume.name}`;
 }
 
@@ -66,11 +73,34 @@ export function volumeByName(bundle: GatewayVmRuntimeBundle, name: string): Gate
   return volume;
 }
 
+export function scratchOwner(bundle: GatewayVmRuntimeBundle, instanceId: string, volume: string): string {
+  if (volume !== "project-materializations") return instanceId;
+  const ids = new Set([bundle.init, ...bundle.containers].flatMap(container => container?.env.OCTOGEE_HOME_STORAGE_ID ? [container.env.OCTOGEE_HOME_STORAGE_ID] : []));
+  if (ids.size > 1) throw new Error("conflicting home storage identities");
+  const id = [...ids][0];
+  if (id && !/^\d+$/u.test(id)) throw new Error("invalid home storage identity");
+  return id ? `${instanceId}-home-${id}` : instanceId;
+}
+
 function bindsFor(bundle: GatewayVmRuntimeBundle, container: GatewayVmRuntimeContainer, ctx: PlanContext): string[] {
-  return container.mounts.map((mount) => {
+  return container.mounts.flatMap((mount) => {
     const volume = volumeByName(bundle, mount.volume);
+    if (volume.kind === "ephemeral") {
+      if (mount.subPath) return [];
+      return `${scratchVolumeName(scratchOwner(bundle, ctx.instanceId, volume.name), volume.name)}:${mount.mountPath}${mount.readOnly ? ":ro" : ""}`;
+    }
     const host = mount.subPath ? `${volumeHostPath(ctx.stateRoot, volume)}/${mount.subPath}` : volumeHostPath(ctx.stateRoot, volume);
     return `${host}:${mount.mountPath}${mount.readOnly ? ":ro" : ""}`;
+  });
+}
+
+function volumeSubpathMounts(bundle: GatewayVmRuntimeBundle, container: GatewayVmRuntimeContainer, ctx: PlanContext): Record<string, unknown>[] {
+  return container.mounts.flatMap(mount => {
+    const volume = volumeByName(bundle, mount.volume);
+    if (volume.kind !== "ephemeral" || !mount.subPath) return [];
+    if (volume.name !== "project-materializations" || mount.subPath !== "projects") throw new Error("unsupported Docker volume subPath");
+    return [{ Type: "volume", Source: scratchVolumeName(scratchOwner(bundle, ctx.instanceId, volume.name), volume.name), Target: mount.mountPath,
+      ReadOnly: mount.readOnly, VolumeOptions: { Subpath: mount.subPath, NoCopy: true } }];
   });
 }
 
@@ -92,8 +122,10 @@ export function envFor(bundle: GatewayVmRuntimeBundle, container: GatewayVmRunti
 
 export function containerSpecVersion(config: Record<string, unknown>): string {
   const { Labels, ...spec } = config;
-  const builderSlug = (Labels as Record<string, string> | undefined)?.[BUILDER_SLUG_LABEL];
-  return createHash("sha256").update(JSON.stringify({ ...spec, ...(builderSlug ? { builderSlug } : {}) })).digest("hex").slice(0, 16);
+  const labels = Labels as Record<string, string> | undefined;
+  const builderSlug = labels?.[BUILDER_SLUG_LABEL];
+  const homeRestore = labels?.["ai.octogee.home-restore"];
+  return createHash("sha256").update(JSON.stringify({ ...spec, ...(builderSlug ? { builderSlug } : {}), ...(homeRestore ? { homeRestore } : {}) })).digest("hex").slice(0, 16);
 }
 
 export function planContainer(
@@ -102,6 +134,11 @@ export function planContainer(
   ctx: PlanContext,
   role: "init" | "service",
 ): DockerContainerSpec {
+  const desktopService = role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER;
+  const mounts = volumeSubpathMounts(bundle, container, ctx);
+  if (role === "service" && container.name === "gateway" && ctx.desktopAuth) {
+    mounts.push({ Type: "bind", Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`, Target: GATEWAY_HOST_DESKTOP_AUTH_DIR, ReadOnly: true });
+  }
   const config: Record<string, unknown> = {
     Image: container.image,
     User: RUNTIME_UID,
@@ -110,38 +147,37 @@ export function planContainer(
     ...(container.args ? { Cmd: container.args } : {}),
     HostConfig: {
       NetworkMode: "host",
-      ...(role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER ? { PidMode: "host" } : {}),
+      ...(desktopService ? { PidMode: "host" } : {}),
       Binds: [
         ...bindsFor(bundle, container, ctx),
         ...(role === "service" && container.name === "gateway" ? ["/home/octo/Documents:/home/octo/Documents"] : []),
-        ...(role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER
+        ...(desktopService
           // eslint-disable-next-line sonarjs/publicly-writable-directories -- XWayland requires its standard socket directory; the mount is read-only.
           ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
           : []),
       ],
-      ...(role === "service" && container.name === "gateway" && ctx.desktopAuth ? {
-        Mounts: [{
-          Type: "bind",
-          Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`,
-          Target: GATEWAY_HOST_DESKTOP_AUTH_DIR,
-          ReadOnly: true,
-        }],
-      } : {}),
+      ...(mounts.length ? { Mounts: mounts } : {}),
       ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),
-      RestartPolicy: { Name: role === "service" ? "unless-stopped" : "no" },
+      RestartPolicy: { Name: role === "service" ? SERVICE_RESTART_POLICY : "no" },
       LogConfig: { Type: "gcplogs", Config: { labels: loggedLabelsFor(bundle).join(",") } },
     },
   };
-  config.Labels = {
+  config.Labels = containerLabels(bundle, container, role);
+  (config.Labels as Record<string, string>)[CONTAINER_SPEC_LABEL] = containerSpecVersion(config);
+  return { name: containerName(container), config };
+}
+
+function containerLabels(bundle: GatewayVmRuntimeBundle, container: GatewayVmRuntimeContainer, role: "init" | "service"): Record<string, string> {
+  const homeRestore = homeRestoreVersion(bundle);
+  return {
     [BUNDLE_VERSION_LABEL]: bundle.version,
     [GATEWAY_ID_LABEL]: bundle.gatewayId,
+    ...(homeRestore ? { "ai.octogee.home-restore": homeRestore } : {}),
     ...(bundleBuilderSlug(bundle) ? { [BUILDER_SLUG_LABEL]: bundleBuilderSlug(bundle) } : {}),
     ...(bundle.namespace ? { [NAMESPACE_LABEL]: bundle.namespace } : {}),
     [CONTAINER_NAME_LABEL]: container.name,
     [CONTAINER_ROLE_LABEL]: role,
   };
-  (config.Labels as Record<string, string>)[CONTAINER_SPEC_LABEL] = containerSpecVersion(config);
-  return { name: containerName(container), config };
 }
 
 export function specVersion(spec: DockerContainerSpec): string {
@@ -150,7 +186,7 @@ export function specVersion(spec: DockerContainerSpec): string {
 
 export function planBundle(bundle: GatewayVmRuntimeBundle, ctx: PlanContext): BundlePlan {
   const init = bundle.init ? planContainer(bundle, bundle.init, ctx, "init") : null;
-  const initSpec = init ? specVersion(init) : NO_INIT_SPEC;
+  const initSpec = init ? specVersion(init) : homeRestoreVersion(bundle) ?? NO_INIT_SPEC;
   const services = bundle.containers.map((container) => {
     const service = planContainer(bundle, container, ctx, "service");
     (service.config.Labels as Record<string, string>)[INIT_SPEC_LABEL] = initSpec;
@@ -160,7 +196,7 @@ export function planBundle(bundle: GatewayVmRuntimeBundle, ctx: PlanContext): Bu
 }
 
 export function planInitSpec(plan: BundlePlan): string {
-  return plan.init ? specVersion(plan.init) : NO_INIT_SPEC;
+  return (plan.services[0]?.config.Labels as Record<string, string> | undefined)?.[INIT_SPEC_LABEL] ?? NO_INIT_SPEC;
 }
 
 export function imagesToPull(bundle: GatewayVmRuntimeBundle): string[] {

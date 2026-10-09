@@ -17,20 +17,30 @@ export interface ResolvedToolchainCommand {
   executable?: string;
 }
 
+async function assertActiveToolchainPath(root: string, activePath: string, preinstalledRoot?: string): Promise<void> {
+    if (preinstalledRoot) {
+      if (activePath !== await fs.realpath(preinstalledRoot)) throw new Error("active object differs from image");
+    } else {
+      const objectsPath = await fs.realpath(path.join(root, "objects"));
+      if (!activePath.startsWith(`${objectsPath}${path.sep}`)) throw new Error("active object escaped root");
+    }
+}
+
 async function resolveReadyToolchainCommand(
   root: string,
   command: BuilderToolchainCommand,
+  preinstalledRoot?: string,
 ): Promise<ResolvedToolchainCommand> {
   try {
     const activePath = await fs.realpath(path.join(root, "active"));
-    const objectsPath = await fs.realpath(path.join(root, "objects"));
-    if (!activePath.startsWith(`${objectsPath}${path.sep}`)) throw new Error("active object escaped root");
+    await assertActiveToolchainPath(root, activePath, preinstalledRoot);
     const installed = JSON.parse(
       await fs.readFile(path.join(activePath, ".toolchain-lock.json"), "utf8"),
     ) as InstalledBuilderToolchainLock;
     const detail = await readToolchainDetail(root);
     if (
       installed.schemaVersion !== 1 || installed.lockSha256 !== detail?.lockSha256 ||
+      (preinstalledRoot && (installed.groupsSha256 !== detail?.groupsSha256 || installed.bundleSha256 !== detail?.bundleSha256)) ||
       !BUILDER_TOOLCHAIN_COMMANDS.every((name) =>
         installed.commands?.[name] === BUILDER_TOOLCHAIN_COMMAND_PATHS[name])
     ) throw new Error("active lock differs");
@@ -52,6 +62,7 @@ async function resolveReadyToolchainCommand(
 export async function resolveToolchainCommand(input: {
   root: string;
   command: string;
+  preinstalledRoot?: string;
 }): Promise<ResolvedToolchainCommand> {
   if (!BUILDER_TOOLCHAIN_COMMANDS.includes(input.command as BuilderToolchainCommand)) {
     return {
@@ -84,5 +95,5 @@ export async function resolveToolchainCommand(input: {
       message: `${command} is unavailable on this Builder (${detail?.reasonCode ?? "hydration-failed"}).`,
     };
   }
-  return resolveReadyToolchainCommand(input.root, command);
+  return resolveReadyToolchainCommand(input.root, command, input.preinstalledRoot);
 }

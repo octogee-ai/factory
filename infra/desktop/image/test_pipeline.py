@@ -100,5 +100,77 @@ echo "DISK=$DISK"
         self.assertNotIn('chown', sudo)
 
 
+class GatewayPreloadTests(unittest.TestCase):
+    def preload(self, fail=False, customize=False, scratch_fail=False):
+        functions = Path(__file__).with_name('pipeline.sh').read_text().split('mkdir -p "$WORK"', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(['bash', '-c', functions + r'''
+WORK="$EVIDENCE_WORK"
+PAYLOAD="$TEST_PAYLOAD"
+guest_started=0
+gcloud() { printf '%s' fixture-access-token; }
+guest_ssh() {
+  printf '%s\n' "$*" >> "$WORK/commands"
+  if [[ "$*" == *--initialize-factory* ]]; then cat > "$WORK/scratch-script"; [[ "$TEST_SCRATCH_FAIL" == 0 ]] || return 17; touch "$WORK/scratch-bounded"; fi
+  if [[ "$*" == *systemctl\ start\ docker.service* && ! -f "$WORK/scratch-bounded" ]]; then return 1; fi
+  if [[ "$*" == *systemctl\ start\ docker.service* && -f "$WORK/home-required" ]]; then
+    return 1
+  fi
+  if [[ "$*" == *bash\ /tmp/customize/customize.sh* ]]; then
+    touch "$WORK/home-required"
+  fi
+  if [[ "$*" == *password-stdin* ]]; then
+    cat > "$WORK/login-input"
+    [[ "$TEST_FAIL" == 0 ]] || return 37
+  fi
+}
+tar() { :; }
+guest_scp() { :; }
+if [[ "$TEST_CUSTOMIZE" == 1 ]]; then customize_guest; else preload_gateway_image; fi
+echo PRELOAD_DONE
+'''], env={**os.environ, 'OMARCHY_VERSION': 'fixture', 'OMARCHY_ISO_SHA256': 'fixture',
+                    'IMAGE_NAME': 'candidate', 'IMAGE_BUCKET': 'gs://fixture', 'DISK_GB': '40',
+                    'IMAGE_DEVICE': '/dev/fixture', 'EVIDENCE_WORK': directory, 'TEST_PAYLOAD': str(Path(__file__).resolve().parent),
+                    'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64,
+                    'TEST_SCRATCH_FAIL': str(int(scratch_fail)), 'TEST_FAIL': str(int(fail)), 'TEST_CUSTOMIZE': str(int(customize))}, capture_output=True, text=True, timeout=10)
+            commands = (Path(directory) / 'commands').read_text() if (Path(directory) / 'commands').exists() else ''
+            login = (Path(directory) / 'login-input').read_text() if (Path(directory) / 'login-input').exists() else ''
+            return result, commands, login
+
+    def test_preloads_the_digest_after_starting_docker_with_an_unbaked_stdin_credential(self):
+        result, commands, login = self.preload()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PRELOAD_DONE', result.stdout)
+        self.assertIn('systemctl start docker.service', commands)
+        self.assertIn('docker pull', commands)
+        self.assertIn('octogee-gateway-builder@sha256:' + 'a' * 64, commands)
+        self.assertIn('docker image inspect', commands)
+        self.assertIn('docker logout', commands)
+        self.assertIn('/etc/octogee-gateway-image', commands)
+        self.assertEqual(login, 'fixture-access-token')
+        self.assertNotIn('fixture-access-token', commands + result.stdout + result.stderr)
+
+    def test_factory_preloads_before_customization_requires_an_owner_home_disk(self):
+        result, commands, login = self.preload(customize=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PRELOAD_DONE', result.stdout)
+        self.assertIn('bash /tmp/customize/customize.sh', commands)
+        self.assertIn('docker image inspect', commands)
+        self.assertEqual(login, 'fixture-access-token')
+
+    def test_unbounded_scratch_blocks_docker_and_preload(self):
+        result, commands, login = self.preload(scratch_fail=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('systemctl start docker.service', commands)
+        self.assertEqual(login, '')
+        self.assertIn('could not bound disposable scratch', result.stdout)
+
+    def test_failed_preload_stops_the_image_pipeline(self):
+        result, _, _ = self.preload(fail=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('PRELOAD_DONE', result.stdout)
+        self.assertIn('gateway preload failed', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

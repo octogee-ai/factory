@@ -5,6 +5,7 @@ export interface ManifestEntry {
     mimeType: string;
     uploadedAt: string;
     hasThumbnail?: boolean;
+    sha256?: string;
 }
 export type Manifest = Record<string, ManifestEntry>;
 export declare const MANIFEST_OBJECT_SUFFIX = ".files/manifest.json";

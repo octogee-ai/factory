@@ -389,6 +389,14 @@
     "./gateway-restart-probe": {
       "types": "./dist/gateway-restart-probe.d.ts",
       "default": "./dist/gateway-restart-probe.js"
+    },
+    "./project-asset-state": {
+      "types": "./dist/project-asset-state.d.ts",
+      "default": "./dist/project-asset-state.js"
+    },
+    "./project-blob-materialization": {
+      "types": "./dist/project-blob-materialization.d.ts",
+      "default": "./dist/project-blob-materialization.js"
     }
   },
   "typesVersions": {
@@ -665,6 +673,12 @@
       ],
       "gateway-restart-probe": [
         "dist/gateway-restart-probe.d.ts"
+      ],
+      "project-asset-state": [
+        "dist/project-asset-state.d.ts"
+      ],
+      "project-blob-materialization": [
+        "dist/project-blob-materialization.d.ts"
       ]
     }
   },

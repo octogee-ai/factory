@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, openAsBlob } from "node:fs";
-import { mkdir, mkdtemp, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream, openAsBlob, type Stats } from "node:fs";
+import { chmod, chown, lstat, mkdir, mkdtemp, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -29,8 +29,59 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+async function restoreBackup(backup: string, target: string): Promise<void> {
+  try {
+    await lstat(target);
+    throw new Error(`home restore target was recreated: ${target}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await rename(backup, target);
+}
+
+async function restorationDirectory(path: string): Promise<Stats | null> {
+  let metadata: Stats;
+  try { metadata = await lstat(path); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  if (!metadata.isDirectory()) throw new Error(`home restore path is not a directory: ${path}`);
+  return metadata;
+}
+
+async function restoreDirectoryMetadata(target: string, metadata: Stats | null, existing: Stats | null, owner: Pick<Stats, "uid" | "gid"> | null, preserved: readonly string[]): Promise<void> {
+  if (metadata && preserved.every((path) => path.includes("/"))) {
+    await chown(target, metadata.uid, metadata.gid);
+    await chmod(target, metadata.mode & 0o7777);
+    await utimes(target, metadata.atime, metadata.mtime);
+  } else if (!existing && preserved.some((path) => !path.includes("/"))) {
+    if (!owner) throw new Error(`protected home directory has no customer ownership: ${target}`);
+    await chown(target, owner.uid, owner.gid);
+    await chmod(target, 0o700);
+  }
+}
+
+async function replaceContents(filesystem: HomeFs, source: string, target: string, preserved: readonly string[], homeOwner?: Pick<Stats, "uid" | "gid">): Promise<void> {
+  const metadata = await restorationDirectory(source);
+  const existing = await restorationDirectory(target);
+  const owner = homeOwner ?? metadata ?? existing;
+  const entries = metadata ? await readdir(source) : [];
+  const protectedEntries = preserved.map((path) => path.split("/")[0]);
+  await mkdir(target, { recursive: true });
+  for (const entry of await readdir(target)) {
+    if (!entries.includes(entry) && !protectedEntries.includes(entry)) await rm(`${target}/${entry}`, { recursive: true, force: true });
+  }
+  for (const entry of new Set([...entries, ...protectedEntries])) {
+    if (preserved.includes(entry)) continue;
+    const nested = preserved.filter((path) => path.startsWith(`${entry}/`)).map((path) => path.slice(entry.length + 1));
+    if (nested.length) await replaceContents(filesystem, `${source}/${entry}`, `${target}/${entry}`, nested, owner ?? undefined);
+    else await filesystem.replaceDirectory(`${source}/${entry}`, `${target}/${entry}`);
+  }
+  await restoreDirectoryMetadata(target, metadata, existing, owner, preserved);
+}
+
 export function createHomeFs(stateRoot: string): HomeFs {
-  return {
+  const filesystem: HomeFs = {
     listDir: async (path) => (await exists(path)) ? readdir(path) : [],
     exists,
     fileSize: async (path) => (await stat(path)).size,
@@ -55,15 +106,35 @@ export function createHomeFs(stateRoot: string): HomeFs {
     },
     mkdir: (path, mode) => mkdir(path, { recursive: true, mode }).then(() => undefined),
     replaceDirectory: async (source, target) => {
-      const stage = `${target}.octogee-restore-stage`;
-      const backup = `${target}.octogee-restore-backup`;
       await mkdir(dirname(target), { recursive: true });
-      await rm(stage, { recursive: true, force: true });
-      await exec("cp", ["-a", "--", source, stage]);
-      await rm(backup, { recursive: true, force: true });
-      if (await exists(target)) await rename(target, backup);
-      await rename(stage, target);
-      await rm(backup, { recursive: true, force: true });
+      const temporary = await mkdtemp(`${dirname(target)}/.octogee-restore-`);
+      const stage = `${temporary}/stage`;
+      const backup = `${temporary}/backup`;
+      let backedUp = false;
+      let installed = false;
+      try {
+        await exec("cp", ["-a", "--", source, stage]);
+        if (await exists(target)) {
+          await rename(target, backup);
+          backedUp = true;
+        }
+        await rename(stage, target);
+        installed = true;
+      } catch (error) {
+        if (backedUp) {
+          try {
+            await restoreBackup(backup, target);
+            backedUp = false;
+          } catch (rollbackError) {
+            throw new AggregateError([error, rollbackError], `home restore failed; backup retained at ${backup}`);
+          }
+        }
+        throw error;
+      } finally {
+        if (!backedUp || installed) await rm(temporary, { recursive: true, force: true });
+      }
     },
+    replaceDirectoryContents: (source, target, preserved = []) => replaceContents(filesystem, source, target, preserved),
   };
+  return filesystem;
 }

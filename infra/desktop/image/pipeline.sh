@@ -87,6 +87,26 @@ wait_guest_down() {
   return 1
 }
 
+preload_gateway_image() {
+  local image="${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}" registry
+  [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ ]] || die "invalid immutable Builder gateway image"
+  registry="${image%%/*}"
+  guest_ssh 'sudo -n systemctl stop docker.service docker.socket' || die "gateway preload could not stop factory Docker"
+  guest_ssh 'sudo -n bash -s -- --initialize-factory' < "$PAYLOAD/rootfs/usr/local/bin/octo-scratch-storage" || die "gateway preload could not bound disposable scratch"
+  guest_ssh 'sudo -n systemctl start docker.service' || die "gateway preload could not start Docker"
+  if ! gcloud auth print-access-token | guest_ssh "sudo -n sh -c 'set -eu; trap \"docker logout $registry >/dev/null\" EXIT; docker login -u oauth2accesstoken --password-stdin $registry >/dev/null; docker pull --quiet $image >/dev/null; docker image inspect $image >/dev/null; printf \"%s\\n\" $image > /etc/octogee-gateway-image'"; then
+    die "gateway preload failed"
+  fi
+}
+
+customize_guest() {
+  log "gateway image"
+  preload_gateway_image
+  tar -C "$PAYLOAD" -czf "$WORK/customize-payload.tgz" customize.sh rootfs desktop-rootfs
+  guest_scp "$WORK/customize-payload.tgz" "octo@127.0.0.1:/tmp/customize-payload.tgz"
+  guest_ssh 'rm -rf /tmp/customize && mkdir -p /tmp/customize && tar -C /tmp/customize -xzf /tmp/customize-payload.tgz && sudo -n env OMARCHY_VERSION='"$OMARCHY_VERSION"' IMAGE_NAME='"$IMAGE_NAME"' bash /tmp/customize/customize.sh' 2>&1 | sed 's/^/  [guest] /'
+}
+
 guest_started=0
 mkdir -p "$WORK"
 trap qemu_stop EXIT
@@ -147,9 +167,7 @@ until guest_ssh 'sudo -n true' 2>/dev/null; do
   printf '%s\n' "$build_password" | guest_ssh 'sudo -S -k bash -c "echo \"octo ALL=(ALL) NOPASSWD: ALL\" > /etc/sudoers.d/zz-octo-nopasswd && chmod 0440 /etc/sudoers.d/zz-octo-nopasswd"' >/dev/null 2>&1 || true
   sleep 20
 done
-tar -C "$PAYLOAD" -czf "$WORK/customize-payload.tgz" customize.sh rootfs desktop-rootfs
-guest_scp "$WORK/customize-payload.tgz" "octo@127.0.0.1:/tmp/customize-payload.tgz"
-guest_ssh 'rm -rf /tmp/customize && mkdir -p /tmp/customize && tar -C /tmp/customize -xzf /tmp/customize-payload.tgz && sudo -n env OMARCHY_VERSION='"$OMARCHY_VERSION"' IMAGE_NAME='"$IMAGE_NAME"' bash /tmp/customize/customize.sh' 2>&1 | sed 's/^/  [guest] /'
+customize_guest
 
 log "seal"
 guest_ssh 'sudo -n bash -c "rm -f /home/octo/.ssh/authorized_keys /root/.ssh/authorized_keys; rm -rf /tmp/customize /tmp/customize-payload.tgz; sync; systemctl --no-block poweroff"' >/dev/null 2>&1 || true

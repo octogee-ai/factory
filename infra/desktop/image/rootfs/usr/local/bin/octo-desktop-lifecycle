@@ -11,6 +11,8 @@ SOCKET = "/run/octogee-desktop/control.sock"
 
 
 def operate(action, run=subprocess.run):
+    if action == "stop-home":
+        raise RuntimeError("full-home restore is blocked: SSH session writers have no verified host fence")
     if action not in {"freeze", "thaw", "stop", "start"}:
         raise ValueError("unknown action")
 
@@ -80,11 +82,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         action = self.path.removeprefix("/")
         try:
-            operate(action)
-            code, body = 200, {"ok": True}
+            if action == "accept-home-recovery":
+                result = subprocess.run(["/usr/local/bin/octo-home-recovery"], check=True, capture_output=True, text=True, timeout=50)
+                code, body = 200, json.loads(result.stdout)
+            else:
+                operate(action)
+                code, body = 200, {"ok": True}
         except ValueError as error:
             code, body = 400, {"error": str(error)}
-        except (subprocess.CalledProcessError, RuntimeError) as error:
+        except (subprocess.SubprocessError, RuntimeError) as error:
             code, body = 500, {"error": str(error), "detail": getattr(error, "stderr", None)}
         self.log_message("desktop %s: %s", action, body)
         encoded = json.dumps(body).encode()

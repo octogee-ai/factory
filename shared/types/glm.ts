@@ -93,6 +93,16 @@ export interface GatewayVmSpec {
   subnetwork: string;
 }
 
+export interface RetainedBuilderHome {
+  projectId: string;
+  zone: string;
+  name: string;
+  id: string;
+  sizeGb: number;
+  diskType: "pd-balanced" | "pd-ssd";
+  source: string;
+}
+
 export const GATEWAY_VM_ORIGINS = ["warm-pool", "cold"] as const;
 export type GatewayVmOrigin = (typeof GATEWAY_VM_ORIGINS)[number];
 
@@ -162,6 +172,17 @@ export interface BuilderParkedComputer {
   gatewayId: string;
   parkedAt: number;
   checkpoint: GatewayVmParkedCheckpoint;
+  homeCheckpoint?: GatewayVmHomeCheckpoint;
+  bootRecovery?: GatewayVmBootRecoverySample & { instanceId: string; observedAt: number };
+  vmSpec?: GatewayVmSpec;
+  disposable?: true;
+}
+
+function parkedComputerRecoveryValid(p: Partial<BuilderParkedComputer>): boolean {
+  return (p.homeCheckpoint === undefined || isGatewayVmHomeCheckpoint(p.homeCheckpoint))
+    && (p.disposable === undefined || (p.disposable === true && isDisposableHomeCheckpoint(p.homeCheckpoint)))
+    && (p.bootRecovery === undefined || isGatewayVmBootRecoverySample(p.bootRecovery)
+      && typeof p.bootRecovery.instanceId === "string" && Number.isFinite(p.bootRecovery.observedAt));
 }
 
 export function isBuilderParkedComputer(value: unknown): value is BuilderParkedComputer {
@@ -172,7 +193,8 @@ export function isBuilderParkedComputer(value: unknown): value is BuilderParkedC
     && (p.instanceId === null || typeof p.instanceId === "string")
     && typeof p.gatewayId === "string" && p.gatewayId.length > 0
     && typeof p.parkedAt === "number" && Number.isFinite(p.parkedAt)
-    && isGatewayVmParkedCheckpoint(p.checkpoint);
+    && isGatewayVmParkedCheckpoint(p.checkpoint)
+    && parkedComputerRecoveryValid(p);
 }
 
 export function readBuilderParkedComputer(userData: Record<string, unknown> | undefined): BuilderParkedComputer | null {
@@ -206,7 +228,7 @@ export interface GatewayVmRuntimeContainer {
 }
 
 export type GatewayVmRuntimeVolume =
-  | { name: string; kind: "emptyDir" }
+  | { name: string; kind: "emptyDir" | "ephemeral" }
   | { name: string; kind: "identityToken"; audience: string }
   | { name: string; kind: "kubernetesApi" };
 
@@ -222,6 +244,11 @@ export interface GatewayVmRuntimeBundle {
   hostAliases: Record<string, string>;
   kubernetes: { apiHost: string; apiPort: string; caCert: string };
   renderedAt: number;
+  homeRestoreCheckpoint?: GatewayVmHomeCheckpoint;
+}
+
+function runtimeBundleHostsValid(b: Partial<GatewayVmRuntimeBundle>): boolean {
+  return !!b.hostAliases && typeof b.hostAliases === "object" && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
 }
 
 export function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRuntimeBundle {
@@ -233,8 +260,8 @@ export function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRunt
     && typeof b.imageTag === "string"
     && Array.isArray(b.containers) && b.containers.length > 0
     && Array.isArray(b.volumes)
-    && !!b.hostAliases && typeof b.hostAliases === "object"
-    && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
+    && runtimeBundleHostsValid(b)
+    && (b.homeRestoreCheckpoint === undefined || isDisposableHomeCheckpoint(b.homeRestoreCheckpoint));
 }
 
 export interface GatewayVmRuntimeResponse {
@@ -251,6 +278,7 @@ export interface GatewayVmRuntimeRequest {
   disk?: GatewayVmDiskSample;
   images?: GatewayVmImageSample;
   preempted?: true;
+  bootRecovery?: GatewayVmBootRecoverySample;
 }
 
 export const GATEWAY_VM_IMAGE_SERVICES = ["gateway", "gateway-edge"] as const;
@@ -339,6 +367,9 @@ export const COMPUTER_HOME_CHECKPOINT_NAME_RE = /^\d{8}T\d{6}Z\.tar\.gz$/u;
 export const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
 
 export interface GatewayVmHomeCheckpoint {
+  generation?: string;
+  coverage?: "builder-home-v2";
+  writerProtocol?: 2 | 3;
   name: string;
   size: number;
   sha256: string;
@@ -350,6 +381,7 @@ export interface GatewayVmHomeState {
   checkpointRequestedAt: number | null;
   checkpointAcknowledgedAt?: number | null;
   parkRequestedAt?: number;
+  restoreCheckpoint?: GatewayVmHomeCheckpoint;
   lastCheckpoint: GatewayVmHomeCheckpoint | null;
 }
 
@@ -361,6 +393,12 @@ export function homeCheckpointOutstanding(home: Partial<GatewayVmHomeState> | nu
     || typeof home?.checkpointAcknowledgedAt !== "number" || home.checkpointAcknowledgedAt < requestedAt;
 }
 
+function homeCheckpointProtocolValid(c: Partial<GatewayVmHomeCheckpoint>): boolean {
+  return (c.coverage === undefined || c.coverage === "builder-home-v2")
+    && (c.writerProtocol === undefined || c.writerProtocol === 2 || c.writerProtocol === 3)
+    && (c.generation === undefined || (typeof c.generation === "string" && /^[1-9]\d*$/u.test(c.generation)));
+}
+
 export function isGatewayVmHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint {
   const c = value as Partial<GatewayVmHomeCheckpoint> | null;
   return !!c
@@ -368,7 +406,18 @@ export function isGatewayVmHomeCheckpoint(value: unknown): value is GatewayVmHom
     && typeof c.size === "number" && Number.isSafeInteger(c.size) && c.size > 0 && c.size <= COMPUTER_HOME_CHECKPOINT_MAX_BYTES
     && typeof c.sha256 === "string" && /^[a-f0-9]{64}$/u.test(c.sha256)
     && (c.instanceId === null || typeof c.instanceId === "string")
-    && typeof c.completedAt === "number" && Number.isFinite(c.completedAt);
+    && typeof c.completedAt === "number" && Number.isFinite(c.completedAt)
+    && homeCheckpointProtocolValid(c);
+}
+
+export function isDisposableHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint & { generation: string; instanceId: string } {
+  return isGatewayVmHomeCheckpoint(value) && typeof value.generation === "string" && typeof value.instanceId === "string" && value.instanceId.length > 0;
+}
+
+export function sameHomeCheckpoint(a: GatewayVmHomeCheckpoint, b: GatewayVmHomeCheckpoint): boolean {
+  return a.name === b.name && a.generation === b.generation && a.size === b.size
+    && a.sha256 === b.sha256 && a.instanceId === b.instanceId && a.completedAt === b.completedAt
+    && a.coverage === b.coverage && a.writerProtocol === b.writerProtocol;
 }
 
 export function computerHomeCheckpointName(at: number): string {
@@ -1091,4 +1140,20 @@ export function resolveGatewayImageProfile(input: {
   if (input.imageProfile === "standard") return "standard";
   if (!input.gatewayClass && input.profile === "builder") return "builder";
   return resolveGatewayClass(input) === "builder" ? "builder" : "standard";
+}
+
+export interface GatewayVmBootRecoverySample {
+  currentPointId: string | null;
+  retainedPoints: number;
+  ready: boolean;
+  bundleVersion: string;
+  freeBytes: number;
+}
+
+export function isGatewayVmBootRecoverySample(value: unknown): value is GatewayVmBootRecoverySample {
+  const r = value as Partial<GatewayVmBootRecoverySample> | null;
+  return !!r && typeof r.ready === "boolean" && typeof r.bundleVersion === "string" && r.bundleVersion.length > 0
+    && Number.isSafeInteger(r.retainedPoints) && r.retainedPoints! >= 0 && r.retainedPoints! <= 1000
+    && Number.isSafeInteger(r.freeBytes) && r.freeBytes! >= 0
+    && (r.currentPointId === null || typeof r.currentPointId === "string" && /^[a-z][a-z0-9-]{0,62}-[a-f0-9]{32}$/u.test(r.currentPointId));
 }

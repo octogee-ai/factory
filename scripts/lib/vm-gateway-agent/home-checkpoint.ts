@@ -2,6 +2,9 @@ import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
   COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
   COMPUTER_HOME_CHECKPOINT_NAME_RE,
+  isDisposableHomeCheckpoint,
+  sameHomeCheckpoint,
+  type GatewayVmHomeCheckpoint,
   type GatewayVmRuntimeBundle,
 } from "@octogee/shared/types/glm";
 import type {
@@ -16,27 +19,17 @@ import type { DesktopControl } from "./desktop-control.js";
 
 export const HOME_VOLUME_NAME = "data";
 export const HOME_CHECKPOINT_INTERVAL_MS = 30 * 60_000;
+export const HOME_TOOLCHAIN_CACHE = ".octogee/toolchains/npm-cache";
 export const HOME_CHECKPOINT_MARKER = "home-checkpoint.marker";
 export const HOME_RESTORE_PENDING = "home-restore.pending";
+export const HOME_METADATA_AUTHORIZATION = [".ssh/authorized_keys", ".ssh/authorized_keys.metadata"] as const;
 export const DESKTOP_HOME_PATHS = [".config/octogee-chromium", ".config/hypr", ".config/omarchy", ".config/octogee", "Documents"] as const;
-export const HOME_CHECKPOINT_EXCLUDES = [
-  "node_modules",
-  ".npm",
-  ".npm-cache",
-  ".cache",
-  ".pnpm-store",
-  "Trash",
-  "Cache",
-  "Code Cache",
-  "GPUCache",
-  "DawnCache",
-  "GrShaderCache",
-  "ShaderCache",
-  "CacheStorage",
-  "SingletonLock",
-  "SingletonCookie",
-  "SingletonSocket",
-  "DevToolsActivePort",
+export const HOME_DESKTOP_RUNTIME_PATHS = [
+  ".config/octogee-chromium/Default/Cache",
+  ".config/octogee-chromium/SingletonLock",
+  ".config/octogee-chromium/SingletonCookie",
+  ".config/octogee-chromium/SingletonSocket",
+  ".config/octogee-chromium/DevToolsActivePort",
 ] as const;
 const BUILDER_SLUG_ENV = "GATEWAY_BUILDER_SLUG";
 const SHA256_RE = /^[a-f0-9]{64}$/u;
@@ -57,6 +50,7 @@ export interface HomeFs {
   saveResponse(response: Response, path: string): Promise<void>;
   mkdir(path: string, mode?: number): Promise<void>;
   replaceDirectory(source: string, target: string): Promise<void>;
+  replaceDirectoryContents(source: string, target: string, preserved?: readonly string[]): Promise<void>;
 }
 
 export interface HomeCheckpointDeps extends BrokerClientDeps {
@@ -77,6 +71,7 @@ export interface HomeScope {
   marker: string;
   desktopDir: string;
   restorePending: string;
+  restoreCheckpoint?: GatewayVmHomeCheckpoint;
 }
 
 export type HomeCheckpointResult =
@@ -95,19 +90,23 @@ export function homeScope(stateRoot: string, bundle: GatewayVmRuntimeBundle): Ho
   return {
     slug, dataDir: volumeHostPath(stateRoot, volume), marker: `${stateRoot}/${HOME_CHECKPOINT_MARKER}`,
     desktopDir: `${stateRoot}/desktop-home`, restorePending: `${stateRoot}/${HOME_RESTORE_PENDING}`,
+    ...(bundle.homeRestoreCheckpoint ? { restoreCheckpoint: bundle.homeRestoreCheckpoint } : {}),
   };
 }
 
-export function tarCreateArgs(archive: string, scope: HomeScope, desktopPaths: readonly string[]): string[] {
+export function tarCreateArgs(archive: string, scope: HomeScope): string[] {
   return [
     "--create",
     "--gzip",
     "--numeric-owner",
     `--file=${archive}`,
-    ...HOME_CHECKPOINT_EXCLUDES.map((name) => `--exclude=${name}`),
+    "--anchored",
+    ...HOME_DESKTOP_RUNTIME_PATHS.map((path) => `--exclude=desktop-home/${path}`),
+    `--exclude=data/${HOME_TOOLCHAIN_CACHE}`,
+    ...HOME_METADATA_AUTHORIZATION.map((path) => `--exclude=desktop-home/${path}`),
     "-C", `${scope.dataDir}/..`, "data",
     "-C", `${scope.desktopDir}/..`,
-    ...desktopPaths.map((path) => `desktop-home/${path}`),
+    "desktop-home",
   ];
 }
 
@@ -115,8 +114,10 @@ export function tarExtractArgs(archive: string, dataDir: string): string[] {
   return ["--extract", "--gzip", "--numeric-owner", "--same-owner", "--same-permissions", `--file=${archive}`, `--directory=${dataDir}`];
 }
 
-export function findDirtyArgs(dataDir: string, marker: string): string[] {
-  const prune = HOME_CHECKPOINT_EXCLUDES.flatMap((name, index) => (index === 0 ? ["-name", name] : ["-o", "-name", name]));
+export function findDirtyArgs(dataDir: string, marker: string, toolchainCache: boolean = false): string[] {
+  const excluded = toolchainCache ? [`${dataDir}/${HOME_TOOLCHAIN_CACHE}`]
+    : [...HOME_DESKTOP_RUNTIME_PATHS, ...HOME_METADATA_AUTHORIZATION].map((path) => `${dataDir}/${path}`);
+  const prune = excluded.flatMap((path, index) => index === 0 ? ["-path", path] : ["-o", "-path", path]);
   return [dataDir, "(", ...prune, ")", "-prune", "-o", "-newer", marker, "-print", "-quit"];
 }
 
@@ -130,16 +131,9 @@ async function sh(deps: HomeCheckpointDeps, command: string, args: string[], okC
 
 export async function homeIsDirty(deps: HomeCheckpointDeps, scope: HomeScope): Promise<boolean> {
   if (!(await deps.fs.exists(scope.marker))) return true;
-  const changed = await sh(deps, "find", findDirtyArgs(scope.dataDir, scope.marker), [0]);
+  const changed = await sh(deps, "find", findDirtyArgs(scope.dataDir, scope.marker, true), [0]);
   if (changed.trim().length > 0) return true;
-  for (const parent of [scope.desktopDir, `${scope.desktopDir}/.config`]) {
-    if (await deps.fs.exists(parent) && (await sh(deps, "find", [parent, "-maxdepth", "0", "-newer", scope.marker, "-print"], [0])).trim()) return true;
-  }
-  for (const path of DESKTOP_HOME_PATHS) {
-    const target = `${scope.desktopDir}/${path}`;
-    if (!(await deps.fs.exists(target))) continue;
-    if ((await sh(deps, "find", findDirtyArgs(target, scope.marker), [0])).trim()) return true;
-  }
+  if (await deps.fs.exists(scope.desktopDir) && (await sh(deps, "find", findDirtyArgs(scope.desktopDir, scope.marker), [0])).trim()) return true;
   return false;
 }
 
@@ -174,11 +168,8 @@ async function createAndUploadCheckpoint(
     dataDir: `${snapshotRoot}/volumes/data`,
     desktopDir: `${snapshotRoot}/desktop-home`,
   };
-  const desktopPaths: string[] = [];
-  for (const path of DESKTOP_HOME_PATHS) {
-    if (await deps.fs.exists(`${capturedScope.desktopDir}/${path}`)) desktopPaths.push(path);
-  }
-  await sh(deps, "tar", tarCreateArgs(archive, capturedScope, desktopPaths), [0]);
+  if (!(await deps.fs.exists(capturedScope.desktopDir))) throw new Error("home snapshot has no complete desktop home");
+  await sh(deps, "tar", tarCreateArgs(archive, capturedScope), [0]);
   const size = await deps.fs.fileSize(archive);
   if (size <= 0) throw new Error("home checkpoint archive is empty");
   if (size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
@@ -197,7 +188,7 @@ async function createAndUploadCheckpoint(
   const committed = await post<FleetBrokerComputerHomeCheckpointCommit>(
     deps,
     "commit",
-    { slug: scope.slug, name: signed.name, size, sha256, requestedAt },
+    { slug: scope.slug, name: signed.name, size, sha256, requestedAt, coverage: "builder-home-v2", writerProtocol: 2 },
     "computer-home commit",
   );
   await deps.fs.touch(scope.marker, startedAt);
@@ -228,17 +219,52 @@ function validateHomeDownload(current: FleetBrokerComputerHomeDownload): void {
   }
 }
 
-export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): Promise<HomeRestoreResult> {
-  const pending = await deps.fs.exists(scope.restorePending);
-  if (!pending && (await deps.fs.listDir(scope.dataDir)).length > 0) return { status: "preserved" };
+async function fetchHomeRestoreDownload(deps: HomeCheckpointDeps, scope: HomeScope, pending: boolean): Promise<FleetBrokerComputerHomeDownload | null> {
+  const expected = scope.restoreCheckpoint;
   const res = await brokerPost(deps, "computer-home/download-url", { slug: scope.slug });
   if (res.status === 404) {
-    if (pending) throw new Error("home restore is incomplete but its checkpoint is unavailable");
-    return { status: "none" };
+    if (pending || expected) throw new Error("required home checkpoint is unavailable");
+    return null;
   }
   if (!res.ok) throw await brokerFailure("computer-home download-url", res);
   const current = (await res.json()) as FleetBrokerComputerHomeDownload;
   validateHomeDownload(current);
+  if (expected && !sameHomeCheckpoint(expected, current as GatewayVmHomeCheckpoint)) throw new Error("computer-home download does not match the required checkpoint");
+  return current;
+}
+
+async function homeRestoreInstalled(deps: HomeCheckpointDeps, scope: HomeScope, receipt: string | null, pending: boolean): Promise<boolean> {
+  return !pending && (!receipt || await deps.fs.exists(receipt)) && (await deps.fs.listDir(scope.dataDir)).length > 0;
+}
+
+async function installHomeRestore(deps: HomeCheckpointDeps, scope: HomeScope, current: FleetBrokerComputerHomeDownload, staged: string, receipt: string | null): Promise<void> {
+  if (!(await deps.fs.exists(`${staged}/data`))) throw new Error("home checkpoint has no gateway data directory");
+  if (current.coverage === "builder-home-v2" && !(await deps.fs.exists(`${staged}/desktop-home`))) throw new Error("home checkpoint has no full desktop home");
+  await deps.desktop.run(current.coverage === "builder-home-v2" ? "stop-home" : "stop");
+  await deps.fs.touch(scope.restorePending, deps.now());
+  await deps.fs.replaceDirectory(`${staged}/data`, scope.dataDir);
+  if (current.coverage === "builder-home-v2") {
+    await deps.fs.replaceDirectoryContents(`${staged}/desktop-home`, scope.desktopDir, HOME_METADATA_AUTHORIZATION);
+  } else {
+    for (const path of DESKTOP_HOME_PATHS) {
+      const source = `${staged}/desktop-home/${path}`;
+      if (await deps.fs.exists(source)) await deps.fs.replaceDirectory(source, `${scope.desktopDir}/${path}`);
+    }
+  }
+  await deps.fs.touch(scope.marker, deps.now());
+  if (receipt) await deps.fs.touch(receipt, deps.now());
+  await deps.fs.rm(scope.restorePending);
+  await deps.desktop.run("start");
+}
+
+export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): Promise<HomeRestoreResult> {
+  const expected = scope.restoreCheckpoint;
+  if (expected !== undefined && !isDisposableHomeCheckpoint(expected)) throw new Error("required home checkpoint is invalid");
+  const receipt = expected ? `${deps.stateRoot}/home-restored-${expected.name}-${expected.generation}-${expected.sha256}.marker` : null;
+  const pending = await deps.fs.exists(scope.restorePending);
+  if (await homeRestoreInstalled(deps, scope, receipt, pending)) return { status: "preserved" };
+  const current = await fetchHomeRestoreDownload(deps, scope, pending);
+  if (!current) return { status: "none" };
   const tempDir = await deps.fs.mkdtemp("octogee-home-restore-");
   const archive = `${tempDir}/home.tar.gz`;
   const staged = `${tempDir}/staged`;
@@ -252,17 +278,7 @@ export async function restoreHome(deps: HomeCheckpointDeps, scope: HomeScope): P
     if (sha256 !== current.sha256) throw new Error(`home checkpoint ${current.name} sha256 mismatch`);
     await deps.fs.mkdir(staged);
     await sh(deps, "tar", tarExtractArgs(archive, staged), [0]);
-    if (!(await deps.fs.exists(`${staged}/data`))) throw new Error("home checkpoint has no gateway data directory");
-    await deps.desktop.run("stop");
-    await deps.fs.touch(scope.restorePending, deps.now());
-    await deps.fs.replaceDirectory(`${staged}/data`, scope.dataDir);
-    for (const path of DESKTOP_HOME_PATHS) {
-      const source = `${staged}/desktop-home/${path}`;
-      if (await deps.fs.exists(source)) await deps.fs.replaceDirectory(source, `${scope.desktopDir}/${path}`);
-    }
-    await deps.fs.touch(scope.marker, deps.now());
-    await deps.fs.rm(scope.restorePending);
-    await deps.desktop.run("start");
+    await installHomeRestore(deps, scope, current, staged, receipt);
     return { status: "restored", name: current.name, size };
   } finally {
     await deps.fs.rm(tempDir);

@@ -57,6 +57,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$PROJECT" ]] || { usage >&2; exit 2; }
+GATEWAY_IMAGE="${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}"
+[[ "$GATEWAY_IMAGE" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ ]] || { echo "invalid immutable Builder gateway image" >&2; exit 2; }
 ISO_SHA256="$(iso_sha256_for "$OMARCHY_VERSION")"
 [[ -n "$ISO_SHA256" ]] || { echo "no pinned checksum for Omarchy $OMARCHY_VERSION; add it to iso_sha256_for" >&2; exit 2; }
 BUCKET="${BUCKET:-gs://${PROJECT}-octogee-computer-images}"
@@ -64,7 +66,7 @@ IMAGE_DISK="${BUILDER}-image"
 SOURCE_SHA="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 IMAGE_NAME="${REQUESTED_IMAGE_NAME:-octogee-computer-${OMARCHY_VERSION//./-}-$(date -u +%Y%m%d-%H%M)}"
 [[ "$IMAGE_NAME" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "invalid image name" >&2; exit 2; }
-image_labels="omarchy=${OMARCHY_VERSION//./-},source=${SOURCE_SHA},purpose=octogee-computer"
+image_labels="omarchy=${OMARCHY_VERSION//./-},source=${SOURCE_SHA},purpose=octogee-computer,home-admission=retained-v1"
 if [[ -n "${OCTOGEE_IMAGE_FINGERPRINT:-}" ]]; then
   [[ "$OCTOGEE_IMAGE_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]] || { echo "invalid image fingerprint" >&2; exit 2; }
   image_labels+=",input-a=${OCTOGEE_IMAGE_FINGERPRINT:0:32},input-b=${OCTOGEE_IMAGE_FINGERPRINT:32:32}"
@@ -126,7 +128,7 @@ gssh true || { echo "builder never answered ssh" >&2; exit 1; }
 
 gcloud compute scp --zone "$ZONE" --project "$PROJECT" --quiet --ssh-key-file "$SSH_KEY" "$payload.tgz" "imagebuilder@$BUILDER:~/image-payload.tgz" 2>/dev/null
 gssh "rm -rf ~/image-payload && mkdir -p ~/image-payload && tar -C ~/image-payload -xzf ~/image-payload.tgz && chmod +x ~/image-payload/*.sh"
-gssh "rm -f ~/pipeline.log; nohup env OMARCHY_VERSION='$OMARCHY_VERSION' OMARCHY_ISO_SHA256='$ISO_SHA256' IMAGE_NAME='$IMAGE_NAME' IMAGE_BUCKET='$BUCKET' IMAGE_DEVICE='/dev/disk/by-id/google-${IMAGE_DEVICE_NAME}' DISK_GB='$IMAGE_DISK_GB' ~/image-payload/pipeline.sh >~/pipeline.log 2>&1 </dev/null & echo \$! > ~/pipeline.pid; echo started"
+gssh "rm -f ~/pipeline.log; nohup env OCTOGEE_DESKTOP_GATEWAY_IMAGE='$GATEWAY_IMAGE' OMARCHY_VERSION='$OMARCHY_VERSION' OMARCHY_ISO_SHA256='$ISO_SHA256' IMAGE_NAME='$IMAGE_NAME' IMAGE_BUCKET='$BUCKET' IMAGE_DEVICE='/dev/disk/by-id/google-${IMAGE_DEVICE_NAME}' DISK_GB='$IMAGE_DISK_GB' ~/image-payload/pipeline.sh >~/pipeline.log 2>&1 </dev/null & echo \$! > ~/pipeline.pid; echo started"
 
 log "pipeline running on ${BUILDER}; log follows"
 seen=0

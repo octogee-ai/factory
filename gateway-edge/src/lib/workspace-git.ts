@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { lstatSync, mkdirSync, promises as fs, readFileSync } from "node:fs";
+import { lstatSync, promises as fs, readFileSync } from "node:fs";
 import * as path from "node:path";
 
-import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
 import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -153,19 +153,24 @@ export interface CommitResult {
 
 export async function gitCommit(
   customerDir: string,
-  options: { message: string; author: CommitAuthor },
+  options: { message: string; author: CommitAuthor; excludePaths?: string[] },
 ): Promise<{ ok: true; result: CommitResult } | { ok: false; error: WorkspaceGitError }> {
   const message = options.message.trim();
   if (!message || message.length > 5_000) {
     return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
   }
 
-  const addRes = await runGit(customerDir, ["add", "-A"]);
+  const excluded = options.excludePaths ?? [];
+  const addRes = await runGit(customerDir, ["add", "-A", ...(excluded.length ? ["--", ".", ...excluded.map(file => `:(exclude,literal)${file}`)] : [])]);
   if (!addRes.ok) return addRes;
+  if (excluded.length) {
+    const removed = await runGit(customerDir, ["rm", "--cached", "--ignore-unmatch", "--", ...excluded.map(file => `:(literal)${file}`)]);
+    if (!removed.ok) return removed;
+  }
 
-const statusRes = await runGit(customerDir, ["status", "--porcelain=v1", "-z"]);
+const statusRes = await runGit(customerDir, excluded.length ? ["diff", "--cached", "--name-only", "-z"] : ["status", "--porcelain=v1", "-z"]);
   if (!statusRes.ok) return statusRes;
-  if (parsePorcelain(statusRes.stdout).length === 0) {
+  if (!statusRes.stdout) {
     return { ok: true, result: { sha: "", empty: true } };
   }
 
@@ -195,7 +200,7 @@ export interface CommitAndPushResult {
 }
 
 export type WorkspaceCommitPreparation =
-  | { ok: true }
+  | { ok: true; excludePaths?: string[] }
   | { ok: false; error: WorkspaceGitError };
 
 export interface CommitAndPushOptions {
@@ -313,11 +318,13 @@ export async function commitAndPushWorkspace(
   });
   if (!lease) return { ok: false, error: { code: "WORKSPACE_BUSY", cwd: customerDir } };
   try {
+    let commitOptions: Parameters<typeof gitCommit>[1] = options;
     if (options.beforeCommit) {
       const prepared = await options.beforeCommit();
       if (!prepared.ok) return prepared;
+      if (prepared.excludePaths?.length) commitOptions = { ...options, excludePaths: prepared.excludePaths };
     }
-    const commitRes = await deps.gitCommit(customerDir, options);
+    const commitRes = await deps.gitCommit(customerDir, commitOptions);
     if (!commitRes.ok) return commitRes;
     const committed = !commitRes.result.empty;
     const prepareRes = await deps.gitPreparePush(customerDir, {
@@ -403,9 +410,9 @@ export async function gitCheckout(
     };
   }
 
-const args: string[] = options.create
-    ? ["checkout", "-b", branch]
-    : ["checkout", END_OF_OPTIONS, branch];
+  const args: string[] = options.create
+    ? ["switch", "-c", branch]
+    : ["switch", "--", branch];
   const r = await runGit(customerDir, args);
   if (!r.ok) return r;
   return { ok: true };
@@ -705,14 +712,7 @@ export function trustedWorkspaceGitDir(cwd: string): string {
 export function workspaceMutationLeaseGitDir(cwd: string): string {
   const identity = customerGitIdentity(cwd);
   if (!identity || identity.repoName === "workspace") return trustedWorkspaceGitDir(cwd);
-  const lockDir = path.join(
-    path.dirname(identity.customersRoot),
-    "git-source-switch-locks",
-    identity.slug,
-    `${identity.repoName}.git`,
-  );
-  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
-  return lockDir;
+  return projectMutationLeaseGitDir(cwd, identity.customersRoot)!;
 }
 
 export async function runWorkspaceGitMutation<T>(

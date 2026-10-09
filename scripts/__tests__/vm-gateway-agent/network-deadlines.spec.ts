@@ -31,10 +31,12 @@ it("gives metadata and signed checkpoint uploads their own finite deadlines", as
   }) as typeof fetch;
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => nativeTimeout(10));
   await expect(createMetadataClient(abortingFetch).accessToken()).rejects.toMatchObject({ name: "TimeoutError" });
-  const fs = { exists: async () => false, mkdtemp: async () => "/tmp/archive", fileSize: async () => 1, sha256: async () => "a".repeat(64), uploadBody: async () => "x", rm: async () => {} };
+  const fs = { exists: async (path: string) => path === "/tmp/.home-checkpoint/snapshot/desktop-home", mkdtemp: async () => "/tmp/archive", fileSize: async () => 1, sha256: async () => "a".repeat(64), uploadBody: async () => "x", rm: async () => {} };
   const fetchImpl: typeof fetch = async (url, init) => String(url).endsWith("/checkpoint-url")
     ? Response.json({ name: "20260905T101500Z.tar.gz", upload: { url: "https://storage.invalid/upload", method: "PUT" } })
     : abortingFetch(url, init);
   await expect(checkpointHome({ gatewayId: "b-x", apiUrl: "https://api.invalid", metadata: { identityToken: async () => "fixture" }, stateRoot: "/tmp", fs, fetchImpl, now: Date.now, log: vi.fn(), snapshot: async (work: () => Promise<void>) => work(), captureSnapshot: async () => {}, discardSnapshot: async () => {}, shell: { run: async () => ({ code: 0, stdout: "", stderr: "" }) } } as never,
     { slug: "bob", dataDir: "/tmp/data", desktopDir: "/tmp/desktop", marker: "/tmp/marker", restorePending: "/tmp/pending" }, { force: true })).rejects.toMatchObject({ name: "TimeoutError" });
+  expect(abortingFetch).toHaveBeenLastCalledWith("https://storage.invalid/upload", expect.objectContaining({ method: "PUT", signal: expect.any(AbortSignal) }));
+  expect(AbortSignal.timeout).toHaveBeenCalledWith(10 * 60_000);
 });

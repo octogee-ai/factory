@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import * as path from "node:path";
+import { builderToolchainRoot } from "../lib/builder-storage.js";
 import { pathToFileURL } from "node:url";
 
 import { resolveBuilderChromiumExecutable } from "../lib/builder-toolchain-chromium.js";
@@ -20,9 +20,9 @@ export async function runBuilderToolchainCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const [command, ...args] = argv;
-  const home = env.HOME?.trim() || "/home/node";
   const resolved = await resolveToolchainCommand({
-    root: path.join(home, ".octogee", "toolchains"),
+    root: builderToolchainRoot(env),
+    preinstalledRoot: env.OCTOGEE_BUILDER_PREINSTALLED_TOOLCHAIN,
     command: command ?? "",
   });
   if (resolved.kind !== "ready" || !resolved.executable) {

@@ -2,7 +2,7 @@ import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
 import { streamAssignmentChanges } from "./fleet-assignment-watch.js";
-import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerImageObservation, recordComputerHomeCheckpoint, recordComputerPreemptionNotice } from "../lib/computer-runtime-observation.js";
+import { readComputerRuntimeObservation, recordComputerDiskObservation, recordComputerBootRecovery, recordComputerImageObservation, recordComputerHomeCheckpoint, recordComputerPreemptionNotice } from "../lib/computer-runtime-observation.js";
 import { readComputerEgress, recordComputerEgress } from "../lib/computer-egress-state.js";
 import { isIP } from "node:net";
 import {
@@ -12,9 +12,12 @@ import {
   computerHomeCheckpointName,
   gatewayVmRuntimeDocPath,
   isGatewayVmDiskSample,
+  isGatewayVmBootRecoverySample,
   isGatewayVmImageSample,
   isGatewayEgressMode,
   isGatewayVmRuntimeBundle,
+  isDisposableHomeCheckpoint,
+  sameHomeCheckpoint,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
   type GatewayVmHomeCheckpoint,
@@ -158,11 +161,16 @@ type RecordUsageEvent = (input: {
   gatewayId: string;
 }) => Promise<void>;
 
+type ReadBlobMetadata = (gcsPath: string) => Promise<{ generation?: unknown; size?: unknown; md5Hash?: unknown }>;
+
 type CreateBlobSignedUrl = (input: {
   gcsPath: string;
   action: "read" | "write";
   contentType?: string;
   ifGenerationMatch?: number | string;
+  generation?: string;
+  contentMd5?: string;
+  contentLength?: number;
 }) => Promise<FleetBrokerBlobSignedUrl>;
 
 type PruneBuilderRuntimeState = (input: {
@@ -256,6 +264,7 @@ interface FleetBrokerRouteDeps {
   renderAvatar?: RenderAvatar;
   applyCoachIdentity?: ApplyCoachIdentity;
   createBlobSignedUrl?: CreateBlobSignedUrl;
+  readBlobMetadata?: ReadBlobMetadata;
   pruneBuilderRuntimeState?: PruneBuilderRuntimeState;
   computerHomeStore?: ComputerHomeStore;
   executeChatSearch?: ExecuteChatSearch;
@@ -431,12 +440,20 @@ const defaultRecordUsageEvent: RecordUsageEvent = async (input) => {
   });
 };
 
+const defaultReadBlobMetadata: ReadBlobMetadata = async (gcsPath) => {
+  const { getStorage } = await import("firebase-admin/storage");
+  const [metadata] = await getStorage().bucket().file(gcsPath).getMetadata();
+  return metadata;
+};
+
 const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
   const { getStorage } = await import("firebase-admin/storage");
   const expires = Date.now() + BLOB_SIGNED_URL_TTL_MS;
-  const requiredHeaders = input.ifGenerationMatch === undefined
-    ? undefined
-    : { "x-goog-if-generation-match": String(input.ifGenerationMatch) };
+  const requiredHeaders = {
+    ...(input.ifGenerationMatch === undefined ? {} : { "x-goog-if-generation-match": String(input.ifGenerationMatch) }),
+    ...(input.contentMd5 === undefined ? {} : { "content-md5": input.contentMd5 }),
+    ...(input.contentLength === undefined ? {} : { "content-length": String(input.contentLength) }),
+  };
   const [url] = await getStorage()
     .bucket()
     .file(input.gcsPath)
@@ -445,14 +462,16 @@ const defaultCreateBlobSignedUrl: CreateBlobSignedUrl = async (input) => {
       action: input.action,
       expires,
       ...(input.action === "write" ? { contentType: input.contentType } : {}),
-      ...(requiredHeaders ? { extensionHeaders: requiredHeaders } : {}),
+      ...(input.contentMd5 ? { contentMd5: input.contentMd5 } : {}),
+      ...(Object.keys(requiredHeaders).length ? { extensionHeaders: requiredHeaders } : {}),
+      ...(input.generation ? { queryParams: { generation: input.generation } } : {}),
     });
   return {
     url,
     method: input.action === "read" ? "GET" : "PUT",
     gcsPath: input.gcsPath,
     expiresAt: new Date(expires).toISOString(),
-    ...(requiredHeaders ? { requiredHeaders } : {}),
+    ...(Object.keys(requiredHeaders).length ? { requiredHeaders } : {}),
   };
 };
 
@@ -1136,6 +1155,7 @@ async function requireAssignedSlug(
   db: Firestore,
   req: Request,
   res: Response,
+  preparingProjectRead = false,
 ): Promise<{ bound: GatewayBinding; uid: string; slug: string } | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
@@ -1144,7 +1164,8 @@ async function requireAssignedSlug(
     res.status(400).json({ error: "invalid_slug" });
     return null;
   }
-  const uid = await findAssignedUidBySlug(db, bound.gatewayId, slug);
+  const assignedUid = await findAssignedUidBySlug(db, bound.gatewayId, slug);
+  const uid = assignedUid ?? (preparingProjectRead ? (await configuredBuilderNpmSubject(db, bound, slug, "preparation"))?.uid : null);
   if (!uid) {
     res.status(403).json(FORBIDDEN);
     return null;
@@ -1401,6 +1422,7 @@ async function configuredBuilderNpmSubject(
   db: Firestore,
   bound: GatewayBinding,
   slug: string,
+  mode: "assignment-or-preparation" | "preparation" = "assignment-or-preparation",
 ): Promise<{ uid: string } | null> {
   if (!bound.podUid) return null;
   const [gatewaySnap, assignmentsSnap] = await Promise.all([
@@ -1419,8 +1441,8 @@ async function configuredBuilderNpmSubject(
     gatewayId: bound.gatewayId,
     slug,
   });
-  if (assignedUid === ownerUid) return { uid: ownerUid };
-  if (assignmentsSnap.docs.length > 0) return null;
+  if (assignedUid === ownerUid && mode === "assignment-or-preparation") return { uid: ownerUid };
+  if (assignmentsSnap.docs.length > 0 && assignedUid !== ownerUid) return null;
   return await configuredBuilderPreparationAllowed(db, bound, slug, ownerUid) ? { uid: ownerUid } : null;
 }
 
@@ -1773,6 +1795,7 @@ type ResolvedFleetBrokerRouteDeps = {
   renderAvatar: RenderAvatar;
   applyCoachIdentity: ApplyCoachIdentity;
   createBlobSignedUrl: CreateBlobSignedUrl;
+  readBlobMetadata: ReadBlobMetadata;
   pruneBuilderRuntimeState: PruneBuilderRuntimeState;
   computerHomeStore: ComputerHomeStore;
   executeChatSearch: ExecuteChatSearch;
@@ -1833,6 +1856,7 @@ function resolveFleetBrokerRouteImplementations(
     renderAvatar: opts.renderAvatar ?? defaultRenderAvatar,
     applyCoachIdentity: opts.applyCoachIdentity ?? defaultApplyCoachIdentity,
     createBlobSignedUrl: opts.createBlobSignedUrl ?? defaultCreateBlobSignedUrl,
+    readBlobMetadata: opts.readBlobMetadata ?? defaultReadBlobMetadata,
     pruneBuilderRuntimeState: opts.pruneBuilderRuntimeState ?? defaultPruneBuilderRuntimeState,
     computerHomeStore: opts.computerHomeStore ?? createGcsComputerHomeStore(),
     executeChatSearch: opts.executeChatSearch ?? defaultExecuteChatSearch,
@@ -2646,9 +2670,13 @@ function installWorkspaceManifestRoutes(
   router.post("/blob/manifest/read-url", async (req, res) => {
     const assigned = await requireAssignedSlug(db, req, res);
     if (!assigned) return;
+    const project = objectBody(req).projectSlug;
+    if (project !== undefined && (typeof project !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(project))) {
+      res.status(400).json({ error: "invalid_project" }); return;
+    }
     await runBrokered(res, async () => {
       const signed = await createBlobSignedUrl({
-        gcsPath: gcsPathForWorkspaceManifest(assigned.slug),
+        gcsPath: project ? `customers/${assigned.slug}/projects/${project}/${MANIFEST_OBJECT_SUFFIX}` : gcsPathForWorkspaceManifest(assigned.slug),
         action: "read",
       });
       res.json(signed);
@@ -2674,6 +2702,68 @@ function installWorkspaceManifestRoutes(
     });
   });
 
+}
+
+function installBlobMaterializationRoute(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
+  router.post("/blob/project/upload-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(deps.db, req, res);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const { projectSlug, sha256, size, md5Hash } = body;
+    if (typeof projectSlug !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(projectSlug) ||
+      typeof sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(sha256) ||
+      typeof size !== "number" || !Number.isSafeInteger(size) || size < 0 || size > 512 * 1024 * 1024 ||
+      typeof md5Hash !== "string" || !/^[A-Za-z0-9+/]{22}==$/u.test(md5Hash)) {
+      res.status(400).json({ error: "invalid_project_asset" }); return;
+    }
+    await runBrokered(res, async () => {
+      res.json(await deps.createBlobSignedUrl({
+        gcsPath: `customers/${assigned.slug}/projects/${projectSlug}/.objects/${sha256}`,
+        action: "write", contentType: validContentType(body.mimeType), ifGenerationMatch: 0,
+        contentMd5: md5Hash, contentLength: size,
+      }));
+    });
+  });
+  router.post("/blob/materialization/manifest/read-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(deps.db, req, res, true);
+    if (!assigned) return;
+    const project = objectBody(req).projectSlug;
+    if (typeof project !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(project)) {
+      res.status(400).json({ error: "invalid_project" }); return;
+    }
+    await runBrokered(res, async () => {
+      const signed = await deps.createBlobSignedUrl({ gcsPath: `customers/${assigned.slug}/projects/${project}/${MANIFEST_OBJECT_SUFFIX}`, action: "read" });
+      res.json(signed);
+    });
+  });
+  router.post("/blob/materialization/read-url", async (req, res) => {
+    const assigned = await requireAssignedSlug(deps.db, req, res, true);
+    if (!assigned) return;
+    const body = objectBody(req);
+    const relativePath = validBlobRelativePath(body.path);
+    const size = body.size;
+    const sha256 = body.sha256;
+    if (sha256 !== undefined && (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(sha256))) {
+      res.status(400).json({ error: "invalid_materialization" }); return;
+    }
+    if (!/^projects\/[a-z0-9][a-z0-9-]*\/.+/u.test(relativePath) || typeof size !== "number" || !Number.isSafeInteger(size) || size < 0 || size > 512 * 1024 * 1024) {
+      res.status(400).json({ error: "invalid_materialization" }); return;
+    }
+    await runBrokered(res, async () => {
+      const gcsPath = sha256
+        ? `customers/${assigned.slug}/projects/${relativePath.split("/")[1]}/.objects/${sha256}`
+        : gcsPathForBlob(assigned.slug, relativePath);
+      const metadata = await deps.readBlobMetadata(gcsPath);
+      const generation = typeof metadata.generation === "string" ? metadata.generation : "";
+      const objectSize = typeof metadata.size === "string" && /^(0|[1-9]\d*)$/u.test(metadata.size) ? Number(metadata.size) : NaN;
+      const md5Hash = typeof metadata.md5Hash === "string" ? metadata.md5Hash : "";
+      if (!/^[1-9]\d{0,19}$/u.test(generation) || objectSize !== size || !/^[A-Za-z0-9+/]{22}==$/u.test(md5Hash)) {
+        res.status(409).json({ error: "blob_identity_changed" }); return;
+      }
+      const download = await deps.createBlobSignedUrl({ gcsPath, action: "read", generation });
+      res.json({ download, generation, size, md5Hash });
+    });
+  });
 }
 
 function installGatewayOpsRoutes(
@@ -2824,6 +2914,7 @@ function installGatewayOpsRoutes(
   });
 
   installWorkspaceManifestRoutes(router, deps);
+  installBlobMaterializationRoute(router, deps);
 
   router.post("/builder-runtime-state/download-url", async (req, res) => {
     const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
@@ -2887,11 +2978,30 @@ function installGatewayOpsRoutes(
   installOpenClawBootRoutes(router, deps);
 }
 
+function validatedHomeRestore(home: Partial<GatewayVmHomeState> | undefined, res: Response): GatewayVmHomeCheckpoint | undefined | null {
+  const expected = home?.restoreCheckpoint;
+  if (expected !== undefined && !isDisposableHomeCheckpoint(expected)) {
+    res.status(409).json({ error: "home_restore_checkpoint_invalid" });
+    return null;
+  }
+  return expected;
+}
+
+function homeCheckpointProtocolValid(coverage: unknown, writerProtocol: unknown): boolean {
+  return (coverage === undefined || coverage === "builder-home-v2") && (writerProtocol === undefined || writerProtocol === 2);
+}
+
+function computerHomeBindingValid(glm: Record<string, unknown> | undefined, bound: GatewayBinding, gateway: ReturnType<typeof projectGatewayDesiredRootForGateway>, slug: string): boolean {
+  const vm = glm?.vm as { instanceId?: unknown } | null | undefined;
+  return resolveGatewayRuntime(glm?.runtime) === "gce-vm" && vm?.instanceId === bound.podUid
+    && computerHomeGatewayEligible(gateway, slug, bound.finalHomeCheckpoint === true);
+}
+
 async function requireComputerHomeScope(
   db: Firestore,
   req: Request,
   res: Response,
-): Promise<{ bound: GatewayBinding; slug: string; instanceId: string } | null> {
+): Promise<{ bound: GatewayBinding; slug: string; instanceId: string; ownerUid: string; restoreCheckpoint?: GatewayVmHomeCheckpoint } | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
   const slug = typeof req.body?.slug === "string" ? req.body.slug : "";
@@ -2907,17 +3017,14 @@ async function requireComputerHomeScope(
     readComputerRuntimeObservation(db, bound.gatewayId),
     db.doc(`${GATEWAYS_COLLECTION}/${bound.gatewayId}`).get(),
   ]);
-  const vm = glm?.vm as { instanceId?: unknown } | null | undefined;
   const gateway = projectGatewayDesiredRootForGateway(gatewaySnap.exists ? gatewaySnap.data() : undefined, bound.gatewayId);
-  if (
-    resolveGatewayRuntime(glm?.runtime) !== "gce-vm" ||
-    vm?.instanceId !== bound.podUid ||
-    !computerHomeGatewayEligible(gateway, slug, bound.finalHomeCheckpoint === true)
-  ) {
+  if (!computerHomeBindingValid(glm, bound, gateway, slug)) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  return { bound, slug, instanceId: bound.podUid };
+  const restoreCheckpoint = validatedHomeRestore(glm?.vmHome as Partial<GatewayVmHomeState> | undefined, res);
+  if (restoreCheckpoint === null) return null;
+  return { bound, slug, instanceId: bound.podUid, ownerUid: gateway!.ownerUid as string, ...(restoreCheckpoint ? { restoreCheckpoint } : {}) };
 }
 
 function computerHomeGatewayEligible(
@@ -2972,14 +3079,17 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
     const name = validComputerHomeCheckpointName(body.name);
     const sha256 = validSha256(body.sha256);
     const size = finiteNonNegative(body.size);
+    const coverage = body.coverage;
+    const writerProtocol = body.writerProtocol;
     const requestedAt = body.requestedAt === null ? null : finiteNonNegative(body.requestedAt);
-    if ((body.requestedAt !== null && requestedAt === null) || (requestedAt !== null && requestedAt > now())
+    if (!homeCheckpointProtocolValid(coverage, writerProtocol)
+      || (body.requestedAt !== null && requestedAt === null) || (requestedAt !== null && requestedAt > now())
       || !name || !sha256 || size === null || size === 0 || size > COMPUTER_HOME_CHECKPOINT_MAX_BYTES) {
       res.status(400).json({ error: "invalid_checkpoint" });
       return;
     }
     await runBrokered(res, async () => {
-      let checkpoint: GatewayVmHomeCheckpoint = { name, size, sha256, instanceId: scope.instanceId, completedAt: now() };
+      let checkpoint: GatewayVmHomeCheckpoint = { name, size, sha256, instanceId: scope.instanceId, completedAt: now(), ...(coverage === "builder-home-v2" ? { coverage } : {}), ...(writerProtocol === 2 ? { writerProtocol } : {}) };
       try {
         checkpoint = await computerHomeStore.commit({
           checkpointPath: computerHomeCheckpointPath(scope.slug, name),
@@ -2991,7 +3101,7 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
         throw error;
       }
       const home: Pick<GatewayVmHomeState, "lastCheckpoint" | "checkpointAcknowledgedAt"> = { lastCheckpoint: checkpoint, checkpointAcknowledgedAt: requestedAt };
-      await recordComputerHomeCheckpoint(db, scope.bound.gatewayId, home);
+      await recordComputerHomeCheckpoint(db, scope.bound.gatewayId, home, { uid: scope.ownerUid, instanceId: scope.instanceId });
       const response: FleetBrokerComputerHomeCheckpointCommit = { name, size, sha256, completedAt: checkpoint.completedAt };
       res.json(response);
     });
@@ -3003,18 +3113,27 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
     await runBrokered(res, async () => {
       const current = await computerHomeStore.readCurrent(computerHomeCurrentPath(scope.slug));
       if (!current) {
-        res.status(404).json({ error: "no_checkpoint" });
+        res.status(scope.restoreCheckpoint ? 409 : 404).json({ error: scope.restoreCheckpoint ? "home_restore_checkpoint_unavailable" : "no_checkpoint" });
+        return;
+      }
+      if (scope.restoreCheckpoint && !sameHomeCheckpoint(scope.restoreCheckpoint, current)) {
+        res.status(409).json({ error: "home_restore_checkpoint_mismatch" });
         return;
       }
       const download = await createBlobSignedUrl({
         gcsPath: computerHomeCheckpointPath(scope.slug, current.name),
         action: "read",
+        ...(current.generation ? { generation: current.generation } : {}),
       });
       const response: FleetBrokerComputerHomeDownload = {
         name: current.name,
         size: current.size,
         sha256: current.sha256,
         completedAt: current.completedAt,
+        instanceId: current.instanceId,
+        ...(current.coverage ? { coverage: current.coverage } : {}),
+        ...(current.writerProtocol ? { writerProtocol: current.writerProtocol } : {}),
+        ...(current.generation ? { generation: current.generation } : {}),
         download,
       };
       res.json(response);
@@ -3411,6 +3530,28 @@ async function recordVmImageReport(
   return true;
 }
 
+async function recordVmBootRecoveryReport(deps: ResolvedFleetBrokerRouteDeps, req: Request, res: Response, bound: GatewayBinding, bundleVersion: string): Promise<boolean> {
+  const sample = (req.body as Partial<GatewayVmRuntimeRequest> | undefined)?.bootRecovery;
+  if (sample === undefined) return true;
+  if (!isGatewayVmBootRecoverySample(sample)) { res.status(400).json({ error: "invalid_boot_recovery_sample" }); return false; }
+  if (!bound.podUid || sample.ready && sample.bundleVersion !== bundleVersion) return true;
+  const { currentPointId, retainedPoints, ready, freeBytes } = sample;
+  try {
+    await recordComputerBootRecovery(deps.db, bound.gatewayId, { currentPointId, retainedPoints, ready, freeBytes, bundleVersion: sample.bundleVersion, instanceId: bound.podUid, observedAt: deps.now() });
+  } catch (error) {
+    logger.error("[fleet-broker] computer boot recovery observation failed", { gatewayId: bound.gatewayId, error });
+    res.status(503).json({ error: "boot_recovery_unrecorded" }); return false;
+  }
+  return true;
+}
+
+function vmRuntimeCheckpointSignal(home: Partial<GatewayVmHomeState> | undefined): GatewayVmRuntimeResponse["homeCheckpoint"] {
+  return {
+    requestedAt: typeof home?.checkpointRequestedAt === "number" ? home.checkpointRequestedAt : null,
+    completedAt: !homeCheckpointOutstanding(home) && typeof home?.lastCheckpoint?.completedAt === "number" ? home.lastCheckpoint.completedAt : null,
+  };
+}
+
 function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db } = deps;
   router.post("/vm-runtime", async (req, res) => {
@@ -3425,16 +3566,16 @@ function installVmRuntimeRoutes(router: Router, deps: ResolvedFleetBrokerRouteDe
       res.status(404).json({ error: "vm_runtime_not_rendered" });
       return;
     }
+    if (!(await recordVmBootRecoveryReport(deps, req, res, bound, bundle.version))) return;
     if (!(await recordVmImageReport(deps, req, res, bound))) return;
     if (!(await recordVmPreemptionNotice(deps, req, res, bound, observation))) return;
     if (!(await recordVmDiskReport(deps, req, res, bound, observation))) return;
     const home = observation?.vmHome as Partial<GatewayVmHomeState> | undefined;
+    const restoreCheckpoint = validatedHomeRestore(home, res);
+    if (restoreCheckpoint === null) return;
     const response: GatewayVmRuntimeResponse = {
-      bundle,
-      homeCheckpoint: {
-        requestedAt: typeof home?.checkpointRequestedAt === "number" ? home.checkpointRequestedAt : null,
-        completedAt: !homeCheckpointOutstanding(home) && typeof home?.lastCheckpoint?.completedAt === "number" ? home.lastCheckpoint.completedAt : null,
-      },
+      bundle: { ...bundle, ...(restoreCheckpoint ? { homeRestoreCheckpoint: restoreCheckpoint } : {}) },
+      homeCheckpoint: vmRuntimeCheckpointSignal(home),
     };
     res.set("cache-control", "no-store");
     res.json(response);

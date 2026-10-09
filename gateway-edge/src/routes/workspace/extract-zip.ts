@@ -1,3 +1,4 @@
+import { storeUploadedWorkspaceBlob as storeWorkspaceBlob } from "../../lib/project-blob-edit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import JSZip from "jszip";
 import { storage } from "../../lib/db.js";
@@ -6,7 +7,6 @@ import { removeFromManifest } from "../../lib/manifest.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
 import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
 import {
-  storeWorkspaceBlob,
   WorkspaceStorageQuotaError,
 } from "../../lib/workspace-blob.js";
 import type { FileTarget } from "../../lib/fileTarget.js";

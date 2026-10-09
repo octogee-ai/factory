@@ -8,6 +8,14 @@ import {
 
 const WORKSPACE_MUTATION_LOCK_NAME = "octogee.workspace-mutation.lock";
 
+export function projectMutationLeaseGitDir(workspaceDir: string, customersRoot: string): string | null {
+  const parts = path.relative(path.resolve(customersRoot), path.resolve(workspaceDir)).split(path.sep);
+  if (parts.length !== 3 || parts[1] !== "projects" || ![parts[0], parts[2]].every(part => /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/u.test(part))) return null;
+  const lockDir = path.join(path.dirname(customersRoot), "git-source-switch-locks", parts[0], `${parts[2]}.git`);
+  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  return lockDir;
+}
+
 export interface WorkspaceMutationLeaseOptions {
   workspaceDir: string;
   gitDir?: string;

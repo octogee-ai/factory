@@ -22,6 +22,8 @@ import {
   OPERATION_AUDIT_RECORD_TYPE,
   OPERATION_AUDIT_SCHEMA_VERSION,
   homeCheckpointOutstanding,
+  isGatewayVmHomeCheckpoint,
+  isDisposableHomeCheckpoint,
   readBuilderParkedComputer,
   isGatewayVmImageObservation,
 } from "./glm";
@@ -421,5 +423,17 @@ describe("VM image observations", () => {
     for (const invalid of [null, { containers }, { ...observation, instanceId: "" }, { ...observation, observedAt: Infinity }, { ...observation, observedAt: -1 }]) {
       expect(isGatewayVmImageObservation(invalid)).toBe(false);
     }
+  });
+});
+
+
+describe("computer recovery checkpoint validation", () => {
+  const saved = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: "a".repeat(64), instanceId: "4242", generation: "9007199254740995", completedAt: 1000, coverage: "builder-home-v2", writerProtocol: 2 };
+  it("preserves exact generation strings and refuses malformed protocol/coverage", () => {
+    expect(isDisposableHomeCheckpoint(saved)).toBe(true);
+    expect(isGatewayVmHomeCheckpoint({ ...saved, generation: Number("9007199254740995") })).toBe(false);
+    expect(isGatewayVmHomeCheckpoint({ ...saved, coverage: "unknown" })).toBe(false);
+    expect(isGatewayVmHomeCheckpoint({ ...saved, writerProtocol: 1 })).toBe(false);
+    expect(isDisposableHomeCheckpoint({ ...saved, instanceId: null })).toBe(false);
   });
 });

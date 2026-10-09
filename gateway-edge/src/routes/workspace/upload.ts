@@ -1,3 +1,4 @@
+import { storeUploadedWorkspaceBlob as storeWorkspaceBlob } from "../../lib/project-blob-edit.js";
 import { Router, Request, Response, NextFunction } from "express";
 import Busboy from "busboy";
 import { storage } from "../../lib/db.js";
@@ -5,7 +6,6 @@ import { readPlatformFreeConfig } from "../../lib/platform-free-config.js";
 import { validateFilePath } from "../../lib/path-validation.js";
 import { resolveFileTarget, withGiteaTarget, type FileTarget } from "../../lib/fileTarget.js";
 import {
-  storeWorkspaceBlob,
   WorkspaceStorageQuotaError,
 } from "../../lib/workspace-blob.js";
 import { freeWorkspaceStorageLimitBytes } from "../../lib/free-storage.js";

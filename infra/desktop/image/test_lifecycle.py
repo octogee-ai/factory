@@ -48,6 +48,12 @@ class Systemd:
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_full_home_restore_refuses_unfenced_ssh_writers_without_mutations(self):
+        systemd = Systemd()
+        with self.assertRaisesRegex(RuntimeError, 'SSH session writers'):
+            OPERATE('stop-home', systemd)
+        self.assertEqual(systemd.calls, [])
+
     def test_freezes_desktop_and_user_apps_before_sync(self):
         systemd = Systemd()
         OPERATE('freeze', systemd)

@@ -103,6 +103,13 @@ if [[ "$KEEP" == 1 ]]; then
   log "kept VM key: ./octogee-computer-test-key (ssh -i ./octogee-computer-test-key octo@$IP)"
 fi
 
+check_gateway_image() {
+  local image
+  image="$(vssh 'set -e; image="$(cat /etc/octogee-gateway-image)"; sudo docker image inspect "$image" >/dev/null; printf "%s\n" "$image"')" || { echo "gateway image preload is missing" >&2; return 1; }
+  [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ && "$image" == "${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}" ]] || { echo "gateway image preload does not match the requested digest" >&2; return 1; }
+}
+check_gateway_image
+vssh 'sudo /usr/local/bin/octo-scratch-storage; sudo test -r "/srv/octogee/.home-checkpoint/pre-migration/$(cat /etc/octogee-computer-image)-$(cat /etc/machine-id)/.home-checkpoint/recovery-image"'
 image_id="$(vssh 'cat /etc/octogee-computer-image 2>/dev/null || echo unknown')"
 vssh 'sudo systemd-analyze verify /etc/systemd/system/octo-*.service'
 boot="$(vssh 'systemd-analyze 2>/dev/null | head -1')"
@@ -143,6 +150,7 @@ if [[ "$STOP_START" == 1 ]]; then
   IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
   wait_ssh 300
   t_back=$(date +%s)
+  check_gateway_image
   wait_desktop
   vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
   after="$(vssh 'cat ~/persist-marker 2>/dev/null; if test -f ~/.config/octogee-chromium/Default/Cookies; then echo profile-present; fi')"

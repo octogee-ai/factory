@@ -33,6 +33,12 @@ export function isGatewayVmParkedCheckpoint(value) {
         && (c.completedAt === null || typeof c.completedAt === "number");
 }
 export const BUILDER_PARKED_COMPUTER_FIELD = "provisioning.computer";
+function parkedComputerRecoveryValid(p) {
+    return (p.homeCheckpoint === undefined || isGatewayVmHomeCheckpoint(p.homeCheckpoint))
+        && (p.disposable === undefined || (p.disposable === true && isDisposableHomeCheckpoint(p.homeCheckpoint)))
+        && (p.bootRecovery === undefined || isGatewayVmBootRecoverySample(p.bootRecovery)
+            && typeof p.bootRecovery.instanceId === "string" && Number.isFinite(p.bootRecovery.observedAt));
+}
 export function isBuilderParkedComputer(value) {
     const p = value;
     return !!p
@@ -41,7 +47,8 @@ export function isBuilderParkedComputer(value) {
         && (p.instanceId === null || typeof p.instanceId === "string")
         && typeof p.gatewayId === "string" && p.gatewayId.length > 0
         && typeof p.parkedAt === "number" && Number.isFinite(p.parkedAt)
-        && isGatewayVmParkedCheckpoint(p.checkpoint);
+        && isGatewayVmParkedCheckpoint(p.checkpoint)
+        && parkedComputerRecoveryValid(p);
 }
 export function readBuilderParkedComputer(userData) {
     const provisioning = userData?.provisioning;
@@ -55,6 +62,9 @@ export const GLM_GATEWAY_VM_RUNTIME_DOC = "runtime";
 export function gatewayVmRuntimeDocPath(gatewayId) {
     return `${GLM_GATEWAYS_COLLECTION}/${gatewayId}/${GLM_GATEWAY_VM_SUBCOLLECTION}/${GLM_GATEWAY_VM_RUNTIME_DOC}`;
 }
+function runtimeBundleHostsValid(b) {
+    return !!b.hostAliases && typeof b.hostAliases === "object" && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
+}
 export function isGatewayVmRuntimeBundle(value) {
     const b = value;
     return !!b
@@ -64,8 +74,8 @@ export function isGatewayVmRuntimeBundle(value) {
         && typeof b.imageTag === "string"
         && Array.isArray(b.containers) && b.containers.length > 0
         && Array.isArray(b.volumes)
-        && !!b.hostAliases && typeof b.hostAliases === "object"
-        && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
+        && runtimeBundleHostsValid(b)
+        && (b.homeRestoreCheckpoint === undefined || isDisposableHomeCheckpoint(b.homeRestoreCheckpoint));
 }
 export const GATEWAY_VM_IMAGE_SERVICES = ["gateway", "gateway-edge"];
 function isGatewayVmContainerImage(value) {
@@ -126,6 +136,11 @@ export function homeCheckpointOutstanding(home) {
     return typeof completedAt !== "number" || completedAt < requestedAt
         || typeof home?.checkpointAcknowledgedAt !== "number" || home.checkpointAcknowledgedAt < requestedAt;
 }
+function homeCheckpointProtocolValid(c) {
+    return (c.coverage === undefined || c.coverage === "builder-home-v2")
+        && (c.writerProtocol === undefined || c.writerProtocol === 2 || c.writerProtocol === 3)
+        && (c.generation === undefined || (typeof c.generation === "string" && /^[1-9]\d*$/u.test(c.generation)));
+}
 export function isGatewayVmHomeCheckpoint(value) {
     const c = value;
     return !!c
@@ -133,7 +148,16 @@ export function isGatewayVmHomeCheckpoint(value) {
         && typeof c.size === "number" && Number.isSafeInteger(c.size) && c.size > 0 && c.size <= COMPUTER_HOME_CHECKPOINT_MAX_BYTES
         && typeof c.sha256 === "string" && /^[a-f0-9]{64}$/u.test(c.sha256)
         && (c.instanceId === null || typeof c.instanceId === "string")
-        && typeof c.completedAt === "number" && Number.isFinite(c.completedAt);
+        && typeof c.completedAt === "number" && Number.isFinite(c.completedAt)
+        && homeCheckpointProtocolValid(c);
+}
+export function isDisposableHomeCheckpoint(value) {
+    return isGatewayVmHomeCheckpoint(value) && typeof value.generation === "string" && typeof value.instanceId === "string" && value.instanceId.length > 0;
+}
+export function sameHomeCheckpoint(a, b) {
+    return a.name === b.name && a.generation === b.generation && a.size === b.size
+        && a.sha256 === b.sha256 && a.instanceId === b.instanceId && a.completedAt === b.completedAt
+        && a.coverage === b.coverage && a.writerProtocol === b.writerProtocol;
 }
 export function computerHomeCheckpointName(at) {
     const date = new Date(at);
@@ -458,4 +482,11 @@ export function resolveGatewayImageProfile(input) {
     if (!input.gatewayClass && input.profile === "builder")
         return "builder";
     return resolveGatewayClass(input) === "builder" ? "builder" : "standard";
+}
+export function isGatewayVmBootRecoverySample(value) {
+    const r = value;
+    return !!r && typeof r.ready === "boolean" && typeof r.bundleVersion === "string" && r.bundleVersion.length > 0
+        && Number.isSafeInteger(r.retainedPoints) && r.retainedPoints >= 0 && r.retainedPoints <= 1000
+        && Number.isSafeInteger(r.freeBytes) && r.freeBytes >= 0
+        && (r.currentPointId === null || typeof r.currentPointId === "string" && /^[a-z][a-z0-9-]{0,62}-[a-f0-9]{32}$/u.test(r.currentPointId));
 }

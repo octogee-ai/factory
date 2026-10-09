@@ -80,6 +80,18 @@ describe("workspace file list helpers", () => {
     vi.mocked(storage.bucket).mockReset();
   });
 
+  it("lists the requested project's committed asset revision without reviving deleted GCS entries", async () => {
+    const target = { ...giteaTarget, projectSlug: "demo", repoName: "alice-demo", gcsPrefix: "customers/alice/projects/demo" };
+    const oldAsset = { type: "blob", gcsPath: `${target.gcsPrefix}/.objects/${"a".repeat(64)}`, sha256: "a".repeat(64), size: 4, mimeType: "application/octet-stream", uploadedAt: "2026-10-08" };
+    vi.mocked(getManifest).mockResolvedValue({ "deleted.bin": oldAsset } as Manifest);
+    vi.mocked(repoContentsApi).mockImplementation(async (_target, name, ref) => name === ".files/manifest.json"
+      ? { type: "file", encoding: "base64", content: Buffer.from(JSON.stringify(ref === "old-version" ? { "old.bin": oldAsset } : {})).toString("base64") }
+      : []);
+    expect(await workspaceFilesResponse(target, "", false, "old-version")).toMatchObject({ files: [{ path: "old.bin", source: "blob" }] });
+    expect(await workspaceFilesResponse(target, "", false, "main")).toMatchObject({ files: [] });
+    expect(getManifest).not.toHaveBeenCalled();
+  });
+
   it("maps visible repo entries, including customer-owned context files, and hides reserved or dot-prefixed names", () => {
     const files = repoFileEntries([
       { name: "src", path: "src", type: "dir" },

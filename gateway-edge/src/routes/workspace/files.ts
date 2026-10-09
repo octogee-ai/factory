@@ -5,6 +5,7 @@ import { withFileTarget } from "../../lib/fileTarget.js";
 import { getManifest } from "../../lib/manifest.js";
 import { BLOB_SIGNED_URL_TTL_MS } from "../../lib/workspace-blob.js";
 import type { Manifest } from "../../lib/manifest.js";
+import { manifestObjectPath, parseManifest } from "@octogee/core/workspace-manifest";
 import { isOversizeFile } from "../../lib/github.js";
 import { logger } from "../../middleware/logging.js";
 import {
@@ -270,6 +271,18 @@ export function sortWorkspaceFiles(files: WorkspaceFileEntry[]): WorkspaceFileEn
   });
 }
 
+async function targetAssetManifest(target: Parameters<typeof repoContentsApi>[0], bustCache = false, ref?: string): Promise<Manifest> {
+  if (!target.projectSlug) return getManifest(target.gcsPrefix, bustCache);
+  let file;
+  try { file = await repoContentsApi(target, ".files/manifest.json", ref) as { encoding?: string; content?: string }; }
+  catch (error) {
+    if (!errorMessage(error).includes("404")) throw error;
+    return ref ? {} : getManifest(target.gcsPrefix, bustCache);
+  }
+  if (!file || file.encoding !== "base64" || typeof file.content !== "string" || file.content.length > 14 * 1024 * 1024) throw new Error("project asset manifest is invalid");
+  return parseManifest(manifestObjectPath(target.gcsPrefix), Buffer.from(file.content, "base64").toString("utf8"));
+}
+
 async function loadWorkspaceFileEntries(
   target: Parameters<typeof repoContentsApi>[0],
   path: string,
@@ -280,7 +293,7 @@ async function loadWorkspaceFileEntries(
   const gitFiles = contents ? repoFileEntries(contents, target) : [];
   if (target.provider === "github") return contents ? sortWorkspaceFiles(gitFiles) : null;
 
-  const manifest = await getManifest(target.gcsPrefix, bustCache);
+  const manifest = await targetAssetManifest(target, bustCache, ref);
   const gitPaths = new Set(gitFiles.map((file) => file.path));
   const blobs = await signThumbnailUrls(target, manifest, blobFileEntries(manifest, path, gitPaths, target));
   if (!contents && blobs.length === 0) return null;
@@ -331,7 +344,7 @@ async function loadWorkspaceFileIndex(
   const entries: WorkspaceFileIndexEntry[] = readableTreePaths.map((path) => ({ path, source: "git" }));
 
   if (target.provider !== "github") {
-    const manifest = await getManifest(target.gcsPrefix);
+    const manifest = await targetAssetManifest(target, false, ref);
     for (const path of Object.keys(manifest)) {
       if (gitPaths.has(path) || !validIndexPath(path) || !isTargetPathReadable(target, path)) continue;
       entries.push({ path, source: "blob" });
@@ -444,7 +457,7 @@ async function loadWorkspaceFileResponse(
   ref?: string,
 ): Promise<WorkspaceFileResponse | null> {
   if (target.provider !== "github") {
-    const manifest = await getManifest(target.gcsPrefix);
+    const manifest = await targetAssetManifest(target, false, ref);
     const blobEntry = manifest[path];
 
     if (blobEntry) {

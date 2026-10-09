@@ -9,6 +9,7 @@ import {
   type VmAgentDeps,
 } from "../../lib/vm-gateway-agent/agent";
 import type { DockerEngine } from "../../lib/vm-gateway-agent/docker-engine";
+import { scratchVolumeName } from "../../lib/vm-gateway-agent/scratch.js";
 import { HOME_CHECKPOINT_INTERVAL_MS } from "../../lib/vm-gateway-agent/home-checkpoint";
 import { bundleFixture } from "./fixture";
 
@@ -18,6 +19,7 @@ const CHECKPOINT = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: SHA, c
 
 interface FakeDocker {
   engine: DockerEngine;
+  volumes: Map<string, Record<string, unknown>>;
   containers: Map<string, { config: Record<string, unknown>; running: boolean; paused?: boolean }>;
   log: string[];
   prune: { status: number; body: unknown };
@@ -26,6 +28,7 @@ interface FakeDocker {
 }
 
 function fakeDocker(log: string[] = []): FakeDocker {
+  const volumes = new Map<string, Record<string, unknown>>();
   const containers = new Map<string, { config: Record<string, unknown>; running: boolean; paused?: boolean }>();
   const fake = {
     prune: { status: 200, body: { ImagesDeleted: null, SpaceReclaimed: 0 } as unknown },
@@ -36,6 +39,18 @@ function fakeDocker(log: string[] = []): FakeDocker {
   const engine: DockerEngine = {
     async request(method, path, body) {
       log.push(`${method} ${path.split("?")[0]}`);
+      if (path === "/info") return { status: 200, body: { DockerRootDir: "/var/lib/docker" } as never };
+      if (path.startsWith("/volumes?")) return { status: 200, body: { Volumes: [...volumes.values()] } as never };
+      if (path.startsWith("/containers/json?")) return { status: 200, body: [...containers.values()].map(container => ({ Mounts: ((container.config.HostConfig as { Binds?: string[] }).Binds ?? []).map(bind => {
+        const source = bind.split(":")[0];
+        return { Type: source.startsWith("/") ? "bind" : "volume", Name: source.startsWith("/") ? undefined : source, Source: source.startsWith("/") ? source : `/var/lib/docker/volumes/${source}/_data` };
+      }) })) as never };
+      if (path.startsWith("/volumes/")) {
+        const name = decodeURIComponent(path.slice("/volumes/".length));
+        if (method === "GET") return { status: volumes.has(name) ? 200 : 404, body: volumes.get(name) as never };
+        volumes.delete(name);
+        return { status: 204, body: "" as never };
+      }
       if (method === "GET" && path === "/containers/octo-gateway-agent/json") {
         return fake.agentImage
           ? { status: 200, body: { Id: "agent", Image: fake.agentImage } as never }
@@ -66,13 +81,14 @@ function fakeDocker(log: string[] = []): FakeDocker {
         containers.set(n, { config: body as Record<string, unknown>, running: false });
         return { status: 201, body: { Id: n } as never };
       }
+      if (path.endsWith("/update")) { (containers.get(name(path))!.config.HostConfig as Record<string, unknown>).RestartPolicy = (body as Record<string, unknown>).RestartPolicy; return { status: 200, body: {} as never }; }
       if (path.endsWith("/pause") || path.endsWith("/unpause")) { containers.get(name(path))!.paused = path.endsWith("/pause"); return { status: 204, body: "" as never }; }
       if (path.endsWith("/start")) { containers.get(name(path))!.running = true; return { status: 204, body: "" as never }; }
       if (path.endsWith("/wait")) { containers.get(name(path))!.running = false; return { status: 200, body: { StatusCode: 0 } as never }; }
       throw new Error(`unexpected ${method} ${path}`);
     },
   };
-  return Object.assign(fake, { engine, containers, log });
+  return Object.assign(fake, { engine, containers, volumes, log });
 }
 
 type Reply = { status: number; body: unknown };
@@ -137,9 +153,10 @@ function deps(
       },
       fs: {
         listDir: async () => home.entries,
-        exists: async (path) => !path.endsWith("home-restore.pending"),
+        exists: async (path) => !path.endsWith("home-restore.pending") && !path.includes("home-restored-"),
         mkdir: async () => {},
         replaceDirectory: async () => {},
+        replaceDirectoryContents: async () => {},
         fileSize: async () => 2048,
         sha256: async () => SHA,
         mkdtemp: async (prefix) => `/tmp/${prefix}1`,
@@ -162,6 +179,31 @@ const homeBundle = (overrides: Parameters<typeof bundleFixture>[0] = {}) => bund
 
 const runtimeReply = (bundle: ReturnType<typeof bundleFixture>, homeCheckpoint = { requestedAt: null as number | null, completedAt: null as number | null }): Reply =>
   ({ status: 200, body: { bundle, homeCheckpoint } });
+
+it("retains old and orphan caches through runtime replacement and steady convergence without exclusive custody", async () => {
+  const docker = fakeDocker();
+  const old = scratchVolumeName("b-old", "builder-cache");
+  const current = scratchVolumeName("4242", "builder-cache");
+  for (const [Name, owner] of [[old, "b-old"], [current, "4242"]]) docker.volumes.set(Name, {
+    Name, Driver: "local", Mountpoint: `/var/lib/docker/volumes/${Name}/_data`, Options: {},
+    Labels: { "ai.octogee.computer-id": owner, "ai.octogee.storage": "ephemeral" },
+  });
+  docker.containers.set("octogee-gateway", { running: true, config: {
+    Image: "old-image", Labels: { "ai.octogee.bundle-version": "old", "ai.octogee.gateway-id": "b-old" }, HostConfig: { Binds: [`${old}:/work/cache`] },
+  } });
+  const h = deps(docker, () => runtimeReply(bundleFixture()), { now: 0 });
+  let state = await convergeOnce(h.d, initialAgentState());
+  expect(docker.volumes.has(old)).toBe(true);
+  expect(docker.volumes.has(current)).toBe(true);
+  expect(docker.log).not.toContain(`DELETE /volumes/${old}`);
+  expect(h.d.log).toHaveBeenCalledWith(expect.stringContaining("exclusive writer custody unavailable"));
+  const orphan = scratchVolumeName("b-retired", "builder-cache");
+  docker.volumes.set(orphan, { Name: orphan, Driver: "local", Mountpoint: `/var/lib/docker/volumes/${orphan}/_data`, Options: {},
+    Labels: { "ai.octogee.computer-id": "b-retired", "ai.octogee.storage": "ephemeral" } });
+  state = await convergeOnce(h.d, state);
+  expect(docker.volumes.has(orphan)).toBe(true);
+  expect(state.appliedVersion).toBe(bundleFixture().version);
+});
 
 const calls = (fetchImpl: typeof fetch, suffix: string) =>
   (fetchImpl as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls.filter(([url]) => String(url).endsWith(suffix));
@@ -254,11 +296,38 @@ describe("convergeOnce", () => {
     const [, init] = calls(reported.fetchImpl, "/internal/fleet/vm-runtime")[0];
     expect(JSON.parse(String(init.body))).toMatchObject({ gatewayId: "b-x", disk: DISK, images: { containers: [{ name: "gateway", running: false }, { name: "gateway-edge", running: false }] } });
 
-    const unmeasured = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock, { diskUsage: async () => { throw new Error("ENOENT: statfs"); } });
+    const unmeasured = deps(fakeDocker(), () => runtimeReply(bundleFixture()), clock, { diskUsage: async path => { if (path === "/") { return DISK; } throw new Error("ENOENT: statfs"); } });
     const state = await convergeOnce(unmeasured.d, initialAgentState());
     expect(state.appliedVersion).toBe("v1");
     expect(JSON.parse(String(calls(unmeasured.fetchImpl, "/internal/fleet/vm-runtime")[0][1].body))).toMatchObject({ gatewayId: "b-x", images: { containers: [{ name: "gateway", running: false }, { name: "gateway-edge", running: false }] } });
     expect(unmeasured.d.log).toHaveBeenCalledWith(expect.stringContaining("disk usage unavailable for /srv/octogee: ENOENT: statfs"));
+  });
+
+  it("refuses new scratch preparation below 2 GiB of boot headroom without deleting retained data", async () => {
+    const docker = fakeDocker();
+    const bundle = bundleFixture();
+    bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" });
+    const h = deps(docker, () => runtimeReply(bundle), { now: 1_000 }, { diskUsage: async path => path === "/" ? { ...DISK, freeBytes: 1024 ** 3 } : DISK });
+    await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow("boot headroom");
+    expect(docker.log.some(entry => entry.startsWith("POST /volumes/create") || entry.startsWith("POST /images/create") || entry.startsWith("DELETE /volumes/"))).toBe(false);
+  });
+
+  it.each([false, true])("restarts stopped services below boot headroom with no new scratch allocation: existing scratch %s", async (scratch) => {
+    const docker = fakeDocker();
+    const bundle = bundleFixture();
+    if (scratch) {
+      bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" });
+      const Name = scratchVolumeName("4242", "builder-cache");
+      docker.volumes.set(Name, { Name, Driver: "local", Mountpoint: `/var/lib/docker/volumes/${Name}/_data`, Options: {},
+        Labels: { "ai.octogee.computer-id": "4242", "ai.octogee.storage": "ephemeral" } });
+    }
+    const h = deps(docker, () => runtimeReply(bundle), { now: 1_000 }, { diskUsage: async path => path === "/" ? { ...DISK, freeBytes: 1024 ** 3 } : DISK });
+    let state = await convergeOnce(h.d, initialAgentState());
+    docker.containers.get("octogee-gateway")!.running = false;
+    state = await convergeOnce(h.d, state);
+    expect(state.appliedVersion).toBe("v1");
+    expect(docker.containers.get("octogee-gateway")!.running).toBe(true);
+    expect(docker.log).not.toContain("POST /volumes/create");
   });
 
   it("waits while the bundle is unrendered, then writes tokens, prepares volumes, runs init, and starts the services", async () => {
@@ -449,6 +518,20 @@ describe("convergeOnce", () => {
     expect(docker.log.slice(settled).filter((l) => l.startsWith("POST /containers/create"))).toHaveLength(0);
   });
 
+  it("keeps native boot admission owned by the agent after creation and checkpoint resume", async () => {
+    const docker = fakeDocker();
+    const clock = { now: 1000 };
+    const h = deps(docker, () => runtimeReply(homeBundle()), clock, { home: { dirty: true } });
+    const first = await convergeOnce(h.d, initialAgentState());
+    for (const service of docker.containers.values()) {
+      expect(service.config.HostConfig).toMatchObject({ RestartPolicy: { Name: "on-failure" } });
+    }
+    await convergeOnce(h.d, first);
+    for (const service of docker.containers.values()) {
+      expect(service.config.HostConfig).toMatchObject({ RestartPolicy: { Name: "on-failure" } });
+    }
+  });
+
   it("refreshes token files on the refresh interval and restarts a container that died", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
@@ -504,6 +587,16 @@ describe("convergeOnce", () => {
     expect(calls(bare.fetchImpl, "/computer-home/download-url")).toHaveLength(0);
   });
 
+  it("requires restoration when a recovery obligation is added to already-running containers", async () => {
+    const docker = fakeDocker();
+    let bundle = homeBundle();
+    const h = deps(docker, () => runtimeReply(bundle), { now: 1000 });
+    const state = await convergeOnce(h.d, initialAgentState());
+    bundle = { ...bundle, homeRestoreCheckpoint: { name: CHECKPOINT.name, size: 2048, sha256: SHA, instanceId: "previous", generation: "9007199254740995", completedAt: 1000 } };
+    await expect(convergeOnce(h.d, state)).rejects.toThrow("checkpoint is unavailable");
+    expect(docker.containers.size).toBe(0);
+  });
+
   it("checkpoints a dirty home once the containers are steady, waits out the interval, and checkpoints immediately when Cowboy asks", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
@@ -551,7 +644,7 @@ describe("convergeOnce", () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
     let signal = { requestedAt: null as number | null, completedAt: null as number | null };
-    const h = deps(docker, () => runtimeReply(homeBundle(), signal), clock);
+    const h = deps(docker, () => runtimeReply(homeBundle(), signal), clock, { diskUsage: async path => path === "/" ? { ...DISK, freeBytes: 1024 ** 3 } : DISK });
     let state = await convergeOnce(h.d, initialAgentState());
     signal = { requestedAt: 1_000, completedAt: null };
     const original = h.d.fetchImpl;
@@ -568,6 +661,27 @@ describe("convergeOnce", () => {
     signal = { requestedAt: null, completedAt: 1_000 };
     await convergeOnce(h.d, state);
     expect([...docker.containers.values()].some((c) => c.paused)).toBe(false);
+    for (const service of docker.containers.values()) expect(service.config.HostConfig).toMatchObject({ RestartPolicy: { Name: "on-failure" } });
+  });
+
+  it("keeps acknowledged final writers held when a service disappears or restarts", async () => {
+    const docker = fakeDocker();
+    const clock = { now: 1000 };
+    let signal = { requestedAt: null as number | null, completedAt: null as number | null };
+    const h = deps(docker, () => runtimeReply(homeBundle(), signal), clock);
+    let state = await convergeOnce(h.d, initialAgentState());
+    signal = { requestedAt: 1000, completedAt: null };
+    state = await convergeOnce(h.d, state);
+    signal = { requestedAt: 1000, completedAt: 1000 };
+    const names = [...docker.containers.keys()];
+    docker.containers.delete(names[0]);
+    docker.containers.get(names[1])!.paused = false;
+    docker.log.length = 0;
+    await convergeOnce(h.d, state);
+    expect([...docker.containers.values()].every((container) => container.paused)).toBe(true);
+    expect(docker.log.some((line) => line.includes("/unpause"))).toBe(false);
+    expect(docker.containers.has(names[0])).toBe(false);
+    expect(h.d.home.desktop.run).not.toHaveBeenLastCalledWith("thaw");
   });
 
   it("holds final-checkpoint writers after a lost commit reply until the controller clears the request", async () => {
@@ -585,6 +699,7 @@ describe("convergeOnce", () => {
     requestedAt = null;
     await convergeOnce(h.d, next);
     expect([...docker.containers.values()].some((c) => c.paused)).toBe(false);
+    for (const service of docker.containers.values()) expect(service.config.HostConfig).toMatchObject({ RestartPolicy: { Name: "on-failure" } });
     expect(h.d.home.desktop.run).toHaveBeenLastCalledWith("thaw");
   });
 

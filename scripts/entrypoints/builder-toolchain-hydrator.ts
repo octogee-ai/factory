@@ -1,6 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("builder-toolchain-hydrator");
-import * as path from "node:path";
+import { builderToolchainRoot } from "../lib/builder-storage.js";
 import { pathToFileURL } from "node:url";
 
 import type { DeveloperToolchainStatusArtifact } from "../../shared/types/developer-toolchain.js";
@@ -21,6 +21,8 @@ import {
 
 export interface BuilderToolchainHydratorConfig {
   root: string;
+  preinstalledRoot?: string;
+  cachePath?: string;
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
@@ -39,10 +41,11 @@ function envValue(env: NodeJS.ProcessEnv, key: string, fallback = ""): string {
 export function resolveBuilderToolchainHydratorConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): BuilderToolchainHydratorConfig {
-  const home = envValue(env, "HOME", "/home/node");
   const fleetControllerPort = envValue(env, "FLEET_CONTROLLER_PORT", "3003");
   return {
-    root: path.join(home, ".octogee", "toolchains"),
+    root: builderToolchainRoot(env),
+    ...(envValue(env, "OCTOGEE_BUILDER_PREINSTALLED_TOOLCHAIN") ? { preinstalledRoot: envValue(env, "OCTOGEE_BUILDER_PREINSTALLED_TOOLCHAIN") } : {}),
+    ...(envValue(env, "NPM_CONFIG_CACHE") ? { cachePath: envValue(env, "NPM_CONFIG_CACHE") } : {}),
     packageJsonPath: envValue(
       env,
       "OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH",
@@ -220,6 +223,8 @@ export async function runBuilderToolchainHydrator(input: {
     probeInteractiveReadiness: () => probeBuilderInteractiveReadiness(input.config.readinessUrl),
     hydrate: (attempt) => hydrateBuilderToolchain({
       root: input.config.root,
+      preinstalledRoot: input.config.preinstalledRoot,
+      cachePath: input.config.cachePath,
       packageJsonPath: input.config.packageJsonPath,
       packageLockPath: input.config.packageLockPath,
       packageLockSha256: input.config.packageLockSha256,

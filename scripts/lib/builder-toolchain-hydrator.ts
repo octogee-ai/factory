@@ -68,6 +68,8 @@ export interface InstallBuilderToolchainOptions {
 
 export interface HydrateBuilderToolchainOptions {
   root: string;
+  preinstalledRoot?: string;
+  cachePath?: string;
   packageJsonPath: string;
   packageLockPath: string;
   packageLockSha256: string;
@@ -791,7 +793,7 @@ async function activateObject(root: string, objectPath: string): Promise<void> {
   const activePath = path.join(root, "active");
   const existing = await fs.lstat(activePath).catch(() => null);
   if (existing && !existing.isSymbolicLink()) throw hydrationError("invalid-active-path");
-  const relativeTarget = path.relative(root, objectPath);
+  const relativeTarget = path.relative(await fs.realpath(root), await fs.realpath(objectPath));
   const temporaryLink = path.join(root, `.active.${process.pid}.${randomUUID()}.tmp`);
   await fs.symlink(relativeTarget, temporaryLink, "dir");
   try {
@@ -944,6 +946,17 @@ export async function hydrateBuilderToolchain(
     toolchainId = `builder-tools-${bundleSha256}`;
     const objectPath = path.join(options.root, "objects", `sha256-${bundleSha256}`);
     const expectedInstalled = installedDescriptor(lockSha256, groupsSha256, bundleSha256);
+    if (options.preinstalledRoot) {
+      const imageObject = await fs.realpath(options.preinstalledRoot).catch(() => null);
+      if (!imageObject || !(await validateInstalledObject({ objectPath: imageObject, expected: expectedInstalled,
+        descriptor: pinned.descriptor, manifest: pinned.manifest, signal: options.signal }))) {
+        throw hydrationError("invalid-preinstalled-toolchain");
+      }
+      await activateObject(options.root, imageObject);
+      return persist(statusFor("ready", runtime.now()), detailFor("ready", {
+        toolchainId, lockSha256, groupsSha256, bundleSha256, attempt: options.attempt,
+      }));
+    }
     if (await validateInstalledObject({
       objectPath,
       expected: expectedInstalled,
@@ -977,7 +990,7 @@ export async function hydrateBuilderToolchain(
     ]);
     await installWithRegistryFallback({
       destination: stagingPath,
-      cachePath: path.join(options.root, "npm-cache"),
+      cachePath: options.cachePath ?? path.join(options.root, "npm-cache"),
       fallbackRegistryUrl: runtime.fallbackRegistryUrl,
       registryCredentialsProvider: options.registryCredentialsProvider,
       installDependencies: runtime.installDependencies,
@@ -1053,7 +1066,7 @@ interface HydrationAttemptResult {
   failure?: HydrationFailureKind;
 }
 
-const DETERMINISTIC_VERIFICATION_FAILURE = /^(?:invalid-command-version:|missing-command:|unsafe-command-path$)/u;
+const DETERMINISTIC_VERIFICATION_FAILURE = /^(?:invalid-command-version:|missing-command:|unsafe-command-path$|invalid-preinstalled-toolchain$)/u;
 
 async function waitForInteractiveReadiness(
   options: RunBuilderToolchainHydrationLoopOptions,

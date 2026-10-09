@@ -4,13 +4,9 @@ user=octo
 home=/home/$user
 metadata=http://metadata.google.internal/computeMetadata/v1
 
-for _ in $(seq 1 45); do
-  curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$metadata/instance/id" >/dev/null 2>&1 && break
-  sleep 2
-done
 if ! curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$metadata/instance/id" >/dev/null 2>&1; then
-  echo "metadata server unreachable after 90 s; leaving authorized_keys unchanged"
-  exit 0
+  echo "metadata server unavailable; refusing SSH admission until current authorization is reconciled" >&2
+  exit 1
 fi
 
 body_file="$(mktemp)"

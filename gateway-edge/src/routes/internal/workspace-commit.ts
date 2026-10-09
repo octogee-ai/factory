@@ -71,8 +71,10 @@ async function divertBinaries(
   dir: string,
   slug: string,
   project: string | null,
-): Promise<{ diverted: unknown[]; failures: string[]; failedPaths: string[] }> {
-  const result = await divertWorktreeBinaries(dir, blobTarget(slug, project));
+): Promise<{ diverted: Array<{ path: string; size: number }>; failures: string[]; failedPaths: string[] }> {
+  const result = project
+    ? await divertWorktreeBinaries(dir, blobTarget(slug, project), undefined, { retainLocalFiles: true })
+    : await divertWorktreeBinaries(dir, blobTarget(slug, project));
   if (result.failures.length > 0) {
     logger.warn(
       `internal/workspace/commit: blob diversion incomplete slug=${slug}: ${result.failures.join("; ")}`,
@@ -190,7 +192,7 @@ router.post("/commit", async (req: Request, res: Response) => {
         };
       }
       divertedBlobs = diverted.diverted.length;
-      return { ok: true };
+      return { ok: true, ...(project ? { excludePaths: diverted.diverted.map(blob => blob.path) } : {}) };
     },
   });
   if (!r.ok) {

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { ensureDesktopImage } from '../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
+import { ensureDesktopImage, desktopFingerprint, resolveDesktopGatewayImage } from '../../.github/actions/release-digest-manifest/build-desktop-image.mjs';
 const fingerprint = 'b'.repeat(64), sourceSha = 'a'.repeat(40);
 const name = `octogee-computer-${fingerprint.slice(0, 24)}`;
 const image = { name, id: '123', status: 'READY', labels: { source: sourceSha, 'input-a': fingerprint.slice(0, 32), 'input-b': fingerprint.slice(32) } };
@@ -64,4 +64,39 @@ it('abandoned-run cleanup preserves recent VMs and rejects unexpected purposes',
   const recent = { ...old, creationTimestamp: '2026-09-07T02:30:00Z' };
   expect(cleanupCandidates([old, recent], '124-1', true, Date.parse('2026-09-07T03:00:00Z'))).toEqual([old]);
   expect(() => cleanupCandidates([{ ...old, labels: { ...old.labels, purpose: 'assigned-computer' } }], '123-1', false)).toThrow('refusing');
+});
+
+const repository = 'us-central1-docker.pkg.dev/octogee/octogee';
+const gatewayDigest = `sha256:${'e'.repeat(64)}`;
+it('includes the immutable gateway digest in the desktop fingerprint', () => {
+  const files = () => '../infra/desktop/image/rootfs/usr/local/bin/octo-home-disk\0';
+  const first = desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, files);
+  expect(first).toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, files));
+  expect(first).not.toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@sha256:${'f'.repeat(64)}`, files));
+});
+it('resolves the exact main Builder image after gateway builds finish', () => {
+  const lookup = vi.fn(() => gatewayDigest);
+  const baseline = vi.fn();
+  expect(resolveDesktopGatewayImage({ repository, project: 'octogee', sourceSha, baseSha: 'c'.repeat(40), changedGateway: true }, lookup, baseline))
+    .toBe(`${repository}/octogee-gateway-builder@${gatewayDigest}`);
+  expect(baseline).not.toHaveBeenCalled();
+});
+it('uses only the named baseline digest when the gateway scope was unchanged and the exact tag is absent', () => {
+  const absent = () => { throw Object.assign(new Error('absent'), { status: 3 }); };
+  const baseline = vi.fn(() => ({ surfaces: { gateway: { 'octogee-gateway-builder': gatewayDigest } } }));
+  expect(resolveDesktopGatewayImage({ repository, project: 'octogee', sourceSha, baseSha: 'c'.repeat(40), changedGateway: false }, absent, baseline))
+    .toBe(`${repository}/octogee-gateway-builder@${gatewayDigest}`);
+  expect(baseline).toHaveBeenCalledWith('c'.repeat(40));
+});
+it.each([true, false])('does not hide registry auth/network errors behind a baseline (changed=%s)', changedGateway => {
+  const baseline = vi.fn();
+  expect(() => resolveDesktopGatewayImage({ repository, project: 'octogee', sourceSha, baseSha: 'c'.repeat(40), changedGateway }, () => { throw Object.assign(new Error('denied'), { status: 1 }); }, baseline)).toThrow('denied');
+  expect(baseline).not.toHaveBeenCalled();
+});
+it('refuses a missing exact image for a changed gateway scope or a malformed baseline digest', () => {
+  const absent = () => { throw Object.assign(new Error('absent'), { status: 3 }); };
+  const baseline = vi.fn(() => ({ surfaces: { gateway: { 'octogee-gateway-builder': 'latest' } } }));
+  expect(() => resolveDesktopGatewayImage({ repository, project: 'octogee', sourceSha, baseSha: 'c'.repeat(40), changedGateway: true }, absent, baseline)).toThrow('exact');
+  expect(baseline).not.toHaveBeenCalled();
+  expect(() => resolveDesktopGatewayImage({ repository, project: 'octogee', sourceSha, baseSha: 'c'.repeat(40), changedGateway: false }, absent, baseline)).toThrow('digest');
 });

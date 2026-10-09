@@ -1,3 +1,5 @@
+import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
+import { builderToolchainRoot } from "./builder-storage.js";
 import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
 import express from "express";
 import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
@@ -387,6 +389,7 @@ export interface StartFleetOptions {
   recordReconcileError?: (slug: string, message: string) => Promise<void>;
   clearReconcileError?: (slug: string) => Promise<void>;
   openclawDir?: string;
+  projectBlobHydrator?: ProjectBlobHydrator;
   surgeOpenClawProcessGate?: SurgeOpenClawProcessSupervisorClient;
   internalServiceKey?: string;
   agentImportDoctorToken?: string;
@@ -1917,6 +1920,7 @@ async function attachConfiguredBuilderBeforeOpenClaw(input: {
   });
   input.adapter.recordAppliedFingerprint?.(slug, NEEDS_FULL_ATTACH_FINGERPRINT);
   if (result.pendingProjectClones.length > 0) {
+    if (process.env.OCTOGEE_PROJECTS_MOUNT) throw new Error(`Builder project restoration is incomplete: ${result.pendingProjectClones.join(", ")}`);
     input.log?.(
       `[surge-handoff] configured Builder project checkouts still pending for ${slug}; ` +
       `the reconcile loop converges them: ${result.pendingProjectClones.join(", ")}`,
@@ -2264,6 +2268,7 @@ async function configuredBuilderSelfReleaseReserved(input: {
 
 interface BuilderSurgeGateWiringOptions {
   openclawDir?: string;
+  projectBlobHydrator?: ProjectBlobHydrator;
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
@@ -2313,6 +2318,7 @@ async function prepareConfiguredBuilderTarget(input: {
   provisioning: ProvisioningCounter;
   waitForActiveProvisioningDrain: () => Promise<void>;
   openclawDir: string;
+  projectBlobHydrator?: ProjectBlobHydrator;
 }): Promise<PreparedBuilderTarget> {
   const { request, adapter, processGate, attachConfigured, log, provisioning } = input;
   if (!processGate || !reservedTargetOpenClawHeld(await processGate.status(), request)) {
@@ -2329,7 +2335,7 @@ async function prepareConfiguredBuilderTarget(input: {
   const lockSha256 = process.env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim();
   const groupsSha256 = process.env.OCTOGEE_BUILDER_TOOL_GROUPS_SHA256?.trim();
   if (lockSha256 && groupsSha256) {
-    await waitForPreparedBuilderToolchain({ root: path.join(process.env.HOME || "/home/node", ".octogee", "toolchains"), lockSha256, groupsSha256 });
+    await waitForPreparedBuilderToolchain({ root: builderToolchainRoot(), lockSha256, groupsSha256 });
   }
   if (!reservedTargetOpenClawHeld(await processGate.status(), request)) throw new Error("Builder process started during preparation");
   log(`[surge-handoff] Builder prepared while OpenClaw remains held slug=${request.slug} migrationId=${request.migrationId}`);
@@ -2477,7 +2483,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
   return {
     async prepareSurgeTarget(request) {
       preparedTarget = await prepareConfiguredBuilderTarget({ request, adapter, processGate, attachConfigured,
-        log, provisioning, waitForActiveProvisioningDrain, openclawDir });
+        log, provisioning, waitForActiveProvisioningDrain, openclawDir, projectBlobHydrator: input.projectBlobHydrator });
     },
     async reserveSurgeTarget({ migrationId, slug }) {
       if (!processGate || configuredBuilderSlug(adapter) !== slug) return;
@@ -2781,6 +2787,8 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   );
 
   const surgeGate = createBuilderSurgeGateWiring({
+    openclawDir: opts.openclawDir,
+    projectBlobHydrator: opts.projectBlobHydrator,
     adapter: wrappedAdapter,
     processGate: builderProcessGate,
     surgeReadiness,

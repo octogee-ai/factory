@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+
+def command(argv):
+    return subprocess.run(argv, check=True, capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+def point_owned(point, run=command):
+    return (not point.is_symlink() and re.fullmatch(r"[a-z][a-z0-9-]{0,62}-[a-f0-9]{32}", point.name)
+            and (point / ".home-checkpoint/recovery-point").read_text().strip() == point.name
+            and run(["btrfs", "property", "get", "-ts", str(point), "ro"]) == "ro=true")
+
+
+def native_ready(run=command):
+    try:
+        health = json.loads(run(["curl", "-fsS", "--max-time", "3", "http://127.0.0.1:3003/surge-ready"]))
+        required = ("ready", "openclawUp", "brokerProfilesSettled", "dashboardBridgeReady", "handoffReleased")
+        if not all(health.get(key) is True for key in required) or health.get("runtimeStatus") != "ready" or health.get("prelaunchState") not in ("none", "serving"):
+            return False, "unavailable", None
+        gateway = run(["curl", "-fsS", "--max-time", "3", "-H", "Metadata-Flavor: Google", "http://169.254.169.254/computeMetadata/v1/instance/attributes/gateway-id"])
+        container = json.loads(run(["docker", "inspect", "octogee-gateway"]))[0]
+        labels = container["Config"]["Labels"]
+        if container["State"].get("Running") is not True or container["State"].get("Paused") or labels.get("ai.octogee.gateway-id") != gateway:
+            return False, labels.get("ai.octogee.bundle-version", "unavailable"), gateway
+        return True, labels["ai.octogee.bundle-version"], gateway
+    except (subprocess.SubprocessError, KeyError, ValueError, IndexError, TypeError, AttributeError):
+        return False, "unavailable", None
+
+
+def accept(state_root=Path("/srv/octogee"), image_file=Path("/etc/octogee-computer-image"), machine_file=Path("/etc/machine-id"), run=command):
+    image = image_file.read_text().strip()
+    machine = machine_file.read_text().strip()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", image) or not re.fullmatch(r"[a-f0-9]{32}", machine):
+        raise RuntimeError("native recovery identity is malformed")
+    recovery = state_root / ".home-checkpoint/pre-migration"
+    if (state_root / ".home-checkpoint").is_symlink() or recovery.is_symlink():
+        raise RuntimeError("native recovery paths must not be symlinks")
+    point = recovery / f"{image}-{machine}"
+    if not point_owned(point, run):
+        raise RuntimeError("current native pre-migration point is unverified")
+    ready, version, _gateway = native_ready(run)
+    if ready:
+        for old in recovery.iterdir():
+            if old == point:
+                continue
+            try:
+                owned = point_owned(old, run)
+            except (OSError, subprocess.SubprocessError):
+                owned = False
+            if owned:
+                run(["btrfs", "subvolume", "delete", str(old)])
+        run(["btrfs", "subvolume", "sync", str(state_root)])
+    available = os.statvfs(state_root)
+    return {"currentPointId": point.name, "retainedPoints": len(list(recovery.iterdir())), "ready": ready,
+            "bundleVersion": version, "freeBytes": available.f_bavail * available.f_frsize}
+
+
+if __name__ == "__main__":
+    print(json.dumps(accept()))

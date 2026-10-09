@@ -25,6 +25,11 @@ class SessionHarness:
         (self.root / '.local/state/octo-desktop').mkdir(parents=True)
         (self.root / 'pids').mkdir()
         (self.root / 'supervisors').mkdir()
+        self.profile = self.root / '.config/octogee-chromium'
+        self.profile.mkdir(parents=True)
+        for name in ('SingletonLock', 'SingletonCookie', 'SingletonSocket'):
+            (self.profile / name).symlink_to('former-hobby-pod-24')
+        (self.profile / 'Local State').write_text('retained browser state')
         stub = '''
 import os
 from pathlib import Path
@@ -131,6 +136,25 @@ sys.exit(int((root / ('exit-' + name)).read_text()))
 class SupervisionTests(SessionHarness, unittest.TestCase):
     def setUp(self):
         self.start_session()
+
+    def test_start_clears_prior_host_locks_and_preserves_browser_state(self):
+        for name in ('SingletonLock', 'SingletonCookie', 'SingletonSocket'):
+            self.assertFalse((self.profile / name).is_symlink())
+        self.assertEqual((self.profile / 'Local State').read_text(), 'retained browser state')
+
+    def test_second_supervisor_leaves_the_running_browser_locks_intact(self):
+        lock = self.profile / 'SingletonLock'
+        lock.unlink(missing_ok=True)
+        lock.symlink_to('current-host-1000')
+        result = subprocess.run(
+            [os.environ.get('OCTOGEE_TEST_BASH', shutil.which('bash')), str(self.root / 'run')],
+            env={**os.environ, 'HOME': str(self.root), 'XDG_RUNTIME_DIR': str(self.root)},
+            capture_output=True, text=True, timeout=2,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('desktop session already running', result.stderr)
+        self.assertEqual(os.readlink(lock), 'current-host-1000')
+        self.assert_services_running()
 
     def test_closing_chromium_preserves_the_desktop_services(self):
         self.exit_child(BROWSER)

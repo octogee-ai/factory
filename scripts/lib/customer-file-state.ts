@@ -35,9 +35,10 @@ export async function customerFileStatePaths(root: string, slug: string): Promis
   return sources;
 }
 
-export async function flushCustomerFiles(slug: string, { root = OPENCLAW_DIR } = {}): Promise<void> {
+export async function flushCustomerFiles(slug: string, { root = OPENCLAW_DIR, persistProjects }: { root?: string; persistProjects?: (slug: string) => Promise<void> } = {}): Promise<void> {
   const workspace = customerPath(root, slug);
   if (!(await fs.lstat(workspace)).isDirectory()) throw new Error(`Customer workspace is not a directory: ${slug}`);
+  await persistProjects?.(slug);
   for (const source of await customerFileStatePaths(root, slug)) {
     await run("/usr/bin/sync", ["-f", path.join(source.cwd, source.path)]);
   }

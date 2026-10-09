@@ -1,6 +1,6 @@
 import http from "node:http";
 
-export const DOCKER_API_PREFIX = "/v1.44";
+export const DOCKER_API_PREFIX = "/v1.45";
 
 export interface DockerResponse<T> {
   status: number;
@@ -152,6 +152,10 @@ export async function waitContainer(engine: DockerEngine, name: string): Promise
 export async function setContainerPaused(engine: DockerEngine, name: string, paused: boolean): Promise<void> {
   const action = paused ? "pause" : "unpause";
   assertOk(await engine.request("POST", `/containers/${encodeURIComponent(name)}/${action}`), `${action} ${name}`);
+}
+
+export async function setContainerRestartPolicy(engine: DockerEngine, name: string, policy: "no" | "on-failure"): Promise<void> {
+  assertOk(await engine.request("POST", `/containers/${encodeURIComponent(name)}/update`, { RestartPolicy: { Name: policy } }), `restart policy ${name}`);
 }
 
 export interface ImagePruneResult {

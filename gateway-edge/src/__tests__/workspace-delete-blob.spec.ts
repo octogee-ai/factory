@@ -47,8 +47,8 @@ vi.mock("../lib/fileTarget.js", () => ({
 vi.mock("../lib/manifest.js", () => ({
   removeFromManifest: (...args: unknown[]) => h.removeFromManifest(...args),
 }));
-vi.mock("../lib/workspace-blob.js", () => ({
-  removeWorkspaceBlob: (...args: unknown[]) => h.removeWorkspaceBlob(...args),
+vi.mock("../lib/project-blob-edit.js", () => ({
+  removeUploadedWorkspaceBlob: (...args: unknown[]) => h.removeWorkspaceBlob(...args),
 }));
 
 const { default: deleteBlobRoutes } = await import("../routes/workspace/delete-blob.js");

@@ -286,6 +286,7 @@ export function createHttpServer(deps: HttpServerDeps): Express {
     getWorkspaceMmContext: (uid, hint) => readMmContextFromFirestore(deps.db, uid, hint),
   });
   addAdminFleetRoutes(adminRouter, {
+    computerReplacementEnabled: true,
     db: deps.db,
     logger: adaptLogger(deps.log),
     workspaceSlugsForUser: deps.workspaceSlugsForUser,

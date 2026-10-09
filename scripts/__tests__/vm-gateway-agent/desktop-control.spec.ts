@@ -29,7 +29,26 @@ it("sends only lifecycle actions through the private socket and surfaces systemd
   }
 });
 
+it("reads validated native recovery admission through the root-owned socket", async () => {
+  const root = await mkdtemp(join(tmpdir(), "octogee-recovery-control-"));
+  const socket = join(root, "control.sock");
+  const sample = { currentPointId: "image-new-" + "a".repeat(32), retainedPoints: 1, ready: true, bundleVersion: "v1", freeBytes: 3 * 1024 ** 3 };
+  let body: unknown = sample;
+  const server = createServer((req, res) => { expect(req.url).toBe("/accept-home-recovery"); res.end(JSON.stringify(body)); });
+  await new Promise<void>((resolve) => server.listen(socket, resolve));
+  try {
+    const control = createDesktopControl(socket);
+    expect(await control.recovery!()).toEqual(sample);
+    body = { ...sample, retainedPoints: -1 };
+    await expect(control.recovery!()).rejects.toThrow("malformed");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it.each([
+  ["retires older recovery points only after actual native readiness", "test_home_recovery.py"],
   ["quiesces applications and recovers lifecycle failures", "test_lifecycle.py"],
   ["keeps managed desktops awake before starting the compositor", "test_idle.py"],
   ["preserves the desktop when Chromium closes and supervises core services", "test_supervision.py"],

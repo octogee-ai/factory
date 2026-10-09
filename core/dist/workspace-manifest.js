@@ -38,12 +38,14 @@ function isManifestPath(value) {
     const parts = value.split("/");
     return !parts.some((part) => part.length === 0 || part === "." || part === ".." || part.startsWith(".") || RESERVED_MANIFEST_PATH_SEGMENTS.has(part));
 }
-function isManifestEntry(value, expectedGcsPath) {
+function isManifestEntry(value, gcsPrefix, path) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return false;
     const entry = value;
     return (entry.type === "blob" &&
-        entry.gcsPath === expectedGcsPath &&
+        (entry.sha256 === undefined
+            ? entry.gcsPath === `${gcsPrefix}/${path}`
+            : typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/u.test(entry.sha256) && entry.gcsPath === `${gcsPrefix}/.objects/${entry.sha256}`) &&
         typeof entry.mimeType === "string" &&
         typeof entry.uploadedAt === "string" &&
         isNonNegativeInteger(entry.size) &&
@@ -66,7 +68,7 @@ export function parseManifest(objectPath, contents) {
     }
     const manifest = {};
     for (const [path, value] of Object.entries(raw)) {
-        if (!isManifestPath(path) || !isManifestEntry(value, `${gcsPrefix}/${path}`)) {
+        if (!isManifestPath(path) || !isManifestEntry(value, gcsPrefix, path)) {
             throw new ManifestCorruptError(objectPath, `invalid entry at ${path}`);
         }
         manifest[path] = value;

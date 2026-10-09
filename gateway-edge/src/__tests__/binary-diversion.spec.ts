@@ -1,4 +1,5 @@
-import { lstat, mkdtemp, readFile, rm, symlink, truncate, writeFile, mkdir } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink, truncate, writeFile, mkdir, open, utimes } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -19,12 +20,16 @@ import type { WorkspaceGitStatusEntry } from "../lib/workspace-git.js";
 const dirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 async function workspace(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "octogee-divert-"));
-  dirs.push(dir);
+  const parent = await mkdtemp(path.join(tmpdir(), "octogee-divert-"));
+  dirs.push(parent);
+  const dir = path.join(parent, "project");
+  await mkdir(dir);
+  await mkdir(path.join(dir, ".git"));
   return dir;
 }
 
@@ -71,6 +76,76 @@ describe("isDivertablePath", () => {
 });
 
 describe("divertWorktreeBinaries", () => {
+  it("does not reread unchanged retained binaries, but saves timestamp-preserving edits and deletions", async () => {
+    const dir = await workspace();
+    const binary = path.join(dir, "asset.png");
+    await writeFile(binary, Buffer.from([0, 1]));
+    const probe = await open(binary, "r");
+    const prototype = Object.getPrototypeOf(probe);
+    await probe.close();
+    const read = prototype.readFile;
+    let payloadReads = 0;
+    vi.spyOn(prototype, "readFile").mockImplementation(function (this: unknown, ...args: unknown[]) {
+      if (args.length === 0) payloadReads++;
+      return read.apply(this, args);
+    });
+    const store = vi.fn(async (_target, _name, body: Buffer) => {
+      const sha256 = createHash("sha256").update(body).digest("hex");
+      return { gcsPath: `${target.gcsPrefix}/.objects/${sha256}`, sha256, size: body.length };
+    });
+    const d = deps([{ path: "asset.png", change: "untracked" }], store);
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    vi.mocked(d.gitStatus).mockResolvedValue({ ok: true, entries: [] });
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    expect(payloadReads).toBe(1);
+    const before = await lstat(binary);
+    await writeFile(binary, Buffer.from([0, 2]));
+    await utimes(binary, before.atime, before.mtime);
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    expect(payloadReads).toBe(2);
+    expect(store).toHaveBeenCalledTimes(2);
+    await rm(binary);
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    expect(JSON.parse(await readFile(path.join(dir, ".files/manifest.json"), "utf8"))).toEqual({});
+  });
+  it("saves edits to materialized assets even when Git ignores their paths, and versions conversion to text", async () => {
+    const dir = await workspace();
+    const binary = path.join(dir, "asset.png");
+    const store = vi.fn(async (_target, _name, body: Buffer) => {
+      const sha256 = createHash("sha256").update(body).digest("hex");
+      return { gcsPath: `${target.gcsPrefix}/.objects/${sha256}`, sha256, size: body.length };
+    });
+    const d = deps([{ path: "asset.png", change: "untracked" }], store);
+    await writeFile(binary, Buffer.from([0, 1]));
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    vi.mocked(d.gitStatus).mockResolvedValue({ ok: true, entries: [] });
+    await writeFile(binary, Buffer.from([0, 2]));
+    expect((await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true })).diverted).toEqual([{ path: "asset.png", size: 2 }]);
+    expect(store).toHaveBeenCalledTimes(2);
+    await writeFile(binary, "now text");
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    expect(JSON.parse(await readFile(path.join(dir, ".files/manifest.json"), "utf8"))["asset.png"].sha256).toBe(createHash("sha256").update("now text").digest("hex"));
+    expect(store).toHaveBeenCalledTimes(3);
+  });
+  it("keeps active project assets in place during autosave and reports changed files as unsaved", async () => {
+    const dir = await workspace();
+    const binary = path.join(dir, "asset.png");
+    const bytes = Buffer.from([0, 1, 2, 3]);
+    await writeFile(binary, bytes);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const store = vi.fn(async () => ({ gcsPath: `${target.gcsPrefix}/.objects/${sha256}`, sha256, size: 4 }));
+    const d = deps([{ path: "asset.png", change: "untracked" }], store);
+    expect((await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true })).diverted).toEqual([{ path: "asset.png", size: 4 }]);
+    expect(await readFile(binary)).toEqual(bytes);
+    expect(JSON.parse(await readFile(path.join(dir, ".files/manifest.json"), "utf8"))["asset.png"].sha256).toBe(sha256);
+    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    expect(store).toHaveBeenCalledTimes(1);
+    await writeFile(binary, Buffer.from([0, 9, 8, 7]));
+    store.mockImplementation(async () => { await writeFile(binary, Buffer.from([0, 4, 5])); return { gcsPath: "g", sha256, size: 4 }; });
+    expect((await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true })).failedPaths).toEqual(["asset.png"]);
+    expect(await readFile(binary)).toEqual(Buffer.from([0, 4, 5]));
+  });
   it("uploads a binary and removes it so the commit never sees it", async () => {
     const dir = await workspace();
     await mkdir(path.join(dir, "notes"), { recursive: true });

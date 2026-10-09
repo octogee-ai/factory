@@ -5,6 +5,7 @@ export interface ManifestEntry {
   mimeType: string;
   uploadedAt: string;
   hasThumbnail?: boolean;
+  sha256?: string;
 }
 
 export type Manifest = Record<string, ManifestEntry>;
@@ -69,12 +70,14 @@ function isManifestPath(value: string): boolean {
   );
 }
 
-function isManifestEntry(value: unknown, expectedGcsPath: string): value is ManifestEntry {
+function isManifestEntry(value: unknown, gcsPrefix: string, path: string): value is ManifestEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Partial<ManifestEntry>;
   return (
     entry.type === "blob" &&
-    entry.gcsPath === expectedGcsPath &&
+    (entry.sha256 === undefined
+      ? entry.gcsPath === `${gcsPrefix}/${path}`
+      : typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/u.test(entry.sha256) && entry.gcsPath === `${gcsPrefix}/.objects/${entry.sha256}`) &&
     typeof entry.mimeType === "string" &&
     typeof entry.uploadedAt === "string" &&
     isNonNegativeInteger(entry.size) &&
@@ -98,7 +101,7 @@ export function parseManifest(objectPath: string, contents: string): Manifest {
   }
   const manifest: Manifest = {};
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isManifestPath(path) || !isManifestEntry(value, `${gcsPrefix}/${path}`)) {
+    if (!isManifestPath(path) || !isManifestEntry(value, gcsPrefix, path)) {
       throw new ManifestCorruptError(objectPath, `invalid entry at ${path}`);
     }
     manifest[path] = value;

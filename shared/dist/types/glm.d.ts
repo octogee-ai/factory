@@ -63,6 +63,15 @@ export interface GatewayVmSpec {
     serviceAccountEmail: string;
     subnetwork: string;
 }
+export interface RetainedBuilderHome {
+    projectId: string;
+    zone: string;
+    name: string;
+    id: string;
+    sizeGb: number;
+    diskType: "pd-balanced" | "pd-ssd";
+    source: string;
+}
 export declare const GATEWAY_VM_ORIGINS: readonly ["warm-pool", "cold"];
 export type GatewayVmOrigin = (typeof GATEWAY_VM_ORIGINS)[number];
 export declare const GATEWAY_VM_STOP_REASONS: readonly ["idle", "preempted", "operator"];
@@ -106,6 +115,13 @@ export interface BuilderParkedComputer {
     gatewayId: string;
     parkedAt: number;
     checkpoint: GatewayVmParkedCheckpoint;
+    homeCheckpoint?: GatewayVmHomeCheckpoint;
+    bootRecovery?: GatewayVmBootRecoverySample & {
+        instanceId: string;
+        observedAt: number;
+    };
+    vmSpec?: GatewayVmSpec;
+    disposable?: true;
 }
 export declare function isBuilderParkedComputer(value: unknown): value is BuilderParkedComputer;
 export declare function readBuilderParkedComputer(userData: Record<string, unknown> | undefined): BuilderParkedComputer | null;
@@ -128,7 +144,7 @@ export interface GatewayVmRuntimeContainer {
 }
 export type GatewayVmRuntimeVolume = {
     name: string;
-    kind: "emptyDir";
+    kind: "emptyDir" | "ephemeral";
 } | {
     name: string;
     kind: "identityToken";
@@ -153,6 +169,7 @@ export interface GatewayVmRuntimeBundle {
         caCert: string;
     };
     renderedAt: number;
+    homeRestoreCheckpoint?: GatewayVmHomeCheckpoint;
 }
 export declare function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRuntimeBundle;
 export interface GatewayVmRuntimeResponse {
@@ -170,6 +187,7 @@ export interface GatewayVmRuntimeRequest {
     disk?: GatewayVmDiskSample;
     images?: GatewayVmImageSample;
     preempted?: true;
+    bootRecovery?: GatewayVmBootRecoverySample;
 }
 export declare const GATEWAY_VM_IMAGE_SERVICES: readonly ["gateway", "gateway-edge"];
 export interface GatewayVmContainerImage {
@@ -204,6 +222,9 @@ export declare const COMPUTER_HOME_CHECKPOINT_KEEP = 5;
 export declare const COMPUTER_HOME_CHECKPOINT_NAME_RE: RegExp;
 export declare const COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE = "application/gzip";
 export interface GatewayVmHomeCheckpoint {
+    generation?: string;
+    coverage?: "builder-home-v2";
+    writerProtocol?: 2 | 3;
     name: string;
     size: number;
     sha256: string;
@@ -214,10 +235,16 @@ export interface GatewayVmHomeState {
     checkpointRequestedAt: number | null;
     checkpointAcknowledgedAt?: number | null;
     parkRequestedAt?: number;
+    restoreCheckpoint?: GatewayVmHomeCheckpoint;
     lastCheckpoint: GatewayVmHomeCheckpoint | null;
 }
 export declare function homeCheckpointOutstanding(home: Partial<GatewayVmHomeState> | null | undefined): boolean;
 export declare function isGatewayVmHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint;
+export declare function isDisposableHomeCheckpoint(value: unknown): value is GatewayVmHomeCheckpoint & {
+    generation: string;
+    instanceId: string;
+};
+export declare function sameHomeCheckpoint(a: GatewayVmHomeCheckpoint, b: GatewayVmHomeCheckpoint): boolean;
 export declare function computerHomeCheckpointName(at: number): string;
 export declare function gatewayVmPodName(gatewayId: string, instanceId: string): string;
 export declare const BUILDER_COMPUTER_INSTANCE_PREFIX = "octogee-computer-";
@@ -521,3 +548,11 @@ export declare function resolveGatewayImageProfile(input: {
     imageProfile?: GatewayImageProfile;
     profile?: GatewayProfile;
 }): GatewayImageProfile;
+export interface GatewayVmBootRecoverySample {
+    currentPointId: string | null;
+    retainedPoints: number;
+    ready: boolean;
+    bundleVersion: string;
+    freeBytes: number;
+}
+export declare function isGatewayVmBootRecoverySample(value: unknown): value is GatewayVmBootRecoverySample;

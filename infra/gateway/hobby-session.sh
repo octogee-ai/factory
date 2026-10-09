@@ -40,7 +40,7 @@ openbox &
 children+=("$!")
 /usr/local/bin/octo-desktop-control &
 children+=("$!")
-/usr/local/bin/entrypoint.sh &
+HOME=/home/node /usr/local/bin/entrypoint.sh &
 children+=("$!")
 OPENCLAW_STATE_DIR="$HOME/.openclaw-desktop" OPENCLAW_CONFIG_PATH="$HOME/.openclaw-desktop/openclaw.json" \
   OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}" \

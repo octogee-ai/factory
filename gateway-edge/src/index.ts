@@ -23,6 +23,7 @@ import internalAgentMessageRoutes from "./routes/internal/agent-message.js";
 import { createInternalConnectorApprovalRouter } from "./routes/internal/connector-approvals.js";
 
 import internalWorkspaceCommitRoutes from "./routes/internal/workspace-commit.js";
+import { createProjectPersistenceRouter } from "./routes/internal/project-persistence.js";
 import internalGiteaAdminRoutes from "./routes/internal/gitea-admin.js";
 import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
@@ -236,6 +237,7 @@ if (surface === "sidecar") {
   app.use("/api/g/:gatewayId/internal/connector-approvals", createInternalConnectorApprovalRouter());
   app.use("/api/g/:gatewayId/internal/agent-message", internalAgentMessageRoutes);
   app.use("/internal/workspace", internalWorkspaceCommitRoutes);
+  app.use("/internal/projects", createProjectPersistenceRouter());
   app.use("/internal/connectors", internalConnectorRoutes);
   app.use("/internal/computer", createInternalComputerRouter({ controlUrl: computerControlUrl }));
 }

@@ -7,6 +7,7 @@ import type {
 } from "@octogee/shared/types/glm";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
@@ -122,7 +123,8 @@ export interface HelmSubprocessRunnerDeps {
     annotations?: Record<string, string>;
   }) => Promise<void>;
 
-  ensureHobbyHome?: (input: { namespace: string; ownerUid: string; builderSlug: string }) => Promise<void>;
+  ensureHobbyHome?: (input: { namespace: string; ownerUid: string; builderSlug: string; sizeGiB: number }) => Promise<string | void>;
+  ensureHobbyProjects?: (input: { namespace: string; ownerUid: string; builderSlug: string }) => Promise<void>;
   runKubectl?: KubectlSubprocess;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
@@ -757,10 +759,15 @@ const hist = await deps.runHelm([
   return `rolled back ${release} to revision ${target}`;
 }
 
-async function ensureBuilderHome(deps: HelmSubprocessRunnerDeps, opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<void> {
+async function ensureBuilderHome(deps: HelmSubprocessRunnerDeps, opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<string | void> {
   if (!deps.ensureHobbyHome || opts.gatewayClass !== "builder") return;
   if (!opts.ownerUid || !opts.builderSlug) throw new Error(`Hobby gateway ${opts.gatewayId} requires its owner and Builder slug`);
-  await deps.ensureHobbyHome({ namespace: opts.namespace, ownerUid: opts.ownerUid, builderSlug: opts.builderSlug });
+  const tier = Object.values(BUILDER_TIERS).find(tier => tier.instance === (opts.sizingTier ?? "s"));
+  if (!tier?.computer) throw new Error("Builder home has no tier policy");
+  const identity = { namespace: opts.namespace, ownerUid: opts.ownerUid, builderSlug: opts.builderSlug };
+  const name = await deps.ensureHobbyHome({ ...identity, sizeGiB: tier.computer.homeSizeGiB });
+  await deps.ensureHobbyProjects?.(identity);
+  return name;
 }
 
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
@@ -815,7 +822,8 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
         });
       };
 
-      await ensureBuilderHome(deps, opts);
+      const homeClaimName = await ensureBuilderHome(deps, opts);
+      if (homeClaimName) args.push("--set-string", `builderHomeClaimName=${homeClaimName}`);
 
       await ensureServiceAccount();
 

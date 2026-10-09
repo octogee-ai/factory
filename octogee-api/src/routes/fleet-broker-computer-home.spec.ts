@@ -61,6 +61,7 @@ function harness(input: {
   store?: Partial<ComputerHomeStore>;
 } = {}) {
   const docs: Record<string, Record<string, unknown>> = {
+    "users/uid-bob": { provisioning: {} },
     "gateways/b-x": gatewayDoc(),
     "glmGateways/b-x": glmDoc(),
     ...input.docs,
@@ -104,6 +105,13 @@ function harness(input: {
 }
 
 describe("computer-home checkpoint routes", () => {
+  it("rejects unpublished writer protocol 3 so a claimed protocol cannot enable disposal", async () => {
+    const h = harness();
+    const res = await h.post("commit", { name: CHECKPOINT_NAME, size: 2048, sha256: SHA, coverage: "builder-home-v2", writerProtocol: 3 });
+    expect(res.status).toBe(400);
+    expect(h.store.commit).not.toHaveBeenCalled();
+    expect(h.writes).toEqual([]);
+  });
   it("mints a create-only upload URL for a second-stamped checkpoint object under the customer's home prefix", async () => {
     const h = harness();
     const res = await h.post("checkpoint-url", { size: 2048 });
@@ -196,6 +204,7 @@ describe("computer-home checkpoint routes", () => {
       size: 2048,
       sha256: SHA,
       completedAt: current.completedAt,
+      instanceId: current.instanceId,
       download: {
         url: `https://storage.example/customers/bob/computer-home/checkpoints/${CHECKPOINT_NAME}`,
         method: "GET",
@@ -269,4 +278,34 @@ describe("computer-home checkpoint routes", () => {
     const foreignInstance = harness({ docs: { "gateways/b-x": retired, "glmGateways/b-x": glm }, bound: { ...vmBound, podUid: "9999", finalHomeCheckpoint: true } });
     expect((await foreignInstance.post("commit", { name: CHECKPOINT_NAME, size: 1, sha256: SHA })).status).toBe(403);
   });
+});
+
+
+describe("required disposable recovery checkpoint", () => {
+  const saved = { ...current, generation: "9007199254740995" };
+  const docs = { "glmGateways/b-x": glmDoc({ vmHome: { restoreCheckpoint: saved } }) };
+  it("pins the signed read to the required immutable archive generation", async () => {
+    const h = harness({ docs, store: { readCurrent: vi.fn(async () => saved) } });
+    const res = await h.post("download-url", {});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ...saved });
+    expect(h.createBlobSignedUrl).toHaveBeenCalledWith(expect.objectContaining({ action: "read", generation: saved.generation }));
+  });
+  it.each([null, { ...saved, generation: "9007199254740996" }, { ...saved, instanceId: "foreign" }, { ...saved, sha256: "b".repeat(64) }])("refuses unavailable or changed recovery identity %#", async (record) => {
+    const h = harness({ docs, store: { readCurrent: vi.fn(async () => record) } });
+    expect((await h.post("download-url", {})).status).toBe(409);
+    expect(h.createBlobSignedUrl).not.toHaveBeenCalled();
+  });
+  it("refuses a corrupt stored restore obligation", async () => {
+    const h = harness({ docs: { "glmGateways/b-x": glmDoc({ vmHome: { restoreCheckpoint: { ...saved, generation: 123 } } }) } });
+    expect((await h.post("download-url", {})).status).toBe(409);
+    expect(h.store.readCurrent).not.toHaveBeenCalled();
+  });
+  it("updates the durable owner anchor on a canonical commit from the current bound instance", async () => {
+    const next = { ...saved, instanceId: "4242", completedAt: NOW };
+    const h = harness({ store: { commit: vi.fn(async () => next) } });
+    expect((await h.post("commit", { name: next.name, size: next.size, sha256: next.sha256 })).status).toBe(200);
+    expect(h.writes).toContainEqual({ path: "users/uid-bob", data: { provisioning: { homeCheckpoint: next } }, options: { merge: true } });
+  });
+
 });

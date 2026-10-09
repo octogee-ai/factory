@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { withGiteaTarget } from "../../lib/fileTarget.js";
 import { validateWorkspacePath } from "./helpers.js";
-import { removeWorkspaceBlob } from "../../lib/workspace-blob.js";
+import { removeUploadedWorkspaceBlob as removeWorkspaceBlob } from "../../lib/project-blob-edit.js";
 
 const router = Router();
 

@@ -76,7 +76,7 @@ deleteAuthUser: (uid: string) => Promise<void>;
 deleteHostingSites?: (slug: string, projectSlugs: string[]) => Promise<{ deleted: number }>;
 
   deleteComputer?: (uid: string) => Promise<boolean>;
-  deleteComputerHome: (slug: string) => Promise<{ deleted: number }>;
+  deleteComputerHome: (uid: string, slug: string) => Promise<{ deleted: number }>;
   log?: (msg: string) => void;
 }
 
@@ -171,14 +171,14 @@ if (ctx.skipHosting || !deps.deleteHostingSites || !ctx.slug) {
   } else {
     results.push(
       await runStep("computer-home", log, async () => {
-        const { deleted } = await deps.deleteComputerHome(ctx.slug);
+        const { deleted } = await deps.deleteComputerHome(ctx.uid, ctx.slug);
         return `${deleted} ${deleted === 1 ? "object" : "objects"}`;
       }),
     );
   }
 
-  const hostingFailed = results.some((result) => result.key === "hosting" && !result.ok);
-  if (hostingFailed) {
+  const anchoredCleanupFailed = results.some((result) => ["hosting", "computer", "computer-home"].includes(result.key) && !result.ok);
+  if (anchoredCleanupFailed) {
     results.push({ key: "firestore", ok: true, skipped: true });
   } else {
     results.push(

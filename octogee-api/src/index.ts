@@ -171,6 +171,8 @@ const TENANT_BOUND_API_ROUTES = new Set([
   "/api/notifications/ingest",
 ]);
 export const GATEWAY_CREDENTIAL_ROUTES = new Set([
+  "/internal/fleet/blob/materialization/read-url",
+  "/internal/fleet/blob/materialization/manifest/read-url",
   "/internal/connectors/access-token",
   "/internal/fleet/vm-runtime",
   "/internal/fleet/computer-home/checkpoint-url",
@@ -187,6 +189,7 @@ export const GATEWAY_CREDENTIAL_ROUTES = new Set([
 ]);
 
 export const SIDECAR_BROKER_ROUTES = new Set([
+  "/internal/fleet/blob/project/upload-url",
   "/internal/connectors/github-project-clone-access",
   "/internal/openclaw/activity/agent-identity",
   "/internal/workspace-commit/verify-proof",

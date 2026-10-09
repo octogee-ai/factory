@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { BuilderParkedComputer, Operation, GatewayVmState } from "@octogee/shared/types/glm";
-import { createGatewayVmHandler, type GatewayVmRecord } from "../handlers/gateway-vm";
+import { createGatewayVmHandler, type GatewayVmRecord, type GatewayVmDeps } from "../handlers/gateway-vm";
 import type { GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
 
 const description: GatewayVmDescription = {
@@ -38,7 +38,7 @@ function op(input: Record<string, unknown>): Operation {
 function harness(
   record: GatewayVmRecord | null,
   vm: Partial<GatewayVmClient> = {},
-  home: { completedAt?: () => number | null; cancelled?: () => boolean; parked?: BuilderParkedComputer | null } = {},
+  home: { completedAt?: () => number | null; cancelled?: () => boolean; parked?: BuilderParkedComputer | null; replacement?: GatewayVmDeps["replaceStoppedComputer"] } = {},
 ) {
   const client: GatewayVmClient = {
     create: vi.fn(async () => ({ description, provisioningModel: "SPOT", fellBackToStandard: false, alreadyExisted: false })),
@@ -47,6 +47,9 @@ function harness(
     findByLabels: vi.fn(async () => null),
     list: vi.fn(async () => []),
     bind: vi.fn(async () => {}),
+    retainHome: vi.fn(async () => ({ projectId: "octogee-test", zone: "us-west1-b", name: "computer-home", id: "777", sizeGb: 30, diskType: "pd-ssd" as const, source: "projects/octogee-test/zones/us-west1-b/disks/computer-home" })),
+    verifyDetachedHome: vi.fn(async () => {}),
+    deleteRetainedHome: vi.fn(async () => {}),
     setServiceAccount: vi.fn(async () => {}),
     setMachineType: vi.fn(async () => {}),
     setMetadata: vi.fn(async () => "applied" as const),
@@ -67,6 +70,7 @@ function harness(
   const steps: unknown[] = [];
   const handler = createGatewayVmHandler({
     vm: client,
+    replaceStoppedComputer: home.replacement,
     readGateway: vi.fn(async () => record),
     writeVmState,
     requestHomeCheckpoint,
@@ -156,6 +160,29 @@ describe("gateway-vm handler", () => {
     expect(h.writeVmState).toHaveBeenCalledWith("b-mama-3-abc-hobby", null);
   });
 
+  it("routes retained-boot replacement through the operation authority instead of checkpoint/deleting disks", async () => {
+    const replacement = vi.fn(async (_gatewayId, _operationId, authority) => { await authority(); return { bootDeleted: true, resumeRequired: true }; });
+    const h = harness({ runtime: "gce-vm", vm: vmState }, {}, { replacement });
+    expect(await h.run({ gatewayId: "b-x", action: "replace" })).toMatchObject({ success: true, output: { bootDeleted: true } });
+    expect(replacement).toHaveBeenCalledWith("b-x", "op-1", expect.any(Function));
+    expect(h.client.delete).not.toHaveBeenCalled();
+    expect(h.requestHomeCheckpoint).not.toHaveBeenCalled();
+  });
+  it("routes completed-retired replacement to its owner-anchored provider without recreating runtime", async () => {
+    const replacement = vi.fn(async (_gatewayId, _operationId, authority) => { await authority(); return { bootDeleted: true }; });
+    const h = harness(null, {}, { parked: parkedFresh, replacement });
+    expect(await h.run({ gatewayId: "b-x", action: "replace" })).toMatchObject({ success: true });
+    expect(await h.run({ ownerUid: "UidA", action: "replace" })).toMatchObject({ success: true });
+    expect(replacement).toHaveBeenCalledTimes(2);
+    expect(h.writeVmState).not.toHaveBeenCalled();
+    expect(h.requestHomeCheckpoint).not.toHaveBeenCalled();
+  });
+  it("keeps source disks when the replacement operation is cancelled", async () => {
+    const deletion = vi.fn();
+    const h = harness({ runtime: "gce-vm", vm: vmState }, {}, { cancelled: () => true, replacement: async (_gatewayId, _operationId, authority) => { await authority(); deletion(); return {}; } });
+    expect(await h.run({ gatewayId: "b-x", action: "replace" })).toMatchObject({ success: false, error: /cancelled/ });
+    expect(deletion).not.toHaveBeenCalled();
+  });
   it.each(["RUNNING", "TERMINATED", "STOPPING"])("blocks state-preserving replacement of a %s computer until coverage and fencing are implemented", async (status) => {
     const h = harness({ ...gceRecord, vm: { ...vmState, status } }, {}, { completedAt: () => 5000 });
     expect(await h.run({ gatewayId: "b-x", action: "replace" })).toMatchObject({ success: false, error: /replacement is disabled.*coverage/ });

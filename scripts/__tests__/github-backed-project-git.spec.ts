@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const paths = vi.hoisted(() => ({
-  customers: `/tmp/octogee-gh-project-${process.pid}`,
+  customers: `${process.platform === "linux" ? "/dev/shm" : "/tmp"}/octogee-gh-project-${process.pid}`,
   keys: `/tmp/octogee-gh-project-keys-${process.pid}`,
   scratch: `/tmp/octogee-gh-project-scratch-${process.pid}`,
   openclaw: `/tmp/octogee-gh-project-openclaw-${process.pid}`,
@@ -109,7 +109,8 @@ function prepareTrustedGithubRepository(
     `${projectSlug}.git`,
   );
   fs.mkdirSync(path.dirname(metadata), { recursive: true });
-  fs.renameSync(path.join(repoDir, ".git"), metadata);
+  fs.cpSync(path.join(repoDir, ".git"), metadata, { recursive: true });
+  fs.rmSync(path.join(repoDir, ".git"), { recursive: true });
   fs.writeFileSync(`${metadata}.octogee-trusted-v3`, [
     "octogee-customer-git-v3",
     `github:${source.owner}/${source.repo}`,
@@ -171,6 +172,9 @@ beforeEach(() => {
   for (const dir of [paths.customers, paths.keys, paths.scratch, paths.openclaw]) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
+  }
+  if (process.platform === "linux") {
+    expect(fs.statSync(paths.customers).dev).not.toBe(fs.statSync(paths.openclaw).dev);
   }
   const origin = seedBareOrigin();
   canonicalOrigin = origin;
@@ -305,15 +309,9 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
   it("switches one trusted GitHub source to another and quarantines old-only files", async () => {
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITHUB_REMOTE);
-    const metadata = path.join(paths.openclaw, "git-metadata", SLUG, "projects", "demo.git");
-    fs.mkdirSync(path.dirname(metadata), { recursive: true });
-    fs.renameSync(path.join(dest, ".git"), metadata);
-    fs.writeFileSync(`${metadata}.octogee-trusted-v3`, [
-      "octogee-customer-git-v3",
-      "github:octogee-ai/demo",
-      "",
-    ].join("\n"));
-    fs.writeFileSync(path.join(dest, ".git"), `gitdir: ${metadata}\n`);
+    prepareTrustedGithubRepository(dest, SLUG, {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+    });
     fs.writeFileSync(path.join(dest, "source-a-only.md"), "old source\n");
 
     expect(await cloneProjectRepo(SLUG, "demo", "demo", {
@@ -361,17 +359,57 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
     expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
   });
 
+  it("keeps an interrupted source clone outside the live project inventory", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
+    let temporary = "";
+    const interruptedClone = (cwd: string, args: string[]): string | null => {
+      expect(args[0]).toBe("clone");
+      temporary = args[2];
+      expect(path.dirname(temporary)).toBe(path.join(path.dirname(dest), ".octogee-state"));
+      expect(fs.readdirSync(path.dirname(dest)).sort()).toEqual([".octogee-state", "demo"]);
+      return null;
+    };
+
+    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+      gitExec: interruptedClone,
+    })).toBe(false);
+
+    expect(fs.existsSync(temporary)).toBe(false);
+    expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
+  });
+
+  it("rejects a redirected project state directory before cloning", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
+    fs.symlinkSync(paths.scratch, path.join(path.dirname(dest), ".octogee-state"));
+    const before = fs.readdirSync(paths.scratch);
+    const runGit = vi.fn(() => null);
+
+    await expect(cloneProjectRepo(SLUG, "demo", "demo", {
+      repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
+      gitExec: runGit,
+    })).rejects.toThrow("project state is not a directory");
+
+    expect(runGit).not.toHaveBeenCalled();
+    expect(fs.readdirSync(paths.scratch)).toEqual(before);
+    expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
+  });
+
   it("restores the prior checkout when replacement preparation fails", async () => {
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITEA_SSH_REMOTE);
     fs.writeFileSync(path.join(dest, "keep.md"), "keep\n");
+    const failPreparation = vi.fn(() => { throw new Error("prepare failed"); });
 
     expect(await cloneProjectRepo(SLUG, "demo", "demo", {
       repoSource: { provider: "github", owner: "octogee-ai", repo: "demo" },
       gitExec: localGitExec,
-      prepareRepository: () => { throw new Error("prepare failed"); },
+      prepareRepository: failPreparation,
     })).toBe(false);
 
+    expect(failPreparation).toHaveBeenCalledOnce();
     expect(fs.readFileSync(path.join(dest, "keep.md"), "utf8")).toBe("keep\n");
     expect(localConfig(dest, "remote.origin.url")).toBe(GITEA_SSH_REMOTE);
   });
