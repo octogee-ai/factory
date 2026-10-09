@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import {
-  createAssignedFingerprintReader,
+  createAssignedCustomerReader,
   createFleetFlushSystemConfigSync,
   createFleetControllerRequestedFlush,
   createFleetSystemConfigVerifyFlush,
@@ -68,11 +68,12 @@ describe("fleet-controller entrypoint config", () => {
     const assignedUsers = vi.fn(async () => [snapshot]);
     const seed = vi.fn();
 
-    const read = createAssignedFingerprintReader({ assignedUsers }, seed);
-    const fingerprints = await read();
+    const read = createAssignedCustomerReader({ assignedUsers }, seed);
+    const customers = await read();
 
-    expect([...fingerprints.keys()]).toEqual(["alice"]);
-    expect(fingerprints.get("alice")).toMatch(/^[0-9a-f]{16}$/);
+    expect([...customers.keys()]).toEqual(["alice"]);
+    expect(customers.get("alice")?.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(customers.get("alice")?.lane).toBe("create");
     expect(seed).toHaveBeenCalledWith(snapshot);
     expect(assignedUsers).toHaveBeenCalledWith({ completeOnly: false });
   });

@@ -2264,7 +2264,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const fingerprintPath = path.join(testRuntime.dir, "applied-fingerprints.json");
     saveAppliedFingerprints(fingerprintPath, fingerprints);
     const hooks = createReconcileConvergenceHooks({
-      fingerprintSource: async () => fingerprints,
+      customerSource: async () => new Map([...fingerprints].map(([slug, fingerprint]) => [slug, { fingerprint, lane: "move" as const }])),
       appliedFp: fingerprints,
       cloneRetry: new Map(),
       persistAppliedFp: () => saveAppliedFingerprints(fingerprintPath, fingerprints),

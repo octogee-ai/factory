@@ -27,7 +27,7 @@ import {
 } from "../lib/fleet-broker-client.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { startFleetController } from "../lib/fleet-provisioner.js";
-import { desiredFingerprints } from "../lib/snapshot-fingerprint.js";
+import { desiredCustomers, type DesiredCustomer } from "../lib/snapshot-fingerprint.js";
 import { probeOpenClawVersion } from "../lib/probe-openclaw-version.js";
 import { startUsageEventTailer } from "../lib/usage-log-tailer.js";
 import { startBlobSyncLoop } from "../lib/blob-sync-runner.js";
@@ -208,13 +208,13 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
   };
 }
 
-export function createAssignedFingerprintReader(
+export function createAssignedCustomerReader(
   brokerClient: Pick<FleetBrokerClient, "assignedUsers">,
-  seedSnapshot: Parameters<typeof desiredFingerprints>[1],
-): () => Promise<Map<string, string>> {
+  seedSnapshot: Parameters<typeof desiredCustomers>[1],
+): () => Promise<Map<string, DesiredCustomer>> {
   return async () => {
     const users = await brokerClient.assignedUsers({ completeOnly: false });
-    return desiredFingerprints(users, seedSnapshot);
+    return desiredCustomers(users, seedSnapshot);
   };
 }
 
@@ -310,7 +310,7 @@ async function main(): Promise<void> {
     platformState: !builder,
     localReconcile: true,
     subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
-    readDesiredFingerprints: createAssignedFingerprintReader(
+    readDesiredCustomers: createAssignedCustomerReader(
       brokerClient,
       adapter.seedUserSnapshotForMigration,
     ),

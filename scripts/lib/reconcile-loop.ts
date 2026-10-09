@@ -5,6 +5,7 @@
 
 export type UnmountOutcome = "drained" | "noop" | "deleted-user";
 export type EnsureOutcome = "mounted" | "noop";
+export type MountLane = "create" | "move";
 
 export interface ReconcileLoopDeps {
   gatewayId: string;
@@ -40,6 +41,11 @@ export interface ReconcileLoopDeps {
   log: (msg: string) => void;
   /** Cap concurrent mounts/evicts so a cold pod doesn't thundering-herd. */
   maxConcurrent?: number;
+  /** Mount lane: "create" for a builder being provisioned for the first time, "move" for
+   *  one already live elsewhere (a roll's surge remount, a migration). Create-lane mounts
+   *  are taken before any queued move — a mover keeps serving from its source pod until
+   *  it lands here; a new builder has nothing until it mounts. Absent → one lane. */
+  mountLane?: (slug: string) => MountLane;
   /** Best-effort: an ensure threw. For surfacing a bounded gateways/{id}.lastError mirror.
    *  MUST NOT throw — the loop guards it, but it should not rely on that. */
   onEnsureError?: (slug: string, message: string, error: unknown) => void;
@@ -70,7 +76,15 @@ interface MountJob {
   batch: MountBatch;
   settle: () => void;
 }
-const mountQueue: MountJob[] = [];
+const mountQueues: Record<MountLane, MountJob[]> = { create: [], move: [] };
+
+function queuedMountCount(): number {
+  return mountQueues.create.length + mountQueues.move.length;
+}
+
+function takeMountJob(): MountJob | undefined {
+  return mountQueues.create.shift() ?? mountQueues.move.shift();
+}
 const queuedMounts = new Set<string>();
 const activeMounts = new Set<string>();
 let reconciledDesired = new Set<string>();
@@ -86,7 +100,8 @@ export function _resetReconcileInFlightForTests(): void {
   queuedEvictions.clear();
   evictionQueue.length = 0;
   evictionWorker = null;
-  mountQueue.length = 0;
+  mountQueues.create.length = 0;
+  mountQueues.move.length = 0;
   queuedMounts.clear();
   activeMounts.clear();
   reconciledDesired = new Set();
@@ -175,7 +190,8 @@ function planReconciliation(deps: ReconcileLoopDeps, snapshot: ReconcileSnapshot
 }
 
 function logReconcilePlan(deps: ReconcileLoopDeps, plan: ReconcilePlan): void {
-  const mountList = plan.toMount.length ? ` (${plan.toMount.join(",")})` : "";
+  const label = (slug: string) => (deps.mountLane ? `${slug}:${deps.mountLane(slug)}` : slug);
+  const mountList = plan.toMount.length ? ` (${plan.toMount.map(label).join(",")})` : "";
   const evictList = plan.toEvict.length ? ` (${plan.toEvict.join(",")})` : "";
   deps.log(
     `[reconcile] ${deps.gatewayId}: +${plan.toMount.length} mount${mountList} / -${plan.toEvict.length} evict${evictList}`,
@@ -208,8 +224,7 @@ async function runMountJob({ slug, deps, batch }: MountJob): Promise<void> {
 async function runMountWorker(): Promise<void> {
   activeMountWorkers += 1;
   try {
-    while (mountQueue.length > 0) {
-      const job = mountQueue.shift()!;
+    for (let job = takeMountJob(); job; job = takeMountJob()) {
       // Claimed synchronously: a plan computed in the same turn must see the slug
       // as in flight, never as free to mount again.
       queuedMounts.delete(job.slug);
@@ -229,7 +244,7 @@ async function runMountWorker(): Promise<void> {
 }
 
 function spawnMountWorkers(limit: number): void {
-  const wanted = Math.min(Math.max(1, limit) - activeMountWorkers, mountQueue.length);
+  const wanted = Math.min(Math.max(1, limit) - activeMountWorkers, queuedMountCount());
   for (let i = 0; i < wanted; i++) void runMountWorker();
 }
 
@@ -241,9 +256,10 @@ async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan):
   for (const slug of plan.toMount) {
     if (queuedMounts.has(slug) || inFlight.has(slug)) continue;
     if ((lastMountCompletedAt.get(slug) ?? 0) > plan.snapshotClock) continue;
+    const lane = deps.mountLane?.(slug) ?? "move";
     queuedMounts.add(slug);
     settled.push(new Promise<void>((settle) => {
-      mountQueue.push({ slug, deps, batch, settle });
+      mountQueues[lane].push({ slug, deps, batch, settle });
     }));
   }
   spawnMountWorkers(deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);

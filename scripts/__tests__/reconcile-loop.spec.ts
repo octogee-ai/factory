@@ -855,3 +855,68 @@ describe("customerAttachPending", () => {
     expect(await pending).toBe(false);
   });
 });
+
+describe("reconcileFleet — mount lanes (create precedes move)", () => {
+  const lanes = (creates: string[]) => (slug: string) => (creates.includes(slug) ? "create" : "move") as const;
+
+  it("starts create-lane mounts before move-lane mounts queued ahead of them, FIFO within a lane", async () => {
+    const slugs = ["mover-a", "new-1", "mover-b", "new-2"];
+    const gates = new Map(slugs.map((s) => [s, deferred()]));
+    const d = mkDeps({
+      maxConcurrent: 1,
+      readDesired: async () => slugs,
+      mountLane: lanes(["new-1", "new-2"]),
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        await gates.get(slug)!.promise;
+        return "mounted";
+      },
+    });
+    const p = reconcileFleet(d);
+    await vi.waitFor(() => expect(d.ensured).toEqual(["new-1"]));
+    gates.get("new-1")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["new-1", "new-2"]));
+    gates.get("new-2")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["new-1", "new-2", "mover-a"]));
+    gates.get("mover-a")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["new-1", "new-2", "mover-a", "mover-b"]));
+    gates.get("mover-b")!.resolve();
+    await p;
+    expect(d.logs.some((m) => m.includes("new-1:create") && m.includes("mover-a:move"))).toBe(true);
+  });
+
+  it("a new builder assigned while movers are queued from an earlier tick mounts next", async () => {
+    const gates = new Map(["a", "b", "c", "oct08"].map((s) => [s, deferred()]));
+    let desired = ["a", "b", "c"];
+    const d = mkDeps({
+      maxConcurrent: 1,
+      readDesired: async () => desired,
+      mountLane: lanes(["oct08"]),
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        await gates.get(slug)!.promise;
+        return "mounted";
+      },
+    });
+    const first = reconcileFleet(d);
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a"]));
+    desired = ["a", "b", "c", "oct08"];
+    const second = reconcileFleet(d);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(d.ensured).toEqual(["a"]);
+    gates.get("a")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "oct08"]));
+    gates.get("oct08")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "oct08", "b"]));
+    gates.get("b")!.resolve();
+    await vi.waitFor(() => expect(d.ensured).toEqual(["a", "oct08", "b", "c"]));
+    gates.get("c")!.resolve();
+    await Promise.all([first, second]);
+  });
+
+  it("without a lane source every mount shares one lane in roster order", async () => {
+    const d = mkDeps({ maxConcurrent: 1, readDesired: async () => ["b", "a"] });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["b", "a"]);
+  });
+});

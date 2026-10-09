@@ -87,8 +87,10 @@ import {
   customerAttachPending,
   startReconcileLoop,
   type EnsureOutcome,
+  type MountLane,
   type UnmountOutcome,
 } from "./reconcile-loop.js";
+import type { DesiredCustomer } from "./snapshot-fingerprint.js";
 import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { createDeviceAuthManager } from "./byosub-device-auth.js";
 import { realDeviceAuthDeps } from "./byosub-device-auth-io.js";
@@ -365,12 +367,12 @@ export interface StartFleetOptions {
    * assigned roster for this gateway identity. */
   readDesiredSlugs?: () => Promise<string[]>;
   subscribeDesiredChanges?: (wake: () => void) => () => void;
-  /** Content-convergence source: slug → fingerprint of the config-affecting snapshot
-   *  slice (see snapshot-fingerprint.ts). When provided, it BOTH drives the desired
-   *  roster (its keys) and lets the reconcile re-ensure an already-mounted customer whose
-   *  fingerprint drifted — the level-triggered path a project-agent toggle rides. Takes
-   *  precedence over readDesiredSlugs. */
-  readDesiredFingerprints?: () => Promise<Map<string, string>>;
+  /** Desired-customer source: slug → config fingerprint + mount lane (see
+   *  snapshot-fingerprint.ts). When provided, it drives the desired roster (its keys), lets
+   *  the reconcile re-ensure an already-mounted customer whose fingerprint drifted — the
+   *  level-triggered path a project-agent toggle rides — and orders the mount pool so
+   *  first-time builders mount ahead of movers. Takes precedence over readDesiredSlugs. */
+  readDesiredCustomers?: () => Promise<Map<string, DesiredCustomer>>;
   /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
   stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
   readUserSnapshotForRuntimeReset?: (
@@ -1425,13 +1427,13 @@ function createReconcileUnmountSlug(input: {
 }
 
 export function createReconcileConvergenceHooks(input: {
-  fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
+  customerSource: StartFleetOptions["readDesiredCustomers"];
   appliedFp: Map<string, string>;
   cloneRetry: Map<string, CloneRetryState>;
   persistAppliedFp: () => void;
 }): ConvergenceHooks {
   const recordApplied = (slug: string, fingerprint: string | undefined): void => {
-    if (!input.fingerprintSource || fingerprint === undefined) return;
+    if (!input.customerSource || fingerprint === undefined) return;
     const previous = input.appliedFp.get(slug);
     input.appliedFp.set(slug, fingerprint);
     try {
@@ -1452,10 +1454,10 @@ export function createReconcileConvergenceHooks(input: {
 }
 
 function assignedRosterReader(
-  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredFingerprints" | "readDesiredSlugs" | "db">,
+  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs" | "db">,
 ): (() => Promise<string[]>) | null {
-  const fingerprints = opts.readDesiredFingerprints;
-  if (fingerprints) return async () => [...(await fingerprints()).keys()];
+  const customers = opts.readDesiredCustomers;
+  if (customers) return async () => [...(await customers()).keys()];
   if (opts.readDesiredSlugs) return opts.readDesiredSlugs;
   const db = opts.db;
   return db ? () => readAssignedSlugsForGateway(db, opts.gatewayId) : null;
@@ -1463,7 +1465,7 @@ function assignedRosterReader(
 
 export function createVerifyAttachPending(input: {
   provision: boolean;
-  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredFingerprints" | "readDesiredSlugs" | "db">;
+  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs" | "db">;
 }): ((slug: string) => Promise<boolean>) | undefined {
   const readAssigned = input.provision ? assignedRosterReader(input.opts) : null;
   if (!readAssigned) return undefined;
@@ -1472,19 +1474,22 @@ export function createVerifyAttachPending(input: {
 
 function createDesiredRosterReader(input: {
   opts: StartFleetOptions;
-  fingerprintSource: StartFleetOptions["readDesiredFingerprints"];
+  customerSource: StartFleetOptions["readDesiredCustomers"];
   desiredFingerprints: Map<string, string>;
+  desiredLanes: Map<string, MountLane>;
   setEnsureFingerprint: (fingerprint: string) => void;
 }): (() => Promise<string[]>) | null {
-  const fingerprintSource = input.fingerprintSource;
-  if (fingerprintSource) {
+  const customerSource = input.customerSource;
+  if (customerSource) {
     return async () => {
-      const next = await fingerprintSource();
+      const next = await customerSource();
       input.desiredFingerprints.clear();
-      for (const [slug, fingerprint] of next) {
-        input.desiredFingerprints.set(slug, fingerprint);
+      input.desiredLanes.clear();
+      for (const [slug, customer] of next) {
+        input.desiredFingerprints.set(slug, customer.fingerprint);
+        input.desiredLanes.set(slug, customer.lane);
       }
-      input.setEnsureFingerprint(desiredEnsureLaneFingerprint(next));
+      input.setEnsureFingerprint(desiredEnsureLaneFingerprint(input.desiredFingerprints));
       return [...next.keys()];
     };
   }
@@ -1575,10 +1580,11 @@ function startMaybeReconcileLoop(params: {
   // (when openclawDir is known) so a container restart with the emptyDir intact does not
   // re-ensure an unchanged fleet; a MISSING entry is stale by definition — see
   // applied-fingerprint-store.ts.
-  const fingerprintSource = opts.readDesiredFingerprints;
+  const customerSource = opts.readDesiredCustomers;
   const desiredFp = new Map<string, string>();
+  const desiredLanes = new Map<string, MountLane>();
   const appliedFpFile =
-    fingerprintSource && opts.openclawDir
+    customerSource && opts.openclawDir
       ? path.join(opts.openclawDir, "applied-fingerprints.json")
       : null;
   const appliedFp = appliedFpFile ? loadAppliedFingerprints(appliedFpFile) : new Map<string, string>();
@@ -1615,7 +1621,8 @@ function startMaybeReconcileLoop(params: {
   };
   const readDesired = createDesiredRosterReader({
     opts,
-    fingerprintSource,
+    customerSource,
+    desiredLanes,
     desiredFingerprints: desiredFp,
     setEnsureFingerprint: (fingerprint) => {
       desiredEnsureFingerprint = fingerprint;
@@ -1623,7 +1630,7 @@ function startMaybeReconcileLoop(params: {
   });
   if (!provision || !readDesired) return () => undefined;
 
-  const getContentStale = fingerprintSource
+  const getContentStale = customerSource
     ? (): string[] =>
         selectStableContentStale(
           getMountObservedSlugs(wrappedAdapter),
@@ -1633,14 +1640,15 @@ function startMaybeReconcileLoop(params: {
         )
     : undefined;
   const convergenceHooks = createReconcileConvergenceHooks(
-    { fingerprintSource, appliedFp, cloneRetry, persistAppliedFp },
+    { customerSource, appliedFp, cloneRetry, persistAppliedFp },
   );
-  if (fingerprintSource) wrappedAdapter.recordAppliedFingerprint = convergenceHooks.recordApplied;
+  if (customerSource) wrappedAdapter.recordAppliedFingerprint = convergenceHooks.recordApplied;
   const start = () => startReconcileLoop({
     gatewayId: opts.gatewayId,
     intervalMs: opts.subscribeDesiredChanges ? 60_000 : RECONCILE_LOOP_INTERVAL_MS,
     subscribe: opts.subscribeDesiredChanges,
     maxConcurrent: MOUNT_CONCURRENCY,
+    ...(customerSource ? { mountLane: (slug: string) => desiredLanes.get(slug) ?? "move" } : {}),
     log: opts.log,
     getMountObserved: () => {
       const mounted = getMountObservedSlugs(wrappedAdapter);
@@ -1715,7 +1723,7 @@ function startMaybeReconcileLoop(params: {
           desiredFingerprint: desiredFp.get(slug),
           prior: cloneRetry.get(slug),
           options: reconcileAddCustomerOptions(
-            fingerprintSource !== undefined, evictionBatch, readCurrentEvictionBatch,
+            customerSource !== undefined, evictionBatch, readCurrentEvictionBatch,
           ),
           hooks: convergenceHooks,
           stampMounted,
@@ -1821,12 +1829,12 @@ function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null
 export function createConfiguredBuilderAssignmentMatcher(
   opts: Pick<
     StartFleetOptions,
-    "readDesiredFingerprints" | "readDesiredSlugs"
+    "readDesiredCustomers" | "readDesiredSlugs"
   >,
 ): (slug: string) => Promise<boolean> {
-  const readDesiredFingerprints = opts.readDesiredFingerprints;
-  if (readDesiredFingerprints) {
-    return async (slug) => (await readDesiredFingerprints()).has(slug);
+  const readDesiredCustomers = opts.readDesiredCustomers;
+  if (readDesiredCustomers) {
+    return async (slug) => (await readDesiredCustomers()).has(slug);
   }
   const readDesiredSlugs = opts.readDesiredSlugs;
   if (readDesiredSlugs) {
@@ -2585,7 +2593,7 @@ export async function startFleetController(
     reportState,
     localReconcile: opts.localReconcile === true,
     hasDb: !!opts.db,
-    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredFingerprints,
+    hasBrokeredRoster: !!opts.readDesiredSlugs || !!opts.readDesiredCustomers,
   });
   const stateDeps = createStateDeps(opts, caps.needsStateDeps);
   const adapter = buildFleetAdapter(opts);

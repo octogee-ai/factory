@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  desiredFingerprints,
+  desiredCustomers,
   snapshotConfigFingerprint,
 } from "../lib/snapshot-fingerprint.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
@@ -349,15 +349,15 @@ describe("snapshotConfigFingerprint", () => {
   });
 });
 
-describe("desiredFingerprints", () => {
+describe("desiredCustomers", () => {
   it("returns slug→fingerprint for every snapshot AND seeds each snapshot into the adapter cache", () => {
     const seed = vi.fn();
     const users = [snap(), snap({ uid: "u2", slug: "bob" })];
 
-    const map = desiredFingerprints(users, seed);
+    const map = desiredCustomers(users, seed);
 
     expect([...map.keys()].sort()).toEqual(["alice", "bob"]);
-    expect(map.get("alice")).toBe(snapshotConfigFingerprint(users[0]));
+    expect(map.get("alice")?.fingerprint).toBe(snapshotConfigFingerprint(users[0]));
     // Every fingerprinted snapshot is seeded — the ensure that a drift triggers must
     // apply exactly the content the fingerprint described, not a stale cache entry.
     expect(seed).toHaveBeenCalledTimes(2);
@@ -366,8 +366,19 @@ describe("desiredFingerprints", () => {
   });
 
   it("tolerates an absent seeder (operator-style callers without a cache)", () => {
-    const map = desiredFingerprints([snap()]);
+    const map = desiredCustomers([snap()]);
     expect(map.size).toBe(1);
+  });
+
+  it("lanes a builder that has completed provisioning as a move and an unprovisioned one as a create", () => {
+    const map = desiredCustomers([
+      snap({ status: "complete" }),
+      snap({ uid: "u2", slug: "bob", status: "provisioning" }),
+      snap({ uid: "u3", slug: "cara", status: "" }),
+    ]);
+    expect(map.get("alice")?.lane).toBe("move");
+    expect(map.get("bob")?.lane).toBe("create");
+    expect(map.get("cara")?.lane).toBe("create");
   });
 });
 

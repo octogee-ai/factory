@@ -3,6 +3,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
+import type { MountLane } from "./reconcile-loop.js";
 
 // A stable fingerprint of the fields of a customer snapshot that shape what an ensure
 // applies on disk — the generated OpenClaw config (agents.list,
@@ -61,14 +62,22 @@ function fnv1a64Hex(input: string): string {
 // fingerprint described — the broker adapter's cache has no TTL, so without the seed a
 // drift-triggered ensure would re-apply the boot-time state while the bookkeeping records
 // the new fingerprint as applied.
-export function desiredFingerprints(
+export interface DesiredCustomer {
+  fingerprint: string;
+  lane: MountLane;
+}
+
+export function desiredCustomers(
   users: readonly FleetBrokerUserSnapshot[],
   seedSnapshot?: (snapshot: FleetBrokerUserSnapshot) => void,
-): Map<string, string> {
-  const map = new Map<string, string>();
+): Map<string, DesiredCustomer> {
+  const map = new Map<string, DesiredCustomer>();
   for (const user of users) {
     seedSnapshot?.(user);
-    map.set(user.slug, snapshotConfigFingerprint(user));
+    map.set(user.slug, {
+      fingerprint: snapshotConfigFingerprint(user),
+      lane: user.status === "complete" ? "move" : "create",
+    });
   }
   return map;
 }

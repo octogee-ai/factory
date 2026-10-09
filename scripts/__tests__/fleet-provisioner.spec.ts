@@ -272,7 +272,7 @@ describe("finalizeConvergedMount — the durable mount boundary", () => {
   it.each([undefined, ""])("retains prior retry state %s when fingerprint persistence fails", (previous) => {
     const appliedFp = new Map<string, string>(previous === undefined ? [] : [["alice", previous]]);
     const hooks = createReconcileConvergenceHooks({
-      fingerprintSource: async () => new Map([["alice", "new-fp"]]),
+      customerSource: async () => new Map([["alice", { fingerprint: "new-fp", lane: "move" as const }]]),
       appliedFp,
       cloneRetry: new Map(),
       persistAppliedFp: () => { throw new Error("fingerprint disk unavailable"); },
@@ -713,16 +713,16 @@ function configuredBuilderLifecycleAdapter(input: {
 
 describe("configured Builder surge release", () => {
   it("matches normal self-release against the authoritative desired roster", async () => {
-    const readDesiredFingerprints = vi.fn(async () => new Map([
-      ["ceckert-test", "fingerprint"],
+    const readDesiredCustomers = vi.fn(async () => new Map([
+      ["ceckert-test", { fingerprint: "fingerprint", lane: "move" as const }],
     ]));
     const matches = createConfiguredBuilderAssignmentMatcher({
-      readDesiredFingerprints,
+      readDesiredCustomers,
     });
 
     await expect(matches("ceckert-test")).resolves.toBe(true);
     await expect(matches("other-builder")).resolves.toBe(false);
-    expect(readDesiredFingerprints).toHaveBeenCalledTimes(2);
+    expect(readDesiredCustomers).toHaveBeenCalledTimes(2);
   });
 
   it("leaves a prelaunch-attached Builder stale so the reconcile loop runs its deferred runtime reconciliation", async () => {
@@ -2629,7 +2629,7 @@ describe("createVerifyAttachPending", () => {
   it("reads the assignment from the content-convergence roster when one is wired", async () => {
     const pending = createVerifyAttachPending({
       provision: true,
-      opts: { gatewayId: "shared-1", readDesiredFingerprints: async () => new Map([["alice", "fp-1"]]) },
+      opts: { gatewayId: "shared-1", readDesiredCustomers: async () => new Map([["alice", { fingerprint: "fp-1", lane: "move" as const }]]) },
     });
 
     expect(await pending?.("alice")).toBe(true);
