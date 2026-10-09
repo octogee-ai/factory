@@ -7,6 +7,7 @@ import {
   OpenclawWireError,
   createGatewayRpc,
   isAgentAlreadyExistsRpcError,
+  isAgentDeletionPendingRpcError,
   isAgentNotFoundRpcError,
   type ConnectTrace,
   type GatewayRpcClient,
@@ -511,6 +512,15 @@ describe("gateway-rpc", () => {
         return { ok: true, payload: { total: 2, jobs: [{ id: "job" }] } };
       });
       await expect(client.cronJobCount("octogee-alice-coach")).resolves.toBe(2);
+    });
+    it("counts disabled jobs too when asked, by sending the explicit all filter", async () => {
+      server.setHandler("cron.list", (params) => {
+        expect(params).toEqual({ agentId: "octogee-alice-coach", enabled: "all", compact: true, limit: 1 });
+        return { ok: true, payload: { total: 3, jobs: [{ id: "job" }] } };
+      });
+      await expect(
+        client.cronJobCount("octogee-alice-coach", { includeDisabled: true }),
+      ).resolves.toBe(3);
     });
     it.each([{}, { total: -1 }, { total: "0" }])("rejects unverified cron counts: %j", async (payload) => {
       server.setHandler("cron.list", () => ({ ok: true, payload }));
@@ -1028,6 +1038,44 @@ describe("gateway-rpc", () => {
       expect(
         isAgentAlreadyExistsRpcError(
           new OpenclawWireError("connect-failed", `agent "x" already exists`),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("isAgentDeletionPendingRpcError", () => {
+    const agentId = "octogee-alice-proj-orbit-coach";
+    const pending = (id: string) =>
+      new OpenclawWireError("rpc-error", `agent "${id}" deletion cleanup is still pending`);
+
+    it("classifies the gateway's pending-deletion refusal of agents.create for that agent", () => {
+      expect(isAgentDeletionPendingRpcError(pending(agentId), agentId)).toBe(true);
+    });
+
+    it("rejects a refusal naming a different agent, so the remedy never deletes the wrong one", () => {
+      expect(isAgentDeletionPendingRpcError(pending("octogee-alice-coach"), agentId)).toBe(false);
+    });
+
+    it("rejects already-exists refusals, non-wire errors and non-rpc wire codes", () => {
+      expect(
+        isAgentDeletionPendingRpcError(
+          new OpenclawWireError("rpc-error", `agent "${agentId}" already exists`),
+          agentId,
+        ),
+      ).toBe(false);
+      expect(
+        isAgentDeletionPendingRpcError(
+          new Error(`agent "${agentId}" deletion cleanup is still pending`),
+          agentId,
+        ),
+      ).toBe(false);
+      expect(
+        isAgentDeletionPendingRpcError(
+          new OpenclawWireError(
+            "connect-failed",
+            `agent "${agentId}" deletion cleanup is still pending`,
+          ),
+          agentId,
         ),
       ).toBe(false);
     });

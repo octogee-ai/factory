@@ -57,7 +57,8 @@ function failedPreSyncCleanup(operation: Operation): boolean {
 }
 
 function incompleteNativeCleanup(error: unknown): boolean {
-  return typeof error === "string" && /agent database files are still held open:|native cleanup incomplete: purgeFailed=(?:true failed=\[|false failed=\[[^\]])/.test(error);
+  return typeof error === "string" &&
+    /agent database files are still held open:|native cleanup incomplete: purgeFailed=(?:true failed=\[|false failed=\[[^\]])|deletion cleanup is still pending/.test(error);
 }
 
 function legacyHeldTargetCleanupPending(operation: Operation): boolean {

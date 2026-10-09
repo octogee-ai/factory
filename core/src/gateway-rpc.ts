@@ -235,19 +235,37 @@ export interface GatewayAgentsCreateResult {
 
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
 const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
+const AGENT_DELETION_PENDING_MESSAGE = /^agent "([^"]*)" deletion cleanup is still pending$/;
 
 /**
  * openclaw refuses `agents.create` for an id already in the roster with
  * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
  * raced another writer has to treat that as already-done; every other refusal —
- * an unwritable workspace, a wedged deletion journal, a transport failure —
- * must still fail the mount.
+ * an unwritable workspace, a transport failure — must still fail the mount.
+ * A pending deletion journal is the one refusal with a native remedy; see
+ * `isAgentDeletionPendingRpcError`.
  */
 export function isAgentAlreadyExistsRpcError(err: unknown): boolean {
   return (
     err instanceof OpenclawWireError &&
     err.code === "rpc-error" &&
     AGENT_ALREADY_EXISTS_MESSAGE.test(err.message)
+  );
+}
+
+/**
+ * openclaw refuses `agents.create` while an earlier `agents.delete` of the same
+ * id is journaled with its cleanup incomplete:
+ * `errorShape(INVALID_REQUEST, 'agent "<id>" deletion cleanup is still pending')`
+ * (agent-create.ts "deletion-pending"). A fresh `agents.delete` resumes that
+ * cleanup; the create is retryable once it completes. The refusal must name
+ * the agent being created, since the remedy deletes it.
+ */
+export function isAgentDeletionPendingRpcError(err: unknown, agentId: string): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    AGENT_DELETION_PENDING_MESSAGE.exec(err.message)?.[1] === agentId
   );
 }
 
@@ -301,7 +319,7 @@ export interface GatewayRpcClient {
     timeoutMs?: number,
   ): Promise<GatewayToolsCatalogResult>;
   schedulerMigration(params: SchedulerMigrationRequest): Promise<SchedulerMigrationResult>;
-  cronJobCount(agentId: string): Promise<number>;
+  cronJobCount(agentId: string, opts?: { includeDisabled?: boolean }): Promise<number>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
   agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
@@ -981,9 +999,9 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       return value;
     },
 
-    async cronJobCount(agentId) {
+    async cronJobCount(agentId, opts) {
       const payload = await call("cron.list", {
-        agentId, enabled: "enabled", compact: true, limit: 1,
+        agentId, enabled: opts?.includeDisabled ? "all" : "enabled", compact: true, limit: 1,
       });
       const total = (payload as { total?: unknown } | null)?.total;
       if (!Number.isSafeInteger(total) || (total as number) < 0) {

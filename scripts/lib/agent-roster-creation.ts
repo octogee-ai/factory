@@ -1,5 +1,10 @@
+import { deleteRosterAgents } from "./agent-roster-deletion.js";
 import { log as defaultLog } from "./config.js";
-import { isAgentAlreadyExistsRpcError, type GatewayRpcClient } from "./gateway-rpc.js";
+import {
+  isAgentAlreadyExistsRpcError,
+  isAgentDeletionPendingRpcError,
+  type GatewayRpcClient,
+} from "./gateway-rpc.js";
 
 export interface RosterAgentSpec {
   agentId: string;
@@ -14,7 +19,7 @@ export interface AgentCreationResult {
 }
 
 export interface CreateRosterAgentsOptions {
-  rpc: Pick<GatewayRpcClient, "agentsCreate">;
+  rpc: Pick<GatewayRpcClient, "agentsCreate" | "agentsDelete" | "cronJobCount">;
   log?: (msg: string) => void;
   logPrefix?: string;
 }
@@ -52,10 +57,7 @@ export async function createRosterAgents(
 
   for (const spec of specs) {
     try {
-      const created = await opts.rpc.agentsCreate({
-        name: spec.agentId,
-        workspace: spec.workspace,
-      });
+      const created = await createAfterPendingDeletion(spec, opts);
       if (created.agentId !== spec.agentId) {
         failures.push(
           `${spec.agentId} (gateway created ${created.agentId} instead)`,
@@ -80,4 +82,38 @@ export async function createRosterAgents(
     throw new Error(`${prefix}agents.create failed for ${failures.join("; ")}`);
   }
   return results;
+}
+
+/** openclaw resumes a journaled, incomplete deletion on a fresh `agents.delete`;
+ *  one resume and one retried create, then the refusal is the failure. The
+ *  resumed delete also prunes the agent's cron rows, so it only runs while
+ *  this gateway holds none for the agent (a staged migration snapshot would
+ *  otherwise be lost). */
+async function createAfterPendingDeletion(
+  spec: RosterAgentSpec,
+  opts: CreateRosterAgentsOptions,
+) {
+  const params = { name: spec.agentId, workspace: spec.workspace };
+  try {
+    return await opts.rpc.agentsCreate(params);
+  } catch (err) {
+    if (!isAgentDeletionPendingRpcError(err, spec.agentId)) throw err;
+    const log = opts.log ?? defaultLog;
+    const prefix = opts.logPrefix ? `${opts.logPrefix} ` : "";
+    const cronJobs = await opts.rpc.cronJobCount(spec.agentId, { includeDisabled: true });
+    if (cronJobs > 0) {
+      throw new Error(
+        `${(err as Error).message}; not resuming the deletion because ${cronJobs} cron job(s) for ${spec.agentId} are already on this gateway and would be pruned`,
+      );
+    }
+    log(
+      `${prefix}agents.create ${spec.agentId} refused: deletion cleanup pending — resuming that deletion before retrying`,
+    );
+    await deleteRosterAgents([spec.agentId], {
+      rpc: opts.rpc,
+      log: opts.log,
+      logPrefix: opts.logPrefix,
+    });
+    return await opts.rpc.agentsCreate(params);
+  }
 }

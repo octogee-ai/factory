@@ -199,6 +199,7 @@ describe("runStuckOpReaperTick", () => {
     ["held", "agent database files are still held open: /state/agent.sqlite", true],
     ["partial", "native cleanup incomplete: purgeFailed=true failed=[]", true],
     ["failed-entry", 'native cleanup incomplete: purgeFailed=false failed=["purge failed"]', true],
+    ["deletion-pending", '[import:alice] agents.create failed for octogee-alice-coach (agent "octogee-alice-coach" deletion cleanup is still pending)', true],
     ["transient", "request timed out", true],
     ["unknown", "workspace migration authority changed", false],
     ["complete", "native cleanup incomplete: purgeFailed=false failed=[]", false],

@@ -265,6 +265,7 @@ function rosterRpc(config: unknown = { agents: { entries: {} } }) {
   return {
     configGet: vi.fn(async () => configSnapshot(config)),
     secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    cronJobCount: vi.fn(async () => 0),
     agentsDelete: vi.fn(async ({ agentId }: { agentId: string }) => ({
       ok: true as const,
       agentId,
@@ -3666,20 +3667,47 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(cache.cache).toEqual({ current: undefined, hash: "" });
   });
 
-  it("blocks config activation while an existing agent's deletion cleanup is pending", async () => {
+  it("resumes an existing agent's pending deletion cleanup, then re-creates it and activates", async () => {
+    const agentId = "octogee-alice-coach";
+    let resumed = false;
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster([agentId]) } }, {
+      agentsCreate: vi.fn(async () => {
+        if (!resumed) {
+          throw new OpenclawWireError("rpc-error", `agent "${agentId}" deletion cleanup is still pending`);
+        }
+        return { ok: true, agentId };
+      }),
+      agentsDelete: vi.fn(async () => {
+        resumed = true;
+        return { ok: true, agentId, complete: true, removed: [], failed: [] };
+      }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" });
+
+    expect(rpc.agentsDelete).toHaveBeenCalledWith({ agentId, deleteFiles: false });
+    expect(rpc.agentsCreate).toHaveBeenCalledTimes(2);
+    expect(applyConfigPatch).toHaveBeenCalled();
+  });
+
+  it("blocks config activation when the resumed deletion cleanup still cannot complete", async () => {
     const agentId = "octogee-alice-coach";
     const rpc = mkRemovalRpc({ agents: { entries: keyedRoster([agentId]) } }, {
       agentsCreate: vi.fn(async () => {
         throw new OpenclawWireError("rpc-error", `agent "${agentId}" deletion cleanup is still pending`);
       }),
+      agentsDelete: vi.fn(async () => ({
+        ok: true, agentId, complete: false, removed: [], failed: [], purgeFailed: true,
+      })),
     });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
 
     await expect(adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }))
-      .rejects.toThrow("deletion cleanup is still pending");
+      .rejects.toThrow("native cleanup incomplete: purgeFailed=true");
 
     expect(applyConfigPatch).not.toHaveBeenCalled();
-    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(rpc.agentsCreate).toHaveBeenCalledTimes(1);
   });
 
   it("patches beta keyed entries with id-free values and skips foreign agents", async () => {
