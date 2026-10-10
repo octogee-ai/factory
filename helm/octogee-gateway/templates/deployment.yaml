@@ -142,11 +142,7 @@ spec:
             - |
               set -eu
               chown 1000:1000 /home/node
-              {{- if $hobbyComputer }}
-              chmod 2770 /home/node
-              {{- else }}
               chmod 0755 /home/node
-              {{- end }}
               {{- if $hobbyComputer }}
               chown 1000:1000 /run/user/1000
               chmod 0700 /run/user/1000

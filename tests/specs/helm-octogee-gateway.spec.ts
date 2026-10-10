@@ -401,7 +401,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       expect(init).toMatch(/drop: \[ALL\]/);
       expect(init).toMatch(/add: \[CHOWN, FOWNER, SETUID, SETGID\]/);
       const handOff = init.indexOf("chown 1000:1000 /home/node");
-      const mode = init.indexOf(`chmod ${values.profile === "builder" || values.gatewayClass === "builder" ? "2770" : "0755"} /home/node`);
+      const mode = init.indexOf("chmod 0755 /home/node");
       const drop = init.indexOf("exec setpriv --reuid=1000 --regid=1000 --keep-groups");
       const seed = init.indexOf("cp -rn /etc/skel/. /home/node/");
       expect(handOff).toBeGreaterThan(-1);
