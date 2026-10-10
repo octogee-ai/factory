@@ -6,6 +6,7 @@ import { findPortableAgentStores, AGENT_SNAPSHOT_DIRNAME } from './agent-store-s
 import { exportActivationManifestWithSecret } from './migration-activation-secrets.js';
 import { writeActivationManifest } from './migration-activation-manifest.js';
 import { rsyncTlsConnectProgram } from './migration-rsync-tls.js';
+import { exportCodexStoreSnapshots } from './codex-store-snapshot.js';
 
 export async function prepareSourceTransferStage(phase: string, scratch: string, executionId: string, podUid: string, root = '/home/node/.openclaw') {
  if (!scratch || !executionId || !/^\/tmp\/octogee-source-transfer-[A-Za-z0-9_-]+$/.test(scratch)) throw new Error('invalid private scratch');
@@ -33,6 +34,7 @@ export async function prepareSourceTransferStage(phase: string, scratch: string,
   validateSnapshotResult(result, snapshot.repository);
   sources.push({ cwd: exportRoot, path: snapshot.relative });
  }
+ sources.push(...await exportCodexStoreSnapshots({ sources, exportRoot, log: console.log }));
  if (request.includeActivationManifest) sources.push(await writeActivationManifest(scratch, manifest));
  const passwordFile = path.join(scratch, 'rsync.pass');
  const certificatePath = path.join(scratch, 'target.crt');

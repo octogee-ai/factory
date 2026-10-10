@@ -8,6 +8,7 @@ import { preflightAgentDatabase } from "./agent-store-preflight.js";
 import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
 import { assertNotHeld, matchFiles, sqliteFamily } from "./held-files.js";
 import { runOpenClaw, type OpenClawCommand, type OpenClawCommandResult } from "./openclaw-cli.js";
+import { exportCodexStoreSnapshots, isCodexDatabase } from "./codex-store-snapshot.js";
 
 export const AGENT_STORE_BASENAME = "openclaw-agent.sqlite";
 export const AGENT_SNAPSHOT_DIRNAME = ".octogee-snapshot";
@@ -46,6 +47,7 @@ export async function findPortableAgentStores(
   for (const source of sources) {
     for (const store of await listSqliteStores(path.join(source.cwd, source.path))) {
       const relative = posixRelative(source.cwd, store);
+      if (isCodexDatabase(relative)) continue;
       const agentId = agentIdOfStateRelativePath(relative);
       if (agentId === null) continue;
       if (path.posix.basename(relative) !== AGENT_STORE_BASENAME) {
@@ -83,11 +85,12 @@ export async function exportAgentStoreSnapshots(
   input: Pick<SnapshotCommandContext, "run" | "signal"> & {
     sources: ReadonlyArray<{ cwd: string; path: string }>;
     exportRoot: string;
+    log?: (message: string) => void;
   },
 ): Promise<Array<{ cwd: string; path: string }>> {
   const run = input.run ?? runOpenClaw;
   const stores = await findPortableAgentStores(input.sources);
-  if (stores.length === 0) return [];
+  if (stores.length === 0) return exportCodexStoreSnapshots(input);
   const privateRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octogee-store-snapshot-")));
   const configPath = path.join(privateRoot, "openclaw.json");
   const env: NodeJS.ProcessEnv = {
@@ -117,7 +120,7 @@ export async function exportAgentStoreSnapshots(
       }
       carried.push({ cwd: input.exportRoot, path: repositoryRelative });
     }
-    return carried;
+    return [...carried, ...await exportCodexStoreSnapshots(input)];
   } finally {
     await fs.rm(privateRoot, { recursive: true, force: true });
   }

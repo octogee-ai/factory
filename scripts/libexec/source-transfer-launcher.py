@@ -166,6 +166,9 @@ def main():
             run_child(['/usr/local/bin/openclaw', 'backup', 'sqlite', 'create', '--agent', snapshot['agentId'], '--repository', snapshot['repository'], '--json'], env, scratch, pathlib.Path(scratch, f'snapshot-{index}.json'), min(deadline, time.monotonic() + 180))
         CURRENT_PHASE = 'finish'
         run_child(['/usr/local/bin/node', STAGE, 'finish', scratch, execution_id], env, scratch, pathlib.Path(scratch, 'finish-output'), deadline)
+        for line in pathlib.Path(scratch, 'finish-output').read_text().splitlines():
+            if line.startswith('[codex-store-snapshot]'):
+                print(line, file=sys.stderr, flush=True)
         transfer = json.loads(pathlib.Path(scratch, 'transfer.json').read_text())
         env['RSYNC_CONNECT_PROG'] = '/usr/bin/prlimit --as=536870912 --core=0 -- ' + transfer['connectProgram']
         CURRENT_PHASE = 'transfer'

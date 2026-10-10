@@ -62,7 +62,8 @@ import { OpenclawWireError } from "../lib/gateway-rpc.js";
 const spawnMock = vi.fn();
 const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../lib/agent-store-upgrade.js", () => ({ upgradeStagedAgentStores: upgradeStoresMock }));
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:child_process")>(),
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
@@ -2906,6 +2907,7 @@ describe("agent sqlite stores across an rsync carry", () => {
   function pushRsync(stateDir: string, migrationId: string, options: {
     mode?: "pre" | "final";
     runOpenClaw?: ReturnType<typeof fakeOpenClaw>;
+    log?: MigrationHandlerDeps["log"];
   } = {}): {
     handler: ReturnType<typeof createPushRsyncStateHandler>;
     req: Request;
@@ -2928,7 +2930,7 @@ describe("agent sqlite stores across an rsync carry", () => {
       exportOpenClawActivationManifest: vi.fn(async () => null as never),
     });
     return {
-      handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw() })),
+      handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw(), ...(options.log ? { log: options.log } : {}) })),
       req: mkRequest(body, {
         signature: signForPod(migrationId, JSON.stringify(body)),
       }),
@@ -2983,9 +2985,26 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(args).toContain("--exclude=openclaw-agent.sqlite");
   });
 
+  it("continues a Hobby push when a managed Codex database is corrupt", async () => {
+    const stateDir = await mkTempRoot();
+    await writeStore(stateDir, CARRIED_STORE, () => {});
+    const home = path.join(stateDir, "agents/octogee-chris-coach/agent/codex-home");
+    await fs.mkdir(home);
+    await fs.writeFile(path.join(home, "goals_1.sqlite"), "corrupt optional state");
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const log = vi.fn();
+    const { handler, req } = pushRsync(stateDir, "mig-codex-optional", { runOpenClaw: fakeOpenClaw(), log });
+    const { res, getStatus } = mkResponse();
+    await handler(req, res, vi.fn());
+    expect(getStatus()).toBe(200);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("omitted optional database"));
+    expect(spawnMock.mock.calls[0]![1]).toContain("--exclude=/agents/*/agent/codex-home/*.sqlite");
+  });
+
   it("fails the push instead of carrying a store OpenClaw cannot snapshot", async () => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
+    await writeStore(stateDir, "agents/octogee-chris-coach/agent/codex-home/goals_1.sqlite", () => {});
     const { handler, req } = pushRsync(stateDir, "mig-carry-bad", {
       runOpenClaw: fakeOpenClaw({ failSnapshot: "database disk image is malformed" }),
     });
@@ -3152,6 +3171,26 @@ describe("agent sqlite stores across an rsync carry", () => {
     await writeStore(stageDir, path.join(STAGED_SNAPSHOT, "database.sqlite"), seed);
     await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), "{}");
   }
+
+  it("activates with the required OpenClaw snapshot even when Codex raw files and its backup are corrupt", async () => {
+    const importDir = await mkTempRoot();
+    const migrationId = "mig-codex-import-optional";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild() });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('required')"));
+    const home = path.join(stageDir, "agents/octogee-chris-coach/agent/codex-home");
+    const artifacts = path.join(home, ".octogee-codex-snapshots");
+    await fs.mkdir(artifacts, { recursive: true });
+    await fs.writeFile(path.join(home, "goals_1.sqlite"), "raw corrupt state");
+    await fs.writeFile(path.join(artifacts, "goals_1.sqlite.backup"), "bad snapshot");
+    await fs.writeFile(path.join(artifacts, "goals_1.sqlite.backup.json"), "{}");
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const { getStatus, getBody } = await finishImport(deps, migrationId);
+    expect(getStatus(), JSON.stringify(getBody())).toBe(200);
+    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("omitted optional database"));
+    await expect(fs.access(path.join(importDir, "agents/octogee-chris-coach/agent/codex-home/goals_1.sqlite"))).rejects.toThrow();
+  });
 
   it("rejects a carried workspace store that does not open instead of delivering it", async () => {
     const importDir = await mkTempRoot();

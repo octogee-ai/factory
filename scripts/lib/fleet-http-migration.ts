@@ -11,6 +11,7 @@ import type { Request, Response, RequestHandler } from "express";
 import { findUnsafeCustomerGitMetadataEntry } from "@octogee/core/git-metadata";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { CODEX_SNAPSHOT_EXCLUDE_ARG, CODEX_STORE_EXCLUDE_ARGS, discardCodexStoreSnapshots, installCodexStoreSnapshots, isCodexDatabase, omitRawCodexDatabases, prepareCodexStoreSnapshots } from "./codex-store-snapshot.js";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -1372,7 +1373,7 @@ async function copyStageToOpenClaw(
   }
   await runSpawnChecked(
     RSYNC_BIN,
-    ["-a", ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
+    ["-a", ...CODEX_STORE_EXCLUDE_ARGS, CODEX_SNAPSHOT_EXCLUDE_ARG, ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
     { label: "rsync import copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS },
   );
   if (baselineEntries) return;
@@ -1717,6 +1718,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),
           run: deps.runOpenClaw,
+          log,
         }));
       }
 
@@ -1810,7 +1812,9 @@ async function validateStagedRsyncImport(
   if (liveStores.length > 0) {
     return `carried live agent database files instead of snapshots: ${liveStores.join(", ")}`;
   }
-  const staged = (await listSqliteStores(session.stageDir)).filter((store) => !isAgentSnapshotArtifact(store));
+  await omitRawCodexDatabases(session.stageDir, log);
+  const staged = (await listSqliteStores(session.stageDir)).filter((store) => !isAgentSnapshotArtifact(store) &&
+    !isCodexDatabase(path.relative(session.stageDir, store).split(path.sep).join("/")));
   const unreadable = await findUnreadableStore({ storePaths: staged, relativeTo: session.stageDir });
   if (unreadable) {
     return `carried agent store ${unreadable.path} does not open: ${unreadable.message}`;
@@ -1978,17 +1982,25 @@ async function deliverStagedImport(input: {
     })
     : null;
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
-  await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, {
-    baselineEntries: session.baselineEntries,
-    deferAgentState,
-  });
-  if (!prepared || deferAgentState) return;
-  await installPreparedAgentStores({
-    prepared,
-    releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log),
-    procRoot: deps.procRoot ?? PROC_ROOT,
-    log,
-  });
+  const codex = input.mode !== "keys" && !deferAgentState
+    ? await prepareCodexStoreSnapshots(session.stageDir, log)
+    : null;
+  try {
+    await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, {
+      baselineEntries: session.baselineEntries,
+      deferAgentState,
+    });
+    if (!prepared || deferAgentState) return;
+    await installPreparedAgentStores({
+      prepared,
+      releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log),
+      procRoot: deps.procRoot ?? PROC_ROOT,
+      log,
+    });
+    await installCodexStoreSnapshots({ prepared: codex, importDir: session.importDir, procRoot: deps.procRoot ?? PROC_ROOT, log, signal: input.signal });
+  } finally {
+    await discardCodexStoreSnapshots(codex, log);
+  }
 }
 
 async function finishTargetPreparation(

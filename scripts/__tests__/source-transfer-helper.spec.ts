@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { admitSourceTree, parseSourceTransferRequest, sharedMigrationAgentIds, sourcesForPushMode } from '../lib/source-transfer-plan.js';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
@@ -36,11 +37,28 @@ it('rejects owned directory symlinks instead of silently omitting archived state
  await fs.symlink('/tmp', path.join(state, 'agents/octogee-alice-proj-weekend-coach'));
  expect(() => sharedMigrationAgentIds(state, 'alice')).toThrow();
 });
-it('plans and finishes only owned state with a genuine activation manifest', async () => {
+it('does not charge excluded Codex database bytes to mandatory state but still rejects symlinks', async () => {
+ const state = await root();
+ const agent = 'agents/octogee-alice-coach';
+ const home = path.join(state, agent, 'agent/codex-home');
+ await fs.mkdir(home, { recursive: true });
+ await fs.writeFile(path.join(home, 'goals_1.sqlite'), 'large optional state');
+ await fs.writeFile(path.join(home, 'goals_1.sqlite-wal'), 'journal');
+ await fs.writeFile(path.join(home, 'config.toml'), 'keep');
+ expect(await admitSourceTree(state, 'alice', [{ cwd: state, path: agent }], { maxBytes: 4 })).toMatchObject({ bytes: 4, files: 1 });
+ await fs.symlink('/tmp', path.join(home, 'state_5.sqlite'));
+ await expect(admitSourceTree(state, 'alice', [{ cwd: state, path: agent }])).rejects.toThrow();
+});
+it('plans and finishes owned state with a genuine activation manifest and optional Codex snapshots', async () => {
  const state = await root();
  const scratch = await fs.mkdtemp('/tmp/octogee-source-transfer-'); roots.push(scratch);
  await fs.mkdir(path.join(state, 'customers/alice'), { recursive: true });
  await fs.writeFile(path.join(state, 'customers/alice/file'), 'data');
+ const home = path.join(state, 'agents/octogee-alice-coach/agent/codex-home');
+ await fs.mkdir(home, { recursive: true });
+ const db = new DatabaseSync(path.join(home, 'goals_1.sqlite'));
+ db.exec("CREATE TABLE goals(value TEXT); INSERT INTO goals VALUES ('goal')");
+ db.close();
  await fs.writeFile(path.join(state, 'applied-fingerprints.json'), JSON.stringify({ alice: 'actual-applied-fingerprint' }));
  await fs.mkdir(path.join(state, 'secrets'));
  await fs.writeFile(path.join(state, 'secrets/mattermost-accounts.json'), JSON.stringify({ 'alice-coach': 'synthetic-token' }));
@@ -51,6 +69,8 @@ it('plans and finishes only owned state with a genuine activation manifest', asy
  await prepareSourceTransferStage('finish', scratch, request.executionId, request.sourcePodUid, state);
  const transfer = JSON.parse(await fs.readFile(path.join(scratch, 'transfer.json'), 'utf8'));
  expect(transfer.args).toContain(`${state}/./customers/alice`);
+ expect(transfer.args).toContain(`${scratch}/snapshots/./agents/octogee-alice-coach/agent/codex-home/.octogee-codex-snapshots`);
+ expect(await fs.stat(path.join(scratch, 'snapshots/agents/octogee-alice-coach/agent/codex-home/.octogee-codex-snapshots/goals_1.sqlite.backup'))).toBeTruthy();
  expect(transfer.args.join(' ')).not.toContain(request.transferKey);
  expect(await fs.readFile(path.join(scratch, 'rsync.pass'), 'utf8')).toBe(`${request.transferKey}\n`);
  expect((await fs.stat(path.join(scratch, 'rsync.pass'))).mode & 0o777).toBe(0o600);
