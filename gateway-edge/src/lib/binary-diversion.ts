@@ -231,7 +231,7 @@ async function divertBinaryEntry(
       throw new Error(`${stats.size} bytes exceeds the blob limit`);
     }
     const cacheKey = JSON.stringify([customerDir, target.gcsPrefix, relativePath]);
-    if (reuseRetainedSnapshot(cacheKey, stats, options)) return null;
+    if (reuseRetainedSnapshot(cacheKey, stats, options)) return { path: relativePath, size: stats.size };
     const contents = await confined.handle.readFile();
     const afterRead = await confined.handle.stat();
     assertStableRead(contents, stats, afterRead);

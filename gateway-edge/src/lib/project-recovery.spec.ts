@@ -36,6 +36,14 @@ it("restores text and the matching immutable asset after losing the working set,
   for(const n of [1,2]){
     const body=Buffer.from([0,1,2,n]);await writeFile(path.join(dir,"asset.bin"),body);await writeFile(path.join(dir,"README.md"),`revision ${n}\n`);
     expect(await persistBuilderProjects({root:customers,slug:"alice"},deps)).toEqual({projects:1});
+    for (let save = 0; save < 2; save++) {
+      const head = git(dir,"rev-parse","HEAD");
+      const uploads = store.mock.calls.length;
+      expect(await persistBuilderProjects({root:customers,slug:"alice"},deps)).toEqual({projects:1});
+      expect(git(dir,"ls-files")).not.toContain("asset.bin");
+      expect(git(dir,"rev-parse","HEAD")).toBe(head);
+      expect(store).toHaveBeenCalledTimes(uploads);
+    }
     expect(await readFile(path.join(dir,"asset.bin"))).toEqual(body);
     const sha=git(dir,"rev-parse","HEAD");
     expect(git(root,"--git-dir",remote,"rev-parse","refs/heads/main")).toBe(sha);

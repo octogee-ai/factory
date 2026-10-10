@@ -96,8 +96,10 @@ describe("divertWorktreeBinaries", () => {
     const d = deps([{ path: "asset.png", change: "untracked" }], store);
     await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
     vi.mocked(d.gitStatus).mockResolvedValue({ ok: true, entries: [] });
-    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
-    await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true });
+    for (let save = 0; save < 2; save++) {
+      expect((await divertWorktreeBinaries(dir, target, d, { retainLocalFiles: true })).diverted)
+        .toEqual([{ path: "asset.png", size: 2 }]);
+    }
     expect(payloadReads).toBe(1);
     const before = await lstat(binary);
     await writeFile(binary, Buffer.from([0, 2]));
