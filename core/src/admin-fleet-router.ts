@@ -4103,6 +4103,7 @@ function isEndpointPreflightError(error: string, operationInput: GlmDoc): boolea
   const { fromGatewayId, toGatewayId } = operationInput;
   const preflightPrefix = [
     `source gateway ${fromGatewayId} is not migration-ready (`,
+    `source gateway ${fromGatewayId} has no durable placement`,
     `target gateway ${toGatewayId} is not migration-ready (`,
     `target gateway ${toGatewayId} has no durable placement`,
     `placement rejected for ${toGatewayId}: `,
