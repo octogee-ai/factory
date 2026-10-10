@@ -130,6 +130,7 @@ interface GatewayRuntimeStampInput {
   gatewayClass: string | null | undefined;
   sizingTier?: SizingTier | null;
   vmSpec: GatewayVmSpec | null;
+  assertStorage?: (runtime: GatewayRuntime) => Promise<void>;
   log: (msg: string) => void;
 }
 
@@ -150,6 +151,7 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
   const data = runtimeRecord(snap.data());
   validateRuntimeObservation(data, input.gatewayId);
   if (isGatewayRuntime(data.runtime)) {
+    await input.assertStorage?.(data.runtime);
     await reconcileStampedVmSpec(input, data);
     return data.runtime;
   }
@@ -157,6 +159,7 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
   const computer = input.gatewayClass === "builder" && !deployedCluster ? resolveBuilderComputerPolicy(input.sizingTier) : null;
   const runtime: GatewayRuntime = computer?.runtime ?? "cluster";
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
+  await input.assertStorage?.(runtime);
   await ref.set({ runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec, machineType: computer?.machineType, homeDiskSizeGb: computer?.homeSizeGiB } } : {}) }, { merge: true });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;

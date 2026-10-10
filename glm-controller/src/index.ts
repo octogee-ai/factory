@@ -1313,18 +1313,18 @@ async function upsertGateway(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
   );
-  const selectedRuntime = await stampGatewayRuntime({
+  await stampGatewayRuntime({
     db,
     gatewayId: gateway.gatewayId,
     gatewayClass: gateway.gatewayClass,
     sizingTier: gateway.sizingTier,
     vmSpec: BUILDER_VM_SPEC,
+    assertStorage: gateway.gatewayClass === "builder" && replicas > 0
+      ? (runtime) => assertBuilderRuntimeStorage({ db, runtime, ownerUid: gateway.ownerUid,
+          builderSlug: gateway.builderSlug, namespace: NAMESPACE, runKubectl: spawnKubectl })
+      : undefined,
     log,
   });
-  if (gateway.gatewayClass === "builder" && replicas > 0) {
-    await assertBuilderRuntimeStorage({ db, runtime: selectedRuntime, ownerUid: gateway.ownerUid,
-      builderSlug: gateway.builderSlug, namespace: NAMESPACE, runKubectl: spawnKubectl });
-  }
   await db
     .collection(GLM_GATEWAYS_COLLECTION)
     .doc(gateway.gatewayId)

@@ -1219,6 +1219,20 @@ describe("runtime policy and stamping", () => {
     expect(docs["glmGateways/b-new"]).toEqual(runtime === "cluster" ? { runtime } : { runtime, vmSpec: { ...spec, machineType, homeDiskSizeGb } });
   });
 
+  it.each([
+    { existing: undefined, sizingTier: "s", expectedRuntime: "cluster" },
+    { existing: undefined, sizingTier: "m", expectedRuntime: "gce-vm" },
+    { existing: { runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2", homeDiskSizeGb: 50 } }, sizingTier: "l", expectedRuntime: "gce-vm" },
+  ] as const)("rejects storage preflight before stamping or resizing $expectedRuntime", async ({ existing, sizingTier, expectedRuntime }) => {
+    const { db, docs, writes } = fakeDb(existing ? { "glmGateways/b-x": existing } : {});
+    const before = structuredClone(docs);
+    const assertStorage = vi.fn(async () => { throw new Error("storage migration required"); });
+    await expect(stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier, vmSpec: spec, assertStorage, log: vi.fn() })).rejects.toThrow("storage migration required");
+    expect(assertStorage).toHaveBeenCalledExactlyOnceWith(expectedRuntime);
+    expect(writes).toEqual([]);
+    expect(docs).toEqual(before);
+  });
+
   it("updates desired VM capacity from persisted Pro to Team and back without changing runtime", async () => {
     const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2" } } });
     await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log: vi.fn() });

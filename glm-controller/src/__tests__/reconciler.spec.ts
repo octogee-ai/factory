@@ -707,6 +707,29 @@ describe("gateway convergence pass outcomes", () => {
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
 
+  it("keeps a rejected storage preflight from poisoning later fleet reconciliation", async () => {
+    const roots = {
+      blocked: durableRoot({ gatewayId: "blocked", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
+      healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
+    };
+    const runtimes: Record<string, Record<string, unknown>> = {};
+    const db = makeDb({ roots, runtimes, callbacks: {},
+      users: { u: { provisioning: { computer: { id: "retained-computer" } } } },
+      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])),
+    });
+    const helm = { upsertInstance: vi.fn(async () => {}), readDeployedInstances: vi.fn(async () => ({})) };
+    const deps = { db, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+      prepareGatewayConfig: vi.fn(async (config: any) => config),
+      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      helm.upsertInstance.mockClear();
+      await expect(runGatewayConvergencePass(deps)).rejects.toThrow("Retained GCE computer state requires an explicit storage migration");
+      expect(runtimes.blocked).toBeUndefined();
+      expect(helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "healthy" }));
+    }
+  });
+
   it("holds same-release stale Helm intent until native restore acknowledges customer custody", async () => {
     const h = retainedGateway();
     const intent = await beginCustomerRestore(h.stateDeps, { uid: "u", slug: "alice", gatewayId: "shared-1",
