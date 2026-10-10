@@ -2000,7 +2000,7 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
 });
 
  it("preserves the cluster owner home through a Hobby tier upgrade", async () => {
-   const ensureHobbyHome = vi.fn(async () => "home-copy-second-home");
+   const ensureHobbyHome = vi.fn(async () => ({ name: "home-copy-second-home", zone: "us-central1-c" }));
    const { runHelm } = mockSubprocess([{ stdout: "ok" }, { stdout: "ok" }, { stdout: "ok" }]);
    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ensureHobbyHome });
    const opts = { namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder" as const, ownerUid: "UidA", builderSlug: "builder", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" };
@@ -2010,5 +2010,5 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
    await runner.upsertInstance({ ...opts, sizingTier: "m" });
    expect(ensureHobbyHome).toHaveBeenLastCalledWith({ namespace: "octogee", ownerUid: "UidA", builderSlug: "builder", sizeGiB: 50 });
    expect(ensureHobbyHome).toHaveBeenCalledTimes(2);
-   expect(runHelm.mock.calls.filter(([args])=>args.includes("upgrade")).every(([args])=>args.includes("builderHomeClaimName=home-copy-second-home"))).toBe(true);
+   expect(runHelm.mock.calls.filter(([args])=>args.includes("upgrade")).every(([args])=>args.includes("builderHomeClaimName=home-copy-second-home") && args.includes("builderHomeZone=us-central1-c"))).toBe(true);
  });

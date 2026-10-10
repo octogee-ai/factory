@@ -261,7 +261,7 @@ import {
   customerMigrationV2GatewayRootFence,
   isCustomerMigrationV2Transition,
 } from "@octogee/core/customer-migration-v2";
-import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner } from "./lib/migration-rsync-transfer.js";
+import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
 import {
   beginCustomerRestore,
   acknowledgeCustomerRestore,
@@ -3251,7 +3251,7 @@ async function buildHandlers(
         },
       );
     },
-    resolveGatewayUrl: (gatewayId) => resolveGatewayUrlFromFirestore(db, gatewayId),
+    resolveGatewayUrl: (gatewayId, options) => resolveGatewayUrlFromFirestore(db, gatewayId, options),
     observeSourceTransfer: async (op) => {
       const fresh = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(op.id).get()).data() as Operation | undefined;
       if (!fresh?.customerMigrationV2) return undefined;
@@ -4268,12 +4268,18 @@ export async function callUnmountRpc(
 async function resolveGatewayUrlFromFirestore(
   db: Firestore,
   gatewayId: string,
+  options?: { allowUnready: boolean },
 ): Promise<string> {
   const doc = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
   const runtime = doc.exists ? doc.data() : undefined;
   if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
     throw new Error(`gateway not registered in glmGateways: ${gatewayId}`);
   }
+  if (options?.allowUnready) return resolveMigrationRecoveryUrl({
+    namespace: NAMESPACE, gatewayId, port: FLEET_CONTROLLER_PORT,
+    runCommand: createSubprocessCommandRunner(),
+    resolveGatewayVm: async () => gatewayVmAddress(runtime),
+  });
   return gatewayFleetBaseUrl({ runtimeDoc: runtime, gatewayId, namespace: NAMESPACE, port: FLEET_CONTROLLER_PORT });
 }
 

@@ -6,6 +6,7 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import {
   createRsyncMigrationTransfer,
   migrationTransferTaskId,
+  resolveMigrationRecoveryUrl,
   type CommandRunner,
 } from "../lib/migration-rsync-transfer";
 
@@ -15,6 +16,33 @@ const SOURCE_POD_IP = ["10", "1", "0", "10"].join(".");
 const TARGET_POD_IP = ["10", "1", "0", "20"].join(".");
 const IPV6_TARGET_POD_IP = "fd00::20";
 const FLEET_CONTROLLER_PORT = "3003";
+
+describe("migration recovery transport", () => {
+  it("reaches a held target directly even while its Service excludes it", async () => {
+    const runCommand: CommandRunner = async (command, args) => {
+      expect(command).toBe("kubectl");
+      expect(args).toEqual(["-n", "octogee-test", "get", "pods", "-l", "app=octogee-gateway,gateway-instance=alice-s-target", "-o", "json"]);
+      return { code: 0, stderr: "", stdout: await runningPod("target", false, IPV6_TARGET_POD_IP).text() };
+    };
+    await expect(resolveMigrationRecoveryUrl({ namespace: "octogee-test", gatewayId: "alice-s-target", port: FLEET_CONTROLLER_PORT,
+      runCommand, resolveGatewayVm: async () => null,
+    })).resolves.toBe(`http://[${IPV6_TARGET_POD_IP}]:3003`);
+  });
+
+  it("refuses an ambiguous set of held target pods", async () => {
+    const pod = { metadata: { name: "target" }, status: { phase: "Running", podIP: TARGET_POD_IP } };
+    await expect(resolveMigrationRecoveryUrl({ namespace: "octogee-test", gatewayId: "alice-s-target", port: FLEET_CONTROLLER_PORT,
+      runCommand: async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ items: [pod, pod] }) }), resolveGatewayVm: async () => null,
+    })).rejects.toThrow("expected exactly one ready pod");
+  });
+
+  it("uses a native target's recorded address without selecting cluster pods", async () => {
+    await expect(resolveMigrationRecoveryUrl({ namespace: "octogee-test", gatewayId: "alice-m-target", port: FLEET_CONTROLLER_PORT,
+      runCommand: async () => { throw new Error("must not select cluster pods"); },
+      resolveGatewayVm: async () => ({ instanceName: "native-target", internalIp: "172.20.0.9" }),
+    })).resolves.toBe("http://172.20.0.9:3003");
+  });
+});
 
 function makeDb(store: Store): Firestore {
   const docFor = (collection: string, id: string) => ({

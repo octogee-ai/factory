@@ -80,6 +80,36 @@ describe("fleet controller port surface", () => {
     expect(JSON.stringify(body)).not.toContain(GATEWAY_ID);
   });
 
+  it.each([
+    ["fresh held boot", "normal", "held", "held", "pod-uid-1", false],
+    ["hydrated reservation", "target", "held", "held", "pod-uid-1", true],
+    ["running process", "normal", "permitted", "running", "pod-uid-1", true],
+    ["another pod", "normal", "held", "held", "old-pod", true],
+  ])("publishes the mount proof appropriate to %s", async (_name, role, mode, phase, podUid, expectedMounted) => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "jack");
+    let mounted = true;
+    const clearMountMarker = vi.fn(() => { mounted = false; });
+    const opts = controllerOpts();
+    opts.adapter = {
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: (slug: string) => slug === "jack",
+      configuredBuilderOverlayPresent: () => true,
+      listLocalCustomerSlugs: () => ["jack"],
+      hasWorkspaceGitDir: () => true,
+      hasGitRemote: () => true,
+      customerMountMarked: () => mounted,
+      clearMountMarker,
+    } as unknown as CustomerLifecycleAdapter;
+    opts.surgeOpenClawProcessGate = {
+      status: async () => ({ version: 1, podUid, role, mode, phase }),
+    } as unknown as NonNullable<StartFleetOptions["surgeOpenClawProcessGate"]>;
+    controller = await startFleetController(opts);
+    const response = await signedFleetStateRequest(controller.port, { requestId: "retained-home", gatewayId: GATEWAY_ID });
+    expect(response.status).toBe(200);
+    expect((await response.json()).customers).toEqual(expectedMounted ? ["jack"] : []);
+    expect(clearMountMarker).toHaveBeenCalledTimes(expectedMounted ? 0 : 1);
+  });
+
   it("serves the roster only to a fleet-controller-signed request", async () => {
     controller = await startFleetController(controllerOpts());
 

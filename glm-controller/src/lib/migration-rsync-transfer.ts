@@ -397,6 +397,23 @@ function podBaseUrl(podIP: string, port: string): string {
   return `http://${host}:${port}`;
 }
 
+export async function resolveMigrationRecoveryUrl(params: {
+  namespace: string;
+  gatewayId: string;
+  port: string;
+  runCommand: CommandRunner;
+  resolveGatewayVm: (gatewayId: string) => Promise<GatewayVmAddress | null>;
+}): Promise<string> {
+  const target = await resolveGatewayEndpoint({
+    namespace: params.namespace,
+    transportId: params.gatewayId,
+    runCommand: params.runCommand,
+    requireReady: false,
+    resolveGatewayVm: params.resolveGatewayVm,
+  });
+  return podBaseUrl(target.podIP, params.port);
+}
+
 function requireTargetCertificate(prepared: PrepareRsyncImportResponse, target: string): string {
   if (typeof prepared.certificatePem !== "string" || prepared.certificatePem.length === 0) {
     throw new Error(`target ${target} did not return a migration TLS certificate`);

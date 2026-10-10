@@ -583,14 +583,6 @@ function millisFromUnknown(value) {
 }
 function recoveryOperationMatches(operation, params) {
     const input = recordOrEmpty(operation?.input);
-    const recordedLease = input.disposableLease === null
-        ? null
-        : recordOrEmpty(input.disposableLease);
-    const leaseMatches = params.disposableLease
-        ? recordedLease !== null &&
-            recordedLease.leaseId === params.disposableLease.leaseId &&
-            recordedLease.generation === params.disposableLease.generation
-        : recordedLease === null;
     const operationMatches = [
         operation?.kind === MIGRATE_CUSTOMER_OPERATION_KIND,
         operation?.status === "succeeded",
@@ -605,7 +597,7 @@ function recoveryOperationMatches(operation, params) {
         input.toGatewayId === params.toGatewayId,
         input.sourceEpoch === params.expectedSourceEpoch,
     ].every(Boolean);
-    return leaseMatches && operationMatches;
+    return operationMatches;
 }
 function recoveryAlreadyCommitted(input) {
     const openclaw = recordOrEmpty(recordOrEmpty(input.user?.provisioning).openclaw);
@@ -629,7 +621,6 @@ function recoveryAlreadyCommitted(input) {
         input.operation?.startedAt === operationAt,
         input.targetAssignment?.updatedAt === operationAt,
     ].every(Boolean);
-    const disposableLeaseExact = returningLeaseMatches(openclaw, input.params, operationAt);
     return [
         recoveryOperationMatches(input.operation, input.params),
         !input.sourceAssignmentExists,
@@ -639,46 +630,8 @@ function recoveryAlreadyCommitted(input) {
         openclaw.controlUiEnabled === controlState.controlUiEnabled,
         targetAssignmentExact,
         operationTimingExact,
-        disposableLeaseExact,
-        runtimeResetMatches(openclaw, input.params, operationAt),
+        openclaw.runtimeReset === undefined,
     ].every(Boolean);
-}
-function returningLeaseMatches(openclaw, params, operationAt) {
-    if (!params.disposableLease)
-        return true;
-    const lease = recordOrEmpty(openclaw.activationLease);
-    return [
-        lease.leaseId === params.disposableLease.leaseId,
-        lease.generation === params.disposableLease.generation,
-        lease.status === "returning",
-        lease.targetGatewayId === params.fromGatewayId,
-        lease.returnReason === "source-unavailable",
-        lease.returnOperationId === params.operationId,
-        lease.returningAt === operationAt,
-    ].every(Boolean);
-}
-function disposableRuntimeReset(params, requestedAt) {
-    if (params.kind !== "recover-disposable-customer" || !params.disposableLease)
-        return null;
-    return {
-        status: "pending",
-        uid: params.uid,
-        slug: params.slug,
-        operationId: params.operationId,
-        sourceGatewayId: params.fromGatewayId,
-        targetGatewayId: params.toGatewayId,
-        generation: params.expectedSourceEpoch + 1,
-        disposableLeaseId: params.disposableLease.leaseId,
-        disposableLeaseGeneration: params.disposableLease.generation,
-        requestedAt,
-    };
-}
-function runtimeResetMatches(openclaw, params, operationAt) {
-    const expected = operationAt === null ? null : disposableRuntimeReset(params, operationAt);
-    if (expected === null)
-        return openclaw.runtimeReset === undefined;
-    const actual = recordOrEmpty(openclaw.runtimeReset);
-    return Object.entries(expected).every(([key, value]) => actual[key] === value);
 }
 function recoveryTargetRootReady(root, params) {
     if (root === null)
@@ -736,44 +689,16 @@ function assertSharedRecoverySource(root, params) {
         root.gatewayClass !== "shared",
         root.desiredStatus !== "running",
         !params.sharedGatewayIds.includes(params.fromGatewayId),
-        params.disposableLease !== undefined,
     ].some(Boolean);
     if (invalid)
         throw new Error("shared gateway recovery source is not an active pool member");
-}
-function disposableRecoveryLease(root, openclaw, params) {
-    if (!params.disposableLease) {
-        throw new Error("disposable gateway recovery lease or allocation changed before cutover");
-    }
-    const lease = recordOrEmpty(openclaw.activationLease);
-    const allocation = recordOrEmpty(root.allocation);
-    const exact = [
-        root.gatewayClass !== "shared",
-        root.ownerUid === params.uid,
-        allocation.kind === "disposable-builder",
-        allocation.claimedByUid === params.uid,
-        allocation.leaseId === params.disposableLease.leaseId,
-        allocation.generation === params.disposableLease.generation,
-        lease.leaseId === params.disposableLease.leaseId,
-        lease.generation === params.disposableLease.generation,
-        lease.status === "active",
-        lease.targetGatewayId === params.fromGatewayId,
-    ].every(Boolean);
-    if (!exact) {
-        throw new Error("disposable gateway recovery lease or allocation changed before cutover");
-    }
-    return lease;
 }
 function assertRecoverySource(input) {
     const { params, sourceRootData, user, sourceAssignment } = input;
     const root = projectGatewayDesiredRootForGateway(sourceRootData, params.fromGatewayId);
     const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
     assertRecoverySourceIdentity(root, openclaw, sourceAssignment, params);
-    if (params.kind === "recover-shared-customer") {
-        assertSharedRecoverySource(root, params);
-        return null;
-    }
-    return disposableRecoveryLease(root, openclaw, params);
+    assertSharedRecoverySource(root, params);
 }
 function clearRecoveredSourceMount(input) {
     const runtimeData = input.sourceRuntimeSnapshot.exists
@@ -790,6 +715,9 @@ function clearRecoveredSourceMount(input) {
     });
 }
 export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
+    if (params.kind !== "recover-shared-customer") {
+        throw new Error("Builder recovery requires its retained home; metadata-only recovery is forbidden");
+    }
     if (!params.operationId ||
         !Number.isSafeInteger(params.expectedSourceEpoch) ||
         params.expectedSourceEpoch < 0 ||
@@ -850,7 +778,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
             targetRoot: targetRootSnapshot.data(),
             targetRuntime: targetRuntimeSnapshot.data(),
         });
-        const lease = assertRecoverySource({
+        assertRecoverySource({
             params,
             sourceRootData: sourceRootSnapshot.exists ? sourceRootSnapshot.data() : undefined,
             user,
@@ -872,20 +800,6 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
             "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
             "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
             [WORKSPACE_MIGRATION_MARKER_PATH]: deps.deleteField(),
-            ...(disposableRuntimeReset(params, nowMs)
-                ? { "provisioning.openclaw.runtimeReset": disposableRuntimeReset(params, nowMs) }
-                : {}),
-            ...(lease
-                ? {
-                    "provisioning.openclaw.activationLease": {
-                        ...lease,
-                        status: "returning",
-                        returnReason: "source-unavailable",
-                        returnOperationId: params.operationId,
-                        returningAt: nowMs,
-                    },
-                }
-                : {}),
         });
         txn.set(targetAssignmentRef, {
             uid: params.uid,
@@ -913,7 +827,6 @@ export async function commitUnavailableGatewayRecoveryAtomic(deps, params) {
                 fromGatewayId: params.fromGatewayId,
                 toGatewayId: params.toGatewayId,
                 sourceEpoch: params.expectedSourceEpoch,
-                disposableLease: params.disposableLease ?? null,
             },
             steps: [],
             gatewayId: params.toGatewayId,

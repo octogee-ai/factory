@@ -108,7 +108,7 @@ export interface MigrateCustomerDeps {
 
   commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
-  resolveGatewayUrl: (gatewayId: string) => Promise<string>;
+  resolveGatewayUrl: (gatewayId: string, options?: { allowUnready: boolean }) => Promise<string>;
 
   buildClient: (resolveSync: (gatewayId: string) => string, retainedSource?: RetainedSourceContext) => MigrationClient;
   observeSourceTransfer?: (op: Operation) => Promise<SourceTransferExecution | undefined>;
@@ -1582,7 +1582,7 @@ async function abortSharedTargetLeftovers(
   slug: string,
   targetGatewayId: string,
 ): Promise<void> {
-  const targetUrl = await deps.resolveGatewayUrl(targetGatewayId);
+  const targetUrl = await deps.resolveGatewayUrl(targetGatewayId, { allowUnready: true });
   const target = deps.buildClient(() => targetUrl);
   for (const mode of ["keys", "pre", "final"] as const) {
     await target.abortImport({ migrationId: deps.genMigrationId(op.id), slug, gatewayId: targetGatewayId, mode });

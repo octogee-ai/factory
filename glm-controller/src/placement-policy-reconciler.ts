@@ -91,7 +91,7 @@ import type { BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import {
   advanceActivationLeaseFirestore,
   requestTierTransitionFirestore,
-  refreshRequestedTierFirestore,
+  refreshRequestedAllocationFirestore,
   allocateDisposableGatewayFirestore,
   completeActivationLeaseFirestore,
   failActivationLeaseFirestore,
@@ -562,30 +562,6 @@ function knownKubernetesUnavailable(gateway: PlacementPolicyGateway | undefined)
   return gateway?.kubernetesStatus === "missing" || gateway?.kubernetesStatus === "not-ready";
 }
 
-function bootingDisposableBuilderStartupFence(
-  gateway: PlacementPolicyGateway,
-  now: number,
-): string | null {
-  const runtimeStartedAt = typeof gateway.runtimeStartedAt === "number" &&
-    Number.isFinite(gateway.runtimeStartedAt)
-    ? gateway.runtimeStartedAt
-    : null;
-  const runtimeAge = runtimeStartedAt === null ? null : now - runtimeStartedAt;
-  const bootingDisposableBuilder = [
-    gateway.gatewayClass === "builder",
-    gateway.disposable,
-    gateway.kubernetesStatus === "not-ready",
-    gateway.serving === true,
-    gateway.runtimeStatus === "booting",
-    gateway.heartbeatFresh === true,
-    gateway.liveReleaseReady === true,
-  ].every(Boolean) && runtimeAge !== null &&
-    runtimeAge >= 0 && runtimeAge < DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS;
-  return bootingDisposableBuilder
-    ? `disposable Builder source ${gateway.gatewayId} is still booting OpenClaw`
-    : null;
-}
-
 function transientSharedRecoveryFence(
   context: PlacementPolicyReconcileContext,
   gateway: PlacementPolicyGateway,
@@ -612,14 +588,6 @@ function transientSharedRecoveryFence(
     return `shared source ${gateway.gatewayId} is inside its post-change recovery grace`;
   }
   return null;
-}
-
-function transientRecoveryFence(
-  context: PlacementPolicyReconcileContext,
-  gateway: PlacementPolicyGateway,
-): string | null {
-  return bootingDisposableBuilderStartupFence(gateway, context.deps.now()) ??
-    transientSharedRecoveryFence(context, gateway);
 }
 
 function gatewayRuntimeServing(gateway: PlacementPolicyGateway): boolean {
@@ -1071,9 +1039,10 @@ async function reconcileUnavailableServingGateway(
   currentGatewayId: string | null,
 ): Promise<boolean> {
   const source = currentGatewayId ? context.gateways.get(currentGatewayId) : null;
-  if (!source || !knownKubernetesUnavailable(source)) return false;
+  if (!source || source.gatewayClass !== "shared" ||
+    !isSharedPoolGateway(context, source.gatewayId) || !knownKubernetesUnavailable(source)) return false;
 
-  const transientFence = transientRecoveryFence(context, source);
+  const transientFence = transientSharedRecoveryFence(context, source);
   if (transientFence) {
     blockPlacement(context, {
       uid: user.uid,
@@ -1095,27 +1064,20 @@ async function reconcileUnavailableServingGateway(
     return true;
   }
 
-  const lease = builderActivationLease(user.data);
-  const kind = unavailableRecoveryKind(context, source, user, lease);
-  if (!kind) return false;
-
   const targetGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration", source.gatewayId);
   if (!targetGatewayId) {
-    await scheduleRollingSharedPeerRecovery(context, source, kind);
+    await scheduleRollingSharedPeerRecovery(context, source);
     blockPlacement(context, {
       uid: user.uid,
-      lease: lease ?? undefined,
       code: NO_ACCEPTING_SHARED_GATEWAY,
       reason: `source ${source.gatewayId} has known Kubernetes status ${source.kubernetesStatus}`,
     });
     return true;
   }
-  const operationId = kind === "recover-shared-customer"
-    ? `recover-shared-${user.uid}-${source.gatewayId}-${assignment.epoch}`
-    : `recover-disposable-${user.uid}-${source.gatewayId}-${assignment.epoch}`;
+  const operationId = `recover-shared-${user.uid}-${source.gatewayId}-${assignment.epoch}`;
   await context.deps.recoverUnavailableGateway({
     operationId,
-    kind,
+    kind: "recover-shared-customer",
     uid: user.uid,
     slug: builderSlug,
     fromGatewayId: source.gatewayId,
@@ -1123,9 +1085,6 @@ async function reconcileUnavailableServingGateway(
     expectedSourceEpoch: assignment.epoch,
     sharedGatewayIds: context.state.sharedGatewayIds,
     targetHeartbeatMaxAgeMs: GATEWAY_UNREACHABLE_AFTER_MS,
-    ...(kind === "recover-disposable-customer"
-      ? { disposableLease: { leaseId: lease!.leaseId, generation: lease!.generation } }
-      : {}),
   });
   projectSharedGatewayPlacement(context, targetGatewayId);
   return true;
@@ -1134,9 +1093,7 @@ async function reconcileUnavailableServingGateway(
 async function scheduleRollingSharedPeerRecovery(
   context: PlacementPolicyReconcileContext,
   source: PlacementPolicyGateway,
-  kind: UnavailableGatewayRecoveryParams["kind"],
 ): Promise<void> {
-  if (kind !== "recover-shared-customer") return;
   if (source.kubernetesStatus !== "missing") return;
   const peerRoll = rollingSharedGatewayForUnavailableRecovery(context, source.gatewayId);
   if (!peerRoll || context.supersededSharedGatewayIds.has(peerRoll.targetGatewayId)) return;
@@ -1153,21 +1110,6 @@ async function scheduleRollingSharedPeerRecovery(
   } finally {
     context.supersededSharedGatewayIds.add(peerRoll.targetGatewayId);
   }
-}
-
-function unavailableRecoveryKind(
-  context: PlacementPolicyReconcileContext,
-  source: ContinuousPlacementOwnedGateway,
-  user: PlacementPolicyUser,
-  lease: BuilderActivationLease | null,
-): UnavailableGatewayRecoveryParams["kind"] | null {
-  if (isSharedPoolGateway(context, source.gatewayId) && source.gatewayClass === "shared") {
-    return "recover-shared-customer";
-  }
-  if (lease?.status !== "active") return null;
-  return disposableTargetIdentityMatchesLease(source, user, lease)
-    ? "recover-disposable-customer"
-    : null;
 }
 
 function authoritativeLeaseStatus(
@@ -2016,12 +1958,35 @@ async function reconcileActivationLease(
   return false;
 }
 
+function retainUnavailableActiveBuilder(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  current: string | null,
+): boolean {
+  const lease = builderActivationLease(user.data);
+  const source = current ? context.gateways.get(current) : null;
+  if (lease?.status === "active" && current === lease.targetGatewayId && source &&
+    disposableTargetIdentityMatchesLease(source, user, lease) &&
+    (source.desiredStatus !== "running" || !source.ready || knownKubernetesUnavailable(source))) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: source.desiredStatus === "paused" ? "builder-paused" : "builder-runtime-unavailable",
+      reason: `retaining Builder authority and home on ${source.gatewayId}; ` +
+        (source.desiredStatus === "paused" ? "waiting for resume" : "waiting for runtime recovery"),
+    });
+    return true;
+  }
+  return false;
+}
+
 async function reconcileEligibleBuilder(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
 ): Promise<void> {
   const current = currentGatewayId(user.data);
+  if (retainUnavailableActiveBuilder(context, user, current)) return;
   if (
     await reconcileRecoveredDisposableRuntimeReset(
       context,
@@ -3985,7 +3950,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     readSnapshot: () => readPlacementPolicySnapshot(input),
     assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
     allocateDisposableGateway: async (request) => {
-      if (await refreshRequestedTierFirestore(input, request)) return null;
+      if (await refreshRequestedAllocationFirestore(input, request)) return null;
       if (input.prepareBuilderHome && !await input.prepareBuilderHome(request)) return null;
       return allocateDisposableGatewayFirestore(input, request);
     },

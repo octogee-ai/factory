@@ -237,6 +237,7 @@ describe("abandoned Shared migration recovery", () => {
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
     if (scenario === "success" || scenario === "never-quiesced") {
       expect(result.rolledBack).toBe(true);
+      expect(h.deps.resolveGatewayUrl).toHaveBeenCalledWith(target, { allowUnready: true });
       expect(h.client.abortImport).toHaveBeenCalledTimes(3);
       if (scenario === "success") expect(h.client.resume).toHaveBeenCalledOnce();
       else expect(h.client.resume).not.toHaveBeenCalled();

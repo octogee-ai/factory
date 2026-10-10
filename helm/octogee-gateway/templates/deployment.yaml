@@ -3,6 +3,10 @@
 {{- $tier := include "octogee-gateway.effectiveTier" . -}}
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
+{{- $computeClass := required "computeClass is required for owner-bound gateways" .Values.computeClass -}}
+{{- if and (eq $gatewayClass "builder") .Values.builderHomeZone -}}
+{{- $computeClass = printf "%s-%s" $computeClass .Values.builderHomeZone -}}
+{{- end -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
 {{- $hobbyComputer := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
@@ -77,7 +81,7 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
       {{- if ne $gatewayClass "shared" }}
       nodeSelector:
-        cloud.google.com/compute-class: {{ required "computeClass is required for owner-bound gateways" .Values.computeClass | quote }}
+        cloud.google.com/compute-class: {{ $computeClass | quote }}
       {{- end }}
       {{- if eq $gatewayClass "shared" }}
       topologySpreadConstraints:

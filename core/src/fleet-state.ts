@@ -810,7 +810,7 @@ function updateAssignment(
 
 export interface UnavailableGatewayRecoveryParams {
   operationId: string;
-  kind: "recover-shared-customer" | "recover-disposable-customer";
+  kind: "recover-shared-customer";
   uid: string;
   slug: string;
   fromGatewayId: string;
@@ -819,10 +819,6 @@ export interface UnavailableGatewayRecoveryParams {
   sharedGatewayIds: readonly string[];
   targetHeartbeatMaxAgeMs: number;
   validateTarget?: (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void>;
-  disposableLease?: {
-    leaseId: string;
-    generation: number;
-  };
 }
 
 export interface UnavailableGatewayRecoveryTargetValidationContext {
@@ -855,14 +851,6 @@ function recoveryOperationMatches(
   params: UnavailableGatewayRecoveryParams,
 ): boolean {
   const input = recordOrEmpty(operation?.input);
-  const recordedLease = input.disposableLease === null
-    ? null
-    : recordOrEmpty(input.disposableLease);
-  const leaseMatches = params.disposableLease
-    ? recordedLease !== null &&
-      recordedLease.leaseId === params.disposableLease.leaseId &&
-      recordedLease.generation === params.disposableLease.generation
-    : recordedLease === null;
   const operationMatches = [
     operation?.kind === MIGRATE_CUSTOMER_OPERATION_KIND,
     operation?.status === "succeeded",
@@ -877,7 +865,7 @@ function recoveryOperationMatches(
     input.toGatewayId === params.toGatewayId,
     input.sourceEpoch === params.expectedSourceEpoch,
   ].every(Boolean);
-  return leaseMatches && operationMatches;
+  return operationMatches;
 }
 
 function recoveryAlreadyCommitted(input: {
@@ -915,7 +903,6 @@ function recoveryAlreadyCommitted(input: {
     input.operation?.startedAt === operationAt,
     input.targetAssignment?.updatedAt === operationAt,
   ].every(Boolean);
-  const disposableLeaseExact = returningLeaseMatches(openclaw, input.params, operationAt);
   return [
     recoveryOperationMatches(input.operation, input.params),
     !input.sourceAssignmentExists,
@@ -925,57 +912,8 @@ function recoveryAlreadyCommitted(input: {
     openclaw.controlUiEnabled === controlState.controlUiEnabled,
     targetAssignmentExact,
     operationTimingExact,
-    disposableLeaseExact,
-    runtimeResetMatches(openclaw, input.params, operationAt),
+    openclaw.runtimeReset === undefined,
   ].every(Boolean);
-}
-
-function returningLeaseMatches(
-  openclaw: Record<string, unknown>,
-  params: UnavailableGatewayRecoveryParams,
-  operationAt: number | null,
-): boolean {
-  if (!params.disposableLease) return true;
-  const lease = recordOrEmpty(openclaw.activationLease);
-  return [
-    lease.leaseId === params.disposableLease.leaseId,
-    lease.generation === params.disposableLease.generation,
-    lease.status === "returning",
-    lease.targetGatewayId === params.fromGatewayId,
-    lease.returnReason === "source-unavailable",
-    lease.returnOperationId === params.operationId,
-    lease.returningAt === operationAt,
-  ].every(Boolean);
-}
-
-function disposableRuntimeReset(
-  params: UnavailableGatewayRecoveryParams,
-  requestedAt: number,
-): Record<string, unknown> | null {
-  if (params.kind !== "recover-disposable-customer" || !params.disposableLease) return null;
-  return {
-    status: "pending",
-    uid: params.uid,
-    slug: params.slug,
-    operationId: params.operationId,
-    sourceGatewayId: params.fromGatewayId,
-    targetGatewayId: params.toGatewayId,
-    generation: params.expectedSourceEpoch + 1,
-    disposableLeaseId: params.disposableLease.leaseId,
-    disposableLeaseGeneration: params.disposableLease.generation,
-    requestedAt,
-  };
-}
-
-function runtimeResetMatches(
-  openclaw: Record<string, unknown>,
-  params: UnavailableGatewayRecoveryParams,
-  operationAt: number | null,
-): boolean {
-  const expected = operationAt === null ? null : disposableRuntimeReset(params, operationAt);
-  if (expected === null) return openclaw.runtimeReset === undefined;
-  const actual = recordOrEmpty(openclaw.runtimeReset);
-  return Object.entries(expected).every(([key, value]) => actual[key] === value);
 }
 
 function recoveryTargetRootReady(
@@ -1058,37 +996,8 @@ function assertSharedRecoverySource(
     root.gatewayClass !== "shared",
     root.desiredStatus !== "running",
     !params.sharedGatewayIds.includes(params.fromGatewayId),
-    params.disposableLease !== undefined,
   ].some(Boolean);
   if (invalid) throw new Error("shared gateway recovery source is not an active pool member");
-}
-
-function disposableRecoveryLease(
-  root: ProjectedGatewayRoot,
-  openclaw: Record<string, unknown>,
-  params: UnavailableGatewayRecoveryParams,
-): Record<string, unknown> {
-  if (!params.disposableLease) {
-    throw new Error("disposable gateway recovery lease or allocation changed before cutover");
-  }
-  const lease = recordOrEmpty(openclaw.activationLease);
-  const allocation = recordOrEmpty(root.allocation);
-  const exact = [
-    root.gatewayClass !== "shared",
-    root.ownerUid === params.uid,
-    allocation.kind === "disposable-builder",
-    allocation.claimedByUid === params.uid,
-    allocation.leaseId === params.disposableLease.leaseId,
-    allocation.generation === params.disposableLease.generation,
-    lease.leaseId === params.disposableLease.leaseId,
-    lease.generation === params.disposableLease.generation,
-    lease.status === "active",
-    lease.targetGatewayId === params.fromGatewayId,
-  ].every(Boolean);
-  if (!exact) {
-    throw new Error("disposable gateway recovery lease or allocation changed before cutover");
-  }
-  return lease;
 }
 
 function assertRecoverySource(input: {
@@ -1096,17 +1005,13 @@ function assertRecoverySource(input: {
   sourceRootData: Record<string, unknown> | undefined;
   user: Record<string, unknown> | undefined;
   sourceAssignment: Record<string, unknown> | undefined;
-}): Record<string, unknown> | null {
+}): void {
   const { params, sourceRootData, user, sourceAssignment } = input;
   const root = projectGatewayDesiredRootForGateway(sourceRootData, params.fromGatewayId);
   const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
   assertRecoverySourceIdentity(root, openclaw, sourceAssignment, params);
 
-  if (params.kind === "recover-shared-customer") {
-    assertSharedRecoverySource(root, params);
-    return null;
-  }
-  return disposableRecoveryLease(root, openclaw, params);
+  assertSharedRecoverySource(root, params);
 }
 
 function clearRecoveredSourceMount(input: {
@@ -1137,6 +1042,9 @@ export async function commitUnavailableGatewayRecoveryAtomic(
   deps: FleetStateDeps,
   params: UnavailableGatewayRecoveryParams,
 ): Promise<{ operationId: string }> {
+  if (params.kind !== "recover-shared-customer") {
+    throw new Error("Builder recovery requires its retained home; metadata-only recovery is forbidden");
+  }
   if (
     !params.operationId ||
     !Number.isSafeInteger(params.expectedSourceEpoch) ||
@@ -1209,7 +1117,7 @@ export async function commitUnavailableGatewayRecoveryAtomic(
       targetRoot: targetRootSnapshot.data()!,
       targetRuntime: targetRuntimeSnapshot.data()!,
     });
-    const lease = assertRecoverySource({
+    assertRecoverySource({
       params,
       sourceRootData: sourceRootSnapshot.exists ? sourceRootSnapshot.data() : undefined,
       user,
@@ -1231,20 +1139,6 @@ export async function commitUnavailableGatewayRecoveryAtomic(
       "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
       "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
       [WORKSPACE_MIGRATION_MARKER_PATH]: deps.deleteField(),
-      ...(disposableRuntimeReset(params, nowMs)
-        ? { "provisioning.openclaw.runtimeReset": disposableRuntimeReset(params, nowMs) }
-        : {}),
-      ...(lease
-        ? {
-            "provisioning.openclaw.activationLease": {
-              ...lease,
-              status: "returning",
-              returnReason: "source-unavailable",
-              returnOperationId: params.operationId,
-              returningAt: nowMs,
-            },
-          }
-        : {}),
     });
     txn.set(targetAssignmentRef, {
       uid: params.uid,
@@ -1272,7 +1166,6 @@ export async function commitUnavailableGatewayRecoveryAtomic(
         fromGatewayId: params.fromGatewayId,
         toGatewayId: params.toGatewayId,
         sourceEpoch: params.expectedSourceEpoch,
-        disposableLease: params.disposableLease ?? null,
       },
       steps: [],
       gatewayId: params.toGatewayId,

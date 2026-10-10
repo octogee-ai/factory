@@ -73,6 +73,7 @@ replicas: 1
 rollStrategy: recreate
 
 computeClass: octogee-gateway
+builderHomeZone: ""
 computerDesktop: auto
 
 # Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and

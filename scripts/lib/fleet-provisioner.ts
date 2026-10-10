@@ -1887,6 +1887,21 @@ function configuredBuilderMountProven(adapter: CustomerLifecycleAdapter): boolea
 
 type BuilderPrelaunchState = "none" | "held" | "hydrated" | "starting" | "serving";
 
+async function clearInheritedBuilderMountProof(
+  adapter: CustomerLifecycleAdapter,
+  processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
+  log: (message: string) => void,
+): Promise<void> {
+  const slug = configuredBuilderSlug(adapter);
+  if (!slug || !processGate || !adapter.customerMountMarked?.(slug)) return;
+  const state = await processGate.status();
+  if (state.podUid !== process.env.POD_UID?.trim() || state.role !== "normal" ||
+      state.mode !== "held" || state.phase !== "held") return;
+  if (!adapter.clearMountMarker) throw new Error("configured Builder cannot invalidate its inherited mount proof");
+  adapter.clearMountMarker(slug);
+  log(`[fleet] cleared inherited mount proof before configured Builder prelaunch: ${slug}`);
+}
+
 async function builderPrelaunchState(
   adapter: CustomerLifecycleAdapter,
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
@@ -2611,6 +2626,7 @@ export async function startFleetController(
   const builderProcessGate = adapter.isBuilderGateway?.() === true
     ? opts.surgeOpenClawProcessGate ?? createSurgeOpenClawProcessSupervisorClient(openclawDir)
     : null;
+  await clearInheritedBuilderMountProof(wrappedAdapter, builderProcessGate, opts.log);
   const configuredBuilderAssigned = createConfiguredBuilderAssignmentMatcher(opts);
   const canReconcile = createConfiguredBuilderReconcileAdmission({
     processGate: builderProcessGate,
