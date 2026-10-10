@@ -232,6 +232,59 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
 });
 
 describe("decideOperationClaim", () => {
+  it("finishes a Builder activation retry before rolling its held target", () => {
+    const activation = {
+      id: "builder-activate-builder-a", kind: "migrate-customer", status: "pending",
+      createdAt: 1, queuedAt: 3, nextAttemptAt: 15_000,
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
+    };
+    const rollout = {
+      id: "roll", kind: "rollout", status: "pending", createdAt: 2,
+      input: { gatewayId: "builder-a" },
+    };
+    expect(decideOperationClaim({
+      op: rollout, now: 10_000, runningOpsSameKind: [], pendingOpsSameKind: [activation],
+    })).toEqual({ outcome: "queue", waitingOn: "migration shared-a → builder-a" });
+    expect(decideOperationClaim({
+      op: activation, now: 15_000, runningOpsSameKind: [], pendingOpsSameKind: [rollout],
+    })).toEqual({ outcome: "claim" });
+    expect(decideOperationClaim({
+      op: rollout, now: 16_000, runningOpsSameKind: [], pendingOpsSameKind: [],
+    })).toEqual({ outcome: "claim" });
+  });
+
+  it.each(["shared-a", "builder-b"])("does not reserve %s for another target's activation retry", (gatewayId) => {
+    expect(decideOperationClaim({
+      op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId } },
+      now: 10_000, runningOpsSameKind: [],
+      pendingOpsSameKind: [{
+        id: "builder-activate-builder-a", kind: "migrate-customer", createdAt: 1,
+        queuedAt: 3, nextAttemptAt: 15_000,
+        input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
+      }],
+    })).toEqual({ outcome: "claim" });
+  });
+
+  it("does not let activation bypass an already running rollout", () => {
+    expect(decideOperationClaim({
+      op: { id: "builder-activate-builder-a", kind: "migrate-customer", status: "pending", createdAt: 1,
+        queuedAt: 3, input: { toGatewayId: "builder-a", source: "builder-activation-lease" } },
+      now: 10_000, runningOpsSameKind: [{ id: "roll", kind: "rollout", input: { gatewayId: "builder-a" } }],
+      pendingOpsSameKind: [],
+    })).toEqual({ outcome: "queue", waitingOn: "roll builder-a" });
+  });
+
+  it("allows a roll once activation has committed ownership even with cleanup pending", () => {
+    expect(decideOperationClaim({
+      op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId: "builder-a" } },
+      now: 10_000, runningOpsSameKind: [],
+      pendingOpsSameKind: [{
+        id: "builder-activate-builder-a", kind: "migrate-customer", createdAt: 1, cutoverCommittedAt: 9_000,
+        input: { fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
+      }],
+    })).toEqual({ outcome: "claim" });
+  });
+
   it.each([5_000, -1])("lets another Builder pass a rolled-back retry with delay %i", (delay) => {
     expect(decideOperationClaim({
       op: { id: "healthy", kind: "migrate-customer", status: "pending", createdAt: 2,

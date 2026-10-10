@@ -140,6 +140,17 @@ function isBackingOffReleasedOperation(pending: PendingOperationRef, now: number
     pending.nextAttemptAt > now;
 }
 
+function rolloutWaitsForBuilderActivation(rollout: OperationRef, activation: OperationRef): boolean {
+  const target = inputString(activation.input, "toGatewayId");
+  return rollout.kind === "rollout" &&
+    activation.kind === "migrate-customer" &&
+    activation.input?.source === "builder-activation-lease" &&
+    typeof target === "string" &&
+    activation.id === `builder-activate-${target}` &&
+    typeof activation.cutoverCommittedAt !== "number" &&
+    rollout.input?.gatewayId === target;
+}
+
 function findOlderPendingSameScope(
   candidate: PendingOperationRef,
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
@@ -149,6 +160,7 @@ function findOlderPendingSameScope(
     .filter(
       (pending) =>
         pending.id !== candidate.id &&
+        !rolloutWaitsForBuilderActivation(pending, candidate) &&
         !isBackingOffReleasedOperation(pending, now) &&
         operationsConflict(candidate, pending) &&
         compareOperationQueueOrder(pending, candidate) < 0,
@@ -175,6 +187,8 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
+  const activation = pendingOpsSameKind.find((pending) => rolloutWaitsForBuilderActivation(op, pending));
+  if (activation) return { outcome: "queue", waitingOn: describeWaitingOn(activation) };
   const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };
   return { outcome: "claim" };
