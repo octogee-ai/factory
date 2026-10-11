@@ -195,3 +195,23 @@ describe("helm/octogee-gateway/ — invalid sizingTier rejected by schema", () =
     expect(result.stderr).toMatch(/schema|sizingTier|enum/i);
   });
 });
+
+
+describe("Builder ephemeral storage admission", () => {
+  it.each(["x11", "omarchy"])("keeps the %s working-set budget intact under Autopilot admission", (computerDesktop) => {
+    const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop }))
+      .map((document) => document.toJS())
+      .find((document) => document?.kind === "Deployment");
+    const pod = deployment.spec.template.spec;
+    const gateway = pod.containers.find((container: any) => container.name === "gateway");
+    const request = gateway.resources.requests["ephemeral-storage"];
+    expect(request).toBe(gateway.resources.limits["ephemeral-storage"]);
+    expect(request).toBe("9Gi");
+    const boundedWorkingSets = pod.volumes.filter((volume: any) => volume.emptyDir?.sizeLimit && !volume.emptyDir.medium);
+    const workingSetGiB = boundedWorkingSets.reduce((total: number, volume: any) => total + Number(volume.emptyDir.sizeLimit.replace("Gi", "")), 0);
+    expect(Number(request.replace("Gi", ""))).toBeGreaterThanOrEqual(workingSetGiB);
+    const sidecars = pod.containers.filter((container: any) => container.name !== "gateway");
+    const totalWithAutopilotDefaults = Number(request.replace("Gi", "")) + sidecars.reduce((total: number, container: any) => total + Number((container.resources.requests["ephemeral-storage"] ?? "1Gi").replace("Gi", "")), 0);
+    expect(totalWithAutopilotDefaults).toBeLessThanOrEqual(10);
+  });
+});

@@ -93,6 +93,11 @@ if [ ! -f "$MATTERMOST_ACCOUNT_SECRETS" ]; then
 fi
 chmod 600 "$MATTERMOST_ACCOUNT_SECRETS"
 
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  log "Pre-boot: removing empty Builder project placeholders..."
+  "$TSX" /octogee/scripts/entrypoints/clean-builder-project-placeholders.ts
+fi
+
 GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   case "${GATEWAY_BUILDER_SLUG:-}" in

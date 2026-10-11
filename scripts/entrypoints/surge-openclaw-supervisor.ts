@@ -164,13 +164,17 @@ function waitForSpawn(command: string, args: string[], options: SpawnOptionsWith
   });
 }
 
-async function defaultPrepareTarget(): Promise<void> {
-  const tsx = process.env.TSX ?? "/octogee/scripts/node_modules/.bin/tsx";
-  const policy = process.env.GATEWAY_CLASS_POLICY_PATH ?? "/octogee/infra/gateway/apply-gateway-class-policy.mjs";
-  const env = { ...process.env, GATEWAY_CLASS: "builder" };
-  await waitForSpawn(tsx, ["/octogee/scripts/entrypoints/pre-boot-config.ts"], { env });
-  await waitForSpawn("node", [policy], { env });
-  await waitForSpawn(tsx, ["/octogee/scripts/entrypoints/ensure-configured-agent-runtime-dirs.ts"], { env });
+export async function prepareConfiguredBuilderTarget(
+  env: NodeJS.ProcessEnv = process.env,
+  run: typeof waitForSpawn = waitForSpawn,
+): Promise<void> {
+  const tsx = env.TSX ?? "/octogee/scripts/node_modules/.bin/tsx";
+  const policy = env.GATEWAY_CLASS_POLICY_PATH ?? "/octogee/infra/gateway/apply-gateway-class-policy.mjs";
+  const builderEnv = { ...env, GATEWAY_CLASS: "builder" };
+  await run(tsx, ["/octogee/scripts/entrypoints/pre-boot-config.ts"], { env: builderEnv });
+  await run("node", [policy], { env: builderEnv });
+  await run(tsx, ["/octogee/scripts/entrypoints/ensure-configured-agent-runtime-dirs.ts"], { env: builderEnv });
+  await run(tsx, ["/octogee/scripts/entrypoints/clean-builder-project-placeholders.ts"], { env: builderEnv });
 }
 
 async function waitForHealth(input: {
@@ -517,7 +521,7 @@ export async function startSurgeOpenClawSupervisor(
   const probeHealthz = opts.probeHealthz ?? defaultProbeHealthz;
   const sleep = opts.sleep ?? defaultSleep;
   const spawnOpenClaw = opts.spawnOpenClaw ?? defaultSpawnOpenClaw;
-  const prepareTarget = opts.prepareTarget ?? defaultPrepareTarget;
+  const prepareTarget = opts.prepareTarget ?? prepareConfiguredBuilderTarget;
   const prepareDatabaseJournals = opts.prepareDatabaseJournals ?? (() => defaultPrepareDatabaseJournals(opts));
   const timeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const stopGraceMs = opts.stopGraceMs ?? DEFAULT_STOP_GRACE_MS;

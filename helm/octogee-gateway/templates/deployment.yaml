@@ -493,7 +493,7 @@ spec:
             successThreshold: {{ .Values.probes.readiness.successThreshold | default 1 }}
           resources:
             {{- if eq $gatewayClass "builder" }}
-            {{- toYaml (mergeOverwrite (deepCopy $preset.resources) (dict "requests" (dict "ephemeral-storage" "1Gi") "limits" (dict "ephemeral-storage" "10Gi"))) | nindent 12 }}
+            {{- toYaml (mergeOverwrite (deepCopy $preset.resources) (dict "requests" (dict "ephemeral-storage" "9Gi") "limits" (dict "ephemeral-storage" "9Gi"))) | nindent 12 }}
             {{- else }}
             {{- toYaml $preset.resources | nindent 12 }}
             {{- end }}

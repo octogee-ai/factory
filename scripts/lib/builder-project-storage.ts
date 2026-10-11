@@ -66,6 +66,25 @@ async function removeEmptyProjectPlaceholders(projects: string): Promise<void> {
   } finally { await parent.close(); }
 }
 
+export async function cleanBuilderProjectPlaceholders(input: { openclawDir: string; slug: string }): Promise<void> {
+  if (!isValidUsername(input.slug) || !path.isAbsolute(input.openclawDir)) throw new Error("invalid project storage owner/root");
+  const handles: Awaited<ReturnType<typeof open>>[] = [];
+  let location = input.openclawDir;
+  try {
+    for (const segment of ["", "customers", input.slug, "projects"]) {
+      if (segment) location = path.join(location, segment);
+      const handle = await open(location, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      });
+      if (!handle) return;
+      handles.push(handle);
+      location = anchoredDirectory(handle.fd, location);
+    }
+    await removeEmptyProjectPlaceholders(`${location}/.`);
+  } finally { for (const handle of handles.reverse()) await handle.close(); }
+}
+
 async function assertProjectMount(home: string, projects: string): Promise<void> {
   const [homeStat, projectStat] = await Promise.all([lstat(home), lstat(projects)]);
   if (!homeStat.isDirectory() || !projectStat.isDirectory() || homeStat.dev === projectStat.dev) throw new Error("projects require a separate filesystem from home");
