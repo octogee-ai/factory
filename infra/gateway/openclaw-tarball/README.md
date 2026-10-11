@@ -128,8 +128,8 @@ locked for the October 8 recut, 277 commits after the previous base. Its
 [push CI](https://github.com/openclaw/openclaw/actions/runs/37807391210)
 has one security-fast success and 39 skips, not full-CI green. The operator
 selected this newer native implementation for independent qualification.
-Exact overlay: `9d9f2ac96d6379e1fbde66984f6c04d6393e2536`, at
-`ceckert/openclaw:codex/native-node-pairing-metadata`.
+Exact overlay: `fae1dbaa82d5b3722d09e6b05925d009905451e5`, at
+`ceckert/openclaw:codex/sqlite-reclamation-commit-deadline`.
 Package version `2026.9.9` identifies a main snapshot, not a released tag.
 Recent full upstream CI remains red; the scheduled run
 [37801957966](https://github.com/openclaw/openclaw/actions/runs/37801957966)
@@ -211,6 +211,27 @@ the healthy sibling exchanges four messages on its original socket with zero
 reconnects. This is independent upstream proof, not live Octogee acceptance.
 
 ### Qualification
+
+The Hobby admission follow-up fixes the reproduced TEST failure where a healthy
+SQLite session store was rejected after its worker waited five seconds for the
+parent commit decision. The worker and parent now share a finite ten-second
+monotonic deadline; expired, cancelled and stale authority still rolls back,
+and an accepted commit keeps write custody until native settlement. Existing
+absolute deadlines remain binding. This changes admission coordination, not
+SQLite durability or snapshot policy. The four-file overlay passes 16 focused
+and neighboring tests, production core/UI/extensions types, scoped lint and
+formatting. Its clean full build completed in 12m32s. Inherited upstream CI
+limitations described above remain unchanged.
+
+The matched archives pass integrity checks and isolated installation. The actual
+Linux arm64 full-plugin-installer passes registry refresh, bundled trust, Codex
+and Parallel source matching, and all three native-hook imports. Its installed
+build-info is the exact `fae1dbaa` overlay and Mattermost remains byte-identical
+to the current object. The five Octogee pin/packaging suites pass 52 cases;
+the unchanged lifecycle suite was rerun after concurrent build load caused five
+fixture timeouts. All 378 hosted JavaScript/CSS outputs are identical after
+normalizing generated chunk names and source labels. Live Hobby acceptance
+remains a deployment gate.
 
 The native pairing follow-up keeps node authority available while queued token
 verification, metadata/presence writes and operator-token issuance preserve its
