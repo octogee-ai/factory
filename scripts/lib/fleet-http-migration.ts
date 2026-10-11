@@ -9,7 +9,7 @@ import { withLogContext, setLogContext, type LogContext } from "@octogee/shared/
 
 import type { Request, Response, RequestHandler } from "express";
 import { findUnsafeCustomerGitMetadataEntry } from "@octogee/core/git-metadata";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { CODEX_SNAPSHOT_EXCLUDE_ARG, CODEX_STORE_EXCLUDE_ARGS, discardCodexStoreSnapshots, installCodexStoreSnapshots, isCodexDatabase, omitRawCodexDatabases, prepareCodexStoreSnapshots } from "./codex-store-snapshot.js";
 import * as fs from "node:fs/promises";
@@ -933,6 +933,7 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
 async function maybeMaterializeActivationManifest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody & { includeActivationManifest?: boolean },
+  options: { signal: AbortSignal; timeoutMs: number },
 ): Promise<{ source: { cwd: string; path: string } | null; cleanup: () => Promise<void> }> {
   if (body.includeActivationManifest !== true) {
     return { source: null, cleanup: async () => undefined };
@@ -940,7 +941,7 @@ async function maybeMaterializeActivationManifest(
   if (!deps.adapter.exportOpenClawActivationManifest) {
     throw new Error("source gateway cannot export an OpenClaw activation manifest");
   }
-  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug);
+  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug, options);
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
   try {
     const source = await writeActivationManifest(tmpDir, manifest);
@@ -1250,57 +1251,63 @@ async function retainCheckoutStaging(stageDir: string): Promise<void> {
   }
 }
 
-async function runSpawnChecked(
-  command: string,
-  args: string[],
-  opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number; label: string },
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      env: opts.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
+interface CheckedSpawnOptions {
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  label: string;
+}
+
+function checkedChildCloseError(code: number | null, signal: NodeJS.Signals | null, label: string, output: string): Error | undefined {
+  if (signal != null) return new Error(`${label} terminated by ${signal}: ${output}`);
+  return code === 0 ? undefined : new Error(`${label} failed (code=${code ?? 1}): ${output}`);
+}
+
+async function runSpawnChecked(command: string, args: string[], opts: CheckedSpawnOptions): Promise<void> {
+  opts.signal?.throwIfAborted();
+  const child = spawn(command, args, { env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
+  await waitForCheckedChildClose(child, opts);
+}
+
+function waitForCheckedChildClose(child: ChildProcess, opts: CheckedSpawnOptions): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let stdout = "", stderr = "";
     let settled = false;
-    let timeout: NodeJS.Timeout | null = null;
-    const settle = (action: () => void): void => {
+    let pendingFailure: { error: unknown } | undefined;
+    let timeout: NodeJS.Timeout | undefined;
+    let escalation: NodeJS.Timeout | undefined;
+    const settle = (error?: unknown): void => {
       if (settled) return;
       settled = true;
-      if (timeout) clearTimeout(timeout);
-      action();
+      clearTimeout(timeout); clearTimeout(escalation);
+      opts.signal?.removeEventListener("abort", abort);
+      if (error !== undefined) reject(error);
+      else resolve();
     };
-    if (opts.timeoutMs) {
-      timeout = setTimeout(() => {
-        stderr += `\n${opts.label} timed out after ${opts.timeoutMs}ms`;
-        child.kill("SIGTERM");
-        settle(() =>
-          reject(new Error(`${opts.label} timed out after ${opts.timeoutMs}ms`)),
-        );
-      }, opts.timeoutMs);
-    }
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
+    const signalChild = (signal: NodeJS.Signals) => {
+      if (settled) return;
+      try { child.kill(signal); }
+      catch (error) { provisionerLog(`[migration-rsync] ${opts.label} ${signal} failed: ${String(error)}`); }
+    };
+    const stop = (error: unknown) => {
+      if (settled || pendingFailure) return;
+      pendingFailure = { error };
+      escalation = setTimeout(() => signalChild("SIGKILL"), RSYNC_DAEMON_STOP_TIMEOUT_MS);
+      signalChild("SIGTERM");
+    };
+    const abort = () => stop(opts.signal?.reason ?? new Error(`${opts.label} cancelled`));
+    child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => {
+      if (child.pid === undefined) settle(error);
+      else stop(error);
     });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (err) => {
-      settle(() => reject(err));
-    });
-    child.on("close", (code, signal) => {
-      if (signal != null) {
-        settle(() => reject(new Error(`${opts.label} terminated by ${signal}: ${stderr.trim()}`)));
-        return;
-      }
-      if (code === 0) {
-        settle(() => resolve());
-        return;
-      }
-      settle(() =>
-        reject(new Error(`${opts.label} failed (code=${code ?? 1}): ${stderr.trim() || stdout.trim()}`)),
-      );
-    });
+    child.on("close", (code, signal) => settle(pendingFailure
+      ? pendingFailure.error
+      : checkedChildCloseError(code, signal, opts.label, stderr.trim() || stdout.trim())));
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    if (opts.signal?.aborted) abort();
+    if (opts.timeoutMs) timeout = setTimeout(() => stop(new Error(`${opts.label} timed out after ${opts.timeoutMs}ms`)), opts.timeoutMs);
   });
 }
 
@@ -1701,9 +1708,12 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
     const target = validateRsyncPushTarget(body, res);
     if (!target) return;
     const { targetHost, targetPort, targetCertificatePem, transferUser, transferKey } = target;
+    const deadline = Date.now() + timeoutMs;
 
     let cleanupActivationManifest: () => Promise<void> = async () => {};
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-rsync-push-${body.migrationId}-`));
+    const { controller, detach } = attachImportDisconnectHandlers(res, body.migrationId, body.slug, log, "export");
+    const transferTimer = setTimeout(() => controller.abort(new Error("rsync push-state transfer deadline exceeded")), Math.max(0, deadline - Date.now()));
     try {
       const allSources = await deps.adapter.listExportPaths(body.slug);
       const sources = sourcesForPushMode(allSources, body.slug, mode);
@@ -1718,13 +1728,17 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),
           run: deps.runOpenClaw,
+          signal: controller.signal,
           log,
         }));
       }
 
       const activationManifest = mode === "keys" || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
         ? { source: null, cleanup: async () => {} }
-        : await maybeMaterializeActivationManifest(deps, body);
+        : await maybeMaterializeActivationManifest(deps, body, {
+          signal: controller.signal,
+          timeoutMs: remainingTransferTimeout(deadline, controller.signal),
+        });
       cleanupActivationManifest = activationManifest.cleanup;
       if (activationManifest.source) sources.push(activationManifest.source);
 
@@ -1740,7 +1754,8 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
         RSYNC_BIN,
         sourceTransferRsyncArgs(sources, passwordFile, destination, mode),
         {
-          timeoutMs,
+          timeoutMs: remainingTransferTimeout(deadline, controller.signal),
+          signal: controller.signal,
           label: "rsync push-state",
           env: {
             ...process.env,
@@ -1762,10 +1777,19 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       log(`[migration-rsync] 🔴 push-state migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
       res.status(500).json({ error: "push-rsync-state failed", message });
     } finally {
+      clearTimeout(transferTimer);
+      detach();
       await cleanupActivationManifest();
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+}
+
+function remainingTransferTimeout(deadline: number, signal: AbortSignal): number {
+  signal.throwIfAborted();
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("rsync push-state preparation exhausted its transfer deadline");
+  return remaining;
 }
 
 async function validateStagedGitMetadata(stageDir: string, slug: string): Promise<string | null> {
@@ -2276,6 +2300,7 @@ function attachImportDisconnectHandlers(
   migrationId: string,
   slug: string,
   log: (msg: string, fields?: LogContext) => void,
+  phase: "import" | "export" = "import",
 ): { controller: AbortController; detach: () => void } {
 
 const controller = new AbortController();
@@ -2284,7 +2309,7 @@ const controller = new AbortController();
     log(
       `[migration-http] client closed connection before response sent migrationId=${migrationId} slug=${slug} — aborting`,
     );
-    controller.abort(new Error(`client disconnected mid-import`));
+    controller.abort(new Error(`client disconnected mid-${phase}`));
   };
   res.on("close", onResClose);
   return {

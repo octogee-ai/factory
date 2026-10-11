@@ -1918,8 +1918,8 @@ export function buildBrokeredLifecycleAdapter(
       openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {
         signal: callOpts?.signal,
       }),
-    exportOpenClawActivationManifest: (slug) =>
-      openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug)),
+    exportOpenClawActivationManifest: (slug, options) =>
+      openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug), options),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
       openClawRuntimeUpdateGuard.run(() =>
         removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch)),

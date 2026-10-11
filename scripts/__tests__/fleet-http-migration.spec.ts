@@ -58,6 +58,7 @@ import {
 } from "../lib/local-coach-wired.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
+import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 
 const spawnMock = vi.fn();
 const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -2040,6 +2041,179 @@ describe("queued-rsync migration control handlers", () => {
         daemon.emit("exit", 0, null);
       }
     }
+  });
+
+  describe("push migration export deadline", () => {
+    const manifest = {
+      version: 2 as const, slug: "chris", appliedFingerprint: "fp-chris",
+      agentId: "octogee-chris-coach", accountId: "chris-coach",
+      agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "coach-pat" }, bindings: [],
+    };
+    const sources = [{ cwd: "/state", path: "agents/octogee-chris-coach" }];
+    function push(adapter: CustomerLifecycleAdapter, timeoutMs = 330_000) {
+      const body: PushRsyncStateRequestBody = {
+        migrationId: "mig-export-deadline", slug: "chris", rpcPhase: "push-rsync-state", mode: "pre",
+        targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM,
+        transferUser: "migration", transferKey: "b".repeat(64), includeActivationManifest: true,
+      };
+      const response = mkResponse();
+      const handler = createPushRsyncStateHandler(mkDeps({ adapter, pushStateTimeoutMs: timeoutMs }));
+      return { ...response, work: handler(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn()) };
+    }
+
+    it("shares one budget across preparation, manifest waiting and rsync", async () => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      const exportManifest = vi.fn(async (_slug, options) => {
+        expect(options.timeoutMs).toBe(310_000);
+        expect(options.signal.aborted).toBe(false);
+        now += 115_000;
+        return manifest;
+      });
+      try {
+        spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+        const result = push(mkAdapter({
+          listExportPaths: vi.fn(async () => { now += 20_000; return sources; }),
+          exportOpenClawActivationManifest: exportManifest,
+        }));
+        await result.work;
+        expect(result.getStatus()).toBe(200);
+        expect(timers.mock.calls.some((call) => call[1] === 195_000)).toBe(true);
+        expect(result.res.listenerCount("close")).toBe(0);
+      } finally { clock.mockRestore(); timers.mockRestore(); }
+    });
+
+    it("refuses manifest or rsync work when preparation consumed the deadline", async () => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const exportManifest = vi.fn(async () => manifest);
+      try {
+        const result = push(mkAdapter({
+          listExportPaths: vi.fn(async () => { now += 330_000; return sources; }),
+          exportOpenClawActivationManifest: exportManifest,
+        }));
+        await result.work;
+        expect(result.getStatus()).toBe(500);
+        expect(result.getBody()).toMatchObject({ message: expect.stringContaining("exhausted its transfer deadline") });
+        expect(exportManifest).not.toHaveBeenCalled();
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally { clock.mockRestore(); }
+    });
+
+    it("cancels queued manifest export on disconnect without releasing its competing writer", async () => {
+      const guard = new OpenClawRuntimeUpdateGuard();
+      let release!: () => void;
+      const held = guard.tryRun(() => new Promise<void>((resolve) => { release = resolve; }))!;
+      await Promise.resolve();
+      const readManifest = vi.fn(async () => manifest);
+      const exportManifest = vi.fn((_slug, options) => guard.run(readManifest, options));
+      const result = push(mkAdapter({ listExportPaths: vi.fn(async () => sources), exportOpenClawActivationManifest: exportManifest }));
+      try {
+        await vi.waitFor(() => expect(exportManifest).toHaveBeenCalledOnce());
+        result.res.emit("close");
+        await result.work;
+        expect(result.getStatus()).toBe(500);
+        expect(result.getBody()).toMatchObject({ message: "client disconnected mid-export" });
+        expect(guard.tryRun(async () => undefined)).toBeUndefined();
+      } finally { release(); await held; }
+      expect(readManifest).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.res.listenerCount("close")).toBe(0);
+    });
+
+    it.each(["AbortError", "disconnect", "deadline"])("retains transfer staging and response custody until child close after %s", async (reason) => {
+      const child = Object.assign(mkFakeChild({ holdExit: true }), { pid: 4242 });
+      const timers = vi.spyOn(globalThis, "setTimeout");
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      spawnMock.mockReturnValueOnce(child);
+      const result = push(mkAdapter({ listExportPaths: vi.fn(async () => sources), exportOpenClawActivationManifest: vi.fn(async () => manifest) }), 330_000);
+      let stageDir: string | undefined;
+      try {
+        await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+        const args = spawnMock.mock.calls[0][1] as string[];
+        stageDir = path.dirname(args[args.indexOf("--password-file") + 1]!);
+        expect(fsSync.existsSync(stageDir)).toBe(true);
+        if (reason === "AbortError") child.emit("error", Object.assign(new Error("child aborted before close"), { name: "AbortError", code: "ABORT_ERR" }));
+        else if (reason === "disconnect") result.res.emit("close");
+        else {
+          const transferDeadline = timers.mock.calls.find((call) => call[1] === 330_000)![0] as () => void;
+          transferDeadline();
+        }
+        await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+        expect(result.getStatus()).toBeUndefined();
+        expect(fsSync.existsSync(stageDir)).toBe(true);
+        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        const escalation = timers.mock.calls.find((call) => call[1] === 5_000)![0] as () => void;
+        escalation();
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+        child.emit("exit", null, "SIGKILL");
+        await Promise.resolve();
+        expect(result.getStatus()).toBeUndefined();
+        expect(fsSync.existsSync(stageDir)).toBe(true);
+      } finally {
+        child.emit("close", null, "SIGKILL");
+        await result.work;
+        timers.mockRestore();
+        clock.mockRestore();
+      }
+      expect(result.getStatus()).toBe(500);
+      expect(fsSync.existsSync(stageDir!)).toBe(false);
+      expect(result.res.listenerCount("close")).toBe(0);
+    });
+
+    it("reports a spawn failure without waiting for a nonexistent process to close", async () => {
+      const child = mkFakeChild({ holdExit: true });
+      spawnMock.mockReturnValueOnce(child);
+      const result = push(mkAdapter({ listExportPaths: vi.fn(async () => sources), exportOpenClawActivationManifest: vi.fn(async () => manifest) }));
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+      const args = spawnMock.mock.calls[0][1] as string[];
+      const stageDir = path.dirname(args[args.indexOf("--password-file") + 1]!);
+      child.emit("error", Object.assign(new Error("spawn rsync ENOENT"), { code: "ENOENT" }));
+      await result.work;
+      expect(result.getStatus()).toBe(500);
+      expect(result.getBody()).toMatchObject({ message: "spawn rsync ENOENT" });
+      expect(fsSync.existsSync(stageDir)).toBe(false);
+      expect(child.kill).not.toHaveBeenCalled();
+    });
+
+    it("waits for a real SIGTERM-resistant child to close before cleaning transfer staging", async () => {
+      const { spawn } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      let child!: ReturnType<typeof spawn>;
+      let ready!: () => void;
+      const readiness = new Promise<void>((resolve) => { ready = resolve; });
+      let closed!: () => void;
+      const closure = new Promise<void>((resolve) => { closed = resolve; });
+      spawnMock.mockImplementationOnce((_command, _args, options) => {
+        child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.stdout.write('ready\\n');setInterval(()=>{},1000);setTimeout(()=>process.exit(0),10000);"], options);
+        child.stdout!.once("data", ready);
+        child.once("close", closed);
+        return child;
+      });
+      const result = push(mkAdapter({ listExportPaths: vi.fn(async () => sources), exportOpenClawActivationManifest: vi.fn(async () => manifest) }));
+      let stageDir: string | undefined;
+      try {
+        await readiness;
+        const args = spawnMock.mock.calls[0][1] as string[];
+        stageDir = path.dirname(args[args.indexOf("--password-file") + 1]!);
+        result.res.emit("close");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(child.exitCode).toBeNull();
+        expect(child.signalCode).toBeNull();
+        expect(result.getStatus()).toBeUndefined();
+        expect(fsSync.existsSync(stageDir)).toBe(true);
+        await result.work;
+        await closure;
+        expect(child.signalCode).toBe("SIGKILL");
+        expect(result.getStatus()).toBe(500);
+        expect(fsSync.existsSync(stageDir)).toBe(false);
+      } finally {
+        child?.kill("SIGKILL");
+        await closure;
+        await result.work;
+      }
+    });
   });
 
   it("createPushRsyncStateHandler runs rsync directly to the target pod with the one-time key", async () => {

@@ -32,6 +32,50 @@ import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch } from "@octo
 import { canonicalCustomerModelDefinition } from "../../shared/types/agent-models.js";
 import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, finalizeConvergedMount, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
+import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
+
+describe("migration manifest export runtime wait", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("waits for a 115-second competing publication before exporting its manifest", async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const custody = new Promise<void>((resolve) => { release = resolve; });
+    const publishing = openClawRuntimeUpdateGuard.run(async () => undefined, { holdUntil: custody });
+    await publishing;
+    const manifest = { slug: "alice", appliedFingerprint: "stable-after-publication" };
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    secretMocks.exportActivationManifestWithSecret.mockResolvedValueOnce(manifest);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: mkGatewayRpc(), log: vi.fn() });
+    const exported = adapter.exportOpenClawActivationManifest!("alice", { timeoutMs: 330_000 }).then((value) => value, (error) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(115_000);
+      expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+    } finally { release(); }
+    await expect(exported).resolves.toEqual(manifest);
+    expect(secretMocks.exportActivationManifestWithSecret).toHaveBeenCalledOnce();
+  });
+
+  it.each(["deadline", "disconnect"])("cancels a queued export on %s without releasing publication custody", async (reason) => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const custody = new Promise<void>((resolve) => { release = resolve; });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { holdUntil: custody });
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: mkGatewayRpc(), log: vi.fn() });
+    const controller = new AbortController();
+    const exported = adapter.exportOpenClawActivationManifest!("alice", { timeoutMs: 50, signal: controller.signal }).then((value) => value, (error) => error);
+    try {
+      if (reason === "disconnect") controller.abort(new Error("export caller disconnected"));
+      else await vi.advanceTimersByTimeAsync(50);
+      await expect(exported).resolves.toMatchObject({ message: reason === "disconnect" ? "export caller disconnected" : "Timed out waiting for an OpenClaw runtime update" });
+      expect(openClawRuntimeUpdateGuard.tryRun(async () => undefined)).toBeUndefined();
+      expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+    } finally { release(); }
+    await Promise.resolve(); await Promise.resolve();
+    expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+  });
+});
 
 const testRuntime = await vi.hoisted(async () => {
   const { mkdtempSync } = await import("node:fs");

@@ -220,7 +220,10 @@ export interface CustomerLifecycleAdapter {
         verificationPending?: string;
     }>;
     recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
-    exportOpenClawActivationManifest?: (slug: string) => Promise<MigrationActivationManifest>;
+    exportOpenClawActivationManifest?: (slug: string, opts?: {
+        signal?: AbortSignal;
+        timeoutMs?: number;
+    }) => Promise<MigrationActivationManifest>;
     removeImportedCustomerBySlug?: (slug: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>) => Promise<RemoveCustomerResult>;
     releaseAgent?: (agentId: string) => Promise<void>;
 }

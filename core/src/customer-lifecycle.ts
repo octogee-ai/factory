@@ -286,7 +286,10 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
   ) => Promise<{ appliedFingerprint: string; verificationPending?: string }>;
   recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
 
-  exportOpenClawActivationManifest?: (slug: string) => Promise<MigrationActivationManifest>;
+  exportOpenClawActivationManifest?: (
+    slug: string,
+    opts?: { signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<MigrationActivationManifest>;
 
   removeImportedCustomerBySlug?: (
     slug: string,
