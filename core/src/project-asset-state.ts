@@ -7,14 +7,21 @@ import { manifestObjectPath, parseManifest, serializeManifest, type Manifest } f
 async function projectFile<T>(root: string, directory: ".files" | ".octogee-state" | ".git", name: string, use: (file: {
   read(): Promise<string | null>;
   write(contents: string, exclusive?: boolean): Promise<void>;
-}) => Promise<T>): Promise<T> {
+}) => Promise<T>, createDirectory = true): Promise<T> {
   const parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
   let handle;
   try {
     const dir = `${fdRoot}/${parent.fd}/${directory}`;
-    await mkdir(dir).catch(error => { if (error.code !== "EEXIST") throw error; });
-    handle = await open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    if (createDirectory) await mkdir(dir).catch(error => { if (error.code !== "EEXIST") throw error; });
+    try { handle = await open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+    catch (error) {
+      if (!createDirectory && (error as NodeJS.ErrnoException).code === "ENOENT") return use({
+        read: async () => null,
+        write: async () => { throw new Error("project state directory is absent"); },
+      });
+      throw error;
+    }
     const location = `${fdRoot}/${handle.fd}/${name}`;
     return await use({
       read: async () => {
@@ -105,7 +112,7 @@ export async function readProjectRestoreReady(root: string, slug: string, projec
     const state = JSON.parse(contents);
     if (state.version !== 1 || state.slug !== slug || state.project !== project) throw new Error("project restore owner differs");
     return state.identity === identity;
-  });
+  }, false);
 }
 
 async function projectCheckoutIdentity(root: string, create: boolean): Promise<string | null> {
@@ -125,7 +132,7 @@ async function projectCheckoutIdentity(root: string, create: boolean): Promise<s
     const identity = JSON.parse(contents);
     if (identity.version !== 1 || typeof identity.id !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(identity.id)) throw new Error("invalid project checkout identity");
     return identity.id;
-  });
+  }, create);
 }
 
 async function projectGitfileIdentity(root: string): Promise<string | null> {

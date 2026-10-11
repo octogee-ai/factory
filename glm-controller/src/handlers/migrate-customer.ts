@@ -988,7 +988,7 @@ async function activateHandedOffSchedules(
     if (!await native.isSourceFencedOff()) throw error;
     deps.log(
       `[migrate-customer] ⚠ native return ${slug}: Compute confirmed the computer stopped before its schedules retired; ` +
-      `its exported copies stay fenced under ${migrationId} on ${handoff.fromGatewayId} until an operator retires that handoff: ${errorMessage(error)}`,
+      `its exported copies stay fenced under ${migrationId} on ${handoff.fromGatewayId} for automatic retirement on the next native activation: ${errorMessage(error)}`,
     );
   }
   await ctx.assertActiveClaim?.();

@@ -4,6 +4,7 @@ import {
   isOperationAuditRow,
   type Operation,
 } from "@octogee/shared/types/glm";
+import { MIGRATION_TRANSFER_LEASE_MS } from "@octogee/shared/types/fleet-controller";
 import { customerRuntimeMutationFenced } from "@octogee/shared/types/gateway-releases";
 import { operationNeedsDurableRestartResume } from "./operation-retry.js";
 import { MIGRATE_CUSTOMER_KIND, RETIRE_GATEWAY_KIND } from "./operation-kinds.js";
@@ -63,7 +64,13 @@ function operationIsStillStale(
     readMillis(operation.startedAt) ?? 0,
     readMillis(operation.createdAt) ?? 0,
   );
-  return anchorMs > 0 && now - anchorMs >= stalenessMs;
+  return anchorMs > 0 && now - anchorMs >= operationStalenessBudget(operation, stalenessMs);
+}
+
+function operationStalenessBudget(operation: Operation, stalenessMs: number): number {
+  const finalImportRunning = operation.kind === MIGRATE_CUSTOMER_KIND &&
+    operation.steps?.at(-1)?.name === "final-sync-state" && operation.steps.at(-1)?.status === "running";
+  return finalImportRunning ? Math.max(stalenessMs, MIGRATION_TRANSFER_LEASE_MS + 60_000) : stalenessMs;
 }
 
 interface ReapResult {
@@ -154,14 +161,15 @@ export async function runStuckOpReaperTick(
       readMillis(operation.createdAt) ?? 0,
     );
     if (anchorMs <= 0) continue;
-    if (now - anchorMs < deps.stalenessMs) continue;
+    if (!operationIsStillStale(operation, now, deps.stalenessMs)) continue;
     stuck.push({ doc, data: operation, ageMin: Math.round((now - anchorMs) / 60_000) });
   }
 
-  const budgetMin = Math.round(deps.stalenessMs / 60_000);
+
   const results = await Promise.allSettled(
     stuck.map(async ({ doc, data, ageMin }) => {
       try {
+        const budgetMin = Math.round(operationStalenessBudget(data, deps.stalenessMs) / 60_000);
         const error = `${REAPED_OPERATION_ERROR_PREFIX}op exceeded ${budgetMin}m running budget — controller likely restarted mid-op or the work hung past the inner deadlines`;
         const legacyResult = legacyMigrationGate(doc.id, data) === null
           ? null

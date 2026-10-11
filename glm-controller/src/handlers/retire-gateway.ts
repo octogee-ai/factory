@@ -18,6 +18,12 @@ export interface RetireGatewayDeps {
   // refuses while any customer is still mounted.
   readMountedCustomers: (gatewayId: string) => Promise<string[]>;
 
+  isPausedNativeSourceFencedOff?: (input: {
+    gatewayId: string;
+    operationId: string;
+    version: number;
+  }) => Promise<boolean>;
+
   // Stable-name Helm uninstall (octogee-gw-{gatewayId}) — must tolerate an
   // already-absent release so a crashed retire re-drives cleanly.
   helmUninstallGateway: (gatewayId: string) => Promise<void>;
@@ -124,9 +130,6 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     const assignmentFailure = await assertNoAssignments(deps, gatewayId);
     if (assignmentFailure) return assignmentFailure;
 
-    const mountedFailure = await assertNoMountedCustomers(deps, gatewayId);
-    if (mountedFailure) return mountedFailure;
-
     const claimFailure = await verifyRetirementClaim(
       deps,
       gatewayId,
@@ -134,6 +137,9 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
       retirementClaimVersion,
     );
     if (claimFailure) return claimFailure;
+
+    const mountedFailure = await assertNoMountedCustomers(deps, gatewayId, op.id, retirementClaimVersion);
+    if (mountedFailure) return mountedFailure;
 
     const uninstall = await runReportedStep(ctx, deps, "helm-uninstall", () =>
       deps.helmUninstallGateway(gatewayId),
@@ -196,9 +202,21 @@ async function verifyRetirementClaim(
 async function assertNoMountedCustomers(
   deps: RetireGatewayDeps,
   gatewayId: string,
+  operationId: string,
+  version: number,
 ): Promise<OperationResult | null> {
   const mounted = [...(await deps.readMountedCustomers(gatewayId))].sort(compareStrings);
   if (mounted.length === 0) return null;
+  try {
+    if (await deps.isPausedNativeSourceFencedOff?.({ gatewayId, operationId, version })) {
+      const claimFailure = await verifyRetirementClaim(deps, gatewayId, operationId, version);
+      if (claimFailure) return claimFailure;
+      deps.log(`[retire-gateway] ${gatewayId}: paused native source is fenced off; ignoring its final mounted telemetry`);
+      return null;
+    }
+  } catch (error) {
+    return failure(`gateway ${gatewayId} native retirement fence unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return failure(
     `gateway ${gatewayId} still has ${mounted.length} mounted customer(s): ` +
       `${mounted.join(", ")} — migrate them off before retiring`,

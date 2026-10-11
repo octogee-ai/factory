@@ -359,6 +359,36 @@ function gatewayBuilderAccess(
   return resolveBuilderGatewayAccess(gateway.ownerUid, gateway.builderAccess ?? undefined);
 }
 
+function provisioningRuntimeObservations(
+  gateway: DurableGateway,
+  existing: GatewayRuntimeDoc | null,
+  now: number,
+): {
+  runtime: Pick<GatewayRuntimeDoc, "lifecycle" | "heartbeat" | "kubernetes">;
+  availableReplicas: GatewayRuntimeDoc["helm"]["availableReplicas"];
+} {
+  const resuming = existing?.helm.replicas === 0 && gateway.desiredStatus === "running";
+  return {
+    availableReplicas: resuming ? null : existing?.helm.availableReplicas ?? null,
+    runtime: {
+      lifecycle: resuming ? "provisioning" : existing?.lifecycle ?? "provisioning",
+      heartbeat: (resuming ? null : existing?.heartbeat) ?? {
+        status: "unknown",
+        lastHeartbeatAt: null,
+        version: null,
+        openclawVersion: null,
+        internalUrl: null,
+        startedAt: null,
+        mountedCustomers: [],
+        migratingIn: [],
+      },
+      ...(resuming ? {
+        kubernetes: { status: "unknown" as const, totalPods: 0, readyPods: 0, observedAt: now, pods: [] },
+      } : {}),
+    },
+  };
+}
+
 // The runtime doc the converge arm maintains at glmGateways/{gatewayId}.
 export function provisioningRuntimeDoc(input: {
   gateway: DurableGateway;
@@ -368,11 +398,12 @@ export function provisioningRuntimeDoc(input: {
 }): GatewayRuntimeDoc {
   const { gateway, artifact, existing } = input;
   const gatewayImage = gatewayImageFor(gateway, artifact);
+  const observations = provisioningRuntimeObservations(gateway, existing, input.now);
   return {
     docKind: "runtime",
     gatewayId: gateway.gatewayId,
     release: gateway.desiredRelease,
-    lifecycle: existing?.lifecycle ?? "provisioning",
+    ...observations.runtime,
     createdAt: existing?.createdAt ?? input.now,
     createdByOperationId: existing?.createdByOperationId ?? null,
     helm: {
@@ -384,18 +415,8 @@ export function provisioningRuntimeDoc(input: {
       imageRepository: gatewayImage.imageRepository,
       imageTag: gatewayImage.imageTag,
       replicas: gateway.desiredStatus === "paused" ? 0 : 1,
-      availableReplicas: existing?.helm.availableReplicas ?? null,
+      availableReplicas: observations.availableReplicas,
       lastAppliedAt: input.now,
-    },
-    heartbeat: existing?.heartbeat ?? {
-      status: "unknown",
-      lastHeartbeatAt: null,
-      version: null,
-      openclawVersion: null,
-      internalUrl: null,
-      startedAt: null,
-      mountedCustomers: [],
-      migratingIn: [],
     },
     lastError: existing?.lastError ?? { message: null, at: null },
   };

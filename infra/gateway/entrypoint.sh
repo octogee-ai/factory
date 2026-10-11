@@ -380,6 +380,7 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
   supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
 else
+  "$TSX" /octogee/scripts/entrypoints/prepare-openclaw-sqlite-journals.ts
   log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
   openclaw gateway run --bind lan --port 18789 &
   OPENCLAW_PID=$!

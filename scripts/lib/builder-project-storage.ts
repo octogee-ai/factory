@@ -1,4 +1,5 @@
-import { cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { cp, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isValidProjectId, isValidUsername } from "../../shared/types/identity.js";
@@ -14,6 +15,55 @@ async function clearProjectReadiness(projects: string): Promise<void> {
   for (const name of entries) {
     if (name.endsWith(".json") && isValidProjectId(name.slice(0, -5))) await rm(path.join(state, name));
   }
+}
+
+function anchoredDirectory(fd: number, location: string): string {
+  return process.platform === "linux" ? `/proc/self/fd/${fd}` : location;
+}
+
+async function hasProjectState(root: string, name: string): Promise<boolean> {
+  let marked = false;
+  for (const suffix of [".json", ".assets.json"]) {
+    try { await lstat(`${root}/.octogee-state/${name}${suffix}`); marked = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  return marked;
+}
+
+async function removeEmptyGitPlaceholder(gitPath: string): Promise<boolean> {
+  const stat = await lstat(gitPath);
+  if (stat.isSymbolicLink()) throw new Error("project Git placeholder is not a real directory");
+  if (!stat.isDirectory()) return false;
+  const git = await open(gitPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    if ((await readdir(anchoredDirectory(git.fd, gitPath))).length) return false;
+    await rmdir(gitPath);
+    return true;
+  } finally { await git.close(); }
+}
+
+async function removeEmptyProjectPlaceholder(root: string, name: string): Promise<void> {
+  const location = `${root}/${name}`;
+  const project = await open(location, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    if (await hasProjectState(root, name)) return;
+    const projectRoot = anchoredDirectory(project.fd, location);
+    const contents = await readdir(projectRoot);
+    if (contents.length === 1 && contents[0] === ".git") {
+      if (!await removeEmptyGitPlaceholder(`${projectRoot}/.git`)) return;
+    } else if (contents.length) return;
+    await rmdir(location);
+  } finally { await project.close(); }
+}
+
+async function removeEmptyProjectPlaceholders(projects: string): Promise<void> {
+  const parent = await open(projects, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const root = anchoredDirectory(parent.fd, projects);
+  try {
+    for (const name of await readdir(root)) {
+      if (isValidProjectId(name)) await removeEmptyProjectPlaceholder(root, name);
+    }
+  } finally { await parent.close(); }
 }
 
 async function assertProjectMount(home: string, projects: string): Promise<void> {
@@ -43,6 +93,7 @@ export async function prepareBuilderProjectStorage(input: { home: string; projec
   if (state?.status === "ready") {
     if (!(await lstat(destination)).isDirectory()) throw new Error("project mount is not a directory");
     if (await readHomeGeneration(homeMarker) === state.generation) {
+      await removeEmptyProjectPlaceholders(destination);
       await clearProjectReadiness(destination);
       return;
     }
@@ -62,6 +113,7 @@ export async function prepareBuilderProjectStorage(input: { home: string; projec
     await importProjectTree(source, destination, input.projects);
     await preserveHomeProjects(source, preserved);
   }
+  await removeEmptyProjectPlaceholders(destination);
   if (state.refreshMetadata) await retainProjectMetadata(input.home, input.slug, state.generation);
   await mkdir(path.dirname(homeMarker), { recursive: true });
   await writeFile(`${homeMarker}.next`, JSON.stringify(state.generation), { mode: 0o600 });

@@ -163,6 +163,52 @@ describe("createRetireGatewayHandler — simple-roll retirement", () => {
     expect(state.helmUninstalled).toEqual([]);
   });
 
+  it("retires a claimed paused native source with stale mounts only after Compute proves it fenced off", async () => {
+    const state = baseState({ mounted: ["ceckert"] });
+    const fenced = vi.fn(async () => true);
+    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: fenced });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(fenced).toHaveBeenCalledWith({ gatewayId: "canary", operationId: "op-r-1", version: 1 });
+    expect(vi.mocked(deps.verifyRetirementClaim).mock.invocationCallOrder[0]).toBeLessThan(fenced.mock.invocationCallOrder[0]);
+    expect(state.helmUninstalled).toEqual(["canary"]);
+  });
+
+  it("preserves stale mount refusal when the paused native source is not proven fenced off", async () => {
+    const state = baseState({ mounted: ["ceckert"] });
+    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: vi.fn(async () => false) });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("still has 1 mounted");
+    expect(state.helmUninstalled).toEqual([]);
+  });
+
+  it("refuses unreadable native fencing proof before any teardown", async () => {
+    const state = baseState({ mounted: ["ceckert"] });
+    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: vi.fn(async () => { throw new Error("Compute denied"); }) });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Compute denied");
+    expect(state.helmUninstalled).toEqual([]);
+  });
+
+  it("rechecks the retirement claim after Compute proof before teardown", async () => {
+    const state = baseState({ mounted: ["ceckert"] });
+    const deps = makeDeps(state, { isPausedNativeSourceFencedOff: vi.fn(async () => { state.claimOk = false; return true; }) });
+
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("retirement claim does not match");
+    expect(state.helmUninstalled).toEqual([]);
+  });
+
   it("refuses when the retirement claim does not match this operation", async () => {
     const state = baseState({ claimOk: false });
     const deps = makeDeps(state);

@@ -191,6 +191,7 @@ import { schedulerHandoffAwaitingRelease, startSchedulerHandoffRelease } from ".
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
 import { createGatewayVmHandler } from "./handlers/gateway-vm.js";
 import { createGatewayVmClient } from "./lib/compute-vm.js";
+import { pausedNativeRetirementSourceFencedOff } from "./lib/native-retirement-telemetry.js";
 import { readHomeCheckpointCompletedAt, requestHomeCheckpoint } from "./lib/home-checkpoint.js";
 import { clearParkedComputer, readParkedComputer } from "./lib/parked-computer.js";
 import {
@@ -3407,6 +3408,10 @@ async function buildHandlers(
   });
 
   const retireGateway = createRetireGatewayHandler({
+    isPausedNativeSourceFencedOff: (input) => pausedNativeRetirementSourceFencedOff({
+      db,
+      describe: (name, zone) => createGatewayComputeClient(logFn).describe(name, zone),
+    }, input),
     verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
       verifyGatewayRetirementClaimAtomic({
         db,

@@ -331,6 +331,47 @@ describe("surge OpenClaw process gate", () => {
 });
 
 describe("surge OpenClaw process supervisor", () => {
+
+  it("prepares SQLite journals before every cold start and source resume", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const children: FakeChild[] = [];
+    const order: string[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: "source-pod", log: () => undefined, socketPath,
+      readinessReleased: async () => true,
+      prepareDatabaseJournals: async () => { order.push("journals"); },
+      spawnOpenClaw: () => { order.push("spawn"); const child = new FakeChild(); children.push(child); return child; },
+      probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const request = { migrationId: "migration-journals", slug: "jefe", targetPodUid: "target-pod" };
+    try {
+      await vi.waitFor(() => expect(children).toHaveLength(1));
+      await client.hold(request);
+      await client.resume(request);
+      expect(order).toEqual(["journals", "spawn", "journals", "spawn"]);
+    } finally { await supervisor.stop(); }
+  });
+
+  it("keeps OpenClaw held when journal integrity preparation fails", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const spawnOpenClaw = vi.fn(() => new FakeChild());
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: "source-pod", log: () => undefined, socketPath,
+      readinessReleased: async () => false,
+      prepareTarget: async () => undefined,
+      prepareDatabaseJournals: async () => { throw new Error("database integrity refused"); },
+      spawnOpenClaw, probeHealthz: async () => false, healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    try {
+      await expect(client.permitNormal()).rejects.toThrow("database integrity refused");
+      expect(spawnOpenClaw).not.toHaveBeenCalled();
+      await expect(client.status()).resolves.toMatchObject({ phase: "held" });
+    } finally { await supervisor.stop(); }
+  });
   it("keeps Builder self-release alive when a permitted first boot fails before health", async () => {
     vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
@@ -474,6 +515,7 @@ describe("surge OpenClaw process supervisor", () => {
   it("refuses an unsupervised OpenClaw before preparing target state it could still be writing", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const prepareTarget = vi.fn(async () => undefined);
+    const prepareDatabaseJournals = vi.fn(async () => undefined);
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir,
@@ -482,6 +524,7 @@ describe("surge OpenClaw process supervisor", () => {
       socketPath,
       readinessReleased: async () => false,
       prepareTarget,
+      prepareDatabaseJournals,
       spawnOpenClaw: () => new FakeChild(),
       probeHealthz: async () => true,
       healthTimeoutMs: 100,
@@ -494,6 +537,7 @@ describe("surge OpenClaw process supervisor", () => {
 
       await expect(client.permit(request)).rejects.toThrow(/refusing to start a second gateway/u);
       expect(prepareTarget).not.toHaveBeenCalled();
+      expect(prepareDatabaseJournals).not.toHaveBeenCalled();
     } finally {
       await supervisor.stop();
     }

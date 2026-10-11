@@ -565,6 +565,35 @@ describe("gatewayUpsertOptsFromRelease", () => {
 });
 
 describe("provisioningRuntimeDoc", () => {
+  it("requires new runtime observations when a paused gateway resumes", () => {
+    const existing = provisioningRuntimeDoc({
+      gateway: gateway({ gatewayClass: "builder", desiredStatus: "paused" }),
+      artifact: artifact(), existing: null, now: 100,
+    });
+    existing.lifecycle = "serving";
+    existing.helm.availableReplicas = 1;
+    existing.heartbeat = {
+      status: "ready", lastHeartbeatAt: 99, version: "def5678", openclawVersion: "2026.9.9",
+      internalUrl: "http://old-pod", startedAt: 50, mountedCustomers: ["alice"], migratingIn: ["bob"],
+    };
+    existing.kubernetes = { status: "ready", totalPods: 1, readyPods: 1, observedAt: 99, pods: [] };
+
+    const resumed = provisioningRuntimeDoc({
+      gateway: gateway({ gatewayClass: "builder", desiredStatus: "running" }),
+      artifact: artifact(), existing, now: 200,
+    });
+
+    expect(resumed.lifecycle).toBe("provisioning");
+    expect(resumed.helm).toMatchObject({ replicas: 1, availableReplicas: null });
+    expect(resumed.heartbeat).toEqual({
+      status: "unknown", lastHeartbeatAt: null, version: null, openclawVersion: null,
+      internalUrl: null, startedAt: null, mountedCustomers: [], migratingIn: [],
+    });
+    expect(resumed.kubernetes).toEqual({ status: "unknown", totalPods: 0, readyPods: 0, observedAt: 200, pods: [] });
+    expect(resumed.createdAt).toBe(100);
+    expect(existing.heartbeat.status).toBe("ready");
+  });
+
   it("creates a provisioning runtime doc keyed by the bare gatewayId", () => {
     const doc = provisioningRuntimeDoc({
       gateway: gateway({ desiredRelease: 2 }),
@@ -596,6 +625,10 @@ describe("provisioningRuntimeDoc", () => {
     });
     existing.lifecycle = "serving";
     existing.heartbeat.status = "ready";
+    existing.heartbeat.lastHeartbeatAt = 99;
+    existing.heartbeat.startedAt = 50;
+    existing.heartbeat.mountedCustomers = ["alice"];
+    existing.helm.availableReplicas = 1;
 
     const sameRelease = provisioningRuntimeDoc({
       gateway: gateway({ desiredRelease: 2 }),
@@ -604,7 +637,8 @@ describe("provisioningRuntimeDoc", () => {
       now: 200,
     });
     expect(sameRelease.lifecycle).toBe("serving");
-    expect(sameRelease.heartbeat.status).toBe("ready");
+    expect(sameRelease.heartbeat).toEqual(existing.heartbeat);
+    expect(sameRelease.helm.availableReplicas).toBe(1);
     expect(sameRelease.createdAt).toBe(100);
 
     const newRelease = provisioningRuntimeDoc({
@@ -615,6 +649,8 @@ describe("provisioningRuntimeDoc", () => {
     });
     expect(newRelease.lifecycle).toBe("serving");
     expect(newRelease.release).toBe(3);
+    expect(newRelease.heartbeat).toEqual(existing.heartbeat);
+    expect(newRelease.helm.availableReplicas).toBe(1);
   });
 });
 

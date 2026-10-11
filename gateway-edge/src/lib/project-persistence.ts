@@ -24,8 +24,41 @@ const defaults: ProjectPersistenceDeps = {
   },
 };
 
+const persistenceTails = new Map<string, Promise<void>>();
+const PERSISTENCE_QUEUE_WAIT_MS = 60_000;
+
+async function waitForPreviousPersistence(previous: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      previous,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("project persistence queue timeout; local work retained")), PERSISTENCE_QUEUE_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function persistBuilderProjects(input: { root: string; slug: string }, deps: ProjectPersistenceDeps = defaults): Promise<{ projects: number }> {
   if (!isValidUsername(input.slug)) throw new Error("invalid project owner");
+  const key = path.resolve(input.root, input.slug);
+  const previous = persistenceTails.get(key);
+  let release!: () => void;
+  const completion = new Promise<void>(resolve => { release = resolve; });
+  const tail = previous ? previous.then(() => completion) : completion;
+  persistenceTails.set(key, tail);
+  try {
+    if (previous) await waitForPreviousPersistence(previous);
+    return await persistProjectsOnce(input, deps);
+  } finally {
+    release();
+    void tail.then(() => { if (persistenceTails.get(key) === tail) persistenceTails.delete(key); });
+  }
+}
+
+async function persistProjectsOnce(input: { root: string; slug: string }, deps: ProjectPersistenceDeps): Promise<{ projects: number }> {
   const directory = path.join(input.root, input.slug, "projects");
   for (const candidate of [input.root, path.join(input.root, input.slug), directory]) {
     if (!(await lstat(candidate)).isDirectory()) throw new Error("project root is not a directory");

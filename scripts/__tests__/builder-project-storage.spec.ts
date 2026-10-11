@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -5,6 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareBuilderProjectStorage } from "../lib/builder-project-storage.js";
+
+vi.mock("node:fs/promises", async importOriginal => ({ ...await importOriginal<typeof import("node:fs/promises")>() }));
 
 let root: string;
 let home: string;
@@ -15,7 +18,7 @@ beforeEach(async () => {
   await mkdir(path.join(home, ".openclaw/customers/alice/projects/demo"), { recursive: true });
   await mkdir(projects);
 });
-afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
 const mounted = { assertMount: vi.fn(async () => {}) };
 it("copies editable project state to the separate mount and preserves its source until remote save", async () => {
   const source = path.join(home, ".openclaw/customers/alice/projects/demo");
@@ -33,8 +36,81 @@ it("copies editable project state to the separate mount and preserves its source
   expect(await readFile(path.join(projects, "projects/demo/unsaved.txt"), "utf8")).toBe("newer");
   expect(await readdir(path.join(projects, "projects/.octogee-state"))).toEqual(["demo.assets.json"]);
 });
+it.each([false, true])("removes only empty legacy project placeholders at boot without reimporting them: %s", async (emptyGit) => {
+  const source = path.join(home, ".openclaw/customers/alice/projects/demo");
+  if (emptyGit) await mkdir(path.join(source, ".git"));
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  expect(await readdir(path.join(projects, "projects"))).toEqual([]);
+  expect(await readdir(path.join(home, ".openclaw/project-imports/alice/demo"))).toEqual(emptyGit ? [".git"] : []);
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  expect(await readdir(path.join(projects, "projects"))).toEqual([]);
+});
+it("removes an empty placeholder left in an initialized working set", async () => {
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  const placeholder = path.join(projects, "projects/orphan");
+  await mkdir(path.join(placeholder, ".git"), { recursive: true });
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  await expect(readdir(placeholder)).rejects.toMatchObject({ code: "ENOENT" });
+});
+it.each(["file", "git-metadata", "asset-state"])("preserves a project containing %s", async (kind) => {
+  const source = path.join(home, ".openclaw/customers/alice/projects/demo");
+  if (kind === "file") await writeFile(path.join(source, "local.txt"), "keep");
+  if (kind === "git-metadata") {
+    await mkdir(path.join(source, ".git"));
+    await writeFile(path.join(source, ".git/HEAD"), "keep");
+  }
+  if (kind === "asset-state") {
+    const state = path.join(path.dirname(source), ".octogee-state");
+    await mkdir(state);
+    await writeFile(path.join(state, "demo.assets.json"), "keep");
+  }
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  expect((await fs.lstat(path.join(projects, "projects/demo"))).isDirectory()).toBe(true);
+  const location = kind === "file" ? "demo/local.txt" : kind === "git-metadata" ? "demo/.git/HEAD" : ".octogee-state/demo.assets.json";
+  expect(await readFile(path.join(projects, "projects", location), "utf8")).toBe("keep");
+});
+it.each(["project", "git"])("refuses a symlink %s placeholder without touching its target", async (kind) => {
+  const source = path.join(home, ".openclaw/customers/alice/projects/demo");
+  const target = path.join(root, "foreign");
+  await mkdir(target);
+  if (kind === "project") { await rm(source, { recursive: true }); await symlink(target, source); }
+  else await symlink(target, path.join(source, ".git"));
+  await expect(prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted)).rejects.toThrow();
+  expect(await readdir(target)).toEqual([]);
+  expect((await fs.lstat(path.join(projects, "projects/demo", ...(kind === "git" ? [".git"] : [])))).isSymbolicLink()).toBe(true);
+});
+it.each([false, true])("preserves a concurrent write and stops boot during empty removal: %s", async (emptyGit) => {
+  const source = path.join(home, ".openclaw/customers/alice/projects/demo");
+  if (emptyGit) await mkdir(path.join(source, ".git"));
+  const rmdir = fs.rmdir;
+  const created = path.join(projects, "projects/demo", ...(emptyGit ? [".git"] : []), "concurrent.txt");
+  vi.spyOn(fs, "rmdir").mockImplementationOnce(async (...args) => {
+    await writeFile(created, "keep concurrent work");
+    return rmdir(...args);
+  });
+  await expect(prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted)).rejects.toMatchObject({ code: "ENOTEMPTY" });
+  expect(await readFile(created, "utf8")).toBe("keep concurrent work");
+  expect(JSON.parse(await readFile(path.join(projects, ".octogee-storage.json"), "utf8"))).toMatchObject({ status: "preparing" });
+});
+it("preserves a project replaced by a symlink during empty removal", async () => {
+  const location = path.join(projects, "projects/demo");
+  const target = path.join(root, "foreign");
+  await mkdir(target);
+  await writeFile(path.join(target, "foreign.txt"), "keep foreign work");
+  const rmdir = fs.rmdir;
+  vi.spyOn(fs, "rmdir").mockImplementationOnce(async (...args) => {
+    await rename(location, `${location}-retained`);
+    await symlink(target, location);
+    return rmdir(...args);
+  });
+  await expect(prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted)).rejects.toThrow();
+  expect((await fs.lstat(location)).isSymbolicLink()).toBe(true);
+  expect(await readFile(path.join(target, "foreign.txt"), "utf8")).toBe("keep foreign work");
+  expect(await readdir(`${location}-retained`)).toEqual([]);
+});
 it("invalidates a retained working set when the home returns from another project mount", async () => {
   await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  await mkdir(path.join(projects, "projects/demo"));
   await writeFile(path.join(projects, "projects/demo/unsaved.txt"), "retained Hobby work");
   const native = path.join(root, "native-projects");
   await mkdir(native);
@@ -60,6 +136,7 @@ it("invalidates a retained working set when the home returns from another projec
 });
 it.each([false, true])("resumes an interrupted runtime transition after retaining the old checkout: %s", async (alreadyRetained) => {
   await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  await mkdir(path.join(projects, "projects/demo"));
   await writeFile(path.join(projects, "projects/demo/local.txt"), "keep");
   const marker = path.join(projects, ".octogee-storage.json");
   const previous = JSON.parse(await readFile(marker, "utf8"));

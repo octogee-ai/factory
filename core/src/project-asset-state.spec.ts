@@ -17,6 +17,19 @@ describe.skipIf(process.platform !== "linux")("project checkout restore readines
   });
   afterEach(async () => { vi.restoreAllMocks(); await rm(parent, { recursive: true, force: true }); });
 
+  it("does not create Git or restore-state directories when reading an empty placeholder", async () => {
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    expect(await fs.readdir(root)).toEqual([]);
+    expect(await fs.readdir(parent)).toEqual(["demo"]);
+  });
+
+  it("does not recreate a missing restore-state directory for an existing checkout", async () => {
+    await writeProjectRestoreReady(root, "alice", "demo");
+    await rm(path.join(parent, ".octogee-state"), { recursive: true });
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    expect(await fs.readdir(parent)).toEqual(["demo"]);
+  });
+
   it("requires restoration again after the checkout is replaced", async () => {
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
     await writeProjectRestoreReady(root, "alice", "demo");

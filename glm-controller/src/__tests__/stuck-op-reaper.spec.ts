@@ -425,6 +425,25 @@ describe("runStuckOpReaperTick", () => {
     expect(ops[0].updated).toBeUndefined();
   });
 
+
+  it.each([{ age: 2_690_000, reaped: 0 }, { age: 2_701_000, reaped: 1 }])("respects the bounded final-import deadline at age $age", async ({ age, reaped }) => {
+    const ops: FakeOpDoc[] = [{ id: "slow-final", data: { status: "running", kind: "migrate-customer",
+      startedAt: NOW - age, lastProgressAt: NOW - age, steps: [{ name: "final-sync-state", status: "running" }] } }];
+    await expect(runStuckOpReaperTick({ db: makeFakeDb(ops) as never, log: vi.fn(), now: () => NOW,
+      stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped });
+  });
+
+
+  it("rechecks a newly running final-import budget inside the reap transaction", async () => {
+    const ops: FakeOpDoc[] = [{ id: "changed-stage", data: { status: "running", kind: "migrate-customer",
+      startedAt: NOW - 1_100_000, input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "builder-target" },
+      steps: [{ name: "pre-sync-state", status: "running" }] } }];
+    const db = makeFakeDb(ops, { beforeTransaction: () => { ops[0].data.steps = [{ name: "final-sync-state", status: "running" }]; } });
+    await expect(runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW,
+      stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped: 0 });
+    expect(ops[0].updated).toBeUndefined();
+  });
+
   it("flips status=failed on a `running` op older than stalenessMs", async () => {
     const ops: FakeOpDoc[] = [
       {

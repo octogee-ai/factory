@@ -29,6 +29,7 @@ import {
   type BuilderAgentModelDefault,
 } from "../../shared/types/platform-config.js";
 import {
+  BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
   CONFIG_PATCH_DEADLINE_MS,
   MIGRATING_IN_PIN_TTL_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
@@ -1488,7 +1489,7 @@ async function activateImportedCustomer(
   if (configuredBuilder) {
     ctx.log(`[import:${slug}] waiting for the Builder control runtime before roster activation`);
     await waitForAppliedConfigRevision(ctx.rpc, slug, {
-      timeoutMs: 600_000,
+      timeoutMs: BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
       signal: opts?.signal,
       acceptSupersedingRevision: true,
     });

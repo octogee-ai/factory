@@ -1,3 +1,4 @@
+import { Agent } from "undici";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { GatewayVmAddress } from "./gateway-address.js";
@@ -11,6 +12,8 @@ import {
   type FinishRsyncImportRequestBody,
   type ImportResponse,
   MIGRATION_TRANSFER_TIMEOUT_MS,
+  MIGRATION_IMPORT_FINISH_TIMEOUT_MS,
+  MIGRATION_TRANSFER_LEASE_MS,
   type PrepareRsyncImportRequestBody,
   type PrepareRsyncImportResponse,
   type PushRsyncStateRequestBody,
@@ -20,7 +23,8 @@ import type { MigrationSyncMode } from "@octogee/core/fleet-migration";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 
-const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_TIMEOUT_MS + 60_000;
+const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_LEASE_MS;
+const controlDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 const DEFAULT_WORKER_ID = `glm-${process.pid}`;
 const MIGRATION_TRANSFER_USER = "migration";
 
@@ -184,7 +188,7 @@ async function waitForTargetPodReady(
   }
 }
 
-function postSignedJson<Resp>(
+async function postSignedJson<Resp>(
   deps: {
     fetchImpl: typeof globalThis.fetch;
     privateKey: string;
@@ -200,26 +204,30 @@ function postSignedJson<Resp>(
   },
 ): Promise<Resp> {
   const rawBody = JSON.stringify(opts.body);
-  const signature = signFleetRequest(
-    deps.privateKey,
-    gatewayScopedJobId(opts.migrationId, opts.gatewayId),
-    rawBody,
-  );
+  const signature = signFleetRequest(deps.privateKey, gatewayScopedJobId(opts.migrationId, opts.gatewayId), rawBody);
   const url = `${opts.baseUrl ?? deps.resolveGatewayUrl(opts.transportId)}${opts.path}`;
-  return deps.fetchImpl(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      [SIGNATURE_HEADER]: signature,
-    },
-    body: rawBody,
-  }).then(async (res) => {
+  const timeoutMs = opts.path.startsWith("/finish-rsync-import/")
+    ? MIGRATION_IMPORT_FINISH_TIMEOUT_MS : MIGRATION_TRANSFER_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`${opts.path} timed out after ${timeoutMs}ms`)), timeoutMs);
+  const init: RequestInit & { dispatcher?: Agent } = {
+    method: "POST", headers: { "content-type": "application/json", [SIGNATURE_HEADER]: signature },
+    body: rawBody, signal: controller.signal,
+    ...(deps.fetchImpl === globalThis.fetch ? { dispatcher: controlDispatcher } : {}),
+  };
+  try {
+    const res = await deps.fetchImpl(url, init);
     if (!res.ok) {
-      const text = await res.text().catch(() => "<no body>");
+      const text = await res.text();
       throw new Error(`${opts.path}: ${res.status} ${text}`);
     }
-    return (await res.json()) as Resp;
-  });
+    return await res.json() as Resp;
+  } catch (error) {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function buildClaimedTaskDoc(

@@ -1,5 +1,7 @@
+import http from "node:http";
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type {SourceTransferExecution} from "@octogee/shared/types/glm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
@@ -182,6 +184,129 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+
+  it("uses a private dispatcher to outlast the production fetch header deadline", async () => {
+    const original = getGlobalDispatcher();
+    const shortHeaders = new Agent({ headersTimeout: 10 });
+    const server = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", chunk => { raw += chunk; });
+      req.on("end", () => {
+        const body = raw ? JSON.parse(raw) : {};
+        const reply = () => {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify(req.url!.includes("prepare-rsync-import")
+            ? { ...body, port: 30873, certificatePem: TARGET_CERTIFICATE_PEM }
+            : { migrationId: body.migrationId, slug: body.slug, imported: true }));
+        };
+        if (req.url === "/slow" || req.url!.includes("finish-rsync-import")) setTimeout(reply, 1_500);
+        else reply();
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as import("node:net").AddressInfo).port;
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      setGlobalDispatcher(shortHeaders);
+      await expect(globalThis.fetch(base + "/slow")).rejects.toThrow("fetch failed");
+      const runner = makeCommandRunner([]);
+      const transfer = createRsyncMigrationTransfer({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+        fleetControllerPort: String(port), resolveGatewayUrl: () => base,
+        runCommand: async (...args) => { const result = await runner(...args); return { ...result, stdout: result.stdout.replaceAll(SOURCE_POD_IP, "127.0.0.1").replaceAll(TARGET_POD_IP, "127.0.0.1") }; } });
+      await expect(transfer({ migrationId: "production-dispatcher", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).resolves.toMatchObject({ imported: true });
+      expect(getGlobalDispatcher()).toBe(shortHeaders);
+    } finally {
+      setGlobalDispatcher(original);
+      await shortHeaders.close();
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }, 10_000);
+
+  it("keeps the cold Builder finish request and transfer claim alive beyond five minutes", async () => {
+    vi.useFakeTimers();
+    const store: Store = {};
+    const baseFetch = makeFetch([]);
+    let ready!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    let finish!: () => void;
+    let signal!: AbortSignal;
+    const fetch = (async (url, init) => {
+      if (!String(url).includes("/finish-rsync-import/")) return baseFetch(url, init);
+      signal = init!.signal!;
+      ready();
+      await new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      return baseFetch(url, init);
+    }) as typeof globalThis.fetch;
+    try {
+      const transfer = createRsyncMigrationTransfer({
+        db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+        fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
+        fetch, runCommand: makeCommandRunner([]), now: () => Date.now(),
+      });
+      const completion = transfer({ migrationId: "slow-start", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
+      await entered;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      await vi.advanceTimersByTimeAsync(600_001);
+      expect(signal.aborted).toBe(false);
+      expect(store["slow-start__final"].leaseExpiresAt).toBeGreaterThan(Date.now());
+      finish();
+      await expect(completion).resolves.toMatchObject({ imported: true });
+      expect(store["slow-start__final"].status).toBe("succeeded");
+    } finally { vi.useRealTimers(); }
+  });
+
+
+
+  it("retains transfer ownership through bounded failure cleanup after slow control phases", async () => {
+    vi.useFakeTimers();
+    const store: Store = {};
+    const baseFetch = makeFetch([]);
+    const fetch = (async (url, init) => {
+      const finish = String(url).includes("/finish-rsync-import/");
+      await vi.advanceTimersByTimeAsync(finish ? 1_529_999 : 329_999);
+      expect(store["cleanup-budget__final"].leaseExpiresAt).toBeGreaterThan(Date.now());
+      if (finish) throw new Error("finish failed before deadline");
+      return baseFetch(url, init);
+    }) as typeof globalThis.fetch;
+    try {
+      const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+        fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]), now: () => Date.now() });
+      await expect(transfer({ migrationId: "cleanup-budget", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).rejects.toThrow("finish failed before deadline");
+      expect(store["cleanup-budget__final"].status).toBe("failed");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["headers", "body"] as const)("aborts a stalled finish %s within the explicit import budget", async (phase) => {
+    vi.useFakeTimers();
+    const store: Store = {};
+    const baseFetch = makeFetch([]);
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const fetch = (async (url, init) => {
+      if (!String(url).includes("/finish-rsync-import/")) return baseFetch(url, init);
+      const stall = () => new Promise<never>((_, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+        entered();
+      });
+      if (phase === "headers") return stall();
+      return { ok: true, json: stall } as unknown as Response;
+    }) as typeof globalThis.fetch;
+    try {
+      const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+        fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]) });
+      const completion = transfer({ migrationId: "stalled", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
+      const rejection = expect(completion).rejects.toThrow("timed out after 1530000ms");
+      await waiting;
+      await vi.advanceTimersByTimeAsync(1_530_000);
+      await rejection;
+      expect(store["stalled__final"].status).toBe("failed");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("waits for the cold target Pod to become Ready after final import before reporting success", async () => {
     const store: Store = {};
     const calls: string[] = [];
