@@ -1,6 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js';
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
-import type { MigrationProgressRecord, SourceTransferExecution } from '@octogee/shared/types/glm';
+import type { MigrationProgressRecord, SourceTransferExecution, GatewayVmHomeCheckpoint } from '@octogee/shared/types/glm';
 import { createMigrationProgress } from "../migration-progress.js";
 import { operationScopedLog, withOperationLogScope } from "../operation-log-scope.js";
 import {
@@ -15,8 +16,12 @@ import {
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   type MigrationProgressRequestBody,
+  type ImportResponse,
+  type NativeAgentContextTransfer,
+  type NativeSharedAgentContextStage,
 } from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput } from "../lib/native-computer-return.js";
+import type { NativeAgentContextTransferInput } from "../lib/native-agent-context-transfer.js";
 import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
@@ -90,6 +95,11 @@ export interface MigrateCustomerDeps {
   reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
   recordMigrationProgress: (input: { operation: Operation; event: MigrationProgressRecord }) => Promise<void>;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
+  prepareNativeAgentContextTransfer: (input: NativeAgentContextTransferInput) => Promise<NativeAgentContextTransfer | null>;
+  acknowledgeNativeAgentContextTransfer: (input: NativeAgentContextTransferInput, policy: NativeAgentContextTransfer, result: ImportResponse) => Promise<void>;
+  acknowledgeNativeSharedContextStage: (input: NativeAgentContextTransferInput, policy: NativeAgentContextTransfer, stage: NativeSharedAgentContextStage) => Promise<void>;
+  prepareNativeSharedContextRestore: (input: NativeAgentContextTransferInput) => Promise<{ stage: NativeSharedAgentContextStage; completed: boolean; checkpoint?: GatewayVmHomeCheckpoint } | null>;
+  acknowledgeNativeSharedContextRestore: (input: NativeAgentContextTransferInput, stage: NativeSharedAgentContextStage, result: ImportResponse) => Promise<void>;
   retireNativeSchedulerBeforeStage: (input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"]) => Promise<void>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
@@ -108,7 +118,9 @@ export interface MigrateCustomerDeps {
     release: number,
   ) => Promise<GatewayArtifact | null>;
 
-  commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
+  commitCutover: (commit: CutoverCommit & { automatic?: boolean; nativeSharedContextHold?: {
+    operationId: string; claimedStartedAt: number; migrationId: string; stage: NativeSharedAgentContextStage;
+  } }) => Promise<void>;
 
   resolveGatewayUrl: (gatewayId: string, options?: { allowUnready: boolean }) => Promise<string>;
 
@@ -511,13 +523,16 @@ async function buildV2DriverDeps(
   await Promise.all([...transportIds].map(async (transportId) => {
     urls.set(transportId, await deps.resolveGatewayUrl(transportId));
   }));
-  const client = deps.buildClient((transportId) => {
+  const client = agentContextMigrationClient(deps.buildClient((transportId) => {
     const url = urls.get(transportId);
     if (!url) {
       throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     }
     return url;
-  }, op.input.sourceTransferMode === RETAINED_POD ? {op,state} : undefined);
+  }, op.input.sourceTransferMode === RETAINED_POD ? {op,state} : undefined), deps, {
+    uid: state.uid, slug: state.slug, operationId: op.id, claimedStartedAt: op.startedAt,
+    migrationId: state.migrationId, fromGatewayId: state.sourceGatewayId, toGatewayId: state.targetGatewayId,
+  });
   return {
     client,
     setMigrationPhase: (phase: "preparing" | "waiting" | "transferring" | "connecting") => deps.setMigrationPhase?.({ uid: state.uid, sourceGatewayId: state.sourceGatewayId, operationId: state.operationId, phase }) ?? Promise.resolve(),
@@ -698,6 +713,7 @@ interface FreshProvision {
   stateMigration: RollStateMigrationDecision;
   automatic: boolean;
   nativeReturn?: NativeComputerReturn | null;
+  agentContextStage?: NativeSharedAgentContextStage;
 }
 
 type SourceAssignment = Omit<Parameters<MigrateCustomerDeps["setAssignmentState"]>[0], "state" | "createIfMissing">;
@@ -709,6 +725,12 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
     `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
     `provision-fresh (${input.stateMigration.reason})`,
   );
+  const agentContextInput: NativeAgentContextTransferInput = {
+    uid, slug, operationId: input.operationId, claimedStartedAt: input.op.startedAt,
+    migrationId, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "final",
+  };
+  const agentContext = input.nativeReturn ? await deps.prepareNativeAgentContextTransfer(agentContextInput) : null;
+  if (agentContext && agentContext.mode !== "restore-shared") throw new Error("native return requires archived Shared agent context");
   const handoff = input.nativeReturn ? await persistNativeReturnHandoff(input) : null;
   const client = await gatewayClient(deps, handoff ? [targets.fromGatewayId, targets.toGatewayId] : [targets.fromGatewayId]);
   const step = (name: string, action: () => Promise<unknown>) =>
@@ -732,7 +754,7 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
       createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
     });
     sourceFenced = true;
-    await closeSourceForFreshProvision(input, client, step, handoff);
+    await closeSourceForFreshProvision(input, client, step, handoff, agentContext);
     await step("cutover-firestore", async () => {
       await deps.commitCutover({
         uid,
@@ -741,6 +763,9 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
         fromGatewayId: targets.fromGatewayId,
         flipMirror: targets.fromGatewayId !== targets.toGatewayId,
         automatic,
+        ...(input.agentContextStage ? { nativeSharedContextHold: {
+          operationId: input.operationId, claimedStartedAt: requiredClaimStartedAt(input.op), migrationId, stage: input.agentContextStage,
+        } } : {}),
       });
       await recordCutoverCommitted(deps, ctx);
     });
@@ -752,9 +777,9 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
       const settled = await settleNativeReturnAfterFailure(input, ctx, input.nativeReturn, handoff);
       if (settled) return settled;
     }
-    return rollbackFreshProvision({ deps, ctx, native: input.nativeReturn, client, handoff, sourceAssignment, migrationId, slug, error });
+    return rollbackFreshProvision({ deps, ctx, native: input.nativeReturn, client, handoff, sourceAssignment, migrationId, slug, error, agentContextStage: input.agentContextStage, toGatewayId: targets.toGatewayId });
   }
-  if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, uid, migrationId, slug, handoff });
+  if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, uid, migrationId, slug, handoff, operation: input.op });
   await discardSourceFootprint(deps, ctx, {
     client,
     migrationId,
@@ -796,6 +821,7 @@ async function closeSourceForFreshProvision(
   client: MigrationClient,
   step: (name: string, action: () => Promise<unknown>) => Promise<void>,
   handoff: SchedulerHandoffState | null,
+  agentContext: NativeAgentContextTransfer | null,
 ): Promise<void> {
   const { targets, slug, migrationId } = input;
   await step("quiesce-source", () => client.quiesce({
@@ -812,6 +838,23 @@ async function closeSourceForFreshProvision(
       reason: input.nativeReturn ? "native-return" : "migration-final",
     }));
   }
+  if (agentContext) await step("stage-shared-agent-context", async () => {
+    const selection: NativeAgentContextTransferInput = {
+      uid: input.uid, slug, operationId: input.operationId, claimedStartedAt: input.op.startedAt,
+      migrationId, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "final",
+    };
+    const policy = await input.deps.prepareNativeAgentContextTransfer(selection);
+    if (!isDeepStrictEqual(policy, agentContext)) throw new Error("Shared agent context restore authority changed before staging");
+    const staged = await client.transferState({
+      migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId,
+      mode: "final", stageOnly: true, includeActivationManifest: false, agentContext,
+    });
+    input.agentContextStage = staged.sharedAgentContextStage;
+    if (staged.imported !== false || staged.migrationId !== migrationId || staged.slug !== slug || !staged.sharedAgentContextStage) {
+      throw new Error("Shared agent context staging did not confirm the matching transfer");
+    }
+    await input.deps.acknowledgeNativeSharedContextStage(selection, agentContext, staged.sharedAgentContextStage);
+  });
   if (handoff) await step("stage-scheduler", () => stagePortableSchedules(input.deps, client, handoff));
   if (input.nativeReturn) await step("checkpoint-native-computer", input.nativeReturn.checkpoint);
 }
@@ -825,7 +868,7 @@ async function settleNativeReturnAfterFailure(
   const { deps, targets, uid, slug, migrationId } = input;
   const current = await deps.readUser(uid);
   if (current?.currentGatewayId === targets.toGatewayId) {
-    return completeNativeReturn(deps, ctx, native, { ...targets, uid, migrationId, slug, handoff });
+    return completeNativeReturn(deps, ctx, native, { ...targets, uid, migrationId, slug, handoff, operation: input.op });
   }
   if (current?.currentGatewayId !== targets.fromGatewayId) {
     throw new Error("native return ownership changed; checkpoint retained");
@@ -844,8 +887,18 @@ async function rollbackFreshProvision(input: {
   migrationId: string;
   slug: string;
   error: unknown;
+  agentContextStage?: NativeSharedAgentContextStage;
+  toGatewayId: string;
 }): Promise<OperationResult> {
   const { deps, client, handoff, migrationId, slug } = input;
+  if (input.agentContextStage) {
+    try {
+      await input.ctx.assertActiveClaim?.();
+      await client.abortImport({ migrationId, gatewayId: input.toGatewayId, slug, mode: "final" });
+    } catch (error) {
+      return failure(`${errorMessage(input.error)}; Shared agent context stage cleanup pending: ${errorMessage(error)}`, false);
+    }
+  }
   const cause = errorMessage(input.error);
   if (handoff) {
     const abortFailed = await abortStagedSchedules(deps, client, handoff);
@@ -906,6 +959,24 @@ async function gatewayClient(deps: MigrateCustomerDeps, gatewayIds: string[]): P
     if (!url) throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     return url;
   });
+}
+
+function agentContextMigrationClient(
+  client: MigrationClient,
+  deps: MigrateCustomerDeps,
+  input: Omit<NativeAgentContextTransferInput, "mode">,
+): MigrationClient {
+  return { ...client, transferState: async request => {
+    if (request.slug !== input.slug || request.migrationId !== input.migrationId ||
+        request.fromGatewayId !== input.fromGatewayId || request.toGatewayId !== input.toGatewayId) {
+      throw new Error("agent context transfer scope changed");
+    }
+    const selection = { ...input, mode: request.mode ?? "pre" };
+    const policy = await deps.prepareNativeAgentContextTransfer(selection);
+    const result = await client.transferState({ ...request, ...(policy ? { agentContext: policy } : {}) });
+    if (policy && selection.mode === "final") await deps.acknowledgeNativeAgentContextTransfer(selection, policy, result);
+    return result;
+  } };
 }
 
 function schedulerRetirementClient(client: MigrationClient, deps: MigrateCustomerDeps, input: Omit<NativeSchedulerRetirementInput, "gatewayId">): MigrationClient {
@@ -1296,9 +1367,10 @@ async function completeNativeReturn(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   native: NativeComputerReturn,
-  input: { uid: string; fromGatewayId: string; toGatewayId: string; slug: string; migrationId: string; handoff: SchedulerHandoffState | null },
+  input: NativeReturnTarget & { handoff: SchedulerHandoffState | null; operation: Operation },
 ): Promise<OperationResult> {
   try {
+    await restoreNativeSharedAgentContext(deps, ctx, input);
     try {
       await ctx.assertCustomerRestoreSettled?.();
     } catch (error) {
@@ -1332,6 +1404,40 @@ async function completeNativeReturn(
   }
 }
 
+async function restoreNativeSharedAgentContext(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  input: NativeReturnTarget & { operation: Operation },
+): Promise<void> {
+  const selection: NativeAgentContextTransferInput = {
+    uid: input.uid, slug: input.slug, operationId: input.operation.id, claimedStartedAt: input.operation.startedAt,
+    migrationId: input.migrationId, fromGatewayId: input.fromGatewayId, toGatewayId: input.toGatewayId, mode: "final",
+  };
+  const restore = await deps.prepareNativeSharedContextRestore(selection);
+  if (!restore) return;
+  let resume = false;
+  try {
+    await ctx.assertCustomerRestoreSettled?.();
+  } catch (error) {
+    if (!(error instanceof PendingCustomerRestoreError)) throw error;
+    resume = true;
+  }
+  if (restore.completed) {
+    if (resume) await withAssignedSharedRestoreFence(deps, ctx, input, true, () => verifyNativeReturnTarget(deps, input));
+    return;
+  }
+  await withAssignedSharedRestoreFence(deps, ctx, input, resume, () => reportFreshStep(deps, ctx, "restore-shared-agent-context", async () => {
+    await ctx.assertActiveClaim?.();
+    const target = await gatewayClient(deps, [input.toGatewayId]);
+    const result = await target.finishAgentContextRestore({
+      migrationId: input.migrationId, fromGatewayId: input.fromGatewayId, toGatewayId: input.toGatewayId, slug: input.slug,
+      stage: restore.stage, agentContext: { mode: "restore-shared", archive: restore.stage.archive },
+      ...(restore.checkpoint ? { sharedAgentContextRecovery: { checkpoint: restore.checkpoint } } : {}),
+    });
+    await deps.acknowledgeNativeSharedContextRestore(selection, restore.stage, result);
+  }));
+}
+
 interface NativeReturnTarget {
   uid: string;
   fromGatewayId: string;
@@ -1357,6 +1463,30 @@ function interruptedSharedMount(error: unknown, input: NativeReturnTarget): bool
   ].every(Boolean);
 }
 
+async function withAssignedSharedRestoreFence(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  input: NativeReturnTarget,
+  resume: boolean,
+  work: () => Promise<void>,
+): Promise<void> {
+  if (!ctx.assertActiveClaim) throw new Error("Shared restore requires an active operation claim check");
+  if (!ctx.withCustomerRestoreFence) throw new Error("Shared restore requires durable assignment coordination");
+  const placement = await deps.resolveSourcePlacement(input.uid, input.toGatewayId);
+  if (placement?.epoch === undefined) throw new Error("Shared restore requires an assigned epoch");
+  await ctx.assertActiveClaim();
+  await ctx.withCustomerRestoreFence({
+    uid: input.uid, slug: input.slug, gatewayId: input.toGatewayId,
+    fromGatewayId: input.fromGatewayId, assignmentEpoch: placement.epoch,
+    ...(resume ? { resume: true } : {}),
+  }, work);
+  await ctx.assertActiveClaim();
+  const owner = await deps.readUser(input.uid);
+  if (owner?.slug !== input.slug || owner.currentGatewayId !== input.toGatewayId) {
+    throw new Error("Shared restore owner changed before verification");
+  }
+}
+
 async function restoreInterruptedSharedMount(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
@@ -1369,16 +1499,7 @@ async function restoreInterruptedSharedMount(
       snapshot.gatewayId !== input.toGatewayId || snapshot.status !== "complete") {
     throw new Error("Shared restore snapshot no longer proves the assigned complete owner");
   }
-  if (!ctx.assertActiveClaim) throw new Error("Shared restore requires an active operation claim check");
-  if (!ctx.withCustomerRestoreFence) throw new Error("Shared restore requires durable assignment coordination");
-  const placement = await deps.resolveSourcePlacement(input.uid, input.toGatewayId);
-  if (placement?.epoch === undefined) throw new Error("Shared restore requires an assigned epoch");
-  await ctx.assertActiveClaim();
-  await ctx.withCustomerRestoreFence({
-    uid: input.uid, slug: input.slug, gatewayId: input.toGatewayId,
-    fromGatewayId: input.fromGatewayId, assignmentEpoch: placement.epoch,
-    ...(resume ? { resume: true } : {}),
-  }, () => reportFreshStep(deps, ctx, "restore-target", async () => {
+  await withAssignedSharedRestoreFence(deps, ctx, input, resume, () => reportFreshStep(deps, ctx, "restore-target", async () => {
     const result = await deps.buildClient(() => url).restoreTarget({
       migrationId: input.migrationId, gatewayId: input.toGatewayId,
       uid: input.uid, slug: input.slug, snapshot,
@@ -1388,11 +1509,6 @@ async function restoreInterruptedSharedMount(
       throw new Error("Shared restore did not confirm the matching migration");
     }
   }));
-  await ctx.assertActiveClaim();
-  const owner = await deps.readUser(input.uid);
-  if (owner?.slug !== input.slug || owner.currentGatewayId !== input.toGatewayId) {
-    throw new Error("Shared restore owner changed before verification");
-  }
 }
 
 async function verifyOrRestoreNativeReturnTarget(
@@ -1457,7 +1573,7 @@ async function finishNativeReturnAfterCutover(
     return failure("scheduler handoff scope changed after cutover", false);
   }
   return completeNativeReturn(deps, ctx, native, {
-    uid: request.uid, fromGatewayId, toGatewayId: user.currentGatewayId, slug: user.slug, migrationId: deps.genMigrationId(op.id), handoff,
+    uid: request.uid, fromGatewayId, toGatewayId: user.currentGatewayId, slug: user.slug, migrationId: deps.genMigrationId(op.id), handoff, operation: op,
   });
 }
 
@@ -1807,13 +1923,16 @@ async function executeMigration(
   const operationId = op.id;
   const automatic = resolveOperationOrigin(op.origin) === "automatic";
   const attempt = (op.attempts ?? 0) + 1;
-  const client = schedulerRetirementClient(deps.buildClient((transportId) => {
+  const client = agentContextMigrationClient(schedulerRetirementClient(deps.buildClient((transportId) => {
     const url = prepared.urls.get(transportId);
     if (!url) {
       throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     }
     return url;
-  }), deps, { uid: prepared.uid, slug: prepared.user.slug, operationId: op.id, claimedStartedAt: op.startedAt });
+  }), deps, { uid: prepared.uid, slug: prepared.user.slug, operationId: op.id, claimedStartedAt: op.startedAt }), deps, {
+    uid: prepared.uid, slug: prepared.user.slug, operationId: op.id, claimedStartedAt: op.startedAt,
+    migrationId: prepared.migrationId, fromGatewayId: prepared.user.currentGatewayId, toGatewayId: prepared.toGatewayId,
+  });
   const progress = createMigrationProgress({
     now: deps.now,
     log: (message) => deps.log(`${message} migrationId=${prepared.migrationId} builder=${prepared.user.slug}`),

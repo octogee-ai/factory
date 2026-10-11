@@ -1,16 +1,20 @@
 import { Agent } from "undici";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { createHash, randomBytes } from "node:crypto";
 import type { GatewayVmAddress } from "./gateway-address.js";
 import {
   FieldValue,
   type DocumentReference,
   type Firestore,
 } from "firebase-admin/firestore";
-import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
+import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION, isDisposableHomeCheckpoint } from "@octogee/shared/types/glm";
 import {
   type FinishRsyncImportRequestBody,
   type ImportResponse,
+  type NativeAgentContextTransfer,
+  type NativeSharedAgentContextStage,
+  type NativeSharedAgentContextRecovery,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_IMPORT_FINISH_TIMEOUT_MS,
   MIGRATION_TRANSFER_LEASE_MS,
@@ -446,6 +450,85 @@ export async function abortRetainedSourceImport(
   await retained.acknowledgeCleanup(record);
 }
 
+function agentContextField(policy?: NativeAgentContextTransfer): { agentContext?: NativeAgentContextTransfer } {
+  return policy ? { agentContext: policy } : {};
+}
+
+function assertStagedTransferInput(input: Parameters<MigrationClient["transferState"]>[0]): void {
+  if (input.stageOnly && (input.mode !== "final" || input.agentContext?.mode !== "restore-shared" || input.includeActivationManifest !== false)) {
+    throw new Error("staged transfer requires archived Shared agent context without activation manifest");
+  }
+}
+
+function stagedSharedAgentContext(
+  input: Parameters<MigrationClient["transferState"]>[0],
+  target: GatewayEndpoint,
+  prepared: PrepareRsyncImportResponse,
+  pushed: ImportResponse,
+): ImportResponse {
+  if (input.agentContext?.mode !== "restore-shared" || target.vm || pushed.imported !== true ||
+      pushed.migrationId !== input.migrationId || pushed.slug !== input.slug) {
+    throw new Error("Shared agent context stage did not confirm the matching source transfer");
+  }
+  return {
+    migrationId: input.migrationId, slug: input.slug, imported: false,
+    sharedAgentContextStage: {
+      migrationId: input.migrationId, slug: input.slug, toGatewayId: input.toGatewayId,
+      targetName: target.name, targetIp: target.podIP, targetVm: target.vm,
+      targetCertificateSha256: createHash("sha256").update(requireTargetCertificate(prepared, target.name)).digest("hex"),
+      archive: input.agentContext.archive,
+    },
+  };
+}
+
+type AgentContextRestoreInput = Parameters<MigrationClient["finishAgentContextRestore"]>[0];
+
+function assertAgentContextRestoreStage(input: AgentContextRestoreInput): void {
+  const { stage } = input;
+  if (stage.migrationId !== input.migrationId || stage.slug !== input.slug || stage.toGatewayId !== input.toGatewayId ||
+      !isDeepStrictEqual(stage.archive, input.agentContext.archive) || !/^[a-f0-9]{64}$/.test(stage.targetCertificateSha256)) {
+    throw new Error("Shared agent context stage scope changed");
+  }
+  const checkpoint = input.sharedAgentContextRecovery?.checkpoint;
+  if (input.sharedAgentContextRecovery && (!isDisposableHomeCheckpoint(checkpoint) || checkpoint.coverage !== "builder-home-v2" ||
+      ![2, 3].includes(checkpoint.writerProtocol ?? 0) || checkpoint.instanceId !== stage.archive.custody.instanceId)) {
+    throw new Error("Shared agent context checkpoint scope changed");
+  }
+}
+
+function assertSharedRestoreEndpoint(target: GatewayEndpoint, stage: NativeSharedAgentContextStage,
+  recovery: NativeSharedAgentContextRecovery | undefined): void {
+  if (target.vm || stage.targetVm || (!recovery && (target.name !== stage.targetName || target.podIP !== stage.targetIp))) {
+    throw new Error("Shared agent context stage target changed");
+  }
+}
+
+export function createRsyncAgentContextRestoreFinish(deps: RSyncMigrationTransferDeps): MigrationClient["finishAgentContextRestore"] {
+  const runCommand = deps.runCommand ?? createSubprocessCommandRunner();
+  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  return async input => {
+    const { stage } = input;
+    assertAgentContextRestoreStage(input);
+    const recovery = input.sharedAgentContextRecovery;
+    const target = await resolveGatewayEndpoint({ namespace: deps.namespace, transportId: input.toGatewayId,
+      runCommand, requireReady: false, resolveGatewayVm: deps.resolveGatewayVm });
+    assertSharedRestoreEndpoint(target, stage, recovery);
+    const baseUrl = podBaseUrl(target.podIP, deps.fleetControllerPort);
+    const finished = await postSignedJson<ImportResponse>({ fetchImpl, privateKey: deps.privateKey, resolveGatewayUrl: deps.resolveGatewayUrl }, {
+      transportId: input.toGatewayId, gatewayId: input.toGatewayId, migrationId: input.migrationId,
+      path: `/finish-rsync-import/${input.toGatewayId}`, baseUrl,
+      body: { migrationId: input.migrationId, slug: input.slug, rpcPhase: "finish-rsync-import", mode: "final",
+        agentContext: input.agentContext, targetCertificateSha256: stage.targetCertificateSha256,
+        ...(recovery ? { sharedAgentContextRecovery: recovery } : {}) },
+    });
+    if (finished.imported !== true || finished.migrationId !== input.migrationId || finished.slug !== input.slug) {
+      throw new Error("Shared agent context restore did not confirm the matching import");
+    }
+    await waitForTargetPodReady(runCommand, deps.namespace, target.name);
+    return finished;
+  };
+}
+
 export function createRsyncMigrationTransfer(
   deps: RSyncMigrationTransferDeps,
 ): MigrationClient["transferState"] {
@@ -489,14 +572,14 @@ export function createRsyncMigrationTransfer(
       const target = await resolveGatewayEndpoint({namespace:deps.namespace,transportId:toTransportId,runCommand,requireReady:false,resolveGatewayVm:deps.resolveGatewayVm});
       const record = await retainedSource.execute({target,prepare: async sourcePodIp => {
         const transferKey = randomBytes(32).toString("hex");
-        const prepared = await control<PrepareRsyncImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/prepare-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"prepare-rsync-import",mode,transferUser:MIGRATION_TRANSFER_USER,transferKey,sourcePodIp},baseUrl:podBaseUrl(target.podIP,deps.fleetControllerPort)});
-        return {migrationId:input.migrationId,slug:input.slug,rpcPhase:"push-rsync-state",mode:"final",targetHost:target.podIP,targetPort:prepared.port,targetCertificatePem:requireTargetCertificate(prepared,target.name),transferUser:MIGRATION_TRANSFER_USER,transferKey,includeActivationManifest:input.includeActivationManifest};
+        const prepared = await control<PrepareRsyncImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/prepare-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"prepare-rsync-import",mode,agentContext:input.agentContext,transferUser:MIGRATION_TRANSFER_USER,transferKey,sourcePodIp},baseUrl:podBaseUrl(target.podIP,deps.fleetControllerPort)});
+        return {migrationId:input.migrationId,slug:input.slug,rpcPhase:"push-rsync-state",mode:"final",agentContext:input.agentContext,targetHost:target.podIP,targetPort:prepared.port,targetCertificatePem:requireTargetCertificate(prepared,target.name),transferUser:MIGRATION_TRANSFER_USER,transferKey,includeActivationManifest:input.includeActivationManifest};
       }});
       if (record.targetGatewayId !== input.toGatewayId || record.targetName !== target.name || record.targetIp !== target.podIP || record.targetVm !== target.vm) throw new Error("retained transfer target changed");
       const baseUrl = podBaseUrl(record.targetIp,deps.fleetControllerPort);
       await retainedSource.settledTarget(target);
       await retainedSource.assertActiveClaim();
-      const finished = await control<ImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/finish-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"finish-rsync-import",mode},baseUrl});
+      const finished = await control<ImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/finish-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"finish-rsync-import",mode,agentContext:input.agentContext},baseUrl});
       if (target.vm) await waitForTargetVmReady(fetchImpl,wait,now,{name:target.name,baseUrl});
       else await waitForTargetPodReady(runCommand,deps.namespace,target.name);
       return finished;
@@ -504,6 +587,7 @@ export function createRsyncMigrationTransfer(
 
   return async (input) => {
     const mode = input.mode ?? "pre";
+    assertStagedTransferInput(input);
     const fromTransportId = input.fromTransportId ?? input.fromGatewayId;
     const toTransportId = input.toTransportId ?? input.toGatewayId;
     if (deps.retainedSource && mode === "final") return transferRetained(input);
@@ -544,6 +628,7 @@ export function createRsyncMigrationTransfer(
         slug: input.slug,
         rpcPhase: "prepare-rsync-import",
         mode,
+        ...agentContextField(input.agentContext),
         transferUser: MIGRATION_TRANSFER_USER,
         transferKey,
         sourcePodIp: sourcePod.podIP,
@@ -565,6 +650,7 @@ export function createRsyncMigrationTransfer(
         slug: input.slug,
         rpcPhase: "push-rsync-state",
         mode,
+        ...agentContextField(input.agentContext),
         targetHost: targetPod.podIP,
         targetPort: prepared.port,
         targetCertificatePem: requireTargetCertificate(prepared, targetPod.name),
@@ -572,18 +658,25 @@ export function createRsyncMigrationTransfer(
         transferKey,
         includeActivationManifest: input.includeActivationManifest,
       };
-      await control<ImportResponse>({
+      const pushed = await control<ImportResponse>({
         transportId: fromTransportId,
         gatewayId: input.fromGatewayId,
         pathSuffix: "/push-rsync-state",
         migrationId: input.migrationId,
         body: pushBody as unknown as Record<string, unknown>,
       });
+      if (input.stageOnly) {
+        const staged = stagedSharedAgentContext(input, targetPod, prepared, pushed);
+        await markTaskSucceeded(claimed.ref, now);
+        log(`[migration-rsync] staged Shared agent context task=${claimed.taskId} migrationId=${input.migrationId} slug=${input.slug}`);
+        return staged;
+      }
       const finishBody: FinishRsyncImportRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
         rpcPhase: "finish-rsync-import",
         mode,
+        ...agentContextField(input.agentContext),
       };
       const finished = await control<ImportResponse>({
         transportId: toTransportId,
@@ -613,7 +706,7 @@ export function createRsyncMigrationTransfer(
       log(
         `[migration-rsync] ✅ task=${claimed.taskId} mode=${mode} migrationId=${input.migrationId} slug=${input.slug}`,
       );
-      return { migrationId: input.migrationId, slug: input.slug, imported: true };
+      return finished;
     } catch (err) {
       if (targetPrepareAttempted && targetPod) {
         await control<ImportResponse>({

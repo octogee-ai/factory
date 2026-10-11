@@ -2102,6 +2102,15 @@ describe("evictLocalCustomer — complete local teardown", () => {
     } as CustomerLifecycleAdapter;
   }
 
+  it("retains a durably held Shared context after its migrating-in pin expires", async () => {
+    const customerContextRestoreHeld = vi.fn(async () => true);
+    const a = adapter({ customerContextRestoreHeld, customerMigratingIn: () => false });
+    await expect(evictLocalCustomer({ adapter: a, slug: "held", stampMounted: vi.fn(async () => undefined), onLocalStateRemoved: vi.fn() })).resolves.toBe("noop");
+    expect(customerContextRestoreHeld).toHaveBeenCalledExactlyOnceWith("held");
+    expect(a.applyRemoveCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(a.deleteDepartedCustomerState).not.toHaveBeenCalled();
+  });
+
   it("prefers the imported-customer teardown for an unassigned slug", async () => {
     const removeImportedCustomerBySlug = vi.fn(async () => ({
       wasMounted: true,

@@ -4664,3 +4664,26 @@ describe("restoreByosubForAgent", () => {
     expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).not.toHaveBeenCalled();
   });
 });
+
+describe("durable Shared context eviction hold", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const hold = { operationId: "return-op", uid: "uid-held", slug: "held", fromGatewayId: "native", toGatewayId: "shared", migrationId: "return-mig", archiveId: "archive", contextSha256: "a".repeat(64) };
+  it("reads fresh broker ownership rather than a cached snapshot or an expired migration pin", async () => {
+    vi.stubEnv("GATEWAY_ID", "shared");
+    const userSnapshot = vi.fn(async () => ({ uid: hold.uid, slug: hold.slug, gatewayId: "shared" }) as FleetBrokerUserSnapshot);
+    const client = mkClient({ uidForSlug: vi.fn(async () => hold.uid), userSnapshot });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+    expect(await adapter.customerContextRestoreHeld!(hold.slug)).toBe(false);
+    userSnapshot.mockResolvedValue({ uid: hold.uid, slug: hold.slug, gatewayId: "shared", nativeSharedContextRestore: hold } as FleetBrokerUserSnapshot);
+    expect(await adapter.customerContextRestoreHeld!(hold.slug)).toBe(true);
+    expect(userSnapshot).toHaveBeenCalledTimes(2);
+    vi.stubEnv("GATEWAY_ID", "native");
+    expect(await adapter.customerContextRestoreHeld!(hold.slug)).toBe(false);
+  });
+  it.each([null, { ...hold, uid: "foreign" }, { ...hold, contextSha256: "bad" }])("fails closed on a malformed or changed hold", async nativeSharedContextRestore => {
+    vi.stubEnv("GATEWAY_ID", "shared");
+    const client = mkClient({ uidForSlug: vi.fn(async () => hold.uid), userSnapshot: vi.fn(async () => ({ uid: hold.uid, slug: hold.slug, gatewayId: "shared", nativeSharedContextRestore }) as unknown as FleetBrokerUserSnapshot) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+    await expect(adapter.customerContextRestoreHeld!(hold.slug)).rejects.toThrow("hold is malformed");
+  });
+});

@@ -1,6 +1,8 @@
 import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
   FleetBrokerBlobSignedUrl,
+  FleetBrokerComputerHomeDownload,
+  FleetBrokerNativeSharedContextCheckpointRequest,
   FleetBrokerBuilderRuntimeStatePruneResult,
   FleetBrokerBuilderRuntimeStateSnapshotUrls,
   BuilderRuntimeStateRecoveryTier,
@@ -110,6 +112,7 @@ export interface FleetBrokerBlobMaterialization {
 }
 
 export interface FleetBrokerClient {
+  sharedContextCheckpoint(request: FleetBrokerNativeSharedContextCheckpointRequest): Promise<FleetBrokerComputerHomeDownload>;
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
@@ -276,6 +279,11 @@ export function createFleetBrokerClient(
       url: `${baseUrl()}/internal/fleet/assignment-watch`,
       gatewayId, revisionId, headers: gatewayCredentialHeaders, wake, log,
     }),
+    async sharedContextCheckpoint(request) {
+      return postJson<FleetBrokerComputerHomeDownload>("/internal/fleet/computer-home/download-url", {
+        gatewayId, slug: request.slug, agentContextRestore: request,
+      }, await gatewayCredentialHeaders());
+    },
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",

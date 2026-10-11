@@ -15,6 +15,7 @@ import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js'
 import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
 import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 import { operationScopedLog } from "./operation-log-scope.js";
+import { prepareNativeAgentContextTransfer, acknowledgeNativeAgentContextTransfer, acknowledgeNativeSharedContextStage, prepareNativeSharedContextRestore, acknowledgeNativeSharedContextRestore } from "./lib/native-agent-context-transfer.js";
 import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
@@ -263,7 +264,7 @@ import {
   customerMigrationV2GatewayRootFence,
   isCustomerMigrationV2Transition,
 } from "@octogee/core/customer-migration-v2";
-import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
+import { abortRetainedSourceImport, createRsyncMigrationTransfer, createRsyncAgentContextRestoreFinish, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
 import {
   beginCustomerRestore,
   acknowledgeCustomerRestore,
@@ -2954,6 +2955,10 @@ function createMigrationClientBuilder(
       privateKey,
       resolveGatewayUrl: resolveSync,
       log: logFn,
+      finishAgentContextRestore: createRsyncAgentContextRestoreFinish({
+        db, namespace: NAMESPACE, privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
+        resolveGatewayUrl: resolveSync, resolveGatewayVm: transportId => readGatewayVmAddress(db, transportId), log: logFn,
+      }),
       transferState: createRsyncMigrationTransfer({
         ...(retainedSource ? {retainedSource: retainedSourceRunner(db,retainedSource)} : {}),
         db,
@@ -3212,6 +3217,11 @@ async function buildHandlers(
       db, vm: createGatewayComputeClient(logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
+    prepareNativeAgentContextTransfer: input => prepareNativeAgentContextTransfer({ db, vm: createGatewayComputeClient(logFn) }, input),
+    acknowledgeNativeAgentContextTransfer: (input, policy, result) => acknowledgeNativeAgentContextTransfer({ db, vm: createGatewayComputeClient(logFn) }, input, policy, result),
+    acknowledgeNativeSharedContextStage: (input, policy, stage) => acknowledgeNativeSharedContextStage({ db, vm: createGatewayComputeClient(logFn) }, input, policy, stage),
+    prepareNativeSharedContextRestore: input => prepareNativeSharedContextRestore({ db, vm: createGatewayComputeClient(logFn) }, input),
+    acknowledgeNativeSharedContextRestore: (input, stage, result) => acknowledgeNativeSharedContextRestore({ db, vm: createGatewayComputeClient(logFn) }, input, stage, result),
     retireNativeSchedulerBeforeStage: (input, scheduler) => retireNativeSchedulerBeforeStage({
       db, vm: createGatewayComputeClient(logFn), log: logFn,
     }, input, scheduler),
@@ -3250,8 +3260,9 @@ async function buildHandlers(
           flipMirror: commit.flipMirror,
           assignment: {
             source: MIGRATE_CUSTOMER_KIND,
-            updatedByOperationId: null,
+            updatedByOperationId: commit.nativeSharedContextHold?.operationId ?? null,
           },
+          ...(commit.nativeSharedContextHold ? { nativeSharedContextHold: commit.nativeSharedContextHold } : {}),
           automatic: commit.automatic,
         },
       );

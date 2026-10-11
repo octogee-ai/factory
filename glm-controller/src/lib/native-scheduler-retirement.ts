@@ -16,7 +16,7 @@ type Retirement = Record<"uid" | "slug" | "returnOperationId" | "migrationId" | 
 const KEYS: Array<keyof Omit<Retirement, "completedAt" | "cutoverCommittedAt">> = ["uid", "slug", "returnOperationId", "migrationId", "sourceGatewayId", "sharedGatewayId",
   "instanceName", "instanceId", "zone", "homeDiskId", "homeDiskSource"];
 
-function retirement(data: DocumentData | undefined): Retirement | null {
+export function readNativeSchedulerRetirement(data: DocumentData | undefined): Retirement | null {
   if (data === undefined) return null;
   if (!data || KEYS.some(key => typeof data[key] !== "string" || !data[key])) throw new Error("native scheduler retirement authority is malformed");
   if ((data.completedAt !== undefined || data.cutoverCommittedAt !== undefined) &&
@@ -47,10 +47,10 @@ export function nativeSchedulerRetirementForReturn(
   const handoff = operation?.schedulerHandoff;
   if (!handoff) return null;
   if (!handoffMatches(handoff, input)) throw new Error("native scheduler retirement handoff authority changed");
-  const record = retirement({ uid: input.uid, slug: input.slug, returnOperationId: input.operationId, migrationId: handoff.migrationId,
+  const record = readNativeSchedulerRetirement({ uid: input.uid, slug: input.slug, returnOperationId: input.operationId, migrationId: handoff.migrationId,
     sourceGatewayId: input.fromGatewayId, sharedGatewayId: input.toGatewayId,
     ...retainedIdentity(user, runtime) })!;
-  const existing = retirement(user?.provisioning?.pendingNativeSchedulerRetirement);
+  const existing = readNativeSchedulerRetirement(user?.provisioning?.pendingNativeSchedulerRetirement);
   if (existing && !KEYS.every(key => existing[key] === record[key])) throw new Error("another native scheduler retirement remains pending");
   return existing ?? record;
 }
@@ -67,7 +67,7 @@ function activeAttempt(op: DocumentData | undefined, input: NativeSchedulerRetir
     op.input?.uid === input.uid && op.input.toGatewayId === input.gatewayId && typeof op.cutoverCommittedAt === "number";
 }
 
-function completedReturn(op: DocumentData | undefined, pending: Retirement): boolean {
+export function isCompletedNativeReturn(op: DocumentData | undefined, pending: Retirement): boolean {
   if (pending.completedAt === undefined || pending.cutoverCommittedAt === undefined) return false;
   if (op === undefined) return true;
   const h = op.schedulerHandoff;
@@ -80,7 +80,7 @@ function completedReturn(op: DocumentData | undefined, pending: Retirement): boo
 }
 
 function ownerMatches(p: DocumentData | undefined, input: NativeSchedulerRetirementInput, pending: Retirement): boolean {
-  return sameRetirement(retirement(p?.pendingNativeSchedulerRetirement), pending) &&
+  return sameRetirement(readNativeSchedulerRetirement(p?.pendingNativeSchedulerRetirement), pending) &&
     pending.uid === input.uid && pending.slug === input.slug && p?.openclaw?.gatewayId === input.gatewayId &&
     p?.homeDisk?.id === pending.homeDiskId && p.homeDisk.source === pending.homeDiskSource;
 }
@@ -102,7 +102,7 @@ async function authorize(deps: Deps, input: NativeSchedulerRetirementInput, pend
     ]);
     const exact = ownerMatches(user.data()?.provisioning, input, pending) &&
       targetMatches(root.data(), runtime.data(), input, pending) &&
-      activeAttempt(current.data(), input) && completedReturn(previous.data(), pending);
+      activeAttempt(current.data(), input) && isCompletedNativeReturn(previous.data(), pending);
     if (!exact) throw new Error("native scheduler retirement authority changed");
     if (acknowledge) tx.update(userRef, { "provisioning.pendingNativeSchedulerRetirement": FieldValue.delete() });
   });
@@ -112,7 +112,7 @@ export async function retireNativeSchedulerBeforeStage(
   deps: Deps, input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"],
 ): Promise<void> {
   const user = await deps.db.collection("users").doc(input.uid).get();
-  const pending = retirement(user.data()?.provisioning?.pendingNativeSchedulerRetirement);
+  const pending = readNativeSchedulerRetirement(user.data()?.provisioning?.pendingNativeSchedulerRetirement);
   if (!pending) return;
   const target = await deps.db.collection("glmGateways").doc(input.gatewayId).get();
   if (target.data()?.runtime !== "gce-vm") return;

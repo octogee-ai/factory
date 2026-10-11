@@ -153,6 +153,7 @@ export interface PlacementPolicyMigration {
   error?: string;
   retryRequested?: boolean;
   sourceRecoveryPending?: boolean;
+  sharedRevisionRetryable?: boolean;
 }
 
 export type PlacementPolicyKubernetesStatus = "ready" | "not-ready" | "missing" | "unknown";
@@ -1744,7 +1745,8 @@ async function reconcileReturnMigrationOnTarget(
   if (
     (returnOperation?.status === "failed" ||
       returnOperation?.status === ROLLED_BACK_STATUS) &&
-    returnOperation.retryRequested !== true && !isGatewayStartupUnavailable(returnOperation.error)
+    returnOperation.retryRequested !== true && returnOperation.sharedRevisionRetryable !== true &&
+    !isGatewayStartupUnavailable(returnOperation.error)
   ) {
     blockTerminalReturnOperation(context, user.uid, lease, returnOperation);
     return true;
@@ -2514,6 +2516,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
     ...(typeof data.error === "string" ? { error: data.error } : {}),
     ...(schedulerHandoffAwaitingRelease({ ...data, id: doc.id }) ? { sourceRecoveryPending: true } : {}),
     ...(millis(data.retryRequestedAt) !== null ? { retryRequested: true } : {}),
+    ...(sharedRevisionPreflightReturnRetryable(data, doc.id) ? { sharedRevisionRetryable: true } : {}),
   };
 }
 
@@ -3201,6 +3204,39 @@ function startupFailedReturnMatchesDemand(data: Record<string, unknown>, request
     isGatewayStartupUnavailable(typeof data.error === "string" ? data.error : undefined);
 }
 
+function sharedRevisionPreflightReturnRetryable(data: Record<string, unknown>, operationId: string): boolean {
+  const original = record(data.input);
+  return [
+    data.kind === MIGRATE_CUSTOMER_KIND,
+    data.status === "failed",
+    data.origin === "automatic",
+    data.createdBy === PLACEMENT_POLICY_ACTOR,
+    original?.source === BUILDER_ACTIVATION_LEASE_SOURCE,
+    operationId === `builder-return-${original?.fromGatewayId}`,
+    nonEmptyString(original?.toGatewayId) !== null,
+    data.gatewayId === original?.toGatewayId,
+    data.inputUid === original?.uid,
+    data.error === `placement rejected for ${original?.toGatewayId}: revision-not-ready`,
+    Array.isArray(data.steps) && data.steps.length === 0,
+    data.rolledBack === false,
+    data.customerMigrationV2 === undefined,
+    data.cutoverCommittedAt === undefined,
+    data.cancellationRequestedAt === undefined,
+    data.sourceTransferExecution === undefined,
+    data.schedulerHandoffLost === undefined,
+    data.schedulerHandoffReleased !== false,
+    data.schedulerHandoff === undefined || data.schedulerHandoffReleased === true,
+    original?.recoverSourceOnly === undefined,
+  ].every(Boolean);
+}
+
+function sharedRevisionReturnMatchesDemand(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const original = record(data.input);
+  return sharedRevisionPreflightReturnRetryable(data, request.operationId) &&
+    request.source === BUILDER_ACTIVATION_LEASE_SOURCE && original?.uid === request.uid &&
+    original.builderSlug === request.builderSlug && original.fromGatewayId === request.fromGatewayId;
+}
+
 function preRpcAuthorityFailure(data: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
   const steps = Array.isArray(data.steps) ? data.steps : [];
   const step = record(steps[0]);
@@ -3261,7 +3297,7 @@ function sharedReturnTargetReady(root: ReturnType<typeof projectGatewayDesiredRo
     heartbeatAt !== null && heartbeatAt <= now && now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
 
-async function assertStartupReturnAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput): Promise<void> {
+async function assertStartupReturnAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput) {
   const [user, assignment, source, target, runtime, pool, targetAssignment] = await Promise.all([
     transaction.get(input.db.collection("users").doc(request.uid)),
     transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
@@ -3278,6 +3314,24 @@ async function assertStartupReturnAuthority(input: FirestorePlacementPolicyInput
     startupReturnSourceMatches(sourceRoot, lease, request) && retrySourceAssignmentMatches(assignment.data(), request) &&
     pool?.sharedGatewayIds.includes(request.toGatewayId) && sharedReturnTargetReady(targetRoot, runtime.data(), request, input.now());
   if (!exact) throw new Error("Builder startup return retry authority changed");
+  return { user: user.data(), assignment: assignment.data(), source: source.data(), target: target.data() };
+}
+
+async function assertSharedRevisionReturnAuthority(
+  input: FirestorePlacementPolicyInput,
+  transaction: Transaction,
+  request: EnqueuePlacementMigrationInput & { previousTargetGatewayId: string },
+): Promise<void> {
+  const authority = await assertStartupReturnAuthority(input, transaction, request);
+  const openclaw = record(record(authority.user?.provisioning)?.openclaw);
+  const previousTargetAssignment = await transaction.get(input.db.collection(GATEWAYS_COLLECTION)
+    .doc(request.previousTargetGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid));
+  const rootsUnfenced = [authority.source, authority.target].every(root =>
+    root?.runtimeRestartFence === undefined && root?.retirementClaim === undefined);
+  const exact = rootsUnfenced && authority.source?.desiredStatus === "running" &&
+    authority.assignment?.slug === request.builderSlug && openclaw?.migration === undefined &&
+    openclaw?.nativeSharedContextRestore === undefined && !previousTargetAssignment.exists;
+  if (!exact) throw new Error("Builder revision return retry authority changed");
 }
 
 function rearmedPlacementMigrationPatch(): Record<string, unknown> {
@@ -3363,6 +3417,15 @@ export async function enqueuePlacementMigration(
       return;
     }
     const data = existing.data() as Record<string, unknown>;
+    if (sharedRevisionReturnMatchesDemand(data, request)) {
+      await assertSharedRevisionReturnAuthority(input, transaction, {
+        ...request, previousTargetGatewayId: record(data.input)!.toGatewayId as string,
+      });
+      transaction.update(ref, {
+        ...rearmedPlacementMigrationPatch(), "input.toGatewayId": request.toGatewayId, gatewayId: request.toGatewayId,
+      });
+      return;
+    }
     if (startupFailedReturnMatchesDemand(data, request)) {
       await assertStartupReturnAuthority(input, transaction, request);
       transaction.update(ref, {

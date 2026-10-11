@@ -1,3 +1,5 @@
+import type { FleetBrokerComputerHomeDownload, FleetBrokerNativeSharedContextCheckpointRequest } from "@octogee/shared/types/fleet-broker";
+import type { NativeSharedAgentContextRestoreHold } from "@octogee/shared/types/fleet-controller";
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult, CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
@@ -10,6 +12,7 @@ export interface UserSnapshot {
     gatewayId: string;
     status: "" | "provisioning" | "complete";
     agentIds: string[];
+    nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
     repoUrl: string;
     mattermostUserId: string | null;
     channels: CustomerSnapshot["channels"];
@@ -59,6 +62,7 @@ export interface CustomerContext {
 }
 export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
+    sharedContextCheckpoint?: (request: FleetBrokerNativeSharedContextCheckpointRequest) => Promise<FleetBrokerComputerHomeDownload>;
     log: (msg: string) => void;
     isBuilderGateway?: () => boolean;
     /** True when this gateway is the configured disposable Builder for this exact slug. */
@@ -196,6 +200,7 @@ export interface CustomerLifecycleAdapter {
     onMounted?: (slug: string) => void;
     onUnmounted?: (slug: string) => void;
     uidForSlug: (slug: string) => Promise<string | null>;
+    customerContextRestoreHeld?: (slug: string) => Promise<boolean>;
     schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promise<SchedulerMigrationResult>;
     schedulerReady: () => Promise<void>;
     resumeCustomer: (slug: string) => Promise<void>;

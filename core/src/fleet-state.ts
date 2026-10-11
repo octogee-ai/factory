@@ -1,7 +1,9 @@
 import {
   type GatewayStatus,
+  type NativeSharedAgentContextStage,
   GATEWAYS_COLLECTION,
 } from "@octogee/shared/types/fleet-controller";
+import { isDeepStrictEqual } from "node:util";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -335,6 +337,17 @@ function assertCustomerRestoreInput(input: CustomerRestoreInput): void {
   }
 }
 
+function customerRestoreAssignmentAllowed(assignment: Record<string, unknown>, openclaw: Record<string, unknown>,
+  operation: Record<string, unknown>, input: CustomerRestoreInput): boolean {
+  if (assignment.state === "serving") return true;
+  const hold = recordOrEmpty(openclaw.nativeSharedContextRestore), stage = recordOrEmpty(operation.nativeSharedAgentContextStage);
+  const archive = recordOrEmpty(stage.archive);
+  return assignment.state === "quiescing" && assignment.updatedByOperationId === input.operationId &&
+    isDeepStrictEqual(hold, { operationId: input.operationId, uid: input.uid, slug: input.slug,
+      fromGatewayId: input.fromGatewayId, toGatewayId: input.gatewayId, migrationId: stage.migrationId,
+      archiveId: archive.archiveId, contextSha256: archive.contextSha256 });
+}
+
 async function readCustomerRestoreAuthority(deps: FleetStateDeps, txn: FleetStateTxn, input: CustomerRestoreInput) {
   assertCustomerRestoreInput(input);
   const userRef = deps.db.collection("users").doc(input.uid);
@@ -363,7 +376,7 @@ async function readCustomerRestoreAuthority(deps: FleetStateDeps, txn: FleetStat
     handoff.fromGatewayId === input.fromGatewayId, handoff.toGatewayId === input.gatewayId,
     assignment.uid === input.uid, assignment.slug === input.slug,
     assignment.gatewayId === input.gatewayId, assignment.epoch === input.assignmentEpoch,
-    assignment.state === "serving",
+    customerRestoreAssignmentAllowed(assignment, openclaw, operation, input),
   ].every(Boolean);
   if (!exact) throw new Error("customer restore authority changed");
   return { userRef, operationRef, user, openclaw, operation };
@@ -373,7 +386,7 @@ function hasPriorCustomerRestoreWork(operation: Record<string, unknown>): boolea
   const histories = Array.isArray(operation.attemptHistory) ? operation.attemptHistory : [];
   const attempts = [operation, ...histories.map(recordOrEmpty)];
   return attempts.some(attempt => Array.isArray(attempt.steps) &&
-    attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
+    attempt.steps.some(step => ["restore-target", "restore-shared-agent-context"].includes(String(recordOrEmpty(step).name))));
 }
 
 function restoreDispatchClaim(operation: Record<string, unknown>, intent: Record<string, unknown>): number | null {
@@ -385,7 +398,7 @@ function restoreDispatchClaim(operation: Record<string, unknown>, intent: Record
   const history = Array.isArray(operation.attemptHistory) ? operation.attemptHistory.map(recordOrEmpty) : [];
   const candidates = history.filter(attempt => Number.isSafeInteger(attempt.startedAt) &&
     Number(attempt.startedAt) > 0 && Number(attempt.startedAt) <= Number(intent.dispatchedAt) &&
-    Array.isArray(attempt.steps) && attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
+    Array.isArray(attempt.steps) && attempt.steps.some(step => ["restore-target", "restore-shared-agent-context"].includes(String(recordOrEmpty(step).name))));
   return candidates.length === 1 ? Number(candidates[0]!.startedAt) : null;
 }
 
@@ -496,6 +509,12 @@ export interface CutoverCommitParams {
     source: AssignmentSource;
     updatedByOperationId: string | null;
   } | null;
+  nativeSharedContextHold?: {
+    operationId: string;
+    claimedStartedAt: number;
+    migrationId: string;
+    stage: NativeSharedAgentContextStage;
+  };
   customerMigrationV2Fence?: {
     claimStartedAt?: number;
     strategy: "migrate-state" | "provision-fresh";
@@ -594,9 +613,51 @@ export async function commitCutoverAtomic(
     const activationSourcePatch = await builderActivationSourceCutoverPatch({
       txn, db: deps.db, params, user: restoreOwner.data(), prior, targetRoot,
     });
-    updateUserMirror(txn, deps, params, targetRoot, activationSourcePatch);
+    const nativeSharedContextRestore = await validateNativeSharedContextCutover({ txn, db: deps.db, params, user: restoreOwner.data(), targetRoot });
+    updateUserMirror(txn, deps, params, targetRoot, { ...activationSourcePatch,
+      ...(nativeSharedContextRestore ? { "provisioning.openclaw.nativeSharedContextRestore": nativeSharedContextRestore } : {}) });
     updateAssignment(txn, deps.db, params, prior.epoch, nowMs);
+    if (nativeSharedContextRestore) txn.update(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(nativeSharedContextRestore.operationId), { cutoverCommittedAt: nowMs });
   });
+}
+
+async function validateNativeSharedContextCutover(input: {
+  txn: FleetStateTxn; db: FleetStateFirestore; params: CutoverCommitParams;
+  user: Record<string, unknown> | undefined; targetRoot: Record<string, unknown> | undefined;
+}) {
+  const { params } = input, hold = params.nativeSharedContextHold;
+  if (!hold) return null;
+  const [operationSnapshot, sourceRootSnapshot, sourceRuntimeSnapshot] = await Promise.all([
+    input.txn.get(input.db.collection(GLM_OPERATIONS_COLLECTION).doc(hold.operationId)),
+    input.txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
+    input.txn.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
+  ]);
+  const op = recordOrEmpty(operationSnapshot.data()), stage = hold.stage;
+  const operationInput = recordOrEmpty(op.input), sourceRoot = recordOrEmpty(sourceRootSnapshot.data());
+  const runtime = recordOrEmpty(sourceRuntimeSnapshot.data()), vm = recordOrEmpty(runtime.vm);
+  const provisioning = recordOrEmpty(input.user?.provisioning), openclaw = recordOrEmpty(provisioning.openclaw), home = recordOrEmpty(provisioning.homeDisk);
+  const archive = stage.archive, proof = archive.custody;
+  const exact = [
+    params.flipMirror, params.assignment !== null, params.fromGatewayId !== params.toGatewayId,
+    input.targetRoot?.gatewayClass === "shared", openclaw.gatewayId === params.fromGatewayId,
+    !Object.hasOwn(openclaw, "nativeSharedContextRestore"),
+    op.kind === MIGRATE_CUSTOMER_OPERATION_KIND, op.status === "running", op.startedAt === hold.claimedStartedAt,
+    Number.isSafeInteger(hold.claimedStartedAt), hold.claimedStartedAt > 0, op.cancellationRequestedAt === undefined,
+    op.cutoverCommittedAt === undefined, operationInput.uid === params.uid,
+    operationInput.fromGatewayId === params.fromGatewayId, operationInput.toGatewayId === params.toGatewayId,
+    isDeepStrictEqual(op.nativeSharedAgentContextStage, stage),
+    isDeepStrictEqual(op.nativeAgentContextTransfer, { mode: "restore-shared", archive }),
+    isDeepStrictEqual(home.sharedAgentContext, archive),
+    stage.migrationId === hold.migrationId, stage.slug === params.slug, stage.toGatewayId === params.toGatewayId,
+    archive.uid === params.uid, archive.slug === params.slug,
+    proof.uid === params.uid, proof.slug === params.slug, home.id === proof.homeDiskId, home.source === proof.homeDiskSource,
+    sourceRoot.gatewayClass === "builder", sourceRoot.ownerUid === params.uid, sourceRoot.builderSlug === params.slug,
+    runtime.runtime === "gce-vm", vm.instanceName === proof.instanceName, vm.instanceId === proof.instanceId, vm.zone === proof.zone,
+  ].every(Boolean);
+  if (!exact) throw new Error("native Shared history cutover authority changed");
+  return { operationId: hold.operationId, uid: params.uid, slug: params.slug,
+    fromGatewayId: params.fromGatewayId, toGatewayId: params.toGatewayId, migrationId: hold.migrationId,
+    archiveId: archive.archiveId, contextSha256: archive.contextSha256 };
 }
 
 interface PriorAssignment {
@@ -838,11 +899,11 @@ function updateAssignment(
     slug: params.slug,
     gatewayId: params.toGatewayId,
     source: params.assignment.source,
-    state: "serving" satisfies AssignmentState,
+    state: (params.nativeSharedContextHold ? "quiescing" : "serving") satisfies AssignmentState,
     epoch: priorEpoch + 1,
     createdAt: nowMs,
     updatedAt: nowMs,
-    updatedByOperationId: params.assignment.updatedByOperationId,
+    updatedByOperationId: params.nativeSharedContextHold?.operationId ?? params.assignment.updatedByOperationId,
   });
   if (params.fromGatewayId !== params.toGatewayId) {
     txn.delete(assignmentRef(db, params.fromGatewayId, params.uid));

@@ -1,3 +1,5 @@
+import { authorizeSharedContextCheckpoint } from "../lib/native-shared-context-checkpoint.js";
+import { nativeSharedContextRestoreHeld } from "@octogee/core/assigned-roster";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
@@ -1690,6 +1692,7 @@ async function loadSnapshot(
     ...baseFields,
     greetingPosted: snapshotGreetingPosted(data),
     ...(runtimeReset ? { runtimeReset } : {}),
+    ...(nativeSharedContextRestoreHeld(data) ? { nativeSharedContextRestore: readPath(data, "provisioning.openclaw.nativeSharedContextRestore") as FleetBrokerUserSnapshot["nativeSharedContextRestore"] } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     freeTierModelRef: modelDials.freeTierModelRef,
     builderAgentDefault: modelDials.builderAgentDefault,
@@ -1980,6 +1983,10 @@ function installSnapshotRoutes(
     for (const doc of snap.docs) {
       const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
       if (!data) continue;
+      if (nativeSharedContextRestoreHeld(data)) {
+        logger.info("fleet broker withheld Shared context restore from normal mount admission", { uid: doc.id, gatewayId: bound.gatewayId });
+        continue;
+      }
       if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
         continue;
       }
@@ -3108,6 +3115,20 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
   });
 
   router.post("/computer-home/download-url", async (req, res) => {
+    if (req.body?.agentContextRestore !== undefined) {
+      const bound = boundGateway(req, res);
+      if (!bound) return;
+      const slug = typeof req.body.slug === "string" ? req.body.slug : "";
+      try {
+        const checkpoint = await authorizeSharedContextCheckpoint(db, bound.gatewayId, slug, req.body.agentContextRestore);
+        const download = await createBlobSignedUrl({ gcsPath: computerHomeCheckpointPath(slug, checkpoint.name), action: "read", generation: checkpoint.generation });
+        res.json({ ...checkpoint, download });
+      } catch (error) {
+        logger.error("Shared context checkpoint download refused", { gatewayId: bound.gatewayId, message: String(error) });
+        res.status(403).json(FORBIDDEN);
+      }
+      return;
+    }
     const scope = await requireComputerHomeScope(db, req, res);
     if (!scope) return;
     await runBrokered(res, async () => {

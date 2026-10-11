@@ -1,3 +1,4 @@
+import type { NativeSharedAgentContextRestoreHold } from "./fleet-controller.js";
 import type { AgentLook } from "./agent-look.js";
 import type { AgentModelSelections } from "./agent-models.js";
 import type { ProjectAgentIdentity, ProjectAgentStatus } from "./project.js";
@@ -232,6 +233,7 @@ export interface FleetBrokerUserSnapshot {
   status: FleetBrokerProvisioningStatus;
   agentIds: string[];
   runtimeReset?: FleetBrokerCustomerRuntimeReset;
+  nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
   repoUrl: string;
   mattermostUserId: string | null;
   customerMmUserId: string | null;
@@ -274,3 +276,5 @@ export interface FleetBrokerUserSnapshot {
     agentModels?: AgentModelSelections;
   };
 }
+
+export type FleetBrokerNativeSharedContextCheckpointRequest = NativeSharedAgentContextRestoreHold & { checkpoint: import("./glm.js").GatewayVmHomeCheckpoint };

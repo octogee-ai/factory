@@ -1,3 +1,4 @@
+import type { GatewayVmHomeCheckpoint } from "./glm.js";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "./fleet-broker.js";
 export type GatewayStatus = "booting" | "ready" | "draining" | "unreachable";
 export interface GatewayLastError {
@@ -93,6 +94,60 @@ export interface GatewayConfigStatus {
     dashboardControlObservedAt?: string;
 }
 export declare const GATEWAYS_COLLECTION = "gateways";
+export interface NativeAgentContextCustody {
+    uid: string;
+    slug: string;
+    returnOperationId: string;
+    migrationId: string;
+    sourceGatewayId: string;
+    sharedGatewayId: string;
+    instanceName: string;
+    instanceId: string;
+    zone: string;
+    homeDiskId: string;
+    homeDiskSource: string;
+    completedAt: number;
+    cutoverCommittedAt: number;
+}
+export interface NativeSharedAgentContextArchive {
+    archiveId: string;
+    uid: string;
+    slug: string;
+    agentIds: string[];
+    contextSha256: string;
+    custody: NativeAgentContextCustody;
+}
+export interface NativeSharedAgentContextRestoreHold {
+    operationId: string;
+    uid: string;
+    slug: string;
+    fromGatewayId: string;
+    toGatewayId: string;
+    migrationId: string;
+    archiveId: string;
+    contextSha256: string;
+}
+export interface NativeSharedAgentContextRecovery {
+    checkpoint: GatewayVmHomeCheckpoint;
+}
+export interface NativeSharedAgentContextStage {
+    migrationId: string;
+    slug: string;
+    toGatewayId: string;
+    targetName: string;
+    targetIp: string;
+    targetVm: boolean;
+    targetCertificateSha256: string;
+    archive: NativeSharedAgentContextArchive;
+}
+export type NativeAgentContextTransfer = {
+    mode: "retain-native";
+    archiveId: string;
+    custody: NativeAgentContextCustody;
+} | {
+    mode: "restore-shared";
+    archive: NativeSharedAgentContextArchive;
+};
 export interface MigrationRequestBody {
     migrationId: string;
     slug: string;
@@ -138,6 +193,7 @@ export interface ActivateImportRequestBody extends MigrationRequestBody {
 }
 export type RsyncMigrationRpcPhase = "prepare-rsync-import" | "push-rsync-state" | "finish-rsync-import" | "abort-rsync-import";
 export interface PrepareRsyncImportRequestBody extends MigrationRequestBody {
+    agentContext?: NativeAgentContextTransfer;
     rpcPhase: "prepare-rsync-import";
     mode: MigrationTransferMode;
     configTransferMode?: MigrationConfigTransferMode;
@@ -155,6 +211,7 @@ export interface PrepareRsyncImportResponse {
     certificatePem: string;
 }
 export interface PushRsyncStateRequestBody extends MigrationRequestBody {
+    agentContext?: NativeAgentContextTransfer;
     rpcPhase: "push-rsync-state";
     mode: MigrationTransferMode;
     configTransferMode?: MigrationConfigTransferMode;
@@ -166,6 +223,9 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
     includeActivationManifest?: boolean;
 }
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
+    sharedAgentContextRecovery?: NativeSharedAgentContextRecovery;
+    targetCertificateSha256?: string;
+    agentContext?: NativeAgentContextTransfer;
     rpcPhase: "finish-rsync-import";
     mode: MigrationTransferMode;
     configTransferMode?: MigrationConfigTransferMode;
@@ -207,6 +267,8 @@ export interface FlushGatewayResponse {
     }>;
 }
 export interface ImportResponse {
+    sharedAgentContextStage?: NativeSharedAgentContextStage;
+    sharedAgentContext?: NativeSharedAgentContextArchive;
     migrationId: string;
     slug: string;
     imported: boolean;
