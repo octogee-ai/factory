@@ -1087,7 +1087,7 @@ async function probeFleetReadiness(
   });
 }
 
-function createSurgeReadinessHandler(input: {
+export function createSurgeReadinessHandler(input: {
   surgeReadiness: SurgeReadinessGate;
   readiness: FleetReadinessInput;
   prelaunchState?: () => Promise<BuilderPrelaunchState>;
@@ -1135,7 +1135,7 @@ export function createToolchainReadinessHandler(input: {
   };
 }
 
-function createStartupReadinessHandler(input: {
+export function createStartupReadinessHandler(input: {
   readiness: FleetReadinessInput;
   prelaunchState?: () => Promise<BuilderPrelaunchState>;
   log: (message: string) => void;
@@ -1145,6 +1145,15 @@ function createStartupReadinessHandler(input: {
       const prelaunchState = input.prelaunchState
         ? await input.prelaunchState()
         : "none";
+      if (prelaunchState === "held" || prelaunchState === "hydrated") {
+        res.status(200).json({
+          ready: true, openclawUp: false,
+          brokerProfilesSettled: input.readiness.brokerProfilesSettled(),
+          dashboardBridgeReady: input.readiness.dashboardBridgeReady(),
+          runtimeStatus: input.readiness.runtime.status, prelaunchState,
+        });
+        return;
+      }
       const processSettled = prelaunchState === "none" || prelaunchState === "serving";
       const readiness = await probeFleetReadiness(input.readiness, true, processSettled);
       res.status(readiness.ready ? 200 : 503).json({

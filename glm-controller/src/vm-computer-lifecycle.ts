@@ -718,7 +718,8 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     const { vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
-    await recordVm(gatewayId, description ? await stopComputer(deps, gatewayId, description, vm, { reason: "operator" }) : null, "pause");
+    if (!description) return;
+    await recordVm(gatewayId, await stopComputer(deps, gatewayId, description, vm, { reason: "operator" }), "pause");
   }
 
   async function stoppableComputer(gatewayId: string, vm: GatewayVmState): Promise<GatewayVmDescription | null> {
@@ -726,6 +727,9 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     if (!description) {
       deps.log(`[vm-gateway-runtime] ${gatewayId}: ${vm.instanceName} is already absent from Compute`);
       return null;
+    }
+    if (!vm.instanceId || description.instanceId !== vm.instanceId) {
+      throw new Error(`computer ${description.name}: recorded instance identity changed; refusing to stop`);
     }
     if (boundElsewhere(description, gatewayId)) {
       deps.log(`[vm-gateway-runtime] ${gatewayId}: leaving ${description.name} running: bound to ${description.gatewayId}`);

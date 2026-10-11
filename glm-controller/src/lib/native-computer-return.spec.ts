@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
 import { prepareNativeComputerReturn } from "./native-computer-return.js";
 
-const input = { fromGatewayId: "native", toGatewayId: "shared", uid: "alice-id", slug: "alice", operationId: "return-1" };
+const input = { fromGatewayId: "native", toGatewayId: "shared", uid: "alice-id", slug: "alice", operationId: "return-1", claimedStartedAt: 900 };
 
 function harness() {
   const root = { gatewayClass: "builder", ownerUid: "alice-id", builderSlug: "alice", desiredStatus: "running" };
   const source: Record<string, any> = {
-    runtime: "gce-vm", vm: { instanceName: "computer", zone: "us-central1-a" }, vmHome: {},
+    runtime: "gce-vm", vm: { instanceName: "computer", zone: "us-central1-a", instanceId: "computer-id" }, vmHome: {},
   };
   const user = { provisioning: { openclaw: { gatewayId: "native" } } };
   const target = { gatewayClass: "shared" };
@@ -16,6 +16,7 @@ function harness() {
   const update = vi.fn((ref: { path: string }, data: Record<string, unknown>) => {
     for (const [key, value] of Object.entries(data)) {
       const [parent, field] = key.split(".");
+      if (field === undefined) { docs[ref.path][parent] = value; continue; }
       if (value instanceof FieldValue) delete docs[ref.path][parent][field];
       else docs[ref.path][parent][field] = value;
     }
@@ -26,9 +27,9 @@ function harness() {
   };
   let now = 1000;
   const wait = vi.fn(async (ms: number) => { now += ms; });
-  const vm = { describe: vi.fn(async (): Promise<{ status: string } | null> => ({ status: "RUNNING" })) };
+  const vm = { describe: vi.fn(async (): Promise<{ status: string; instanceId: string } | null> => ({ status: "RUNNING", instanceId: "computer-id" })) };
   const deps = { db: db as never, vm: vm as never, now: () => now, wait, timeoutMs: 100 };
-  return { deps, source, root, target, user, update };
+  return { deps, source, root, target, user, docs, update };
 }
 
 describe("native computer return checkpoint", () => {
@@ -36,7 +37,7 @@ describe("native computer return checkpoint", () => {
     const h = harness();
     h.root.desiredStatus = "paused";
     const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
-    vm.describe.mockResolvedValue(status === null ? null : { status });
+    vm.describe.mockResolvedValue(status === null ? null : { status, instanceId: "computer-id" });
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
     expect(await native.isSourceFencedOff()).toBe(status === null || status === "TERMINATED" || status === "STOPPED");
     expect(vm.describe).toHaveBeenCalledWith("computer", "us-central1-a");
@@ -53,10 +54,18 @@ describe("native computer return checkpoint", () => {
     expect(await native.isSourceFencedOff()).toBe(false);
   });
 
+  it("does not accept a stopped replacement instance as proof that the recorded source is fenced", async () => {
+    const h = harness(); h.root.desiredStatus = "paused";
+    const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
+    vm.describe.mockResolvedValue({ status: "TERMINATED", instanceId: "replacement-id" });
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    expect(await native.isSourceFencedOff()).toBe(false);
+  });
+
   it("does not waive cleanup for a preempted source that Cowboy can restart", async () => {
     const h = harness();
     const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
-    vm.describe.mockResolvedValue({ status: "TERMINATED" });
+    vm.describe.mockResolvedValue({ status: "TERMINATED", instanceId: "computer-id" });
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
     expect(await native.isSourceFencedOff()).toBe(false);
     expect(vm.describe).not.toHaveBeenCalled();
@@ -106,6 +115,80 @@ describe("native computer return checkpoint", () => {
     await native.release();
     expect(h.source.vmHome.checkpointRequestedAt).toBe(3000);
     await expect(native.checkpoint()).rejects.toThrow(/another checkpoint/);
+  });
+
+  function committedReturn(h: ReturnType<typeof harness>) {
+    h.user.provisioning.openclaw.gatewayId = "shared";
+    h.source.vm.instanceId = "computer-id";
+    h.source.vmHome = { returnOperationId: "return-1", checkpointRequestedAt: 1000,
+      parkRequestedAt: 1000, checkpointAcknowledgedAt: 1000,
+      lastCheckpoint: { completedAt: 1001, instanceId: "computer-id" } };
+    h.docs["glmOperations/return-1"] = { kind: "migrate-customer", status: "running", startedAt: 900, cutoverCommittedAt: 1002,
+      input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } };
+    h.docs["gateways/shared/assignments/alice-id"] = { uid: "alice-id", gatewayId: "shared", slug: "alice", state: "serving" };
+  }
+
+  it("keeps the final checkpoint held until the committed native source is stopped", async () => {
+    const h = harness(); committedReturn(h);
+    const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
+    vm.describe.mockImplementationOnce(async () => {
+      expect(h.root.desiredStatus).toBe("paused");
+      expect(h.source.vmHome.returnOperationId).toBe("return-1");
+      expect(h.source.vmHome.checkpointRequestedAt).toBe(1000);
+      return { status: "STOPPING", instanceId: "computer-id" };
+    }).mockResolvedValue({ status: "TERMINATED", instanceId: "computer-id" });
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    await native.release();
+    expect(h.root.desiredStatus).toBe("paused");
+    expect(h.deps.wait).toHaveBeenCalledOnce();
+    expect(h.source.vmHome.checkpointRequestedAt).toBeUndefined();
+  });
+
+  it("retains the final checkpoint hold when the committed source cannot stop", async () => {
+    const h = harness(); committedReturn(h);
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    await expect(native.release()).rejects.toThrow(/stop.*timed out/i);
+    expect(h.source.vmHome.returnOperationId).toBe("return-1");
+    expect(h.source.vmHome.checkpointRequestedAt).toBe(1000);
+  });
+
+  it("keeps an absent source fenced after checkpoint release and on a completion retry", async () => {
+    const h = harness(); committedReturn(h);
+    const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
+    vm.describe.mockResolvedValue(null);
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    await native.release();
+    expect(await native.isSourceFencedOff()).toBe(true);
+    expect(h.source.vmHome.checkpointRequestedAt).toBeUndefined();
+    const retry = (await prepareNativeComputerReturn(h.deps, input))!;
+    await retry.release();
+    expect(await retry.isSourceFencedOff()).toBe(true);
+  });
+
+  it.each(["claim", "cancel"])("retains the checkpoint when the active attempt changes during stop: %s", async change => {
+    const h = harness(); committedReturn(h);
+    const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
+    vm.describe.mockResolvedValueOnce({ status: "STOPPING", instanceId: "computer-id" })
+      .mockResolvedValue({ status: "TERMINATED", instanceId: "computer-id" });
+    h.deps.wait.mockImplementation(async () => {
+      if (change === "claim") h.docs["glmOperations/return-1"].startedAt = 901;
+      else h.docs["glmOperations/return-1"].cancellationRequestedAt = 1003;
+    });
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    await expect(native.release()).rejects.toThrow(/authority changed/);
+    expect(h.source.vmHome.returnOperationId).toBe("return-1");
+    expect(h.source.vmHome.checkpointRequestedAt).toBe(1000);
+  });
+
+  it.each(["cutover", "operation", "target-assignment", "checkpoint-instance"])("refuses a post-cutover source pause after %s changes", async change => {
+    const h = harness(); committedReturn(h);
+    if (change === "cutover") delete h.docs["glmOperations/return-1"].cutoverCommittedAt;
+    if (change === "operation") h.docs["glmOperations/return-1"].input.uid = "bob";
+    if (change === "target-assignment") h.docs["gateways/shared/assignments/alice-id"].state = "quiescing";
+    if (change === "checkpoint-instance") h.source.vmHome.lastCheckpoint.instanceId = "different-computer";
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    await expect(native.release()).rejects.toThrow(/authority changed/);
+    expect(h.update).not.toHaveBeenCalled();
   });
 
   it.each(["owner", "assignment"])("refuses checkpoint writes after %s changes", async (change) => {

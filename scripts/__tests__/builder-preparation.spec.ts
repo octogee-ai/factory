@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Request, Response } from "express";
-import { createBuilderSurgeGateWiring, createToolchainReadinessHandler } from "../lib/fleet-provisioner.js";
+import { createBuilderSurgeGateWiring, createStartupReadinessHandler, createSurgeReadinessHandler, createToolchainReadinessHandler } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import { writeActivationManifest, type MigrationActivationManifest } from "../lib/migration-activation-manifest.js";
 import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
@@ -171,5 +171,42 @@ describe("Builder toolchain readiness", () => {
     expect(status).toHaveBeenLastCalledWith(phase === "held" ? 503 : 200);
     expect(json).toHaveBeenLastCalledWith({ ready: phase !== "held", prelaunchState: phase });
     expect(fixture.processGate.permit).not.toHaveBeenCalled();
+  });
+});
+
+describe("Builder startup during a held handoff", () => {
+  function response() {
+    const json = vi.fn(), status = vi.fn();
+    return { json, status, res: { status: status.mockReturnValue({ json }) } as unknown as Response };
+  }
+  function readiness() {
+    return {
+      runtime: { status: "booting" as const, activeProvisioning: 0, mountedCustomers: [],
+        beginProvisioning: vi.fn(), finishProvisioning: vi.fn(), waitForProvisioningDrain: async () => {} },
+      probeHealthz: vi.fn(async () => false), brokerProfilesSettled: () => false, dashboardBridgeReady: () => false,
+    };
+  }
+  it.each(["held", "hydrated"] as const)("keeps a healthy %s process gate alive while customer readiness stays closed", async phase => {
+    const r = response(), input = readiness();
+    await createStartupReadinessHandler({ readiness: input, prelaunchState: async () => phase, log: vi.fn() })({} as Request, r.res, vi.fn());
+    expect(r.status).toHaveBeenCalledWith(200);
+    expect(r.json).toHaveBeenCalledWith(expect.objectContaining({ ready: true, openclawUp: false, runtimeStatus: "booting", prelaunchState: phase }));
+    expect(input.probeHealthz).not.toHaveBeenCalled();
+    const customer = response();
+    await createSurgeReadinessHandler({ readiness: input, prelaunchState: async () => phase,
+      surgeReadiness: { released: async () => false } as SurgeReadinessGate, log: vi.fn() })({} as Request, customer.res, vi.fn());
+    expect(customer.status).toHaveBeenCalledWith(503);
+    expect(customer.json).toHaveBeenCalledWith(expect.objectContaining({ ready: false, handoffReleased: false }));
+  });
+  it.each(["starting", "serving", "none"] as const)("does not accept an unhealthy %s runtime", async phase => {
+    const r = response();
+    await createStartupReadinessHandler({ readiness: readiness(), prelaunchState: async () => phase, log: vi.fn() })({} as Request, r.res, vi.fn());
+    expect(r.status).toHaveBeenCalledWith(503);
+  });
+  it("rejects an unavailable process supervisor and logs its failure", async () => {
+    const r = response(), log = vi.fn();
+    await createStartupReadinessHandler({ readiness: readiness(), prelaunchState: async () => { throw new Error("supervisor unavailable"); }, log })({} as Request, r.res, vi.fn());
+    expect(r.status).toHaveBeenCalledWith(500);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("supervisor unavailable"));
   });
 });

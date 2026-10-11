@@ -1,6 +1,6 @@
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, type DocumentData, type Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 import { awaitHomeCheckpoint, readHomeCheckpointCompletedAt, readVmHome } from "./home-checkpoint.js";
 import type { GatewayVmClient } from "./compute-vm.js";
 
@@ -10,6 +10,7 @@ export interface NativeComputerReturnInput {
   uid: string;
   slug: string;
   operationId: string;
+  claimedStartedAt: number | null;
 }
 
 export interface NativeComputerReturn {
@@ -69,20 +70,92 @@ async function claimCheckpoint(deps: NativeReturnDeps, input: NativeComputerRetu
   });
 }
 
-async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<void> {
+async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, committed = false): Promise<void> {
   const source = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
   await deps.db.runTransaction(async (tx) => {
-    const [snap, root] = await Promise.all([
+    const [snap, root, operation, user] = await Promise.all([
       tx.get(source), tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
+      tx.get(deps.db.collection("users").doc(input.uid)),
     ]);
     if (returnRequest(snap.data(), input.operationId) === null) return;
     assertOwner(root.data(), input);
+    if (committed && (!committedOperationMatches(operation.data(), input) ||
+        user.data()?.provisioning?.openclaw?.gatewayId !== input.toGatewayId)) {
+      throw new Error("native return checkpoint release authority changed");
+    }
     tx.update(source, {
       "vmHome.returnOperationId": FieldValue.delete(),
       "vmHome.checkpointRequestedAt": FieldValue.delete(),
       "vmHome.parkRequestedAt": FieldValue.delete(),
     });
   });
+}
+
+function committedOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  return op?.kind === "migrate-customer" && op.status === "running" &&
+    typeof input.claimedStartedAt === "number" && op.startedAt === input.claimedStartedAt && op.cancellationRequestedAt === undefined &&
+    typeof op.cutoverCommittedAt === "number" && op.cutoverCommittedAt > 0 &&
+    op.input?.uid === input.uid && op.input.fromGatewayId === input.fromGatewayId && op.input.toGatewayId === input.toGatewayId;
+}
+
+function sharedAssignmentMatches(assignment: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  return assignment?.uid === input.uid && assignment.gatewayId === input.toGatewayId &&
+    assignment.slug === input.slug && assignment.state === "serving";
+}
+
+function returnHoldMatches(runtime: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  const home = readVmHome(runtime);
+  const returnOperationId = (runtime?.vmHome as { returnOperationId?: unknown } | undefined)?.returnOperationId;
+  const requestedAt = returnRequest(runtime, input.operationId);
+  return (returnOperationId === undefined || returnOperationId === input.operationId) &&
+    (requestedAt === null || home?.checkpointAcknowledgedAt === requestedAt && (home?.lastCheckpoint?.completedAt ?? 0) >= requestedAt);
+}
+
+function sourceCheckpointMatches(runtime: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  const checkpoint = readVmHome(runtime)?.lastCheckpoint;
+  if (runtime?.runtime !== "gce-vm" || typeof runtime.vm?.instanceId !== "string" ||
+      checkpoint?.instanceId !== runtime.vm.instanceId || typeof checkpoint?.completedAt !== "number") return false;
+  return returnHoldMatches(runtime, input);
+}
+
+async function pauseCommittedSource(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
+  return deps.db.runTransaction(async (tx) => {
+    const rootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId);
+    const [user, root, source, operation, target, assignment] = await Promise.all([
+      tx.get(deps.db.collection("users").doc(input.uid)), tx.get(rootRef),
+      tx.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
+      tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.toGatewayId)),
+      tx.get(deps.db.collection(`${GATEWAYS_COLLECTION}/${input.toGatewayId}/assignments`).doc(input.uid)),
+    ]);
+    const current = user.data()?.provisioning?.openclaw?.gatewayId;
+    if (current === input.fromGatewayId) return false;
+    const desired = root.data();
+    assertOwner(desired, input);
+    const exact = current === input.toGatewayId && target.data()?.gatewayClass === "shared" &&
+      sharedAssignmentMatches(assignment.data(), input) && committedOperationMatches(operation.data(), input) &&
+      sourceCheckpointMatches(source.data(), input) &&
+      ["running", "paused"].includes(desired?.desiredStatus);
+    if (!exact) throw new Error("native return source pause authority changed");
+    if (desired?.desiredStatus !== "paused") {
+      tx.update(rootRef, { desiredStatus: "paused", updatedAt: deps.now(), updatedBy: input.operationId });
+    }
+    return true;
+  });
+}
+
+async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<void> {
+  const committed = await pauseCommittedSource(deps, input);
+  if (committed) {
+    const deadline = deps.now() + (deps.timeoutMs ?? 300_000);
+    while (!await isSourceFencedOff(deps, input)) {
+      if (deps.now() >= deadline) throw new Error("native return source stop timed out; final checkpoint remains held");
+      await deps.wait(Math.min(5_000, deadline - deps.now()));
+    }
+    if (!await pauseCommittedSource(deps, input)) throw new Error("native return source pause authority changed");
+  }
+  await releaseCheckpoint(deps, input, committed);
 }
 
 async function isSourceFencedOff(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
@@ -94,9 +167,10 @@ async function isSourceFencedOff(deps: NativeReturnDeps, input: NativeComputerRe
   assertOwner(desired, input);
   if (desired?.desiredStatus !== "paused" && desired?.desiredStatus !== "retired") return false;
   const vm = source.data()?.vm;
-  if (!vm?.instanceName || !vm.zone) return false;
+  if (!vm?.instanceName || !vm.zone || !vm.instanceId) return false;
   const current = await deps.vm.describe(vm.instanceName, vm.zone);
-  return current === null || current.status === "TERMINATED" || current.status === "STOPPED";
+  return current === null || current.instanceId === vm.instanceId &&
+    (current.status === "TERMINATED" || current.status === "STOPPED");
 }
 
 export async function prepareNativeComputerReturn(
@@ -120,7 +194,7 @@ export async function prepareNativeComputerReturn(
       }, { gatewayId: input.fromGatewayId, requestedAt });
       if (result.outcome !== "completed") throw new Error(`native computer checkpoint ${result.outcome}; source retained`);
     },
-    release: () => releaseCheckpoint(deps, input),
+    release: () => releaseReturnCheckpoint(deps, input),
     isSourceFencedOff: () => isSourceFencedOff(deps, input),
   };
 }

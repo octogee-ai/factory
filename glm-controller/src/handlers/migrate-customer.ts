@@ -1436,7 +1436,7 @@ async function finishNativeReturnAfterCutover(
   if (typeof op.input.fromGatewayId !== "string") return null;
   const fromGatewayId = op.input.fromGatewayId;
   const native = await deps.prepareNativeComputerReturn({
-    fromGatewayId, toGatewayId: user.currentGatewayId, uid: request.uid, slug: user.slug, operationId: op.id,
+    fromGatewayId, toGatewayId: user.currentGatewayId, uid: request.uid, slug: user.slug, operationId: op.id, claimedStartedAt: op.startedAt,
   });
   if (!native) return null;
   const handoff = op.schedulerHandoff ?? null;
@@ -1695,6 +1695,7 @@ async function prepareMigration(
       uid: request.uid,
       slug: user.slug,
       operationId: op.id,
+      claimedStartedAt: op.startedAt,
     });
     const stateMigration = await preparedStateMigration(deps, resolved.targets, nativeReturn);
     const durable = await deps.useDurableMigration(

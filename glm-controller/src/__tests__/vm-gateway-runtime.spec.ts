@@ -514,7 +514,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     });
     await vanished.runtime.upsertInstance(paused);
     expect(vanished.vm.stop).not.toHaveBeenCalled();
-    expect(vanished.docs["glmGateways/b-x"].vm).toBeNull();
+    expect(vanished.docs["glmGateways/b-x"].vm).toEqual(recorded);
     expect(vanished.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 0 });
 
     const noComputer = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
@@ -526,6 +526,29 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(noComputer.vm.stop).not.toHaveBeenCalled();
     expect(noComputer.docs["glmGateways/b-x"].vm).toBeUndefined();
     expect(noComputer.docs["glmGateways/b-x"].vmInstance).toMatchObject({ replicas: 0 });
+  });
+
+  it("retains an absent source identity while a native return checkpoint remains held", async () => {
+    const vmHome = { returnOperationId: "return-one", checkpointRequestedAt: 900, parkRequestedAt: 900 };
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: { ...recorded }, vmHome } }, {
+      describe: vi.fn(async () => null),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.docs["glmGateways/b-x"].vm).toEqual(recorded);
+    expect(h.docs["glmGateways/b-x"].vmHome).toEqual(vmHome);
+    delete (h.docs["glmGateways/b-x"].vmHome as Record<string, unknown>).checkpointRequestedAt;
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.docs["glmGateways/b-x"].vm).toEqual(recorded);
+  });
+
+  it.each(["b-x", null])("never stops a same-name replacement computer while pausing (binding %s)", async gatewayId => {
+    const h = harness({ "glmGateways/b-x": { runtime: "gce-vm", vm: { ...recorded } } }, {
+      describe: vi.fn(async () => ({ ...running, instanceId: "replacement", gatewayId })),
+    });
+    await expect(h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 })).rejects.toThrow(/identity changed/);
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.docs["glmGateways/b-x"].vm).toEqual(recorded);
   });
 
   it("claims a warm-pool member as the Builder's first computer: metadata under its fingerprint, then the Builder's labels, no reboot", async () => {
