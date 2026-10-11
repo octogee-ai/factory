@@ -1005,6 +1005,62 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
+  it("waits through a cold Builder control handshake before changing its roster", async () => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    try {
+      const rpc = mkGatewayRpc({
+        channelsStatus: vi.fn(async () => ({ channelAccounts: {
+          mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+        } })),
+        configGet: vi.fn()
+        .mockRejectedValueOnce(new OpenclawWireError("connect-failed", "socket closed before connect response"))
+        .mockResolvedValue(configSnapshot({ agents: { list: [] } })) });
+      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn() });
+      await expect(adapter.activateImportedCustomer("tester10")).resolves.toMatchObject({ appliedFingerprint: expect.any(String) });
+      expect(vi.mocked(rpc.configGet).mock.invocationCallOrder[1]).toBeLessThan(vi.mocked(rpc.agentsCreate).mock.invocationCallOrder[0]);
+    } finally {
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
+  it.each(["connect-failed", "timeout"] as const)("exhausts cold Builder admission without roster changes for %s", async (code) => {
+    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
+    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const rpc = mkGatewayRpc({ configGet: vi.fn(async () => {
+        now += 600_001;
+        throw new OpenclawWireError(code, "cold control runtime unavailable");
+      }) });
+      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn() });
+      await expect(adapter.activateImportedCustomer("tester10")).rejects.toThrow(/config revision was unreadable for 600000ms/);
+      expect(rpc.agentsCreate).not.toHaveBeenCalled();
+      expect(rpc.agentsDelete).not.toHaveBeenCalled();
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+      expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
+      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+    }
+  });
+
+  it.each(["auth-failed", "invalid-response", "rpc-error"] as const)("fails runtime admission immediately for %s", async (code) => {
+    const failure = new OpenclawWireError(code, "strict runtime admission failure");
+    const rpc = { configGet: vi.fn().mockRejectedValue(failure) };
+    await expect(waitForAppliedConfigRevision(rpc, "tester10", { timeoutMs: 0 })).rejects.toBe(failure);
+    expect(rpc.configGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not admit a valid config response after the import is cancelled", async () => {
+    const controller = new AbortController(), cancelled = new Error("migration cancelled");
+    const rpc = { configGet: vi.fn(async () => { controller.abort(cancelled); return configSnapshot({}); }) };
+    await expect(waitForAppliedConfigRevision(rpc, "tester10", { signal: controller.signal })).rejects.toBe(cancelled);
+  });
+
   it("anchors inherited auth to the neutral agent for the configured Builder", async () => {
     const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
     process.env.GATEWAY_BUILDER_SLUG = "tester10";

@@ -85,7 +85,7 @@ import {
   customerCoachAgentId,
   resolveOpenClawStateDir,
 } from "./fleet-http-migration.js";
-import type { ConfigGetResult, GatewayRpcClient } from "./gateway-rpc.js";
+import { OpenclawWireError, type ConfigGetResult, type GatewayRpcClient } from "./gateway-rpc.js";
 import {
   cloneProjectRepo,
   cloneWorkspaceRepo,
@@ -780,9 +780,13 @@ export async function waitForAppliedConfigRevision(
   const readSnapshot = async (): Promise<ConfigGetResult | null> => {
     throwIfConfigApplicationWaitAborted(opts.signal);
     try {
-      return await rpc.configGet();
+      const snapshot = await rpc.configGet();
+      throwIfConfigApplicationWaitAborted(opts.signal);
+      return snapshot;
     } catch (error) {
       throwIfConfigApplicationWaitAborted(opts.signal);
+      if (!(error instanceof OpenclawWireError &&
+          (error.code === "connect-failed" || error.code === "timeout"))) throw error;
       lastReadError = error instanceof Error ? error.message : String(error);
       return null;
     }
@@ -1481,6 +1485,15 @@ async function activateImportedCustomer(
   const ownerMmUserId = configuredBuilder
     ? validOwnerMmUserId(slug, (await snapshotForSlug(ctx, slug))?.customerMmUserId)
     : undefined;
+  if (configuredBuilder) {
+    ctx.log(`[import:${slug}] waiting for the Builder control runtime before roster activation`);
+    await waitForAppliedConfigRevision(ctx.rpc, slug, {
+      timeoutMs: 600_000,
+      signal: opts?.signal,
+      acceptSupersedingRevision: true,
+    });
+    ctx.log(`[import:${slug}] Builder control runtime is ready for roster activation`);
+  }
   const secretMaterial = ctx.pendingRuntimeSecrets.get(slug) ?? createSecretMaterialLedger();
   ctx.pendingRuntimeSecrets.set(slug, secretMaterial);
   const { manifest: safeManifest, secretsChanged } = await materializeActivationManifestSecret(
