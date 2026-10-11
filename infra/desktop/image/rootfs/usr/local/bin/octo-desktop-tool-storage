@@ -11,6 +11,8 @@ import uuid
 import os
 from pathlib import Path
 import stat
+import signal
+import time
 
 
 def real_ancestors(path):
@@ -139,7 +141,9 @@ def owner_processes(uid):
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit(): continue
         try:
-            if entry.stat().st_uid == uid: result.append(int(entry.name))
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            if entry.stat().st_uid == uid and fields[0] not in ("Z", "X"):
+                result.append(int(entry.name))
         except FileNotFoundError:
             continue
     return result
@@ -151,7 +155,48 @@ def writer_fence(home, run, processes):
         raise RuntimeError("desktop or SSH writers are not fenced before tool storage reconciliation")
 
 
-def mise(home, args, run):
+def process_group_writers(group):
+    writers = []
+    for process in Path("/proc").iterdir():
+        if not process.name.isdigit(): continue
+        try:
+            fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
+        except FileNotFoundError:
+            continue
+        if int(fields[2]) == group and fields[0] not in ("Z", "X"):
+            writers.append(int(process.name))
+    return writers
+
+
+def quiesce_process_group(group):
+    for termination in (signal.SIGTERM, signal.SIGKILL):
+        if not process_group_writers(group): return
+        try: os.killpg(group, termination)
+        except ProcessLookupError: pass
+        deadline = time.monotonic() + 2
+        while process_group_writers(group) and time.monotonic() < deadline:
+            time.sleep(.01)
+    if process_group_writers(group):
+        raise RuntimeError("mise process group could not be quiesced before writer admission")
+
+
+def run_mise_command(command, *, env, cwd, timeout):
+    process = subprocess.Popen(command, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        output, errors = process.communicate(timeout=timeout)
+    except BaseException:
+        quiesce_process_group(process.pid)
+        try: process.communicate(timeout=2)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("mise output custody could not be released before writer admission") from error
+        raise
+    quiesce_process_group(process.pid)
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command, output, errors)
+    return subprocess.CompletedProcess(command, process.returncode, output, errors)
+
+
+def mise(home, args, run, timeout=30):
     owner = home.stat()
     if owner.st_uid == 0: raise RuntimeError("Builder tool execution cannot use a root-owned home")
     command = ["/usr/bin/mise", *args]
@@ -160,7 +205,9 @@ def mise(home, args, run):
     with tempfile.TemporaryDirectory(prefix="octogee-mise-read-") as directory:
         os.chown(directory, owner.st_uid, owner.st_gid)
         environment = {**os.environ, "HOME": str(home), "MISE_DATA_DIR": str(home / ".local/share/mise"), "MISE_CACHE_DIR": directory, "MISE_NO_HOOKS": "1", "MISE_NO_ENV": "1"}
-        return run(command, env=environment, cwd=home, check=True, capture_output=True, text=True)
+        if run is subprocess.run:
+            return run_mise_command(command, env=environment, cwd=home, timeout=timeout)
+        return run(command, env=environment, cwd=home, check=True, capture_output=True, text=True, timeout=timeout)
 
 
 def write_ledger(home, record):
@@ -190,6 +237,13 @@ def pending_requests(home):
     if not isinstance(requests, list) or any(not isinstance(value, str) or not value or value.startswith("-") or any(character.isspace() for character in value) for value in requests):
         raise RuntimeError("pending tool rebuild requests are malformed")
     return requests
+
+
+def install_before_deadline(home, args, run, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired(["/usr/bin/mise", *args], 180)
+    return mise(home, args, run, timeout=remaining)
 
 
 def record_tools(home, tools, run=subprocess.run, rebuild_complete=False):
@@ -284,6 +338,7 @@ def reconcile_boot(home, tools, cache, run=subprocess.run, processes=owner_proce
     if state["rebuildable"]:
         writer_fence(home, run, processes)
         project_tree(home / ".local/share/mise", tools, home.stat())
+        missing = []
         if previous:
             requests = pending_requests(home) + (previous["requests"] if previous.get("rebuildable") else [])
             for request in requests:
@@ -293,9 +348,16 @@ def reconcile_boot(home, tools, cache, run=subprocess.run, processes=owner_proce
             missing = sorted(set(requests) - set(current["requests"]))
             if missing:
                 write_ledger(home, {**current, "pendingRequests": missing})
-                mise(home, ["install", "--", *missing], run)
-        mise(home, ["install"], run)
-        record_tools(home, tools, run, rebuild_complete=True)
+        deadline = time.monotonic() + 180
+        try:
+            if missing:
+                install_before_deadline(home, ["install", "--", *missing], run, deadline)
+            install_before_deadline(home, ["install"], run, deadline)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            print(f"mise tool rebuild pending ({type(error).__name__}); retained declarations will retry on the next boot", file=sys.stderr)
+        else:
+            record_tools(home, tools, run, rebuild_complete=True)
+    writer_fence(home, run, processes)
     for source, target in [(home / ".cache/mise", cache / "mise"), (home / ".npm", cache / "npm")]:
         try:
             writer_fence(home, run, processes)

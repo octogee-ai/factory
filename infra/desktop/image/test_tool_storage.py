@@ -4,8 +4,12 @@ import shutil
 import os
 import errno
 import json
+import contextlib
+import io
 import subprocess
 import types
+import sys
+import time
 from unittest.mock import patch
 import tempfile
 import unittest
@@ -252,14 +256,111 @@ class BootReconciliation(ToolStorage):
         def fail(argv, **kwargs):
             if "install" in argv: raise subprocess.CalledProcessError(1, argv)
             return self.command(argv, **kwargs)
-        with self.assertRaises(subprocess.CalledProcessError):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
             SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=fail, processes=lambda _uid: [])
+        self.assertIn('mise tool rebuild pending (CalledProcessError)', errors.getvalue())
         SCRIPT["record_tools"](self.home, self.tools, self.command)
         ledger = self.home / ".config/octogee/mise-installs.json"
         self.assertIn("node@99.0.0", json.loads(ledger.read_text()).get("pendingRequests", []))
         SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
         self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "rebuilt exact version")
         self.assertNotIn("pendingRequests", json.loads(ledger.read_text()))
+
+    def test_failed_config_rebuild_keeps_declared_config_and_allows_boot_retry(self):
+        config = self.home / ".config/mise/config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('[tools]\nnode = "99.0.0"\n')
+        original = self.install.read_text()
+        def fail(argv, **kwargs):
+            if "install" in argv: raise subprocess.CalledProcessError(1, argv)
+            return self.command(argv, **kwargs)
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=fail, processes=lambda _uid: [])
+        self.assertIn("mise tool rebuild pending (CalledProcessError)", errors.getvalue())
+        self.assertEqual(config.read_text(), '[tools]\nnode = "99.0.0"\n')
+        self.assertEqual(self.install.read_text(), original)
+        self.calls.clear()
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertTrue(any(argv[-1] == "install" for argv in self.calls))
+        self.assertEqual(config.read_text(), '[tools]\nnode = "99.0.0"\n')
+
+    def test_hanging_rebuild_has_a_bounded_timeout_and_retains_pending_requests(self):
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        shutil.rmtree(self.tools)
+        self.tools.mkdir()
+        def hang(argv, **kwargs):
+            if "install" in argv:
+                self.assertGreater(kwargs.get("timeout", 0), 0)
+                self.assertLessEqual(kwargs["timeout"], 180)
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            return self.command(argv, **kwargs)
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=hang, processes=lambda _uid: [])
+        self.assertIn("mise tool rebuild pending (TimeoutExpired)", errors.getvalue())
+        ledger = self.home / ".config/octogee/mise-installs.json"
+        self.assertIn("node@99.0.0", json.loads(ledger.read_text())["pendingRequests"])
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "rebuilt exact version")
+        self.assertNotIn("pendingRequests", json.loads(ledger.read_text()))
+
+    def test_missing_and_configured_installations_share_one_total_deadline(self):
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        shutil.rmtree(self.tools)
+        self.tools.mkdir()
+        timeouts = []
+        def command(argv, **kwargs):
+            if "install" in argv: timeouts.append(kwargs.get("timeout"))
+            return self.command(argv, **kwargs)
+        ticks = iter([10, 10, 70])
+        with patch.dict(SCRIPT["reconcile_boot"].__globals__, {"time": types.SimpleNamespace(monotonic=lambda: next(ticks))}):
+            SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=command, processes=lambda _uid: [])
+        self.assertEqual(timeouts, [180, 120])
+
+    def test_inventory_reads_are_bounded_independently_of_installation(self):
+        def command(argv, **kwargs):
+            if "ls" in argv: self.assertEqual(kwargs.get("timeout"), 30)
+            return self.command(argv, **kwargs)
+        self.assertTrue(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+
+    @unittest.skipUnless(sys.platform == "linux", "native process custody uses Linux /proc")
+    def test_timeout_reaps_mise_and_terminates_its_term_ignoring_installer(self):
+        marker = self.root / "installer-writes"
+        program = "import os,signal,time; child=os.fork(); " + "\nif child == 0:\n signal.signal(signal.SIGTERM,signal.SIG_IGN)\n while True:\n  with open(" + repr(str(marker)) + ", 'a') as file: file.write('write\\n')\n  time.sleep(.01)\nelse:\n time.sleep(60)\n"
+        with self.assertRaises(subprocess.TimeoutExpired):
+            SCRIPT["run_mise_command"]([sys.executable, "-c", program], env=os.environ.copy(), cwd=self.root, timeout=.2)
+        self.assertTrue(marker.exists())
+        content = marker.read_bytes()
+        time.sleep(.15)
+        self.assertEqual(marker.read_bytes(), content, "orphan installer continued writing after deadline custody ended")
+
+    def test_owner_fence_ignores_exited_zombies_but_keeps_live_writers(self):
+        class Process:
+            def __init__(self, pid, state, uid): self.name, self.state, self.uid = str(pid), state, uid
+            def stat(self): return types.SimpleNamespace(st_uid=self.uid)
+            def __truediv__(self, _name): return types.SimpleNamespace(read_text=lambda: self.name + " (writer) " + self.state + " 1 123 123 0")
+        entries = [Process(10, "Z", 1000), Process(11, "X", 1000), Process(12, "S", 1000), Process(13, "R", 0)]
+        with patch.dict(SCRIPT["owner_processes"].__globals__, {"Path": lambda _path: types.SimpleNamespace(iterdir=lambda: entries)}):
+            self.assertEqual(SCRIPT["owner_processes"](1000), [12])
+
+    def test_remaining_owner_process_after_install_is_a_strict_boot_failure(self):
+        observed = iter([[], [], [99]])
+        with self.assertRaisesRegex(RuntimeError, "writers"):
+            SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: next(observed))
+
+    def test_unavailable_tool_executable_remains_a_strict_boot_failure(self):
+        def missing(argv, **kwargs):
+            if "install" in argv: raise FileNotFoundError("missing /usr/bin/mise")
+            return self.command(argv, **kwargs)
+        with self.assertRaisesRegex(FileNotFoundError, "missing /usr/bin/mise"):
+            SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=missing, processes=lambda _uid: [])
+
+    def test_tool_copy_failure_remains_a_strict_boot_failure(self):
+        with patch.dict(SCRIPT["reconcile_boot"].__globals__, {"project_tree": lambda *_args: (_ for _ in ()).throw(RuntimeError("unsafe copy"))}):
+            with self.assertRaisesRegex(RuntimeError, "unsafe copy"):
+                SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
 
     def test_inventory_after_success_does_not_rebuild_intentionally_removed_versions(self):
         SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
