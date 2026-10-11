@@ -11,6 +11,10 @@ SOCKET = "/run/octogee-desktop/control.sock"
 
 
 def operate(action, run=subprocess.run):
+    if action == "reconcile-tools":
+        result = run(["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--property=Type=exec", "--property=RuntimeMaxSec=20min", "--property=KillMode=control-group", "/usr/local/bin/octo-desktop-tool-storage", "--reconcile"], check=True, capture_output=True, text=True)
+        if result.stderr: print(result.stderr, flush=True)
+        return
     if action == "stop-home":
         raise RuntimeError("full-home restore is blocked: SSH session writers have no verified host fence")
     if action not in {"freeze", "thaw", "stop", "start"}:
@@ -82,7 +86,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         action = self.path.removeprefix("/")
         try:
-            if action == "accept-home-recovery":
+            if action == "record-tools":
+                result = subprocess.run(["/usr/local/bin/octo-desktop-tool-storage", "--record"], check=True, capture_output=True, text=True, timeout=50)
+                if result.stderr: print(result.stderr, flush=True)
+                code, body = 200, json.loads(result.stdout)
+            elif action == "accept-home-recovery":
                 result = subprocess.run(["/usr/local/bin/octo-home-recovery"], check=True, capture_output=True, text=True, timeout=50)
                 code, body = 200, json.loads(result.stdout)
             else:

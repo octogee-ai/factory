@@ -322,7 +322,7 @@ describe.skipIf(process.platform === "darwin" && !nativeDocker)("native home arc
     expect(await h.deps.fs.exists(`${h.scope.dataDir}/tokens`)).toBe(false);
     const { readdir } = await import("node:fs/promises");
     expect(await readdir(`${h.scope.desktopDir}/.config/octogee-chromium`)).toEqual(["Default"]);
-    expect(h.events).toEqual(["freeze", "thaw", "stop-home", "start"]);
+    expect(h.events).toEqual(["freeze", "thaw", "stop-home", "reconcile-tools", "start"]);
   });
 
   it("retries extraction failures without treating partially extracted staging files as a live home", async () => {

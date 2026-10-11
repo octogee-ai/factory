@@ -24,7 +24,9 @@ export const HOME_CHECKPOINT_MARKER = "home-checkpoint.marker";
 export const HOME_RESTORE_PENDING = "home-restore.pending";
 export const HOME_METADATA_AUTHORIZATION = [".ssh/authorized_keys", ".ssh/authorized_keys.metadata"] as const;
 export const DESKTOP_HOME_PATHS = [".config/octogee-chromium", ".config/hypr", ".config/omarchy", ".config/octogee", "Documents"] as const;
+export const HOME_DESKTOP_TOOL_PATHS = [".local/share/mise", ".cache/mise", ".npm"] as const;
 export const HOME_DESKTOP_RUNTIME_PATHS = [
+  ...HOME_DESKTOP_TOOL_PATHS,
   ".config/octogee-chromium/Default/Cache",
   ".config/octogee-chromium/SingletonLock",
   ".config/octogee-chromium/SingletonCookie",
@@ -50,7 +52,8 @@ export interface HomeFs {
   saveResponse(response: Response, path: string): Promise<void>;
   mkdir(path: string, mode?: number): Promise<void>;
   replaceDirectory(source: string, target: string): Promise<void>;
-  replaceDirectoryContents(source: string, target: string, preserved?: readonly string[]): Promise<void>;
+  retainToolStorage?(source: string, target: string): Promise<void>;
+  replaceDirectoryContents(source: string, target: string, preserved?: readonly string[], metadataPreserved?: readonly string[]): Promise<void>;
 }
 
 export interface HomeCheckpointDeps extends BrokerClientDeps {
@@ -72,6 +75,7 @@ export interface HomeScope {
   desktopDir: string;
   restorePending: string;
   restoreCheckpoint?: GatewayVmHomeCheckpoint;
+  desktopToolsRebuildable?: boolean;
 }
 
 export type HomeCheckpointResult =
@@ -101,7 +105,7 @@ export function tarCreateArgs(archive: string, scope: HomeScope): string[] {
     "--numeric-owner",
     `--file=${archive}`,
     "--anchored",
-    ...HOME_DESKTOP_RUNTIME_PATHS.map((path) => `--exclude=desktop-home/${path}`),
+    ...HOME_DESKTOP_RUNTIME_PATHS.filter(path => path !== ".local/share/mise" || scope.desktopToolsRebuildable).map((path) => `--exclude=desktop-home/${path}`),
     `--exclude=data/${HOME_TOOLCHAIN_CACHE}`,
     ...HOME_METADATA_AUTHORIZATION.map((path) => `--exclude=desktop-home/${path}`),
     "-C", `${scope.dataDir}/..`, "data",
@@ -111,12 +115,14 @@ export function tarCreateArgs(archive: string, scope: HomeScope): string[] {
 }
 
 export function tarExtractArgs(archive: string, dataDir: string): string[] {
-  return ["--extract", "--gzip", "--numeric-owner", "--same-owner", "--same-permissions", `--file=${archive}`, `--directory=${dataDir}`];
+  return ["--extract", "--gzip", "--numeric-owner", "--same-owner", "--same-permissions", "--anchored",
+    ...HOME_DESKTOP_TOOL_PATHS.filter(path => path !== ".local/share/mise").map(path => `--exclude=desktop-home/${path}`),
+    `--file=${archive}`, `--directory=${dataDir}`];
 }
 
-export function findDirtyArgs(dataDir: string, marker: string, toolchainCache: boolean = false): string[] {
+export function findDirtyArgs(dataDir: string, marker: string, toolchainCache: boolean = false, desktopToolsRebuildable = false): string[] {
   const excluded = toolchainCache ? [`${dataDir}/${HOME_TOOLCHAIN_CACHE}`]
-    : [...HOME_DESKTOP_RUNTIME_PATHS, ...HOME_METADATA_AUTHORIZATION].map((path) => `${dataDir}/${path}`);
+    : [...HOME_DESKTOP_RUNTIME_PATHS.filter(path => path !== ".local/share/mise" || desktopToolsRebuildable), ...HOME_METADATA_AUTHORIZATION].map((path) => `${dataDir}/${path}`);
   const prune = excluded.flatMap((path, index) => index === 0 ? ["-path", path] : ["-o", "-path", path]);
   return [dataDir, "(", ...prune, ")", "-prune", "-o", "-newer", marker, "-print", "-quit"];
 }
@@ -133,7 +139,7 @@ export async function homeIsDirty(deps: HomeCheckpointDeps, scope: HomeScope): P
   if (!(await deps.fs.exists(scope.marker))) return true;
   const changed = await sh(deps, "find", findDirtyArgs(scope.dataDir, scope.marker, true), [0]);
   if (changed.trim().length > 0) return true;
-  if (await deps.fs.exists(scope.desktopDir) && (await sh(deps, "find", findDirtyArgs(scope.desktopDir, scope.marker), [0])).trim()) return true;
+  if (await deps.fs.exists(scope.desktopDir) && (await sh(deps, "find", findDirtyArgs(scope.desktopDir, scope.marker, false, scope.desktopToolsRebuildable), [0])).trim()) return true;
   return false;
 }
 
@@ -161,10 +167,15 @@ async function createAndUploadCheckpoint(
   startedAt: number,
 ): Promise<HomeCheckpointResult> {
   await deps.discardSnapshot();
-  await deps.snapshot(() => deps.captureSnapshot());
+  let desktopToolsRebuildable = scope.desktopToolsRebuildable;
+  await deps.snapshot(async () => {
+    desktopToolsRebuildable = await recordDesktopTools(deps);
+    await deps.captureSnapshot();
+  });
   const snapshotRoot = `${deps.stateRoot}/.home-checkpoint/snapshot`;
   const capturedScope = {
     ...scope,
+    desktopToolsRebuildable,
     dataDir: `${snapshotRoot}/volumes/data`,
     desktopDir: `${snapshotRoot}/desktop-home`,
   };
@@ -196,7 +207,16 @@ async function createAndUploadCheckpoint(
   return { status: "uploaded", name: committed.name, size, pruned };
 }
 
+async function recordDesktopTools(deps: HomeCheckpointDeps): Promise<boolean> {
+  try { return (await deps.desktop.tools?.())?.rebuildable ?? false; }
+  catch (error) {
+    deps.log(`optional native tool inventory unavailable (${error instanceof Error ? error.name : typeof error}); retaining tool storage`);
+    return false;
+  }
+}
+
 export async function checkpointHome(deps: HomeCheckpointDeps, scope: HomeScope, opts: { force: boolean; requestedAt?: number | null }): Promise<HomeCheckpointResult> {
+  scope.desktopToolsRebuildable = await recordDesktopTools(deps);
   if (!opts.force && !(await homeIsDirty(deps, scope))) return { status: "clean" };
   const startedAt = deps.now();
   const tempDir = await deps.fs.mkdtemp("octogee-home-checkpoint-");
@@ -244,12 +264,18 @@ async function installHomeRestore(deps: HomeCheckpointDeps, scope: HomeScope, cu
   await deps.fs.touch(scope.restorePending, deps.now());
   await deps.fs.replaceDirectory(`${staged}/data`, scope.dataDir);
   if (current.coverage === "builder-home-v2") {
-    await deps.fs.replaceDirectoryContents(`${staged}/desktop-home`, scope.desktopDir, HOME_METADATA_AUTHORIZATION);
+    if (!deps.fs.retainToolStorage) throw new Error("native tool preservation is unavailable");
+    await deps.fs.retainToolStorage(`${staged}/desktop-home/.local/share/mise`, `${staged}/desktop-home/.config/octogee/mise-retained`);
+    await deps.fs.replaceDirectoryContents(`${staged}/desktop-home`, scope.desktopDir, [...HOME_METADATA_AUTHORIZATION, ...HOME_DESKTOP_TOOL_PATHS], HOME_METADATA_AUTHORIZATION);
   } else {
     for (const path of DESKTOP_HOME_PATHS) {
       const source = `${staged}/desktop-home/${path}`;
       if (await deps.fs.exists(source)) await deps.fs.replaceDirectory(source, `${scope.desktopDir}/${path}`);
     }
+  }
+  try { await deps.desktop.run("reconcile-tools"); }
+  catch (error) {
+    deps.log(`optional restored native tools could not be rebuilt (${error instanceof Error ? error.name : typeof error}); preserving declarations for retry`);
   }
   await deps.fs.touch(scope.marker, deps.now());
   if (receipt) await deps.fs.touch(receipt, deps.now());

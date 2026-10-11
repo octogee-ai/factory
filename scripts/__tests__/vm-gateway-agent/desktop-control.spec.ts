@@ -63,3 +63,20 @@ it.each([
     stderr: expect.stringMatching(/Ran [1-9]\d* tests? in [^\n]+\n\nOK\s*$/),
   });
 }, 90_000);
+
+it("records read-only native tool declarations and rejects malformed status", async () => {
+  const root = await mkdtemp(join(tmpdir(), "octogee-tools-control-"));
+  const socket = join(root, "control.sock");
+  let body: unknown = { rebuildable: true };
+  const server = createServer((req, res) => { expect(req.url).toBe("/record-tools"); res.end(JSON.stringify(body)); });
+  await new Promise<void>(resolve => server.listen(socket, resolve));
+  try {
+    const control = createDesktopControl(socket);
+    expect(await control.tools!()).toEqual({ rebuildable: true });
+    body = { rebuildable: "yes" };
+    await expect(control.tools!()).rejects.toThrow("malformed");
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});

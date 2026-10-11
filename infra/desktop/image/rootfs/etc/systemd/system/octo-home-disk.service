@@ -1,12 +1,14 @@
 [Unit]
 Description=Octogee Builder home disk at the gateway state root and the desktop user's home
-After=local-fs.target
+After=local-fs.target network-online.target
+Wants=network-online.target
 Before=docker.service octo-gateway-agent.service octo-desktop.service user@1000.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/octo-home-disk
+ExecStartPost=/usr/local/bin/octo-desktop-tool-storage --reconcile
 ExecStartPost=/usr/local/bin/octo-home-migrate
 ExecStartPost=/usr/local/bin/octo-scratch-storage
 TimeoutStartSec=20min

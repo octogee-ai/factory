@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, openAsBlob, type Stats } from "node:fs";
 import { chmod, chown, lstat, mkdir, mkdtemp, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -49,19 +49,25 @@ async function restorationDirectory(path: string): Promise<Stats | null> {
   return metadata;
 }
 
-async function restoreDirectoryMetadata(target: string, metadata: Stats | null, existing: Stats | null, owner: Pick<Stats, "uid" | "gid"> | null, preserved: readonly string[]): Promise<void> {
-  if (metadata && preserved.every((path) => path.includes("/"))) {
+interface PreservedHomePaths {
+  entries: readonly string[];
+  metadata: readonly string[];
+}
+
+async function restoreDirectoryMetadata(target: string, metadata: Stats | null, existing: Stats | null, owner: Pick<Stats, "uid" | "gid"> | null, preserved: PreservedHomePaths): Promise<void> {
+  if (metadata && preserved.metadata.every((path) => path.includes("/"))) {
     await chown(target, metadata.uid, metadata.gid);
     await chmod(target, metadata.mode & 0o7777);
     await utimes(target, metadata.atime, metadata.mtime);
-  } else if (!existing && preserved.some((path) => !path.includes("/"))) {
+  } else if (!existing && preserved.entries.some((path) => !path.includes("/"))) {
     if (!owner) throw new Error(`protected home directory has no customer ownership: ${target}`);
     await chown(target, owner.uid, owner.gid);
     await chmod(target, 0o700);
   }
 }
 
-async function replaceContents(filesystem: HomeFs, source: string, target: string, preserved: readonly string[], homeOwner?: Pick<Stats, "uid" | "gid">): Promise<void> {
+async function replaceContents(filesystem: HomeFs, source: string, target: string, paths: PreservedHomePaths, homeOwner?: Pick<Stats, "uid" | "gid">): Promise<void> {
+  const preserved = paths.entries;
   const metadata = await restorationDirectory(source);
   const existing = await restorationDirectory(target);
   const owner = homeOwner ?? metadata ?? existing;
@@ -74,14 +80,54 @@ async function replaceContents(filesystem: HomeFs, source: string, target: strin
   for (const entry of new Set([...entries, ...protectedEntries])) {
     if (preserved.includes(entry)) continue;
     const nested = preserved.filter((path) => path.startsWith(`${entry}/`)).map((path) => path.slice(entry.length + 1));
-    if (nested.length) await replaceContents(filesystem, `${source}/${entry}`, `${target}/${entry}`, nested, owner ?? undefined);
+    if (nested.length) await replaceContents(filesystem, `${source}/${entry}`, `${target}/${entry}`, {
+      entries: nested,
+      metadata: paths.metadata.filter((path) => path.startsWith(`${entry}/`)).map((path) => path.slice(entry.length + 1)),
+    }, owner ?? undefined);
     else await filesystem.replaceDirectory(`${source}/${entry}`, `${target}/${entry}`);
   }
-  await restoreDirectoryMetadata(target, metadata, existing, owner, preserved);
+  await restoreDirectoryMetadata(target, metadata, existing, owner, paths);
+}
+
+async function toolRetentionParents(home: string): Promise<void> {
+  const owner = await lstat(home);
+  if (!owner.isDirectory()) throw new Error("archived native home is not a real directory");
+  for (const parent of [`${home}/.config`, `${home}/.config/octogee`]) {
+    try { if (!(await lstat(parent)).isDirectory()) throw new Error("archived native tool parent is not a real directory"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await mkdir(parent, { mode: 0o700 });
+      await chown(parent, owner.uid, owner.gid);
+    }
+  }
+}
+
+async function retainToolStorage(source: string, target: string): Promise<void> {
+  const suffix = "/.local/share/mise";
+  const home = source.slice(0, -suffix.length);
+  if (!source.endsWith(suffix) || target !== `${home}/.config/octogee/mise-retained`) throw new Error("native tool retention path is invalid");
+  for (const parent of [home, `${home}/.local`, `${home}/.local/share`]) {
+    if (!await restorationDirectory(parent)) return;
+  }
+  let metadata: Stats;
+  try { metadata = await lstat(source); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (metadata.isSymbolicLink()) return;
+  if (!metadata.isDirectory()) throw new Error("archived native tools are not a directory");
+  await toolRetentionParents(home);
+  try {
+    if (!(await lstat(target)).isDirectory()) throw new Error("retained native tools are not a real directory");
+    await rename(target, `${target}-before-restore-${randomUUID()}`);
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  await rename(source, target);
 }
 
 export function createHomeFs(stateRoot: string): HomeFs {
   const filesystem: HomeFs = {
+    retainToolStorage,
     listDir: async (path) => (await exists(path)) ? readdir(path) : [],
     exists,
     fileSize: async (path) => (await stat(path)).size,
@@ -134,7 +180,7 @@ export function createHomeFs(stateRoot: string): HomeFs {
         if (!backedUp || installed) await rm(temporary, { recursive: true, force: true });
       }
     },
-    replaceDirectoryContents: (source, target, preserved = []) => replaceContents(filesystem, source, target, preserved),
+    replaceDirectoryContents: (source, target, preserved = [], metadataPreserved = []) => replaceContents(filesystem, source, target, { entries: preserved, metadata: metadataPreserved }),
   };
   return filesystem;
 }

@@ -44,7 +44,7 @@ log "desktop session files"
 cp -R --no-preserve=all "$HERE/desktop-rootfs/." /
 cp -R --no-preserve=all "$HERE/rootfs/." /
 chown -R root:root /usr/local/bin/octo-shims /usr/share/omarchy/octo-desktop /etc/systemd/system/octo-*.service /etc/systemd/system/octo-*.timer /etc/systemd/logind.conf.d/octo-desktop.conf /etc/modules-load.d/octo-desktop.conf /etc/sudoers.d/octo-desktop /usr/local/bin/octo-desktop-* /usr/local/bin/octo-metadata-ssh-keys
-chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys /usr/local/bin/octo-gateway-agent /usr/local/bin/octo-gateway-firewall /usr/local/bin/octo-grow-root /usr/local/bin/octo-home-disk /usr/local/bin/octo-home-migrate /usr/local/bin/octo-home-recovery /usr/local/bin/octo-scratch-storage /usr/local/bin/octo-limine-enroll
+chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys /usr/local/bin/octo-gateway-agent /usr/local/bin/octo-gateway-firewall /usr/local/bin/octo-grow-root /usr/local/bin/octo-home-disk /usr/local/bin/octo-home-migrate /usr/local/bin/octo-home-recovery /usr/local/bin/octo-scratch-storage /usr/local/bin/octo-limine-enroll /usr/local/bin/octo-desktop-tool-storage
 chmod 0440 /etc/sudoers.d/octo-desktop
 rm -f /etc/sudoers.d/zz-octo-nopasswd
 visudo -cf /etc/sudoers.d/octo-desktop >/dev/null
@@ -89,6 +89,9 @@ systemctl enable octo-grow-root.service octo-limine-enroll.service octo-home-dis
 systemctl disable sddm.service
 systemctl mask sddm.service
 systemctl disable --now cups.service cups.path avahi-daemon.service bluetooth.service >/dev/null 2>&1 || true
+
+log "desktop tool storage outside the Builder home"
+/usr/local/bin/octo-desktop-tool-storage
 
 log "identity reset + cleanup"
 printf '%s\n' "$IMAGE_NAME" > /etc/octogee-computer-image

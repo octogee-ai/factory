@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { COMPUTER_HOME_CHECKPOINT_MAX_BYTES } from "@octogee/shared/types/glm";
 import {
   DESKTOP_HOME_PATHS,
+  HOME_DESKTOP_TOOL_PATHS,
+  HOME_METADATA_AUTHORIZATION,
   checkpointHome,
   homeScope,
   restoreHome,
@@ -44,7 +46,7 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
     metadata: { identityToken: async (aud) => `id-${aud}` },
     fetchImpl,
     stateRoot: "/srv/octogee",
-    desktop: { run: vi.fn(async () => {}) },
+    desktop: { tools: vi.fn(async () => ({ rebuildable: true })), run: vi.fn(async () => {}) },
     snapshot: async (work) => work(),
     captureSnapshot: async () => {},
     discardSnapshot: async () => {},
@@ -61,6 +63,7 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
       exists: async (path) => path.endsWith("/data") || path.endsWith("/desktop-home") || (path.endsWith("home-checkpoint.marker") && world.markerExists),
       mkdir: async () => {},
       replaceDirectory: async () => {},
+      retainToolStorage: async () => {},
         replaceDirectoryContents: async () => {},
       fileSize: async (path) => (path.includes("home-restore") ? world.savedSize : world.archiveSize),
       sha256: async () => SHA,
@@ -76,6 +79,7 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
   const scope = homeScope("/srv/octogee", bundleFixture({
     containers: bundleFixture().containers.map((c) => ({ ...c, env: { ...c.env, GATEWAY_BUILDER_SLUG: "bob" } })),
   }))!;
+  scope.desktopToolsRebuildable = true;
   return { deps, scope, shell, fetches, touched, removed, world, routes };
 }
 
@@ -128,7 +132,7 @@ describe("checkpointHome", () => {
     expect(await checkpointHome(h.deps, h.scope, { force: false })).toEqual({ status: "clean" });
     expect(h.shell).toEqual([
       "find /srv/octogee/volumes/data ( -path /srv/octogee/volumes/data/.octogee/toolchains/npm-cache ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
-      "find /srv/octogee/desktop-home ( -path /srv/octogee/desktop-home/.config/octogee-chromium/Default/Cache -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonLock -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonCookie -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonSocket -o -path /srv/octogee/desktop-home/.config/octogee-chromium/DevToolsActivePort -o -path /srv/octogee/desktop-home/.ssh/authorized_keys -o -path /srv/octogee/desktop-home/.ssh/authorized_keys.metadata ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
+      "find /srv/octogee/desktop-home ( -path /srv/octogee/desktop-home/.local/share/mise -o -path /srv/octogee/desktop-home/.cache/mise -o -path /srv/octogee/desktop-home/.npm -o -path /srv/octogee/desktop-home/.config/octogee-chromium/Default/Cache -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonLock -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonCookie -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonSocket -o -path /srv/octogee/desktop-home/.config/octogee-chromium/DevToolsActivePort -o -path /srv/octogee/desktop-home/.ssh/authorized_keys -o -path /srv/octogee/desktop-home/.ssh/authorized_keys.metadata ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
     ]);
     expect(h.fetches).toEqual([]);
   });
@@ -214,6 +218,17 @@ describe("checkpointHome", () => {
   });
 });
 
+it("keeps checkpointing and preserves tool storage if optional inventory is unreadable", async () => {
+  const h = fakeHome({}, {
+    "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: NAME, upload: { url: "https://storage.example/upload", method: "PUT", requiredHeaders: {} } } }),
+    "/internal/fleet/computer-home/commit": () => ({ status: 200, body: { name: NAME } }),
+  });
+  h.deps.desktop.tools = vi.fn(async () => { throw new Error("optional cache unreadable"); });
+  expect(await checkpointHome(h.deps, h.scope, { force: true })).toMatchObject({ status: "uploaded" });
+  expect(h.shell.find(value => value.startsWith("tar --create"))).not.toContain("--exclude=desktop-home/.local/share/mise");
+  expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("retaining tool storage"));
+});
+
 describe("restoreHome", () => {
   const record = { name: NAME, size: 2048, sha256: SHA, completedAt: 5, download: { url: "https://storage.example/download", method: "GET", gcsPath: "p", expiresAt: "e" } };
 
@@ -230,12 +245,36 @@ describe("restoreHome", () => {
     expect(h.shell).toEqual([]);
   });
 
+  it("preserves current tool projections while restoring full desktop context behind the strict host fence", async () => {
+    const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: { ...record, coverage: "builder-home-v2", writerProtocol: 2 } }) });
+    h.deps.fs.replaceDirectoryContents = vi.fn(async () => {});
+    await restoreHome(h.deps, h.scope);
+    expect(h.deps.desktop.run).toHaveBeenNthCalledWith(1, "stop-home");
+    expect(h.deps.fs.replaceDirectoryContents).toHaveBeenCalledWith(
+      "/tmp/octogee-home-restore-xyz/staged/desktop-home", h.scope.desktopDir,
+      [...HOME_METADATA_AUTHORIZATION, ...HOME_DESKTOP_TOOL_PATHS],
+      HOME_METADATA_AUTHORIZATION,
+    );
+  });
+
+  it("logs optional restored-tool rebuild failure and still admits the preserved home", async () => {
+    const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: { ...record, coverage: "builder-home-v2", writerProtocol: 2 } }) });
+    const actions: string[] = [];
+    h.deps.desktop.run = async action => {
+      actions.push(action);
+      if (action === "reconcile-tools") throw new Error("optional tool install failed");
+    };
+    await expect(restoreHome(h.deps, h.scope)).resolves.toMatchObject({ status: "restored" });
+    expect(actions).toEqual(["stop-home", "reconcile-tools", "start"]);
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("preserving declarations for retry"));
+  });
+
   it("downloads the current checkpoint, verifies size and digest, extracts it into the empty home, and marks it clean", async () => {
     const h = fakeHome({ dataEntries: [] }, { "/internal/fleet/computer-home/download-url": () => ({ status: 200, body: record }) });
     expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "restored", name: NAME, size: 2048 });
     expect(h.fetches[1]).toMatchObject({ url: "https://storage.example/download", init: { method: "GET" } });
     expect(h.shell).toEqual([
-      "tar --extract --gzip --numeric-owner --same-owner --same-permissions --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
+      "tar --extract --gzip --numeric-owner --same-owner --same-permissions --anchored --exclude=desktop-home/.cache/mise --exclude=desktop-home/.npm --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
     ]);
     expect(h.touched).toEqual([{ path: "/srv/octogee/home-restore.pending", at: 1_700_000_000_000 }, { path: "/srv/octogee/home-checkpoint.marker", at: 1_700_000_000_000 }]);
     expect(h.removed).toEqual(["/srv/octogee/home-restore.pending", "/tmp/octogee-home-restore-xyz"]);

@@ -1,0 +1,273 @@
+from pathlib import Path
+import runpy
+import shutil
+import os
+import errno
+import json
+import subprocess
+import types
+from unittest.mock import patch
+import tempfile
+import unittest
+
+SCRIPT = runpy.run_path(str(Path(__file__).parent / "rootfs/usr/local/bin/octo-desktop-tool-storage"))
+PREPARE = SCRIPT["prepare_image"]
+
+class ToolStorage(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name).resolve()
+        self.home = self.root / "image-home"
+        self.tools = self.root / "os-tools/mise"
+        self.cache = self.root / "os-cache"
+        self.home.mkdir(parents=True)
+        if os.geteuid() == 0: os.chown(self.home, 1000, 1000)
+        self.install = self.home / ".local/share/mise/installs/node/26/bin/node"
+        self.install.parent.mkdir(parents=True)
+        self.install.write_text("installed image binary")
+        self.install.chmod(0o755)
+        custom = self.home / ".local/share/mise/installs/node/99.0.0/bin/node"
+        custom.parent.mkdir(parents=True)
+        custom.write_text("customer-pinned version")
+        shims = self.home / ".local/share/mise/shims"
+        shims.mkdir()
+        (shims / "node").symlink_to("../installs/node/26/bin/node")
+        downloads = self.home / ".cache/mise/downloads/node.tar.gz"
+        downloads.parent.mkdir(parents=True)
+        downloads.write_text("rebuildable download")
+        npm = self.home / ".npm/_cacache/download"
+        npm.parent.mkdir(parents=True)
+        npm.write_text("rebuildable npm cache")
+        for name in (".codex/auth.json", ".config/mise/config.toml", ".config/octogee-chromium/Default/Cookies", ".local/share/user-app/context.txt"):
+            target = self.home / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("private user context")
+
+    def invoke(self):
+        PREPARE(self.home, self.tools, self.cache)
+
+    def test_image_seed_contains_links_and_user_state_instead_of_tool_bytes(self):
+        self.invoke()
+        self.assertTrue((self.home / ".local/share/mise").is_symlink())
+        self.assertTrue((self.home / ".cache/mise").is_symlink())
+        self.assertTrue((self.home / ".npm").is_symlink())
+        self.assertEqual((self.tools / "installs/node/26/bin/node").read_text(), "installed image binary")
+        self.assertEqual((self.cache / "mise/downloads/node.tar.gz").read_text(), "rebuildable download")
+        self.assertEqual((self.cache / "npm/_cacache/download").read_text(), "rebuildable npm cache")
+        self.assertEqual(self.install.read_text(), "installed image binary")
+        self.assertEqual(self.install.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.home / ".local/share/mise/shims/node").read_text(), "installed image binary")
+        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "customer-pinned version")
+        seed = self.root / "durable-seed"
+        shutil.copytree(self.home, seed, symlinks=True)
+        self.assertTrue((seed / ".local/share/mise").is_symlink())
+        for name in (".codex/auth.json", ".config/mise/config.toml", ".config/octogee-chromium/Default/Cookies", ".local/share/user-app/context.txt"):
+            self.assertEqual((seed / name).read_text(), "private user context")
+
+    def test_repeat_preparation_does_not_replace_tools_or_change_context(self):
+        self.invoke()
+        installed = self.tools / "installs/node/26/bin/node"
+        before = installed.stat().st_ino
+        self.invoke()
+        self.assertEqual(installed.stat().st_ino, before)
+
+    def test_foreign_symlink_is_rejected_without_following_or_deleting_it(self):
+        source = self.home / ".local/share/mise"
+        shutil.rmtree(source)
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "auth.json").write_text("foreign private auth")
+        source.symlink_to(foreign)
+        with self.assertRaises(RuntimeError): self.invoke()
+        self.assertEqual((foreign / "auth.json").read_text(), "foreign private auth")
+        self.assertTrue(source.is_symlink())
+
+    def test_retained_home_adopts_new_image_storage_without_losing_custom_versions(self):
+        self.tools.mkdir(parents=True)
+        (self.tools / "image-new-version").write_text("new image tool")
+        (self.tools / "shims").mkdir()
+        (self.tools / "shims/node").symlink_to("../installs/node/26/bin/node")
+        self.invoke()
+        self.assertTrue((self.home / ".local/share/mise").is_symlink())
+        self.assertEqual(self.install.read_text(), "installed image binary")
+        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "customer-pinned version")
+        self.assertEqual((self.tools / "image-new-version").read_text(), "new image tool")
+
+    @unittest.skipUnless(Path("/dev/shm").is_dir(), "Linux separate mount required")
+    def test_separate_filesystem_relocation_preserves_bytes_modes_and_shims(self):
+        with tempfile.TemporaryDirectory(dir="/dev/shm") as directory:
+            self.tools = Path(directory) / "mise"
+            self.cache = Path(directory) / "cache"
+            self.assertNotEqual(self.home.stat().st_dev, Path(directory).stat().st_dev)
+            self.invoke()
+            self.assertTrue((self.home / ".local/share/mise").is_symlink())
+            self.assertEqual(self.install.read_text(), "installed image binary")
+            self.assertEqual(self.install.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((self.home / ".local/share/mise/shims/node").read_text(), "installed image binary")
+
+    def test_concurrent_source_change_blocks_handoff_and_preserves_both_writes(self):
+        original_copy = shutil.copytree
+        source = self.home / ".local/share/mise"
+        def changed(*args, **kwargs):
+            result = original_copy(*args, **kwargs)
+            if Path(args[0]) == source:
+                (source / "new-local-data").write_text("concurrent context")
+            return result
+        with patch("shutil.copytree", side_effect=changed), self.assertRaisesRegex(RuntimeError, "verification"):
+            self.invoke()
+        self.assertFalse(source.is_symlink())
+        self.assertEqual(self.install.read_text(), "installed image binary")
+        self.assertEqual((source / "new-local-data").read_text(), "concurrent context")
+
+    def test_failed_cross_filesystem_copy_preserves_original_home_tools(self):
+        with patch.object(Path, "rename", side_effect=OSError(errno.EXDEV, "different filesystems")), patch("shutil.copytree", side_effect=OSError("copy failed")):
+            with self.assertRaisesRegex(RuntimeError, "copy"):
+                self.invoke()
+        self.assertFalse((self.home / ".local/share/mise").is_symlink())
+        self.assertEqual(self.install.read_text(), "installed image binary")
+
+    def test_failed_publication_restores_original_home_and_os_tools(self):
+        self.tools.mkdir(parents=True)
+        (self.tools / "image-only").write_text("image tool")
+        rename = Path.rename
+        def fail_stage(location, target):
+            if location.name.startswith(".octogee-tool-stage-"):
+                raise OSError("publication failed")
+            return rename(location, target)
+        with patch.object(Path, "rename", fail_stage), self.assertRaisesRegex(RuntimeError, "publication"):
+            self.invoke()
+        self.assertFalse((self.home / ".local/share/mise").is_symlink())
+        self.assertEqual(self.install.read_text(), "installed image binary")
+        self.assertEqual((self.tools / "image-only").read_text(), "image tool")
+
+    def test_destination_links_cannot_redirect_copy_outside_owned_storage(self):
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        self.tools.mkdir(parents=True)
+        (self.tools / "installs").symlink_to(foreign)
+        with self.assertRaises(RuntimeError): self.invoke()
+        self.assertEqual(list(foreign.iterdir()), [])
+        self.assertEqual(self.install.read_text(), "installed image binary")
+
+    def test_symlink_ancestor_is_rejected_without_entering_it(self):
+        local = self.home / ".local"
+        held = self.home / "held-local"
+        local.rename(held)
+        local.symlink_to(held)
+        with self.assertRaises(RuntimeError): self.invoke()
+        self.assertEqual((held / "share/mise/installs/node/26/bin/node").read_text(), "installed image binary")
+
+class BootReconciliation(ToolStorage):
+    def command(self, argv, **kwargs):
+        self.calls.append(argv)
+        if "show" in argv:
+            return types.SimpleNamespace(stdout="inactive\ninactive\ninactive\n", returncode=0)
+        if "ls" in argv:
+            rows = [{"version": version.name, "installed": True, "install_path": str(version)} for version in (self.home / ".local/share/mise/installs/node").glob("*") if version.is_dir()]
+            return types.SimpleNamespace(stdout=json.dumps({"node": rows}), returncode=0)
+        if "install" in argv:
+            for request in argv:
+                if request.startswith("node@"):
+                    file = self.tools / "installs/node" / request.split("@", 1)[1] / "bin/node"
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text("rebuilt exact version")
+        return types.SimpleNamespace(stdout="", returncode=0)
+
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+
+    def test_retained_home_boot_reconciles_before_declared_writers(self):
+        reconcile = SCRIPT.get("reconcile_boot", lambda *_args, **_kwargs: None)
+        reconcile(self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertTrue((self.home / ".local/share/mise").is_symlink())
+        self.assertTrue((self.home / ".config/octogee/mise-installs.json").is_file())
+        unit = (Path(__file__).parent / "rootfs/etc/systemd/system/octo-home-disk.service").read_text()
+        self.assertIn("ExecStartPost=/usr/local/bin/octo-desktop-tool-storage --reconcile", unit)
+        self.assertLess(unit.index("tool-storage --reconcile"), unit.index("octo-home-migrate"))
+        for file in ("sshd.service.d/10-octogee-home-authorization.conf", "user@1000.service.d/10-octogee-home.conf", "octo-desktop.service"):
+            value = (Path(__file__).parent / "rootfs/etc/systemd/system" / file).read_text()
+            self.assertIn("octo-home-disk.service", value)
+
+    def test_active_ssh_or_owner_process_blocks_boot_copy_without_mutation(self):
+        reconcile = SCRIPT.get("reconcile_boot", lambda *_args, **_kwargs: None)
+        active = lambda argv, **kwargs: types.SimpleNamespace(stdout="inactive\ninactive\nactive\n", returncode=0)
+        for run, processes in ((active, lambda _uid: []), (self.command, lambda _uid: [99])):
+            with self.subTest(), self.assertRaisesRegex(RuntimeError, "writers"):
+                reconcile(self.home, self.tools, self.cache, run=run, processes=processes)
+        self.assertFalse((self.home / ".local/share/mise").is_symlink())
+        self.assertEqual(self.install.read_text(), "installed image binary")
+
+    def test_os_rebuild_restores_recorded_custom_version_before_admission(self):
+        reconcile = SCRIPT.get("reconcile_boot", lambda *_args, **_kwargs: None)
+        reconcile(self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        shutil.rmtree(self.tools, ignore_errors=True)
+        self.tools.mkdir(parents=True)
+        reconcile(self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertEqual(self.install.read_text(), "rebuilt exact version")
+        self.assertTrue(any("install" in argv and "node@26" in argv for argv in self.calls))
+
+    def test_optional_cache_is_not_read_by_tool_inventory(self):
+        def command(argv, **kwargs):
+            self.assertNotEqual(kwargs.get("env", {}).get("MISE_CACHE_DIR"), str(self.home / ".cache/mise"))
+            return self.command(argv, **kwargs)
+        self.assertTrue(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+
+    def test_local_install_remains_in_home_and_is_reported_for_operator_cleanup(self):
+        def command(argv, **kwargs):
+            result = self.command(argv, **kwargs)
+            if "ls" in argv:
+                value = json.loads(result.stdout)
+                value["node"][0]["symlinked_to"] = str(self.home / "local-custom-tool")
+                result.stdout = json.dumps(value)
+            return result
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=command, processes=lambda _uid: [])
+        self.assertFalse((self.home / ".local/share/mise").is_symlink())
+        self.assertEqual(self.install.read_text(), "installed image binary")
+        self.assertFalse(json.loads((self.home / ".config/octogee/mise-installs.json").read_text())["rebuildable"])
+
+    def test_projected_local_install_is_retained_durably_before_checkpoint(self):
+        self.invoke()
+        def command(argv, **kwargs):
+            result = self.command(argv, **kwargs)
+            if "ls" in argv:
+                value = json.loads(result.stdout)
+                value["node"][0]["symlinked_to"] = str(self.home / "local-custom-tool")
+                result.stdout = json.dumps(value)
+            return result
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        retained = self.home / ".config/octogee/mise-retained/installs/node/26/bin/node"
+        self.assertEqual(retained.read_text(), "installed image binary")
+        shutil.rmtree(self.tools)
+        self.tools.mkdir()
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertEqual(self.install.read_text(), "installed image binary")
+        self.assertEqual(retained.read_text(), "installed image binary")
+
+    def test_failed_rebuild_does_not_erase_custom_version_declarations(self):
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        shutil.rmtree(self.tools)
+        self.tools.mkdir()
+        def fail(argv, **kwargs):
+            if "install" in argv: raise subprocess.CalledProcessError(1, argv)
+            return self.command(argv, **kwargs)
+        with self.assertRaises(subprocess.CalledProcessError):
+            SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=fail, processes=lambda _uid: [])
+        SCRIPT["record_tools"](self.home, self.tools, self.command)
+        ledger = self.home / ".config/octogee/mise-installs.json"
+        self.assertIn("node@99.0.0", json.loads(ledger.read_text()).get("pendingRequests", []))
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertEqual((self.tools / "installs/node/99.0.0/bin/node").read_text(), "rebuilt exact version")
+        self.assertNotIn("pendingRequests", json.loads(ledger.read_text()))
+
+    def test_inventory_after_success_does_not_rebuild_intentionally_removed_versions(self):
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        shutil.rmtree(self.tools / "installs/node/99.0.0")
+        SCRIPT["record_tools"](self.home, self.tools, self.command)
+        self.calls.clear()
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=self.command, processes=lambda _uid: [])
+        self.assertFalse((self.tools / "installs/node/99.0.0").exists())
+        self.assertFalse(any("node@99.0.0" in argv for argv in self.calls))
+
+if __name__ == "__main__": unittest.main()
