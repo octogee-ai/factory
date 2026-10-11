@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { createMmCleanupClient } from "../lib/customer-ops/mattermost";
 import { nukeUserCloudSide, type NukeCloudCtx, type NukeCloudDeps } from "../lib/customer-ops/nuke-cloud";
 
 function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
@@ -120,6 +121,36 @@ describe("nukeUserCloudSide — happy path", () => {
     expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("alice", "blog");
     expect(deps.gitea.deleteOrg).toHaveBeenCalledWith("alice");
     expect(deps.gitea.deleteGiteaUser).toHaveBeenCalledWith("alice");
+  });
+
+  it("direct and group memberships do not block permanent Mattermost user and team erasure", async () => {
+    const deletes: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL, init: RequestInit = {}) => {
+      const path = new URL(url).pathname;
+      if (init.method !== "DELETE") return new Response(JSON.stringify([
+        { id: "public", type: "O", team_id: "team-1" },
+        { id: "direct", type: "D", team_id: "" },
+        { id: "group", type: "G", team_id: "" },
+        { id: "private", type: "P", team_id: "team-1" },
+      ]));
+      deletes.push(new URL(url).pathname + new URL(url).search);
+      return new Response(JSON.stringify({ id: "api.channel.delete_channel.type.invalid" }), {
+        status: path.endsWith("/direct") || path.endsWith("/group") ? 400 : 200,
+      });
+    }) as unknown as typeof fetch;
+    const mattermost = createMmCleanupClient({ baseUrl: "https://mm.test", adminToken: "admin", fetchImpl });
+    const deps = mkDeps({ mattermost });
+    const results = await nukeUserCloudSide(mkCtx(), deps);
+    expect(results.find(result => result.key === "mattermost")).toMatchObject({ ok: true });
+    expect(deletes).toEqual([
+      "/api/v4/channels/public", "/api/v4/channels/private",
+      "/api/v4/users/mm-u-1?permanent=true", "/api/v4/channels/mm-c-admin",
+      "/api/v4/users/mm-coach-1?permanent=true",
+      "/api/v4/users/mm-project-1?permanent=true", "/api/v4/users/mm-project-2?permanent=true",
+      "/api/v4/teams/team-1?permanent=true",
+    ]);
+    expect(deps.nukeUserFirestore).toHaveBeenCalled();
+    expect(deps.deleteAuthUser).toHaveBeenCalled();
   });
 
   it("MM step destroys all user channels then the user, plus admin channel + coach + team", async () => {

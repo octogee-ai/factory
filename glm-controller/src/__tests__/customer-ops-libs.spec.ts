@@ -133,9 +133,36 @@ describe("createMmCleanupClient", () => {
   });
 
   it("getUserChannels parses the response into id[]; returns [] on miss", async () => {
-    const { client } = setup([{ status: 200, body: JSON.stringify([{ id: "a" }, { id: "b" }]) }]);
+    const { client } = setup([{ status: 200, body: JSON.stringify([{ id: "a", type: "O", team_id: "t1" }, { id: "b", type: "P", team_id: "t1" }]) }]);
     const ids = await client.getUserChannels("u1", "t1");
     expect(ids).toEqual(["a", "b"]);
+  });
+
+  it("getUserChannels excludes direct and group channels before destructive cleanup", async () => {
+    const { client, calls } = setup([{ status: 200, body: JSON.stringify([
+      { id: "public", type: "O", team_id: "t1" },
+      { id: "direct", type: "D", team_id: "" },
+      { id: "group", type: "G", team_id: "" },
+      { id: "private", type: "P", team_id: "t1" },
+    ]) }]);
+    for (const channelId of await client.getUserChannels("u1", "t1")) {
+      await client.destroyChannel(channelId);
+    }
+    expect(calls.filter(call => call.init.method === "DELETE").map(call => call.url))
+      .toEqual(["https://mm.test/api/v4/channels/public", "https://mm.test/api/v4/channels/private"]);
+  });
+
+  it.each([
+    null,
+    {},
+    [null],
+    [{ id: "x", type: "unknown", team_id: "t1" }],
+    [{ id: "x", type: "O", team_id: "another-team" }],
+    [{ id: "x", type: "P" }],
+    [{ type: "O", team_id: "t1" }],
+  ])("getUserChannels refuses malformed or foreign-team cleanup authority (%j)", async body => {
+    const { client } = setup([{ status: 200, body: JSON.stringify(body) }]);
+    await expect(client.getUserChannels("u1", "t1")).rejects.toThrow(/invalid channel/);
   });
 
   it("getUserChannels returns [] on 404 only — does not silently swallow other errors", async () => {
