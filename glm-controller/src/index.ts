@@ -16,6 +16,7 @@ import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
 import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 import { operationScopedLog } from "./operation-log-scope.js";
 import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
+import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
@@ -3210,6 +3211,9 @@ async function buildHandlers(
       db, vm: createGatewayComputeClient(logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
+    retireNativeSchedulerBeforeStage: (input, scheduler) => retireNativeSchedulerBeforeStage({
+      db, vm: createGatewayComputeClient(logFn), log: logFn,
+    }, input, scheduler),
     readUser: async (uid) => {
       const doc = await db.collection("users").doc(uid).get();
       if (!doc.exists) return null;

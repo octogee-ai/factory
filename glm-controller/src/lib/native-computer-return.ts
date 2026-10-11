@@ -3,6 +3,7 @@ import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
 import { awaitHomeCheckpoint, readHomeCheckpointCompletedAt, readVmHome } from "./home-checkpoint.js";
 import type { GatewayVmClient } from "./compute-vm.js";
+import { nativeSchedulerRetirementForReturn } from "./native-scheduler-retirement.js";
 
 export interface NativeComputerReturnInput {
   fromGatewayId: string;
@@ -17,7 +18,16 @@ export interface NativeComputerReturn {
   checkpointRequested: boolean;
   checkpoint: () => Promise<void>;
   release: () => Promise<void>;
+  acknowledgeCompletedSchedulerHandoff: () => Promise<void>;
   isSourceFencedOff: () => Promise<boolean>;
+}
+
+function persistSchedulerRetirement(
+  tx: import("firebase-admin/firestore").Transaction,
+  userRef: import("firebase-admin/firestore").DocumentReference,
+  retirement: ReturnType<typeof nativeSchedulerRetirementForReturn>,
+): void {
+  if (retirement) tx.update(userRef, { "provisioning.pendingNativeSchedulerRetirement": retirement });
 }
 
 type NativeReturnDb = Pick<Firestore, "collection" | "runTransaction">;
@@ -122,8 +132,9 @@ function sourceCheckpointMatches(runtime: DocumentData | undefined, input: Nativ
 async function pauseCommittedSource(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
   return deps.db.runTransaction(async (tx) => {
     const rootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId);
+    const userRef = deps.db.collection("users").doc(input.uid);
     const [user, root, source, operation, target, assignment] = await Promise.all([
-      tx.get(deps.db.collection("users").doc(input.uid)), tx.get(rootRef),
+      tx.get(userRef), tx.get(rootRef),
       tx.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
       tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
       tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.toGatewayId)),
@@ -138,10 +149,37 @@ async function pauseCommittedSource(deps: NativeReturnDeps, input: NativeCompute
       sourceCheckpointMatches(source.data(), input) &&
       ["running", "paused"].includes(desired?.desiredStatus);
     if (!exact) throw new Error("native return source pause authority changed");
+    const retirement = nativeSchedulerRetirementForReturn(input, user.data(), source.data(), operation.data());
+    persistSchedulerRetirement(tx, userRef, retirement);
     if (desired?.desiredStatus !== "paused") {
       tx.update(rootRef, { desiredStatus: "paused", updatedAt: deps.now(), updatedBy: input.operationId });
     }
     return true;
+  });
+}
+
+async function acknowledgeCompletedSchedulerHandoff(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<void> {
+  await deps.db.runTransaction(async tx => {
+    const userRef = deps.db.collection("users").doc(input.uid);
+    const [user, source, root, operation, target, assignment] = await Promise.all([
+      tx.get(userRef), tx.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
+      tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.toGatewayId)),
+      tx.get(deps.db.collection(`${GATEWAYS_COLLECTION}/${input.toGatewayId}/assignments`).doc(input.uid)),
+    ]);
+    const op = operation.data();
+    assertOwner(root.data(), input);
+    if (!committedOperationMatches(op, input) || user.data()?.provisioning?.openclaw?.gatewayId !== input.toGatewayId ||
+        target.data()?.gatewayClass !== "shared" || !sharedAssignmentMatches(assignment.data(), input) ||
+        root.data()?.desiredStatus !== "paused" || !sourceCheckpointMatches(source.data(), input) ||
+        returnRequest(source.data(), input.operationId) !== null) {
+      throw new Error("native scheduler handoff completion authority changed");
+    }
+    const pending = nativeSchedulerRetirementForReturn(input, user.data(), source.data(), op);
+    if (pending) tx.update(userRef, { "provisioning.pendingNativeSchedulerRetirement": {
+      ...pending, completedAt: deps.now(), cutoverCommittedAt: op!.cutoverCommittedAt,
+    } });
   });
 }
 
@@ -195,6 +233,7 @@ export async function prepareNativeComputerReturn(
       if (result.outcome !== "completed") throw new Error(`native computer checkpoint ${result.outcome}; source retained`);
     },
     release: () => releaseReturnCheckpoint(deps, input),
+    acknowledgeCompletedSchedulerHandoff: () => acknowledgeCompletedSchedulerHandoff(deps, input),
     isSourceFencedOff: () => isSourceFencedOff(deps, input),
   };
 }

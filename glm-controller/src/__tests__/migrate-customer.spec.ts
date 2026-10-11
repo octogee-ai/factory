@@ -158,6 +158,7 @@ function mkDeps(options: HarnessOptions = {}) {
     })),
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
     prepareNativeComputerReturn: vi.fn(async () => null),
+    retireNativeSchedulerBeforeStage: vi.fn(async () => undefined),
     readGatewayOpenclawVersion: vi.fn(async (gatewayId: string) =>
       options.openclawVersions
         ? options.openclawVersions[gatewayId] ?? null
@@ -438,7 +439,7 @@ describe("abandoned Shared migration recovery", () => {
 
 describe("native computer return", () => {
   function nativeReturn(h: ReturnType<typeof mkDeps>) {
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
     h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
     return native;
   }
@@ -939,7 +940,7 @@ describe("native computer return", () => {
       checkpointRequested: requested,
       checkpoint: vi.fn(async () => { events.push("native-checkpoint"); }),
       release: vi.fn(async () => {}),
-      isSourceFencedOff: vi.fn(async () => false),
+      acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false),
     };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
@@ -954,7 +955,7 @@ describe("native computer return", () => {
 
   it("finishes source cleanup when a retry finds the native return already cut over", async () => {
     const { deps, ctx, client } = mkDeps({ sourceGatewayId: "gw-green" });
-    const native = { checkpointRequested: true, checkpoint: vi.fn(), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = { checkpointRequested: true, checkpoint: vi.fn(), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({ input: {
       uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
@@ -979,7 +980,7 @@ describe("native computer return", () => {
 
   it("rolls forward after an uncertain cutover response when Shared already owns the Builder", async () => {
     const { deps, ctx, client } = mkDeps();
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     vi.mocked(deps.commitCutover).mockImplementation(async () => {
       vi.mocked(deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
@@ -998,7 +999,7 @@ describe("native computer return", () => {
       checkpointRequested: false,
       checkpoint: vi.fn(async () => { throw new Error("checkpoint timed out"); }),
       release: vi.fn(async () => {}),
-      isSourceFencedOff: vi.fn(async () => false),
+      acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false),
     };
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
@@ -1016,8 +1017,13 @@ describe("native computer return", () => {
 
     it("moves portable schedules to Shared and leaves host-bound jobs dormant on the computer", async () => {
       const h = mkDeps();
-      nativeReturn(h);
+      const native = nativeReturn(h);
       const order: string[] = [];
+      vi.mocked(h.client.verifyTarget).mockImplementation(async () => {
+        order.push("verify");
+        return { migrationId: "mig-op-1", slug: "alice", ready: true };
+      });
+      native.acknowledgeCompletedSchedulerHandoff.mockImplementation(async () => { order.push("acknowledge"); });
       const snapshot = { version: 1, operationId: handoffId, agentIds: ["octogee-alice-coach"], jobs: [], scratch: [], retainedJobIds: ["desktop-watch"] };
       vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
         order.push(`quiesce:${request.gatewayId}`);
@@ -1035,7 +1041,7 @@ describe("native computer return", () => {
       });
 
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
-      expect(order).toEqual(["quiesce:gw-blue", "quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
+      expect(order).toEqual(["quiesce:gw-blue", "quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue", "verify", "acknowledge"]);
       expect(vi.mocked(h.client.quiesce).mock.calls[1][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: handoffId, retainNonportable: true });
       expect(schedulerCalls(h)).toEqual([
         ["gw-blue", "export", true], ["gw-green", "stage", undefined], ["gw-blue", "retire", undefined], ["gw-green", "activate", undefined],
@@ -1045,6 +1051,18 @@ describe("native computer return", () => {
         "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "checkpoint-native-computer", "cutover-firestore", "activate-scheduler", "unmount-source", "verify-target",
       ]);
       expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");
+    });
+
+    it.each(["activate", "verify"])("does not attest completion when %s fails", async phase => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      if (phase === "verify") vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("target unavailable"));
+      else vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
+        if (phase === "activate") throw new Error("scheduler unavailable");
+        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: false });
+      expect(native.acknowledgeCompletedSchedulerHandoff).not.toHaveBeenCalled();
     });
 
     it("aborts Shared's staged schedules and reopens the computer's scheduler when the checkpoint fails", async () => {
@@ -1283,6 +1301,17 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
     expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({
       migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
     });
+  });
+
+  it.each([false, true])("retires deferred native schedules before target stage (retry=%s)", async retry => {
+    const h = heldActivation(retry ? { sourceGatewayId: "gw-green" } : {});
+    vi.mocked(h.deps.retireNativeSchedulerBeforeStage).mockImplementation(async input => {
+      expect(input).toEqual({ uid: "uid-alice", slug: "alice", gatewayId: "gw-green", operationId: "op-1", claimedStartedAt: 4_000 });
+      h.order.push("retire-deferred-native");
+    });
+    const op = mkOp({ startedAt: 4_000, ...(retry ? { schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 } : {}) });
+    expect(await createMigrateCustomerHandler(h.deps)(op, h.ctx)).toMatchObject({ success: true });
+    expect(h.order.indexOf("retire-deferred-native")).toBeLessThan(h.order.indexOf(`gw-green:stage:${deferred.migrationId}:retain`));
   });
 
   it("stages from the source's exported copy when a retry finds the cutover committed but nothing staged", async () => {
@@ -2104,7 +2133,7 @@ describe("waiting for active Builder work", () => {
   });
   it("defers native computer return before checkpointing or fencing an active voice call", async () => {
     const h = mkDeps();
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
     h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
     vi.mocked(h.client.quiesce).mockRejectedValue(new MigrationDrainPendingError("voice call active"));
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ waitingForBuilderIdle: true, rolledBack: false });

@@ -17,6 +17,7 @@ import {
   type MigrationProgressRequestBody,
 } from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput } from "../lib/native-computer-return.js";
+import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
   CustomerMigrationV2State,
@@ -89,6 +90,7 @@ export interface MigrateCustomerDeps {
   reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
   recordMigrationProgress: (input: { operation: Operation; event: MigrationProgressRecord }) => Promise<void>;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
+  retireNativeSchedulerBeforeStage: (input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"]) => Promise<void>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
 
@@ -906,6 +908,13 @@ async function gatewayClient(deps: MigrateCustomerDeps, gatewayIds: string[]): P
   });
 }
 
+function schedulerRetirementClient(client: MigrationClient, deps: MigrateCustomerDeps, input: Omit<NativeSchedulerRetirementInput, "gatewayId">): MigrationClient {
+  return { ...client, scheduler: async request => {
+    if (request.phase === "stage") await deps.retireNativeSchedulerBeforeStage({ ...input, gatewayId: request.gatewayId }, params => client.scheduler(params));
+    return client.scheduler(request);
+  } };
+}
+
 function retainedJobIds(snapshot: unknown): string[] {
   const ids = (snapshot as { retainedJobIds?: unknown } | null | undefined)?.retainedJobIds;
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
@@ -1316,6 +1325,7 @@ async function completeNativeReturn(
       await ctx.assertActiveClaim?.();
     });
     await reportFreshStep(deps, ctx, "verify-target", () => verifyOrRestoreNativeReturnTarget(deps, ctx, input));
+    await native.acknowledgeCompletedSchedulerHandoff();
     return { steps: [], success: true, rolledBack: false };
   } catch (error) {
     return failure(`native return completion pending: status 503: ${errorMessage(error)}`, false);
@@ -1481,7 +1491,8 @@ async function completeSchedulerHandoff(
   }
   let client: MigrationClient;
   try {
-    client = await gatewayClient(deps, [handoff.fromGatewayId, handoff.toGatewayId]);
+    client = schedulerRetirementClient(await gatewayClient(deps, [handoff.fromGatewayId, handoff.toGatewayId]), deps,
+      { uid: request.uid, slug: user.slug, operationId: op.id, claimedStartedAt: op.startedAt });
     await stageAfterCutover(deps, ctx, client, handoff);
     await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
     await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "activate" });
@@ -1796,13 +1807,13 @@ async function executeMigration(
   const operationId = op.id;
   const automatic = resolveOperationOrigin(op.origin) === "automatic";
   const attempt = (op.attempts ?? 0) + 1;
-  const client = deps.buildClient((transportId) => {
+  const client = schedulerRetirementClient(deps.buildClient((transportId) => {
     const url = prepared.urls.get(transportId);
     if (!url) {
       throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     }
     return url;
-  });
+  }), deps, { uid: prepared.uid, slug: prepared.user.slug, operationId: op.id, claimedStartedAt: op.startedAt });
   const progress = createMigrationProgress({
     now: deps.now,
     log: (message) => deps.log(`${message} migrationId=${prepared.migrationId} builder=${prepared.user.slug}`),
