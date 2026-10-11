@@ -591,7 +591,10 @@ export async function commitCutoverAtomic(
       });
       if (alreadyCommitted) return;
     }
-    updateUserMirror(txn, deps, params, targetRoot);
+    const activationSourcePatch = await builderActivationSourceCutoverPatch({
+      txn, db: deps.db, params, user: restoreOwner.data(), prior, targetRoot,
+    });
+    updateUserMirror(txn, deps, params, targetRoot, activationSourcePatch);
     updateAssignment(txn, deps.db, params, prior.epoch, nowMs);
   });
 }
@@ -600,6 +603,42 @@ interface PriorAssignment {
   exists: boolean;
   data: Record<string, unknown> | undefined;
   epoch: number;
+}
+
+async function builderActivationSourceCutoverPatch(input: {
+  txn: FleetStateTxn;
+  db: FleetStateFirestore;
+  params: CutoverCommitParams;
+  user: Record<string, unknown> | undefined;
+  prior: PriorAssignment;
+  targetRoot: Record<string, unknown> | undefined;
+}): Promise<Record<string, unknown>> {
+  const { params, prior } = input;
+  const openclaw = recordOrEmpty(recordOrEmpty(input.user?.provisioning).openclaw);
+  const lease = recordOrEmpty(openclaw.activationLease);
+  const applies = [
+    params.flipMirror, params.assignment !== null, params.fromGatewayId !== params.toGatewayId,
+    input.targetRoot?.gatewayClass === "shared",
+    ["requested", "provisioning", "activating"].includes(String(lease.status)),
+  ].every(Boolean);
+  if (!applies) return {};
+  const source = await input.txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId));
+  const exact = [
+    lease.status !== "activating",
+    source.data()?.gatewayClass === "shared",
+    openclaw.gatewayId === params.fromGatewayId,
+    lease.sourceGatewayId === params.fromGatewayId,
+    lease.sourceAssignmentEpoch === prior.data?.epoch,
+    prior.exists, prior.data?.uid === params.uid, prior.data?.gatewayId === params.fromGatewayId,
+    Number.isSafeInteger(prior.data?.epoch), Number(prior.data?.epoch) >= 0,
+    Number(prior.data?.epoch) < Number.MAX_SAFE_INTEGER,
+    prior.data?.state === "serving" || prior.data?.state === "quiescing",
+  ].every(Boolean);
+  if (!exact) throw new Error("Builder activation source changed before Shared cutover");
+  return {
+    "provisioning.openclaw.activationLease.sourceGatewayId": params.toGatewayId,
+    "provisioning.openclaw.activationLease.sourceAssignmentEpoch": prior.epoch + 1,
+  };
 }
 
 async function readPriorAssignment(
@@ -769,6 +808,7 @@ function updateUserMirror(
   deps: FleetStateDeps,
   params: CutoverCommitParams,
   targetRoot: Record<string, unknown> | undefined,
+  activationSourcePatch: Record<string, unknown>,
 ): void {
   if (!params.flipMirror) {
     clearWorkspaceMigrationMarker(txn, deps, params.uid);
@@ -776,6 +816,7 @@ function updateUserMirror(
   }
   const controlState = resolveUserGatewayControlState(targetRoot, params.uid);
   txn.update(deps.db.collection("users").doc(params.uid), {
+    ...activationSourcePatch,
     "provisioning.openclaw.gatewayId": params.toGatewayId,
     "provisioning.openclaw.gatewayAssignedAt": deps.serverTimestamp(),
     "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
