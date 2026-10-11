@@ -8,6 +8,7 @@ export interface GatewayUnmountTarget {
 
 export interface UnmountFromGatewayDeps {
   resolveGatewayUnmountTarget: (gatewayId: string) => Promise<GatewayUnmountTarget | null>;
+  isRetiredSharedGateway: (gatewayId: string) => Promise<boolean>;
 
   readAvailableReplicas: (revisionId: string) => Promise<number | null>;
 
@@ -53,6 +54,10 @@ export function createUnmountFromGateway(
 
   return async (gatewayId, slug) => {
     const target = await deps.resolveGatewayUnmountTarget(gatewayId);
+    if (!target && await deps.isRetiredSharedGateway(gatewayId)) {
+      deps.log(`[deprovision] unmount skipped for ${slug}: Shared gateway ${gatewayId} has completed retirement and no runtime`);
+      return "skipped-no-live-pod";
+    }
     if (!target || target.gatewayId !== gatewayId) {
       throw new Error(`gateway ${gatewayId} has no validated serving revision`);
     }

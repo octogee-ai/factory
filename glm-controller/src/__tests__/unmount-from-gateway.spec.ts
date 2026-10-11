@@ -16,6 +16,7 @@ function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGat
       profile: "standard" as const,
     })),
     readAvailableReplicas: vi.fn(async () => 1),
+    isRetiredSharedGateway: vi.fn(async () => false),
     unmountRpc: vi.fn(async () => undefined),
     wait: vi.fn(async () => undefined),
     now: vi.fn(() => 0),
@@ -25,6 +26,26 @@ function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGat
 }
 
 describe("createUnmountFromGateway — durable runtime resolution", () => {
+  it("skips a removed Shared gateway only after verified retirement", async () => {
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => null),
+      isRetiredSharedGateway: vi.fn(async () => true),
+    });
+    await expect(createUnmountFromGateway(deps)("shared-old", "alice"))
+      .resolves.toBe("skipped-no-live-pod");
+    expect(deps.isRetiredSharedGateway).toHaveBeenCalledWith("shared-old");
+    expect(deps.unmountRpc).not.toHaveBeenCalled();
+  });
+
+  it("never uses retirement proof for a mismatched serving revision", async () => {
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "foreign", revisionId: "foreign", profile: "standard" })),
+      isRetiredSharedGateway: vi.fn(async () => true),
+    });
+    await expect(createUnmountFromGateway(deps)("shared-old", "alice")).rejects.toThrow(/no validated serving revision/);
+    expect(deps.isRetiredSharedGateway).not.toHaveBeenCalled();
+  });
+
   it("throws when the gateway has no validated serving revision", async () => {
     const deps = mkDeps({ resolveGatewayUnmountTarget: vi.fn(async () => null) });
     const unmount = createUnmountFromGateway(deps);

@@ -213,6 +213,7 @@ import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.j
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
+import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/customer-ops/retired-shared-gateway.js";
 import { nukeUserCloudSide } from "./lib/customer-ops/nuke-cloud.js";
 import { markSuspendedAndReleaseErasure } from "./lib/customer-ops/erasure-release.js";
 import {
@@ -3931,7 +3932,7 @@ function buildSuspendCustomerHandler(
   db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
-  kubeOps: Pick<KubeOps, "readAvailableReplicas">,
+  kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   return createSuspendCustomerHandler({
@@ -4053,9 +4054,11 @@ function createCustomerDeletionUnmount(
   db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
-  kubeOps: Pick<KubeOps, "readAvailableReplicas">,
+  kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   return createUnmountFromGateway({
+    isRetiredSharedGateway: (gatewayId) => isRetiredSharedGateway(db, gatewayId,
+      (id) => retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, id, deploymentNameForInstance(id))),
     resolveGatewayUnmountTarget: async (gatewayId) => {
       const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       const authorization = gatewayAuthorizationFromRootDocument(
@@ -4097,7 +4100,7 @@ function buildDeprovisionCustomerHandler(
   db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
-  kubeOps: Pick<KubeOps, "readAvailableReplicas">,
+  kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   return createDeprovisionCustomerHandler({
     loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
