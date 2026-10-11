@@ -246,12 +246,29 @@ def install_before_deadline(home, args, run, deadline):
     return mise(home, args, run, timeout=remaining)
 
 
+def rebuildable_install_manifest(path, backends, backend_metadata):
+    if not stat.S_ISREG(path.lstat().st_mode): return False
+    try:
+        manifest = tomllib.loads(path.read_text())
+    except ValueError:
+        return False
+    if not manifest: return False
+    if {str(path.parent / directory): entry for directory, entry in manifest.items()} != backend_metadata: return False
+    for directory, entry in manifest.items():
+        if Path(directory).name != directory or directory.startswith(".") or not isinstance(entry, dict): return False
+        if set(entry) - {"short", "full", "explicit_backend"}: return False
+        if not isinstance(entry.get("short"), str) or not isinstance(entry.get("full"), str): return False
+        if not isinstance(entry.get("explicit_backend", True), bool): return False
+        if backends.get(str(path.parent / directory)) != {(entry["short"], entry["full"])}: return False
+    return True
+
+
 def record_tools(home, tools, run=subprocess.run, rebuild_complete=False):
     try:
         pending = [] if rebuild_complete else pending_requests(home)
         inventory = json.loads(mise(home, ["ls", "--installed", "--json", "--offline"], run).stdout)
         if not isinstance(inventory, dict): raise RuntimeError("mise inventory is malformed")
-        requests, unsupported, declared = [], False, set()
+        requests, unsupported, declared, backends, backend_metadata = [], False, set(), {}, {}
         for tool, rows in inventory.items():
             if not isinstance(tool, str) or not tool or tool.startswith("-") or any(value.isspace() for value in tool):
                 raise RuntimeError("mise inventory tool is malformed")
@@ -268,22 +285,35 @@ def record_tools(home, tools, run=subprocess.run, rebuild_complete=False):
                 declared.add(str(location))
                 backend = tool
                 metadata = location.parent / ".mise.backend.toml"
-                if metadata.exists():
-                    if metadata.is_symlink(): raise RuntimeError("mise backend metadata is not a real file")
-                    backend = tomllib.loads(metadata.read_text()).get("full", tool)
+                if metadata.exists() or metadata.is_symlink():
+                    if not stat.S_ISREG(metadata.lstat().st_mode): raise RuntimeError("mise backend metadata is not a real file")
+                    parsed_metadata = tomllib.loads(metadata.read_text())
+                    if set(parsed_metadata) - {"short", "full", "explicit_backend"} or "full" not in parsed_metadata:
+                        unsupported = True
+                    if parsed_metadata.get("short", tool) != tool or not isinstance(parsed_metadata.get("explicit_backend", True), bool):
+                        unsupported = True
+                    backend_metadata[str(location.parent)] = parsed_metadata
+                    backend = parsed_metadata.get("full", tool)
                 if not isinstance(backend, str) or not backend or backend.startswith("-") or any(value.isspace() for value in backend):
                     raise RuntimeError("mise backend declaration is malformed")
                 if row.get("symlinked_to") or version.startswith(("path:", "ref:", "link:")) or backend.startswith(("asdf:", "vfox:")):
                     unsupported = True
+                backends.setdefault(str(location.parent), set()).add((tool, backend))
                 requests.append(f"{backend}@{version}")
         installs = home / ".local/share/mise/installs"
         if installs.is_dir():
             for tool in installs.iterdir():
+                if tool.name == ".mise-installs.toml":
+                    if not rebuildable_install_manifest(tool, backends, backend_metadata): unsupported = True
+                    continue
                 if not tool.is_dir() or tool.is_symlink():
                     unsupported = True
                     continue
                 for version in tool.iterdir():
-                    if version.name.startswith("."): continue
+                    if version.name.startswith("."):
+                        if version.name != ".mise.backend.toml" or not stat.S_ISREG(version.lstat().st_mode) or str(tool) not in backend_metadata:
+                            unsupported = True
+                        continue
                     if version.is_symlink() and version.resolve().parent == tool.resolve(): continue
                     if str(version) not in declared: unsupported = True
         plugins = home / ".local/share/mise/plugins"

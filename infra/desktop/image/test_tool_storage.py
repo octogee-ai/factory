@@ -163,6 +163,125 @@ class ToolStorage(unittest.TestCase):
         self.assertEqual((held / "share/mise/installs/node/26/bin/node").read_text(), "installed image binary")
 
 class BootReconciliation(ToolStorage):
+    def factory_metadata(self):
+        installs = self.home / ".local/share/mise/installs"
+        shutil.rmtree(installs)
+        rows = {}
+        for name, version in (("node", "26.8.2"), ("codex", "0.162.1")):
+            location = installs / name / version
+            location.mkdir(parents=True)
+            (location / name).write_text("factory " + name)
+            (location.parent / "latest").symlink_to(version)
+            rows[name] = [{"version": version, "installed": True, "install_path": str(location)}]
+        backend = 'short = "codex"\nfull = "aqua:openai/codex"\nexplicit_backend = false'
+        (installs / "codex/.mise.backend.toml").write_text(backend)
+        manifest = installs / ".mise-installs.toml"
+        manifest.write_text("[codex]\n" + backend)
+        def command(argv, **kwargs):
+            if "ls" in argv: return types.SimpleNamespace(stdout=json.dumps(rows), returncode=0)
+            return self.command(argv, **kwargs)
+        return manifest, command
+
+    def test_fresh_factory_mise_manifest_keeps_declared_tools_rebuildable(self):
+        manifest, command = self.factory_metadata()
+        content = manifest.read_bytes()
+        self.invoke()
+        SCRIPT["reconcile_boot"](self.home, self.tools, self.cache, run=command, processes=lambda _uid: [])
+        record = json.loads((self.home / ".config/octogee/mise-installs.json").read_text())
+        self.assertTrue(record["rebuildable"])
+        self.assertEqual(record["requests"], ["aqua:openai/codex@0.162.1", "node@26.8.2"])
+        self.assertFalse((self.home / ".config/octogee/mise-retained").exists())
+        self.assertEqual(manifest.read_bytes(), content)
+
+    def test_manifest_must_cover_every_installed_backend_metadata_file(self):
+        manifest, command = self.factory_metadata()
+        metadata = manifest.parent / "node/.mise.backend.toml"
+        metadata.write_text('short = "node"\nfull = "node"\nexplicit_backend = false')
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/node/.mise.backend.toml").read_bytes(), metadata.read_bytes())
+
+    def test_modified_backend_metadata_is_retained_despite_valid_root_manifest(self):
+        manifest, command = self.factory_metadata()
+        metadata = manifest.parent / "codex/.mise.backend.toml"
+        metadata.write_text(metadata.read_text() + '\nprivate_context = "owned custom bytes"')
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/codex/.mise.backend.toml").read_bytes(), metadata.read_bytes())
+
+    def test_unknown_hidden_tool_context_is_retained_with_factory_manifest(self):
+        manifest, command = self.factory_metadata()
+        context = manifest.parent / "codex/.customer-context"
+        context.write_text("owned agent context")
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/codex/.customer-context").read_bytes(), context.read_bytes())
+
+    def test_broken_unlisted_backend_link_is_retained(self):
+        manifest, command = self.factory_metadata()
+        metadata = manifest.parent / "node/.mise.backend.toml"
+        metadata.symlink_to("missing-owned-backend")
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/node/.mise.backend.toml").readlink(), metadata.readlink())
+
+    def test_backend_context_without_a_root_manifest_is_retained(self):
+        manifest, command = self.factory_metadata()
+        metadata = manifest.parent / "codex/.mise.backend.toml"
+        metadata.write_text(metadata.read_text() + '\nprivate_context = "owned agent context"')
+        manifest.unlink()
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/codex/.mise.backend.toml").read_bytes(), metadata.read_bytes())
+
+    def test_unknown_regular_installs_file_is_still_retained(self):
+        manifest, command = self.factory_metadata()
+        unknown = manifest.with_name(".customer-tools.toml")
+        unknown.write_text("owned custom bytes")
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual(unknown.read_text(), "owned custom bytes")
+        self.assertEqual((self.home / ".config/octogee/mise-retained/installs/.customer-tools.toml").read_text(), "owned custom bytes")
+
+    def test_manifest_symlink_does_not_make_foreign_metadata_rebuildable(self):
+        manifest, command = self.factory_metadata()
+        foreign = self.root / "foreign-manifest"
+        manifest.rename(foreign)
+        original = foreign.read_bytes()
+        manifest.symlink_to(foreign)
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertEqual(foreign.read_bytes(), original)
+        self.assertTrue((self.home / ".config/octogee/mise-retained/installs/.mise-installs.toml").is_symlink())
+
+    def test_manifest_directory_is_not_metadata(self):
+        manifest, command = self.factory_metadata()
+        manifest.unlink()
+        manifest.mkdir()
+        self.invoke()
+        self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+        self.assertTrue((self.home / ".config/octogee/mise-retained/installs/.mise-installs.toml").is_dir())
+
+    def test_manifest_requires_known_schema_and_matching_declared_backend(self):
+        manifest, command = self.factory_metadata()
+        self.invoke()
+        valid = manifest.read_text()
+        malformed = [
+            "", "# private bytes", "[codex", 'codex = "private bytes"',
+            valid.replace('short = "codex"', 'short = "foreign"'),
+            valid.replace('full = "aqua:openai/codex"', 'full = "aqua:foreign/codex"'),
+            valid.replace('explicit_backend = false', 'explicit_backend = "false"'),
+            valid.replace('[codex]', '[foreign]'),
+            valid + '\nprivate_context = "owned bytes"',
+            valid + '\nopts = { local_path = "/owned/tool" }',
+        ]
+        for content in malformed:
+            with self.subTest(content=content):
+                manifest.write_text(content)
+                self.assertFalse(SCRIPT["record_tools"](self.home, self.tools, command)["rebuildable"])
+                self.assertEqual(manifest.read_text(), content)
+                self.assertEqual((self.home / ".config/octogee/mise-retained/installs/.mise-installs.toml").read_text(), content)
+
     def command(self, argv, **kwargs):
         self.calls.append(argv)
         if "show" in argv:
