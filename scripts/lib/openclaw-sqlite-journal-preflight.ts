@@ -30,7 +30,7 @@ function configuredAgentDirectories(options: OpenClawSqliteJournalPreflightOptio
   const agentDirOnly = (entry: unknown) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
     const record = entry as Record<string, unknown>;
-    return { id: record.id, agentDir: record.agentDir };
+    return { id: record.id, ...(Object.hasOwn(record, "agentDir") ? { agentDir: record.agentDir } : {}) };
   };
   const agents = config.agents;
   const plan = configuredBuilderPortableStatePlanFromConfig({

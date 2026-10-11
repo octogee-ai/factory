@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareOpenClawSqliteJournals } from "../lib/openclaw-sqlite-journal-preflight.js";
+import { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } from "../lib/openclaw-config-builders.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -28,6 +29,34 @@ function readStore(filename: string) {
 const nineP = () => 0x01021997;
 
 describe("OpenClaw quiescent journal preflight", () => {
+  it.each(["list", "entries"])("prepares the generated safe default agent's existing store with an omitted agentDir in agents.%s", (format) => {
+    const root = stateRoot(), agent = buildSafeDefaultAgent();
+    expect(Object.hasOwn(agent, "agentDir")).toBe(false);
+    const filename = store(root, `agents/${SAFE_DEFAULT_AGENT_ID}/agent/openclaw-agent.sqlite`);
+    const custom = store(root, "agents/coach/runtime/openclaw-agent.sqlite");
+    const coach = { id: "coach", agentDir: path.dirname(custom) };
+    const agents = format === "list" ? { list: [agent, coach] } : { entries: { [SAFE_DEFAULT_AGENT_ID]: agent, coach } };
+    fs.writeFileSync(path.join(root, "openclaw.json"), JSON.stringify({ agents }));
+    expect(prepareOpenClawSqliteJournals({ stateDir: root, filesystemType: nineP }).converted).toEqual([filename, custom]);
+    for (const storePath of [filename, custom]) expect(readStore(storePath)).toEqual({ mode: "delete", values: [{ value: "keep-me" }] });
+  });
+
+  it.each(["", null, 12])("keeps an explicitly malformed agentDir strict: %s", (agentDir) => {
+    const root = stateRoot(), filename = store(root, "agents/coach/agent/openclaw-agent.sqlite");
+    fs.writeFileSync(path.join(root, "openclaw.json"), JSON.stringify({ agents: { list: [{ id: "coach", agentDir }] } }));
+    expect(() => prepareOpenClawSqliteJournals({ stateDir: root, filesystemType: nineP })).toThrow(/agentDir must be a non-empty string/);
+    expect(readStore(filename).mode).toBe("wal");
+  });
+
+  it("fails on corrupt existing state for the generated default agent without an explicit directory", () => {
+    const root = stateRoot(), filename = path.join(root, "agents", SAFE_DEFAULT_AGENT_ID, "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    const corrupt = Buffer.from("not a sqlite database"); fs.writeFileSync(filename, corrupt);
+    fs.writeFileSync(path.join(root, "openclaw.json"), JSON.stringify({ agents: { list: [buildSafeDefaultAgent()] } }));
+    expect(() => prepareOpenClawSqliteJournals({ stateDir: root, filesystemType: nineP })).toThrow(/not a database/);
+    expect(fs.readFileSync(filename)).toEqual(corrupt);
+  });
+
   it("converts global and agent WAL stores before readers and preserves durable rows", () => {
     const root = stateRoot();
     const global = store(root, "state/openclaw.sqlite");
