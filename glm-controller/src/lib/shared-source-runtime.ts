@@ -80,7 +80,7 @@ async function transferPredecessor(request: { deps: SharedPodRecoveryDeps; tx: T
 function assertPredecessorPodImages(pod: Row, oldImages: Row): void {
   for (const [name, image] of Object.entries(oldImages)) {
     const spec = pod.spec?.containers?.find((c: Row) => c.name === name), status = pod.status?.containerStatuses?.find((c: Row) => c.name === name);
-    if (spec?.image !== image || !status?.state?.running || typeof status.imageID !== 'string' ||
+    if (spec?.image !== image || typeof status?.imageID !== 'string' ||
       !status.imageID.endsWith(`@${String(image).split('@')[1]}`)) throw new Error('source recovery predecessor Pod image changed');
   }
 }

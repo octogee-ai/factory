@@ -672,12 +672,20 @@ describe('journaled Shared source schema repair', () => {
     await expect(recoverSharedSourceRuntime({ ...h.deps, sourceSha: sha }, h.oldOp, h.ctx)).rejects.toThrow();
     expect(h.store).toEqual(before);
   });
-  it.each(['completed-at', 'doctor-spent', 'same-pod', 'prior-image', 'cancelled', 'progressed-queue', 'missing-fence', 'claimed-history'])('refuses source successor %s without changing the prior fence or failed history', async change => {
+  it('supersedes the exact old installed image while its failed repair is in CrashLoopBackOff without weakening the new running proof', async () => {
+    const h = await sourceSuccessor();
+    h.pod.status.containerStatuses[0].state = { waiting: { reason: 'CrashLoopBackOff' } };
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
+    expect(h.store['glmOperations/recover'].status).toBe('failed');
+  });
+  it.each(['completed-at', 'doctor-spent', 'same-pod', 'prior-image', 'missing-prior-image', 'cancelled', 'progressed-queue', 'missing-fence', 'claimed-history'])('refuses source successor %s without changing the prior fence or failed history', async change => {
     const h = await sourceSuccessor();
     if (change === 'completed-at') h.store['glmOperations/recover'].completedAt++;
     if (change === 'doctor-spent') h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt = 1;
     if (change === 'same-pod') h.pod.metadata.uid = 'replacement';
     if (change === 'prior-image') h.pod.status.containerStatuses[0].imageID = 'wrong';
+    if (change === 'missing-prior-image') delete h.pod.status.containerStatuses[0].imageID;
     if (change === 'cancelled') h.store['glmOperations/recover'].cancellationRequestedAt = 1;
     if (change === 'progressed-queue') h.store['glmOperations/queued'].steps = [{ name: 'keys-sync-state', status: 'running' }];
     if (change === 'missing-fence') { delete h.store['gateways/shared-1'].runtimeRestartFence; delete h.store['glmOperations/queued']; }
