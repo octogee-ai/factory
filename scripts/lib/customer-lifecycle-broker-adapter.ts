@@ -179,6 +179,7 @@ import {
   type SecretMaterialLedger,
 } from "./secret-material-change.js";
 import { isConfiguredGatewayBuilder } from "./system-config-watch-state.js";
+import { customerAgentRuntimePresent } from "./customer-agent-runtime.js";
 import { writeTierTemplateFiles } from "./tier-template-files.js";
 import { reassertConvergedContextFilesForSlug } from "./context-file-convergence.js";
 import {
@@ -1473,7 +1474,7 @@ async function prepareImportDir(
       });
     }
     assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, builderPlan);
-  } else {
+  } else if (mode !== "final") {
     await fsp.mkdir(path.join(stateDir, "agents", customerCoachAgentId(slug), "agent"), {
       recursive: true,
     });
@@ -1810,7 +1811,7 @@ export function buildBrokeredLifecycleAdapter(
     customerCoachWiredInOpenclawConfig: (slug) =>
       customerCoachWiredInOpenclawConfig(OPENCLAW_CONFIG, slug),
     hasCustomerAgentRuntime: (slug) =>
-      fs.existsSync(path.join(AGENTS_DIR, `octogee-${slug}-coach`, "agent")),
+      customerAgentRuntimePresent(AGENTS_DIR, slug),
     listLocalCustomerSlugs: () =>
       opts.isBuilderGateway?.()
         ? listLocalCustomerDirs(CUSTOMERS_DIR).filter((slug) =>

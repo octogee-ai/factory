@@ -1,7 +1,7 @@
 ---
 name: cua-x11
-description: Operate native applications on this Builder computer's X11 desktop through the `computer` tool, which Cua Driver 0.28.2 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
-version: 0.28.2
+description: Operate native applications on this Builder computer's X11 desktop through the `computer` tool, which Cua Driver 0.32.0 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
+version: 0.32.0
 metadata:
   openclaw:
     requires:

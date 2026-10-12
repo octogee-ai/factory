@@ -1,7 +1,7 @@
 ---
 name: cua-driver
-description: Operate native applications on this Builder computer's Omarchy desktop through the `computer` tool, which Cua Driver 0.28.2 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
-version: 0.28.2
+description: Operate native applications on this Builder computer's Omarchy desktop through the `computer` tool, which Cua Driver 0.32.0 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
+version: 0.32.0
 metadata:
   openclaw:
     requires:
@@ -49,7 +49,9 @@ processes). For one window's elements use `get_window_state`.
 ## Start with the narrowest route
 
 Name the postcondition first, then use the first route that applies and verify
-it in the same domain:
+it in the same domain. Honor a requested interaction method: a GUI-only task
+does not authorize an API, DOM, clipboard, or shell shortcut. A session or
+available tool does not enlarge the Builder's authorization.
 
 0. **Not a GUI outcome.** Files, repositories, data, and services have direct
    tools. Use them and read the result back; do not open an application to
@@ -73,7 +75,9 @@ it in the same domain:
 1. `list_windows` and select the intended window explicitly. After launching an
    application, enumerate its windows again rather than assuming one exists.
 2. `get_window_state` with that `windowRef`. It returns the accessibility tree,
-   the window image, and an `observationId`. Ground the target on both.
+   an `observationId`, and a window image when capture succeeds. Ground the
+   target on the available tree and image; discovery alone does not prove that
+   capture or input is available for that window.
 3. Act with an `elementRef` (preferred) or window image coordinates, passing the
    `observationId`.
 4. Use the fresh observation returned by the action, or take a new one, and
@@ -81,7 +85,9 @@ it in the same domain:
 
 A new observation invalidates older `elementRef`s and `observationId`s. A stale
 reference means observe again and use only the new references. Never blind-retry
-a mutation.
+a mutation. Cancellation, a partial result, or a lost response can leave an
+action's outcome unknown: observe the postcondition before deciding whether
+another action is needed, never replay it automatically.
 
 ## Read action results without overclaiming
 
@@ -99,7 +105,9 @@ An `escalation` hint is advice for your next choice, never an automatic retry.
 The accessibility tree can be wrong: Electron can echo a value write that never
 rendered, and virtualized rows can report one-pixel or off-screen bounds. A
 `degraded` observation means the tree is empty or unusable for that window. On
-those signals, target pixels from the image in the same observation. Do not
+those signals, target pixels only if that observation has a usable image. A
+capture failure is not the same as an unusable tree: a valid tree can still
+support an accessibility action, but no image means no pixel target. Do not
 click a coordinate computed from a tree frame without checking it against the
 image, and do not use an element you only saw in the image as an `elementRef`.
 
@@ -113,6 +121,8 @@ image, and do not use an element you only saw in the image as an `elementRef`.
 
 This is Hyprland on Wayland.
 
+- The desktop is shared. Separate sessions do not isolate focus or the pointer;
+  coordinate visible control with the Builder and other controllers.
 - Accessibility actions deliver through AT-SPI in the background without
   changing focus. A pixel left click can also land in the background when it
   resolves to an actionable accessibility control.
@@ -126,12 +136,21 @@ This is Hyprland on Wayland.
 - Do not bypass a refusal with compositor focus commands or generic input
   injection.
 - Window geometry changes are refused on Wayland.
+- OS or portal permission prompts belong to the Builder. Do not approve them
+  or change desktop permission settings on their behalf.
+- This driver build does not opt into experimental Hyprland input-v3. A
+  published driver version is not proof of that route's compositor or app
+  qualification.
 
 ## When something fails
 
 - `background_unavailable`, `background_occluded`, `off_space_or_ax_unresolved`:
   honest refusals. Choose another available route; do not retry harder.
 - Stale or unknown reference: observe again.
+- `surface_identity_unproven`: the driver could not attest the requested
+  window's capture. Do not crop a desktop screenshot and claim it is that
+  window's image, invent bounds, or blindly retry capture modes. Use a valid
+  tree if available; otherwise explain the missing route.
 - Element does not support its default action: try another offered action, or
   a pixel click on its verified center.
 - Tree unchanged and image unchanged after an action: the action probably did

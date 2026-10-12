@@ -11,17 +11,22 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(driverVersion = "0.28.2") {
+function fixture(driverVersion = "0.32.0") {
   const root = mkdtempSync(path.join(tmpdir(), "cua-skills-"));
   roots.push(root);
   const openclaw = path.join(root, "openclaw");
   const native = path.join(openclaw, `node_modules/@trycua/cua-driver-linux-${process.arch}-gnu`);
+  const sdk = path.join(openclaw, "node_modules/@trycua/cua-driver");
   mkdirSync(native, { recursive: true });
+  mkdirSync(sdk, { recursive: true });
   writeFileSync(path.join(native, "package.json"), JSON.stringify({ version: driverVersion }));
-  writeFileSync(path.join(native, "octogee-patch.json"), JSON.stringify({ version: driverVersion }));
+  writeFileSync(path.join(sdk, "package.json"), JSON.stringify({ version: driverVersion }));
+  writeFileSync(path.join(native, "octogee-patch.json"), JSON.stringify({
+    version: driverVersion, sourceCommit: "58aba84b5b83d77e7e2b0f006547699eb594e50d",
+  }));
   const source = path.join(root, "source");
   cpSync(vendored, source, { recursive: true });
-  return { openclaw, source, destination: path.join(root, "skills") };
+  return { openclaw, native, sdk, source, destination: path.join(root, "skills") };
 }
 
 function install(f: ReturnType<typeof fixture>) {
@@ -41,11 +46,12 @@ describe("vendored CUA computer skills", () => {
         .toBe(readFileSync(path.join(vendored, skill, "SKILL.md"), "utf8"));
     }
     const provenance = JSON.parse(readFileSync(path.join(f.destination, "provenance.json"), "utf8"));
-    expect(provenance.driverVersion).toBe("0.28.2");
+    expect(provenance.driverVersion).toBe("0.32.0");
+    expect(provenance.driverSourceCommit).toBe("58aba84b5b83d77e7e2b0f006547699eb594e50d");
     expect(provenance.skills["cua-driver"]).toMatchObject({
       repository: "https://github.com/trycua/cua",
-      commit: "fc188250b4ca8549b8e61f937fdb1fb560770e86",
-      version: "0.28.2",
+      commit: "58aba84b5b83d77e7e2b0f006547699eb594e50d",
+      version: "0.32.0",
     });
     expect(provenance.skills["cua-omarchy"]).toMatchObject({
       repository: "https://github.com/omacom/omarchy",
@@ -54,16 +60,30 @@ describe("vendored CUA computer skills", () => {
   });
 
   it("refuses skills written for a different driver than the image installs", () => {
-    const f = fixture("0.29.0");
-    expect(() => install(f)).toThrow("CUA skills target driver 0.28.2, but the installed driver is 0.29.0");
+    const f = fixture("0.28.2");
+    expect(() => install(f)).toThrow("CUA skills target driver 0.32.0, but the installed driver is 0.28.2");
     expect(existsSync(f.destination)).toBe(false);
   });
 
   it("refuses a skill whose own version drifts from the driver", () => {
     const f = fixture();
     const skill = path.join(f.source, "cua-driver/SKILL.md");
-    writeFileSync(skill, readFileSync(skill, "utf8").replace("version: 0.28.2", "version: 0.27.0"));
-    expect(() => install(f)).toThrow("cua-driver version 0.27.0 does not match driver 0.28.2");
+    writeFileSync(skill, readFileSync(skill, "utf8").replace("version: 0.32.0", "version: 0.28.2"));
+    expect(() => install(f)).toThrow("cua-driver version 0.28.2 does not match driver 0.32.0");
+    expect(existsSync(f.destination)).toBe(false);
+  });
+
+  it("refuses mismatched installed JavaScript bindings before copying skills", () => {
+    const f = fixture();
+    writeFileSync(path.join(f.sdk, "package.json"), JSON.stringify({ version: "0.28.2" }));
+    expect(() => install(f)).toThrow("CUA skills target driver 0.32.0");
+    expect(existsSync(f.destination)).toBe(false);
+  });
+
+  it("refuses a same-version library built from a different source before copying skills", () => {
+    const f = fixture();
+    writeFileSync(path.join(f.native, "octogee-patch.json"), JSON.stringify({ version: "0.32.0", sourceCommit: "0".repeat(40) }));
+    expect(() => install(f)).toThrow("must match the installed driver's exact source commit");
     expect(existsSync(f.destination)).toBe(false);
   });
 

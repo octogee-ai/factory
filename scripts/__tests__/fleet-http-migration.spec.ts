@@ -1,3 +1,4 @@
+import { customerAgentRuntimePresent } from "../lib/customer-agent-runtime.js";
 import { evictLocalCustomer } from "../lib/fleet-provisioner.js";
 import { create as createTar } from "tar";
 
@@ -3702,6 +3703,35 @@ describe("agent sqlite stores across an rsync carry", () => {
       }),
     };
   }
+
+  it.each(["empty-preparation", "runtime-state", "configured"])("restores only an unadmitted target with %s", async (target) => {
+    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
+    const migrationId = `restore-admission-${target}`;
+    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
+    const agentDir = path.join(importDir, "agents", "octogee-chris-coach", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    if (target === "runtime-state") await fs.writeFile(path.join(agentDir, "existing.json"), "existing-runtime");
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
+      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId),
+        hasCustomerAgentRuntime: slug => customerAgentRuntimePresent(path.join(importDir, "agents"), slug),
+        customerCoachWiredInOpenclawConfig: () => target === "configured" }, deps: { procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
+    if (target === "empty-preparation") spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const result = await finishImport(deps, migrationId, "final", policy, certificate);
+    if (target === "empty-preparation") {
+      expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+      expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+      expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
+    } else {
+      expect(result.getStatus()).toBe(500);
+      expect(result.getBody()).toMatchObject({ message: "Shared context restoration requires an unadmitted customer runtime" });
+      expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
+      expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+      if (target === "runtime-state") expect(await fs.readFile(path.join(agentDir, "existing.json"), "utf8")).toBe("existing-runtime");
+    }
+  });
 
   it("restores the exact Shared history after cutover and confirms lost-ACK replay without replacing newer history", async () => {
     const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();

@@ -9,14 +9,19 @@ if (!openclawRoot || !source || !destination) {
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const provenance = json(path.join(source, "provenance.json"));
 const nativeRoot = path.join(openclawRoot, `node_modules/@trycua/cua-driver-linux-${process.arch}-gnu`);
+const patch = json(path.join(nativeRoot, "octogee-patch.json"));
 const installed = {
   native: json(path.join(nativeRoot, "package.json")).version,
-  patch: json(path.join(nativeRoot, "octogee-patch.json")).version,
+  patch: patch.version,
+  sdk: json(path.join(openclawRoot, "node_modules/@trycua/cua-driver/package.json")).version,
 };
-if (installed.native !== provenance.driverVersion || installed.patch !== provenance.driverVersion) {
+if (installed.native !== provenance.driverVersion || installed.patch !== provenance.driverVersion || installed.sdk !== provenance.driverVersion) {
   throw new Error(
     `CUA skills target driver ${provenance.driverVersion}, but the installed driver is ${installed.native} (patch ${installed.patch})`,
   );
+}
+if (!/^[0-9a-f]{40}$/.test(provenance.driverSourceCommit ?? "") || patch.sourceCommit !== provenance.driverSourceCommit) {
+  throw new Error("CUA skills must match the installed driver's exact source commit");
 }
 
 function frontmatter(file) {

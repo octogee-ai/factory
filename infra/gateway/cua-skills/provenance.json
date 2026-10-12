@@ -1,20 +1,21 @@
 {
-  "driverVersion": "0.28.2",
+  "driverVersion": "0.32.0",
+  "driverSourceCommit": "58aba84b5b83d77e7e2b0f006547699eb594e50d",
   "skills": {
     "cua-driver": {
       "repository": "https://github.com/trycua/cua",
-      "commit": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
+      "commit": "58aba84b5b83d77e7e2b0f006547699eb594e50d",
       "path": "libs/cua-driver/rust/Skills/cua-driver",
-      "version": "0.28.2",
+      "version": "0.32.0",
       "adaptedFrom": {
-        "SKILL.md": "a6ca1717f88a1d95e302f82f953ac4887d4ad7478290a73d36062e3ce479f0fe",
-        "LINUX.md": "4d096f19eab5c56f0231bed98e2048abc09f969a92e70311be9e1f5ecc5209e0"
+        "SKILL.md": "ff3488a506d3024c24f3729e35ed2301eadcb21e7fb51eff6831ba739f81d5cc",
+        "LINUX.md": "98535c92944e753a5d2b3d98fe772d0ef44af4c2aae136de39f5f4d7ad38a1fe"
       },
       "files": [
         "SKILL.md"
       ],
       "localEdits": [
-        "SKILL.md: explicit Octogee computer browser profile under \"Start with the narrowest route\""
+        "SKILL.md: adapt official driver and Linux contracts to the managed computer tool, paired node, observation references and explicit computer browser profile; omit standalone driver installation and unsupported tool routes"
       ]
     },
     "cua-omarchy": {
