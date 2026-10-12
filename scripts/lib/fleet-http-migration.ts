@@ -1,5 +1,6 @@
 import { recoverSharedAgentContextCheckpoint } from "./shared-agent-context-checkpoint.js";
-import { preflightAgentDatabase } from "./agent-store-preflight.js";
+import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
+import { assertMatchingSharedContextPreparation } from "./shared-agent-context-preparation.js";
 import { readSharedAgentContextRestoreReceipt, writeSharedAgentContextRestoreReceipt } from "./shared-agent-context-restore-receipt.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -70,6 +71,7 @@ import {
   type PreparedAgentStores,
   findPortableAgentStores,
   AGENT_STORE_BASENAME,
+  AGENT_IMPORT_DIRNAME,
   exportAgentStoreSnapshots,
   findStagedLiveAgentStores,
   installPreparedAgentStores,
@@ -2208,26 +2210,38 @@ async function assertInstalledSharedContext(body: FinishRsyncImportRequestBody, 
   await assertRetainedNativeAgentContext(stateDir, body.slug);
 }
 
+async function sharedRecoverySnapshot(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody): Promise<UserSnapshot> {
+  const snapshot = await sharedRestoreSnapshot(deps, body, false);
+  if (deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug) !== false || deps.adapter.customerMountMarked?.(body.slug) !== false) {
+    throw new Error("Shared context recovery requires an unwired and unmounted customer runtime");
+  }
+  return snapshot;
+}
+
 async function installRecoveredSharedContext(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, root: string, signal: AbortSignal): Promise<void> {
   if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) throw new Error("Shared recovery archive is missing");
-  const archive = body.agentContext.archive, importDir = resolveOpenClawStateDir();
+  const archive = body.agentContext.archive, importDir = await fs.realpath(resolveOpenClawStateDir());
   const stores = await findPortableAgentStores(archive.agentIds.map(agentId => ({ cwd: root, path: `agents/${agentId}` })));
-  const landingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "octogee-shared-recovered-stores-"));
-  const isolatedConfig = path.join(landingRoot, "openclaw.json");
+  const importRoot = path.join(importDir, AGENT_IMPORT_DIRNAME);
+  await fs.mkdir(importRoot, { recursive: true, mode: 0o700 });
+  if (await fs.realpath(importRoot) !== path.resolve(importRoot)) throw new Error("Shared recovery landing directory is not canonical");
+  const landingRoot = await fs.mkdtemp(path.join(importRoot, "shared-recovered-"));
   try {
-    await fs.writeFile(isolatedConfig, JSON.stringify({ agents: { list: [] } }), { mode: 0o600 });
     const prepared: PreparedAgentStores = { landingRoot, stores: [] };
     for (const store of stores) {
       signal.throwIfAborted();
       const source = path.join(store.sourceAgentDir, AGENT_STORE_BASENAME);
-      const fit = await preflightAgentDatabase(source, store.agentId, deps.runOpenClaw ?? runOpenClaw, { signal, env: { PATH: "/usr/local/bin:/usr/bin:/bin", OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: isolatedConfig, OPENCLAW_CONFIG_READONLY: "1" } });
-      if (fit !== "exact") throw new Error(`Shared context recovery requires schema repair for ${store.agentId}`);
-      const restoredPath = path.join(landingRoot, `${store.agentId}.sqlite`);
+      const restoredPath = path.join(landingRoot, store.agentDir, AGENT_STORE_BASENAME);
+      await fs.mkdir(path.dirname(restoredPath), { recursive: true, mode: 0o700 });
       await fs.copyFile(source, restoredPath);
+      await fs.chmod(restoredPath, 0o600);
       prepared.stores.push({ agentId: store.agentId, restoredPath, destinationPath: path.join(importDir, store.agentDir, AGENT_STORE_BASENAME) });
     }
+    await upgradeStagedAgentStores(landingRoot, { run: deps.runOpenClaw ?? runOpenClaw, signal, log: deps.log ?? provisionerLog });
     const codex = await prepareCodexStoreSnapshots(root, deps.log ?? provisionerLog);
     try {
+      await sharedRecoverySnapshot(deps, body);
+      await assertMatchingSharedContextPreparation({ importDir, archiveRoot: root, agentIds: archive.agentIds, signal });
       for (const agentId of archive.agentIds) await fs.cp(path.join(root, "agents", agentId), path.join(importDir, "agents", agentId), {
         recursive: true, dereference: false, verbatimSymlinks: true, filter: source => {
           const relative = path.relative(root, source).split(path.sep).join("/");
@@ -2251,13 +2265,14 @@ async function recoverMissingSharedRestore(deps: MigrationHandlerDeps, body: Fin
   try {
     await withCustomerRemoval(body.slug, async () => {
     await validateAgentContextTransfer(deps, body, "target", "final");
-    const snapshot = await sharedRestoreSnapshot(deps, body, true);
+    const snapshot = await sharedRecoverySnapshot(deps, body);
     if (!deps.adapter.sharedContextCheckpoint) throw new Error("Shared context checkpoint recovery is unavailable");
     const download = await deps.adapter.sharedContextCheckpoint({ ...snapshot.nativeSharedContextRestore!, checkpoint: recovery.checkpoint });
     const recovered = await recoverSharedAgentContextCheckpoint({ archive, recovery,
       download, fetch: deps.fetch ?? globalThis.fetch, signal: controller.signal });
     try {
-      await sharedRestoreSnapshot(deps, body, true);
+      await sharedRecoverySnapshot(deps, body);
+      await assertMatchingSharedContextPreparation({ importDir: resolveOpenClawStateDir(), archiveRoot: recovered.root, agentIds: archive.agentIds, signal: controller.signal });
       await installRecoveredSharedContext(deps, body, recovered.root, controller.signal);
       await markSharedRestoreInstalled(deps, body, resolveOpenClawStateDir());
       await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal });

@@ -82,6 +82,90 @@ describe('journaled Shared restore runtime recovery', () => {
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
     return structuredClone(original);
   }
+  function nativeRestore(h: ReturnType<typeof harness>) {
+    const returned = h.store['glmOperations/return'];
+    returned.input.builderSlug = 'alice';
+    const hold = { operationId: 'return', uid: 'u', slug: 'alice', fromGatewayId: 'builder-alice',
+      toGatewayId: 'shared-1', migrationId: 'mig-return', archiveId: 'mig-activate', contextSha256: 'f'.repeat(64) };
+    h.store['users/u'].provisioning.openclaw.nativeSharedContextRestore = hold;
+    returned.nativeSharedAgentContextStage = { toGatewayId: 'shared-1', migrationId: hold.migrationId, slug: 'alice',
+      targetName: 'pod', targetIp: '10.0.0.1', targetVm: false, targetCertificateSha256: 'e'.repeat(64),
+      archive: { uid: 'u', slug: 'alice', archiveId: hold.archiveId, contextSha256: hold.contextSha256 } };
+    Object.assign(h.store['gateways/shared-1/assignments/u'], { state: 'quiescing', updatedByOperationId: 'return' });
+    return hold;
+  }
+  it('recovers a quiescing native archive restore on the same pod without admitting or acknowledging the customer', async () => {
+    const h = harness(); nativeRestore(h);
+    const user = structuredClone(h.store['users/u']);
+    const returned = structuredClone(h.store['glmOperations/return']);
+    const assignment = structuredClone(h.store['gateways/shared-1/assignments/u']);
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+    expect(h.store['users/u']).toEqual(user);
+    expect(h.store['glmOperations/return']).toEqual(returned);
+    expect(h.store['gateways/shared-1/assignments/u']).toEqual(assignment);
+    expect(h.store['glmOperations/recover'].restoreRuntimeRecovery.podUid).toBe('pod-uid');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+  });
+  it('observes a lost quiescing recovery patch reply on the same pod without repeating it or changing native custody', async () => {
+    const h = harness(); nativeRestore(h); h.lostReply();
+    const returned = structuredClone(h.store['glmOperations/return']);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('unresolved');
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+    expect(h.store['glmOperations/return']).toEqual(returned);
+    expect(h.store['gateways/shared-1/assignments/u'].state).toBe('quiescing');
+  });
+  it('retains restart and restore fences when native archive authority changes during the image update', async () => {
+    const h = harness(); const hold = nativeRestore(h);
+    const original = structuredClone(hold);
+    const returned = structuredClone(h.store['glmOperations/return']);
+    const kubectl = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async args => {
+      const result = await kubectl(args);
+      if (args.includes('patch')) hold.archiveId = 'other';
+      return result;
+    });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('assignment changed');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.phase).toBe('dispatched');
+    expect(h.store['users/u'].provisioning.openclaw.restoreFence).toEqual(returned.restoreAttempt);
+    expect(h.store['glmOperations/return']).toEqual(returned);
+    Object.assign(hold, original);
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+  });
+  it.each(['missing-hold', 'operation', 'uid', 'slug', 'from', 'to', 'migration', 'archive', 'digest', 'invalid-digest',
+    'stage-target', 'stage-slug', 'stage-migration', 'archive-owner', 'archive-slug', 'archive-id', 'archive-digest',
+    'missing-stage', 'assignment-operation', 'epoch', 'restored', 'receipt', 'other-migration', 'input-slug'])('rejects quiescing native restore %s before reserving custody or patching images', async change => {
+      const h = harness(); const hold = nativeRestore(h);
+      const returned = h.store['glmOperations/return'], stage = returned.nativeSharedAgentContextStage;
+      const openclaw = h.store['users/u'].provisioning.openclaw;
+      if (change === 'missing-hold') delete openclaw.nativeSharedContextRestore;
+      for (const [key, field] of [['operation', 'operationId'], ['uid', 'uid'], ['slug', 'slug'], ['from', 'fromGatewayId'],
+        ['to', 'toGatewayId'], ['migration', 'migrationId'], ['archive', 'archiveId'], ['digest', 'contextSha256']]) {
+        if (change === key) (hold as any)[field] = 'foreign';
+      }
+      if (change === 'invalid-digest') hold.contextSha256 = stage.archive.contextSha256 = 'invalid';
+      if (change === 'stage-target') stage.toGatewayId = 'other';
+      if (change === 'stage-slug') stage.slug = 'other';
+      if (change === 'stage-migration') stage.migrationId = 'other';
+      if (change === 'archive-owner') stage.archive.uid = 'other';
+      if (change === 'archive-slug') stage.archive.slug = 'other';
+      if (change === 'archive-id') stage.archive.archiveId = 'other';
+      if (change === 'archive-digest') stage.archive.contextSha256 = 'a'.repeat(64);
+      if (change === 'missing-stage') delete returned.nativeSharedAgentContextStage;
+      if (change === 'assignment-operation') h.store['gateways/shared-1/assignments/u'].updatedByOperationId = 'other';
+      if (change === 'epoch') h.store['gateways/shared-1/assignments/u'].epoch++;
+      if (change === 'restored') returned.nativeSharedAgentContextRestored = true;
+      if (change === 'receipt') returned.nativeSharedAgentContextRestoreReceipt = {};
+      if (change === 'other-migration') openclaw.migration = {};
+      if (change === 'input-slug') returned.input.builderSlug = 'other';
+      const before = structuredClone(h.store);
+      await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+      expect(h.store).toEqual(before);
+      expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+    });
   async function failedRecovery() {
     const h = harness();
     const intent = reauthorize(h);

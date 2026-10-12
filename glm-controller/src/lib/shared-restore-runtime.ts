@@ -51,6 +51,37 @@ function recovery(op: Operation, sourceSha: string): Recovery {
   return input as Recovery;
 }
 
+function quiescingNativeRestoreMatches(params: {
+  assignment: RecordValue; openclaw: RecordValue; returned: RecordValue; receipt: RecordValue; operationId: string; gatewayId: string;
+}): boolean {
+  const { assignment, openclaw, returned, receipt, operationId, gatewayId } = params;
+  const hold = object(openclaw.nativeSharedContextRestore);
+  const stage = object(returned.nativeSharedAgentContextStage);
+  const archive = object(stage.archive);
+  const input = object(returned.input);
+  return [
+    assignment.state === 'quiescing', assignment.updatedByOperationId === operationId,
+    hold.operationId === operationId, hold.uid === receipt.uid, hold.slug === receipt.slug,
+    hold.fromGatewayId === receipt.fromGatewayId, hold.toGatewayId === gatewayId,
+    input.builderSlug === receipt.slug, hold.migrationId === `mig-${operationId}`,
+    typeof hold.archiveId === 'string', Boolean(hold.archiveId),
+    typeof hold.contextSha256 === 'string', /^[a-f0-9]{64}$/.test(hold.contextSha256),
+    stage.toGatewayId === gatewayId, stage.migrationId === hold.migrationId, stage.slug === receipt.slug,
+    archive.uid === receipt.uid, archive.slug === receipt.slug, archive.archiveId === hold.archiveId,
+    archive.contextSha256 === hold.contextSha256,
+    returned.nativeSharedAgentContextRestored === undefined, returned.nativeSharedAgentContextRestoreReceipt === undefined,
+    !Object.hasOwn(openclaw, 'migration'),
+  ].every(Boolean);
+}
+function assignmentMatches(params: {
+  assignment: RecordValue; openclaw: RecordValue; returned: RecordValue; receipt: RecordValue; operationId: string; gatewayId: string;
+}): boolean {
+  const { assignment, receipt, gatewayId } = params;
+  return [assignment.uid === receipt.uid, assignment.slug === receipt.slug, assignment.gatewayId === gatewayId,
+    assignment.epoch === receipt.assignmentEpoch,
+    assignment.state === 'serving' || quiescingNativeRestoreMatches(params)].every(Boolean);
+}
+
 async function authority(deps: Deps, tx: Transaction, op: Operation, input: Recovery): Promise<RecordValue> {
   const gatewayId = op.input.gatewayId as string;
   const [root, claim, restore, users, active, transfersFrom, transfersTo] = await Promise.all([
@@ -82,8 +113,9 @@ async function authority(deps: Deps, tx: Transaction, op: Operation, input: Reco
   if (!exact) throw new Error('paired post-cutover restore authority is unavailable');
   if (!reauthorizationMatches(input, receipt, returned.status)) throw new Error('restore reauthorization requires an unchanged intent and a pending native return');
   const assignment = object((await tx.get(deps.db.doc(`gateways/${gatewayId}/assignments/${uid}`))).data());
-  if (assignment.state !== 'serving' || assignment.uid !== uid || assignment.slug !== receipt.slug ||
-      assignment.gatewayId !== gatewayId || assignment.epoch !== receipt.assignmentEpoch) throw new Error('restore recovery assignment changed');
+  if (!assignmentMatches({ assignment, openclaw, returned, receipt, operationId: input.operationId, gatewayId })) {
+    throw new Error('restore recovery assignment changed');
+  }
   for (const row of users.docs) {
     const state = customerState(row.data());
     if (row.id !== uid && (Object.hasOwn(state, 'restoreFence') || Object.hasOwn(state, 'sourceTransferFence'))) throw new Error('another customer runtime outcome is unresolved');

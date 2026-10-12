@@ -1,3 +1,4 @@
+import { assertMatchingSharedContextPreparation } from "../lib/shared-agent-context-preparation.js";
 import { customerAgentRuntimePresent } from "../lib/customer-agent-runtime.js";
 import { evictLocalCustomer } from "../lib/fleet-provisioner.js";
 import { create as createTar } from "tar";
@@ -3857,7 +3858,19 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(applyAddCustomerConfigPatch).toHaveBeenCalledTimes(2);
   });
 
-  it("recovers only the exact archived Shared context from its pinned home checkpoint after pod staging is lost", async () => {
+  it("refuses an ordinary SQLite sidecar even when its bytes match the archive preparation", async () => {
+    const importDir = await mkTempRoot(), archiveRoot = await mkTempRoot();
+    const relative = "agents/octogee-chris-coach/agent/openclaw-agent.sqlite-wal";
+    for (const root of [importDir, archiveRoot]) {
+      await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await fs.writeFile(path.join(root, relative), "matching wal state");
+    }
+    await expect(assertMatchingSharedContextPreparation({ importDir, archiveRoot, agentIds: ["octogee-chris-coach"], signal: new AbortController().signal }))
+      .rejects.toThrow("existing runtime or nonmatching preparation state");
+    expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe("matching wal state");
+  });
+
+  it.each(["fresh", "matching-partial", "repairable-schema", "foreign-file", "mutated-file", "database", "wal", "shm", "journal", "configured", "mounted"])("recovers pinned Shared context with %s target preparation", async variant => {
     const input = await archivedContextFixture(), importDir = await mkTempRoot(), checkpointRoot = await mkTempRoot();
     vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
     vi.stubEnv("POD_UID", "replacement-shared-pod");
@@ -3875,8 +3888,63 @@ describe("agent sqlite stores across an rsync carry", () => {
       gcsPath: `customers/chris/computer-home/checkpoints/${checkpoint.name}`, expiresAt: "2099-01-01" } }));
     const deps = mkDeps({ adapter: mkAdapter({ ...sharedRestoreAdapter(importDir, input.archive, "restore-after-pod-loss"), sharedContextCheckpoint }),
       fetch: vi.fn(async () => new Response(bytes)), runOpenClaw: fakeOpenClaw() });
+    deps.adapter.hasCustomerAgentRuntime = slug => customerAgentRuntimePresent(path.join(importDir, "agents"), slug);
+    deps.adapter.customerMountMarked = () => variant === "mounted";
+    deps.adapter.customerCoachWiredInOpenclawConfig = () => variant === "configured";
+    const nonDatabase = path.join(importDir, "agents/octogee-chris-coach/agent/memory.md");
+    if (variant === "matching-partial" || variant === "mutated-file") {
+      await fs.mkdir(path.dirname(nonDatabase), { recursive: true });
+      await fs.writeFile(nonDatabase, variant === "matching-partial" ? "shared-memory" : "different context");
+    }
+    const prohibited = variant === "foreign-file" ? path.join(path.dirname(nonDatabase), "foreign.md") :
+      ["database", "wal", "shm", "journal"].includes(variant) ? path.join(importDir, CARRIED_STORE) + (variant === "database" ? "" : `-${variant}`) : null;
+    if (prohibited) { await fs.mkdir(path.dirname(prohibited), { recursive: true }); await fs.writeFile(prohibited, "existing state"); }
+    if (variant === "repairable-schema") {
+      const actual = await vi.importActual<typeof import("../lib/agent-store-upgrade.js")>("../lib/agent-store-upgrade.js");
+      upgradeStoresMock.mockImplementation(actual.upgradeStagedAgentStores);
+      deps.runOpenClaw = vi.fn(async (args, options) => {
+        if (args[0] === "doctor") {
+          const file = path.join(options.env.OPENCLAW_STATE_DIR, CARRIED_STORE);
+          if (fsSync.existsSync(file)) { const db = new DatabaseSync(file); db.exec("PRAGMA user_version=25"); db.close(); }
+          return { code: 0, stdout: "{}" };
+        }
+        const db = new DatabaseSync(args[2], { readOnly: true });
+        const version = Number(db.prepare("PRAGMA user_version").get().user_version) || 24; db.close();
+        return { code: version === 25 ? 0 : 1, stdout: JSON.stringify({ schema: "openclaw.agent-schema-preflight.v1", databasePath: args[2],
+          agentId: args[args.indexOf("--agent-id") + 1], foundVersion: version, targetVersion: 25, status: version === 25 ? "exact" : "incompatible" }) };
+      });
+    }
+    const originalDatabase = await fs.readFile(path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId, CARRIED_STORE));
+    const actualRename = fs.rename.bind(fs);
+    const physicalImportDir = await fs.realpath(importDir);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to).endsWith(CARRIED_STORE) && !String(from).startsWith(physicalImportDir + path.sep)) {
+        throw Object.assign(new Error("EXDEV: checkpoint staging and target home are on different filesystems"), { code: "EXDEV" });
+      }
+      return actualRename(from, to);
+    });
     const result = await finishImport(deps, "restore-after-pod-loss", "final", { mode: "restore-shared", archive: input.archive }, "c".repeat(64), { checkpoint });
+    if (variant === "configured" || variant === "mounted") {
+      expect(result.getStatus()).toBe(500);
+      expect(result.getBody()).toMatchObject({ message: "Shared context recovery requires an unwired and unmounted customer runtime" });
+      expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+      expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
+      return;
+    }
+    if (prohibited || variant === "mutated-file") {
+      expect(result.getStatus()).toBe(500);
+      expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+      expect(await fs.readFile(prohibited ?? nonDatabase, "utf8")).toBe(prohibited ? "existing state" : "different context");
+      if (variant !== "database") expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
+      return;
+    }
     expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(upgradeStoresMock).toHaveBeenCalledOnce();
+    expect(await fs.readFile(path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId, CARRIED_STORE))).toEqual(originalDatabase);
+    if (variant === "repairable-schema") {
+      const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); expect(db.prepare("PRAGMA user_version").get().user_version).toBe(25); db.close();
+    }
+    if (variant === "matching-partial") expect(await fs.readFile(nonDatabase, "utf8")).toBe("shared-memory");
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
     expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
     expect(sharedContextCheckpoint).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ archiveId: input.archive.archiveId, checkpoint }));
