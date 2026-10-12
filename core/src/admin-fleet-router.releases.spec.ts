@@ -503,6 +503,82 @@ describe('POST /gateways/:id/recover-restore', () => {
     expect(opsIn(store, 'restart-gateway').filter(op => op.status === 'pending')).toHaveLength(0);
     expect(auditsIn(store)).toHaveLength(0);
   });
+  function pendingRecoverySeed() {
+    const h = failedRecoverySeed(); const { seed } = h;
+    const receipt = { ...h.receipt, slug: 'alice', fromGatewayId: 'builder-alice', operationId: 'return-1', phase: 'dispatched' };
+    const hold = { operationId: 'return-1', uid: 'u', slug: 'alice', fromGatewayId: 'builder-alice', toGatewayId: 'shared-0',
+      migrationId: 'mig-return-1', archiveId: 'mig-activate', contextSha256: 'f'.repeat(64) };
+    const stage = { toGatewayId: 'shared-0', migrationId: hold.migrationId, slug: 'alice', archive: {
+      uid: 'u', slug: 'alice', archiveId: hold.archiveId, contextSha256: hold.contextSha256 } };
+    seed['glmOperations/return-1'] = { kind: 'migrate-customer', status: 'pending', startedAt: null, completedAt: null,
+      input: { uid: 'u', builderSlug: 'alice', fromGatewayId: 'builder-alice', toGatewayId: 'shared-0' }, cutoverCommittedAt: 50,
+      restoreAttempt: receipt, nativeSharedAgentContextStage: stage };
+    seed['users/u'] = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-0', restoreFence: structuredClone(receipt),
+      nativeSharedContextRestore: hold, activationLease: { status: 'returning', returnOperationId: 'return-1', targetGatewayId: 'builder-alice' } } } };
+    seed['gateways/shared-0/assignments/u'] = { uid: 'u', slug: 'alice', gatewayId: 'shared-0', epoch: 3,
+      state: 'quiescing', updatedByOperationId: 'return-1' };
+    const previous = seed['glmOperations/failed-recovery'];
+    Object.assign(previous, { status: 'pending', startedAt: null, completedAt: null, error: 'images are not ready', attempts: 1 });
+    delete (previous.input as any).restoreRecovery.reauthorize;
+    const body = { sourceSha: h.manifest.sourceSha, operationId: 'return-1', supersedeRecoveryId: 'failed-recovery' };
+    return { ...h, receipt, hold, stage, body };
+  }
+  it('captures an unclaimed pending image recovery and paired native intent without reauthorizing or changing its owner', async () => {
+    const { seed, manifest, body, receipt, hold, stage, fence } = pendingRecoverySeed();
+    const before = structuredClone(seed);
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(202);
+    const next = opsIn(store, 'restart-gateway').find(op => op.input.restoreRecovery.sourceSha === manifest.sourceSha);
+    expect(next?.input.restoreRecovery).toMatchObject({ supersede: { operationId: 'failed-recovery', status: 'pending',
+      input: before['glmOperations/failed-recovery'].input, completedAt: null, fence, pendingNativeRestore: {
+        restoreAttempt: receipt, nativeSharedContextRestore: hold, nativeSharedAgentContextStage: stage,
+        assignment: before['gateways/shared-0/assignments/u'] } } });
+    expect(next?.input.restoreRecovery.reauthorize).toBeUndefined();
+    expect(store.get('glmOperations/failed-recovery')).toEqual(before['glmOperations/failed-recovery']);
+    expect(store.get('users/u')).toEqual(before['users/u']);
+    expect(store.get('gateways/shared-0')?.runtimeRestartFence).toEqual(fence);
+  });
+  it.each(['running', 'claimed', 'completed', 'cancelled', 'reauthorize', 'receipt', 'fence', 'intent', 'stage', 'epoch'])('refuses pending image predecessor %s before queueing a successor', async change => {
+      const { seed, manifest, body } = pendingRecoverySeed();
+      const prior = seed['glmOperations/failed-recovery'];
+      if (change === 'running') prior.status = 'running';
+      if (change === 'claimed') prior.startedAt = 200;
+      if (change === 'completed') prior.completedAt = 200;
+      if (change === 'cancelled') prior.cancellationRequestedAt = 200;
+      if (change === 'reauthorize') (prior.input as any).restoreRecovery.reauthorize = {};
+      if (change === 'receipt') prior.restoreRuntimeRecovery = {};
+      if (change === 'fence') delete seed['gateways/shared-0'].runtimeRestartFence;
+      if (change === 'intent') (seed['users/u'].provisioning as any).openclaw.restoreFence.attemptId = 'other';
+      if (change === 'stage') (seed['glmOperations/return-1'].nativeSharedAgentContextStage as any).archive.contextSha256 = 'a'.repeat(64);
+      if (change === 'epoch') seed['gateways/shared-0/assignments/u'].epoch = 4;
+      const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+      await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(409);
+      expect(opsIn(store, 'restart-gateway').filter(op => op.input.restoreRecovery.sourceSha === manifest.sourceSha)).toHaveLength(0);
+      expect(auditsIn(store)).toHaveLength(0);
+    });
+  function terminalNativeRecoverySeed() {
+    const h = pendingRecoverySeed();
+    Object.assign(h.seed['glmOperations/failed-recovery'], { status: 'failed', startedAt: 200, completedAt: 500,
+      error: 'restore recovery images are not ready; outcome remains fenced' });
+    return h;
+  }
+  it('captures a failed image recovery with unchanged native restore authority without reauthorization', async () => {
+    const { seed, manifest, body } = terminalNativeRecoverySeed();
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(202);
+    const next = opsIn(store, 'restart-gateway').find(op => op.input.restoreRecovery.sourceSha === manifest.sourceSha);
+    expect(next?.input.restoreRecovery.supersede).toMatchObject({ status: 'failed', startedAt: 200, completedAt: 500,
+      pendingNativeRestore: { restoreAttempt: seed['glmOperations/return-1'].restoreAttempt } });
+    expect(next?.input.restoreRecovery.reauthorize).toBeUndefined();
+    expect(store.get('glmOperations/failed-recovery')).toEqual(seed['glmOperations/failed-recovery']);
+  });
+  it.each(['completedAt', 'error'])('refuses terminal native recovery with invalid %s', async change => {
+    const { seed, manifest, body } = terminalNativeRecoverySeed();
+    seed['glmOperations/failed-recovery'][change] = change === 'completedAt' ? null : 'another failure';
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(409);
+    expect(auditsIn(store)).toHaveLength(0);
+  });
   it('captures the exact retained attempt only when the operator explicitly reauthorizes its ID', async () => {
     const manifest = immutableBuild();
     const receipt = { uid: 'u', attemptId: 'retained-1', gatewayId: 'shared-0', assignmentEpoch: 3, claimStartedAt: 200, dispatchedAt: 100 };
@@ -539,7 +615,6 @@ describe('POST /gateways/:id/recover-restore', () => {
   });
   it.each([{ sourceSha: 'short', operationId: 'return' }, { sourceSha: 'a'.repeat(40), operationId: 'foreign/path' },
     { sourceSha: 'a'.repeat(40), operationId: 'return', images: {} },
-    { sourceSha: 'a'.repeat(40), operationId: 'return', supersedeRecoveryId: 'prior' },
     { sourceSha: 'a'.repeat(40), operationId: 'return', reauthorizeAttemptId: 'retained', supersedeRecoveryId: 'foreign/path' }])('rejects malformed recovery input %j', async body => {
     const { app, store } = mkApp(seedNewSchemaGateway('shared-0', sharedPayload()));
     await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(400);

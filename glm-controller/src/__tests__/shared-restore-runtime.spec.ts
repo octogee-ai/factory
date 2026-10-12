@@ -186,6 +186,122 @@ describe('journaled Shared restore runtime recovery', () => {
     h.setReady(true);
     return { h, next, deps: { ...h.deps, sourceSha: nextSha }, predecessor, intent, nextImages };
   }
+  it('keeps explicit reauthorization mandatory for a failed predecessor even when its prior request omitted it', async () => {
+    const { h, next, deps } = await failedRecovery();
+    delete (next.input.restoreRecovery as any).reauthorize;
+    delete (h.store['glmOperations/recover'].input.restoreRecovery as any).reauthorize;
+    delete (next.input.restoreRecovery as any).supersede.input.restoreRecovery.reauthorize;
+    h.store['glmOperations/successor'].input = structuredClone(next.input);
+    const before = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(deps, next, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+  async function pendingRecovery() {
+    const h = harness(); const hold = nativeRestore(h);
+    Object.assign(h.store['glmOperations/return'], { startedAt: null, completedAt: null });
+    h.store['users/u'].provisioning.openclaw.activationLease = { status: 'returning', returnOperationId: 'return', targetGatewayId: 'builder-alice' };
+    h.setReady(false); let clock = 1;
+    await expect(recoverSharedRestoreRuntime({ ...h.deps, now: () => clock, wait: async () => { clock += 240_000; } }, h.op, h.ctx)).rejects.toThrow('images are not ready');
+    Object.assign(h.store['glmOperations/recover'], { status: 'pending', startedAt: null, completedAt: null,
+      error: 'restore recovery images are not ready; outcome remains fenced', attempts: 1, nextAttemptAt: Date.now() + 60_000 });
+    const predecessor = { operationId: 'recover', status: 'pending', startedAt: null, input: structuredClone(h.op.input), completedAt: null,
+      fence: structuredClone(h.store['gateways/shared-1'].runtimeRestartFence), pendingNativeRestore: {
+        restoreAttempt: structuredClone(h.store['glmOperations/return'].restoreAttempt), nativeSharedContextRestore: structuredClone(hold),
+        nativeSharedAgentContextStage: structuredClone(h.store['glmOperations/return'].nativeSharedAgentContextStage),
+        assignment: structuredClone(h.store['gateways/shared-1/assignments/u']) } };
+    const nextSha = 'd'.repeat(40), nextImages = Object.fromEntries(Object.entries(images).map(([name, image]) => [name,
+      image.replace('aaaaaaa', 'ddddddd').replace(/@sha256:.+$/, `@sha256:${'e'.repeat(64)}`)]));
+    const next = { ...h.op, id: 'successor', startedAt: 600, input: { gatewayId: 'shared-1',
+      restoreRecovery: { operationId: 'return', sourceSha: nextSha, images: nextImages, supersede: predecessor } } } as Operation;
+    h.store['glmOperations/successor'] = structuredClone(next); h.deps.runKubectl.mockClear(); h.setReady(true);
+    return { h, next, deps: { ...h.deps, sourceSha: nextSha }, predecessor, nextImages };
+  }
+  it('atomically supersedes only an unclaimed pending image recovery while preserving the native restore intent and same pod', async () => {
+    const { h, next, deps, predecessor } = await pendingRecovery();
+    const originalReturn = structuredClone(h.store['glmOperations/return']);
+    const originalUser = structuredClone(h.store['users/u']);
+    const prior = structuredClone(h.store['glmOperations/recover']);
+    const kubectl = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async args => {
+      if (args.includes('patch')) {
+        expect(h.store['glmOperations/recover']).toMatchObject({ status: 'failed', startedAt: null,
+          cancellationRequestedAt: expect.any(Number), restoreRecoverySupersededBy: next.id });
+        expect(h.store['gateways/shared-1'].runtimeRestartFence.attemptId).toBe(next.id);
+      }
+      return kubectl(args);
+    });
+    await recoverSharedRestoreRuntime(deps, next, h.ctx);
+    expect(h.store['glmOperations/recover']).toMatchObject({ input: prior.input, error: prior.error, attempts: 1, completedAt: expect.any(Number) });
+    expect(h.store['glmOperations/return']).toEqual(originalReturn);
+    expect(h.store['users/u']).toEqual(originalUser);
+    expect(h.store['glmOperations/successor'].restoreRuntimeRecovery.podUid).toBe(predecessor.fence.target.podUid);
+    expect(h.store['glmOperations/successor'].input.restoreRecovery.reauthorize).toBeUndefined();
+  });
+  it.each(['running', 'claimed', 'completed', 'cancelled', 'receipt', 'input', 'fence', 'intent', 'stage', 'epoch', 'pod'])('refuses pending predecessor %s without changing either owner or pod', async change => {
+      const { h, next, deps } = await pendingRecovery(); const prior = h.store['glmOperations/recover'];
+      if (change === 'running') prior.status = 'running';
+      if (change === 'claimed') prior.startedAt = 800;
+      if (change === 'completed') prior.completedAt = 800;
+      if (change === 'cancelled') prior.cancellationRequestedAt = 800;
+      if (change === 'receipt') prior.restoreRuntimeRecovery = {};
+      if (change === 'input') prior.input.extra = true;
+      if (change === 'fence') h.store['gateways/shared-1'].runtimeRestartFence.startedAt++;
+      if (change === 'intent') { h.store['glmOperations/return'].restoreAttempt.claimStartedAt++;
+        h.store['users/u'].provisioning.openclaw.restoreFence.claimStartedAt++; }
+      if (change === 'stage') h.store['glmOperations/return'].nativeSharedAgentContextStage.targetCertificateSha256 = 'a'.repeat(64);
+      if (change === 'epoch') { h.store['gateways/shared-1/assignments/u'].epoch++;
+        h.store['glmOperations/return'].restoreAttempt.assignmentEpoch++; h.store['users/u'].provisioning.openclaw.restoreFence.assignmentEpoch++; }
+      if (change === 'pod') h.pod.metadata.uid = 'replacement';
+      const before = structuredClone(h.store);
+      await expect(recoverSharedRestoreRuntime(deps, next, h.ctx)).rejects.toThrow();
+      expect(h.store).toEqual(before); expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+    });
+  it('prevents a superseded pending retry from claiming and a stale predecessor from clearing the successor fence', async () => {
+    const { h, next, deps } = await pendingRecovery();
+    const pending = structuredClone(h.store['glmOperations/recover']);
+    const handler = vi.fn(async () => ({ success: true, steps: [] }));
+    const kubectl = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async args => {
+      if (args.includes('patch')) {
+        const fence = structuredClone(h.store['gateways/shared-1'].runtimeRestartFence);
+        await processOperation({ ...pending, id: 'recover' }, (h.deps.db as any).doc('glmOperations/recover'),
+          { db: h.deps.db, handlers: { 'restart-gateway': handler }, log: vi.fn() } as never);
+        expect(handler).not.toHaveBeenCalled();
+        await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('paired post-cutover restore authority');
+        expect(h.store['gateways/shared-1'].runtimeRestartFence).toEqual(fence);
+      }
+      return kubectl(args);
+    });
+    await recoverSharedRestoreRuntime(deps, next, h.ctx);
+    expect(h.store['glmOperations/recover'].restoreRuntimeRecovery).toBeUndefined();
+    expect(h.store['glmOperations/successor'].restoreRuntimeRecovery.podUid).toBe('pod-uid');
+  });
+  async function failedNativeRecovery() {
+    const h = await pendingRecovery();
+    Object.assign(h.h.store['glmOperations/recover'], { status: 'failed', startedAt: 300, completedAt: 500 });
+    Object.assign(h.predecessor, { status: 'failed', startedAt: 300, completedAt: 500 });
+    h.h.store['glmOperations/successor'].input = structuredClone(h.next.input);
+    return h;
+  }
+  it('supersedes a failed native image recovery without rewriting completion, failure, history or restore intent', async () => {
+    const { h, next, deps } = await failedNativeRecovery();
+    const prior = structuredClone(h.store['glmOperations/recover']);
+    const returned = structuredClone(h.store['glmOperations/return']);
+    await recoverSharedRestoreRuntime(deps, next, h.ctx);
+    expect(h.store['glmOperations/recover']).toMatchObject({ completedAt: prior.completedAt, error: prior.error,
+      input: prior.input, attempts: prior.attempts, cancellationRequestedAt: expect.any(Number), restoreRecoverySupersededBy: next.id });
+    expect(h.store['glmOperations/return']).toEqual(returned);
+    expect(h.store['glmOperations/successor'].restoreRuntimeRecovery.previousRestoreAttempt).toBeUndefined();
+  });
+  it.each(['completedAt', 'error'])('refuses a changed failed native predecessor %s without transferring custody', async change => {
+    const { h, next, deps } = await failedNativeRecovery();
+    h.store['glmOperations/recover'][change] = change === 'completedAt' ? 501 : 'another failure';
+    const before = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(deps, next, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
   function queuedMigration(h: ReturnType<typeof harness>) {
     h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', createdAt: 1_000,
       createdBy: 'glm-controller-placement-policy', origin: 'automatic', startedAt: null, completedAt: null,

@@ -620,9 +620,8 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
       const reauthorizeAttemptId = args.flags['reauthorize-attempt'] === undefined ? undefined :
         requiredFlag(args, 'reauthorize-attempt', 'gw recover-restore', 'retained-attempt-id');
       const supersedeRecoveryId = args.flags['supersede-recovery'] === undefined ? undefined :
-        requiredFlag(args, 'supersede-recovery', 'gw recover-restore', 'failed-recovery-id');
+        requiredFlag(args, 'supersede-recovery', 'gw recover-restore', 'predecessor-recovery-id');
       if (!/^[a-f0-9]{40}$/.test(sourceSha) || operationId.includes("/") || supersedeRecoveryId?.includes("/")) throw new Error("invalid restore recovery build or operation");
-      if (supersedeRecoveryId && !reauthorizeAttemptId) throw new Error("supersede-recovery requires --reauthorize-attempt");
       return withIdempotency({ method: "POST", path: `/api/admin/gateways/${gatewayId}/recover-restore`,
         body: { sourceSha, operationId, ...(reauthorizeAttemptId ? { reauthorizeAttemptId } : {}), ...(supersedeRecoveryId ? { supersedeRecoveryId } : {}) } });
     }

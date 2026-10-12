@@ -386,6 +386,7 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
 else
   "$TSX" /octogee/scripts/entrypoints/prepare-openclaw-sqlite-journals.ts
+  "$TSX" /octogee/scripts/entrypoints/openclaw-boot-sentinel.ts before-start
   log "Starting OpenClaw gateway... (build: ${BUILD_SHA:-unknown})"
   openclaw gateway run --bind lan --port 18789 &
   OPENCLAW_PID=$!
@@ -398,6 +399,7 @@ else
     fi
     sleep 1
   done
+  "$TSX" /octogee/scripts/entrypoints/openclaw-boot-sentinel.ts healthy
   log "OpenClaw gateway healthy; starting auxiliary runners"
 fi
 
