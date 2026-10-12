@@ -20,6 +20,7 @@ await runDesktopImagePublication({
   environment,
   sourceSha: requiredEnv("SOURCE_SHA"),
   apply: true,
+  skipMissing: true,
   actor: `github-actions:${requiredEnv("GITHUB_ACTOR")}`,
   why: `Deploy platform build ${runUrl}`,
   db: getFirestore(),

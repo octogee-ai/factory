@@ -210,7 +210,7 @@ function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps
 }
 
 export async function runDesktopImagePublication(input: {
-  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth;
+  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; skipMissing?: boolean;
 }) {
   if (!/^[a-f0-9]{40}$/.test(input.sourceSha)) throw new Error('desktop-image publish requires --sha=<full-main-sha>');
   const auth = input.auth ?? new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
@@ -225,6 +225,10 @@ export async function runDesktopImagePublication(input: {
       },
     },
   ).resolveManifest(input.sourceSha);
+  if (manifest.desktopImage === undefined && input.skipMissing) {
+    console.log(`desktop image: build ${manifest.sourceSha} has no desktop image; skipping publication`);
+    return;
+  }
   const cloud = createDesktopPublicationCloud(auth);
   const publication = await planDesktopPublication(manifest.desktopImage, input.environment, cloud);
   const plan = { environment: input.environment, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest, desktopImage: manifest.desktopImage, publication };
