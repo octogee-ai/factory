@@ -4,7 +4,7 @@ import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 
 type BootInput = {
   env?: NodeJS.ProcessEnv;
-  client?: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot">;
+  client?: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor">;
   log?: (message: string) => void;
   run?: Parameters<typeof createOpenClawBootWatcher>[0]["run"];
 };

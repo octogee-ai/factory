@@ -175,6 +175,7 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
   claimOpenClawBoot(input: { releaseKey: string }): Promise<FleetBrokerOpenClawBootClaim>;
   completeOpenClawBoot(input: { releaseKey: string }): Promise<void>;
+  completeOpenClawDoctor(input: { releaseKey: string; requestId: string; verifiedAgentIds: string[] }): Promise<void>;
 }
 
 export async function resolveGithubTokenForSlug(
@@ -244,11 +245,18 @@ function openClawBootClient(
   gatewayId: string,
   revisionId: string,
   gatewayCredentialHeaders: () => Promise<Record<string, string>>,
-): Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot"> {
+): Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor"> {
   return {
     async claimOpenClawBoot(input) {
       return postJson<FleetBrokerOpenClawBootClaim>(
         "/internal/fleet/openclaw-boot/claim",
+        { gatewayId, revisionId, ...input },
+        await gatewayCredentialHeaders(),
+      );
+    },
+    async completeOpenClawDoctor(input) {
+      return postNoContent(
+        "/internal/fleet/openclaw-boot/doctor-complete",
         { gatewayId, revisionId, ...input },
         await gatewayCredentialHeaders(),
       );

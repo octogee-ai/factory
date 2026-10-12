@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+import { verifySourceDoctorAgentStores } from "./openclaw-source-doctor.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 
 export interface OpenClawBootWatcher {
@@ -32,18 +33,52 @@ function runCommand(command: string, args: readonly string[]): Promise<void> {
   });
 }
 
+function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>) {
+  const request = claim.sourceDoctor;
+  if (request && (typeof request.requestId !== "string" || !request.requestId || request.requestId.includes("/") || !Array.isArray(request.agentIds) ||
+      request.agentIds.length === 0 || new Set(request.agentIds).size !== request.agentIds.length ||
+      !request.agentIds.every((id) => /^octogee-[a-z0-9][a-z0-9_-]*-coach$/.test(id)))) throw new Error("invalid source Doctor request");
+  return request;
+}
+
 export function createOpenClawBootWatcher(input: {
-  client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot">;
+  client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor">;
   releaseKey: string;
   log: (message: string) => void;
   run?: RunCommand;
+  verifySourceDoctor?: (agentIds: string[]) => Promise<void>;
+  now?: () => number;
+  wait?: (ms: number) => Promise<void>;
 }): OpenClawBootWatcher {
   const run = input.run ?? runCommand;
+  const now = input.now ?? (() => performance.now());
+  const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  async function claimBoot(): Promise<Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>> {
+    const deadline = now() + 120_000;
+    let pendingRequest: string | undefined;
+    for (;;) {
+      let claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>;
+      try { claim = await input.client.claimOpenClawBoot({ releaseKey: input.releaseKey }); }
+      catch (error) {
+        if (pendingRequest) throw new Error("source Doctor claim failed while awaiting installed image proof", { cause: error });
+        throw error;
+      }
+      const request = sourceDoctorRequest(claim);
+      if (pendingRequest && pendingRequest !== request?.requestId) throw new Error("source Doctor request changed while waiting for installed image proof");
+      if (claim.action !== "wait") return claim;
+      if (!request) throw new Error("source Doctor image wait requires an explicit request");
+      pendingRequest = request.requestId;
+      const remaining = deadline - now();
+      if (remaining <= 0) throw new Error("source Doctor installed image proof wait timed out");
+      input.log("[openclaw-boot] awaiting controller verification of the installed source recovery image");
+      await wait(Math.min(2_000, remaining));
+    }
+  }
   return {
     async beforeStart() {
       let claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>;
       try {
-        claim = await input.client.claimOpenClawBoot({ releaseKey: input.releaseKey });
+        claim = await claimBoot();
       } catch (error) {
         if (!missingBrokerRoute(error, CLAIM_PATH)) throw error;
         input.log("[openclaw-boot] boot sentinel unavailable on this platform release; starting normally");
@@ -53,8 +88,14 @@ export function createOpenClawBootWatcher(input: {
       if (claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
-      input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
+      input.log(claim.sourceDoctor ? "[openclaw-boot] running explicitly requested source Doctor before gateway startup" :
+        "[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
       await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
+      if (claim.sourceDoctor) {
+        await (input.verifySourceDoctor ?? verifySourceDoctorAgentStores)(claim.sourceDoctor.agentIds);
+        await input.client.completeOpenClawDoctor({ releaseKey: input.releaseKey, requestId: claim.sourceDoctor.requestId,
+          verifiedAgentIds: claim.sourceDoctor.agentIds });
+      }
     },
     async healthy() {
       try {

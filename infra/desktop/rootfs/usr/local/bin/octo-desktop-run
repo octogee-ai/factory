@@ -43,7 +43,13 @@ idle_browser() {
   sleep infinity &
   browser_pid=$!
   browser_idle=1
-  if (( restart_browser )); then kill "$browser_pid" 2>/dev/null || true; fi
+  if (( restart_browser )); then
+    kill "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" 2>/dev/null || true
+    browser_pid=""
+    stamp "Chromium restarting for an egress mode change"
+    launch_browser
+  fi
 }
 
 launch_browser() {

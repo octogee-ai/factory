@@ -61,6 +61,29 @@ describe("createRestartGatewayHandler", () => {
     expect(result.success).toBe(false);
     expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
   });
+  it('delegates explicit source repair without ordinary process restart or restore authority', async () => {
+    const recoverSource = vi.fn(async () => {}), deps = mkDeps({ recoverSource });
+    const op = mkOp({ input: { gatewayId: 'shared-1', sourceRecovery: {} } }), { ctx } = mkCtx();
+    expect((await createRestartGatewayHandler(deps)(op, ctx)).success).toBe(true);
+    expect(recoverSource).toHaveBeenCalledWith(op, ctx);
+    expect(deps.resolveLiveRevisionId).not.toHaveBeenCalled(); expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
+  });
+  it('refuses unavailable source repair without falling back to an ordinary restart', async () => {
+    const deps = mkDeps();
+    expect((await createRestartGatewayHandler(deps)(mkOp({ input: { gatewayId: 'shared-1', sourceRecovery: {} } }), mkCtx().ctx)).success).toBe(false);
+    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
+  });
+  it('refuses a mixed source and restore authority without invoking either', async () => {
+    const recoverSource = vi.fn(async () => {}), recoverRestore = vi.fn(async () => {}), deps = mkDeps({ recoverSource, recoverRestore });
+    expect((await createRestartGatewayHandler(deps)(mkOp({ input: { gatewayId: 'shared-1', sourceRecovery: {}, restoreRecovery: {} } }), mkCtx().ctx)).success).toBe(false);
+    expect(recoverSource).not.toHaveBeenCalled(); expect(recoverRestore).not.toHaveBeenCalled();
+  });
+  it('retains a fenced source-repair retry when its readiness deadline expires', async () => {
+    const deps = mkDeps({ recoverSource: vi.fn(async () => { throw new Error('source repair is not ready; outcome remains fenced'); }) });
+    expect(await createRestartGatewayHandler(deps)(mkOp({ input: { gatewayId: 'shared-1', sourceRecovery: {} } }), mkCtx().ctx))
+      .toMatchObject({ success: false, retryAfterMs: 60_000, error: 'source repair is not ready; outcome remains fenced' });
+    expect(deps.kubeOps.restartOpenClawInPlace).not.toHaveBeenCalled();
+  });
   it("calls kubeOps.restartOpenClawInPlace with the deployment derived from the serving revision", async () => {
     const deps = mkDeps();
     const handler = createRestartGatewayHandler(deps);

@@ -1517,3 +1517,64 @@ describe("platform runtime configuration", () => {
     },
   );
 });
+
+describe('POST /gateways/:id/recover-source', () => {
+  function sourceSeed() {
+    const seed = seedNewSchemaGateway('shared-0', sharedPayload());
+    seed['gateways/shared-0'].desiredStatus = 'draining';
+    seed['gateways/shared-0'].liveRelease = 1;
+    const slugs = ['jdog99', 'oct01', 'journeyd093e6f87', 'journey94a458e32', 'jefe', 'oct08'];
+    for (const [index, slug] of slugs.entries()) {
+      const uid = `source-user-${index}`, agentId = `octogee-${slug}-coach`, file = `/home/node/.openclaw/agents/${agentId}/agent/openclaw-agent.sqlite`;
+      seed[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: 'shared-0', status: 'complete' } } };
+      seed[`gateways/shared-0/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-0', state: 'serving', epoch: index + 1 };
+      const message = `OpenClaw snapshot of ${agentId} failed: SQLite database cannot be snapshotted safely: ${file}. OpenClaw agent database ${file} uses schema version 24; run openclaw doctor --fix before compacting it.`;
+      const error = '/push-rsync-state/shared-0: 500 ' + JSON.stringify({ error: 'push-rsync-state failed', message });
+      seed[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 300, completedAt: 400,
+        input: { uid, fromGatewayId: 'shared-0', toGatewayId: 'shared-1' }, error,
+        steps: [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'failed', error },
+          { name: 'rollback:unmount-target', status: 'done' }] };
+    }
+    return seed;
+  }
+  it('journals immutable source repair for the six configured schema24 exports without forging a restore or boot failure', async () => {
+    const manifest = immutableBuild(), seed = sourceSeed(), before = structuredClone(seed);
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
+    const queued = opsIn(store, 'restart-gateway')[0];
+    expect(queued.input.sourceRecovery).toMatchObject({ sourceSha: manifest.sourceSha,
+      assignments: expect.arrayContaining([{ uid: 'source-user-4', slug: 'jefe', agentId: 'octogee-jefe-coach', assignmentEpoch: 5,
+        assignment: before['gateways/shared-0/assignments/source-user-4'] }]),
+      failedExports: expect.arrayContaining([{ operationId: 'export-4', input: before['glmOperations/export-4'].input,
+        startedAt: 300, completedAt: 400, error: before['glmOperations/export-4'].error, steps: before['glmOperations/export-4'].steps }]) });
+    expect(queued.input.sourceRecovery.assignments).toHaveLength(6);
+    expect(queued.input.sourceRecovery.failedExports).toHaveLength(6);
+    expect(queued.input.restoreRecovery).toBeUndefined();
+    expect(store.get('gateways/shared-0')).toEqual(before['gateways/shared-0']);
+    expect(store.get('glmOperations/export-4')).toEqual(before['glmOperations/export-4']);
+    expect(auditsIn(store)).toHaveLength(1);
+  });
+  it.each(['builder', 'retired', 'restart', 'assignment', 'owner', 'restore', 'running', 'pending', 'rollback', 'cutover', 'schema', 'empty', 'tenant'])('refuses source repair with %s authority before journaling', async change => {
+      const manifest = immutableBuild(), seed = sourceSeed();
+      if (change === 'builder') seed['gateways/shared-0'].gatewayClass = 'builder';
+      if (change === 'retired') seed['gateways/shared-0'].desiredStatus = 'retired';
+      if (change === 'restart') seed['gateways/shared-0'].runtimeRestartFence = {};
+      if (change === 'assignment') seed['gateways/shared-0/assignments/source-user-0'].state = 'quiescing';
+      if (change === 'owner') (seed['users/source-user-0'].provisioning as any).openclaw.gatewayId = 'shared-2';
+      if (change === 'restore') (seed['users/source-user-0'].provisioning as any).openclaw.restoreFence = {};
+      if (change === 'running' || change === 'pending') seed['glmOperations/competing'] = { kind: 'migrate-customer', status: change,
+        input: { uid: 'other', fromGatewayId: 'shared-0', toGatewayId: 'shared-1' } };
+      if (change === 'tenant') seed['glmOperations/tenant-delete'] = { kind: 'erase-customer', status: 'running', input: { uid: 'source-user-0' } };
+      if (change === 'rollback') (seed['glmOperations/export-0'].steps as any[]).pop();
+      if (change === 'cutover') seed['glmOperations/export-0'].cutoverCommittedAt = 350;
+      if (change === 'schema') seed['glmOperations/export-0'].error = 'corrupt database';
+      if (change === 'empty') for (let i = 0; i < 6; i++) delete seed[`gateways/shared-0/assignments/source-user-${i}`];
+      const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+      await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
+      expect(opsIn(store, 'restart-gateway')).toHaveLength(0); expect(auditsIn(store)).toHaveLength(0);
+    });
+  it.each([{ sourceSha: 'short' }, { sourceSha: 'a'.repeat(40), restoreAttempt: {} }])('rejects malformed source repair %j', async body => {
+    const { app } = mkApp(sourceSeed());
+    await request(app).post('/gateways/shared-0/recover-source').send(body).expect(400);
+  });
+});

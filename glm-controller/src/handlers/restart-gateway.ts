@@ -9,6 +9,7 @@ export interface RestartGatewayDeps {
   now: () => number;
   log: (msg: string) => void;
   recoverRestore?: (op: Operation, ctx: OperationContext) => Promise<void>;
+  recoverSource?: (op: Operation, ctx: OperationContext) => Promise<void>;
 }
 
 interface RestartGatewayInput {
@@ -33,15 +34,8 @@ export function createRestartGatewayHandler(
       return { steps: [], success: false, error: "missing gatewayId in op.input" };
     }
 
-    if (op.input.restoreRecovery !== undefined) {
-      if (!deps.recoverRestore) return { steps: [], success: false, error: "restore runtime recovery is unavailable" };
-      try {
-        await deps.recoverRestore(op, ctx);
-        return { steps: [], success: true };
-      } catch (error) {
-        return { steps: [], success: false, error: error instanceof Error ? error.message : String(error), retryAfterMs: 60_000 };
-      }
-    }
+    const recovered = await runtimeRecovery(deps, op, ctx);
+    if (recovered) return recovered;
 
     const revisionId = await deps.resolveLiveRevisionId(gatewayId);
     if (!revisionId) {
@@ -111,6 +105,16 @@ export function createRestartGatewayHandler(
 
     return { steps: [], success: true };
   };
+}
+
+async function runtimeRecovery(deps: RestartGatewayDeps, op: Operation, ctx: OperationContext): Promise<OperationResult | null> {
+  const source = op.input.sourceRecovery !== undefined, restore = op.input.restoreRecovery !== undefined;
+  if (!source && !restore) return null;
+  if (source && restore) return { steps: [], success: false, error: 'runtime recovery authority is ambiguous' };
+  const run = source ? deps.recoverSource : deps.recoverRestore;
+  if (!run) return { steps: [], success: false, error: source ? 'source runtime recovery is unavailable' : 'restore runtime recovery is unavailable' };
+  try { await run(op, ctx); return { steps: [], success: true }; }
+  catch (error) { return { steps: [], success: false, error: error instanceof Error ? error.message : String(error), retryAfterMs: 60_000 }; }
 }
 
 function openClawProcessDown(message: string): boolean {

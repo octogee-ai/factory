@@ -1,3 +1,4 @@
+import { readSharedSourceRecoveryAuthority, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
@@ -4201,6 +4202,39 @@ export function addAdminFleetRoutes(router, deps) {
         }
         catch (e) {
             next(e);
+        }
+    });
+    router.post("/gateways/:id/recover-source", async (req, res, next) => {
+        try {
+            const gatewayId = req.params.id, body = req.body ?? {}, sourceSha = body.sourceSha;
+            if (typeof sourceSha !== "string" || !/^[a-f0-9]{40}$/.test(sourceSha) || Object.keys(body).some(key => key !== "sourceSha")) {
+                res.status(400).json({ error: "sourceSha is required" });
+                return;
+            }
+            if (!deps.releaseAuthority) {
+                res.status(503).json({ error: "immutable build manifests are unavailable" });
+                return;
+            }
+            const source = await db.runTransaction(tx => readSharedSourceRecoveryAuthority(db, tx, gatewayId), { readOnly: true });
+            const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
+            const payload = centralGatewayReleasePayload(manifest);
+            const input = { gatewayId, sourceRecovery: { sourceSha, ...source, images: {
+                        gateway: `${payload.imageRepository}:${payload.imageTag}`,
+                        "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}`,
+                    } } };
+            const operationId = await runAdminFleetMutation({ req, what: "repair Shared source before export", why: ADMIN_FLEET_REQUEST_REASON,
+                target: { gatewayId }, preActionStatus: source.root, mutation: input,
+                action: async () => createOperation(db, { kind: OP_KIND_RESTART_GATEWAY, createdBy: req.uid ?? "unknown", input }) });
+            res.status(202).json({ gatewayId, sourceSha, operationId });
+        }
+        catch (error) {
+            if (error instanceof SharedSourceRecoveryConflict) {
+                res.status(409).json({ error: error.message });
+                return;
+            }
+            if (respondCentralReleaseError(res, error))
+                return;
+            next(error);
         }
     });
     router.post("/gateways/:id/recover-restore", async (req, res, next) => {

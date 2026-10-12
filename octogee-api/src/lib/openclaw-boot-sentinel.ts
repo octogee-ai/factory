@@ -1,16 +1,89 @@
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { isDeepStrictEqual } from "node:util";
+import { FieldValue, type DocumentData, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 
 interface OpenClawBootInput {
   gatewayId: string;
   podUid: string;
+  podName: string;
   releaseKey: string;
 }
 
 export interface OpenClawBootSentinelStore {
-  claim(input: OpenClawBootInput): Promise<{ action: "doctor" | "start" } | null>;
+  claim(input: OpenClawBootInput): Promise<{ action: "doctor" | "start" | "wait"; sourceDoctor?: { requestId: string; agentIds: string[] } } | null>;
   complete(input: OpenClawBootInput): Promise<boolean>;
+  completeDoctor(input: OpenClawBootInput & { requestId: string; verifiedAgentIds: string[] }): Promise<boolean>;
+}
+
+function record(value: unknown): DocumentData {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as DocumentData : {};
+}
+
+function assertSourceRoot(root: DocumentData, captured: unknown): void {
+  if (root.gatewayClass !== "shared" || !["running", "draining"].includes(root.desiredStatus) ||
+      root.retirementClaim != null || !Number.isSafeInteger(root.liveRelease) || root.liveRelease < 1 || root.desiredRelease !== root.liveRelease) {
+    throw new Error("source Doctor lifecycle custody mismatch");
+  }
+  const identity = Object.fromEntries(["gatewayId", "gatewayClass", "ownerUid", "builderSlug", "desiredStatus", "desiredRelease", "liveRelease", "latestRelease"].map((key) => [key, root[key]]));
+  if (!isDeepStrictEqual(captured, identity)) throw new Error("source Doctor release custody changed");
+}
+
+function assertSourceFence(fence: DocumentData, input: OpenClawBootInput): void {
+  const target = record(fence.target), doctor = record(fence.doctor);
+  if (fence.gatewayId !== input.gatewayId || fence.phase !== "dispatched" || fence.attemptId !== doctor.requestId || fence.auditId !== doctor.requestId ||
+      typeof doctor.requestId !== "string" || !doctor.requestId || doctor.requestId.includes("/") || doctor.error !== undefined ||
+      target.podUid !== input.podUid || target.podName !== input.podName || !Number.isSafeInteger(fence.startedAt) || fence.startedAt <= 0) {
+    throw new Error("source Doctor fence custody mismatch");
+  }
+}
+
+function assertSourceOperation(op: DocumentData, recovery: DocumentData, target: DocumentData, gatewayId: string): void {
+  if (op.kind !== "restart-gateway" || !["pending", "running"].includes(op.status) || op.completedAt !== null ||
+      op.cancellationRequestedAt !== undefined || op.input?.gatewayId !== gatewayId ||
+      typeof recovery.sourceSha !== "string" || !/^[a-f0-9]{40}$/.test(recovery.sourceSha) || target.sourceSha !== recovery.sourceSha ||
+      !isDeepStrictEqual(target.images, recovery.images)) throw new Error("source Doctor operation mismatch");
+}
+
+function sourceAgentIds(assignments: unknown, captured: unknown): string[] {
+  if (!Array.isArray(assignments) || assignments.length === 0) throw new Error("source Doctor requires owned agents");
+  const agents = assignments.map((value) => {
+    const agent = { ...record(value) }; delete agent.assignment;
+    if (typeof agent.uid !== "string" || !agent.uid || agent.uid.includes("/") || typeof agent.slug !== "string" ||
+        !/^[a-z0-9][a-z0-9_-]*$/.test(agent.slug) || agent.agentId !== `octogee-${agent.slug}-coach` ||
+        !Number.isSafeInteger(agent.assignmentEpoch) || agent.assignmentEpoch < 0) throw new Error("source Doctor agent ownership mismatch");
+    return agent;
+  });
+  const agentIds = agents.map((agent) => agent.agentId as string);
+  if (!isDeepStrictEqual(captured, agents) || new Set(agentIds).size !== agentIds.length) throw new Error("source Doctor roster mismatch");
+  return agentIds;
+}
+
+function sourceImageVerified(fence: DocumentData, podUid: string): boolean {
+  if (fence.installedImage === undefined) return false;
+  const image = record(fence.installedImage), target = record(fence.target);
+  const wanted = typeof target.images?.gateway === "string" ? /@(sha256:[a-f0-9]{64})$/.exec(target.images.gateway)?.[1] : undefined;
+  if (!wanted || image.podUid !== podUid || typeof image.gatewayImageId !== "string" || !image.gatewayImageId.endsWith(wanted) ||
+      !Number.isSafeInteger(image.verifiedAt) || image.verifiedAt < fence.startedAt) throw new Error("source Doctor installed image mismatch");
+  return true;
+}
+
+async function sourceDoctorContext(db: Firestore, txn: Transaction, input: OpenClawBootInput) {
+  const rootRef = db.doc(`gateways/${input.gatewayId}`);
+  const root = record((await txn.get(rootRef)).data()), fence = record(root.runtimeRestartFence);
+  if (fence.kind !== "source-recovery") return null;
+  assertSourceFence(fence, input);
+  const target = record(fence.target), doctor = record(fence.doctor);
+  const op = record((await txn.get(db.doc(`glmOperations/${doctor.requestId}`))).data()), recovery = record(op.input?.sourceRecovery);
+  assertSourceRoot(root, recovery.root);
+  assertSourceOperation(op, recovery, target, input.gatewayId);
+  return { rootRef, fence, doctor, agentIds: sourceAgentIds(recovery.assignments, target.agents), imageVerified: sourceImageVerified(fence, input.podUid) };
+}
+
+function sourceDoctorCompleted(context: NonNullable<Awaited<ReturnType<typeof sourceDoctorContext>>>, input: OpenClawBootInput): boolean {
+  const { doctor, agentIds } = context;
+  return context.imageVerified && Number.isSafeInteger(doctor.startedAt) && doctor.startedAt > 0 && Number.isSafeInteger(doctor.completedAt) &&
+    doctor.completedAt >= doctor.startedAt && doctor.releaseKey === input.releaseKey && isDeepStrictEqual(doctor.verifiedAgentIds, agentIds);
 }
 
 export function createOpenClawBootSentinelStore(
@@ -23,6 +96,18 @@ export function createOpenClawBootSentinelStore(
       return db.runTransaction(async (txn) => {
         const runtimeSnap = await txn.get(runtimeRef);
         if (!runtimeSnap.exists) return null;
+        const context = await sourceDoctorContext(db, txn, input);
+        if (context) {
+          if (sourceDoctorCompleted(context, input)) return { action: "start" as const };
+          if (context.doctor.startedAt !== undefined || context.doctor.completedAt !== undefined) throw new Error("source Doctor attempted without matching success acknowledgement");
+          const sourceDoctor = { requestId: context.doctor.requestId as string, agentIds: context.agentIds };
+          if (!context.imageVerified) return { action: "wait" as const, sourceDoctor };
+          txn.update(context.rootRef, {
+            "runtimeRestartFence.doctor.startedAt": now(),
+            "runtimeRestartFence.doctor.releaseKey": input.releaseKey,
+          });
+          return { action: "doctor" as const, sourceDoctor };
+        }
         const sentinel = runtimeSnap.data()?.openclawBootSentinel as
           | Record<string, unknown>
           | undefined;
@@ -58,11 +143,32 @@ export function createOpenClawBootSentinelStore(
         return { action: "start" };
       });
     },
+    async completeDoctor(input) {
+      return db.runTransaction(async (txn) => {
+        const context = await sourceDoctorContext(db, txn, input);
+        if (!context || !context.imageVerified || context.doctor.requestId !== input.requestId ||
+            context.doctor.releaseKey !== input.releaseKey || !Number.isSafeInteger(context.doctor.startedAt) || context.doctor.startedAt <= 0 ||
+            !isDeepStrictEqual(context.agentIds, input.verifiedAgentIds)) throw new Error("source Doctor acknowledgement mismatch");
+        if (context.doctor.completedAt !== undefined) {
+          if (!sourceDoctorCompleted(context, input)) throw new Error("source Doctor stored acknowledgement mismatch");
+          return true;
+        }
+        const completedAt = now();
+        if (completedAt < context.doctor.startedAt) throw new Error("source Doctor completion predates its claim");
+        txn.update(context.rootRef, {
+          "runtimeRestartFence.doctor.completedAt": completedAt,
+          "runtimeRestartFence.doctor.verifiedAgentIds": input.verifiedAgentIds,
+        });
+        return true;
+      });
+    },
     async complete(input) {
       const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
       return db.runTransaction(async (txn) => {
         const runtimeSnap = await txn.get(runtimeRef);
         if (!runtimeSnap.exists) return false;
+        const context = await sourceDoctorContext(db, txn, input);
+        if (context && !sourceDoctorCompleted(context, input)) throw new Error("source Doctor success acknowledgement is required before health");
         const sentinel = runtimeSnap.data()?.openclawBootSentinel as
           | Record<string, unknown>
           | undefined;

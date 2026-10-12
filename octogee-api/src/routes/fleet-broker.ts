@@ -2177,16 +2177,16 @@ async function requireConfiguredBuilderRuntimeState(
 function openClawBootRequest(
   bound: GatewayBinding,
   body: unknown,
-): { releaseKey: string; podUid: string } | null {
+): { releaseKey: string; podUid: string; podName: string } | null {
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const revisionId = typeof record.revisionId === "string" ? record.revisionId : "";
   const releaseKey = typeof record.releaseKey === "string" ? record.releaseKey.trim() : "";
   const authenticatedRevisionId = revisionIdFromGatewayPodName(bound.gatewayId, bound.podName);
-  if (!bound.podUid || !authenticatedRevisionId || revisionId !== authenticatedRevisionId) {
+  if (!bound.podUid || !bound.podName || !authenticatedRevisionId || revisionId !== authenticatedRevisionId) {
     return null;
   }
   if (!releaseKey || releaseKey.length > 512) return null;
-  return { releaseKey, podUid: bound.podUid };
+  return { releaseKey, podUid: bound.podUid, podName: bound.podName };
 }
 
 function installOpenClawBootRoutes(
@@ -2210,6 +2210,23 @@ function installOpenClawBootRoutes(
         return;
       }
       res.json(result);
+    });
+  });
+
+  router.post("/openclaw-boot/doctor-complete", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const request = openClawBootRequest(bound, req.body);
+    const requestId = req.body?.requestId;
+    const verifiedAgentIds = req.body?.verifiedAgentIds;
+    if (!request || typeof requestId !== "string" || !requestId || requestId.includes("/") ||
+        !Array.isArray(verifiedAgentIds) || verifiedAgentIds.length === 0 || !verifiedAgentIds.every((id: unknown) => typeof id === "string")) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    await runBrokered(res, async () => {
+      await store.completeDoctor({ gatewayId: bound.gatewayId, ...request, requestId, verifiedAgentIds });
+      res.status(204).end();
     });
   });
 

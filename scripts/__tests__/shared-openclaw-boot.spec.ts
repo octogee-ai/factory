@@ -45,7 +45,7 @@ await runOpenClawBootPhase(process.argv[2],{log:()=>{},
 client:{claimOpenClawBoot:async()=>{const prior=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
  const action=prior==='starting'?'doctor':'start';
  if(!prior)fs.writeFileSync(file,'starting');else if(action==='doctor')fs.writeFileSync(file,'doctor-attempted');return{action};},
-completeOpenClawBoot:async()=>{fs.rmSync(file,{force:true});fs.appendFileSync(root+'/order.log','healthy\\n');}},
+completeOpenClawDoctor:async()=>{},completeOpenClawBoot:async()=>{fs.rmSync(file,{force:true});fs.appendFileSync(root+'/order.log','healthy\\n');}},
 run:async(command,args)=>{execFileSync(command,args,{stdio:'inherit'});}});
 `);
   const tsx = path.join(root, "tsx");
@@ -72,7 +72,8 @@ run:async(command,args)=>{execFileSync(command,args,{stdio:'inherit'});}});
 
 
 it("uses the installed build identity when in-place recovery retains the old pod image tag", async () => {
-  const client = { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn().mockResolvedValue(undefined) };
+  const client = { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawDoctor: vi.fn(async () => undefined),
+      completeOpenClawBoot: vi.fn().mockResolvedValue(undefined) };
   const input = { client, env: { GATEWAY_ID: "shared-fixture", BUILD_SHA: "new-build-sha", GATEWAY_IMAGE_TAG: "old-pod-tag" } };
   await runOpenClawBootPhase("before-start", input);
   await runOpenClawBootPhase("healthy", input);
@@ -81,7 +82,8 @@ it("uses the installed build identity when in-place recovery retains the old pod
 });
 
 it("fails the pre-start phase when the claimed canonical repair fails", async () => {
-  const client = { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "doctor" }), completeOpenClawBoot: vi.fn() };
+  const client = { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "doctor" }), completeOpenClawDoctor: vi.fn(async () => undefined),
+      completeOpenClawBoot: vi.fn() };
   const run = vi.fn().mockRejectedValue(new Error("canonical repair failed"));
   await expect(runOpenClawBootPhase("before-start", { client, run, log: () => {}, env: { GATEWAY_ID: "shared-fixture", BUILD_SHA: "build-sha" } })).rejects.toThrow("canonical repair failed");
   expect(run).toHaveBeenCalledWith("openclaw", ["doctor", "--fix", "--non-interactive"]);

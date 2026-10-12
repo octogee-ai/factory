@@ -397,6 +397,10 @@
     "./project-blob-materialization": {
       "types": "./dist/project-blob-materialization.d.ts",
       "default": "./dist/project-blob-materialization.js"
+    },
+    "./shared-source-recovery": {
+      "types": "./dist/shared-source-recovery.d.ts",
+      "default": "./dist/shared-source-recovery.js"
     }
   },
   "typesVersions": {

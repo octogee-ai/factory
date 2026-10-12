@@ -162,9 +162,13 @@ export interface FleetBrokerComputerHomePruneResult {
 export interface FleetBrokerComputerEgress {
     egress: GatewayVmEgressState | null;
 }
-export type FleetBrokerOpenClawBootAction = "start" | "doctor";
+export type FleetBrokerOpenClawBootAction = "start" | "doctor" | "wait";
 export interface FleetBrokerOpenClawBootClaim {
     action: FleetBrokerOpenClawBootAction;
+    sourceDoctor?: {
+        requestId: string;
+        agentIds: string[];
+    };
 }
 export interface FleetBrokerPreStopFlushStep {
     name: string;

@@ -1003,3 +1003,7 @@ it("waits for active Builder work without consuming attempts or recording a fail
   expect(update).not.toHaveProperty("attemptHistory");
   expect(update.error).toEqual(FieldValue.delete());
 });
+
+it("retains durable resume ownership for a pending source Doctor and its retained Pod", () => {
+  expect(operationNeedsDurableRestartResume({ kind: "restart-gateway", input: { sourceRecovery: {} } })).toBe(true);
+});

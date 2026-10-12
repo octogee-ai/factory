@@ -1,3 +1,5 @@
+import { readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
+import { recoverSharedSourceRuntime } from "../lib/shared-source-runtime.js";
 import { describe, expect, it, vi } from 'vitest';
 import { FieldValue } from 'firebase-admin/firestore';
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from '@octogee/core/fleet-state';
@@ -26,10 +28,10 @@ function harness() {
     doc: (id: string) => ref(`${path}/${id}`), collection: (name: string) => ref(`${path}/${name}`),
     where: (key: string, comparator: string, match: unknown) => ref(path, [...filters, { key, comparator, match }]) });
   const snapshot = (target: any): any => {
-    if (target.path.includes('/')) return { exists: !!store[target.path], data: () => store[target.path] };
-    return { docs: Object.entries(store).filter(([path, row]) => path.split('/').length === 2 && path.startsWith(`${target.path}/`) &&
+    if (target.path.split('/').length % 2 === 0) return { exists: !!store[target.path], data: () => store[target.path] };
+    return { docs: Object.entries(store).filter(([path, row]) => path.startsWith(`${target.path}/`) && !path.slice(target.path.length + 1).includes('/') &&
       target.filters.every((filter: any) => filter.comparator === 'in' ? filter.match.includes(value(row, filter.key)) : value(row, filter.key) === filter.match))
-      .map(([path, row]) => ({ id: path.split('/')[1], data: () => row })) };
+      .map(([path, row]) => ({ id: path.split('/').at(-1), data: () => row })) };
   };
   const db = { doc: ref, collection: ref, runTransaction: async (body: any) => {
     const writes: (() => void)[] = [];
@@ -591,5 +593,94 @@ describe('journaled Shared restore runtime recovery', () => {
     h.pod.metadata.uid = 'replacement';
     await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('restart outcome');
     expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined();
+  });
+});
+
+describe('journaled Shared source schema repair', () => {
+  async function sourceHarness() {
+    const h = harness();
+    for (const key of Object.keys(h.store)) if (key.startsWith('users/') || key.includes('/assignments/') || key === 'glmOperations/return') delete h.store[key];
+    Object.assign(h.store['gateways/shared-1'], { gatewayId: 'shared-1', ownerUid: null, builderSlug: null, latestRelease: 1, desiredStatus: 'draining' });
+    for (const [index, slug] of ['jdog99', 'oct01', 'journeyd093e6f87', 'journey94a458e32', 'jefe', 'oct08'].entries()) {
+      const uid = `source-${index}`, id = `octogee-${slug}-coach`, file = `/home/node/.openclaw/agents/${id}/agent/openclaw-agent.sqlite`;
+      const error = '/push-rsync-state/shared-1: 500 ' + JSON.stringify({ error: 'push-rsync-state failed', message:
+        `OpenClaw snapshot of ${id} failed: SQLite database cannot be snapshotted safely: ${file}. OpenClaw agent database ${file} uses schema version 24; run openclaw doctor --fix before compacting it.` });
+      h.store[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: 'shared-1', status: 'complete' } } };
+      h.store[`gateways/shared-1/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-1', state: 'serving', epoch: index + 1 };
+      h.store[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 100, completedAt: 200,
+        input: { uid, fromGatewayId: 'shared-1', toGatewayId: 'shared-2' }, error,
+        steps: [{ name: 'pre-sync-state', status: 'failed', error }, { name: 'rollback:unmount-target', status: 'done' }] };
+    }
+    const captured = await (h.deps.db as any).runTransaction((tx: any) => readSharedSourceRecoveryAuthority(h.deps.db, tx, 'shared-1', h.op.id));
+    h.op.input = { gatewayId: 'shared-1', sourceRecovery: { sourceSha: sha, images, ...captured } };
+    h.store['glmOperations/recover'].input = structuredClone(h.op.input);
+    let ack = true, wrongImage = false, healthyWithoutAck = false;
+    const runKubectl = vi.fn(async (args: string[]) => {
+      if (args.includes('patch')) {
+        const saved = h.store['gateways/shared-1'].runtimeRestartFence;
+        expect(saved.kind).toBe('source-recovery'); expect(saved.phase).toBe('dispatched');
+        expect(saved.doctor.startedAt).toBeUndefined(); expect(saved.installedImage).toBeUndefined();
+        const patch = JSON.parse(args[args.indexOf('-p') + 1]);
+        expect(patch.slice(0, 2)).toEqual([{ op: 'test', path: '/metadata/uid', value: 'pod-uid' }, { op: 'test', path: '/metadata/resourceVersion', value: 'rv' }]);
+        for (const item of patch.filter((item: any) => item.op === 'replace')) h.pod.spec.containers[Number(item.path.split('/')[3])].image = item.value;
+        h.pod.status.conditions = [{ type: 'Ready', status: healthyWithoutAck ? 'True' : 'False' }];
+        h.pod.status.containerStatuses = h.pod.spec.containers.map((c: any) => ({ name: c.name, ready: healthyWithoutAck,
+          imageID: wrongImage ? 'old-image' : c.image, state: { running: { startedAt: 'now' } } }));
+      }
+      const fence = h.store['gateways/shared-1'].runtimeRestartFence;
+      if (args.includes('pod') && ack && fence?.installedImage) {
+        expect(fence.installedImage.podUid).toBe('pod-uid');
+        if (!healthyWithoutAck) expect(h.pod.status.conditions[0].status).toBe('False');
+        const now = Date.now();
+        fence.doctor = { ...fence.doctor, releaseKey: 'actual-reused-image-tag', startedAt: now, completedAt: now,
+          verifiedAgentIds: fence.target.agents.map((a: any) => a.agentId) };
+        h.pod.status.conditions = [{ type: 'Ready', status: 'True' }];
+        for (const c of h.pod.status.containerStatuses) c.ready = true;
+      }
+      const result = args.includes('pods') ? { items: [h.pod] } : args.includes('replicaset') ?
+        { metadata: { uid: 'rs-uid', ownerReferences: [{ controller: true, kind: 'Deployment', uid: 'deployment-uid' }] } } :
+        args.includes('deployment') ? { metadata: { uid: 'deployment-uid' } } : h.pod;
+      return { code: 0, stdout: JSON.stringify(result), stderr: '' };
+    });
+    let clock = Date.now();
+    return { ...h, deps: { ...h.deps, runKubectl, now: () => clock, wait: async () => { clock += 600_000; } },
+      setAck: (value: boolean) => { ack = value; }, setWrongImage: () => { wrongImage = true; }, setHealthyWithoutAck: () => { healthyWithoutAck = true; } };
+  }
+  it('holds the same Pod/home, records actual installed digest before Doctor and clears only after real repair ACK plus Ready', async () => {
+    const h = await sourceHarness(), before = structuredClone(h.store);
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toMatchObject({ sourceSha: sha, podUid: 'pod-uid',
+      doctor: { requestId: h.op.id, releaseKey: 'actual-reused-image-tag', verifiedAgentIds: expect.arrayContaining(['octogee-jefe-coach', 'octogee-oct08-coach']) } });
+    for (const [key, value] of Object.entries(before)) if (key.startsWith('users/') || key.includes('/assignments/') || key.startsWith('glmOperations/export-')) expect(h.store[key]).toEqual(value);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+  });
+  it.each(['epoch', 'failed-export', 'foreign-fence', 'source-sha', 'pod'])('refuses changed source %s before image mutation', async change => {
+    const h = await sourceHarness();
+    if (change === 'epoch') h.store['gateways/shared-1/assignments/source-0'].epoch++;
+    if (change === 'failed-export') h.store['glmOperations/export-0'].completedAt++;
+    if (change === 'foreign-fence') h.store['gateways/shared-1'].runtimeRestartFence = {};
+    if (change === 'source-sha') h.deps.sourceSha = 'd'.repeat(40);
+    if (change === 'pod') h.pod.metadata.deletionTimestamp = 'now';
+    const before = structuredClone(h.store);
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before); expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+  it('keeps mandatory repair fenced even if the image became Ready without a Doctor acknowledgment', async () => {
+    const h = await sourceHarness(); h.setAck(false); h.setHealthyWithoutAck();
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
+    const fence = h.store['gateways/shared-1'].runtimeRestartFence;
+    expect(fence.phase).toBe('dispatched'); expect(fence.installedImage.podUid).toBe('pod-uid');
+    expect(fence.doctor.completedAt).toBeUndefined(); expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
+    h.setAck(true);
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeDefined();
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+  });
+  it('never grants installed-image proof or spends Doctor for an old running imageID', async () => {
+    const h = await sourceHarness(); h.setWrongImage();
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.installedImage).toBeUndefined();
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt).toBeUndefined();
   });
 });

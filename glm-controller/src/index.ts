@@ -187,6 +187,7 @@ import {
   stampGatewayRuntime,
 } from "./vm-gateway-runtime.js";
 import { createRestartGatewayHandler } from "./handlers/restart-gateway.js";
+import { recoverSharedSourceRuntime } from "./lib/shared-source-runtime.js";
 import { recoverSharedRestoreRuntime } from "./lib/shared-restore-runtime.js";
 import { schedulerHandoffAwaitingRelease, startSchedulerHandoffRelease } from "./scheduler-handoff-release.js";
 import { createRecycleGatewayHandler } from "./handlers/recycle-gateway.js";
@@ -3579,6 +3580,7 @@ async function buildHandlers(
 
   const restartGateway = createRestartGatewayHandler({
     recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
+    recoverSource: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedSourceRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
     kubeOps: {...kubeOps,restartOpenClawInPlace: async ({name}) => {
       const gatewayId=name.slice('octogee-gateway-'.length);
       if(name!==deploymentNameForInstance(gatewayId))throw new Error('gateway restart deployment identity mismatch');

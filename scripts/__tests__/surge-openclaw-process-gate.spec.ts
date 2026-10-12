@@ -391,6 +391,7 @@ describe("surge OpenClaw process supervisor", () => {
         .mockImplementationOnce(async () => { await firstBoot.promise; return { action: "start" }; })
         .mockResolvedValueOnce({ action: "doctor" })
         .mockResolvedValue({ action: "start" }),
+      completeOpenClawDoctor: vi.fn(async () => undefined),
       completeOpenClawBoot: vi.fn(async () => undefined),
     };
     const supervisor = await startSurgeOpenClawSupervisor({

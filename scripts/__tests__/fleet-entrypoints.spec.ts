@@ -1214,6 +1214,35 @@ describe("fleet CLI args", () => {
     });
   });
 
+  it("requests a journaled Shared source repair for one immutable build", async () => {
+    const sourceSha = "b".repeat(40);
+    const args = parseFleetArgs([
+      "--env=test", "gw", "recover-source", "shared-1", `--sha=${sourceSha}`,
+      "--idempotency-key=source-repair-1",
+    ]);
+
+    expect(resolveFleetVerb(args)).toMatchObject({ verb: "gw recover-source", writes: true });
+    expect(resolveFleetGatewayMutation(args)).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways/shared-1/recover-source",
+      body: { sourceSha },
+      idempotencyKey: "source-repair-1",
+    });
+    const request = vi.fn();
+    await executeFleetGatewayMutation({ request }, resolveFleetGatewayMutation(args), false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "abc1234", "B".repeat(40)])(
+    "rejects a Shared source repair without a full lowercase build SHA: %s",
+    (sha) => {
+      expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+        "--env=test", "gw", "recover-source", "shared-1",
+        ...(sha === undefined ? [] : [`--sha=${sha}`]),
+      ]))).toThrow("gw recover-source requires --sha");
+    },
+  );
+
   it("maps each existing Admin gateway action to its API request", () => {
     const sourceSha = "a".repeat(40);
     expect(resolveFleetGatewayMutation(parseFleetArgs([

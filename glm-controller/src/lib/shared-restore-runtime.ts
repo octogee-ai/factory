@@ -6,7 +6,8 @@ import type { KubectlSubprocess } from '../fleet-ingress.js';
 
 type RecordValue = DocumentData;
 interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue; supersede?: RecordValue }
-interface Deps { db: Firestore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
+export interface SharedPodRecoveryDeps { db: Firestore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
+type Deps = SharedPodRecoveryDeps;
 function object(value: unknown): RecordValue { return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {}; }
 function customerState(user: RecordValue | undefined): RecordValue { return object(object(user?.provisioning).openclaw); }
 function liveShared(root: RecordValue): boolean {
@@ -343,3 +344,5 @@ export async function recoverSharedRestoreRuntime(deps: Deps, op: Operation, ctx
   await waitForRecovery(deps, ctx, saved, input);
   await update(null);
 }
+
+export { existingOwnedPod, imagePatch, json, assertRecoveryImages };
