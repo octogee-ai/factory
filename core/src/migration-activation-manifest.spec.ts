@@ -800,6 +800,8 @@ describe("migration activation manifest", () => {
       const rpc = {
         configGet: vi.fn(async () => ({
           hash: "h1",
+          configRevisionHash: "r1",
+          appliedConfigHash: "r1",
           config: {
             agents: { list: [{ id: "octogee-bob-coach" }] },
             channels: { mattermost: { accounts } },

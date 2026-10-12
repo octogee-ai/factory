@@ -218,15 +218,17 @@ async function runConfigPatchAttempt(
     prefix: string;
     rpc: GatewayRpcClient;
     startedAt: number;
+    checkBudget: () => void;
   },
 ): Promise<ApplyConfigPatchResult> {
   const { config, hash, getMs } = await readConfigForPatch(ctx.rpc, ctx.cache, ctx.now);
   const patch = args.buildPatch(config);
   if (args.skipIfAlreadyApplied && mergePatchValueAlreadyApplied(config, patch)) {
+    const settled = await settleConfigNoop({ ...ctx, hash });
     ctx.log(
-      `${ctx.prefix}config.patch local noop attempt=${ctx.attempts} configGet=${getMs}ms totalMs=${ctx.now() - ctx.startedAt}`,
+      `${ctx.prefix}config.patch local ${settled.noop ? "noop" : "reapplied"} attempt=${ctx.attempts} configGet=${getMs}ms totalMs=${ctx.now() - ctx.startedAt}`,
     );
-    return { mode: "rpc", attempts: ctx.attempts, noop: true };
+    return { mode: "rpc", attempts: ctx.attempts, ...(settled.noop ? { noop: true } : {}) };
   }
   const replacePaths = args.buildReplacePaths?.(config);
   const patchStart = ctx.now();
@@ -238,6 +240,7 @@ async function runConfigPatchAttempt(
       configPatchReplacePathOptions(replacePaths),
     );
   } catch (err) {
+    if (isPersistedFailedError(err)) invalidateCacheForHashMismatch(ctx.cache);
     if (!isPersistedSupersededError(err)) throw err;
     updateCacheAfterPatch(ctx.cache, {});
     ctx.log(
@@ -245,6 +248,7 @@ async function runConfigPatchAttempt(
     );
     return { mode: "rpc", attempts: ctx.attempts, superseded: true };
   }
+  if (patchResult.noop === true) patchResult = await settleConfigNoop({ ...ctx, hash });
   const patchMs = ctx.now() - patchStart;
 
   updateCacheAfterPatch(ctx.cache, patchResult);
@@ -257,6 +261,44 @@ async function runConfigPatchAttempt(
     attempts: ctx.attempts,
     ...(patchResult.noop === true ? { noop: true } : {}),
   };
+}
+
+async function settleConfigNoop(ctx: {
+  rpc: GatewayRpcClient;
+  hash: string;
+  cache: ConfigCache | undefined;
+  checkBudget: () => void;
+}): Promise<Awaited<ReturnType<GatewayRpcClient["configPatch"]>>> {
+  ctx.checkBudget();
+  const current = await ctx.rpc.configGet();
+  ctx.checkBudget();
+  if (current.hash !== ctx.hash) {
+    throw new OpenclawWireError("hash-mismatch", "config changed before verifying the live revision; rebuild the patch");
+  }
+  if (typeof current.configRevisionHash !== "string" || current.configRevisionHash.length === 0) {
+    throw new OpenclawWireError("invalid-response", "config.get omitted the revision needed to verify the applied revision");
+  }
+  if (current.appliedConfigHash === current.configRevisionHash) return { ok: true, noop: true };
+  if (!isMergePatchObject(current.config)) {
+    throw new OpenclawWireError("invalid-response", "config.get returned an invalid saved config for reapplication");
+  }
+  await ctx.rpc.configApply(current.config, current.hash);
+  invalidateCacheForHashMismatch(ctx.cache);
+  ctx.checkBudget();
+  const applied = await ctx.rpc.configGet();
+  ctx.checkBudget();
+  if (applied.configRevisionHash !== current.configRevisionHash) {
+    throw new OpenclawWireError("hash-mismatch", "config changed while reapplying the live revision; rebuild the patch");
+  }
+  if (applied.appliedConfigHash !== current.configRevisionHash) {
+    throw new OpenclawWireError("invalid-response", "config.apply did not establish the saved config's applied revision");
+  }
+  return { ok: true };
+}
+
+function isPersistedFailedError(err: unknown): boolean {
+  return err instanceof OpenclawWireError && err.code === "rpc-error" &&
+    /config\.patch persisted but was not applied to the active Gateway \(failed\)/.test(err.message);
 }
 
 function isPersistedSupersededError(err: unknown): boolean {
@@ -445,6 +487,10 @@ export async function applyConfigPatch(
   const remainingMs = (): number => totalDeadlineMs - (now() - startedAt);
   const cache = opts.cache;
   const throwIfAborted = () => throwIfConfigPatchAborted(signal, prefix);
+  const checkBudget = () => {
+    throwIfAborted();
+    if (remainingMs() <= 0) throw new Error(`${prefix}config.patch totalDeadlineMs=${totalDeadlineMs}ms exceeded while verifying the applied revision`);
+  };
 
   try {
     throwIfAborted();
@@ -460,6 +506,7 @@ export async function applyConfigPatch(
           prefix,
           rpc,
           startedAt,
+          checkBudget,
         });
       } catch (err) {
         if (!(err instanceof OpenclawWireError)) {

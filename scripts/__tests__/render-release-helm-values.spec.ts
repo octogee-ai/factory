@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ReleaseDigestManifest } from "@octogee/core/artifact-registry";
+import { centralGatewayReleasePayload, type ReleaseDigestManifest } from "@octogee/core/artifact-registry";
 import { renderReleaseHelmValues } from "../ops/render-release-helm-values.js";
 
 const sourceSha = "a".repeat(40);
@@ -23,13 +24,44 @@ describe("operator Helm release selection", () => {
     expect(values["glm-controller"]).toMatchObject({
       image: { repository: `${manifest.repository}/glm-controller`, tag: sourceSha.slice(0, 7), digest },
       platformRelease: { sourceSha, openclawSourceSha: manifest.openclawSourceSha,
-        gatewayImageTag: `${sourceSha.slice(0, 7)}@${digest}`, builderImageTag: `${sourceSha.slice(0, 7)}@${digest}`,
-        gatewayEdgeImageTag: `${sourceSha.slice(0, 7)}@${digest}` },
+        gatewayImageTag: `${sourceSha.slice(0, 7)}-oc${manifest.openclawVersion}@${digest}`, builderImageTag: `${sourceSha.slice(0, 7)}-oc${manifest.openclawVersion}@${digest}`,
+        gatewayEdgeImageTag: `${sourceSha.slice(0, 7)}-oc${manifest.openclawVersion}@${digest}` },
     });
     for (const key of ["octogee-api", "llmBroker", "artifactWorker", "opsAgent", "gateway-edge"]) {
       expect(values[key].image).toMatchObject({ tag: sourceSha.slice(0, 7), digest });
     }
     expect(values.global.projectRunnerImage).toMatchObject({ tag: sourceSha.slice(0, 7), digest });
+  });
+
+  it("gives Shared allocation the exact canonical family used by Builder deployment", async () => {
+    const selected = structuredClone(manifest);
+    selected.surfaces.gateway["octogee-gateway-builder"] = `sha256:${"d".repeat(64)}`;
+    selected.surfaces.gateway["gateway-edge"] = `sha256:${"e".repeat(64)}`;
+    const values = JSON.parse(await renderReleaseHelmValues(sourceSha, { resolveManifest: async () => selected }));
+    const platform = values["glm-controller"].platformRelease;
+    expect({
+      imageRepository: platform.gatewayImageRepository,
+      imageTag: platform.gatewayImageTag,
+      openclawSourceSha: platform.openclawSourceSha,
+      profileImages: { builder: {
+        imageRepository: `${selected.repository}/octogee-gateway-builder`,
+        imageTag: platform.builderImageTag,
+      } },
+      gatewayEdgeImage: {
+        imageRepository: platform.gatewayEdgeImageRepository,
+        imageTag: platform.gatewayEdgeImageTag,
+      },
+    }).toEqual(centralGatewayReleasePayload(selected));
+  });
+
+  it("renders the deployed workflow gateway tag from the same canonical manifest identity", () => {
+    const workflow = readFileSync(resolve(import.meta.dirname, "../../.github/workflows/build-and-deploy.yml"), "utf8");
+    const expression = workflow.match(/GATEWAY_TAG="\$\(jq -er '([^']+)' "\$MANIFEST_FILE"\)"/);
+    expect(expression).not.toBeNull();
+    const result = spawnSync("jq", ["-er", expression![1]], { input: JSON.stringify(manifest), encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(`${result.stdout.trim()}@${manifest.surfaces.gateway["octogee-gateway"]}`).toBe(centralGatewayReleasePayload(manifest).imageTag);
   });
 
   it.each(["", "abc1234", "g".repeat(40)])("rejects an invalid source before resolving or provisioning: %s", async sha => {

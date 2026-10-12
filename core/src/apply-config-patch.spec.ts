@@ -32,7 +32,7 @@ import { OpenclawWireError, type GatewayRpcClient } from "./gateway-rpc.js";
 
 function makeFakeRpc(overrides: Partial<GatewayRpcClient> = {}): GatewayRpcClient {
   return {
-    configGet: overrides.configGet ?? vi.fn(async () => ({ config: {}, hash: "h1" })),
+    configGet: overrides.configGet ?? vi.fn(async () => ({ config: {}, hash: "h1", configRevisionHash: "r1", appliedConfigHash: "r1" })),
     configPatch:
       overrides.configPatch ??
       vi.fn(async () => ({ ok: true as const, path: "/fake/openclaw.json" })),
@@ -141,7 +141,7 @@ describe("applyConfigPatch — RPC happy path", () => {
     };
     const configPatch = vi.fn(async () => ({ ok: true as const }));
     const rpc = makeFakeRpc({
-      configGet: vi.fn(async () => ({ config: current, hash: "current-hash" })),
+      configGet: vi.fn(async () => ({ config: current, hash: "current-hash", configRevisionHash: "r1", appliedConfigHash: "r1" })),
       configPatch,
     });
 
@@ -365,6 +365,107 @@ expect(sleep.mock.calls.map((c) => c[0])).toEqual([100, 200, 400, 400]);
       ),
     ).rejects.toMatchObject({ code: "connect-failed" });
     expect(configGet).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("applyConfigPatch — saved but unapplied config", () => {
+  const saved = { agents: { list: [{ id: "octogee-alice-coach" }] }, sibling: "preserved" };
+  const snapshot = (applied = "old-revision") => ({
+    config: saved, hash: "saved-hash", configRevisionHash: "saved-revision", appliedConfigHash: applied,
+  });
+
+  it("reapplies a persisted failed patch instead of accepting its later native noop", async () => {
+    const cache = { current: {}, hash: "before-write" };
+    const configGet = vi.fn().mockResolvedValue(snapshot());
+    const configPatch = vi.fn().mockRejectedValueOnce(new OpenclawWireError("rpc-error",
+      "config.patch persisted but was not applied to the active Gateway (failed); run config.get, then use config.apply"))
+      .mockResolvedValue({ ok: true, noop: true });
+    const configApply = vi.fn(async () => {
+      configGet.mockResolvedValue(snapshot("saved-revision"));
+      return { ok: true as const };
+    });
+    const result = await applyConfigPatch({ buildPatch: () => ({ agents: saved.agents }) },
+      { ...baseOpts({ cache }), rpc: { ...makeFakeRpc({ configGet, configPatch }), configApply } });
+    expect(configPatch.mock.calls.map(c => c[1])).toEqual(["before-write", "saved-hash"]);
+    expect(configApply).toHaveBeenCalledExactlyOnceWith(saved, "saved-hash");
+    expect(result.noop).not.toBe(true);
+    expect(cache.hash).toBe("");
+  });
+
+  it.each([false, true])("repairs an independent reconciliation with local noop %s only when live revision differs", async (localNoop) => {
+    const configGet = vi.fn().mockResolvedValue(snapshot());
+    const configPatch = vi.fn().mockResolvedValue({ ok: true, noop: true });
+    const configApply = vi.fn(async () => {
+      configGet.mockResolvedValue(snapshot("saved-revision"));
+      return { ok: true as const };
+    });
+    await applyConfigPatch({ buildPatch: () => ({ agents: saved.agents }), skipIfAlreadyApplied: localNoop },
+      { ...baseOpts(), rpc: { ...makeFakeRpc({ configGet, configPatch }), configApply } });
+    expect(configApply).toHaveBeenCalledExactlyOnceWith(saved, "saved-hash");
+    expect(configPatch).toHaveBeenCalledTimes(localNoop ? 0 : 1);
+  });
+
+  it("rebuilds caller intent after an apply CAS conflict instead of replacing a concurrent sibling", async () => {
+    const newer = { ...saved, sibling: "newer" };
+    const configGet = vi.fn().mockResolvedValue(snapshot());
+    const configPatch = vi.fn().mockResolvedValue({ ok: true, noop: true });
+    const configApply = vi.fn().mockImplementationOnce(async () => {
+      configGet.mockResolvedValue({ ...snapshot(), config: newer, hash: "newer-hash", configRevisionHash: "newer-revision" });
+      throw new OpenclawWireError("hash-mismatch", "config changed since last load");
+    }).mockImplementationOnce(async () => {
+      configGet.mockResolvedValue({ ...snapshot(), config: newer, hash: "newer-hash", configRevisionHash: "newer-revision", appliedConfigHash: "newer-revision" });
+      return { ok: true };
+    });
+    const buildPatch = vi.fn(() => ({ agents: saved.agents }));
+    await applyConfigPatch({ buildPatch }, { ...baseOpts(), rpc: { ...makeFakeRpc({ configGet, configPatch }), configApply } });
+    expect(buildPatch).toHaveBeenLastCalledWith(newer);
+    expect(configApply.mock.calls).toEqual([[saved, "saved-hash"], [newer, "newer-hash"]]);
+  });
+
+  it("refuses success when config.apply fails", async () => {
+    const configApply = vi.fn().mockRejectedValue(new OpenclawWireError("rpc-error", "live update failed"));
+    await expect(applyConfigPatch({ buildPatch: () => ({}) }, { ...baseOpts({ maxRetries: 1 }),
+      rpc: { ...makeFakeRpc({ configGet: vi.fn().mockResolvedValue(snapshot()), configPatch: vi.fn().mockResolvedValue({ ok: true, noop: true }) }), configApply } }))
+      .rejects.toThrow("live update failed");
+  });
+
+  it("refuses an apply acknowledgement without actual applied-revision proof", async () => {
+    const rpc = { ...makeFakeRpc({ configGet: vi.fn().mockResolvedValue(snapshot()),
+      configPatch: vi.fn().mockResolvedValue({ ok: true, noop: true }) }), configApply: vi.fn().mockResolvedValue({ ok: true }) };
+    await expect(applyConfigPatch({ buildPatch: () => ({}) }, { ...baseOpts({ maxRetries: 1 }), rpc }))
+      .rejects.toThrow(/applied revision/);
+  });
+
+  it("does not reapply a noop already proven live", async () => {
+    const configApply = vi.fn();
+    const rpc = { ...makeFakeRpc({ configGet: vi.fn().mockResolvedValue(snapshot("saved-revision")),
+      configPatch: vi.fn().mockResolvedValue({ ok: true, noop: true }) }), configApply };
+    expect(await applyConfigPatch({ buildPatch: () => ({}) }, { ...baseOpts(), rpc }))
+      .toEqual({ mode: "rpc", attempts: 1, noop: true });
+    expect(configApply).not.toHaveBeenCalled();
+  });
+
+  it("refuses missing revision metadata instead of reapplying an unverifiable snapshot", async () => {
+    const configApply = vi.fn();
+    const rpc = { ...makeFakeRpc({ configGet: vi.fn().mockResolvedValue({ config: saved, hash: "saved-hash" }),
+      configPatch: vi.fn().mockResolvedValue({ ok: true, noop: true }) }), configApply };
+    await expect(applyConfigPatch({ buildPatch: () => ({}) }, { ...baseOpts(), rpc })).rejects.toThrow(/omitted the revision/);
+    expect(configApply).not.toHaveBeenCalled();
+  });
+
+  it.each(["abort", "deadline"])("never starts reapplication after its %s during the fresh read", async (reason) => {
+    let clock = 0;
+    const controller = new AbortController();
+    const configGet = vi.fn().mockResolvedValueOnce(snapshot()).mockImplementationOnce(async () => {
+      if (reason === "abort") controller.abort(new Error("cancelled recovery"));
+      else clock = 10;
+      return snapshot();
+    });
+    const configApply = vi.fn();
+    const rpc = { ...makeFakeRpc({ configGet, configPatch: vi.fn().mockResolvedValue({ ok: true, noop: true }) }), configApply };
+    await expect(applyConfigPatch({ buildPatch: () => ({}) }, { ...baseOpts(), rpc,
+      signal: controller.signal, now: () => clock, totalDeadlineMs: 10 })).rejects.toThrow(reason === "abort" ? /cancelled recovery/ : /totalDeadlineMs/);
+    expect(configApply).not.toHaveBeenCalled();
   });
 });
 
@@ -1504,7 +1605,7 @@ describe("applyConfigPatch — a target that restarts after committing the patch
   // then its own reconcile moves the config hash once, then the patch is a server no-op.
   function restartingGateway(clock: { now: number }) {
     const t0 = clock.now;
-    const configGet = vi.fn(async () => ({ config: {}, hash: `h-${Math.floor((clock.now - t0) / 60_000)}` }));
+    const configGet = vi.fn(async () => ({ config: {}, hash: `h-${Math.floor((clock.now - t0) / 60_000)}`, configRevisionHash: "live", appliedConfigHash: "live" }));
     const configPatch = vi.fn(async (_patch: object, hash: string) => {
       const elapsed = clock.now - t0;
       if (elapsed < 1_000) {

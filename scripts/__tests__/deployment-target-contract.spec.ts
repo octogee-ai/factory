@@ -509,7 +509,7 @@ describe("deployment target consumers", () => {
     const workflow = source(".github/workflows/build-and-deploy.yml");
 
     expect(workflow).toContain(
-      "--set-string glm-controller.platformRelease.gatewayImageTag=${GLM_TAG}@${GATEWAY_DIGEST}",
+      '--set-string "glm-controller.platformRelease.gatewayImageTag=${GATEWAY_TAG}@${GATEWAY_DIGEST}"',
     );
     expect(workflow).toContain(
       "--set glm-controller.platformRelease.gatewayImageRepository=${{ steps.target.outputs.artifact_registry_repository }}/octogee-gateway",
@@ -518,10 +518,10 @@ describe("deployment target consumers", () => {
       "--set glm-controller.platformRelease.gatewayEdgeImageRepository=${{ steps.target.outputs.artifact_registry_repository }}/gateway-edge",
     );
     expect(workflow).toContain(
-      "--set-string glm-controller.platformRelease.gatewayEdgeImageTag=${GLM_TAG}@${ROUTER_DIGEST}",
+      '--set-string "glm-controller.platformRelease.gatewayEdgeImageTag=${GATEWAY_TAG}@${ROUTER_DIGEST}"',
     );
     expect(workflow).toContain(
-      "--set-string glm-controller.platformRelease.builderImageTag=${GLM_TAG}@${BUILDER_DIGEST}",
+      '--set-string "glm-controller.platformRelease.builderImageTag=${GATEWAY_TAG}@${BUILDER_DIGEST}"',
     );
     expect(workflow).toContain('BUILDER_DIGEST="$(manifest_digest gateway octogee-gateway-builder)"');
     expect(workflow).toContain(
@@ -549,6 +549,7 @@ describe("deployment target consumers", () => {
       sourceSha: "b".repeat(40),
       repository: "registry.example/release",
       openclawSourceSha,
+      openclawVersion: "2026.9.9",
       surfaces: {
         gateway: { "gateway-edge": digest, "octogee-gateway": digest },
         platform: Object.fromEntries([
