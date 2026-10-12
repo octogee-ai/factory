@@ -1,11 +1,10 @@
-import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
+import type { AgentLook } from "@octogee/shared/types/agent-look";
 import { characterSvg } from "@octogee/shared/types/agent-characters";
 import type { FleetBrokerConfiguredBuilderBootstrap, FleetBrokerConfiguredBuilderDesk } from "@octogee/shared/types/fleet-broker";
-import { parseTimeZone } from "@octogee/shared/types/time-zone";
+import { DESK_CONFIG_DIR, parseDeskIdentity } from "../desk-identity.js";
 import { brokerFailure, brokerPost, type BrokerClientDeps } from "./broker.js";
 import type { HomeScope } from "./home-checkpoint.js";
 
-export const DESK_CONFIG_DIR = ".config/octogee";
 export const DESKTOP_CONTROL_URL = "http://127.0.0.1:7777";
 const DESKTOP_STYLE_FILE = ".config/omarchy/octogee-desktop-style";
 const CURRENT_THEME_FILE = ".local/state/omarchy/current/theme.name";
@@ -32,21 +31,12 @@ interface DeskFile extends FleetBrokerConfiguredBuilderDesk {
   note?: string;
 }
 
-function deskIdentity(value: unknown): FleetBrokerConfiguredBuilderDesk | null {
-  if (!value || typeof value !== "object") return null;
-  const { builderName, agentName, look, timeZone } = value as Record<string, unknown>;
-  const valid = parseAgentLook(look);
-  if (typeof builderName !== "string" || typeof agentName !== "string" || !valid) return null;
-  if (timeZone !== null && timeZone !== undefined && !parseTimeZone(timeZone)) return null;
-  return { builderName, agentName, look: valid, timeZone: typeof timeZone === "string" ? timeZone : null };
-}
-
 export async function fetchDesk(deps: DeskDeps, slug: string): Promise<FleetBrokerConfiguredBuilderDesk | null> {
   const res = await brokerPost(deps, "configured-builder-bootstrap", { slug, revisionId: deps.gatewayId });
   if (res.status === 404) return null;
   if (!res.ok) throw await brokerFailure("configured-builder-bootstrap", res);
   const body = (await res.json()) as { bootstrap?: Partial<FleetBrokerConfiguredBuilderBootstrap> };
-  const desk = deskIdentity(body.bootstrap?.desk);
+  const desk = parseDeskIdentity(body.bootstrap?.desk);
   if (!desk) throw new Error("configured-builder-bootstrap: payload carries no valid desk identity");
   return desk;
 }

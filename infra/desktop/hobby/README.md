@@ -126,7 +126,10 @@ The benchmark supports Hobby's core-computer floor; the full platform still
 needs qualification at that limit before fleet release.
 
 New Hobby gateways use the existing immutable Builder image, now including
-TigerVNC and Openbox, under Cowboy's cluster runtime. Pro and Team use the
+TigerVNC, Openbox, a tint2 dock, and the Desk, under Cowboy's cluster runtime.
+The production session lives in `infra/gateway/hobby-session.sh` with its
+desktop configuration in `infra/gateway/hobby-desktop/`; this benchmark image
+is the bare X11 floor it was measured on. Pro and Team use the
 Omarchy image family on GCE with `n2-standard-2` and `n2-standard-4` respectively.
 Browser, computer, CLI, and the OpenClaw Dashboard are available on every tier.
 The coach attaches to the same visible Chromium profile as the Builder.

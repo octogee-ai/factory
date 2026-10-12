@@ -111,10 +111,18 @@ image, and do not use an element you only saw in the image as an `elementRef`.
 
 ## This desktop
 
-Hobby runs Openbox on X11 with one TigerVNC display, a terminal, a file manager,
-and sandboxed Chromium. It has no Hyprland compositor or Omarchy settings.
-The Builder sees and controls this same desktop through the Computer pane.
-The platform manages display, accessibility bus, driver, and browser startup.
+Hobby runs Openbox on X11 with one TigerVNC display. It has no Hyprland
+compositor or Omarchy settings, but it offers the same shape as the Omarchy
+Builder computer: the Desk (a frameless Chromium app window showing the
+Builder's agent, note, clock, and app grid) opens at start, a dock along the
+bottom edge launches Web, Files, Terminal, and Text and lists open windows,
+windows float centred with Mac-style title bars (close, minimize, maximize on
+the left), and a right-click on the desktop opens the same launcher menu.
+Minimized windows reappear from the dock. Applications: Chromium, PCManFM
+(Files), Sakura (Terminal), and Mousepad (Text). The Builder sees and controls
+this same desktop through the Computer pane. The platform manages display,
+accessibility bus, driver, dock, and browser startup; closing the Desk or the
+dock brings it back.
 
 Select a window with `list_windows` and fresh `windowRef` rather than assuming
 its native X11 identifier is a tool reference. Coordinates come from the image

@@ -1,5 +1,6 @@
 import type {
   FleetBrokerConfiguredBuilderBootstrap,
+  FleetBrokerConfiguredBuilderDesk,
   FleetBrokerConfiguredBuilderProjectCredential,
 } from "../../shared/types/fleet-broker.js";
 import { isValidProjectId, projectAgentId } from "../../shared/types/identity.js";
@@ -7,12 +8,14 @@ import {
   createFleetBrokerClient,
   type FleetBrokerClient,
 } from "./fleet-broker-client.js";
+import { MalformedDeskFileError, localDeskIdentityFs, parseDeskIdentity, writeDeskIdentity } from "./desk-identity.js";
 import { updateMattermostAccountSecrets } from "./mattermost-account-secrets.js";
 
 interface ConfiguredBuilderBootstrapInput {
   openclawDir: string;
   gatewayId: string;
   slug: string;
+  desktopHome?: string;
 }
 
 interface ConfiguredBuilderBootstrapDependencies {
@@ -27,6 +30,8 @@ interface ConfiguredBuilderBootstrapDependencies {
     | "setAgentIds"
   >;
   writeSecrets?: typeof updateMattermostAccountSecrets;
+  writeDesk?: (desktopHome: string, desk: FleetBrokerConfiguredBuilderDesk) => Promise<{ written: boolean }>;
+  log?: (message: string) => void;
 }
 
 function matchesProjectCredential(
@@ -79,6 +84,8 @@ export async function hydrateConfiguredBuilderBootstrap(
 ): Promise<void> {
   const createClient = dependencies.createClient ?? createFleetBrokerClient;
   const writeSecrets = dependencies.writeSecrets ?? updateMattermostAccountSecrets;
+  const writeDesk = dependencies.writeDesk ?? ((desktopHome, desk) => writeDeskIdentity(localDeskIdentityFs, desktopHome, desk));
+  const log = dependencies.log ?? ((message: string) => console.error(message));
   const client = createClient(input.gatewayId);
   let bootstrap: FleetBrokerConfiguredBuilderBootstrap;
   try {
@@ -95,6 +102,7 @@ export async function hydrateConfiguredBuilderBootstrap(
   if (!matchesConfiguredBuilder(bootstrap, input.slug)) {
     throw new Error("configured builder bootstrap identity mismatch");
   }
+  const desk = input.desktopHome === undefined ? null : requireDesk(bootstrap);
   const projectSecrets = Object.fromEntries(
     bootstrap.projectCredentials.map((credential) => [
       credential.accountId,
@@ -108,4 +116,26 @@ export async function hydrateConfiguredBuilderBootstrap(
       ...projectSecrets,
     },
   });
+  if (input.desktopHome !== undefined && desk) await writeDeskReportingCorruption(writeDesk, log, input.desktopHome, desk);
+}
+
+async function writeDeskReportingCorruption(
+  writeDesk: NonNullable<ConfiguredBuilderBootstrapDependencies["writeDesk"]>,
+  log: (message: string) => void,
+  desktopHome: string,
+  desk: FleetBrokerConfiguredBuilderDesk,
+): Promise<void> {
+  try {
+    await writeDesk(desktopHome, desk);
+  } catch (error) {
+    if (!(error instanceof MalformedDeskFileError)) throw error;
+    log(`[configured-builder-bootstrap] ${error.message}; writing a fresh Desk without the stored note`);
+    await writeDesk(desktopHome, desk);
+  }
+}
+
+function requireDesk(bootstrap: FleetBrokerConfiguredBuilderBootstrap): FleetBrokerConfiguredBuilderDesk {
+  const desk = parseDeskIdentity(bootstrap.desk);
+  if (!desk) throw new Error("configured builder bootstrap carries no valid desk identity");
+  return desk;
 }

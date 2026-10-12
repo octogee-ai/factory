@@ -144,6 +144,18 @@ class DesktopEntryTest(unittest.TestCase):
             (fx.root / 'home/.config/omarchy/shell.json').write_text('not json')
             self.assertEqual([a['id'] for a in control.desktop_entries()], ['chromium', 'obsidian', 'alpha'])
 
+    def test_platform_pins_replace_dock_configuration_and_admit_utility_entries(self):
+        with _stack() as stack:
+            fx = Fixture(stack)
+            for name in ('Alpha', 'Chromium', 'Obsidian'):
+                entry(fx.system_apps, name, Categories='Office;')
+            entry(fx.system_apps, 'Terminal', Categories='System;TerminalEmulator;')
+            entry(fx.system_apps, 'Sakura', Categories='System;TerminalEmulator;')
+            (fx.root / 'home/.config/omarchy').mkdir(parents=True)
+            (fx.root / 'home/.config/omarchy/shell.json').write_text(json.dumps({'plugins': [{'id': 'rdf.dock', 'items': [{'desktop': 'obsidian'}]}]}))
+            with patch.dict(os.environ, {'OCTO_PINNED_APPS': 'chromium:terminal:../etc:missing'}):
+                self.assertEqual([a['id'] for a in control.desktop_entries()], ['chromium', 'terminal', 'alpha', 'obsidian'])
+
     def test_icons_resolve_absolute_paths_then_scalable_then_largest_then_pixmaps(self):
         with _stack() as stack:
             fx = Fixture(stack)

@@ -175,6 +175,11 @@ COPY infra/gateway/hobby-session.sh /usr/local/bin/octogee-hobby-session
 COPY infra/desktop/rootfs/usr/local/bin/octo-desktop-browser /usr/local/bin/octo-desktop-browser
 COPY infra/desktop/rootfs/usr/local/bin/octo-desktop-control /usr/local/bin/octo-desktop-control
 COPY infra/desktop/rootfs/usr/share/omarchy/octo-desktop/desk /usr/share/omarchy/octo-desktop/desk
+COPY infra/desktop/image/rootfs/etc/chromium/policies/managed/octogee-desk.json /etc/chromium/policies/managed/octogee-desk.json
+COPY infra/gateway/hobby-desktop/rc.xml infra/gateway/hobby-desktop/menu.xml infra/gateway/hobby-desktop/tint2rc /usr/share/octogee/hobby-desktop/
+COPY infra/gateway/hobby-desktop/theme /usr/share/themes/Octogee
+COPY infra/gateway/hobby-desktop/applications /usr/share/applications
+COPY infra/gateway/hobby-desktop/icons/hicolor /usr/share/icons/hicolor
 COPY infra/gateway/octogee /usr/local/bin/octogee
 COPY infra/gateway/octo-desk /usr/local/bin/octo-desk
 COPY --chmod=755 infra/gateway/octo-project /usr/local/bin/octo-project
@@ -188,12 +193,17 @@ RUN chmod 755 /usr/local/bin/octogee-hobby-desktop /usr/local/bin/octogee-hobby-
     && /usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS" \
     && case "$ENABLE_BUILDER_TOOLCHAIN_WRAPPER" in \
       false) \
-        apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server tigervnc-tools openbox xterm pcmanfm dbus-x11 at-spi2-core wmctrl x11-utils x11-xserver-utils xdotool imagemagick libglib2.0-bin libgtk-3-bin \
+        apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server tigervnc-tools openbox tint2 sakura pcmanfm mousepad adwaita-icon-theme fonts-noto-core dbus-x11 at-spi2-core wmctrl x11-utils x11-xserver-utils xdotool imagemagick libglib2.0-bin libgtk-3-bin \
         && rm -rf /var/lib/apt/lists/* \
         && test -x /usr/local/bin/claude \
         && test -x /usr/local/bin/codex \
         && test -x /usr/bin/chromium \
         && test -x /usr/bin/gtk-launch \
+        && test -x /usr/bin/tint2 \
+        && test -x /usr/bin/sakura \
+        && test -x /usr/bin/mousepad \
+        && test -f /usr/share/themes/Octogee/openbox-3/themerc \
+        && python3 -c 'import xml.etree.ElementTree as tree; tree.parse("/usr/share/octogee/hobby-desktop/rc.xml"); tree.parse("/usr/share/octogee/hobby-desktop/menu.xml")' \
         && sed -i 's|^Exec=/usr/bin/chromium %U$|Exec=/usr/local/bin/octo-desktop-browser --new-window %U|' /usr/share/applications/chromium.desktop \
         && grep -qxF 'Exec=/usr/local/bin/octo-desktop-browser --new-window %U' /usr/share/applications/chromium.desktop \
         ;; \

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { hydrateConfiguredBuilderBootstrap } from "../lib/configured-builder-bootstrap.js";
+import { MalformedDeskFileError } from "../lib/desk-identity.js";
 
 describe("configured builder bootstrap", () => {
   it("materializes the exact workspace and project coach credentials required at boot", async () => {
@@ -37,6 +38,63 @@ describe("configured builder bootstrap", () => {
         "alice-proj-orbit": "project-token",
       },
     });
+  });
+
+  it("writes the Desk identity into the desktop home when the boot names one, and refuses a bootstrap without a valid desk", async () => {
+    const desk = { builderName: "Alice", agentName: "Scout", look: { style: "kit", color: "#0ea5e9" }, timeZone: "America/Chicago" };
+    const bootstrap = {
+      uid: "uid-alice",
+      slug: "alice",
+      agentId: "octogee-alice-coach",
+      accountId: "alice-coach",
+      coachToken: "coach-token",
+      projectCredentials: [],
+    };
+    const writeSecrets = vi.fn().mockResolvedValue(undefined);
+    const writeDesk = vi.fn().mockResolvedValue({ written: true });
+    await hydrateConfiguredBuilderBootstrap({ openclawDir: "/tmp/openclaw", gatewayId: "bender", slug: "alice", desktopHome: "/home/octo" }, {
+      createClient: () => ({ configuredBuilderBootstrap: vi.fn().mockResolvedValue({ ...bootstrap, desk }) }),
+      writeSecrets,
+      writeDesk,
+    });
+    expect(writeDesk).toHaveBeenCalledWith("/home/octo", desk);
+
+    writeDesk.mockClear();
+    writeSecrets.mockClear();
+    await expect(hydrateConfiguredBuilderBootstrap({ openclawDir: "/tmp/openclaw", gatewayId: "bender", slug: "alice", desktopHome: "/home/octo" }, {
+      createClient: () => ({ configuredBuilderBootstrap: vi.fn().mockResolvedValue({ ...bootstrap, desk: { builderName: "Alice" } }) }),
+      writeSecrets,
+      writeDesk,
+    })).rejects.toThrow("no valid desk identity");
+    expect(writeSecrets).not.toHaveBeenCalled();
+    expect(writeDesk).not.toHaveBeenCalled();
+
+    await hydrateConfiguredBuilderBootstrap({ openclawDir: "/tmp/openclaw", gatewayId: "bender", slug: "alice" }, {
+      createClient: () => ({ configuredBuilderBootstrap: vi.fn().mockResolvedValue(bootstrap) }),
+      writeSecrets,
+      writeDesk,
+    });
+    expect(writeDesk).not.toHaveBeenCalled();
+
+    const log = vi.fn();
+    const quarantining = vi.fn()
+      .mockRejectedValueOnce(new MalformedDeskFileError("/home/octo/.config/octogee/desk.json", "/home/octo/.config/octogee/desk.json.malformed-1"))
+      .mockResolvedValueOnce({ written: true });
+    await hydrateConfiguredBuilderBootstrap({ openclawDir: "/tmp/openclaw", gatewayId: "bender", slug: "alice", desktopHome: "/home/octo" }, {
+      createClient: () => ({ configuredBuilderBootstrap: vi.fn().mockResolvedValue({ ...bootstrap, desk }) }),
+      writeSecrets,
+      writeDesk: quarantining,
+      log,
+    });
+    expect(quarantining).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("desk.json.malformed-1"));
+    const broken = vi.fn().mockRejectedValue(new Error("EACCES"));
+    await expect(hydrateConfiguredBuilderBootstrap({ openclawDir: "/tmp/openclaw", gatewayId: "bender", slug: "alice", desktopHome: "/home/octo" }, {
+      createClient: () => ({ configuredBuilderBootstrap: vi.fn().mockResolvedValue({ ...bootstrap, desk }) }),
+      writeSecrets,
+      writeDesk: broken,
+      log,
+    })).rejects.toThrow("EACCES");
   });
 
   it("rejects a project credential outside the configured Builder identity", async () => {

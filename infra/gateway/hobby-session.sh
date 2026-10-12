@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+desktop_config=/usr/share/octogee/hobby-desktop
 children=()
 browser_pid=""
+panel_pid=""
 restart_browser=0
 cleanup() {
   trap '' TERM INT
-  for pid in "${children[@]}" "$browser_pid"; do
+  for pid in "${children[@]}" "$browser_pid" "$panel_pid" "$reopen_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then kill -TERM "$pid"; fi
   done
   wait || true
@@ -18,6 +20,35 @@ request_browser_restart() {
   if [[ -n "$browser_pid" ]]; then kill -TERM "$browser_pid" 2>/dev/null || true; fi
 }
 trap request_browser_restart USR1
+reopen_desk=0
+request_desk_reopen() { reopen_desk=1; }
+trap request_desk_reopen USR2
+browser_started=0
+launch_browser() {
+  /usr/local/bin/octo-desktop-browser &
+  browser_pid=$!
+  browser_started=$SECONDS
+}
+desk_window_open() { wmctrl -lx 2>/dev/null | grep -q '127\.0\.0\.1__desk'; }
+reopen_pid=""
+reopen_desk_window() {
+  reopen_desk=0
+  if [[ -n "$reopen_pid" || -z "$browser_pid" ]] || ! kill -0 "$browser_pid" 2>/dev/null; then return 0; fi
+  if (( SECONDS - browser_started < ${OCTO_DESK_REOPEN_GRACE:-20} )) || desk_window_open; then return 0; fi
+  echo "hobby-desktop: Desk window closed; reopening" >&2
+  timeout 30 /usr/local/bin/octo-desktop-browser &
+  reopen_pid=$!
+}
+watch_desk_window() {
+  while true; do
+    sleep "${OCTO_DESK_WATCH_INTERVAL:-5}"
+    desk_window_open || kill -USR2 "$OCTO_SUPERVISOR_PID" 2>/dev/null || true
+  done
+}
+launch_panel() {
+  tint2 -c "$desktop_config/tint2rc" &
+  panel_pid=$!
+}
 export OCTO_SUPERVISOR_PID=$$
 password_file="$XDG_RUNTIME_DIR/octogee-openclaw-vnc/password"
 python3 - "$password_file" <<'PYTHON'
@@ -36,7 +67,8 @@ for _ in $(seq 1 100); do
   sleep 0.2
 done
 xdpyinfo >/dev/null
-openbox &
+xsetroot -solid '#e9ebef' -cursor_name left_ptr
+openbox --config-file "$desktop_config/rc.xml" &
 children+=("$!")
 /usr/local/bin/octo-desktop-control &
 children+=("$!")
@@ -46,14 +78,25 @@ OPENCLAW_STATE_DIR="$HOME/.openclaw-desktop" OPENCLAW_CONFIG_PATH="$HOME/.opencl
   OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}" \
   /usr/local/bin/octogee-desktop-node &
 children+=("$!")
-/usr/local/bin/octo-desktop-browser about:blank &
-browser_pid=$!
+watch_desk_window &
+children+=("$!")
+launch_panel
+launch_browser
 while true; do
   exited=""
   status=0
-  wait -n -p exited "${children[@]}" "$browser_pid" || status=$?
+  wait -n -p exited "${children[@]}" "$browser_pid" "$panel_pid" ${reopen_pid:+"$reopen_pid"} || status=$?
   if [[ ! -v exited ]]; then exited=""; fi
-  if [[ "$exited" == "$browser_pid" || -z "$exited" ]]; then
+  if [[ -z "$exited" ]] && (( reopen_desk )) && ! (( restart_browser )); then
+    reopen_desk_window
+  elif [[ -n "$reopen_pid" && "$exited" == "$reopen_pid" ]]; then
+    if (( status )); then echo "hobby-desktop: Desk reopen failed (status=$status)" >&2; fi
+    reopen_pid=""
+  elif [[ "$exited" == "$panel_pid" ]]; then
+    echo "hobby-desktop: dock exited (status=$status); restarting" >&2
+    sleep 2
+    launch_panel
+  elif [[ "$exited" == "$browser_pid" || -z "$exited" ]]; then
     if (( restart_browser )); then
       wait "$browser_pid" || true
       restart_browser=0
@@ -64,8 +107,7 @@ while true; do
       echo "hobby-desktop: Chromium exited (status=$status); restarting" >&2
       sleep 2
     fi
-    /usr/local/bin/octo-desktop-browser about:blank &
-    browser_pid=$!
+    launch_browser
   else
     echo "hobby-desktop: required process $exited exited (status=$status)" >&2
     exit 1

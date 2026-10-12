@@ -4,10 +4,13 @@ import { pathToFileURL } from "node:url";
 
 import { hydrateConfiguredBuilderBootstrap } from "../lib/configured-builder-bootstrap.js";
 
+export const HOBBY_DESKTOP_HOME = "/home/octo";
+
 export interface ConfiguredBuilderBootstrapInput {
   openclawDir: string;
   gatewayId: string;
   slug: string;
+  desktopHome?: string;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -19,10 +22,12 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 export function resolveConfiguredBuilderBootstrapInput(
   env: NodeJS.ProcessEnv = process.env,
 ): ConfiguredBuilderBootstrapInput {
+  const hobbyComputer = env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11";
   return {
     openclawDir: required(env, "OPENCLAW_DIR"),
     gatewayId: required(env, "GATEWAY_ID"),
     slug: required(env, "GATEWAY_BUILDER_SLUG"),
+    ...(hobbyComputer ? { desktopHome: HOBBY_DESKTOP_HOME } : {}),
   };
 }
 

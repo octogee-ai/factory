@@ -31,7 +31,7 @@ APPLICATION_CATEGORIES = {
     "Game", "Education", "Science", "Development", "TextEditor", "Viewer", "Calculator",
 }
 UTILITY_ONLY_CATEGORIES = {"System", "Settings", "Utility", "ConsoleOnly", "Qt", "GTK", "HardwareSettings", "Printing"}
-DENIED_ENTRY_ID = re.compile(r"^(avahi-.*|bssh|bvnc|foot.*|lstopo|limine-.*|cups|system-config-printer|qv4l2|qvidcap|uuctl|x|xorg.*|x11vnc)$", re.IGNORECASE)
+DENIED_ENTRY_ID = re.compile(r"^(avahi-.*|bssh|bvnc|display-im6.*|foot.*|lstopo|limine-.*|cups|system-config-printer|qv4l2|qvidcap|uuctl|x|xorg.*|x11vnc)$", re.IGNORECASE)
 WEB_APP_LAUNCHER = "omarchy-launch-webapp"
 TIME_ZONE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$")
 TIME_ZONE_MAX = 64
@@ -226,6 +226,9 @@ def curated(entry_id, parsed, pinned):
 
 
 def pinned_entry_ids():
+    configured = os.environ.get("OCTO_PINNED_APPS")
+    if configured is not None:
+        return [entry_id for entry_id in configured.split(":") if ENTRY_ID.match(entry_id)]
     for path in shell_json_paths():
         try:
             with open(path, encoding="utf-8") as handle:
