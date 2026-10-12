@@ -259,6 +259,7 @@ gatewayFleet:
   computeClass:
     enabled: true
     name: octogee-gateway
+    preferSpot: true
     zones: []
   # NOTE: the fleet-controller HTTP port now lives at
   # `.Values.global.fleetControllerPort`. Both the templates here and

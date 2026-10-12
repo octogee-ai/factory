@@ -14,12 +14,14 @@ spec:
   autopilot:
     enabled: true
   priorities:
+    {{- if $root.Values.gatewayFleet.computeClass.preferSpot }}
     - podFamily: general-purpose
       spot: true
       location:
         zones:
           {{- toYaml (ternary (list $zone) $zones (ne $zone "")) | nindent 10 }}
         locationPolicy: ANY
+    {{- end }}
     - podFamily: general-purpose
       spot: false
       location:

@@ -18,7 +18,8 @@ import {
 } from "../lib/surge-openclaw-process-gate.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 import { prepareOpenClawSqliteJournals } from "../lib/openclaw-sqlite-journal-preflight.js";
-import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import { inspectConfiguredBuilderAgentStores } from "../lib/openclaw-builder-store-preflight.js";
 import {
   createOpenClawBootWatcher,
   type OpenClawBootWatcher,
@@ -734,6 +735,21 @@ export async function startSurgeOpenClawSupervisor(
   };
 }
 
+export function createSurgeOpenClawBootWatcher(input: {
+  client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor">;
+  openclawDir: string;
+  releaseKey: string;
+  log: (message: string) => void;
+  env?: NodeJS.ProcessEnv;
+  run?: (command: string, args: readonly string[]) => Promise<void>;
+}): OpenClawBootWatcher {
+  const env = input.env ?? process.env;
+  return createOpenClawBootWatcher({ ...input, inspectBuilderStores: env.GATEWAY_CLASS === "builder"
+    ? () => inspectConfiguredBuilderAgentStores({ stateDir: input.openclawDir,
+      configPath: env.OPENCLAW_CONFIG_PATH || path.join(input.openclawDir, "openclaw.json") })
+    : undefined });
+}
+
 async function main(): Promise<void> {
   const podUid = process.env.POD_UID?.trim();
   if (!podUid) throw new Error("POD_UID is required for the surge OpenClaw supervisor");
@@ -746,7 +762,8 @@ async function main(): Promise<void> {
   }
   const openclawDir = process.env.OPENCLAW_DIR?.trim() || "/home/node/.openclaw";
   const log = runtimeLogger.info;
-  const bootWatcher = createOpenClawBootWatcher({
+  const bootWatcher = createSurgeOpenClawBootWatcher({
+    openclawDir,
     client: createFleetBrokerClient(gatewayId, revisionId),
     releaseKey,
     log,

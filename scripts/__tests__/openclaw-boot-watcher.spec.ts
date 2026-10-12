@@ -3,6 +3,48 @@ import { describe, expect, it, vi } from "vitest";
 import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 
 describe("OpenClaw boot watcher", () => {
+  it("repairs a dormant configured Builder store before a previously healthy gateway starts", async () => {
+    const inspectBuilderStores = vi.fn()
+      .mockResolvedValueOnce("repair-required")
+      .mockResolvedValueOnce("exact");
+    const run = vi.fn(async () => undefined);
+    const input = {
+      client: {
+        claimOpenClawBoot: vi.fn(async () => ({ action: "start" as const })),
+        completeOpenClawDoctor: vi.fn(async () => undefined),
+        completeOpenClawBoot: vi.fn(async () => undefined),
+      },
+      releaseKey: "qualified-builder-release",
+      log: () => undefined,
+      run,
+      inspectBuilderStores,
+    };
+    await createOpenClawBootWatcher(input).beforeStart();
+    expect(run).toHaveBeenCalledWith("openclaw", ["doctor", "--fix", "--non-interactive"]);
+    expect(inspectBuilderStores).toHaveBeenCalledTimes(2);
+  });
+  it("does not run Doctor when every configured Builder store is exact", async () => {
+    const inspectBuilderStores = vi.fn().mockResolvedValue("exact"), run = vi.fn();
+    await createOpenClawBootWatcher({
+      client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawDoctor: vi.fn(), completeOpenClawBoot: vi.fn() },
+      releaseKey: "builder-release", log: () => {}, run, inspectBuilderStores,
+    }).beforeStart();
+    expect(inspectBuilderStores).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("refuses Builder startup when inspection is unsafe or repair does not produce exact stores", async () => {
+    for (const inspection of [vi.fn().mockRejectedValue(new Error("store inspection refused")),
+      vi.fn().mockResolvedValue("repair-required")]) {
+      const run = vi.fn();
+      await expect(createOpenClawBootWatcher({
+        client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawDoctor: vi.fn(), completeOpenClawBoot: vi.fn() },
+        releaseKey: "builder-release", log: () => {}, run, inspectBuilderStores: inspection,
+      }).beforeStart()).rejects.toThrow(/refused|incompatible/);
+      expect(run).toHaveBeenCalledTimes(inspection.mock.calls.length === 1 ? 0 : 1);
+    }
+  });
+
   it("records an ordinary first start without running Doctor", async () => {
     const run = vi.fn(async () => undefined);
     const client = {

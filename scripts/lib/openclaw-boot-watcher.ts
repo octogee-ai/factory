@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { AgentSchemaFit } from "./agent-store-preflight.js";
 
 import { verifySourceDoctorAgentStores } from "./openclaw-source-doctor.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
@@ -47,6 +48,7 @@ export function createOpenClawBootWatcher(input: {
   log: (message: string) => void;
   run?: RunCommand;
   verifySourceDoctor?: (agentIds: string[]) => Promise<void>;
+  inspectBuilderStores?: () => Promise<AgentSchemaFit>;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }): OpenClawBootWatcher {
@@ -82,15 +84,20 @@ export function createOpenClawBootWatcher(input: {
       } catch (error) {
         if (!missingBrokerRoute(error, CLAIM_PATH)) throw error;
         input.log("[openclaw-boot] boot sentinel unavailable on this platform release; starting normally");
-        return;
+        claim = { action: "start" };
       }
-      if (claim.action === "start") return;
-      if (claim.action !== "doctor") {
+      if (claim.action !== "start" && claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
-      input.log(claim.sourceDoctor ? "[openclaw-boot] running explicitly requested source Doctor before gateway startup" :
-        "[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
+      const fit = await input.inspectBuilderStores?.();
+      if (claim.action === "start" && fit !== "repair-required") return;
+      if (fit === "repair-required") input.log("[openclaw-boot] configured Builder stores require canonical Doctor before startup");
+      else if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
+      else input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
       await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
+      if (input.inspectBuilderStores && await input.inspectBuilderStores() !== "exact") {
+        throw new Error("configured Builder stores remain incompatible after canonical Doctor");
+      }
       if (claim.sourceDoctor) {
         await (input.verifySourceDoctor ?? verifySourceDoctorAgentStores)(claim.sourceDoctor.agentIds);
         await input.client.completeOpenClawDoctor({ releaseKey: input.releaseKey, requestId: claim.sourceDoctor.requestId,
