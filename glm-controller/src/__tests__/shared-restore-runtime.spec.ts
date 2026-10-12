@@ -672,6 +672,35 @@ describe('journaled Shared source schema repair', () => {
     await expect(recoverSharedSourceRuntime({ ...h.deps, sourceSha: sha }, h.oldOp, h.ctx)).rejects.toThrow();
     expect(h.store).toEqual(before);
   });
+  async function spentSourceSuccessor() {
+    const h = await sourceSuccessor(), prior = h.store['glmOperations/recover'], fence = h.store['gateways/shared-1'].runtimeRestartFence;
+    prior.error = 'source repair is not ready; outcome remains fenced';
+    prior.input.sourceRecovery.supersede = { operationId: 'original-queue-repair', history: 'preserved' };
+    prior.completedAt = fence.startedAt + 20;
+    Object.assign(fence.doctor, { startedAt: fence.startedAt + 10, releaseKey: 'actual-baked-source-key' });
+    fence.installedImage = { podUid: 'pod-uid', gatewayImageId: h.pod.status.containerStatuses[0].imageID, verifiedAt: fence.startedAt + 5 };
+    h.op.input.sourceRecovery.supersede = { operationId: 'recover', input: structuredClone(prior.input), startedAt: prior.startedAt,
+      completedAt: prior.completedAt, error: prior.error, fence: structuredClone(fence) };
+    h.store['glmOperations/successor'] = structuredClone(h.op);
+    return { ...h, before: structuredClone(prior) };
+  }
+  it('transfers a terminal spent-but-unacknowledged Doctor to a distinct once-only request preserving every failed history field', async () => {
+    const h = await spentSourceSuccessor();
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['glmOperations/recover']).toEqual({ ...h.before, sourceRecoverySupersededBy: 'successor', cancellationRequestedAt: expect.any(Number) });
+    expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+  });
+  it.each(['running', 'acknowledged', 'changed-start', 'changed-image'])('refuses changed spent source %s without clearing its fence', async change => {
+    const h = await spentSourceSuccessor();
+    if (change === 'running') h.store['glmOperations/recover'].status = 'running';
+    if (change === 'acknowledged') h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt = Date.now();
+    if (change === 'changed-start') h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt++;
+    if (change === 'changed-image') h.store['gateways/shared-1'].runtimeRestartFence.installedImage.gatewayImageId = 'foreign';
+    const before = structuredClone(h.store);
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before);
+  });
   it('supersedes the exact old installed image while its failed repair is in CrashLoopBackOff without weakening the new running proof', async () => {
     const h = await sourceSuccessor();
     h.pod.status.containerStatuses[0].state = { waiting: { reason: 'CrashLoopBackOff' } };

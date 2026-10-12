@@ -109,24 +109,40 @@ export function assertSharedSourceRecoveryUnchanged(current, captured) {
     }
 }
 function failedPredecessorMatches(row, gatewayId) {
-    const input = row.input ?? {}, source = input.sourceRecovery ?? {};
+    const input = row.input ?? {};
     return [row.kind === "restart-gateway", row.status === "failed", input.gatewayId === gatewayId,
-        row.error === "another source operation is active", Number.isSafeInteger(row.startedAt), row.startedAt > 0,
+        Number.isSafeInteger(row.startedAt), row.startedAt > 0,
         Number.isSafeInteger(row.completedAt), row.completedAt >= row.startedAt,
         row.cancellationRequestedAt === undefined, row.sourceRuntimeRecovery === undefined, row.sourceRecoverySupersededBy === undefined,
-        input.sourceRecovery !== undefined, input.restoreRecovery === undefined, source.supersede === undefined].every(Boolean);
+        input.sourceRecovery !== undefined, input.restoreRecovery === undefined].every(Boolean);
+}
+function spentDoctorMatches(row, fence) {
+    const doctor = fence.doctor ?? {}, proof = fence.installedImage ?? {}, target = fence.target ?? {}, gatewayImage = target.images?.gateway;
+    return [Object.keys(doctor).length === 3, doctor.completedAt === undefined, doctor.verifiedAgentIds === undefined, doctor.error === undefined,
+        Number.isSafeInteger(doctor.startedAt), doctor.startedAt > 0, typeof doctor.releaseKey === "string", Boolean(doctor.releaseKey),
+        Number.isSafeInteger(fence.startedAt), fence.startedAt >= row.startedAt,
+        Number.isSafeInteger(proof.verifiedAt), proof.verifiedAt >= fence.startedAt, proof.verifiedAt <= doctor.startedAt,
+        doctor.startedAt <= row.completedAt, proof.podUid === target.podUid,
+        typeof gatewayImage === "string" && /@sha256:[a-f0-9]{64}$/.test(gatewayImage),
+        typeof proof.gatewayImageId === "string" && proof.gatewayImageId.endsWith(`@${String(gatewayImage).split("@")[1]}`)].every(Boolean);
+}
+function predecessorDoctorMatches(row, fence) {
+    if (row.error === "another source operation is active") {
+        return Object.keys(fence.doctor ?? {}).length === 1 && row.input?.sourceRecovery?.supersede === undefined;
+    }
+    return row.error === "source repair is not ready; outcome remains fenced" && spentDoctorMatches(row, fence);
 }
 function predecessorFenceMatches(request) {
     const { operationId, source } = request, fence = request.fence ?? {}, input = request.input ?? {}, doctor = fence.doctor ?? {}, target = fence.target ?? {};
     return [ownedSourceFence({ ...source.root, runtimeRestartFence: fence }, operationId, source.assignments), fence.phase === "dispatched",
         typeof target.podUid === "string", Boolean(target.podUid), typeof target.podName === "string", Boolean(target.podName),
-        Object.keys(doctor).length === 1, doctor.requestId === operationId,
+        predecessorDoctorMatches(request.row, fence), doctor.requestId === operationId,
         target.sourceSha === input.sourceSha, isDeepStrictEqual(target.images, input.images),
         isDeepStrictEqual(target.failedExportOperationIds, source.failedExports.map(r => r.operationId))].every(Boolean);
 }
 export function assertSharedSourceRecoveryPredecessor(request) {
     const { gatewayId, operationId, row, fence, source } = request, input = row.input?.sourceRecovery;
-    if (!failedPredecessorMatches(row, gatewayId) || !predecessorFenceMatches({ fence, operationId, source, input })) {
+    if (!failedPredecessorMatches(row, gatewayId) || !predecessorFenceMatches({ fence, operationId, source, input, row })) {
         conflict("source recovery predecessor is unavailable");
     }
     assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports }, input);

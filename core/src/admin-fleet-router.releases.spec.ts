@@ -1551,6 +1551,32 @@ describe('POST /gateways/:id/recover-source', () => {
       startedAt: null, completedAt: null, attempts: 0, steps: [], input: { uid: 'source-user-0', fromGatewayId: 'shared-0', toGatewayId: 'shared-1' } });
     return { ...h, manifest, authority, id, prior, fence };
   }
+  async function spentSourceRepair() {
+    const h = await failedSourceRepair();
+    h.prior.error = 'source repair is not ready; outcome remains fenced';
+    h.prior.input.sourceRecovery.supersede = { operationId: 'original-queue-repair', history: 'preserved' };
+    Object.assign(h.fence.doctor, { startedAt: 550, releaseKey: 'actual-baked-source-key' });
+    (h.fence as any).installedImage = { podUid: h.fence.target.podUid, gatewayImageId: h.fence.target.images.gateway, verifiedAt: 540 };
+    return h;
+  }
+  it('journals an explicit once-only retry for a terminal spent Doctor without acknowledging or changing its nested history', async () => {
+    const h = await spentSourceRepair(), before = structuredClone(h.prior), oldFence = structuredClone(h.fence);
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
+    const next = opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending') as any;
+    expect(next.input.sourceRecovery.supersede).toEqual({ operationId: h.id, input: before.input,
+      startedAt: before.startedAt, completedAt: before.completedAt, error: before.error, fence: oldFence });
+    expect(h.prior).toEqual(before); expect(h.fence).toEqual(oldFence);
+  });
+  it.each(['running', 'acknowledged', 'image-proof', 'clock', 'different-error'])('refuses spent source continuation with %s', async change => {
+    const h = await spentSourceRepair();
+    if (change === 'running') h.prior.status = 'running';
+    if (change === 'acknowledged') (h.fence.doctor as any).completedAt = 560;
+    if (change === 'image-proof') (h.fence as any).installedImage.gatewayImageId = 'foreign';
+    if (change === 'clock') h.prior.completedAt = 545;
+    if (change === 'different-error') h.prior.error = 'other failure';
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(409);
+    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(1);
+  });
   it('captures a terminal owned queue-race repair for normal supersession without changing its failure or source fence', async () => {
     const h = await failedSourceRepair(), before = structuredClone(h.prior), fence = structuredClone(h.fence);
     await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
