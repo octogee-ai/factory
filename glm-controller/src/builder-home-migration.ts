@@ -33,6 +33,7 @@ export interface BuilderHomeStorage extends BuilderHomeLocation {
 }
 export interface BuilderHomeOwner extends Record<string, unknown>, TierResolvable {
   provisioning?: {
+    computer?: { instanceName: string; instanceId: string; zone: string };
     homeStorage?: BuilderHomeStorage;
     homeMigration?: BuilderHomeMigration;
     homeDisk?: CopyHomeDisk;

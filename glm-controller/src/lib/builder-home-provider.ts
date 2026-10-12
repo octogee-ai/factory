@@ -21,7 +21,8 @@ interface KubeHomeResource {
   items?: KubeHomeResource[];
 }
 interface ComputeHomeResource {
-  id?: string; sizeGb?: string; type?: string; users?: string[]; labels?: Record<string, string>;
+  id?: string; sizeGb?: string; type?: string; users?: string[]; labels?: Record<string, string>; status?: string;
+  metadata?: { items?: Array<{ key?: string; value?: string }> };
   disks?: Array<{ deviceName?: string; source: string; boot?: boolean; autoDelete?: boolean }>;
 }
 interface HomeProviderDeps {
@@ -35,9 +36,28 @@ interface HomeProviderDeps {
   journal: <T>(what: string, uid: string, action: () => Promise<T>) => Promise<T>;
 }
 type ObservedHomeDisk = CopyHomeDisk & { users?: string[]; ownerUid?: string };
+type LegacyComputer = NonNullable<NonNullable<BuilderHomeOwner["provisioning"]>["computer"]>;
 const IGNORE_MISSING = "--ignore-not-found";
 const RWOP = "ReadWriteOncePod";
 const OWNER_ANNOTATION = "octogee.ai/owner-uid";
+
+function assertLegacyInstance(instance: ComputeHomeResource, uid: string, recorded: LegacyComputer, environment: string): void {
+  if (![instance.id === recorded.instanceId, instance.status === "TERMINATED",
+    instance.metadata?.items?.find(item => item.key === "octogee-owner-uid")?.value === uid,
+    instance.labels?.["octogee-owner-uid"] === uid.toLowerCase(), instance.labels?.["octogee-environment"] === environment,
+    instance.labels?.purpose === "octogee-computer"].every(Boolean)) throw new Error("legacy home computer owner or stopped identity changed");
+}
+function assertLegacyDisk(disk: ObservedHomeDisk, uid: string, recorded: LegacyComputer, instanceSource: string): void {
+  if (![disk.zone === recorded.zone, disk.ownerUid === undefined || disk.ownerUid === uid.toLowerCase(),
+    Array.isArray(disk.users) && disk.users.length === 1 && disk.users[0]!.replace(/^https:\/\/(?:www|compute)\.googleapis\.com\/compute\/v1\//u, "") === instanceSource].every(Boolean)) {
+    throw new Error("legacy home disk owner, zone or attachment changed");
+  }
+}
+function assertPrimarySelection(provisioning: BuilderHomeOwner["provisioning"], pvc: KubeHomeResource | null): void {
+  if (!provisioning?.homeStorage && pvc && (provisioning?.homeDisk || provisioning?.computer)) {
+    throw new Error("multiple homes have no recorded primary storage");
+  }
+}
 
 class BuilderHomeProvider {
   constructor(private readonly deps: HomeProviderDeps) {}
@@ -97,20 +117,55 @@ class BuilderHomeProvider {
     if (primary?.runtime === "cluster" && !primary.claim) throw new Error("primary home claim identity is missing");
     return this.claim(uid, slug, primary?.runtime === "cluster" ? primary.claim : undefined);
   }
+  async legacySource(uid: string, recorded: LegacyComputer) {
+    const computer = await this.ownedComputer(uid);
+    if (![computer?.name === recorded.instanceName, computer?.instanceId === recorded.instanceId,
+      computer?.zone === recorded.zone, computer?.status === "TERMINATED"].every(Boolean)) throw new Error("legacy home computer identity changed");
+    const instanceSource = `projects/${this.deps.projectId}/zones/${recorded.zone}/instances/${recorded.instanceName}`;
+    const instance = await this.compute(`https://compute.googleapis.com/compute/v1/${instanceSource}`, "GET");
+    assertLegacyInstance(instance, uid, recorded, this.deps.environment);
+    const homes = instance.disks?.filter(entry => entry.deviceName === "octogee-home") ?? [];
+    if (homes.length !== 1 || homes[0]!.boot !== false || typeof homes[0]!.autoDelete !== "boolean") throw new Error("legacy computer has no unique nonboot home attachment");
+    const attached = homes[0]!, disk = await this.disk(attached.source);
+    assertLegacyDisk(disk, uid, recorded, instanceSource);
+    return { attached, disk };
+  }
+  async legacyInventory(uid: string, recorded: LegacyComputer): Promise<BuilderHomeLocation> {
+    if (![typeof recorded.instanceName === "string", /^[a-z][a-z0-9-]{0,62}$/u.test(recorded.instanceName),
+      /^\d+$/u.test(recorded.instanceId), typeof recorded.zone === "string", /^[a-z][a-z0-9-]+$/u.test(recorded.zone)].every(Boolean)) {
+      throw new Error("legacy computer identity is incomplete");
+    }
+    const source = await this.legacySource(uid, recorded);
+    if (source.attached.autoDelete !== false || source.disk.ownerUid !== uid.toLowerCase()) {
+      await this.deps.journal("retain-legacy-builder-home", uid, async () => {
+        const before = await this.legacySource(uid, recorded);
+        if (before.disk.id !== source.disk.id || before.disk.source !== source.disk.source) throw new Error("legacy home disk identity changed before retention");
+        const retained = await this.deps.vm.retainHome(recorded.instanceName, recorded.zone, uid);
+        if (retained.id !== source.disk.id || retained.source !== source.disk.source) throw new Error("legacy home disk identity changed during retention");
+      });
+    }
+    const confirmed = await this.legacySource(uid, recorded);
+    if (confirmed.attached.autoDelete !== false || confirmed.disk.ownerUid !== uid.toLowerCase() ||
+      confirmed.disk.id !== source.disk.id || confirmed.disk.source !== source.disk.source) throw new Error("legacy home retention did not converge");
+    return { runtime: "gce-vm", layout: "flat", disk: confirmed.disk,
+      computer: { name: recorded.instanceName, id: recorded.instanceId, zone: recorded.zone } };
+  }
   async inventory(uid: string, slug: string, owner: BuilderHomeOwner): Promise<BuilderHomeLocation | null> {
     const migration = owner.provisioning?.homeMigration;
     if (migration?.phase === "adopting") return migration.source;
     const primary = owner.provisioning?.homeStorage;
     const pvc = await this.primaryClaim(uid, slug, primary);
     const home = owner.provisioning?.homeDisk;
-    if (!primary && pvc && home) throw new Error("multiple homes have no recorded primary storage");
+    const computer = owner.provisioning?.computer;
+    assertPrimarySelection(owner.provisioning, pvc);
     if (primary) {
       if (primary.runtime === "cluster") return this.clusterInventory(pvc, primary);
       if (primary.runtime === "gce-vm") return this.nativeInventory(uid, primary.disk);
       throw new Error("invalid primary home runtime");
     }
     if (pvc) return this.clusterInventory(pvc);
-    return home ? this.nativeInventory(uid, home) : null;
+    if (home) return this.nativeInventory(uid, home);
+    return computer ? this.legacyInventory(uid, computer) : null;
   }
   async verifyStopped(uid: string, source: BuilderHomeLocation): Promise<void> {
     const observed = await this.disk(source.disk.source);
