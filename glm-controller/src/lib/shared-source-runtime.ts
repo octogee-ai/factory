@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
 import { FieldValue, type DocumentData, type Transaction } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
-import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority, type SharedSourceRecoveryAuthority } from '@octogee/core/shared-source-recovery';
+import { assertSharedSourceRecoveryUnchanged, assertSharedSourceRecoveryPredecessor, readSharedSourceRecoveryAuthority, type SharedSourceRecoveryAuthority, type SharedSourceRecoverySupersession } from '@octogee/core/shared-source-recovery';
 import type { OperationContext } from '../operation-router.js';
 import { assertRecoveryImages, existingOwnedPod, imagePatch, json, recoveredPodReady, type SharedPodRecoveryDeps } from './shared-restore-runtime.js';
 
 type Row = DocumentData;
-interface SourceRecovery extends SharedSourceRecoveryAuthority { sourceSha: string; images: Record<string, string> }
+interface SourceRecovery extends SharedSourceRecoveryAuthority { sourceSha: string; images: Record<string, string>; supersede?: SharedSourceRecoverySupersession }
 const object = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
 function sourceRecovery(op: Operation, deployedSha: string): SourceRecovery {
   const input = object(op.input.sourceRecovery);
@@ -22,7 +22,7 @@ async function authority(deps: SharedPodRecoveryDeps, tx: Transaction, op: Opera
   const gatewayId = op.input.gatewayId as string;
   const [claim, root, captured] = await Promise.all([
     tx.get(deps.db.doc(`glmOperations/${op.id}`)), tx.get(deps.db.doc(`gateways/${gatewayId}`)),
-    readSharedSourceRecoveryAuthority(deps.db, tx, gatewayId, op.id),
+    readSharedSourceRecoveryAuthority(deps.db, tx, gatewayId, op.id, input.supersede?.operationId),
   ]);
   const current = claim.data();
   if (current?.status !== 'running' || current.startedAt !== op.startedAt || current.cancellationRequestedAt !== undefined ||
@@ -47,15 +47,42 @@ async function reserve(deps: SharedPodRecoveryDeps, op: Operation, input: Source
   await deps.db.runTransaction(async tx => {
     const root = await authority(deps, tx, op, input);
     if (root.runtimeRestartFence !== undefined) {
-      assertOwnedFence(object(root.runtimeRestartFence), op, input, pod); return;
+      if (root.runtimeRestartFence.attemptId === op.id) { assertOwnedFence(object(root.runtimeRestartFence), op, input, pod); return; }
+      await transferPredecessor({ deps, tx, op, input, pod, root }); return;
     }
-    const fence = { kind: 'source-recovery', attemptId: op.id, auditId: op.id, gatewayId: op.input.gatewayId,
+    if (input.supersede) throw new Error('captured source recovery predecessor fence is absent');
+    const fence = newFence(deps, op, input, pod);
+    tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: fence });
+  });
+}
+function newFence(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row): Row {
+  return { kind: 'source-recovery', attemptId: op.id, auditId: op.id, gatewayId: op.input.gatewayId,
       startedAt: (deps.now ?? Date.now)(), phase: 'reserved', doctor: { requestId: op.id },
       target: { podName: pod.metadata.name, podUid: pod.metadata.uid, sourceSha: input.sourceSha, images: input.images,
         originalImages: Object.fromEntries(pod.spec.containers.map((container: Row) => [container.name, container.image])),
         agents: expectedAgents(input), failedExportOperationIds: input.failedExports.map(row => row.operationId) } };
-    tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: fence });
-  });
+}
+async function transferPredecessor(request: { deps: SharedPodRecoveryDeps; tx: Transaction; op: Operation; input: SourceRecovery; pod: Row; root: Row }): Promise<void> {
+  const { deps, tx, op, input, pod, root } = request;
+  const supersede = input.supersede;
+  if (!supersede || supersede.operationId === op.id) throw new Error('source recovery predecessor is unavailable');
+  const prior = await tx.get(deps.db.doc(`glmOperations/${supersede.operationId}`));
+  const captured = assertSharedSourceRecoveryPredecessor({ gatewayId: op.input.gatewayId as string, operationId: supersede.operationId,
+    row: object(prior.data()), fence: object(root.runtimeRestartFence), source: input });
+  if (!isDeepStrictEqual(captured, supersede)) throw new Error('source recovery predecessor changed');
+  const old = object(supersede.input.sourceRecovery);
+  assertRecoveryImages(object(old.images), old.sourceSha);
+  assertOwnedFence(supersede.fence, { ...op, id: supersede.operationId, input: supersede.input }, old as SourceRecovery, pod);
+  assertPredecessorPodImages(pod, old.images);
+  tx.update(deps.db.doc(`glmOperations/${supersede.operationId}`), { cancellationRequestedAt: (deps.now ?? Date.now)(), sourceRecoverySupersededBy: op.id });
+  tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: newFence(deps, op, input, pod) });
+}
+function assertPredecessorPodImages(pod: Row, oldImages: Row): void {
+  for (const [name, image] of Object.entries(oldImages)) {
+    const spec = pod.spec?.containers?.find((c: Row) => c.name === name), status = pod.status?.containerStatuses?.find((c: Row) => c.name === name);
+    if (spec?.image !== image || !status?.state?.running || typeof status.imageID !== 'string' ||
+      !status.imageID.endsWith(`@${String(image).split('@')[1]}`)) throw new Error('source recovery predecessor Pod image changed');
+  }
 }
 async function dispatch(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row): Promise<Row> {
   return deps.db.runTransaction(async tx => {

@@ -646,6 +646,59 @@ describe('journaled Shared source schema repair', () => {
     return { ...h, deps: { ...h.deps, runKubectl, now: () => clock, wait: async () => { clock += 600_000; } },
       setAck: (value: boolean) => { ack = value; }, setWrongImage: () => { wrongImage = true; }, setHealthyWithoutAck: () => { healthyWithoutAck = true; } };
   }
+  async function sourceSuccessor() {
+    const h = await sourceHarness(); h.setAck(false);
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
+    const fence = h.store['gateways/shared-1'].runtimeRestartFence; delete fence.installedImage;
+    const prior = h.store['glmOperations/recover']; Object.assign(prior, { status: 'failed', completedAt: 400, error: 'another source operation is active' });
+    const before = structuredClone(prior), oldOp = structuredClone(h.op), oldFence = structuredClone(fence);
+    h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', origin: 'automatic', createdBy: 'glm-controller-placement-policy',
+      startedAt: null, completedAt: null, attempts: 0, steps: [], input: { uid: 'source-0', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' } };
+    const nextSha = 'd'.repeat(40), nextImages = { gateway: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:ddddddd@sha256:${'e'.repeat(64)}`,
+      'gateway-edge': `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:ddddddd@sha256:${'f'.repeat(64)}` };
+    Object.assign(h.op, { id: 'successor', startedAt: 500, input: { gatewayId: 'shared-1', sourceRecovery: { ...before.input.sourceRecovery,
+      sourceSha: nextSha, images: nextImages, supersede: { operationId: 'recover', input: before.input,
+        startedAt: before.startedAt, completedAt: before.completedAt, error: before.error, fence: oldFence } } } });
+    h.store['glmOperations/successor'] = structuredClone(h.op); h.deps.sourceSha = nextSha; h.setAck(true);
+    return { ...h, before, oldOp, oldFence };
+  }
+  it('atomically transfers the failed queue-race fence to a new immutable family, preserving its failure and preventing stale completion', async () => {
+    const h = await sourceSuccessor();
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['glmOperations/recover']).toEqual({ ...h.before, sourceRecoverySupersededBy: 'successor', cancellationRequestedAt: expect.any(Number) });
+    expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+    const before = structuredClone(h.store);
+    await expect(recoverSharedSourceRuntime({ ...h.deps, sourceSha: sha }, h.oldOp, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before);
+  });
+  it.each(['completed-at', 'doctor-spent', 'same-pod', 'prior-image', 'cancelled', 'progressed-queue', 'missing-fence', 'claimed-history'])('refuses source successor %s without changing the prior fence or failed history', async change => {
+    const h = await sourceSuccessor();
+    if (change === 'completed-at') h.store['glmOperations/recover'].completedAt++;
+    if (change === 'doctor-spent') h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt = 1;
+    if (change === 'same-pod') h.pod.metadata.uid = 'replacement';
+    if (change === 'prior-image') h.pod.status.containerStatuses[0].imageID = 'wrong';
+    if (change === 'cancelled') h.store['glmOperations/recover'].cancellationRequestedAt = 1;
+    if (change === 'progressed-queue') h.store['glmOperations/queued'].steps = [{ name: 'keys-sync-state', status: 'running' }];
+    if (change === 'missing-fence') { delete h.store['gateways/shared-1'].runtimeRestartFence; delete h.store['glmOperations/queued']; }
+    if (change === 'claimed-history') h.store['glmOperations/queued'].attemptHistory = [{ startedAt: 200, completedAt: 250 }];
+    const before = structuredClone(h.store), calls = h.deps.runKubectl.mock.calls.filter(([a]) => a.includes('patch')).length;
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before); expect(h.deps.runKubectl.mock.calls.filter(([a]) => a.includes('patch'))).toHaveLength(calls);
+  });
+  it('finishes an owned repair when pristine automatic outbound moves were queued after its fence', async () => {
+    const h = await sourceHarness(), run = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async args => {
+      const result = await run(args);
+      if (args.includes('patch')) h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', origin: 'automatic',
+        createdBy: 'glm-controller-placement-policy', startedAt: null, completedAt: null, attempts: 0, steps: [],
+        input: { uid: 'source-0', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' } };
+      return result;
+    });
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeDefined();
+    expect(h.store['glmOperations/queued']).toMatchObject({ status: 'pending', startedAt: null, steps: [] });
+  });
   it('holds the same Pod/home, records actual installed digest before Doctor and clears only after real repair ACK plus Ready', async () => {
     const h = await sourceHarness(), before = structuredClone(h.store);
     await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);

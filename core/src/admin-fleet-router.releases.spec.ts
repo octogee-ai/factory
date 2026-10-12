@@ -1537,6 +1537,50 @@ describe('POST /gateways/:id/recover-source', () => {
     }
     return seed;
   }
+  async function failedSourceRepair() {
+    const manifest = immutableBuild(), authority = buildAuthority(manifest), h = mkApp(sourceSeed(), { releaseAuthority: authority });
+    const first = await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
+    const id = first.body.operationId, prior = h.store.get(`glmOperations/${id}`) as any, input = prior.input.sourceRecovery;
+    Object.assign(prior, { status: 'failed', startedAt: 500, completedAt: 600, error: 'another source operation is active' });
+    const fence = { kind: 'source-recovery', attemptId: id, auditId: id, gatewayId: 'shared-0', startedAt: 510, phase: 'dispatched',
+      doctor: { requestId: id }, target: { podUid: 'same-pod', podName: 'same-name', sourceSha: input.sourceSha, images: input.images,
+        originalImages: input.images, agents: input.assignments.map(({ uid, slug, agentId, assignmentEpoch }: any) => ({ uid, slug, agentId, assignmentEpoch })),
+        failedExportOperationIds: input.failedExports.map((r: any) => r.operationId) } };
+    h.store.get('gateways/shared-0')!.runtimeRestartFence = fence;
+    h.store.set('glmOperations/queued', { kind: 'migrate-customer', status: 'pending', origin: 'automatic', createdBy: 'glm-controller-placement-policy',
+      startedAt: null, completedAt: null, attempts: 0, steps: [], input: { uid: 'source-user-0', fromGatewayId: 'shared-0', toGatewayId: 'shared-1' } });
+    return { ...h, manifest, authority, id, prior, fence };
+  }
+  it('captures a terminal owned queue-race repair for normal supersession without changing its failure or source fence', async () => {
+    const h = await failedSourceRepair(), before = structuredClone(h.prior), fence = structuredClone(h.fence);
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
+    const next = opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending') as any;
+    expect(next.input.sourceRecovery.supersede).toEqual({ operationId: h.id, input: before.input,
+      startedAt: before.startedAt, completedAt: before.completedAt, error: before.error, fence });
+    expect(h.prior).toEqual(before); expect(h.store.get('gateways/shared-0')!.runtimeRestartFence).toEqual(fence);
+  });
+  it.each([false, true])('binds a new immutable family while refusing changed native source (%s)', async changedNative => {
+    const h = await failedSourceRepair(), next = immutableBuild('d'.repeat(40));
+    if (changedNative) next.openclawSourceSha = 'e'.repeat(40);
+    vi.mocked(h.authority.resolveManifest).mockImplementation(async sourceSha => sourceSha === h.manifest.sourceSha ? h.manifest : next);
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: next.sourceSha, supersedeRecoveryId: h.id }).expect(changedNative ? 409 : 202);
+    if (!changedNative) expect(opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending')!.input).toMatchObject({
+      sourceRecovery: { sourceSha: next.sourceSha, supersede: { input: { sourceRecovery: { sourceSha: h.manifest.sourceSha } } } } });
+  });
+  it.each(['claimed', 'completed-proof', 'cancelled', 'different-error', 'doctor-spent', 'foreign-fence', 'progressed-queue', 'foreign-queue', 'epoch'])('refuses terminal source continuation with %s', async change => {
+    const h = await failedSourceRepair();
+    if (change === 'claimed') h.prior.status = 'running';
+    if (change === 'completed-proof') h.prior.sourceRuntimeRecovery = {};
+    if (change === 'cancelled') h.prior.cancellationRequestedAt = 1;
+    if (change === 'different-error') h.prior.error = 'other error';
+    if (change === 'doctor-spent') (h.fence.doctor as any).startedAt = 520;
+    if (change === 'foreign-fence') h.fence.auditId = 'foreign';
+    if (change === 'progressed-queue') h.store.get('glmOperations/queued')!.startedAt = 550;
+    if (change === 'foreign-queue') (h.store.get('glmOperations/queued')!.input as any).uid = 'foreign';
+    if (change === 'epoch') (h.store.get('gateways/shared-0/assignments/source-user-0') as any).epoch++;
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(409);
+    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(1);
+  });
   it('journals immutable source repair for the six configured schema24 exports without forging a restore or boot failure', async () => {
     const manifest = immutableBuild(), seed = sourceSeed(), before = structuredClone(seed);
     const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });

@@ -222,7 +222,7 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "gw recover-source",
     summary: "Repair a Shared source after database export failures while retaining its pod storage.",
-    args: "<gw-id> --sha=<full-main-sha> [--idempotency-key=<key>] [--apply]",
+    args: "<gw-id> --sha=<full-main-sha> [--supersede-recovery=<failed-recovery-id>] [--idempotency-key=<key>] [--apply]",
     description: "Journals a Cowboy recovery using an immutable build. The API verifies current assignments and failed exports; Cowboy updates the existing pod images and requires Doctor to repair the affected stores before completion. Briefly interrupts the pod's tenants. Dry-run by default.",
     examples: ["fleet --env=test gw recover-source shared-example --sha=0123456789abcdef0123456789abcdef01234567 --apply"],
     writes: true,
@@ -627,10 +627,15 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
       if (!/^[a-f0-9]{40}$/.test(sourceSha)) {
         throw new Error("gw recover-source requires --sha=<full-lowercase-main-sha>");
       }
+      const supersedeRecoveryId = args.flags["supersede-recovery"] === undefined ? undefined :
+        requiredFlag(args, "supersede-recovery", "gw recover-source", "failed-recovery-id");
+      if (supersedeRecoveryId?.includes("/")) {
+        throw new Error("gw recover-source requires --supersede-recovery=<failed-recovery-id>");
+      }
       return withIdempotency({
         method: "POST",
         path: `/api/admin/gateways/${gatewayId}/recover-source`,
-        body: { sourceSha },
+        body: { sourceSha, ...(supersedeRecoveryId ? { supersedeRecoveryId } : {}) },
       });
     }
     case "recover-restore": {

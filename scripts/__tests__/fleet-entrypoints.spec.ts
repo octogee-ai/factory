@@ -1243,6 +1243,28 @@ describe("fleet CLI args", () => {
     },
   );
 
+  it("explicitly supersedes a failed Shared source repair through the Admin API", () => {
+    const sourceSha = "c".repeat(40);
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "recover-source", "shared-1", `--sha=${sourceSha}`,
+      "--supersede-recovery=failed-source-repair", "--idempotency-key=source-repair-2",
+    ]))).toEqual({
+      method: "POST",
+      path: "/api/admin/gateways/shared-1/recover-source",
+      body: { sourceSha, supersedeRecoveryId: "failed-source-repair" },
+      idempotencyKey: "source-repair-2",
+    });
+  });
+
+  it.each(["--supersede-recovery", "--supersede-recovery=", "--supersede-recovery=foreign/path"])(
+    "rejects an invalid Shared source repair predecessor: %s",
+    (flag) => {
+      expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+        "--env=test", "gw", "recover-source", "shared-1", `--sha=${"c".repeat(40)}`, flag,
+      ]))).toThrow("supersede-recovery");
+    },
+  );
+
   it("maps each existing Admin gateway action to its API request", () => {
     const sourceSha = "a".repeat(40);
     expect(resolveFleetGatewayMutation(parseFleetArgs([

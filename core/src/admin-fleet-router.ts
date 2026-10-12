@@ -1,4 +1,4 @@
-import { readSharedSourceRecoveryAuthority, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
+import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 
 
@@ -1911,6 +1911,12 @@ function validRecoveryAttemptId(value: unknown): value is string {
 function validRecoverySupersession(body: RestoreRecoveryBody): boolean {
   return body.supersedeRecoveryId === undefined || (validRecoveryAttemptId(body.supersedeRecoveryId) &&
     !body.supersedeRecoveryId.includes("/"));
+}
+function validSourceRecoveryBody(body: Record<string, unknown>): boolean {
+  const predecessorId = body.supersedeRecoveryId;
+  return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
+    Object.keys(body).every(key => ["sourceSha", "supersedeRecoveryId"].includes(key)) &&
+    (predecessorId === undefined || (typeof predecessorId === "string" && Boolean(predecessorId) && !predecessorId.includes("/")));
 }
 function validRestoreRecoveryBody(body: RestoreRecoveryBody): boolean {
   return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
@@ -5756,15 +5762,26 @@ router.post(
 
   router.post("/gateways/:id/recover-source", async (req, res, next) => {
     try {
-      const gatewayId = req.params.id as string, body = req.body ?? {}, sourceSha = body.sourceSha;
-      if (typeof sourceSha !== "string" || !/^[a-f0-9]{40}$/.test(sourceSha) || Object.keys(body).some(key => key !== "sourceSha")) {
+      const gatewayId = req.params.id as string, body = req.body ?? {}, sourceSha = body.sourceSha, predecessorId = body.supersedeRecoveryId;
+      if (!validSourceRecoveryBody(body)) {
         res.status(400).json({ error: "sourceSha is required" }); return;
       }
       if (!deps.releaseAuthority) { res.status(503).json({ error: "immutable build manifests are unavailable" }); return; }
-      const source = await db.runTransaction(tx => readSharedSourceRecoveryAuthority(db, tx, gatewayId), { readOnly: true });
+      const captured = await db.runTransaction(async tx => predecessorId === undefined
+        ? { source: await readSharedSourceRecoveryAuthority(db, tx, gatewayId), supersede: undefined }
+        : readSharedSourceRecoverySupersession(db, tx, gatewayId, predecessorId), { readOnly: true });
+      const { source, supersede } = captured;
       const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
       const payload = centralGatewayReleasePayload(manifest);
-      const input = { gatewayId, sourceRecovery: { sourceSha, ...source, images: {
+      if (supersede) {
+        const priorPayload = centralGatewayReleasePayload(await centralManifestForSourceSha(deps.releaseAuthority, supersede.input.sourceRecovery.sourceSha));
+        const priorImages = { gateway: `${priorPayload.imageRepository}:${priorPayload.imageTag}`,
+          "gateway-edge": `${priorPayload.gatewayEdgeImage!.imageRepository}:${priorPayload.gatewayEdgeImage!.imageTag}` };
+        if (priorPayload.openclawSourceSha !== payload.openclawSourceSha || !isDeepStrictEqual(priorImages, supersede.input.sourceRecovery.images)) {
+          throw new SharedSourceRecoveryConflict("source recovery predecessor immutable build changed");
+        }
+      }
+      const input = { gatewayId, sourceRecovery: { sourceSha, ...source, ...(supersede ? { supersede } : {}), images: {
         gateway: `${payload.imageRepository}:${payload.imageTag}`,
         "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}`,
       } } };

@@ -3368,6 +3368,9 @@ async function assertSharedDrainAuthority(
     transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId)),
     readSharedPoolReplacements(input.db, transaction),
   ]);
+  if (source.data()?.runtimeRestartFence !== undefined) {
+    throw new SharedDrainSupersededError(request.fromGatewayId, "the source runtime restart is unresolved");
+  }
   if (source.data()?.desiredStatus !== "draining") {
     throw new SharedDrainSupersededError(request.fromGatewayId, "the source is no longer draining");
   }

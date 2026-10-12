@@ -54,7 +54,24 @@ function failedExportMatches(row: DocumentData, identity: SourceRecoveryAssignme
 function operationTouchesSource(row: DocumentData, gatewayId: string): boolean {
   return [row.input?.gatewayId, row.input?.fromGatewayId, row.input?.toGatewayId].includes(gatewayId);
 }
-export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Transaction, gatewayId: string, ownOperationId?: string): Promise<SharedSourceRecoveryAuthority> {
+function ownedSourceFence(root: DocumentData, ownerId: string | undefined, assignments: SourceRecoveryAssignment[]): boolean {
+  const fence = root.runtimeRestartFence, target = fence?.target;
+  return Boolean(ownerId && fence?.kind === "source-recovery" && fence.attemptId === ownerId && fence.auditId === ownerId &&
+    fence.gatewayId === root.gatewayId && ["reserved", "dispatched"].includes(fence.phase) && fence.doctor?.requestId === ownerId &&
+    isDeepStrictEqual(target?.agents, assignments.map(({ uid, slug, agentId, assignmentEpoch }) => ({ uid, slug, agentId, assignmentEpoch }))));
+}
+function pristineOutbound(row: DocumentData, gatewayId: string, sourceUids: Set<string>): boolean {
+  return [row.kind === "migrate-customer", row.status === "pending", row.origin === "automatic",
+    row.createdBy === "glm-controller-placement-policy", row.startedAt === null, row.completedAt === null,
+    row.attempts === undefined || row.attempts === 0, Array.isArray(row.steps) && row.steps.length === 0,
+    row.attemptHistory === undefined || (Array.isArray(row.attemptHistory) && row.attemptHistory.length === 0),
+    row.input?.fromGatewayId === gatewayId, sourceUids.has(row.input?.uid), typeof row.input?.toGatewayId === "string",
+    Boolean(row.input?.toGatewayId), row.input?.toGatewayId !== gatewayId,
+    ["cancellationRequestedAt", "cutoverCommittedAt", "restoreAttempt", "schedulerHandoff", "customerMigrationV2", "sourceTransferExecution",
+      "firstStartedAt", "lastProgressAt", "resumeCount", "lastResumedAt", "error", "output", "rolledBack"]
+      .every(key => row[key] === undefined)].every(Boolean);
+}
+export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Transaction, gatewayId: string, ownOperationId?: string, predecessorId?: string): Promise<SharedSourceRecoveryAuthority> {
   const [rootSnap, roster, active, failed] = await Promise.all([
     tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.collection(`gateways/${gatewayId}/assignments`)),
     tx.get(db.collection("glmOperations").where("status", "in", ["pending", "running"])),
@@ -65,7 +82,9 @@ export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Trans
   const assignments = roster.docs.map(row => assignmentIdentity(row.id, row.data(), gatewayId)).sort((a, b) => a.uid.localeCompare(b.uid));
   if (!assignments.length || new Set(assignments.map(row => row.slug)).size !== assignments.length) conflict("source recovery roster is unavailable");
   const sourceUids = new Set(assignments.map(row => row.uid));
-  if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)))) {
+  const fenced = ownedSourceFence(root, ownOperationId, assignments) || ownedSourceFence(root, predecessorId, assignments);
+  if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)) &&
+    !(fenced && pristineOutbound(row.data(), gatewayId, sourceUids)))) {
     conflict("another source operation is active");
   }
   const users = await Promise.all(assignments.map(row => tx.get(db.doc(`users/${row.uid}`))));
@@ -83,4 +102,42 @@ export function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecover
   if (!isDeepStrictEqual(current, { root: captured.root, assignments: captured.assignments, failedExports: captured.failedExports })) {
     conflict("source recovery custody changed");
   }
+}
+
+export interface SharedSourceRecoverySupersession {
+  operationId: string; input: DocumentData; startedAt: number; completedAt: number; error: string; fence: DocumentData;
+}
+function failedPredecessorMatches(row: DocumentData, gatewayId: string): boolean {
+  const input = row.input ?? {}, source = input.sourceRecovery ?? {};
+  return [row.kind === "restart-gateway", row.status === "failed", input.gatewayId === gatewayId,
+    row.error === "another source operation is active", Number.isSafeInteger(row.startedAt), row.startedAt > 0,
+    Number.isSafeInteger(row.completedAt), row.completedAt >= row.startedAt,
+    row.cancellationRequestedAt === undefined, row.sourceRuntimeRecovery === undefined, row.sourceRecoverySupersededBy === undefined,
+    input.sourceRecovery !== undefined, input.restoreRecovery === undefined, source.supersede === undefined].every(Boolean);
+}
+function predecessorFenceMatches(request: { fence: DocumentData; operationId: string; source: SharedSourceRecoveryAuthority; input: DocumentData }): boolean {
+  const { operationId, source } = request, fence = request.fence ?? {}, input = request.input ?? {}, doctor = fence.doctor ?? {}, target = fence.target ?? {};
+  return [ownedSourceFence({ ...source.root, runtimeRestartFence: fence }, operationId, source.assignments), fence.phase === "dispatched",
+    typeof target.podUid === "string", Boolean(target.podUid), typeof target.podName === "string", Boolean(target.podName),
+    Object.keys(doctor).length === 1, doctor.requestId === operationId,
+    target.sourceSha === input.sourceSha, isDeepStrictEqual(target.images, input.images),
+    isDeepStrictEqual(target.failedExportOperationIds, source.failedExports.map(r => r.operationId))].every(Boolean);
+}
+export function assertSharedSourceRecoveryPredecessor(request: {
+  gatewayId: string; operationId: string; row: DocumentData; fence: DocumentData; source: SharedSourceRecoveryAuthority;
+}): SharedSourceRecoverySupersession {
+  const { gatewayId, operationId, row, fence, source } = request, input = row.input?.sourceRecovery;
+  if (!failedPredecessorMatches(row, gatewayId) || !predecessorFenceMatches({ fence, operationId, source, input })) {
+    conflict("source recovery predecessor is unavailable");
+  }
+  assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports }, input);
+  return { operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
+}
+export async function readSharedSourceRecoverySupersession(db: Firestore, tx: Transaction, gatewayId: string, operationId: string): Promise<{
+  source: SharedSourceRecoveryAuthority; supersede: SharedSourceRecoverySupersession;
+}> {
+  const [root, prior, source] = await Promise.all([tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.doc(`glmOperations/${operationId}`)),
+    readSharedSourceRecoveryAuthority(db, tx, gatewayId, operationId)]);
+  return { source, supersede: assertSharedSourceRecoveryPredecessor({ gatewayId, operationId,
+    row: prior.data() ?? {}, fence: root.data()?.runtimeRestartFence, source }) };
 }

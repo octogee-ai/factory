@@ -1,4 +1,4 @@
-import { readSharedSourceRecoveryAuthority, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
+import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 import { FieldValue, } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
@@ -1166,6 +1166,12 @@ function validRecoveryAttemptId(value) {
 function validRecoverySupersession(body) {
     return body.supersedeRecoveryId === undefined || (validRecoveryAttemptId(body.supersedeRecoveryId) &&
         !body.supersedeRecoveryId.includes("/"));
+}
+function validSourceRecoveryBody(body) {
+    const predecessorId = body.supersedeRecoveryId;
+    return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
+        Object.keys(body).every(key => ["sourceSha", "supersedeRecoveryId"].includes(key)) &&
+        (predecessorId === undefined || (typeof predecessorId === "string" && Boolean(predecessorId) && !predecessorId.includes("/")));
 }
 function validRestoreRecoveryBody(body) {
     return typeof body.sourceSha === "string" && /^[a-f0-9]{40}$/.test(body.sourceSha) &&
@@ -4206,8 +4212,8 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.post("/gateways/:id/recover-source", async (req, res, next) => {
         try {
-            const gatewayId = req.params.id, body = req.body ?? {}, sourceSha = body.sourceSha;
-            if (typeof sourceSha !== "string" || !/^[a-f0-9]{40}$/.test(sourceSha) || Object.keys(body).some(key => key !== "sourceSha")) {
+            const gatewayId = req.params.id, body = req.body ?? {}, sourceSha = body.sourceSha, predecessorId = body.supersedeRecoveryId;
+            if (!validSourceRecoveryBody(body)) {
                 res.status(400).json({ error: "sourceSha is required" });
                 return;
             }
@@ -4215,10 +4221,21 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(503).json({ error: "immutable build manifests are unavailable" });
                 return;
             }
-            const source = await db.runTransaction(tx => readSharedSourceRecoveryAuthority(db, tx, gatewayId), { readOnly: true });
+            const captured = await db.runTransaction(async (tx) => predecessorId === undefined
+                ? { source: await readSharedSourceRecoveryAuthority(db, tx, gatewayId), supersede: undefined }
+                : readSharedSourceRecoverySupersession(db, tx, gatewayId, predecessorId), { readOnly: true });
+            const { source, supersede } = captured;
             const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
             const payload = centralGatewayReleasePayload(manifest);
-            const input = { gatewayId, sourceRecovery: { sourceSha, ...source, images: {
+            if (supersede) {
+                const priorPayload = centralGatewayReleasePayload(await centralManifestForSourceSha(deps.releaseAuthority, supersede.input.sourceRecovery.sourceSha));
+                const priorImages = { gateway: `${priorPayload.imageRepository}:${priorPayload.imageTag}`,
+                    "gateway-edge": `${priorPayload.gatewayEdgeImage.imageRepository}:${priorPayload.gatewayEdgeImage.imageTag}` };
+                if (priorPayload.openclawSourceSha !== payload.openclawSourceSha || !isDeepStrictEqual(priorImages, supersede.input.sourceRecovery.images)) {
+                    throw new SharedSourceRecoveryConflict("source recovery predecessor immutable build changed");
+                }
+            }
+            const input = { gatewayId, sourceRecovery: { sourceSha, ...source, ...(supersede ? { supersede } : {}), images: {
                         gateway: `${payload.imageRepository}:${payload.imageTag}`,
                         "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}`,
                     } } };

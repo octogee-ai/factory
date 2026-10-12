@@ -55,7 +55,24 @@ function failedExportMatches(row, identity, gatewayId) {
 function operationTouchesSource(row, gatewayId) {
     return [row.input?.gatewayId, row.input?.fromGatewayId, row.input?.toGatewayId].includes(gatewayId);
 }
-export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOperationId) {
+function ownedSourceFence(root, ownerId, assignments) {
+    const fence = root.runtimeRestartFence, target = fence?.target;
+    return Boolean(ownerId && fence?.kind === "source-recovery" && fence.attemptId === ownerId && fence.auditId === ownerId &&
+        fence.gatewayId === root.gatewayId && ["reserved", "dispatched"].includes(fence.phase) && fence.doctor?.requestId === ownerId &&
+        isDeepStrictEqual(target?.agents, assignments.map(({ uid, slug, agentId, assignmentEpoch }) => ({ uid, slug, agentId, assignmentEpoch }))));
+}
+function pristineOutbound(row, gatewayId, sourceUids) {
+    return [row.kind === "migrate-customer", row.status === "pending", row.origin === "automatic",
+        row.createdBy === "glm-controller-placement-policy", row.startedAt === null, row.completedAt === null,
+        row.attempts === undefined || row.attempts === 0, Array.isArray(row.steps) && row.steps.length === 0,
+        row.attemptHistory === undefined || (Array.isArray(row.attemptHistory) && row.attemptHistory.length === 0),
+        row.input?.fromGatewayId === gatewayId, sourceUids.has(row.input?.uid), typeof row.input?.toGatewayId === "string",
+        Boolean(row.input?.toGatewayId), row.input?.toGatewayId !== gatewayId,
+        ["cancellationRequestedAt", "cutoverCommittedAt", "restoreAttempt", "schedulerHandoff", "customerMigrationV2", "sourceTransferExecution",
+            "firstStartedAt", "lastProgressAt", "resumeCount", "lastResumedAt", "error", "output", "rolledBack"]
+            .every(key => row[key] === undefined)].every(Boolean);
+}
+export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOperationId, predecessorId) {
     const [rootSnap, roster, active, failed] = await Promise.all([
         tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.collection(`gateways/${gatewayId}/assignments`)),
         tx.get(db.collection("glmOperations").where("status", "in", ["pending", "running"])),
@@ -68,7 +85,9 @@ export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOp
     if (!assignments.length || new Set(assignments.map(row => row.slug)).size !== assignments.length)
         conflict("source recovery roster is unavailable");
     const sourceUids = new Set(assignments.map(row => row.uid));
-    if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)))) {
+    const fenced = ownedSourceFence(root, ownOperationId, assignments) || ownedSourceFence(root, predecessorId, assignments);
+    if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)) &&
+        !(fenced && pristineOutbound(row.data(), gatewayId, sourceUids)))) {
         conflict("another source operation is active");
     }
     const users = await Promise.all(assignments.map(row => tx.get(db.doc(`users/${row.uid}`))));
@@ -88,4 +107,34 @@ export function assertSharedSourceRecoveryUnchanged(current, captured) {
     if (!isDeepStrictEqual(current, { root: captured.root, assignments: captured.assignments, failedExports: captured.failedExports })) {
         conflict("source recovery custody changed");
     }
+}
+function failedPredecessorMatches(row, gatewayId) {
+    const input = row.input ?? {}, source = input.sourceRecovery ?? {};
+    return [row.kind === "restart-gateway", row.status === "failed", input.gatewayId === gatewayId,
+        row.error === "another source operation is active", Number.isSafeInteger(row.startedAt), row.startedAt > 0,
+        Number.isSafeInteger(row.completedAt), row.completedAt >= row.startedAt,
+        row.cancellationRequestedAt === undefined, row.sourceRuntimeRecovery === undefined, row.sourceRecoverySupersededBy === undefined,
+        input.sourceRecovery !== undefined, input.restoreRecovery === undefined, source.supersede === undefined].every(Boolean);
+}
+function predecessorFenceMatches(request) {
+    const { operationId, source } = request, fence = request.fence ?? {}, input = request.input ?? {}, doctor = fence.doctor ?? {}, target = fence.target ?? {};
+    return [ownedSourceFence({ ...source.root, runtimeRestartFence: fence }, operationId, source.assignments), fence.phase === "dispatched",
+        typeof target.podUid === "string", Boolean(target.podUid), typeof target.podName === "string", Boolean(target.podName),
+        Object.keys(doctor).length === 1, doctor.requestId === operationId,
+        target.sourceSha === input.sourceSha, isDeepStrictEqual(target.images, input.images),
+        isDeepStrictEqual(target.failedExportOperationIds, source.failedExports.map(r => r.operationId))].every(Boolean);
+}
+export function assertSharedSourceRecoveryPredecessor(request) {
+    const { gatewayId, operationId, row, fence, source } = request, input = row.input?.sourceRecovery;
+    if (!failedPredecessorMatches(row, gatewayId) || !predecessorFenceMatches({ fence, operationId, source, input })) {
+        conflict("source recovery predecessor is unavailable");
+    }
+    assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports }, input);
+    return { operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
+}
+export async function readSharedSourceRecoverySupersession(db, tx, gatewayId, operationId) {
+    const [root, prior, source] = await Promise.all([tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.doc(`glmOperations/${operationId}`)),
+        readSharedSourceRecoveryAuthority(db, tx, gatewayId, operationId)]);
+    return { source, supersede: assertSharedSourceRecoveryPredecessor({ gatewayId, operationId,
+            row: prior.data() ?? {}, fence: root.data()?.runtimeRestartFence, source }) };
 }
