@@ -63,6 +63,7 @@ export interface ProjectCloneTarget {
 
 export interface ProjectCloneOptions {
   repoSource?: ProjectRepoSource | null;
+  refreshRemote?: boolean;
 }
 
 export interface CustomerContext {
@@ -538,7 +539,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(
 
   throwIfAborted(signal, uid);
   markStep("ssh-key");
-  steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+  steps.push(...(await ensureSshKeyAndGitea(adapter, slug, true)));
   throwIfAborted(signal, uid);
 
   markStep("workspace-repo");
@@ -649,7 +650,9 @@ async function cloneProjectsFromSnapshot(
         snapshot.slug,
         project.projectSlug,
         project.giteaRepoName,
-        projectCloneOptions(project),
+        githubRepoSourceOf(project)
+          ? projectCloneOptions(project)
+          : { refreshRemote: true },
       );
       if (cloned) steps.push("project-clone");
       else pending.push(project.projectSlug);

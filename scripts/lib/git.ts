@@ -853,6 +853,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
 export interface CloneProjectRepoOptions {
   repoSource?: ProjectRepoSource | null;
+  refreshRemote?: boolean;
   githubToken?: string | null;
   gitExec?: GitRunner;
   prepareRepository?: typeof setRepoSshCommand;
@@ -883,8 +884,9 @@ export async function cloneProjectRepo(
       giteaRepoName,
       githubToken: opts.githubToken,
     });
-    return projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
-      && customerRepositoryHasCanonicalRemote(dest);
+    if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
+      || !customerRepositoryHasCanonicalRemote(dest)) return false;
+    return refreshProjectCheckout(slug, projectSlug, dest, opts);
   }
 
   if (opts.repoSource?.provider === "github") {
@@ -906,6 +908,41 @@ export async function cloneProjectRepo(
     opts.gitExec ?? gitExec,
     opts.prepareRepository ?? setRepoSshCommand,
   );
+}
+
+function refreshProjectCheckout(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  opts: CloneProjectRepoOptions,
+): boolean {
+  if (!opts.refreshRemote) return true;
+  const lease = acquireProjectSourceSwitchLease(
+    opts.acquireMutationLease ?? acquireWorkspaceMutationLeaseSync,
+    dest,
+    slug,
+    projectSlug,
+  );
+  if (!lease) {
+    log(`⚠ [git] Cannot refresh ${slug}/${projectSlug} — project mutation lease is unavailable`);
+    return false;
+  }
+  try {
+    const run = (args: string[]) => (opts.gitExec ?? gitExec)(
+      dest, args, customerSshKeyPath(slug), opts.githubToken,
+    );
+    if (run(["fetch", "--no-tags", "origin"]) === null) return false;
+    const remoteMain = run(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"]);
+    if (remoteMain === null) return false;
+    if (!remoteMain) return true;
+    if (run(["merge", "--ff-only", "--no-edit", "@{upstream}"]) === null) {
+      log(`⚠ [git] Cannot refresh ${slug}/${projectSlug} without overwriting local project work`);
+      return false;
+    }
+    return true;
+  } finally {
+    lease.release();
+  }
 }
 
 function restoreMissingProjectGitMetadata(

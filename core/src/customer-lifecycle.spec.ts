@@ -2321,6 +2321,35 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     _resetInFlightUidsForTests();
   });
 
+  it("keeps the restored gateway's SSH key registered after the previous owner unmounts", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    state.disk.sshKey = true;
+    state.giteaRegisteredPubKey = "ssh-pubkey";
+    let keyOwner = "native";
+    const adapter = makeAdapter(state);
+    adapter.createGiteaUser = async () => { keyOwner = "shared"; };
+
+    await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+    if (keyOwner === "native") state.giteaRegisteredPubKey = null;
+
+    expect(keyOwner).toBe("shared");
+    expect(await adapter.readGiteaCustomerPubKeys("test")).toEqual(["ssh-pubkey"]);
+  });
+
+  it("requires Gitea project checkouts to refresh during runtime restoration", async () => {
+    const state = makeState(snap({
+      status: "complete",
+      projects: [{ projectSlug: "proofproj", giteaRepoName: "proofproj" }],
+    }), emptyDisk());
+    const adapter = makeAdapter(state);
+    const clone = vi.fn(adapter.cloneProjectRepo);
+    adapter.cloneProjectRepo = clone;
+
+    await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+
+    expect(clone).toHaveBeenCalledWith(state.user!.slug, "proofproj", "proofproj", { refreshRemote: true });
+  });
+
   it("does not publish a restored mount when an active project runtime is missing", async () => {
     const state = makeState(snap({ status: "complete" }), emptyDisk());
     const adapter = makeAdapter(state);
@@ -2433,7 +2462,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
 
     expect(state.cloneProjectCalls).toEqual([
       { projectSlug: "gh", giteaRepoName: null, opts: { repoSource: GITHUB_REPO_SOURCE } },
-      { projectSlug: "camp", giteaRepoName: "test-camp", opts: undefined },
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: { refreshRemote: true } },
     ]);
     expect(result.steps.filter((s) => s === "project-clone")).toHaveLength(2);
   });
@@ -2459,7 +2488,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
 
     expect(state.cloneProjectCalls).toEqual([
-      { projectSlug: "camp", giteaRepoName: "test-camp", opts: undefined },
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: { refreshRemote: true } },
     ]);
     expect(state.logs.find((l) => l.includes("test/gh"))).toMatch(/turned off by its owner/);
   });

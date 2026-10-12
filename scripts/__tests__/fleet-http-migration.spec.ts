@@ -1201,7 +1201,7 @@ describe("createRestoreHandler", () => {
         }),
       );
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-      expect(adapter.cloneProjectRepo).toHaveBeenCalledWith("chris", "demo", "chris-demo", undefined);
+      expect(adapter.cloneProjectRepo).toHaveBeenCalledWith("chris", "demo", "chris-demo", { refreshRemote: true });
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
       expect(pauseSystemConfigWatch).toHaveBeenCalledOnce();

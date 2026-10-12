@@ -48,6 +48,7 @@ export interface ProjectCloneTarget {
 }
 export interface ProjectCloneOptions {
     repoSource?: ProjectRepoSource | null;
+    refreshRemote?: boolean;
 }
 export interface CustomerContext {
     uid: string;

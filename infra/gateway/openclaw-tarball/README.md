@@ -127,8 +127,8 @@ Upstream is operator-selected main
 frozen for the October 11 recut. The operator approved independent local
 qualification rather than waiting for full upstream CI to recover. OpenClaw
 validation stays local; no full-upstream, fork-CI or iOS-green claim is made.
-Exact overlay source is `2ad5cffe5fdc2db87bed2aeb9d707d03dfd33671` on
-`ceckert/openclaw:codex/openclaw-controlled-main-oct11`.
+Exact overlay source is `c0be6a3b65361941447d0edcbf7479cba302dd7f` on
+`ceckert/openclaw:codex/doctor-deleted-artifact-discovery`.
 Package version `2026.9.9` identifies a main snapshot, not a released tag.
 
 Shared-state schema 21, agent schema 25 and protocol 4 follow the selected
@@ -160,6 +160,7 @@ The main snapshot's worker-computer takeover transport remains unchanged.
 | Predecessor catalog closure lifetime and request-free account startup | Distinct gaps tracked by #158986 and #159396; catalog publication alone does not remove them. |
 | Named-account removal custody and canonical identity | #167431 plus coordinated repairs; stop only the removed account, join pending startup, retain cleanup ownership on timeout, and fail closed on ambiguous dotted paths. |
 | Queued node-token/metadata authority | Pairing/presence publication; replacement and revocation must invalidate authority before dispatch. |
+| Deleted-agent maintenance discovery | Doctor must hold every journaled deleted identity, including restored files and unfinished deletion, while preserving runtime admission and cleanup selection. |
 
 Public channel dispatch from
 [#163685](https://github.com/openclaw/openclaw/pull/163685)

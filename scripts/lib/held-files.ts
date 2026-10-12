@@ -66,6 +66,21 @@ async function descriptorWritable(fdinfoPath: string): Promise<boolean | undefin
   return flags === undefined ? undefined : (Number.parseInt(flags, 8) & O_ACCMODE) !== 0;
 }
 
+async function isDetachedRegularFile(fdPath: string, logicalPath: string): Promise<boolean> {
+  try {
+    const descriptor = await fsp.stat(fdPath);
+    if (!descriptor.isFile() || descriptor.nlink !== 0) return false;
+    try {
+      const current = await fsp.stat(logicalPath);
+      return current.dev !== descriptor.dev || current.ino !== descriptor.ino;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+    }
+  } catch {
+    return false;
+  }
+}
+
 function connectionDatabasePath(heldPath: string): string {
   const sidecar = READ_ONLY_CONNECTION_SIDECARS.find((suffix) => heldPath.endsWith(suffix));
   return sidecar ? heldPath.slice(0, -sidecar.length) : heldPath;
@@ -107,12 +122,13 @@ async function heldByProcess(
     }
     const linked = linkedPath(target);
     if (!match(linked)) continue;
-    held.push({
-      path: linked,
-      writable: options.ignoreReadOnlyConnections
-        ? await descriptorWritable(path.join(processDir, "fdinfo", descriptor))
-        : undefined,
-    });
+    const deleted = target.endsWith(DELETED_LINK_SUFFIX);
+    const writable = options.ignoreReadOnlyConnections || deleted
+      ? await descriptorWritable(path.join(processDir, "fdinfo", descriptor))
+      : undefined;
+    if (!options.ignoreReadOnlyConnections && deleted && writable === false &&
+        await isDetachedRegularFile(path.join(fdDir, descriptor), linked)) continue;
+    held.push({ path: linked, writable });
   }
   return (options.ignoreReadOnlyConnections ? withoutReadOnlyConnections(held) : held).map((descriptor) => descriptor.path);
 }

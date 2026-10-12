@@ -306,6 +306,62 @@ describe("cloneProjectRepo for a GitHub-backed project", () => {
     ).toBe("local work\n");
   });
 
+  it("refreshes a cached Gitea checkout on runtime restore while preserving local work", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    git(paths.scratch, ["clone", canonicalOrigin, dest]);
+    git(dest, ["remote", "set-url", "origin", GITEA_SSH_REMOTE]);
+    externalizeCustomerGitDir(dest, {
+      giteaRepoName: "demo",
+      fetchCanonical: (_worktree, metadata) => {
+        git(metadata, ["fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
+      },
+    });
+    fs.writeFileSync(path.join(dest, "README.md"), "uncommitted local edit\n");
+    fs.writeFileSync(path.join(dest, "local-only.md"), "untracked local work\n");
+    const seed = path.join(paths.scratch, "seed");
+    fs.writeFileSync(path.join(seed, "lifecycle-proof.txt"), "committed on Native\n");
+    git(seed, ["add", "lifecycle-proof.txt"]);
+    git(seed, ["commit", "-m", "native project work"]);
+    git(seed, ["push", "origin", "main"]);
+
+    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
+      refreshRemote: true,
+      gitExec: localGitExec,
+    })).toBe(true);
+    expect(fs.readFileSync(path.join(dest, "lifecycle-proof.txt"), "utf8")).toBe("committed on Native\n");
+    expect(fs.readFileSync(path.join(dest, "README.md"), "utf8")).toBe("uncommitted local edit\n");
+    expect(fs.readFileSync(path.join(dest, "local-only.md"), "utf8")).toBe("untracked local work\n");
+    expect(git(dest, ["rev-parse", "HEAD"])).toBe(git(seed, ["rev-parse", "HEAD"]));
+  });
+
+  it("refuses a cached project refresh that would overwrite conflicting local work", async () => {
+    const dest = path.join(paths.customers, SLUG, "projects", "demo");
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    git(paths.scratch, ["clone", canonicalOrigin, dest]);
+    git(dest, ["remote", "set-url", "origin", GITEA_SSH_REMOTE]);
+    externalizeCustomerGitDir(dest, {
+      giteaRepoName: "demo",
+      fetchCanonical: (_worktree, metadata) => {
+        git(metadata, ["fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
+      },
+    });
+    const originalHead = git(dest, ["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(dest, "README.md"), "keep this local edit\n");
+    const seed = path.join(paths.scratch, "seed");
+    fs.writeFileSync(path.join(seed, "README.md"), "new upstream edit\n");
+    git(seed, ["add", "README.md"]);
+    git(seed, ["commit", "-m", "upstream project edit"]);
+    git(seed, ["push", "origin", "main"]);
+
+    expect(await cloneProjectRepo(SLUG, "demo", "demo", {
+      refreshRemote: true,
+      gitExec: localGitExec,
+    })).toBe(false);
+    expect(fs.readFileSync(path.join(dest, "README.md"), "utf8")).toBe("keep this local edit\n");
+    expect(git(dest, ["rev-parse", "HEAD"])).toBe(originalHead);
+  });
+
   it("switches one trusted GitHub source to another and quarantines old-only files", async () => {
     const dest = path.join(paths.customers, SLUG, "projects", "demo");
     initRepoWithOrigin(dest, GITHUB_REMOTE);

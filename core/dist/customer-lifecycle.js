@@ -109,7 +109,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     adapter.log(`[restore:${slug}] starting durable restore for migration (repoUrl=${snapshot.repoUrl ? "set" : "empty"}, projects=${snapshot.projects?.length ?? 0})`);
     throwIfAborted(signal, uid);
     markStep("ssh-key");
-    steps.push(...(await ensureSshKeyAndGitea(adapter, slug)));
+    steps.push(...(await ensureSshKeyAndGitea(adapter, slug, true)));
     throwIfAborted(signal, uid);
     markStep("workspace-repo");
     const workspaceSteps = snapshot.repoUrl
@@ -195,7 +195,9 @@ async function cloneProjectsFromSnapshot(adapter, snapshot) {
             continue;
         }
         try {
-            const cloned = await adapter.cloneProjectRepo(snapshot.slug, project.projectSlug, project.giteaRepoName, projectCloneOptions(project));
+            const cloned = await adapter.cloneProjectRepo(snapshot.slug, project.projectSlug, project.giteaRepoName, githubRepoSourceOf(project)
+                ? projectCloneOptions(project)
+                : { refreshRemote: true });
             if (cloned)
                 steps.push("project-clone");
             else
