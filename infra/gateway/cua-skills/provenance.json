@@ -1,14 +1,14 @@
 {
-  "driverVersion": "0.32.0",
-  "driverSourceCommit": "58aba84b5b83d77e7e2b0f006547699eb594e50d",
+  "driverVersion": "0.33.4",
+  "driverSourceCommit": "ba0033a661101669c60ce05f1fe5753bf8bad748",
   "skills": {
     "cua-driver": {
       "repository": "https://github.com/trycua/cua",
-      "commit": "58aba84b5b83d77e7e2b0f006547699eb594e50d",
+      "commit": "ba0033a661101669c60ce05f1fe5753bf8bad748",
       "path": "libs/cua-driver/rust/Skills/cua-driver",
-      "version": "0.32.0",
+      "version": "0.33.4",
       "adaptedFrom": {
-        "SKILL.md": "ff3488a506d3024c24f3729e35ed2301eadcb21e7fb51eff6831ba739f81d5cc",
+        "SKILL.md": "d0fe0c013cff17c3f9f94c88b6f67690b57beb7e48b4b29aeb45af6381e3b671",
         "LINUX.md": "98535c92944e753a5d2b3d98fe772d0ef44af4c2aae136de39f5f4d7ad38a1fe"
       },
       "files": [

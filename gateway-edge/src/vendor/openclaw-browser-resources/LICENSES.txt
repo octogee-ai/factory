@@ -1,4 +1,4 @@
-OpenClaw source c0be6a3b65361941447d0edcbf7479cba302dd7f
+OpenClaw source 4408d087223f08b3ca344154f255d660fc647b55
 
 MIT License
 
@@ -315,7 +315,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-mdast-util-from-markdown@2.0.3
+mdast-util-from-markdown@2.1.0
 
 (The MIT License)
 
@@ -1121,7 +1121,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-typebox@1.3.34
+typebox@1.3.35
 
 TypeBox
 

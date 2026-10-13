@@ -1,7 +1,7 @@
 {
-  "source": "c0be6a3b65361941447d0edcbf7479cba302dd7f",
+  "source": "4408d087223f08b3ca344154f255d660fc647b55",
   "inputs": {
-    "sha256": "a24ba89fcb8b4de4ca814d696d9d55bd7ba0f9e23d00f8f06ddeb249e36da03a",
+    "sha256": "433963fe418b2268d7a9f2d268fa42953a8bfec5890a3b557e7f10a35a99830a",
     "files": [
       "octogee/app/openclaw-browser/entry.ts",
       "octogee/app/openclaw-browser/media.ts",
@@ -11,8 +11,8 @@
       "octogee/app/openclaw-islands/i18n.ts",
       "octogee/app/openclaw-islands/inline-css.mjs",
       "octogee/app/openclaw-islands/licenses.mjs",
-      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.13/LICENSE",
-      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.13/provenance.json",
+      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.14/LICENSE",
+      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.14/provenance.json",
       "octogee/app/openclaw-islands/provenance.mjs",
       "octogee/app/openclaw-islands/solid-runtime.mjs",
       "octogee/app/openclaw-tool-icons/entry.ts",
@@ -33,7 +33,7 @@
     "longest-streak@3.1.0",
     "markdown-it@15.0.2",
     "markdown-table@3.0.4",
-    "mdast-util-from-markdown@2.0.3",
+    "mdast-util-from-markdown@2.1.0",
     "mdast-util-gfm-table@2.0.0",
     "mdast-util-phrasing@4.1.0",
     "mdast-util-to-markdown@2.1.3",
@@ -61,7 +61,7 @@
     "micromark-util-subtokenize@2.1.0",
     "micromark@4.0.3",
     "punycode.js@2.3.1",
-    "typebox@1.3.34",
+    "typebox@1.3.35",
     "uc.micro@3.0.0",
     "unist-util-is@6.0.1",
     "unist-util-stringify-position@4.0.0",

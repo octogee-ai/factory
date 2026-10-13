@@ -123,16 +123,16 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`7c2aa571ea03f08d8cee9bf1b5fe34b6547e9372`](https://github.com/openclaw/openclaw/commit/7c2aa571ea03f08d8cee9bf1b5fe34b6547e9372),
-frozen for the October 11 recut. The operator approved independent local
+[`5d5407ae973addb2174301fb17808382ef0a97a1`](https://github.com/openclaw/openclaw/commit/5d5407ae973addb2174301fb17808382ef0a97a1),
+frozen for the October 12 recut. The operator approved independent local
 qualification rather than waiting for full upstream CI to recover. OpenClaw
 validation stays local; no full-upstream, fork-CI or iOS-green claim is made.
-Exact overlay source is `c0be6a3b65361941447d0edcbf7479cba302dd7f` on
-`ceckert/openclaw:codex/doctor-deleted-artifact-discovery`.
-Package version `2026.9.9` identifies a main snapshot, not a released tag.
+Exact overlay source is `4408d087223f08b3ca344154f255d660fc647b55` on
+`ceckert/openclaw:codex/openclaw-controlled-main-oct12`.
+Package version `2026.10.2` identifies a main snapshot, not a released tag.
 
-Shared-state schema 21, agent schema 25 and protocol 4 follow the selected
-native contracts. Native schema admission and backups remain authoritative;
+Shared-state schema 21, agent schema 26 and protocol 4 follow the selected
+native contracts; there is no fork schema 22. Native admission and backups remain authoritative;
 packaging neither repairs nor resets live stores. The compiled gateway objects
 and committed native UI provenance must use this same clean, built source.
 Deployment requires the successful immutable Build main family, TEST first
@@ -145,6 +145,15 @@ runtime, channel lifetime, approval completion, session-member reader and Talk
 relay owners. Native owners replace obsolete interfaces and duplicated
 authority shims; adopted upstream fixes and retired Workshop code stay removed.
 The main snapshot's worker-computer takeover transport remains unchanged.
+
+The prior fork used shared version 21 for its private cron fences before
+upstream assigned that version to canonical cron predicate columns. Full
+Doctor recognizes only that complete prior layout, takes its normal verified
+backup, and applies upstream's exact predicate-column derivation without
+changing the version marker or canonical JSON. Partial or ambiguous layouts
+refuse repair. The retained handoff journal/fences are one lazily initialized
+feature fragment, not another global schema version. Ordinary runtime readers
+do not repair this layout. Agent 25 → 26 uses the unchanged native migration.
 
 | Retained contract | Consumer / condition for removal |
 | --- | --- |
@@ -194,16 +203,13 @@ parent commit decision. The worker and parent now share a finite ten-second
 monotonic deadline; expired, cancelled and stale authority still rolls back,
 and an accepted commit keeps write custody until native settlement. Existing
 absolute deadlines remain binding. This changes admission coordination, not
-SQLite durability or snapshot policy. The four-file overlay passes 16 focused
-and neighboring tests on its original overlay. Its mechanical port retains the
-current database-admission and caller-cancellation owners. A real six-second
-parent delay fails on the preceding frozen candidate and passes after the port;
-all 14 owning commit/lifetime cases pass and the isolated source review is clean
-through P2. Original-overlay build and image results are not qualification for
-this combined candidate. Native/Hobby live acceptance remains separately owned
-by the final acceptance effort.
+SQLite durability or snapshot policy. The port retains the current
+database-admission and caller-cancellation owners. Prior overlay proof is not
+qualification for this combined candidate. Native/Hobby live acceptance
+remains separately owned by the recovery effort until it explicitly releases
+rollout authority.
 
-The SQLite dialect guard intentionally reports design dependencies **19 → 20**.
+The SQLite dialect guard intentionally reports design dependencies **24 → 25**.
 Chris approved retaining this scoped dependency without weakening the guard or
 changing storage schema. Its owner is
 `src/cron/store/migration.kernel.ts: retiredMigrations`, called by
@@ -215,24 +221,24 @@ replay, retained host-bound jobs/scratch/grants, retired fences across repeated
 resume/abort, and rejection of stale unfencing. Removing ordering or sorting by
 operation ID is not equivalent.
 
-The final unused-export scans report 37 production and 21 full-tree findings
-across 20 files, all byte-identical to the frozen upstream base; the script scan
-has zero findings. No native guard, baseline or lint rule is relaxed to conceal
-these inherited findings. There is no aggregate `pnpm check` success claim.
+No native guard, baseline or lint rule is relaxed to conceal inherited findings.
+There is no aggregate `pnpm check` success claim.
 
 Native Control UI build-size warnings remain advisory and their budgets are
 unchanged. Local synthetic UI captures/tests are not authenticated TEST proof.
 Full Doctor is not claimed to be a semantic no-op: healthy boots skip it while
 bounded native recovery remains for failed boots and older/manual Builders.
-The exact installed build accepts isolated Shared and VM-Builder configs from
-the maintained policy, roster, account, pre-boot and per-agent catalog writers
-before Doctor, with no schema warnings. Account deletion fragments are applied
-through native merge-patch semantics, not persisted as null configuration.
-The offline Doctor comparison still canonicalizes a retired model reference,
-repairs the unmatched Shared default's unavailable provider, and records
-metadata, skills and optional account/plugin choices; no default schema-key
-translation is required to make either materialized config valid. This is
-synthetic config/schema evidence, not provider or desktop acceptance.
+Installed qualification must use Shared and VM-Builder configs from the
+maintained policy, roster, account, pre-boot and per-agent catalog writers;
+no fixture-only default-key translation may make an invalid producer pass.
+Use the image's runtime UID and Linux-backed fixture storage. Record Doctor's
+metadata and unavailable-provider model repairs separately from config validity
+and preservation of configured per-agent model, tool and browser policy.
+Account deletion fragments use native merge-patch semantics, not persisted
+null configuration. The mixed-store upgrade proof must originate with the
+exact predecessor package and run the actual installed candidate's backup,
+Doctor and pre-spawn reinspection. Synthetic config/schema evidence is not
+provider or desktop acceptance.
 Prior startup samples did not show faster startup and are not fresh evidence
 for this source. Installed-image qualification and live rollout acceptance must
 use the new exact artifacts, not October 8 proof images or an empty gateway.
@@ -250,7 +256,7 @@ GitHub CLI 2.102.0, Helm 4.3.0, yq 4.54.1, Terraform 1.16.5, Builder Firebase
 CLI 15.32.1, npm 12.2.0 and fd 10.5.0 stay unchanged. The native CUA driver
 builder uses the pinned Rust 1.99.0 image and the source's toolchain selector.
 The selected OpenClaw snapshot pins pnpm 12.9.0,
-Codex plugin dependency 0.160.0 and matched CUA package 0.32.0.
+Codex plugin dependency 0.160.0 and matched CUA package 0.33.4.
 
 The base retains the existing immutable Node 26.10.0 image, which satisfies
 the selected OpenClaw engine requirement. This recut does not refresh unrelated
@@ -274,7 +280,7 @@ the same image-build instruction. Reopening an inherited Docker-layer SQLite
 database changes its birth time during copy-up and trips native admission.
 Native guards and live state remain unchanged.
 
-CUA uses the matched 0.32.0 JavaScript/native package and the narrow Linux
+CUA uses the matched 0.33.4 JavaScript/native package and the narrow Linux
 desktop-discovery source patch below. The published modifier fix is adopted;
 the old modifier-only fork is no longer an input.
 No desktop OS image change is included. Environment rollout is separately gated
@@ -320,18 +326,18 @@ preservation remain removed. No replacement admin RPC is needed.
 ## Native CUA desktop-discovery preservation
 
 `Dockerfile.base` builds the Linux SDK from the official
-[CUA 0.32.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.32.0),
-exact source `58aba84b5b83d77e7e2b0f006547699eb594e50d`, with
+[CUA 0.33.4 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.33.4),
+exact source `ba0033a661101669c60ce05f1fe5753bf8bad748`, with
 `cua-desktop-discovery.patch`. The published modifier fix is already present,
 so the older modifier-only fork is not used. Rust and the other CLI/tool pins
 remain unchanged.
 
 The sparse checkout also includes `libs/cua/Cargo.toml` and
-`libs/cua/crates/cua-telemetry`, the 0.32.0 driver's existing path dependency.
+`libs/cua/crates/cua-telemetry`, the 0.33.4 driver's existing path dependency.
 The source revision, Cargo lockfile, dependency features and test gates remain
 unchanged; the recipe does not fetch the rest of the CUA workspace.
 
-The 0.32.0 `GetAccessibilityTreeTool` still discovers only X11 windows. The
+The 0.33.4 `GetAccessibilityTreeTool` still discovers only X11 windows. The
 patch keeps discovery on the native Wayland/X11 dispatcher, excludes
 off-screen windows and known dead owners, remembers observed Wayland origins,
 and emits the existing canonical window record (including bounds, app name,
@@ -348,7 +354,7 @@ new source/library pair must include the Linux crate tests, both required image
 architectures, dynamic loading and the installed driver artifact check; old
 0.28.2 build results do not qualify this pair.
 
-The installer requires matching 0.32.0 installed JavaScript bindings, native
+The installer requires matching 0.33.4 installed JavaScript bindings, native
 package, plugin dependency and patch metadata, the exact official source/tag,
 and a patch digest. It first validates the original SDK against OpenClaw's
 native artifact manifest, then replaces only that architecture's SDK digest in
@@ -366,8 +372,8 @@ not meet that removal condition.
 ## Vendored computer-use skills
 
 `infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
-0.32.0 skill pack
-([`58aba84b`](https://github.com/trycua/cua/tree/58aba84b5b83d77e7e2b0f006547699eb594e50d/libs/cua-driver/rust/Skills/cua-driver))
+0.33.4 skill pack
+([`ba0033a6`](https://github.com/trycua/cua/tree/ba0033a661101669c60ce05f1fe5753bf8bad748/libs/cua-driver/rust/Skills/cua-driver))
 and the `cua-omarchy` companion from Omarchy
 [PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
 `provenance.json` records each repository, commit, and the SHA-256 of every

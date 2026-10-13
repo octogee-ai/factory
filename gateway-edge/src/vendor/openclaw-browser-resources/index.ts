@@ -12,13 +12,13 @@ var p = (e, t, n) => () => {
     throw n = [o], o;
   }
 };
-var IR = (e, t) => () => {
+var vR = (e, t) => () => {
   try {
     return t || e((t = { exports: {} }).exports, t), t.exports;
   } catch (n) {
     throw t = 0, n;
   }
-}, st = (e, t) => {
+}, ct = (e, t) => {
   for (var n in t)
     fb(e, n, { get: t[n], enumerable: !0 });
 }, jV = (e, t, n, o) => {
@@ -27,7 +27,7 @@ var IR = (e, t) => () => {
       !zV.call(e, r) && r !== n && fb(e, r, { get: () => t[r], enumerable: !(o = UV(t, r)) || o.enumerable });
   return e;
 };
-var wR = (e, t, n) => (n = e != null ? NV(FV(e)) : {}, jV(
+var IR = (e, t, n) => (n = e != null ? NV(FV(e)) : {}, jV(
   // If the importer is in node compatibility mode or this is not an ESM
   // file that has been converted to a CommonJS file using a Babel-
   // compatible transform (i.e. "__esModule" has not been set), then set
@@ -81,8 +81,8 @@ var BV, Zde, Po = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/@noble+ed25519@3.2.0/node_modules/@noble/ed25519/index.js
-var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, K, VV, hb, PR, Vi, Qc, Hi, WV, ZV, Xr, JV, _R, YV, vb, XV, ER, TR, QV, OR = p(() => {
-  CR = Object.freeze, ls = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn, yb = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn, Gd = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n, bb = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an, xb = 0x6666666666666666666666666666666666666666666666666666666666666658n, Kd = ls - 1n, qV = CR({
+var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, K, VV, hb, AR, Vi, Qc, Hi, WV, ZV, Xr, JV, kR, YV, vb, XV, _R, ER, QV, PR = p(() => {
+  TR = Object.freeze, ls = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn, yb = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn, Gd = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n, bb = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an, xb = 0x6666666666666666666666666666666666666666666666666666666666666658n, Kd = ls - 1n, qV = TR({
     p: ls,
     n: yb,
     h: 8n,
@@ -90,17 +90,17 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
     d: Gd,
     Gx: bb,
     Gy: xb
-  }), GV = 32, SR = (e) => e instanceof Uint8Array || ArrayBuffer.isView(e) && e.constructor.name === "Uint8Array" && e.BYTES_PER_ELEMENT === 1, Hd = (e, t, n = "") => {
-    if (SR(e) && (t === void 0 || e.length === t))
+  }), GV = 32, wR = (e) => e instanceof Uint8Array || ArrayBuffer.isView(e) && e.constructor.name === "Uint8Array" && e.BYTES_PER_ELEMENT === 1, Hd = (e, t, n = "") => {
+    if (wR(e) && (t === void 0 || e.length === t))
       return e;
-    let o = SR(e), r = t !== void 0 ? ` of length ${t}` : "", i = o ? `length=${e.length}` : `type=${typeof e}`, a = (n ? `"${n}" ` : "") + "expected Uint8Array" + r + ", got " + i;
+    let o = wR(e), r = t !== void 0 ? ` of length ${t}` : "", i = o ? `length=${e.length}` : `type=${typeof e}`, a = (n ? `"${n}" ` : "") + "expected Uint8Array" + r + ", got " + i;
     throw o ? new RangeError(a) : new TypeError(a);
-  }, KV = (e, t = "", n) => Uint8Array.from(Hd(e, n, t)), RR = (e, t) => e.toString(16).padStart(t, "0"), $R = (e) => {
+  }, KV = (e, t = "", n) => Uint8Array.from(Hd(e, n, t)), CR = (e, t) => e.toString(16).padStart(t, "0"), RR = (e) => {
     let t = "";
     for (let n of Hd(e))
-      t += RR(n, 2);
+      t += CR(n, 2);
     return t;
-  }, AR = (e) => {
+  }, $R = (e) => {
     let t = "hex invalid";
     if (typeof e != "string")
       throw new TypeError(t);
@@ -126,11 +126,11 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
     if (t <= e && e < n)
       return e;
     throw new RangeError(o);
-  }, _t = (e, t = ls) => (e %= t) >= 0n ? e : t + e, kR = (1n << 255n) - 1n, K = (e) => {
+  }, _t = (e, t = ls) => (e %= t) >= 0n ? e : t + e, SR = (1n << 255n) - 1n, K = (e) => {
     if (e < 0n)
       throw new RangeError("negative coordinate");
-    let t = (e >> 255n) * 19n + (e & kR);
-    return t = (t >> 255n) * 19n + (t & kR), t % ls;
+    let t = (e >> 255n) * 19n + (e & SR);
+    return t = (t >> 255n) * 19n + (t & SR), t % ls;
   }, VV = (e, t) => {
     if (e === 0n)
       throw new Error("invert: expected non-zero number");
@@ -148,7 +148,7 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
     if (e instanceof Vi)
       return e;
     throw new TypeError("Point expected");
-  }, PR = 2n ** 256n, Vi = class e {
+  }, AR = 2n ** 256n, Vi = class e {
     static BASE;
     static ZERO;
     X;
@@ -158,8 +158,8 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
     // Constructor only bounds-checks and freezes XYZT coordinates; it does not prove the point is
     // on-curve or that T matches X*Y/Z.
     constructor(t, n, o, r) {
-      let i = PR;
-      this.X = Ki(t, 0n, i), this.Y = Ki(n, 0n, i), this.Z = Ki(o, 1n, i), this.T = Ki(r, 0n, i), CR(this);
+      let i = AR;
+      this.X = Ki(t, 0n, i), this.Y = Ki(n, 0n, i), this.Z = Ki(o, 1n, i), this.T = Ki(r, 0n, i), TR(this);
     }
     static CURVE() {
       return qV;
@@ -182,7 +182,7 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
       return h !== !!(m & 1n) && (m = _t(-m)), new e(m, i, 1n, K(m * i));
     }
     static fromHex(t, n) {
-      return e.fromBytes(AR(t), n);
+      return e.fromBytes($R(t), n);
     }
     get x() {
       return this.toAffine().x;
@@ -266,7 +266,7 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
       return o[31] |= t & 1n ? 128 : 0, o;
     }
     toHex() {
-      return $R(this.toBytes());
+      return RR(this.toBytes());
     }
     clearCofactor() {
       return this.multiply(8n, !1);
@@ -280,7 +280,7 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
   }, Qc = new Vi(bb, xb, 1n, _t(bb * xb)), Hi = new Vi(0n, 1n, 1n, 0n);
   Vi.BASE = Qc;
   Vi.ZERO = Hi;
-  WV = (e) => AR(RR(Ki(e, 0n, PR), 64)).reverse(), ZV = (e) => BigInt("0x" + $R(Uint8Array.from(Hd(e)).reverse())), Xr = (e, t) => {
+  WV = (e) => $R(CR(Ki(e, 0n, AR), 64)).reverse(), ZV = (e) => BigInt("0x" + RR(Uint8Array.from(Hd(e)).reverse())), Xr = (e, t) => {
     let n = e;
     for (; t-- > 0; )
       n = K(n * n);
@@ -288,8 +288,8 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
   }, JV = (e) => {
     let t = K(e * e), n = K(t * e), o = K(Xr(n, 2) * n), r = K(Xr(o, 1) * e), i = K(Xr(r, 5) * r), a = K(Xr(i, 10) * i), s = K(Xr(a, 20) * a), u = K(Xr(s, 40) * s), l = K(Xr(u, 80) * u), m = K(Xr(l, 80) * u), h = K(Xr(m, 10) * i);
     return K(Xr(h, 2) * e);
-  }, _R = 0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0n, YV = (e, t) => {
-    let n = K(t * K(t * t)), o = K(K(n * n) * t), r = JV(K(e * o)), i = K(e * K(n * r)), a = K(t * K(i * i)), s = i, u = K(i * _R), l = a === e, m = a === _t(-e), h = a === _t(-e * _R);
+  }, kR = 0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0n, YV = (e, t) => {
+    let n = K(t * K(t * t)), o = K(K(n * n) * t), r = JV(K(e * o)), i = K(e * K(n * r)), a = K(t * K(i * i)), s = i, u = K(i * kR), l = a === e, m = a === _t(-e), h = a === _t(-e * kR);
     return l && (i = s), (m || h) && (i = u), (_t(i) & 1n) === 1n && (i = _t(-i)), { isValid: l || m, value: i };
   }, vb = {
     sha512Async: async (e) => {
@@ -308,16 +308,16 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
       t = n.double();
     }
     return e;
-  }, TR = (e, t) => {
+  }, ER = (e, t) => {
     let n = t.negate();
     return e ? n : t;
   }, QV = (e) => {
-    let t = ER || (ER = XV()), n = Hi, o = Qc;
+    let t = _R || (_R = XV()), n = Hi, o = Qc;
     for (let r = 0; r < 33; r++) {
       let i = Number(e & 255n);
       e >>= 8n, i > 128 && (i -= 256, e += 1n);
       let a = r * 128, s = a + Math.abs(i) - 1, u = r % 2 !== 0, l = i < 0;
-      i === 0 ? o = o.add(TR(u, t[a])) : n = n.add(TR(l, t[s]));
+      i === 0 ? o = o.add(ER(u, t[a])) : n = n.add(ER(l, t[s]));
     }
     if (e !== 0n)
       throw new Error("invalid wnaf");
@@ -326,16 +326,16 @@ var CR, ls, yb, Gd, bb, xb, Kd, qV, GV, SR, Hd, KV, RR, $R, AR, HV, Ki, _t, kR, 
 });
 
 // openclaw/packages/gateway-client/src/device-auth.ts
-var DR = p(() => {
+var OR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/chat-stream-message.ts
-var MR = p(() => {
+var DR = p(() => {
   Le();
 });
 
 // openclaw/packages/gateway-client/src/chat-stream-projection.ts
-var NR = p(() => {
+var MR = p(() => {
   Le();
 });
 
@@ -414,20 +414,20 @@ var Ae, spe, cpe, Ib = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/connect-auth.ts
-var UR = p(() => {
+var NR = p(() => {
   pt();
 });
 
 // openclaw/packages/gateway-client/src/browser-device-auth.ts
-var LR = p(() => {
+var UR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/gateway-origin-scope.ts
-var FR = p(() => {
+var LR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/model-catalog-connect.ts
-var zR = p(() => {
+var FR = p(() => {
 });
 
 // openclaw/packages/retry/src/index.ts
@@ -447,7 +447,7 @@ function eu(e) {
 function rW(e, t) {
   return e === "full" ? "full" : typeof e == "number" && Number.isFinite(e) ? Math.min(Math.max(e, 0), 1) : t;
 }
-function oW(e = jR, t) {
+function oW(e = zR, t) {
   let n = nW(t?.attempts, e.attempts), o = eu(
     Wd(t?.minDelayMs, e.minDelayMs, 0)
   ), r = Math.max(
@@ -480,7 +480,7 @@ function aW(e, t = "Non-Error thrown") {
 function sW(e = {}) {
   let t = e.sleep ?? tW, n = e.random ?? Math.random, o = e.createFailure ?? ((r) => aW(r.at(-1) ?? new Error("Retry failed")));
   return async function(i, a = 3, s = 300) {
-    let u = [], l = typeof a == "number", m = typeof a == "number" ? { attempts: a } : a, h = oW(jR, m), b = h.attempts, f = h.minDelayMs, y = h.maxDelayMs > 0 ? h.maxDelayMs : Number.POSITIVE_INFINITY, x = m.retryAfterMaxDelayMs === void 0 ? y : Math.max(
+    let u = [], l = typeof a == "number", m = typeof a == "number" ? { attempts: a } : a, h = oW(zR, m), b = h.attempts, f = h.minDelayMs, y = h.maxDelayMs > 0 ? h.maxDelayMs : Number.POSITIVE_INFINITY, x = m.retryAfterMaxDelayMs === void 0 ? y : Math.max(
       f,
       eu(Wd(m.retryAfterMaxDelayMs, y, 0))
     ), v = m.random ?? n, S = m.sleep ?? t, w = m.shouldRetry ?? (() => !0);
@@ -510,8 +510,8 @@ function sW(e = {}) {
     throw o(u);
   };
 }
-var jR, tW, gpe, BR = p(() => {
-  jR = {
+var zR, tW, gpe, jR = p(() => {
+  zR = {
     attempts: 3,
     minDelayMs: 300,
     maxDelayMs: 3e4,
@@ -529,13 +529,13 @@ var jR, tW, gpe, BR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/protocol-client.ts
-var qR = p(() => {
+var BR = p(() => {
   Le();
-  BR();
+  jR();
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var Tpe, GR = p(() => {
+var Tpe, qR = p(() => {
   Ib();
   Tpe = /* @__PURE__ */ new Set([
     Ae.AUTH_TOKEN_MISSING,
@@ -557,20 +557,20 @@ var Tpe, GR = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/stable-stringify.ts
-var KR = p(() => {
+var GR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/gateway-error-details.ts
-var HR = p(() => {
+var KR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/session-projection-message-identity.ts
-function VR(e) {
+function HR(e) {
   return typeof e == "number" && Number.isSafeInteger(e) && e > 0 ? e : null;
 }
-function WR(e, t) {
+function VR(e, t) {
   let n = At(At(e)?.__openclaw);
-  return VR(n?.seq) ?? VR(t?.messageSeq);
+  return HR(n?.seq) ?? HR(t?.messageSeq);
 }
 function tu(e) {
   let t = Ft(e);
@@ -586,7 +586,7 @@ function wb(e, t) {
   return {
     role: o,
     id: Ft(r?.id) ?? Ft(t?.messageId),
-    sequence: WR(e, t),
+    sequence: VR(e, t),
     idempotencyKey: b,
     sendId: o === "user" ? f ?? C : null,
     runId: C,
@@ -595,25 +595,25 @@ function wb(e, t) {
     externalSource: h && i && a && s ? JSON.stringify([i, a, s]) : null
   };
 }
-var ZR = p(() => {
+var WR = p(() => {
   Le();
   pt();
 });
 
 // openclaw/packages/gateway-client/src/session-projection.ts
-var JR = p(() => {
+var ZR = p(() => {
   Le();
   pt();
-  ZR();
+  WR();
 });
 
 // openclaw/packages/normalization-core/src/result.ts
-var YR = p(() => {
+var JR = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/agent-id.ts
 var Zd = p(() => {
-  YR();
+  JR();
 });
 
 // openclaw/packages/normalization-core/src/uuid.ts
@@ -621,7 +621,7 @@ var Sb = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/session-subscriptions.ts
-var XR = p(() => {
+var YR = p(() => {
   Zd();
   Sb();
 });
@@ -661,43 +661,43 @@ var _b, Eb, Ype, Xpe, Tb = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/startup-unavailable.ts
-var QR = p(() => {
+var XR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/version.ts
-var e0 = p(() => {
+var QR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/browser.ts
-var t0 = p(() => {
+var e0 = p(() => {
+  OR();
   DR();
   MR();
-  NR();
-  LR();
-  FR();
   UR();
-  zR();
+  LR();
+  NR();
+  FR();
+  BR();
   qR();
-  GR();
-  JR();
-  XR();
+  ZR();
+  YR();
   Tb();
   Ib();
-  HR();
+  KR();
+  XR();
   QR();
-  e0();
 });
 
 // openclaw/packages/normalization-core/src/balanced-json.ts
-var n0 = p(() => {
+var t0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/boolean-coercion.ts
-var r0 = p(() => {
+var n0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/cjk-chars.ts
-var Cb, wme, Sme, o0 = p(() => {
+var Cb, wme, Sme, r0 = p(() => {
   Cb = [
     [
       [183, 183],
@@ -758,13 +758,13 @@ var Rb = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/error-coercion.ts
-var cW, a0, s0, i0, c0 = p(() => {
+var cW, i0, a0, o0, s0 = p(() => {
   cW = /* @__PURE__ */ Symbol.for(
     "openclaw.provider-auth-persistence-error"
-  ), i0 = class extends (s0 = AggregateError, a0 = cW, s0) {
+  ), o0 = class extends (a0 = AggregateError, i0 = cW, a0) {
     constructor(n, o, { cause: r }) {
       super([o, r], n, { cause: r });
-      this[a0] = !0;
+      this[i0] = !0;
       this.persistenceError = o, this.cleanupError = r;
     }
   };
@@ -775,7 +775,7 @@ var $b = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/format.ts
-var u0 = p(() => {
+var c0 = p(() => {
   $b();
 });
 
@@ -795,88 +795,88 @@ var Pb = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/response-bytes.ts
-var l0 = p(() => {
+var u0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/text-decoding.ts
-var d0 = p(() => {
+var l0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/utf16-slice.ts
-function p0(e) {
+function d0(e) {
   return e >= 55296 && e <= 56319;
 }
-function m0(e) {
+function p0(e) {
   return e >= 56320 && e <= 57343;
 }
-function f0(e, t, n) {
+function m0(e, t, n) {
   let o = e.length, r = t < 0 ? Math.max(o + t, 0) : Math.min(t, o), i = n === void 0 ? o : n < 0 ? Math.max(o + n, 0) : Math.min(n, o);
   if (i <= r)
     return "";
   if (r > 0 && r < o) {
     let a = e.charCodeAt(r);
-    m0(a) && p0(e.charCodeAt(r - 1)) && (r += 1);
+    p0(a) && d0(e.charCodeAt(r - 1)) && (r += 1);
   }
   if (i > 0 && i < o) {
     let a = e.charCodeAt(i - 1);
-    p0(a) && m0(e.charCodeAt(i)) && (i -= 1);
+    d0(a) && p0(e.charCodeAt(i)) && (i -= 1);
   }
   return e.slice(r, i);
 }
 function ds(e, t) {
   let n = Math.max(0, Math.floor(t));
-  return e.length <= n ? e : f0(e, 0, n);
+  return e.length <= n ? e : m0(e, 0, n);
 }
 var Ji = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/index.ts
 var Ar = p(() => {
+  t0();
   n0();
   r0();
-  o0();
   Rb();
-  c0();
+  s0();
   $b();
-  u0();
+  c0();
   Pb();
   Po();
   Le();
-  l0();
-  KR();
+  u0();
+  GR();
   pt();
   Vd();
-  d0();
+  l0();
   Ji();
 });
 
 // openclaw/packages/net-policy/src/redact-sensitive-url.ts
-var g0 = p(() => {
+var f0 = p(() => {
   pt();
 });
 
 // openclaw/src/logging/redact-pattern-runtime.ts
-function h0(e) {
+function g0(e) {
   let t = e.match(/^\/(.+)\/([gimsuy]*)$/);
   if (!t)
     return [e, "gi"];
   let n = t[1] ?? "", o = t[2] ?? "";
   return [n, o.includes("g") ? o : `${o}g`];
 }
-var y0 = p(() => {
+var h0 = p(() => {
 });
 
 // openclaw/packages/acp-core/src/structured-auth-redaction.ts
-var Jd, ni, ps, ms, Oo, Do, Yd, Yi, ct, tfe, nfe, b0 = p(() => {
-  Jd = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ni = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, ps = String.raw`\\{1,64}t`, ms = String.raw`(?:[ \t]+|${ps})`, Oo = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]*)`, Do = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]+)`, Yd = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${ps})|[ \t]*\\{1,64}n(?:[ \t]*|${ps})|[ \t]*${ps}[ \t]*)`, Yi = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, ct = String.raw`(?:\\{1,64}["']|["']|)`, tfe = String.raw`${Yi}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${ct}[ \t]*[:=]${Oo}${ct}([^\s\\"',;]+)`, nfe = new RegExp(
-    String.raw`${Yi}(?:Proxy-)?Authorization${ct}[ \t]*[:=]${Oo}${ct}(${Jd})${Do}`,
+var Jd, ni, ps, ms, Oo, Do, Yd, Yi, ut, tfe, nfe, y0 = p(() => {
+  Jd = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ni = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, ps = String.raw`\\{1,64}t`, ms = String.raw`(?:[ \t]+|${ps})`, Oo = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]*)`, Do = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]+)`, Yd = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${ps})|[ \t]*\\{1,64}n(?:[ \t]*|${ps})|[ \t]*${ps}[ \t]*)`, Yi = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, ut = String.raw`(?:\\{1,64}["']|["']|)`, tfe = String.raw`${Yi}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${ut}[ \t]*[:=]${Oo}${ut}([^\s\\"',;]+)`, nfe = new RegExp(
+    String.raw`${Yi}(?:Proxy-)?Authorization${ut}[ \t]*[:=]${Oo}${ut}(${Jd})${Do}`,
     "giu"
   );
 });
 
 // openclaw/src/logging/redact-pem.ts
-var x0, v0 = p(() => {
-  x0 = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`;
+var b0, x0 = p(() => {
+  b0 = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`;
 });
 
 // openclaw/src/logging/redact-patterns.ts
@@ -884,19 +884,19 @@ function Db(e) {
   let t = e.charCodeAt(0);
   return t >= 65 && t <= 90 || t >= 97 && t <= 122 || t >= 48 && t <= 57 || e === "/" || e === "+" || e === "=";
 }
-function C0(e) {
+function T0(e) {
   for (let t = 39; t < e.length; ) {
     let n = t;
     for (; n > t - 40 && Db(e[n]); )
       n--;
     if (n === t - 40)
-      return T0.test(e);
+      return E0.test(e);
     t = n + 40;
   }
   return !1;
 }
 function* AW(e) {
-  if (!C0(e))
+  if (!T0(e))
     return;
   let t = {
     '"': '"',
@@ -916,7 +916,7 @@ function* AW(e) {
         if (!v && (y === "_" || Db(y)) || x === "_" || e.slice(h.origin - 8, h.origin) === ";base64," || f && !S && h.start >= b.start && h.end <= b.end)
           continue;
         let w = e.slice(h.start, h.end);
-        T0.test(w) && (yield { match: w, groups: [w], input: e, offset: h.start });
+        E0.test(w) && (yield { match: w, groups: [w], input: e, offset: h.start });
       }
       a.length = 0, o = -1, r = void 0;
       continue;
@@ -962,8 +962,8 @@ function* NW(e) {
         o = !0;
         let m = r + i[0].length;
         if (!u) {
-          w0.lastIndex = m;
-          let b = w0.exec(e)?.[0];
+          I0.lastIndex = m;
+          let b = I0.exec(e)?.[0];
           b && (m += b.length, yield { match: e.slice(r, m), groups: [b], input: e, offset: r });
         }
         let h = t[n];
@@ -978,39 +978,39 @@ function* NW(e) {
 ` || a === "\r" ? o = !1 : (a === "=" || a === ":" && !MW.test(e[r + 1] ?? " ")) && (o = !0);
   }
 }
-var S0, fs, uW, Qd, lW, dW, k0, Mb, _0, pW, E0, I0, sfe, mW, fW, gW, hW, yW, bW, xW, vW, IW, wW, SW, kW, _W, EW, TW, Xi, Xd, T0, CW, RW, $W, PW, OW, w0, DW, MW, UW, LW, FW, R0, $0, ep, zW, jW, BW, qW, GW, KW, HW, VW, WW, ZW, JW, A0, P0 = p(() => {
-  b0();
-  v0();
-  S0 = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, fs = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, uW = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, Qd = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, lW = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${Qd}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, dW = String.raw`${lW}|app[-_]?secret|credential|${fs}`, k0 = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${fs}`, Mb = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${fs}`, _0 = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${fs}`, pW = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, E0 = String.raw`password|passphrase|pass|passwd`, I0 = String.raw`${Qd}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${fs}`, sfe = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, mW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${S0})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, fW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${S0})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, gW = String.raw`(^|[\s,;({\["])(?:${k0})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, hW = String.raw`(^|[\s,;({\["])(?:${k0})=(["'\x60]?[^\s&#"'\x60<>]+)`, yW = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${fs}`, bW = String.raw`/(^|[\s,{])(?:(?:${yW})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${E0})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, xW = String.raw`/(^|[\s,{])(?:(?:${_0})\s*:\s*|(?:${Mb})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, vW = String.raw`/(^|[\s,{])(?:${pW})=([^\s#"'\x60<>]+)/g`, IW = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${E0})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, wW = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, SW = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${Qd}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, kW = String.raw`"(?:${uW})"\s*:\s*"([^"]+)"`, _W = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, EW = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, TW = String.raw`(^|[^A-Za-z0-9])`, Xi = (e) => String.raw`${TW}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, Xd = String.raw`(^|[^A-Za-z0-9_])`;
-  T0 = /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
+var w0, fs, uW, Qd, lW, dW, S0, Mb, k0, pW, _0, v0, sfe, mW, fW, gW, hW, yW, bW, xW, vW, IW, wW, SW, kW, _W, EW, TW, Xi, Xd, E0, CW, RW, $W, PW, OW, I0, DW, MW, UW, LW, FW, C0, R0, ep, zW, jW, BW, qW, GW, KW, HW, VW, WW, ZW, JW, $0, A0 = p(() => {
+  y0();
+  x0();
+  w0 = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, fs = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, uW = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, Qd = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, lW = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${Qd}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, dW = String.raw`${lW}|app[-_]?secret|credential|${fs}`, S0 = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${fs}`, Mb = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${fs}`, k0 = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${fs}`, pW = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, _0 = String.raw`password|passphrase|pass|passwd`, v0 = String.raw`${Qd}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${fs}`, sfe = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, mW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${w0})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, fW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${w0})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, gW = String.raw`(^|[\s,;({\["])(?:${S0})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, hW = String.raw`(^|[\s,;({\["])(?:${S0})=(["'\x60]?[^\s&#"'\x60<>]+)`, yW = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${fs}`, bW = String.raw`/(^|[\s,{])(?:(?:${yW})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${_0})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, xW = String.raw`/(^|[\s,{])(?:(?:${k0})\s*:\s*|(?:${Mb})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, vW = String.raw`/(^|[\s,{])(?:${pW})=([^\s#"'\x60<>]+)/g`, IW = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${_0})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, wW = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, SW = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${Qd}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, kW = String.raw`"(?:${uW})"\s*:\s*"([^"]+)"`, _W = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, EW = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, TW = String.raw`(^|[^A-Za-z0-9])`, Xi = (e) => String.raw`${TW}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, Xd = String.raw`(^|[^A-Za-z0-9_])`;
+  E0 = /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
   CW = /\s/, RW = /[A-Za-z0-9+.-]/, $W = /[A-Za-z]/;
   PW = Object.freeze({
     source: "aws-secret-access-key",
     exec: AW,
-    couldMatch: C0
+    couldMatch: T0
   }), OW = new RegExp(
-    String.raw`(?<![A-Za-z0-9])(pass|${_0})\s*:\s*`,
+    String.raw`(?<![A-Za-z0-9])(pass|${k0})\s*:\s*`,
     "gi"
-  ), w0 = /[^\s#"'\x60<>]+/y, DW = /[A-Za-z0-9]/, MW = /[ \t\r\n]/;
+  ), I0 = /[^\s#"'\x60<>]+/y, DW = /[A-Za-z0-9]/, MW = /[ \t\r\n]/;
   UW = Object.freeze({
     source: "bare-pass-assignment",
     exec: NW
-  }), LW = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`, FW = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`, R0 = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token", $0 = "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token", ep = String.raw`(^|[^A-Za-z0-9_?&-]|\\{1,64}[rn])`, zW = String.raw`${ep}(?:${R0})${ct}[ \t]*:${Oo}${ct}([^\s\\"',;]+)`, jW = String.raw`${ep}(?:${R0})${ct}[ \t]*=${Oo}${ct}([^\s\\"',;]+)`, BW = String.raw`${ep}(?:${$0})\s*:\s*([^\s"',;]+)`, qW = String.raw`${ep}(?:${$0})\s*=\s*([^\s"',;]+)`, GW = [
-    String.raw`${Yi}Proxy-Authorization${ct}[ \t]*[:=]${Oo}${ct}${Jd}${Do}(${ni})`,
-    String.raw`${Yi}Proxy-Authorization${ct}[ \t]*[:=]${Oo}${ct}(${ni})[ \t]*(?=${ct}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
-    String.raw`${Yi}Authorization${ct}[ \t]*[:=]${Oo}${ct}(?!(?:Bearer|Basic|Bot)(?=${Do}))${Jd}${Do}(${ni})`,
-    String.raw`${Yi}Authorization${ct}[ \t]*[:=]${Oo}${ct}(?!(?:Bearer|Basic|Bot)(?=${Do}))(${ni})[ \t]*(?=${ct}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
+  }), LW = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`, FW = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`, C0 = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token", R0 = "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token", ep = String.raw`(^|[^A-Za-z0-9_?&-]|\\{1,64}[rn])`, zW = String.raw`${ep}(?:${C0})${ut}[ \t]*:${Oo}${ut}([^\s\\"',;]+)`, jW = String.raw`${ep}(?:${C0})${ut}[ \t]*=${Oo}${ut}([^\s\\"',;]+)`, BW = String.raw`${ep}(?:${R0})\s*:\s*([^\s"',;]+)`, qW = String.raw`${ep}(?:${R0})\s*=\s*([^\s"',;]+)`, GW = [
+    String.raw`${Yi}Proxy-Authorization${ut}[ \t]*[:=]${Oo}${ut}${Jd}${Do}(${ni})`,
+    String.raw`${Yi}Proxy-Authorization${ut}[ \t]*[:=]${Oo}${ut}(${ni})[ \t]*(?=${ut}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
+    String.raw`${Yi}Authorization${ut}[ \t]*[:=]${Oo}${ut}(?!(?:Bearer|Basic|Bot)(?=${Do}))${Jd}${Do}(${ni})`,
+    String.raw`${Yi}Authorization${ut}[ \t]*[:=]${Oo}${ut}(?!(?:Bearer|Basic|Bot)(?=${Do}))(${ni})[ \t]*(?=${ut}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
     zW,
     jW
-  ], KW = String.raw`Authorization${ct}[ \t]*[:=]${Yd}${ct}Bearer${Do}(${ni})`, HW = String.raw`Authorization${ct}[ \t]*[:=]${Yd}${ct}Basic${Do}(${ni})`, VW = String.raw`Authorization${ct}[ \t]*[:=]${Yd}${ct}Bot${Do}(${ni})`, WW = String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`, ZW = [
+  ], KW = String.raw`Authorization${ut}[ \t]*[:=]${Yd}${ut}Bearer${Do}(${ni})`, HW = String.raw`Authorization${ut}[ \t]*[:=]${Yd}${ut}Basic${Do}(${ni})`, VW = String.raw`Authorization${ut}[ \t]*[:=]${Yd}${ut}Bot${Do}(${ni})`, WW = String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`, ZW = [
     mW,
     fW,
     SW,
     kW,
     _W,
     EW,
-    String.raw`--(?:${I0})=([^\s"']+)`,
-    String.raw`--(?:${I0})\s+(?!(?:or|and)\b(?=\s+--))(["']?)([^\s"']+)\1`,
+    String.raw`--(?:${v0})=([^\s"']+)`,
+    String.raw`--(?:${v0})\s+(?!(?:or|and)\b(?=\s+--))(["']?)([^\s"']+)\1`,
     KW,
     HW,
     VW,
@@ -1030,7 +1030,7 @@ var S0, fs, uW, Qd, lW, dW, k0, Mb, _0, pW, E0, I0, sfe, mW, fW, gW, hW, yW, bW,
     vW,
     IW,
     wW,
-    x0,
+    b0,
     String.raw`(^|[\s,{])["']?(?:${Qd})["']?\s*[:=]\s*(["']?)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])\2`
   ], JW = [
     String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
@@ -1123,7 +1123,7 @@ var S0, fs, uW, Qd, lW, dW, k0, Mb, _0, pW, E0, I0, sfe, mW, fW, gW, hW, yW, bW,
     String.raw`(r8_[A-Za-z0-9]{10,})`,
     LW,
     FW
-  ], A0 = [
+  ], $0 = [
     ...ZW,
     ...JW,
     PW
@@ -1131,20 +1131,20 @@ var S0, fs, uW, Qd, lW, dW, k0, Mb, _0, pW, E0, I0, sfe, mW, fW, gW, hW, yW, bW,
 });
 
 // openclaw/ui/src/lib/browser-redact.ts
-var hfe, Nb = p(() => {
-  g0();
+var hfe, P0 = p(() => {
+  f0();
   Ji();
-  y0();
-  P0();
-  hfe = A0.map(
-    (e) => typeof e == "string" ? new RegExp(...h0(e)) : e
+  h0();
+  A0();
+  hfe = $0.map(
+    (e) => typeof e == "string" ? new RegExp(...g0(e)) : e
   );
 });
 
 // openclaw/ui/src/lib/format-error.ts
 var tp = p(() => {
   Ar();
-  Nb();
+  P0();
 });
 
 // openclaw/src/shared/control-ui-storage.ts
@@ -1153,7 +1153,7 @@ var D0, YW, M0 = p(() => {
 });
 
 // openclaw/src/shared/device-auth.ts
-var Ub = p(() => {
+var Nb = p(() => {
   Vd();
 });
 
@@ -1185,10 +1185,10 @@ function Qr(e, t, n, o) {
   let r = (t >>> 0) + (o >>> 0);
   return { h: e + n + (r / 2 ** 32 | 0) | 0, l: r | 0 };
 }
-var np, L0, QW, eZ, Lb, Fb, Qi, ea, nu, ru, j0, B0, q0, G0, K0, H0, zb = p(() => {
+var np, L0, QW, eZ, Ub, Lb, Qi, ea, nu, ru, j0, B0, q0, G0, K0, H0, Fb = p(() => {
   np = BigInt(4294967295), L0 = /* @__PURE__ */ BigInt(32);
   QW = (e) => e / 2 ** 32 | 0, eZ = (e) => e >>> 0;
-  Lb = (e, t, n) => e >>> n, Fb = (e, t, n) => e << 32 - n | t >>> n, Qi = (e, t, n) => e >>> n | t << 32 - n, ea = (e, t, n) => e << 32 - n | t >>> n, nu = (e, t, n) => e << 64 - n | t >>> n - 32, ru = (e, t, n) => e >>> n - 32 | t << 64 - n;
+  Ub = (e, t, n) => e >>> n, Lb = (e, t, n) => e << 32 - n | t >>> n, Qi = (e, t, n) => e >>> n | t << 32 - n, ea = (e, t, n) => e << 32 - n | t >>> n, nu = (e, t, n) => e << 64 - n | t >>> n - 32, ru = (e, t, n) => e >>> n - 32 | t << 64 - n;
   j0 = (e, t, n) => (e >>> 0) + (t >>> 0) + (n >>> 0), B0 = (e, t, n, o) => t + n + o + (e / 2 ** 32 | 0) | 0, q0 = (e, t, n, o) => (e >>> 0) + (t >>> 0) + (n >>> 0) + (o >>> 0), G0 = (e, t, n, o, r) => t + n + o + r + (e / 2 ** 32 | 0) | 0, K0 = (e, t, n, o, r) => (e >>> 0) + (t >>> 0) + (n >>> 0) + (o >>> 0) + (r >>> 0), H0 = (e, t, n, o, r, i) => t + n + o + r + i + (e / 2 ** 32 | 0) | 0;
 });
 
@@ -1198,26 +1198,26 @@ function V0(e) {
 }
 function nZ(e, t = "") {
   if (typeof e != "number")
-    throw new TypeError(jb(t) + "expected number, got " + typeof e);
+    throw new TypeError(zb(t) + "expected number, got " + typeof e);
   if (!Number.isSafeInteger(e) || e < 0)
-    throw new RangeError(jb(t) + "expected integer >= 0, got " + e);
+    throw new RangeError(zb(t) + "expected integer >= 0, got " + e);
   return e;
 }
-function Bb(e, t, n = "") {
+function jb(e, t, n = "") {
   if (V0(e) && (t === void 0 || e.length === t))
     return e;
   t !== void 0 && nZ(t, "length");
-  let o = V0(e), r = t !== void 0 ? ` of length ${t}` : "", i = o ? `length=${e.length}` : `type=${typeof e}`, a = jb(n) + "expected Uint8Array" + r + ", got " + i;
+  let o = V0(e), r = t !== void 0 ? ` of length ${t}` : "", i = o ? `length=${e.length}` : `type=${typeof e}`, a = zb(n) + "expected Uint8Array" + r + ", got " + i;
   throw o ? new RangeError(a) : new TypeError(a);
 }
-function qb(e, t = !0) {
+function Bb(e, t = !0) {
   if (e.destroyed)
     throw new Error("hash was destroyed");
   if (t && e.finished)
     throw new Error("digest() was already called");
 }
 function Z0(e, t) {
-  Bb(e, void 0, "output");
+  jb(e, void 0, "output");
   let n = t.outputLen;
   if (!(e.length >= n))
     throw new RangeError('"output" expected length >= ' + n);
@@ -1242,8 +1242,8 @@ function ta(e, t = {}) {
   let n = (r, i) => e(i).update(r).digest(), o = e(void 0);
   return n.outputLen = o.outputLen, n.blockLen = o.blockLen, n.canXOF = o.canXOF, n.create = (r) => e(r), Object.assign(n, t), Object.freeze(n);
 }
-var jb, rZ, W0, na, Gb = p(() => {
-  jb = (e) => e ? `"${e}" ` : "";
+var zb, rZ, W0, na, qb = p(() => {
+  zb = (e) => e ? `"${e}" ` : "";
   rZ = (e, t) => {
     if (e === null || typeof e != "object" || Array.isArray(e))
       throw new TypeError((t === "object" ? "" : `"${t}" `) + "expected object, got type=" + typeof e);
@@ -1270,8 +1270,8 @@ function Y0(e, t, n) {
   return e & t ^ e & n ^ t & n;
 }
 var iu, X0, Q0, e$, t$, n$ = p(() => {
-  zb();
-  Gb();
+  Fb();
+  qb();
   iu = class {
     blockLen;
     outputLen;
@@ -1289,7 +1289,7 @@ var iu, X0, Q0, e$, t$, n$ = p(() => {
       this.blockLen = t, this.outputLen = n, this.padOffset = o, this.isLE = r, this.buffer = new Uint8Array(t), this.view = rp(this.buffer);
     }
     update(t) {
-      qb(this), Bb(t);
+      Bb(this), jb(t);
       let { view: n, buffer: o, blockLen: r } = this, i = t.length, a = !1;
       for (let s = 0; s < i; ) {
         let u = Math.min(r - this.pos, i - s);
@@ -1305,7 +1305,7 @@ var iu, X0, Q0, e$, t$, n$ = p(() => {
       return this.length += t.length, a && this.roundClean(), this;
     }
     digestInto(t) {
-      qb(this), Z0(t, this), this.finished = !0;
+      Bb(this), Z0(t, this), this.finished = !0;
       let { buffer: n, view: o, blockLen: r, isLE: i } = this, { pos: a } = this;
       n[a++] = 128, n.fill(0, a), this.padOffset > r - a && (this.process(o, 0), n.fill(0)), z0(o, r - 8, this.length * 8, i), this.process(o, 0), this.roundClean();
       let s = t === n ? o : rp(t), u = this.outputLen, l = u / 4, m = this.get();
@@ -1384,7 +1384,7 @@ var iu, X0, Q0, e$, t$, n$ = p(() => {
 
 // openclaw/node_modules/.pnpm/@noble+hashes@2.4.0/node_modules/@noble/hashes/sha2.js
 var o$ = {};
-st(o$, {
+ct(o$, {
   _SHA224: () => ap,
   _SHA256: () => ip,
   _SHA384: () => cp,
@@ -1400,8 +1400,8 @@ st(o$, {
 });
 var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, pZ, mZ, fZ, gZ, i$ = p(() => {
   n$();
-  zb();
-  Gb();
+  Fb();
+  qb();
   iZ = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -1644,7 +1644,7 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
       for (let k = 0; k < 16; k++, n += 4)
         oi[k] = t.getUint32(n), ii[k] = t.getUint32(n += 4);
       for (let k = 16; k < 80; k++) {
-        let C = oi[k - 15] | 0, $ = ii[k - 15] | 0, D = Qi(C, $, 1) ^ Qi(C, $, 8) ^ Lb(C, $, 7), V = ea(C, $, 1) ^ ea(C, $, 8) ^ Fb(C, $, 7), te = oi[k - 2] | 0, Z = ii[k - 2] | 0, $e = Qi(te, Z, 19) ^ nu(te, Z, 61) ^ Lb(te, Z, 6), me = ea(te, Z, 19) ^ ru(te, Z, 61) ^ Fb(te, Z, 6), ue = q0(V, me, ii[k - 7], ii[k - 16]), Rt = G0(ue, D, $e, oi[k - 7], oi[k - 16]);
+        let C = oi[k - 15] | 0, $ = ii[k - 15] | 0, D = Qi(C, $, 1) ^ Qi(C, $, 8) ^ Ub(C, $, 7), V = ea(C, $, 1) ^ ea(C, $, 8) ^ Lb(C, $, 7), te = oi[k - 2] | 0, Z = ii[k - 2] | 0, $e = Qi(te, Z, 19) ^ nu(te, Z, 61) ^ Ub(te, Z, 6), me = ea(te, Z, 19) ^ ru(te, Z, 61) ^ Lb(te, Z, 6), ue = q0(V, me, ii[k - 7], ii[k - 16]), Rt = G0(ue, D, $e, oi[k - 7], oi[k - 16]);
         oi[k] = Rt | 0, ii[k] = ue | 0;
       }
       let { Ah: o, Al: r, Bh: i, Bl: a, Ch: s, Cl: u, Dh: l, Dl: m, Eh: h, El: b, Fh: f, Fl: y, Gh: x, Gl: v, Hh: S, Hl: w } = this;
@@ -1734,18 +1734,18 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
 });
 
 // openclaw/ui/src/lib/nodes/index.ts
-var bZ, a$, Kb = p(() => {
-  OR();
+var bZ, a$, Gb = p(() => {
+  PR();
   Le();
   M0();
-  Ub();
+  Nb();
   N0();
   U0();
   bZ = () => Promise.resolve().then(() => (i$(), o$)), a$ = vb.sha512Async;
   vb.sha512Async = async (e) => globalThis.crypto?.subtle && a$ ? await a$(e) : Uint8Array.from((await bZ()).sha512(e));
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/unicode/unicode_segment.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/unicode/unicode_segment.mjs
 function ys(e, t, n) {
   return e >= t && e <= n;
 }
@@ -1791,7 +1791,7 @@ function D$(e) {
 var M$ = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/unicode/unicode.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/unicode/unicode.mjs
 function yp(e) {
   let t = 0, n = 0, o = 0;
   for (; n < e.length; ) {
@@ -1809,9 +1809,9 @@ function U$(e, t) {
 var L$ = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/guard.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/guard.mjs
 var c = {};
-st(c, {
+ct(c, {
   CodePointCount: () => XZ,
   Counted: () => i8,
   Entries: () => c8,
@@ -1825,12 +1825,12 @@ st(c, {
   IsBoolean: () => F$,
   IsClassInstance: () => JZ,
   IsConstructor: () => GZ,
-  IsDeepEqual: () => Xb,
+  IsDeepEqual: () => Yb,
   IsEqual: () => Ee,
   IsFunction: () => z$,
   IsGreaterEqualThan: () => B$,
   IsGreaterThan: () => VZ,
-  IsInteger: () => Jb,
+  IsInteger: () => Zb,
   IsLessEqualThan: () => j$,
   IsLessThan: () => WZ,
   IsMaxLength: () => QZ,
@@ -1842,7 +1842,7 @@ st(c, {
   IsObjectNotArray: () => KZ,
   IsString: () => Ip,
   IsSymbol: () => HZ,
-  IsUndefined: () => Yb,
+  IsUndefined: () => Jb,
   IsUnsafePropertyKey: () => G$,
   IsValueLike: () => q$,
   Keys: () => bp,
@@ -1862,7 +1862,7 @@ function F$(e) {
   return Ee(typeof e, "boolean");
 }
 function GZ(e) {
-  if (Yb(e) || !z$(e))
+  if (Jb(e) || !z$(e))
     return !1;
   let t = Function.prototype.toString.call(e);
   return !!(/^class\s/.test(t) || /\[native code\]/.test(t));
@@ -1870,7 +1870,7 @@ function GZ(e) {
 function z$(e) {
   return Ee(typeof e, "function");
 }
-function Jb(e) {
+function Zb(e) {
   return Number.isInteger(e);
 }
 function xp(e) {
@@ -1891,7 +1891,7 @@ function Ip(e) {
 function HZ(e) {
   return Ee(typeof e, "symbol");
 }
-function Yb(e) {
+function Jb(e) {
   return Ee(e, void 0);
 }
 function Ee(e, t) {
@@ -1913,7 +1913,7 @@ function ZZ(e, t) {
   if (su(e) || su(t))
     return BigInt(e) % BigInt(t) === 0n;
   let n = 1e-10;
-  if (!vp(e) || Jb(e) && 1 / t % 1 === 0)
+  if (!vp(e) || Zb(e) && 1 / t % 1 === 0)
     return !0;
   let o = e % t;
   return Math.min(Math.abs(o), Math.abs(o - t), Math.abs(o + t)) < n;
@@ -1925,7 +1925,7 @@ function JZ(e) {
   return xp(t) ? !1 : Ee(typeof t.constructor, "function") && !(Ee(t.constructor, globalThis.Object) || Ee(t.constructor.name, "Object"));
 }
 function q$(e) {
-  return su(e) || F$(e) || xp(e) || vp(e) || Ip(e) || Yb(e);
+  return su(e) || F$(e) || xp(e) || vp(e) || Ip(e) || Jb(e);
 }
 function YZ(e) {
   return D$(e);
@@ -1988,12 +1988,12 @@ function d8(e, t) {
   if (!uu(t))
     return !1;
   let n = bp(e);
-  return Ee(n.length, bp(t).length) && n.every((o) => Xb(e[o], t[o]));
+  return Ee(n.length, bp(t).length) && n.every((o) => Yb(e[o], t[o]));
 }
 function p8(e, t) {
-  return cu(t) && Ee(e.length, t.length) && e.every((n, o) => Xb(e[o], t[o]));
+  return cu(t) && Ee(e.length, t.length) && e.every((n, o) => Yb(e[o], t[o]));
 }
-function Xb(e, t) {
+function Yb(e, t) {
   return cu(e) ? p8(e, t) : uu(e) ? d8(e, t) : Ee(e, t);
 }
 var bs = p(() => {
@@ -2001,14 +2001,14 @@ var bs = p(() => {
   L$();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/emit.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/emit.mjs
 var K$ = p(() => {
   bs();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/globals.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/globals.mjs
 var Pt = {};
-st(Pt, {
+ct(Pt, {
   IsBigInt64Array: () => E8,
   IsBigUint64Array: () => T8,
   IsBoolean: () => m8,
@@ -2089,12 +2089,12 @@ function A8(e) {
 var H$ = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/native.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/native.mjs
 var V$ = p(() => {
   bs();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/guard/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/index.mjs
 var Sp, I = p(() => {
   K$();
   H$();
@@ -2104,9 +2104,9 @@ var Sp, I = p(() => {
   Sp = c;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/settings/settings.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/settings/settings.mjs
 var mt = {};
-st(mt, {
+ct(mt, {
   Get: () => kp,
   Reset: () => O8,
   Set: () => D8
@@ -2123,7 +2123,7 @@ function D8(e) {
 function kp() {
   return Or;
 }
-var Or, Qb = p(() => {
+var Or, Xb = p(() => {
   I();
   Or = {
     immutableTypes: !1,
@@ -2138,12 +2138,12 @@ var Or, Qb = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/settings/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/settings/index.mjs
 var eo = p(() => {
-  Qb();
+  Xb();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/_refine.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/_refine.mjs
 function _p(e) {
   return c.HasPropertyKey(e, "~refine") && c.IsArray(e["~refine"]) && c.Every(e["~refine"], 0, (t) => c.IsObject(t) && c.HasPropertyKey(t, "check") && c.HasPropertyKey(t, "error") && c.IsFunction(t.check) && c.IsFunction(t.error));
 }
@@ -2151,7 +2151,7 @@ var W$ = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/schema.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/schema.mjs
 function An(e) {
   return c.IsObject(e) && !c.IsArray(e);
 }
@@ -2165,7 +2165,7 @@ var Ot = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/additionalItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/additionalItems.mjs
 function Ep(e) {
   return c.HasPropertyKey(e, "additionalItems") && oe(e.additionalItems);
 }
@@ -2174,7 +2174,7 @@ var Z$ = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/additionalProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/additionalProperties.mjs
 function hr(e) {
   return c.HasPropertyKey(e, "additionalProperties") && oe(e.additionalProperties);
 }
@@ -2183,7 +2183,7 @@ var J$ = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/allOf.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/allOf.mjs
 function Tp(e) {
   return c.HasPropertyKey(e, "allOf") && c.IsArray(e.allOf) && e.allOf.every((t) => oe(t));
 }
@@ -2192,7 +2192,7 @@ var Y$ = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/anchor.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/anchor.mjs
 function X$(e) {
   return c.HasPropertyKey(e, "$anchor") && c.IsString(e.$anchor);
 }
@@ -2200,7 +2200,7 @@ var Q$ = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/anyOf.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/anyOf.mjs
 function Cp(e) {
   return c.HasPropertyKey(e, "anyOf") && c.IsArray(e.anyOf) && e.anyOf.every((t) => oe(t));
 }
@@ -2209,15 +2209,15 @@ var eA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/const.mjs
-function ex(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/const.mjs
+function Qb(e) {
   return c.HasPropertyKey(e, "const");
 }
 var tA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/contains.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/contains.mjs
 function ai(e) {
   return c.HasPropertyKey(e, "contains") && oe(e.contains);
 }
@@ -2226,7 +2226,7 @@ var nA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/default.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/default.mjs
 function Hn(e) {
   return c.HasPropertyKey(e, "default");
 }
@@ -2234,14 +2234,14 @@ var rA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/defs.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/defs.mjs
 var oA = p(() => {
   I();
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/dependencies.mjs
-function tx(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/dependencies.mjs
+function ex(e) {
   return c.HasPropertyKey(e, "dependencies") && c.IsObject(e.dependencies) && Object.values(e.dependencies).every((t) => oe(t) || c.IsArray(t) && t.every((n) => c.IsString(n)));
 }
 var iA = p(() => {
@@ -2249,15 +2249,15 @@ var iA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/dependentRequired.mjs
-function nx(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/dependentRequired.mjs
+function tx(e) {
   return c.HasPropertyKey(e, "dependentRequired") && c.IsObject(e.dependentRequired) && Object.values(e.dependentRequired).every((t) => c.IsArray(t) && t.every((n) => c.IsString(n)));
 }
 var aA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/dependentSchemas.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/dependentSchemas.mjs
 function Rp(e) {
   return c.HasPropertyKey(e, "dependentSchemas") && c.IsObject(e.dependentSchemas) && Object.values(e.dependentSchemas).every((t) => oe(t));
 }
@@ -2266,7 +2266,7 @@ var sA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/dynamicAnchor.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/dynamicAnchor.mjs
 function si(e) {
   return c.HasPropertyKey(e, "$dynamicAnchor") && c.IsString(e.$dynamicAnchor);
 }
@@ -2274,7 +2274,7 @@ var cA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/dynamicRef.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/dynamicRef.mjs
 function $p(e) {
   return c.HasPropertyKey(e, "$dynamicRef") && c.IsString(e.$dynamicRef);
 }
@@ -2282,7 +2282,7 @@ var uA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/else.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/else.mjs
 function Ap(e) {
   return c.HasPropertyKey(e, "else") && oe(e.else);
 }
@@ -2291,23 +2291,23 @@ var lA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/enum.mjs
-function rx(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/enum.mjs
+function nx(e) {
   return c.HasPropertyKey(e, "enum") && c.IsArray(e.enum);
 }
 var dA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/exclusiveMaximum.mjs
-function ox(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/exclusiveMaximum.mjs
+function rx(e) {
   return c.HasPropertyKey(e, "exclusiveMaximum") && (c.IsNumber(e.exclusiveMaximum) || c.IsBigInt(e.exclusiveMaximum));
 }
 var pA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/exclusiveMinimum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/exclusiveMinimum.mjs
 function Mo(e) {
   return c.HasPropertyKey(e, "exclusiveMinimum") && (c.IsNumber(e.exclusiveMinimum) || c.IsBigInt(e.exclusiveMinimum));
 }
@@ -2315,7 +2315,7 @@ var mA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/format.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/format.mjs
 function lu(e) {
   return c.HasPropertyKey(e, "format") && c.IsString(e.format);
 }
@@ -2323,7 +2323,7 @@ var fA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/id.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/id.mjs
 function In(e) {
   return c.HasPropertyKey(e, "$id") && c.IsString(e.$id);
 }
@@ -2331,7 +2331,7 @@ var gA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/if.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/if.mjs
 function Pp(e) {
   return c.HasPropertyKey(e, "if") && oe(e.if);
 }
@@ -2340,7 +2340,7 @@ var hA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/items.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/items.mjs
 function ia(e) {
   return c.HasPropertyKey(e, "items") && (oe(e.items) || c.IsArray(e.items) && e.items.every((t) => oe(t)));
 }
@@ -2352,23 +2352,23 @@ var yA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/maximum.mjs
-function ix(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/maximum.mjs
+function ox(e) {
   return c.HasPropertyKey(e, "maximum") && (c.IsNumber(e.maximum) || c.IsBigInt(e.maximum));
 }
 var bA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/maxContains.mjs
-function ax(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/maxContains.mjs
+function ix(e) {
   return c.HasPropertyKey(e, "maxContains") && c.IsNumber(e.maxContains);
 }
 var xA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/maxItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/maxItems.mjs
 function du(e) {
   return c.HasPropertyKey(e, "maxItems") && c.IsNumber(e.maxItems);
 }
@@ -2376,23 +2376,23 @@ var vA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/maxLength.mjs
-function sx(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/maxLength.mjs
+function ax(e) {
   return c.HasPropertyKey(e, "maxLength") && c.IsNumber(e.maxLength);
 }
 var IA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/maxProperties.mjs
-function cx(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/maxProperties.mjs
+function sx(e) {
   return c.HasPropertyKey(e, "maxProperties") && c.IsNumber(e.maxProperties);
 }
 var wA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/minimum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/minimum.mjs
 function No(e) {
   return c.HasPropertyKey(e, "minimum") && (c.IsNumber(e.minimum) || c.IsBigInt(e.minimum));
 }
@@ -2400,7 +2400,7 @@ var SA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/minContains.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/minContains.mjs
 function aa(e) {
   return c.HasPropertyKey(e, "minContains") && c.IsNumber(e.minContains);
 }
@@ -2408,7 +2408,7 @@ var kA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/minItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/minItems.mjs
 function sa(e) {
   return c.HasPropertyKey(e, "minItems") && c.IsNumber(e.minItems);
 }
@@ -2416,7 +2416,7 @@ var _A = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/minLength.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/minLength.mjs
 function pu(e) {
   return c.HasPropertyKey(e, "minLength") && c.IsNumber(e.minLength);
 }
@@ -2424,7 +2424,7 @@ var EA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/minProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/minProperties.mjs
 function mu(e) {
   return c.HasPropertyKey(e, "minProperties") && c.IsNumber(e.minProperties);
 }
@@ -2432,15 +2432,15 @@ var TA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/multipleOf.mjs
-function ux(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/multipleOf.mjs
+function cx(e) {
   return c.HasPropertyKey(e, "multipleOf") && (c.IsNumber(e.multipleOf) || c.IsBigInt(e.multipleOf));
 }
 var CA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/not.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/not.mjs
 function Dp(e) {
   return c.HasPropertyKey(e, "not") && oe(e.not);
 }
@@ -2449,7 +2449,7 @@ var RA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/oneOf.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/oneOf.mjs
 function Mp(e) {
   return c.HasPropertyKey(e, "oneOf") && c.IsArray(e.oneOf) && e.oneOf.every((t) => oe(t));
 }
@@ -2458,7 +2458,7 @@ var $A = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/pattern.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/pattern.mjs
 function fu(e) {
   return c.HasPropertyKey(e, "pattern") && (c.IsString(e.pattern) || e.pattern instanceof RegExp);
 }
@@ -2466,7 +2466,7 @@ var AA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/patternProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/patternProperties.mjs
 function xs(e) {
   return c.HasPropertyKey(e, "patternProperties") && c.IsObject(e.patternProperties) && Object.values(e.patternProperties).every((t) => oe(t));
 }
@@ -2475,7 +2475,7 @@ var PA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/prefixItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/prefixItems.mjs
 function ca(e) {
   return c.HasPropertyKey(e, "prefixItems") && c.IsArray(e.prefixItems) && e.prefixItems.every((t) => oe(t));
 }
@@ -2484,7 +2484,7 @@ var OA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/properties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/properties.mjs
 function vs(e) {
   return c.HasPropertyKey(e, "properties") && c.IsObject(e.properties) && Object.values(e.properties).every((t) => oe(t));
 }
@@ -2493,7 +2493,7 @@ var DA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/propertyNames.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/propertyNames.mjs
 function Np(e) {
   return c.HasPropertyKey(e, "propertyNames") && (c.IsObject(e.propertyNames) || oe(e.propertyNames));
 }
@@ -2502,7 +2502,7 @@ var MA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/recursiveAnchor.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/recursiveAnchor.mjs
 function M8(e) {
   return c.HasPropertyKey(e, "$recursiveAnchor") && c.IsBoolean(e.$recursiveAnchor);
 }
@@ -2513,7 +2513,7 @@ var NA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/recursiveRef.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/recursiveRef.mjs
 function Up(e) {
   return c.HasPropertyKey(e, "$recursiveRef") && c.IsString(e.$recursiveRef);
 }
@@ -2521,7 +2521,7 @@ var UA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/ref.mjs
 function Lp(e) {
   return c.HasPropertyKey(e, "$ref") && c.IsString(e.$ref);
 }
@@ -2529,7 +2529,7 @@ var LA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/required.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/required.mjs
 function ua(e) {
   return c.HasPropertyKey(e, "required") && c.IsArray(e.required) && e.required.every((t) => c.IsString(t));
 }
@@ -2537,7 +2537,7 @@ var FA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/then.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/then.mjs
 function Fp(e) {
   return c.HasPropertyKey(e, "then") && oe(e.then);
 }
@@ -2546,15 +2546,15 @@ var zA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/type.mjs
-function lx(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/type.mjs
+function ux(e) {
   return c.HasPropertyKey(e, "type") && (c.IsString(e.type) || c.IsArray(e.type) && e.type.every((t) => c.IsString(t)));
 }
 var jA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/uniqueItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/uniqueItems.mjs
 function ci(e) {
   return c.HasPropertyKey(e, "uniqueItems") && c.IsBoolean(e.uniqueItems);
 }
@@ -2562,7 +2562,7 @@ var BA = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/unevaluatedItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/unevaluatedItems.mjs
 function hu(e) {
   return c.HasPropertyKey(e, "unevaluatedItems") && oe(e.unevaluatedItems);
 }
@@ -2571,7 +2571,7 @@ var qA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/unevaluatedProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/unevaluatedProperties.mjs
 function yu(e) {
   return c.HasPropertyKey(e, "unevaluatedProperties") && oe(e.unevaluatedProperties);
 }
@@ -2580,7 +2580,7 @@ var GA = p(() => {
   Ot();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/types/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/index.mjs
 var je = p(() => {
   W$();
   Z$();
@@ -2635,7 +2635,7 @@ var je = p(() => {
   GA();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_context.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_context.mjs
 var wn, sn, to = p(() => {
   eo();
   je();
@@ -2703,23 +2703,23 @@ var wn, sn, to = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_externals.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_externals.mjs
 var Uo = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_refine.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_refine.mjs
 function KA(e, t, n, o) {
   return c.Every(n["~refine"], 0, (r, i) => r.check(o));
 }
 function HA(e, t, n, o, r, i) {
   return c.EveryAll(r["~refine"], 0, (a, s) => a.check(i) || t.AddError("~refine", n, o, { index: s, message: a.error(i) }));
 }
-var dx = p(() => {
+var lx = p(() => {
   Uo();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_stack.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_stack.mjs
 function Lo(e, t) {
   return URL.canParse(e, t) ? new URL(e, t) : c.IsEqual(t, bu) ? new URL(`${t}:${e}`) : new URL(`${t.slice(0, t.lastIndexOf(":"))}:${e}`);
 }
@@ -2741,15 +2741,15 @@ function ws(e, t) {
     enteredResource: !1
   };
 }
-function px(e, t, n = !0) {
+function dx(e, t, n = !0) {
   if (oa(t))
     return e;
   if (Array.isArray(t))
-    return t.reduce((r, i) => px(r, i, !1), e);
+    return t.reduce((r, i) => dx(r, i, !1), e);
   if (!An(t) || !n && In(t))
     return e;
   let o = !n && si(t) ? [...e, t] : e;
-  return Object.keys(t).reduce((r, i) => px(r, t[i], !1), o);
+  return Object.keys(t).reduce((r, i) => dx(r, t[i], !1), o);
 }
 function xu(e, t) {
   return e.resourceEntries.get(t);
@@ -2767,7 +2767,7 @@ function L8(e, t) {
   return e.recursiveAnchor ?? (gu(t) ? t : void 0);
 }
 function F8(e, t) {
-  let n = In(t) ? px(e.dynamicAnchors, t) : e.dynamicAnchors;
+  let n = In(t) ? dx(e.dynamicAnchors, t) : e.dynamicAnchors;
   return si(t) ? [...n, t] : n;
 }
 function z8(e, t) {
@@ -2816,11 +2816,11 @@ var bu, vu = p(() => {
   bu = "urn:typebox:root";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_unique.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_unique.mjs
 var Dr = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/additionalItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/additionalItems.mjs
 function YA(e) {
   return ia(e) && c.IsArray(e.items);
 }
@@ -2833,28 +2833,28 @@ function QA(e, t, n, o, r, i) {
     return c.IsLessThan(u, r.items.length) || cr(e, t, l, m, r.additionalItems, s) && t.AddIndex(u);
   }) : !0;
 }
-var fx = p(() => {
+var mx = p(() => {
   je();
   Dr();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_pathing.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_pathing.mjs
 function Vn(e) {
   return e.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 var da = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_regexp.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_regexp.mjs
 function ui(e) {
   return new RegExp(e, "u");
 }
 var zp = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/additionalProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/additionalProperties.mjs
 function G8(e) {
   return `^${e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
 }
@@ -2873,7 +2873,7 @@ function nP(e, t, n, o, r, i) {
     return f || s.push(l), f;
   }) || t.AddError("additionalProperties", n, o, { additionalProperties: s });
 }
-var gx = p(() => {
+var fx = p(() => {
   je();
   Uo();
   da();
@@ -2883,13 +2883,13 @@ var gx = p(() => {
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_reducer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_reducer.mjs
 var _s = p(() => {
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/allOf.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/allOf.mjs
 function rP(e, t, n, o) {
   let r = n.allOf.reduce((i, a) => {
     let s = new wn();
@@ -2904,14 +2904,14 @@ function oP(e, t, n, o, r, i) {
   }, []), u = c.IsEqual(s.length, r.allOf.length) && t.Merge(s);
   return u || a.forEach((l) => t.AddErrors(l.GetErrors())), u;
 }
-var yx = p(() => {
+var hx = p(() => {
   to();
   _s();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/anyOf.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/anyOf.mjs
 function iP(e, t, n, o) {
   let r = n.anyOf.reduce((i, a) => {
     let s = new wn();
@@ -2926,54 +2926,54 @@ function aP(e, t, n, o, r, i) {
   }, []), u = c.IsGreaterThan(s.length, 0) && t.Merge(s);
   return u || a.forEach((l) => t.AddErrors(l.GetErrors())), u || t.AddError("anyOf", n, o, {});
 }
-var bx = p(() => {
+var yx = p(() => {
   _s();
   to();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/boolean.mjs
-function xx(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/boolean.mjs
+function bx(e, t, n, o) {
   return n;
 }
 function sP(e, t, n, o, r, i) {
-  return xx(e, t, r, i) || t.AddError("boolean", n, o, {});
+  return bx(e, t, r, i) || t.AddError("boolean", n, o, {});
 }
-var vx = p(() => {
+var xx = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/const.mjs
-function Ix(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/const.mjs
+function vx(e, t, n, o) {
   return c.IsValueLike(n.const) ? c.IsEqual(o, n.const) : c.IsDeepEqual(o, n.const);
 }
 function cP(e, t, n, o, r, i) {
-  return Ix(e, t, r, i) || t.AddError("const", n, o, { allowedValue: r.const });
+  return vx(e, t, r, i) || t.AddError("const", n, o, { allowedValue: r.const });
 }
-var wx = p(() => {
+var Ix = p(() => {
   Uo();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/contains.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/contains.mjs
 function K8(e) {
   return !(aa(e) && c.IsEqual(e.minContains, 0));
 }
-function Sx(e, t, n, o) {
+function wx(e, t, n, o) {
   return K8(n) ? !c.IsEqual(o.length, 0) && c.SomeAll(o, (r, i) => Te(e, t, n.contains, r) && t.AddIndex(i)) : !0;
 }
 function uP(e, t, n, o, r, i) {
-  return Sx(e, t, r, i) || t.AddError("contains", n, o, { minContains: 1 });
+  return wx(e, t, r, i) || t.AddError("contains", n, o, { minContains: 1 });
 }
-var kx = p(() => {
+var Sx = p(() => {
   je();
   Dr();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/dependencies.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/dependencies.mjs
 function lP(e, t, n, o) {
   let r = c.IsEqual(c.Keys(o).length, 0), i = c.Every(c.Entries(n.dependencies), 0, ([a, s]) => !c.HasPropertyKey(o, a) || (c.IsArray(s) ? s.every((u) => c.HasPropertyKey(o, u)) : Te(e, t, s, o)));
   return r || i;
@@ -2985,13 +2985,13 @@ function dP(e, t, n, o, r, i) {
   });
   return a || s;
 }
-var _x = p(() => {
+var kx = p(() => {
   da();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/dependentRequired.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/dependentRequired.mjs
 function pP(e, t, n, o) {
   let r = c.IsEqual(c.Keys(o).length, 0), i = c.Every(c.Entries(n.dependentRequired), 0, ([a, s]) => !c.HasPropertyKey(o, a) || s.every((u) => c.HasPropertyKey(o, u)));
   return r || i;
@@ -3000,11 +3000,11 @@ function mP(e, t, n, o, r, i) {
   let a = c.IsEqual(c.Keys(i).length, 0), s = c.EveryAll(c.Entries(r.dependentRequired), 0, ([u, l]) => !c.HasPropertyKey(i, u) || c.EveryAll(l, 0, (m) => c.HasPropertyKey(i, m) || t.AddError("dependentRequired", n, o, { property: u, dependencies: l })));
   return a || s;
 }
-var Ex = p(() => {
+var _x = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/dependentSchemas.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/dependentSchemas.mjs
 function fP(e, t, n, o) {
   let r = c.IsEqual(c.Keys(o).length, 0), i = c.Every(c.Entries(n.dependentSchemas), 0, ([a, s]) => !c.HasPropertyKey(o, a) || Te(e, t, s, o));
   return r || i;
@@ -3016,19 +3016,19 @@ function gP(e, t, n, o, r, i) {
   });
   return a || s;
 }
-var Tx = p(() => {
+var Ex = p(() => {
   da();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/pointer/pointer_get.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/pointer/pointer_get.mjs
 var hP = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/pointer/pointer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/pointer/pointer.mjs
 var Mr = {};
-st(Mr, {
+ct(Mr, {
   Delete: () => Z8,
   Get: () => V8,
   Has: () => H8,
@@ -3041,7 +3041,7 @@ function bP(e) {
 function yP() {
   bP("Pointer contains unsafe property key");
 }
-function Cx() {
+function Tx() {
   bP("Cannot set value");
 }
 function wu(e) {
@@ -3070,15 +3070,15 @@ function xP(e, t, n) {
   let o = e;
   for (let r of t)
     c.IsUnsafePropertyKey(r) && yP(), o = c.IsObject(o) ? o[r] : void 0;
-  return c.IsUnsafePropertyKey(n) && yP(), c.IsObject(o) || Cx(), o;
+  return c.IsUnsafePropertyKey(n) && yP(), c.IsObject(o) || Tx(), o;
 }
 function W8(e, t, n) {
   let o = wu(t), r = o.pop();
-  return c.IsUndefined(r) && Cx(), xP(e, o, r)[r] = n, e;
+  return c.IsUndefined(r) && Tx(), xP(e, o, r)[r] = n, e;
 }
 function Z8(e, t) {
   let n = wu(t), o = n.pop();
-  c.IsUndefined(o) && Cx();
+  c.IsUndefined(o) && Tx();
   let r = xP(e, n, o);
   return c.IsArray(r) && /^(0|[1-9]\d*)$/.test(o) ? r.splice(Number(o), 1) : delete r[o], e;
 }
@@ -3086,30 +3086,30 @@ var vP = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/pointer/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/pointer/index.mjs
 var jp = p(() => {
   hP();
   vP();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/resolve/resolve.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/resolve/resolve.mjs
 var yr = {};
-st(yr, {
+ct(yr, {
   DynamicRef: () => wJ,
   RecursiveRef: () => xJ,
   Ref: () => yJ
 });
-function Ax(e, t) {
+function $x(e, t) {
   return An(e) && In(e) ? Lo(e.$id, t.href) : t;
 }
-function Px(e) {
+function Ax(e) {
   return Lo(e, bu);
 }
-function Rx(e) {
+function Cx(e) {
   return e.href.split("#")[0];
 }
 function J8(e, t, n) {
-  return $x(e, Px(t), n);
+  return Rx(e, Ax(t), n);
 }
 function Y8(e, t) {
   return t.$ref.startsWith("#") || e.enteredResource ? e.lexicalSchema : e.schema;
@@ -3127,19 +3127,19 @@ function IP(e, t) {
         return o;
     }
 }
-function $x(e, t, n) {
+function Rx(e, t, n) {
   if (c.IsEqual(e, n))
     return t.href;
-  let o = Ax(e, t);
+  let o = $x(e, t);
   if (c.IsArray(e))
     for (let r of e) {
-      let i = $x(r, o, n);
+      let i = Rx(r, o, n);
       if (!c.IsUndefined(i))
         return i;
     }
   else if (c.IsObject(e))
     for (let r of c.Keys(e)) {
-      let i = $x(e[r], o, n);
+      let i = Rx(e[r], o, n);
       if (!c.IsUndefined(i))
         return i;
     }
@@ -3195,7 +3195,7 @@ function oJ(e, t, n) {
     }, void 0);
 }
 function Bp(e, t, n) {
-  let o = Ax(e, t);
+  let o = $x(e, t);
   return nJ(e, o, n) ?? rJ(e, o, n) ?? oJ(e, o, n);
 }
 function iJ(e, t, n, o) {
@@ -3241,14 +3241,14 @@ function dJ(e, t, n) {
   return Bp(e, t, n);
 }
 function pJ(e, t, n) {
-  let o = Rx(n);
-  if (!c.HasPropertyKey(e, o) || c.IsEqual(o, Rx(t)))
+  let o = Cx(n);
+  if (!c.HasPropertyKey(e, o) || c.IsEqual(o, Cx(t)))
     return;
-  let r = e[o], i = Ax(r, new URL(o));
+  let r = e[o], i = $x(r, new URL(o));
   return c.IsEqual(n.hash, "") ? r : Bp(r, i, n);
 }
 function qp(e, t, n, o) {
-  let r = Px(n), i = Lo(o, r.href);
+  let r = Ax(n), i = Lo(o, r.href);
   return lJ(e, o) ?? dJ(t, r, i) ?? pJ(e, r, i);
 }
 function mJ(e, t) {
@@ -3265,7 +3265,7 @@ function SP(e, t, n, o) {
   return fJ(r, o);
 }
 function gJ(e, t, n) {
-  let o = Rx(Lo(t.$ref, e.referenceBase)), r = !c.IsEqual(o, e.resourceBase), i = cJ(e, t, n, o, r), a = r ? uJ(e, o, n) : void 0;
+  let o = Cx(Lo(t.$ref, e.referenceBase)), r = !c.IsEqual(o, e.resourceBase), i = cJ(e, t, n, o, r), a = r ? uJ(e, o, n) : void 0;
   return { schema: n, stack: SP(e, !0, i, a) };
 }
 function hJ(e, t) {
@@ -3283,7 +3283,7 @@ function xJ(e, t) {
   return qp(e.context, n, e.lexicalBase, t.$recursiveRef);
 }
 function kP(e, t) {
-  return Lo(t.$dynamicRef, Px(e.lexicalBase).href).hash;
+  return Lo(t.$dynamicRef, Ax(e.lexicalBase).href).hash;
 }
 function _P(e, t) {
   return e.dynamicAnchors.find((n) => c.IsEqual(n.$dynamicAnchor, t)) ?? IP(e.schema, t);
@@ -3309,12 +3309,12 @@ var EP = p(() => {
   vu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/resolve/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/resolve/index.mjs
 var Es = p(() => {
   EP();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/dynamicRef.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/dynamicRef.mjs
 function TP(e, t, n, o) {
   let r = yr.DynamicRef(e, n) ?? !1, i = r ? { ...e, pendingResource: !0 } : e;
   return oe(r) && Te(i, t, r, o);
@@ -3330,41 +3330,41 @@ var RP = p(() => {
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/enum.mjs
-function Mx(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/enum.mjs
+function Dx(e, t, n, o) {
   return c.Some(n.enum, (r) => c.IsValueLike(r) ? c.IsEqual(o, r) : c.IsDeepEqual(o, r));
 }
 function $P(e, t, n, o, r, i) {
-  return Mx(e, t, r, i) || t.AddError("enum", n, o, { allowedValues: r.enum });
+  return Dx(e, t, r, i) || t.AddError("enum", n, o, { allowedValues: r.enum });
 }
-var Nx = p(() => {
+var Mx = p(() => {
   Uo();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/exclusiveMaximum.mjs
-function Ux(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/exclusiveMaximum.mjs
+function Nx(e, t, n, o) {
   return c.IsLessThan(o, n.exclusiveMaximum);
 }
 function AP(e, t, n, o, r, i) {
-  return Ux(e, t, r, i) || t.AddError("exclusiveMaximum", n, o, { comparison: "<", limit: r.exclusiveMaximum });
+  return Nx(e, t, r, i) || t.AddError("exclusiveMaximum", n, o, { comparison: "<", limit: r.exclusiveMaximum });
 }
-var Lx = p(() => {
+var Ux = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/exclusiveMinimum.mjs
-function Fx(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/exclusiveMinimum.mjs
+function Lx(e, t, n, o) {
   return c.IsGreaterThan(o, n.exclusiveMinimum);
 }
 function PP(e, t, n, o, r, i) {
-  return Fx(e, t, r, i) || t.AddError("exclusiveMinimum", n, o, { comparison: ">", limit: r.exclusiveMinimum });
+  return Lx(e, t, r, i) || t.AddError("exclusiveMinimum", n, o, { comparison: ">", limit: r.exclusiveMinimum });
 }
-var zx = p(() => {
+var Fx = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/date.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/date.mjs
 function _J(e) {
   return e % 4 === 0 && (e % 100 !== 0 || e % 400 === 0);
 }
@@ -3379,7 +3379,7 @@ var SJ, kJ, Gp = p(() => {
   SJ = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], kJ = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/time.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/time.mjs
 function Cs(e, t = !0) {
   let n = EJ.exec(e);
   if (!n || t && !n[4] && !n[5])
@@ -3401,50 +3401,50 @@ var EJ, Kp = p(() => {
   EJ = /^(\d\d):(\d\d):(\d\d)(?:\.\d+)?(?:([Zz])|([+-])(\d\d):(\d\d))?$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/date_time.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/date_time.mjs
 function Hp(e) {
   let t = e.split(/T/i);
   return t.length === 2 && Ts(t[0]) && Cs(t[1]);
 }
-var jx = p(() => {
+var zx = p(() => {
   Gp();
   Kp();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/duration.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/duration.mjs
 function Vp(e) {
   return TJ.test(e);
 }
-var TJ, Bx = p(() => {
+var TJ, jx = p(() => {
   TJ = /^P((\d+Y(\d+M(\d+D)?)?|\d+M(\d+D)?|\d+D)(T(\d+H(\d+M(\d+S)?)?|\d+M(\d+S)?|\d+S))?|T(\d+H(\d+M(\d+S)?)?|\d+M(\d+S)?|\d+S)|\d+W)$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/email.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/email.mjs
 function Wp(e) {
   return CJ.test(e);
 }
-var CJ, qx = p(() => {
+var CJ, Bx = p(() => {
   CJ = /^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[^"\\]|\\[\x20-\x7e])*")@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[(?:IPv6:[a-f0-9:]+|(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3})\])$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/pattern/pattern.mjs
-var OP, DP, MP, Rs, RJ, NP, $J, AJ, PJ, Gx, OJ, UP, Kx, DJ, LP, Zp, FP, zP, Hx, jP, MJ, NJ, BP, qP, $s = p(() => {
-  OP = /^(?!-).*(?<!-)$/, DP = /^(?!..--)/, MP = /^[a-zA-Z0-9-]*$/, Rs = /[^\p{ASCII}]/u, RJ = /[0-9]/, NP = /[\u{0660}-\u{0669}]/u, $J = /[\u{06f0}-\u{06f9}]/u, AJ = /[\u{002e}\u{002c}\u{003a}\u{002f}]/u, PJ = /[\u{002d}\u{002b}]/u, Gx = /\p{Mn}/u, OJ = /\p{Mc}/u, UP = /[\p{Mn}\p{Mc}\p{Me}]/u, Kx = /\p{L}/u, DJ = /\p{Nd}/u, LP = /\p{Script=Greek}/u, Zp = /\p{Script=Hebrew}/u, FP = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, zP = /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Mandaic}]/u, Hx = /[\u{094d}\u{09cd}\u{0a4d}\u{0acd}\u{0b4d}\u{0bcd}\u{0c4d}\u{0ccd}\u{0d3b}\u{0d3c}\u{0d4d}\u{0dca}\u{1b44}\u{1baa}\u{1bab}\u{a9c0}\u{11046}\u{1107f}\u{110b9}\u{11133}\u{11134}\u{111c0}\u{11235}\u{1134d}\u{11442}\u{114c2}\u{115bf}\u{1163f}\u{116b6}\u{11c3f}\u{11d44}\u{11d45}]/u, jP = /[\u{0640}\u{07fa}\u{302e}\u{302f}\u{3031}\u{3032}\u{3033}\u{3034}\u{3035}\u{303b}]/u, MJ = /[\u{00b7}\u{0375}\u{05f3}\u{05f4}\u{200c}\u{200d}\u{30fb}]/u, NJ = /[\u{00df}\u{03c2}\u{06fd}\u{06fe}\u{0f0b}\u{3007}]/u, BP = new RegExp([
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/pattern/pattern.mjs
+var OP, DP, MP, Rs, RJ, NP, $J, AJ, PJ, qx, OJ, UP, Gx, DJ, LP, Zp, FP, zP, Kx, jP, MJ, NJ, BP, qP, $s = p(() => {
+  OP = /^(?!-).*(?<!-)$/, DP = /^(?!..--)/, MP = /^[a-zA-Z0-9-]*$/, Rs = /[^\p{ASCII}]/u, RJ = /[0-9]/, NP = /[\u{0660}-\u{0669}]/u, $J = /[\u{06f0}-\u{06f9}]/u, AJ = /[\u{002e}\u{002c}\u{003a}\u{002f}]/u, PJ = /[\u{002d}\u{002b}]/u, qx = /\p{Mn}/u, OJ = /\p{Mc}/u, UP = /[\p{Mn}\p{Mc}\p{Me}]/u, Gx = /\p{L}/u, DJ = /\p{Nd}/u, LP = /\p{Script=Greek}/u, Zp = /\p{Script=Hebrew}/u, FP = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, zP = /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Mandaic}]/u, Kx = /[\u{094d}\u{09cd}\u{0a4d}\u{0acd}\u{0b4d}\u{0bcd}\u{0c4d}\u{0ccd}\u{0d3b}\u{0d3c}\u{0d4d}\u{0dca}\u{1b44}\u{1baa}\u{1bab}\u{a9c0}\u{11046}\u{1107f}\u{110b9}\u{11133}\u{11134}\u{111c0}\u{11235}\u{1134d}\u{11442}\u{114c2}\u{115bf}\u{1163f}\u{116b6}\u{11c3f}\u{11d44}\u{11d45}]/u, jP = /[\u{0640}\u{07fa}\u{302e}\u{302f}\u{3031}\u{3032}\u{3033}\u{3034}\u{3035}\u{303b}]/u, MJ = /[\u{00b7}\u{0375}\u{05f3}\u{05f4}\u{200c}\u{200d}\u{30fb}]/u, NJ = /[\u{00df}\u{03c2}\u{06fd}\u{06fe}\u{0f0b}\u{3007}]/u, BP = new RegExp([
     RJ,
     $J
   ].map((e) => e.source).join("|"), "u"), qP = new RegExp([
-    Kx,
+    Gx,
     PJ,
     AJ,
     DJ,
-    Gx,
+    qx,
     OJ,
     MJ,
     NJ
   ].map((e) => e.source).join("|"), "u");
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/label/ascii.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/label/ascii.mjs
 function GP(e) {
   return OP.test(e) && DP.test(e) && MP.test(e);
 }
@@ -3452,8 +3452,8 @@ var KP = p(() => {
   $s();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/format/puny.mjs
-function Vx() {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/format/puny.mjs
+function Hx() {
   throw null;
 }
 function Jp(e) {
@@ -3471,15 +3471,15 @@ function Yp(e) {
   if (i > 0)
     for (let s = 0; s < i; s++) {
       let u = e.charCodeAt(s);
-      u >= 128 && Vx(), t.push(u);
+      u >= 128 && Hx(), t.push(u);
     }
   let a = i < 0 ? 0 : i + 1;
   for (; a < e.length; ) {
     let s = o, u = 1, l = Nr;
     for (; ; ) {
-      a >= e.length && Vx();
+      a >= e.length && Hx();
       let h = e.charCodeAt(a++), b;
-      h >= 97 && h <= 122 ? b = h - 97 : h >= 48 && h <= 57 ? b = h - 48 + 26 : Vx(), o += b * u;
+      h >= 97 && h <= 122 ? b = h - 97 : h >= 48 && h <= 57 ? b = h - 48 + 26 : Hx(), o += b * u;
       let f = l <= r ? _u : l >= r + Eu ? Eu : l - r;
       if (b < f)
         break;
@@ -3522,7 +3522,7 @@ var Nr, _u, Eu, LJ, FJ, VP, WP, zJ, Xp = p(() => {
   zJ = new RegExp(Rs.source, "gu");
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/format/bidi.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/format/bidi.mjs
 function XP(e) {
   if (Jp(e))
     try {
@@ -3537,7 +3537,7 @@ function QP(e) {
   return BP.test(t) ? "EN" : NP.test(t) ? "AN" : (
     // Pattern.RE_EUROPEAN_SEPARATOR.test(char) ? 'ES' : // (no-spec-coverage)
     // Pattern.RE_COMMON_SEPARATOR.test(char) ? 'CS' : // (no-spec-coverage)
-    Gx.test(t) ? "NSM" : Zp.test(t) ? "R" : zP.test(t) ? "AL" : Kx.test(t) ? "L" : "ON"
+    qx.test(t) ? "NSM" : Zp.test(t) ? "R" : zP.test(t) ? "AL" : Gx.test(t) ? "L" : "ON"
   );
 }
 function Qp(e) {
@@ -3561,13 +3561,13 @@ function em(e) {
   }
   return !(t && o && r);
 }
-var jJ, YP, BJ, Zx = p(() => {
+var jJ, YP, BJ, Wx = p(() => {
   Xp();
   $s();
   jJ = /^(?:R|AL|AN|EN|ES|CS|ET|ON|BN|NSM)$/, YP = /^(?:L|EN|ES|CS|ET|ON|BN|NSM)$/, BJ = /^(?:R|AL|AN)$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/label/unicode.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/label/unicode.mjs
 function qJ(e) {
   return Rs.test(e) && JP(e).length + 4 > 63;
 }
@@ -3605,11 +3605,11 @@ function tm(e) {
         break;
       // Hebrew GERESH
       case 8204:
-        if (!u || u < 128 && !Hx.test(t[i - 1]))
+        if (!u || u < 128 && !Kx.test(t[i - 1]))
           return !1;
         break;
       case 8205:
-        if (!u || !Hx.test(t[i - 1]))
+        if (!u || !Kx.test(t[i - 1]))
           return !1;
         break;
       case 12539:
@@ -3618,13 +3618,13 @@ function tm(e) {
   }
   return !(e.includes("\u30FB") && !r);
 }
-var Jx = p(() => {
+var Zx = p(() => {
   $s();
-  Zx();
+  Wx();
   Xp();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/label/puny.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/label/puny.mjs
 function nm(e) {
   if (!Jp(e))
     return !1;
@@ -3638,13 +3638,13 @@ function nm(e) {
     return !1;
   }
 }
-var Yx = p(() => {
+var Jx = p(() => {
   Xp();
-  Jx();
+  Zx();
   $s();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/hostname.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/hostname.mjs
 function KJ(e) {
   return e.length > 0 && e.length <= 63;
 }
@@ -3656,10 +3656,10 @@ function rO(e) {
 }
 var oO = p(() => {
   KP();
-  Yx();
+  Jx();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/idn-hostname.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/idn-hostname.mjs
 function VJ(e) {
   return e.length > 0 && e.length <= 63;
 }
@@ -3679,90 +3679,90 @@ function iO(e) {
   return n.every((r) => WJ(r) && (!o || em(r)));
 }
 var aO = p(() => {
+  Wx();
   Zx();
   Jx();
-  Yx();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idna/index.mjs
-var Xx = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/index.mjs
+var Yx = p(() => {
   oO();
   aO();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/hostname.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/hostname.mjs
 function rm(e) {
   return rO(e);
 }
-var Qx = p(() => {
-  Xx();
+var Xx = p(() => {
+  Yx();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idn_email.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idn_email.mjs
 function om(e) {
   return JJ.test(e.normalize("NFC"));
 }
-var JJ, ev = p(() => {
+var JJ, Qx = p(() => {
   JJ = /^(?:[A-Za-z0-9!#$%&'*+\/=?^_`{|}~\u{0080}-\u{10FFFF}-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~\u{0080}-\u{10FFFF}-]+)*|"(?:[^"\\]|\\.)*")@[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})(?<!-)(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})(?<!-))*$/iu;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/idn_hostname.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idn_hostname.mjs
 function im(e) {
   return iO(e);
 }
-var tv = p(() => {
-  Xx();
+var ev = p(() => {
+  Yx();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/ipv4.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/ipv4.mjs
 function am(e) {
   return YJ.test(e);
 }
-var YJ, nv = p(() => {
+var YJ, tv = p(() => {
   YJ = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/ipv6.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/ipv6.mjs
 function sm(e) {
   return XJ.test(e);
 }
-var XJ, rv = p(() => {
+var XJ, nv = p(() => {
   XJ = /^(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:)?[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/iri_reference.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/iri_reference.mjs
 function cm(e) {
   return !QJ.test(e) && !e7.test(e) && URL.canParse(e, "http://example.com");
 }
-var QJ, e7, ov = p(() => {
+var QJ, e7, rv = p(() => {
   QJ = /[\x00-\x20\x7F\\]|%(?![0-9a-fA-F]{2})/, e7 = /^[a-zA-Z][a-zA-Z0-9+\-.]*\/\//;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/iri.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/iri.mjs
 function um(e) {
   return t7.test(e) || n7.test(e) ? !1 : URL.canParse(e);
 }
-var t7, n7, iv = p(() => {
+var t7, n7, ov = p(() => {
   t7 = /[\x00-\x20<>\^`{|}\\]/, n7 = /%(?![0-9a-fA-F]{2})/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/json_pointer_uri_fragment.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/json_pointer_uri_fragment.mjs
 function lm(e) {
   return r7.test(e);
 }
-var r7, av = p(() => {
+var r7, iv = p(() => {
   r7 = /^#(?:\/(?:[a-z0-9_\-.!$&'()*+,;:=@]|%[0-9a-f]{2}|~0|~1)*)*$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/json_pointer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/json_pointer.mjs
 function dm(e) {
   return o7.test(e);
 }
-var o7, sv = p(() => {
+var o7, av = p(() => {
   o7 = /^(?:\/(?:[^~/]|~0|~1)*)*$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/regex.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/regex.mjs
 function pm(e) {
   try {
     return new RegExp(e, "u"), !0;
@@ -3770,57 +3770,57 @@ function pm(e) {
     return !1;
   }
 }
-var cv = p(() => {
+var sv = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/relative_json_pointer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/relative_json_pointer.mjs
 function mm(e) {
   return i7.test(e);
 }
-var i7, uv = p(() => {
+var i7, cv = p(() => {
   i7 = /^(?:0|[1-9][0-9]*)(?:#|(?:\/(?:[^~/]|~0|~1)*)*)$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/uri_reference.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/uri_reference.mjs
 function fm(e) {
   return a7.test(e);
 }
-var a7, lv = p(() => {
+var a7, uv = p(() => {
   a7 = /^(?:[a-z][a-z0-9+\-.]*:(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?)(?:\?(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/uri_template.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/uri_template.mjs
 function gm(e) {
   return s7.test(e);
 }
-var s7, dv = p(() => {
+var s7, lv = p(() => {
   s7 = /^(?:(?:[^\x00-\x20"<>%\\^`{|}\x7f]|%[0-9a-f]{2})|\{[+#./;?&=,!@|]?(?:[a-z0-9_]|%[0-9a-f]{2})+(?:\.(?:[a-z0-9_]|%[0-9a-f]{2})+)*(?::[1-9]\d{0,3}|\*)?(?:,(?:[a-z0-9_]|%[0-9a-f]{2})+(?:\.(?:[a-z0-9_]|%[0-9a-f]{2})+)*(?::[1-9]\d{0,3}|\*)?)*\})*$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/uri.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/uri.mjs
 function hm(e) {
   return c7.test(e);
 }
-var c7, pv = p(() => {
+var c7, dv = p(() => {
   c7 = /^[a-z][a-z0-9+\-.]*:(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?(?:\?(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/url.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/url.mjs
 function ym(e) {
   return URL.canParse(e);
 }
-var mv = p(() => {
+var pv = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/uuid.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/uuid.mjs
 function bm(e) {
   return u7.test(e);
 }
-var u7, fv = p(() => {
+var u7, mv = p(() => {
   u7 = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/_registry.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/_registry.mjs
 function cO() {
   et.clear();
 }
@@ -3843,10 +3843,11 @@ function uO() {
   cO(), et.set("date-time", Hp), et.set("date", Ts), et.set("duration", Vp), et.set("email", Wp), et.set("hostname", rm), et.set("idn-email", om), et.set("idn-hostname", im), et.set("ipv4", am), et.set("ipv6", sm), et.set("iri-reference", cm), et.set("iri", um), et.set("json-pointer-uri-fragment", lm), et.set("json-pointer", dm), et.set("regex", pm), et.set("relative-json-pointer", mm), et.set("time", Cs), et.set("uri-reference", fm), et.set("uri-template", gm), et.set("uri", hm), et.set("url", ym), et.set("uuid", bm);
 }
 var et, lO = p(() => {
-  jx();
+  zx();
   Gp();
+  jx();
   Bx();
-  qx();
+  Xx();
   Qx();
   ev();
   tv();
@@ -3857,20 +3858,19 @@ var et, lO = p(() => {
   av();
   sv();
   cv();
-  uv();
   Kp();
+  uv();
   lv();
   dv();
   pv();
   mv();
-  fv();
   et = /* @__PURE__ */ new Map();
   uO();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/format.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/format.mjs
 var Tu = {};
-st(Tu, {
+ct(Tu, {
   Clear: () => cO,
   Entries: () => l7,
   Get: () => m7,
@@ -3902,10 +3902,11 @@ st(Tu, {
 });
 var xm = p(() => {
   lO();
-  jx();
+  zx();
   Gp();
+  jx();
   Bx();
-  qx();
+  Xx();
   Qx();
   ev();
   tv();
@@ -3916,36 +3917,35 @@ var xm = p(() => {
   av();
   sv();
   cv();
-  uv();
   Kp();
+  uv();
   lv();
   dv();
   pv();
   mv();
-  fv();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/format/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/index.mjs
 var dO = p(() => {
   xm();
   xm();
   xm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/format.mjs
-function gv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/format.mjs
+function fv(e, t, n, o) {
   return Tu.Test(n.format, o);
 }
 function pO(e, t, n, o, r, i) {
-  return gv(e, t, r, i) || t.AddError("format", n, o, { format: r.format });
+  return fv(e, t, r, i) || t.AddError("format", n, o, { format: r.format });
 }
-var hv = p(() => {
+var gv = p(() => {
   Uo();
   dO();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/if.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/if.mjs
 function mO(e, t, n, o) {
   let r = Fp(n) ? n.then : !0, i = Ap(n) ? n.else : !0;
   return Te(e, t, n.if, o) ? Te(e, t, r, o) : Te(e, t, i, o);
@@ -3954,14 +3954,14 @@ function fO(e, t, n, o, r, i) {
   let a = Fp(r) ? r.then : !0, s = Ap(r) ? r.else : !0, u = new sn(), l = Ve(e, u, `${n}/if`, o, r.if, i) ? Ve(e, u, `${n}/then`, o, a, i) || t.AddError("if", n, o, { failingKeyword: "then" }) : Ve(e, t, `${n}/else`, o, s, i) || t.AddError("if", n, o, { failingKeyword: "else" });
   return l && t.Merge([u]), l;
 }
-var yv = p(() => {
+var hv = p(() => {
   je();
   to();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/items.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/items.mjs
 function g7(e, t, n, o) {
   return c.Every(n.items, 0, (r, i) => c.IsLessEqualThan(o.length, i) || sr(e, t, r, o[i]) && t.AddIndex(i));
 }
@@ -3988,17 +3988,17 @@ function gO(e, t, n, o) {
 function hO(e, t, n, o, r, i) {
   return Op(r) ? h7(e, t, n, o, r, i) : b7(e, t, n, o, r, i);
 }
-var bv = p(() => {
+var yv = p(() => {
   je();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/maxContains.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/maxContains.mjs
 function x7(e) {
   return ai(e);
 }
-function xv(e, t, n, o) {
+function bv(e, t, n, o) {
   if (!x7(n))
     return !0;
   let r = c.Counted(o, (i) => Te(e, t, n.contains, i));
@@ -4006,150 +4006,150 @@ function xv(e, t, n, o) {
 }
 function yO(e, t, n, o, r, i) {
   let a = aa(r) ? r.minContains : 1;
-  return xv(e, t, r, i) || t.AddError("contains", n, o, { minContains: a, maxContains: r.maxContains });
+  return bv(e, t, r, i) || t.AddError("contains", n, o, { minContains: a, maxContains: r.maxContains });
 }
-var vv = p(() => {
+var xv = p(() => {
   je();
   Dr();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/maximum.mjs
-function Iv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/maximum.mjs
+function vv(e, t, n, o) {
   return c.IsLessEqualThan(o, n.maximum);
 }
 function bO(e, t, n, o, r, i) {
-  return Iv(e, t, r, i) || t.AddError("maximum", n, o, { comparison: "<=", limit: r.maximum });
+  return vv(e, t, r, i) || t.AddError("maximum", n, o, { comparison: "<=", limit: r.maximum });
 }
-var wv = p(() => {
+var Iv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/maxItems.mjs
-function Sv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/maxItems.mjs
+function wv(e, t, n, o) {
   return c.IsLessEqualThan(o.length, n.maxItems);
 }
 function xO(e, t, n, o, r, i) {
-  return Sv(e, t, r, i) || t.AddError("maxItems", n, o, { limit: r.maxItems });
+  return wv(e, t, r, i) || t.AddError("maxItems", n, o, { limit: r.maxItems });
 }
-var kv = p(() => {
+var Sv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/maxLength.mjs
-function _v(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/maxLength.mjs
+function kv(e, t, n, o) {
   return c.IsMaxLength(o, n.maxLength);
 }
 function vO(e, t, n, o, r, i) {
-  return _v(e, t, r, i) || t.AddError("maxLength", n, o, { limit: r.maxLength });
+  return kv(e, t, r, i) || t.AddError("maxLength", n, o, { limit: r.maxLength });
 }
-var Ev = p(() => {
+var _v = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/maxProperties.mjs
-function Tv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/maxProperties.mjs
+function Ev(e, t, n, o) {
   return c.IsLessEqualThan(c.Keys(o).length, n.maxProperties);
 }
 function IO(e, t, n, o, r, i) {
-  return Tv(e, t, r, i) || t.AddError("maxProperties", n, o, { limit: r.maxProperties });
+  return Ev(e, t, r, i) || t.AddError("maxProperties", n, o, { limit: r.maxProperties });
 }
-var Cv = p(() => {
+var Tv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/minContains.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/minContains.mjs
 function v7(e) {
   return ai(e);
 }
-function Rv(e, t, n, o) {
+function Cv(e, t, n, o) {
   if (!v7(n))
     return !0;
   let r = c.Counted(o, (i, a) => Te(e, t, n.contains, i) && t.AddIndex(a));
   return c.IsGreaterEqualThan(r, n.minContains);
 }
 function wO(e, t, n, o, r, i) {
-  return Rv(e, t, r, i) || t.AddError("contains", n, o, { minContains: r.minContains });
+  return Cv(e, t, r, i) || t.AddError("contains", n, o, { minContains: r.minContains });
 }
-var $v = p(() => {
+var Rv = p(() => {
   je();
   Dr();
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/minimum.mjs
-function Av(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/minimum.mjs
+function $v(e, t, n, o) {
   return c.IsGreaterEqualThan(o, n.minimum);
 }
 function SO(e, t, n, o, r, i) {
-  return Av(e, t, r, i) || t.AddError("minimum", n, o, { comparison: ">=", limit: r.minimum });
+  return $v(e, t, r, i) || t.AddError("minimum", n, o, { comparison: ">=", limit: r.minimum });
 }
-var Pv = p(() => {
+var Av = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/minItems.mjs
-function Ov(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/minItems.mjs
+function Pv(e, t, n, o) {
   return c.IsGreaterEqualThan(o.length, n.minItems);
 }
 function kO(e, t, n, o, r, i) {
-  return Ov(e, t, r, i) || t.AddError("minItems", n, o, { limit: r.minItems });
+  return Pv(e, t, r, i) || t.AddError("minItems", n, o, { limit: r.minItems });
 }
-var Dv = p(() => {
+var Ov = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/minLength.mjs
-function Mv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/minLength.mjs
+function Dv(e, t, n, o) {
   return c.IsMinLength(o, n.minLength);
 }
 function _O(e, t, n, o, r, i) {
-  return Mv(e, t, r, i) || t.AddError("minLength", n, o, { limit: r.minLength });
+  return Dv(e, t, r, i) || t.AddError("minLength", n, o, { limit: r.minLength });
 }
-var Nv = p(() => {
+var Mv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/minProperties.mjs
-function Uv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/minProperties.mjs
+function Nv(e, t, n, o) {
   return c.IsGreaterEqualThan(c.Keys(o).length, n.minProperties);
 }
 function EO(e, t, n, o, r, i) {
-  return Uv(e, t, r, i) || t.AddError("minProperties", n, o, { limit: r.minProperties });
+  return Nv(e, t, r, i) || t.AddError("minProperties", n, o, { limit: r.minProperties });
 }
-var Lv = p(() => {
+var Uv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/multipleOf.mjs
-function Fv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/multipleOf.mjs
+function Lv(e, t, n, o) {
   return c.IsMultipleOf(o, n.multipleOf);
 }
 function TO(e, t, n, o, r, i) {
-  return Fv(e, t, r, i) || t.AddError("multipleOf", n, o, { multipleOf: r.multipleOf });
+  return Lv(e, t, r, i) || t.AddError("multipleOf", n, o, { multipleOf: r.multipleOf });
 }
-var zv = p(() => {
+var Fv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/not.mjs
-function jv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/not.mjs
+function zv(e, t, n, o) {
   let r = new wn();
   return !Te(e, r, n.not, o) && t.Merge([r]);
 }
 function CO(e, t, n, o, r, i) {
-  return jv(e, t, r, i) || t.AddError("not", n, o, {});
+  return zv(e, t, r, i) || t.AddError("not", n, o, {});
 }
-var Bv = p(() => {
+var jv = p(() => {
   _s();
   to();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/oneOf.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/oneOf.mjs
 function RO(e, t, n, o) {
   let r = n.oneOf.reduce((i, a) => {
     let s = new wn();
@@ -4164,7 +4164,7 @@ function $O(e, t, n, o, r, i) {
   }, []), l = c.IsEqual(u.length, 1) && t.Merge(u);
   return !l && c.IsEqual(s.length, 0) && a.forEach((m) => t.AddErrors(m.GetErrors())), l || t.AddError("oneOf", n, o, { passingSchemas: s });
 }
-var qv = p(() => {
+var Bv = p(() => {
   _s();
   Dr();
   to();
@@ -4172,20 +4172,20 @@ var qv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/pattern.mjs
-function Gv(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/pattern.mjs
+function qv(e, t, n, o) {
   return (c.IsString(n.pattern) ? ui(n.pattern) : n.pattern).test(o);
 }
 function AO(e, t, n, o, r, i) {
-  return Gv(e, t, r, i) || t.AddError("pattern", n, o, { pattern: r.pattern });
+  return qv(e, t, r, i) || t.AddError("pattern", n, o, { pattern: r.pattern });
 }
-var Kv = p(() => {
+var Gv = p(() => {
   Uo();
   zp();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/patternProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/patternProperties.mjs
 function PO(e, t, n, o) {
   return c.Every(c.Entries(n.patternProperties), 0, ([r, i]) => {
     let a = ui(r);
@@ -4201,7 +4201,7 @@ function OO(e, t, n, o, r, i) {
     });
   });
 }
-var Hv = p(() => {
+var Kv = p(() => {
   Uo();
   da();
   Dr();
@@ -4210,7 +4210,7 @@ var Hv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/prefixItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/prefixItems.mjs
 function DO(e, t, n, o) {
   return c.IsEqual(o.length, 0) || c.Every(n.prefixItems, 0, (r, i) => c.IsLessEqualThan(o.length, i) || sr(e, t, r, o[i]) && t.AddIndex(i));
 }
@@ -4220,16 +4220,16 @@ function MO(e, t, n, o, r, i) {
     return c.IsLessEqualThan(i.length, s) || cr(e, t, u, l, a, i[s]) && t.AddIndex(s);
   });
 }
-var Vv = p(() => {
+var Hv = p(() => {
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_exact_optional.mjs
-function Wv(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_exact_optional.mjs
+function Vv(e, t) {
   return e.includes(t) || mt.Get().exactOptionalPropertyTypes;
 }
-function Zv(e, t) {
+function Wv(e, t) {
   return c.IsUndefined(e[t]);
 }
 var NO = p(() => {
@@ -4237,22 +4237,22 @@ var NO = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/properties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/properties.mjs
 function UO(e, t, n, o) {
   let r = ua(n) ? n.required : [];
   return c.Every(c.Entries(n.properties), 0, ([a, s]) => {
     let u = !c.HasPropertyKey(o, a) || sr(e, t, s, o[a]) && t.AddKey(a);
-    return Wv(r, a) ? u : Zv(o, a) || u;
+    return Vv(r, a) ? u : Wv(o, a) || u;
   });
 }
 function LO(e, t, n, o, r, i) {
   let a = ua(r) ? r.required : [];
   return c.EveryAll(c.Entries(r.properties), 0, ([u, l]) => {
     let m = `${n}/properties/${Vn(u)}`, h = `${o}/${Vn(u)}`, b = () => !c.HasPropertyKey(i, u) || cr(e, t, m, h, l, i[u]) && t.AddKey(u);
-    return Wv(a, u) ? b() : Zv(i, u) || b();
+    return Vv(a, u) ? b() : Wv(i, u) || b();
   });
 }
-var Jv = p(() => {
+var Zv = p(() => {
   je();
   da();
   nt();
@@ -4260,7 +4260,7 @@ var Jv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/propertyNames.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/propertyNames.mjs
 function FO(e, t, n, o) {
   return c.Every(c.Keys(o), 0, (r, i) => Te(e, t, n.propertyNames, r));
 }
@@ -4271,14 +4271,14 @@ function zO(e, t, n, o, r, i) {
     return b || a.push(u), b;
   }) || t.AddError("propertyNames", n, o, { propertyNames: a });
 }
-var Yv = p(() => {
+var Jv = p(() => {
   da();
   Dr();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/recursiveRef.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/recursiveRef.mjs
 function jO(e, t, n, o) {
   let r = yr.RecursiveRef(e, n) ?? !1, i = r ? { ...e, pendingResource: !0 } : e;
   return oe(r) && Te(i, t, r, o);
@@ -4287,14 +4287,14 @@ function BO(e, t, n, o, r, i) {
   let a = yr.RecursiveRef(e, r) ?? !1, s = a ? { ...e, pendingResource: !0 } : e;
   return oe(a) && Ve(s, t, n, o, a, i);
 }
-var Xv = p(() => {
+var Yv = p(() => {
   je();
   Su();
   Es();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/ref.mjs
 function qO(e, t, n, o) {
   let r = yr.Ref(e, n), i = r.schema ?? !1, a = new wn(), s = oe(i) && Te(r.stack, a, i, o);
   return s && t.Merge([a]), s;
@@ -4303,7 +4303,7 @@ function GO(e, t, n, o, r, i) {
   let a = yr.Ref(e, r), s = a.schema ?? !1, u = new sn(), l = oe(s) && Ve(a.stack, u, n, o, s, i);
   return l && t.Merge([u]), l || t.AddErrors(u.GetErrors()), l;
 }
-var Qv = p(() => {
+var Xv = p(() => {
   Su();
   je();
   Es();
@@ -4312,7 +4312,7 @@ var Qv = p(() => {
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/required.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/required.mjs
 function KO(e, t, n, o) {
   return c.Every(n.required, 0, (r) => c.HasPropertyKey(o, r));
 }
@@ -4323,12 +4323,12 @@ function HO(e, t, n, o, r, i) {
     return l || a.push(u), l;
   }) || t.AddError("required", n, o, { requiredProperties: a });
 }
-var eI = p(() => {
+var Qv = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/type.mjs
-function tI(e, t, n, o, r) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/type.mjs
+function eI(e, t, n, o, r) {
   return (
     // jsonschema
     c.IsEqual(n, "object") ? c.IsObjectNotArray(r) : c.IsEqual(n, "array") ? c.IsArray(r) : c.IsEqual(n, "boolean") ? c.IsBoolean(r) : c.IsEqual(n, "integer") ? c.IsInteger(r) : c.IsEqual(n, "number") ? c.IsNumber(r) : c.IsEqual(n, "null") ? c.IsNull(r) : c.IsEqual(n, "string") ? c.IsString(r) : (
@@ -4338,19 +4338,19 @@ function tI(e, t, n, o, r) {
   );
 }
 function VO(e, t, n, o, r) {
-  return c.Some(n, (i) => tI(e, t, i, o, r));
+  return c.Some(n, (i) => eI(e, t, i, o, r));
 }
 function WO(e, t, n, o) {
-  return c.IsArray(n.type) ? VO(e, t, n.type, n, o) : tI(e, t, n.type, n, o);
+  return c.IsArray(n.type) ? VO(e, t, n.type, n, o) : eI(e, t, n.type, n, o);
 }
 function ZO(e, t, n, o, r, i) {
-  return (c.IsArray(r.type) ? VO(e, t, r.type, r, i) : tI(e, t, r.type, r, i)) || t.AddError("type", n, o, { type: r.type });
+  return (c.IsArray(r.type) ? VO(e, t, r.type, r, i) : eI(e, t, r.type, r, i)) || t.AddError("type", n, o, { type: r.type });
 }
-var nI = p(() => {
+var tI = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/unevaluatedItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/unevaluatedItems.mjs
 function JO(e, t, n, o) {
   let r = t.GetIndices();
   return c.Every(o, 0, (i, a) => (r.has(a) || Te(e, t, n.unevaluatedItems, i)) && t.AddIndex(a));
@@ -4362,14 +4362,14 @@ function YO(e, t, n, o, r, i) {
     return b || s.push(m), b;
   }) || t.AddError("unevaluatedItems", n, o, { unevaluatedItems: s });
 }
-var rI = p(() => {
+var nI = p(() => {
   Dr();
   to();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/unevaluatedProperties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/unevaluatedProperties.mjs
 function XO(e, t, n, o) {
   let r = t.GetKeys();
   return c.Every(c.Entries(o), 0, ([i, a]) => r.has(i) || Te(e, t, n.unevaluatedProperties, a) && t.AddKey(i));
@@ -4381,28 +4381,28 @@ function QO(e, t, n, o, r, i) {
     return b || s.push(l), b;
   }) || t.AddError("unevaluatedProperties", n, o, { unevaluatedProperties: s });
 }
-var oI = p(() => {
+var rI = p(() => {
   Dr();
   to();
   nt();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/unreachable/unreachable.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/unreachable/unreachable.mjs
 function ft() {
   throw new Error("Unreachable");
 }
-var iI = p(() => {
+var oI = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/unreachable/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/unreachable/index.mjs
 var Ur = p(() => {
-  iI();
+  oI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/hashing/hash.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/hashing/hash.mjs
 var zo = {};
-st(zo, {
+ct(zo, {
   Hash: () => L7,
   HashCode: () => iD
 });
@@ -4462,9 +4462,9 @@ function P7(e) {
     li(t), li(e[t]);
 }
 function O7(e) {
-  Qt(Sn.RegExp), aI(e.toString());
+  Qt(Sn.RegExp), iI(e.toString());
 }
-function aI(e) {
+function iI(e) {
   Qt(Sn.String);
   for (let t of D7.encode(e))
     Qt(t);
@@ -4482,7 +4482,7 @@ function U7(e) {
   return Qt(Sn.Undefined);
 }
 function li(e) {
-  return Pt.IsTypeArray(e) ? N7(e) : Pt.IsDate(e) ? R7(e) : Pt.IsRegExp(e) ? O7(e) : Pt.IsBoolean(e) ? eD(e.valueOf()) : Pt.IsString(e) ? aI(e.valueOf()) : Pt.IsNumber(e) ? tD(e.valueOf()) : w7(e) ? tD(e) : c.IsArray(e) ? E7(e) : c.IsBoolean(e) ? eD(e) : c.IsBigInt(e) ? T7(e) : c.IsConstructor(e) ? C7(e) : c.IsNull(e) ? A7(e) : c.IsObject(e) ? P7(e) : c.IsString(e) ? aI(e) : c.IsSymbol(e) ? M7(e) : c.IsUndefined(e) ? U7(e) : c.IsFunction(e) ? $7(e) : ft();
+  return Pt.IsTypeArray(e) ? N7(e) : Pt.IsDate(e) ? R7(e) : Pt.IsRegExp(e) ? O7(e) : Pt.IsBoolean(e) ? eD(e.valueOf()) : Pt.IsString(e) ? iI(e.valueOf()) : Pt.IsNumber(e) ? tD(e.valueOf()) : w7(e) ? tD(e) : c.IsArray(e) ? E7(e) : c.IsBoolean(e) ? eD(e) : c.IsBigInt(e) ? T7(e) : c.IsConstructor(e) ? C7(e) : c.IsNull(e) ? A7(e) : c.IsObject(e) ? P7(e) : c.IsString(e) ? iI(e) : c.IsSymbol(e) ? M7(e) : c.IsUndefined(e) ? U7(e) : c.IsFunction(e) ? $7(e) : ft();
 }
 function iD(e) {
   return As = BigInt("14695981039346656037"), li(e), As;
@@ -4503,12 +4503,12 @@ var Sn, As, S7, k7, _7, nD, rD, oD, D7, aD = p(() => {
   D7 = new TextEncoder();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/hashing/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/hashing/index.mjs
 var Cu = p(() => {
   aD();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/uniqueItems.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/uniqueItems.mjs
 function sD(e) {
   return !c.IsEqual(e.uniqueItems, !1);
 }
@@ -4527,18 +4527,18 @@ function uD(e, t, n, o, r, i) {
   }, []);
   return c.IsEqual(s.length, 0) || t.AddError("uniqueItems", n, o, { duplicateItems: s });
 }
-var sI = p(() => {
+var aI = p(() => {
   Cu();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/schema.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/schema.mjs
 function sr(e, t, n, o) {
   return t.Push() && Te(e, t, n, o) && t.Pop();
 }
 function Te(e, t, n, o) {
   let r = Ss(e, n);
-  return oa(n) ? xx(r, t, n, o) : (!lx(n) || WO(r, t, n, o)) && (!(c.IsObject(o) && !c.IsArray(o)) || (!ua(n) || KO(r, t, n, o)) && (!hr(n) || tP(r, t, n, o)) && (!tx(n) || lP(r, t, n, o)) && (!nx(n) || pP(r, t, n, o)) && (!Rp(n) || fP(r, t, n, o)) && (!xs(n) || PO(r, t, n, o)) && (!vs(n) || UO(r, t, n, o)) && (!Np(n) || FO(r, t, n, o)) && (!mu(n) || Uv(r, t, n, o)) && (!cx(n) || Tv(r, t, n, o))) && (!c.IsArray(o) || (!Ep(n) || XA(r, t, n, o)) && (!ai(n) || Sx(r, t, n, o)) && (!ia(n) || gO(r, t, n, o)) && (!aa(n) || Rv(r, t, n, o)) && (!ax(n) || xv(r, t, n, o)) && (!sa(n) || Ov(r, t, n, o)) && (!du(n) || Sv(r, t, n, o)) && (!ca(n) || DO(r, t, n, o)) && (!ci(n) || cD(r, t, n, o))) && (!c.IsString(o) || (!pu(n) || Mv(r, t, n, o)) && (!sx(n) || _v(r, t, n, o)) && (!lu(n) || gv(r, t, n, o)) && (!fu(n) || Gv(r, t, n, o))) && (!(c.IsNumber(o) || c.IsBigInt(o)) || (!Mo(n) || Fx(r, t, n, o)) && (!ox(n) || Ux(r, t, n, o)) && (!No(n) || Av(r, t, n, o)) && (!ix(n) || Iv(r, t, n, o)) && (!ux(n) || Fv(r, t, n, o))) && (!Lp(n) || qO(r, t, n, o)) && (!Up(n) || jO(r, t, n, o)) && (!$p(n) || TP(r, t, n, o)) && (!ex(n) || Ix(r, t, n, o)) && (!rx(n) || Mx(r, t, n, o)) && (!Pp(n) || mO(r, t, n, o)) && (!Dp(n) || jv(r, t, n, o)) && (!Tp(n) || rP(r, t, n, o)) && (!Cp(n) || iP(r, t, n, o)) && (!Mp(n) || RO(r, t, n, o)) && (!hu(n) || !c.IsArray(o) || JO(r, t, n, o)) && (!yu(n) || !c.IsObject(o) || XO(r, t, n, o)) && (!_p(n) || KA(r, t, n, o));
+  return oa(n) ? bx(r, t, n, o) : (!ux(n) || WO(r, t, n, o)) && (!(c.IsObject(o) && !c.IsArray(o)) || (!ua(n) || KO(r, t, n, o)) && (!hr(n) || tP(r, t, n, o)) && (!ex(n) || lP(r, t, n, o)) && (!tx(n) || pP(r, t, n, o)) && (!Rp(n) || fP(r, t, n, o)) && (!xs(n) || PO(r, t, n, o)) && (!vs(n) || UO(r, t, n, o)) && (!Np(n) || FO(r, t, n, o)) && (!mu(n) || Nv(r, t, n, o)) && (!sx(n) || Ev(r, t, n, o))) && (!c.IsArray(o) || (!Ep(n) || XA(r, t, n, o)) && (!ai(n) || wx(r, t, n, o)) && (!ia(n) || gO(r, t, n, o)) && (!aa(n) || Cv(r, t, n, o)) && (!ix(n) || bv(r, t, n, o)) && (!sa(n) || Pv(r, t, n, o)) && (!du(n) || wv(r, t, n, o)) && (!ca(n) || DO(r, t, n, o)) && (!ci(n) || cD(r, t, n, o))) && (!c.IsString(o) || (!pu(n) || Dv(r, t, n, o)) && (!ax(n) || kv(r, t, n, o)) && (!lu(n) || fv(r, t, n, o)) && (!fu(n) || qv(r, t, n, o))) && (!(c.IsNumber(o) || c.IsBigInt(o)) || (!Mo(n) || Lx(r, t, n, o)) && (!rx(n) || Nx(r, t, n, o)) && (!No(n) || $v(r, t, n, o)) && (!ox(n) || vv(r, t, n, o)) && (!cx(n) || Lv(r, t, n, o))) && (!Lp(n) || qO(r, t, n, o)) && (!Up(n) || jO(r, t, n, o)) && (!$p(n) || TP(r, t, n, o)) && (!Qb(n) || vx(r, t, n, o)) && (!nx(n) || Dx(r, t, n, o)) && (!Pp(n) || mO(r, t, n, o)) && (!Dp(n) || zv(r, t, n, o)) && (!Tp(n) || rP(r, t, n, o)) && (!Cp(n) || iP(r, t, n, o)) && (!Mp(n) || RO(r, t, n, o)) && (!hu(n) || !c.IsArray(o) || JO(r, t, n, o)) && (!yu(n) || !c.IsObject(o) || XO(r, t, n, o)) && (!_p(n) || KA(r, t, n, o));
 }
 function cr(e, t, n, o, r, i) {
   return t.Push() && Ve(e, t, n, o, r, i) && t.Pop();
@@ -4547,118 +4547,118 @@ function Ve(e, t, n, o, r, i) {
   if (t.AtCapacity())
     return !1;
   let a = Ss(e, r);
-  return oa(r) ? sP(a, t, n, o, r, i) : !!(+(!lx(r) || ZO(a, t, n, o, r, i)) & +(!(c.IsObject(i) && !c.IsArray(i)) || !!(+(!ua(r) || HO(a, t, n, o, r, i)) & +(!hr(r) || nP(a, t, n, o, r, i)) & +(!tx(r) || dP(a, t, n, o, r, i)) & +(!nx(r) || mP(a, t, n, o, r, i)) & +(!Rp(r) || gP(a, t, n, o, r, i)) & +(!xs(r) || OO(a, t, n, o, r, i)) & +(!vs(r) || LO(a, t, n, o, r, i)) & +(!Np(r) || zO(a, t, n, o, r, i)) & +(!mu(r) || EO(a, t, n, o, r, i)) & +(!cx(r) || IO(a, t, n, o, r, i)))) & +(!c.IsArray(i) || !!(+(!Ep(r) || QA(a, t, n, o, r, i)) & +(!ai(r) || uP(a, t, n, o, r, i)) & +(!ia(r) || hO(a, t, n, o, r, i)) & +(!aa(r) || wO(a, t, n, o, r, i)) & +(!ax(r) || yO(a, t, n, o, r, i)) & +(!sa(r) || kO(a, t, n, o, r, i)) & +(!du(r) || xO(a, t, n, o, r, i)) & +(!ca(r) || MO(a, t, n, o, r, i)) & +(!ci(r) || uD(a, t, n, o, r, i)))) & +(!c.IsString(i) || !!(+(!pu(r) || _O(a, t, n, o, r, i)) & +(!sx(r) || vO(a, t, n, o, r, i)) & +(!lu(r) || pO(a, t, n, o, r, i)) & +(!fu(r) || AO(a, t, n, o, r, i)))) & +(!(c.IsNumber(i) || c.IsBigInt(i)) || !!(+(!Mo(r) || PP(a, t, n, o, r, i)) & +(!ox(r) || AP(a, t, n, o, r, i)) & +(!No(r) || SO(a, t, n, o, r, i)) & +(!ix(r) || bO(a, t, n, o, r, i)) & +(!ux(r) || TO(a, t, n, o, r, i)))) & +(!Lp(r) || GO(a, t, n, o, r, i)) & +(!Up(r) || BO(a, t, n, o, r, i)) & +(!$p(r) || CP(a, t, n, o, r, i)) & +(!ex(r) || cP(a, t, n, o, r, i)) & +(!rx(r) || $P(a, t, n, o, r, i)) & +(!Pp(r) || fO(a, t, n, o, r, i)) & +(!Dp(r) || CO(a, t, n, o, r, i)) & +(!Tp(r) || oP(a, t, n, o, r, i)) & +(!Cp(r) || aP(a, t, n, o, r, i)) & +(!Mp(r) || $O(a, t, n, o, r, i)) & +(!hu(r) || !c.IsArray(i) || YO(a, t, n, o, r, i)) & +(!yu(r) || !c.IsObject(i) || QO(a, t, n, o, r, i))) && (!_p(r) || HA(a, t, n, o, r, i));
+  return oa(r) ? sP(a, t, n, o, r, i) : !!(+(!ux(r) || ZO(a, t, n, o, r, i)) & +(!(c.IsObject(i) && !c.IsArray(i)) || !!(+(!ua(r) || HO(a, t, n, o, r, i)) & +(!hr(r) || nP(a, t, n, o, r, i)) & +(!ex(r) || dP(a, t, n, o, r, i)) & +(!tx(r) || mP(a, t, n, o, r, i)) & +(!Rp(r) || gP(a, t, n, o, r, i)) & +(!xs(r) || OO(a, t, n, o, r, i)) & +(!vs(r) || LO(a, t, n, o, r, i)) & +(!Np(r) || zO(a, t, n, o, r, i)) & +(!mu(r) || EO(a, t, n, o, r, i)) & +(!sx(r) || IO(a, t, n, o, r, i)))) & +(!c.IsArray(i) || !!(+(!Ep(r) || QA(a, t, n, o, r, i)) & +(!ai(r) || uP(a, t, n, o, r, i)) & +(!ia(r) || hO(a, t, n, o, r, i)) & +(!aa(r) || wO(a, t, n, o, r, i)) & +(!ix(r) || yO(a, t, n, o, r, i)) & +(!sa(r) || kO(a, t, n, o, r, i)) & +(!du(r) || xO(a, t, n, o, r, i)) & +(!ca(r) || MO(a, t, n, o, r, i)) & +(!ci(r) || uD(a, t, n, o, r, i)))) & +(!c.IsString(i) || !!(+(!pu(r) || _O(a, t, n, o, r, i)) & +(!ax(r) || vO(a, t, n, o, r, i)) & +(!lu(r) || pO(a, t, n, o, r, i)) & +(!fu(r) || AO(a, t, n, o, r, i)))) & +(!(c.IsNumber(i) || c.IsBigInt(i)) || !!(+(!Mo(r) || PP(a, t, n, o, r, i)) & +(!rx(r) || AP(a, t, n, o, r, i)) & +(!No(r) || SO(a, t, n, o, r, i)) & +(!ox(r) || bO(a, t, n, o, r, i)) & +(!cx(r) || TO(a, t, n, o, r, i)))) & +(!Lp(r) || GO(a, t, n, o, r, i)) & +(!Up(r) || BO(a, t, n, o, r, i)) & +(!$p(r) || CP(a, t, n, o, r, i)) & +(!Qb(r) || cP(a, t, n, o, r, i)) & +(!nx(r) || $P(a, t, n, o, r, i)) & +(!Pp(r) || fO(a, t, n, o, r, i)) & +(!Dp(r) || CO(a, t, n, o, r, i)) & +(!Tp(r) || oP(a, t, n, o, r, i)) & +(!Cp(r) || aP(a, t, n, o, r, i)) & +(!Mp(r) || $O(a, t, n, o, r, i)) & +(!hu(r) || !c.IsArray(i) || YO(a, t, n, o, r, i)) & +(!yu(r) || !c.IsObject(i) || QO(a, t, n, o, r, i))) && (!_p(r) || HA(a, t, n, o, r, i));
 }
 var nt = p(() => {
   je();
-  dx();
+  lx();
   vu();
   I();
+  mx();
   fx();
-  gx();
+  hx();
   yx();
-  bx();
-  vx();
-  wx();
+  xx();
+  Ix();
+  Sx();
   kx();
   _x();
   Ex();
-  Tx();
   RP();
-  Nx();
-  Lx();
-  zx();
+  Mx();
+  Ux();
+  Fx();
+  gv();
   hv();
   yv();
-  bv();
-  vv();
-  wv();
-  kv();
-  Ev();
-  Cv();
-  $v();
-  Pv();
-  Dv();
-  Nv();
-  Lv();
-  zv();
+  xv();
+  Iv();
+  Sv();
+  _v();
+  Tv();
+  Rv();
+  Av();
+  Ov();
+  Mv();
+  Uv();
+  Fv();
+  jv();
   Bv();
-  qv();
+  Gv();
   Kv();
   Hv();
-  Vv();
+  Zv();
   Jv();
   Yv();
   Xv();
   Qv();
-  eI();
+  tI();
   nI();
   rI();
-  oI();
-  sI();
+  aI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/_functions.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_functions.mjs
 var Su = p(() => {
   I();
   nt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/engine/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/index.mjs
 var Ru = p(() => {
   to();
   Uo();
   Su();
   _s();
-  dx();
+  lx();
   vu();
+  mx();
   fx();
-  gx();
+  hx();
   yx();
-  bx();
-  vx();
-  wx();
+  xx();
+  Ix();
+  Sx();
   kx();
   _x();
   Ex();
-  Tx();
-  Nx();
-  Lx();
-  zx();
+  Mx();
+  Ux();
+  Fx();
+  gv();
   hv();
   yv();
-  bv();
-  vv();
-  kv();
-  Ev();
-  Cv();
-  wv();
-  $v();
-  Dv();
-  Nv();
-  Lv();
-  Pv();
-  zv();
+  xv();
+  Sv();
+  _v();
+  Tv();
+  Iv();
+  Rv();
+  Ov();
+  Mv();
+  Uv();
+  Av();
+  Fv();
+  jv();
   Bv();
-  qv();
+  Gv();
   Kv();
   Hv();
-  Vv();
+  Zv();
   Jv();
   Yv();
   Xv();
   Qv();
-  eI();
   nt();
+  tI();
   nI();
   rI();
-  oI();
-  sI();
+  aI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/arguments/arguments.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/arguments/arguments.mjs
 var le = {};
-st(le, {
+ct(le, {
   Match: () => F7
 });
 function F7(e, t) {
@@ -4669,28 +4669,28 @@ function F7(e, t) {
 var lD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/arguments/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/arguments/index.mjs
 var Et = p(() => {
   lD();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/environment/evaluate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/environment/evaluate.mjs
 var dD = p(() => {
   eo();
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/environment/environment.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/environment/environment.mjs
 var mD = p(() => {
   dD();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/environment/index.mjs
-var uI = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/environment/index.mjs
+var cI = p(() => {
   mD();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/en_US.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/en_US.mjs
 function fD(e) {
   switch (e.keyword) {
     case "additionalProperties":
@@ -4760,183 +4760,183 @@ function fD(e) {
       return "an unknown validation error occurred";
   }
 }
-var lI = p(() => {
+var uI = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/_config.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/_config.mjs
 function gD() {
   return z7;
 }
-var z7, dI = p(() => {
-  lI();
+var z7, lI = p(() => {
+  uI();
   z7 = fD;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ar_001.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ar_001.mjs
 var hD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/bn_BD.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/bn_BD.mjs
 var yD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/cs_CZ.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/cs_CZ.mjs
 var bD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/de_DE.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/de_DE.mjs
 var xD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/el_GR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/el_GR.mjs
 var vD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/es_419.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/es_419.mjs
 var ID = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/es_AR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/es_AR.mjs
 var wD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/es_ES.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/es_ES.mjs
 var SD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/es_MX.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/es_MX.mjs
 var kD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/fa_IR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/fa_IR.mjs
 var _D = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/fil_PH.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/fil_PH.mjs
 var ED = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/fr_CA.mjs
-var pI = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/fr_CA.mjs
+var dI = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/fr_FR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/fr_FR.mjs
 var TD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ha_NG.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ha_NG.mjs
 var CD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/hi_IN.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/hi_IN.mjs
 var RD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/hu_HU.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/hu_HU.mjs
 var $D = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/id_ID.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/id_ID.mjs
 var AD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/it_IT.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/it_IT.mjs
 var PD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ja_JP.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ja_JP.mjs
 var OD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ko_KR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ko_KR.mjs
 var DD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ms_MY.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ms_MY.mjs
 var MD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/nl_NL.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/nl_NL.mjs
 var ND = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/pl_PL.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/pl_PL.mjs
 var UD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/pt_BR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/pt_BR.mjs
 var LD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/pt_PT.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/pt_PT.mjs
 var FD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ro_RO.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ro_RO.mjs
 var zD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ru_RU.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ru_RU.mjs
 var jD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/sv_SE.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/sv_SE.mjs
 var BD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/sw_TZ.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/sw_TZ.mjs
 var qD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/th_TH.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/th_TH.mjs
 var GD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/tr_TR.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/tr_TR.mjs
 var KD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/uk_UA.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/uk_UA.mjs
 var HD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/ur_PK.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/ur_PK.mjs
 var VD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/vi_VN.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/vi_VN.mjs
 var WD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/yo_NG.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/yo_NG.mjs
 var ZD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/zh_Hans.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/zh_Hans.mjs
 var JD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/zh_Hant.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/zh_Hant.mjs
 var YD = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/_locale.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/_locale.mjs
 var XD = p(() => {
-  dI();
+  lI();
   hD();
   yD();
   bD();
   xD();
   vD();
-  lI();
+  uI();
   ID();
   wD();
   SD();
   kD();
   _D();
   ED();
-  pI();
-  pI();
+  dI();
+  dI();
   TD();
   CD();
   RD();
@@ -4964,12 +4964,12 @@ var XD = p(() => {
   YD();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/locale/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/index.mjs
 var QD = p(() => {
   XD();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/metrics.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/metrics.mjs
 var Lr, pa = p(() => {
   Lr = {
     assign: 0,
@@ -4980,7 +4980,7 @@ var Lr, pa = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/freeze.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/freeze.mjs
 function di(e) {
   return mt.Get().immutableTypes ? Object.freeze(e) : e;
 }
@@ -4988,7 +4988,7 @@ var $u = p(() => {
   eo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/assign.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/assign.mjs
 function B7(e, t) {
   return Lr.assign += 1, di({ ...e, ...t });
 }
@@ -4997,7 +4997,7 @@ var eM = p(() => {
   $u();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/clone.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/clone.mjs
 function q7(e) {
   return c.HasPropertyKey(e, "~kind") || c.HasPropertyKey(e, "~unsafe");
 }
@@ -5048,7 +5048,7 @@ var Au = p(() => {
   pa();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/create.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/create.mjs
 function X7(e, t) {
   for (let n of Object.keys(t))
     Object.defineProperty(e, n, {
@@ -5073,7 +5073,7 @@ var nM = p(() => {
   $u();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/discard.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/discard.mjs
 function eY(e, t) {
   Lr.discard += 1;
   let n = {};
@@ -5092,7 +5092,7 @@ var rM = p(() => {
   Au();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/update.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/update.mjs
 function tY(e, t, n) {
   Lr.update += 1;
   let o = mt.Get(), r = fa(e);
@@ -5119,9 +5119,9 @@ var oM = p(() => {
   Au();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/memory.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/memory.mjs
 var _ = {};
-st(_, {
+ct(_, {
   Assign: () => B7,
   Clone: () => fa,
   Create: () => Q7,
@@ -5138,29 +5138,29 @@ var iM = p(() => {
   oM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/memory/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/index.mjs
 var z = p(() => {
   iM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/system.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/system.mjs
 var Pu = p(() => {
   Et();
-  uI();
+  cI();
   Cu();
   QD();
   z();
   eo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/index.mjs
 var ga = p(() => {
   Pu();
   Pu();
   Pu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/intern/intern.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/intern/intern.mjs
 var sM = p(() => {
   Et();
   ga();
@@ -5170,40 +5170,40 @@ var sM = p(() => {
   Es();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/intern/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/intern/index.mjs
 var cM = p(() => {
   sM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/schema.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/schema.mjs
 var uM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/draft_2020_12.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/draft_2020_12.mjs
 var lM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/draft_2019_09.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/draft_2019_09.mjs
 var dM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/draft_7.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/draft_7.mjs
 var pM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/draft_6.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/draft_6.mjs
 var mM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/draft_4.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/draft_4.mjs
 var fM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/draft_3.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/draft_3.mjs
 var gM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/meta.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/meta.mjs
 var hM = p(() => {
   lM();
   dM();
@@ -5213,26 +5213,26 @@ var hM = p(() => {
   gM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/meta/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/meta/index.mjs
 var yM = p(() => {
   uM();
   hM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/static/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/static/index.mjs
 var bM = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/build.mjs
-var mI = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/build.mjs
+var pI = p(() => {
   Et();
-  uI();
+  cI();
   Cu();
   I();
   Ru();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/errors.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/errors.mjs
 function vm(...e) {
   let [t, n, o] = le.Match(e, {
     3: (m, h, b) => [m, h, b],
@@ -5242,11 +5242,11 @@ function vm(...e) {
 }
 var Im = p(() => {
   Et();
-  dI();
+  lI();
   Ru();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/system/settings/internal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/settings/internal.mjs
 function Ou() {
   let e = kp();
   xM = e.maxErrors, e.maxErrors = e.maxParseErrors;
@@ -5256,11 +5256,11 @@ function Du() {
   e.maxErrors = xM;
 }
 var xM, wm = p(() => {
-  Qb();
+  Xb();
   xM = 0;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/check.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/check.mjs
 function Mu(...e) {
   let [t, n, o] = le.Match(e, {
     3: (a, s, u) => [a, s, u],
@@ -5268,29 +5268,29 @@ function Mu(...e) {
   }), r = ws(t, n), i = new wn();
   return Te(r, i, n, o);
 }
-var fI = p(() => {
+var mI = p(() => {
   Et();
   Ru();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/parse.mjs
-var gI = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/parse.mjs
+var fI = p(() => {
   wm();
-  Et();
-  fI();
-  Im();
-});
-
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/compile.mjs
-var IM = p(() => {
   Et();
   mI();
   Im();
-  gI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/schema.mjs
-var hI = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/compile.mjs
+var IM = p(() => {
+  Et();
+  pI();
+  Im();
+  fI();
+});
+
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/schema.mjs
+var gI = p(() => {
   Ru();
   cM();
   yM();
@@ -5298,17 +5298,17 @@ var hI = p(() => {
   Es();
   bM();
   je();
-  mI();
+  pI();
   IM();
+  mI();
   fI();
-  gI();
   Im();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/schema/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/index.mjs
 var jo = p(() => {
-  hI();
-  hI();
+  gI();
+  gI();
 });
 
 // openclaw/packages/normalization-core/src/json-schema.ts
@@ -5318,7 +5318,7 @@ var wM = p(() => {
   Le();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/check/check.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/check/check.mjs
 function be(...e) {
   let [t, n, o] = le.Match(e, {
     3: (r, i, a) => [r, i, a],
@@ -5331,12 +5331,12 @@ var SM = p(() => {
   jo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/check/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/check/index.mjs
 var zt = p(() => {
   SM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/errors/errors.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/errors/errors.mjs
 function br(...e) {
   let [t, n, o] = le.Match(e, {
     3: (a, s, u) => [a, s, u],
@@ -5349,12 +5349,12 @@ var kM = p(() => {
   jo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/errors/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/errors/index.mjs
 var ha = p(() => {
   kM();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/assert/assert.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/assert/assert.mjs
 function Sm(...e) {
   let [t, n, o] = le.Match(e, {
     3: (i, a, s) => [i, a, s],
@@ -5379,23 +5379,23 @@ var Bo, _M = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/assert/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/assert/index.mjs
 var ya = p(() => {
   _M();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/schema.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/schema.mjs
 function q(e, t) {
   return c.IsObject(e) && c.HasPropertyKey(e, "~kind") && c.IsEqual(e["~kind"], t);
 }
-function ut(e) {
+function rt(e) {
   return c.IsObject(e);
 }
 var fe = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/deferred.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/deferred.mjs
 function G(e, t, n) {
   return _.Create({ "~kind": "Deferred" }, { type: "deferred", action: e, parameters: t, options: n }, {});
 }
@@ -5407,7 +5407,7 @@ var Oe = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly/instantiate_add.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly/instantiate_add.mjs
 function oY(e) {
   return _.Update(e, { "~readonly": !0 }, {});
 }
@@ -5423,7 +5423,7 @@ var km = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/optional/instantiate_add.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/optional/instantiate_add.mjs
 function iY(e) {
   return _.Update(e, { "~optional": !0 }, {});
 }
@@ -5439,7 +5439,7 @@ var _m = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/array.mjs
 function Pn(e, t) {
   return _.Create({ "~kind": "Array" }, { type: "array", items: e }, t);
 }
@@ -5454,7 +5454,7 @@ var kn = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/constructor.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/constructor.mjs
 function no(e, t, n = {}) {
   return _.Create({ "~kind": "Constructor" }, { type: "constructor", parameters: e, instanceType: t }, n);
 }
@@ -5469,7 +5469,7 @@ var xr = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/function.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/function.mjs
 function ro(e, t, n = {}) {
   return _.Create({ "~kind": "Function" }, { type: "function", parameters: e, returnType: t }, n);
 }
@@ -5484,7 +5484,7 @@ var vr = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/ref.mjs
 function jt(e, t) {
   return _.Create({ "~kind": "Ref" }, { $ref: e }, t);
 }
@@ -5496,7 +5496,7 @@ var Ir = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/generic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/generic.mjs
 function mi(e, t) {
   return _.Create({ "~kind": "Generic" }, { type: "generic", parameters: e, expression: t });
 }
@@ -5508,7 +5508,7 @@ var Lu = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/any.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/any.mjs
 function Ds(e) {
   return _.Create({ "~kind": "Any" }, {}, e);
 }
@@ -5520,7 +5520,7 @@ var On = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/never.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/never.mjs
 function Fe(e) {
   return _.Create({ "~kind": "Never" }, { not: {} }, e);
 }
@@ -5533,7 +5533,7 @@ var $M, en = p(() => {
   $M = "(?!)";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/_add_optional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_add_optional.mjs
 function oo(e, t = {}) {
   return G("AddOptional", [e], t);
 }
@@ -5545,12 +5545,12 @@ var Fu = p(() => {
   _m();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/_optional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_optional.mjs
 function AM(e) {
   return ba(e);
 }
 function Bt(e) {
-  return ut(e) && c.HasPropertyKey(e, "~optional");
+  return rt(e) && c.HasPropertyKey(e, "~optional");
 }
 var fi = p(() => {
   I();
@@ -5558,7 +5558,7 @@ var fi = p(() => {
   Fu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/properties.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/properties.mjs
 function PM(e) {
   return c.Keys(e).filter((t) => !Bt(e[t]));
 }
@@ -5573,7 +5573,7 @@ var xa = p(() => {
   fi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/object.mjs
 function X(e, t = {}) {
   let n = PM(e), o = n.length > 0 ? { required: n } : {};
   return _.Create({ "~kind": "Object" }, { type: "object", ...o, properties: e }, t);
@@ -5590,7 +5590,7 @@ var Ne = p(() => {
   xa();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/unknown.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/unknown.mjs
 function Dt(e) {
   return _.Create({ "~kind": "Unknown" }, {}, e);
 }
@@ -5602,7 +5602,7 @@ var cn = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/cyclic.mjs
 function io(e, t, n) {
   let o = c.Keys(e).reduce((r, i) => ({ ...r, [i]: _.Update(e[i], {}, { $id: i }) }), {});
   return _.Create({ "~kind": "Cyclic" }, { $defs: o, $ref: t }, n);
@@ -5616,7 +5616,7 @@ var Mn = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/unsafe.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/unsafe.mjs
 function DM(e) {
   return _.Update(e, { "~unsafe": null }, {});
 }
@@ -5628,7 +5628,7 @@ var Rm = p(() => {
   z();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/infer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/infer.mjs
 function zu(...e) {
   let [t, n] = le.Match(e, {
     2: (o, r) => [o, r, r],
@@ -5646,7 +5646,7 @@ var wr = p(() => {
   cn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/dependent.mjs
 function va(e, t, n, o = {}) {
   return _.Create({ "~kind": "Dependent" }, { if: e, then: t, else: n }, o);
 }
@@ -5661,7 +5661,7 @@ var Zn = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/enum/typescript_enum_to_enum_values.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/enum/typescript_enum_to_enum_values.mjs
 function NM(e) {
   return c.IsObjectNotArray(e);
 }
@@ -5672,7 +5672,7 @@ var $m = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/enum.mjs
 function LM(e) {
   return c.IsString(e) || c.IsNumber(e);
 }
@@ -5691,7 +5691,7 @@ var Fr = p(() => {
   $m();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/intersect.mjs
 function mn(e, t = {}) {
   return _.Create({ "~kind": "Intersect" }, { allOf: e }, t);
 }
@@ -5706,7 +5706,7 @@ var qt = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/_codec.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_codec.mjs
 function Am(e) {
   return new Bu(e);
 }
@@ -5721,9 +5721,9 @@ function BM(e, t) {
   }).Encode(t);
 }
 function _n(e) {
-  return ut(e) && c.HasPropertyKey(e, "~codec") && c.IsObject(e["~codec"]) && c.HasPropertyKey(e["~codec"], "encode") && c.HasPropertyKey(e["~codec"], "decode");
+  return rt(e) && c.HasPropertyKey(e, "~codec") && c.IsObject(e["~codec"]) && c.HasPropertyKey(e["~codec"], "encode") && c.HasPropertyKey(e["~codec"], "decode");
 }
-var ju, Bu, yI = p(() => {
+var ju, Bu, hI = p(() => {
   ga();
   I();
   fe();
@@ -5745,12 +5745,12 @@ var ju, Bu, yI = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/_immutable.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_immutable.mjs
 function qM(e) {
   return Ms(e);
 }
 function Ia(e) {
-  return ut(e) && c.HasPropertyKey(e, "~immutable");
+  return rt(e) && c.HasPropertyKey(e, "~immutable");
 }
 var qu = p(() => {
   I();
@@ -5758,7 +5758,7 @@ var qu = p(() => {
   Gu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/_add_readonly.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_add_readonly.mjs
 function ao(e, t = {}) {
   return G("AddReadonly", [e], t);
 }
@@ -5770,12 +5770,12 @@ var Ku = p(() => {
   km();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/_readonly.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_readonly.mjs
 function GM(e) {
   return wa(e);
 }
 function Sa(e) {
-  return ut(e) && c.HasPropertyKey(e, "~readonly");
+  return rt(e) && c.HasPropertyKey(e, "~readonly");
 }
 var Hu = p(() => {
   I();
@@ -5783,7 +5783,7 @@ var Hu = p(() => {
   Ku();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/_refine.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_refine.mjs
 function aY(e, t) {
   let n = Vu(e) ? [...e["~refine"], t] : [t];
   return _.Update(e, { "~refine": n }, {});
@@ -5799,16 +5799,16 @@ function sY(e) {
   return c.IsObjectNotArray(e) && c.HasPropertyKey(e, "check") && c.HasPropertyKey(e, "error") && c.IsFunction(e.check) && c.IsFunction(e.error);
 }
 function Vu(e) {
-  return ut(e) && c.HasPropertyKey(e, "~refine") && c.IsArray(e["~refine"]) && c.Every(e["~refine"], 0, (t) => sY(t));
+  return rt(e) && c.HasPropertyKey(e, "~refine") && c.IsArray(e["~refine"]) && c.Every(e["~refine"], 0, (t) => sY(t));
 }
-var bI = p(() => {
+var yI = p(() => {
   Et();
   z();
   I();
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/bigint.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/bigint.mjs
 function Wu(e) {
   return _.Create({ "~kind": "BigInt" }, { type: "bigint" }, e);
 }
@@ -5821,7 +5821,7 @@ var HM, ka = p(() => {
   HM = "-?(?:0|[1-9][0-9]*)n";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/boolean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/boolean.mjs
 function Pm(e) {
   return _.Create({ "~kind": "Boolean" }, { type: "boolean" }, e);
 }
@@ -5833,19 +5833,19 @@ var gi = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/identifier.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/identifier.mjs
 function Zu(e) {
   return _.Create({ "~kind": "Identifier" }, { name: e });
 }
 function VM(e) {
   return q(e, "Identifier");
 }
-var xI = p(() => {
+var bI = p(() => {
   z();
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/integer.mjs
 function _a(e) {
   return _.Create({ "~kind": "Integer" }, { type: "integer" }, e);
 }
@@ -5858,10 +5858,10 @@ var Om, so = p(() => {
   Om = "-?(?:0|[1-9][0-9]*)";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/literal.mjs
 function cY(e) {
   return c.IsBigInt(e) ? "bigint" : c.IsBoolean(e) ? "boolean" : c.IsNumber(e) ? "number" : c.IsString(e) ? "string" : (() => {
-    throw new vI(e);
+    throw new xI(e);
   })();
 }
 function he(e, t) {
@@ -5885,11 +5885,11 @@ function Nm(e) {
 function xe(e) {
   return q(e, "Literal");
 }
-var vI, Mt = p(() => {
+var xI, Mt = p(() => {
   z();
   I();
   fe();
-  vI = class extends Error {
+  xI = class extends Error {
     constructor(t) {
       super("Invalid Literal value"), Object.defineProperty(this, "cause", {
         value: { value: t },
@@ -5901,7 +5901,7 @@ var vI, Mt = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/null.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/null.mjs
 function Ns(e) {
   return _.Create({ "~kind": "Null" }, { type: "null" }, e);
 }
@@ -5913,11 +5913,11 @@ var Us = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/number.mjs
 function Yn(e) {
   return _.Create({ "~kind": "Number" }, { type: "number" }, e);
 }
-function rt(e) {
+function ot(e) {
   return q(e, "Number");
 }
 var Um, Tn = p(() => {
@@ -5926,7 +5926,7 @@ var Um, Tn = p(() => {
   Um = "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/symbol.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/symbol.mjs
 function Ls(e) {
   return _.Create({ "~kind": "Symbol" }, { type: "symbol" }, e);
 }
@@ -5938,7 +5938,7 @@ var Ea = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/parameter.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/parameter.mjs
 function Ta(...e) {
   let [t, n, o] = le.Match(e, {
     3: (r, i, a) => [r, i, a],
@@ -5950,14 +5950,14 @@ function Ta(...e) {
 function JM(e) {
   return q(e, "Parameter");
 }
-var II = p(() => {
+var vI = p(() => {
   Et();
   z();
   fe();
   cn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/string.mjs
 function Cn(e) {
   return _.Create({ "~kind": "String" }, { type: "string" }, e);
 }
@@ -5970,7 +5970,7 @@ var Lm, Sr = p(() => {
   Lm = ".*";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/union.mjs
 function ie(e, t = {}) {
   return _.Create({ "~kind": "Union" }, { anyOf: e }, t);
 }
@@ -5985,7 +5985,7 @@ var Ie = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/patterns/pattern.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/patterns/pattern.mjs
 function Ju(e) {
   let t = XM(e);
   return c.IsEqual(t.length, 2) ? t[0] : [];
@@ -5995,7 +5995,7 @@ var Yu = p(() => {
   Fm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/is_finite.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/is_finite.mjs
 function uY(e) {
   return !0;
 }
@@ -6017,7 +6017,7 @@ var jm = p(() => {
   Ie();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/create.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/create.mjs
 function Bm(e) {
   return _.Create({ "~kind": "TemplateLiteral" }, { type: "string", pattern: e }, {});
 }
@@ -6025,7 +6025,7 @@ var qm = p(() => {
   z();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/decode.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/decode.mjs
 function t1(e, t, n = []) {
   return c.ShiftLeft(e, (o, r) => t1(r, t, [...n, `${o}${t}`]), () => n);
 }
@@ -6054,12 +6054,12 @@ function fY(e) {
     c.IsEqual(e.length, 1) && xe(e[0]) ? e[0] : mY(e)
   );
 }
-function wI(e) {
+function II(e) {
   let t = Ju(e);
   return c.IsEqual(t.length, 0) ? Cn() : zm(t) ? fY(t) : Bm(e);
 }
 function Fs(e) {
-  let t = wI(e);
+  let t = II(e);
   return qe(t) ? Cn() : t;
 }
 var Gm = p(() => {
@@ -6074,7 +6074,7 @@ var Gm = p(() => {
   qm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/record_create.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/record_create.mjs
 function Un(e, t) {
   let n = "object", o = { [e]: t };
   return _.Create({ "~kind": "Record" }, { type: n, patternProperties: o });
@@ -6083,7 +6083,7 @@ var hi = p(() => {
   z();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_any.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_any.mjs
 function i1(e) {
   return Un(zr, e);
 }
@@ -6092,7 +6092,7 @@ var a1 = p(() => {
   hi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_boolean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_boolean.mjs
 function s1(e) {
   return X({ true: e, false: e });
 }
@@ -6100,7 +6100,7 @@ var c1 = p(() => {
   Ne();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/tuple.mjs
 function xt(e, t = {}) {
   let [n, o, r] = [e, e.length, !1];
   return _.Create({ "~kind": "Tuple" }, { type: "array", additionalItems: r, items: n, minItems: o }, t);
@@ -6116,76 +6116,76 @@ var Gt = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly/instantiate_remove.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly/instantiate_remove.mjs
 function gY(e) {
   return _.Discard(e, ["~readonly"]);
 }
-function SI(e, t) {
+function wI(e, t) {
   return _.Update(gY(e), {}, t);
 }
 function l1(e, t, n, o) {
   let r = M(e, t, n);
-  return SI(r, o);
+  return wI(r, o);
 }
-var kI = p(() => {
+var SI = p(() => {
   z();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/_remove_readonly.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_remove_readonly.mjs
 function d1(e, t = {}) {
   return G("RemoveReadonly", [e], t);
 }
 function p1(e, t = {}) {
-  return SI(e, t);
+  return wI(e, t);
 }
-var _I = p(() => {
+var kI = p(() => {
   Oe();
-  kI();
+  SI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/optional/instantiate_remove.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/optional/instantiate_remove.mjs
 function hY(e) {
   return _.Discard(e, ["~optional"]);
 }
-function EI(e, t) {
+function _I(e, t) {
   return _.Update(hY(e), {}, t);
 }
 function m1(e, t, n, o) {
   let r = M(e, t, n);
-  return EI(r, o);
+  return _I(r, o);
 }
-var TI = p(() => {
+var EI = p(() => {
   z();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/_remove_optional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_remove_optional.mjs
 function f1(e, t = {}) {
   return G("RemoveOptional", [e], t);
 }
 function Km(e, t = {}) {
-  return EI(e, t);
+  return _I(e, t);
 }
 var Hm = p(() => {
   Oe();
-  TI();
+  EI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/tuple/to_object.mjs
-function CI(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/tuple/to_object.mjs
+function TI(e) {
   return e.reduceRight((n, o, r) => ({ [r]: o, ...n }), {});
 }
 function g1(e) {
-  let t = CI(e.items);
+  let t = TI(e.items);
   return X(t);
 }
-var RI = p(() => {
+var CI = p(() => {
   Ne();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/composite.mjs
-function $I(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/composite.mjs
+function RI(e) {
   return Q(e) || ge(e);
 }
 function yY(e, t) {
@@ -6195,7 +6195,7 @@ function bY(e, t) {
   return Bt(e) ? !!Bt(t) : !1;
 }
 function xY(e, t) {
-  let n = yY(e, t), o = bY(e, t), r = ot([e, t]), i = p1(Km(r));
+  let n = yY(e, t), o = bY(e, t), r = it([e, t]), i = p1(Km(r));
   return n && o ? wa(ba(i)) : n && !o ? wa(i) : !n && o ? ba(i) : i;
 }
 function vY(e, t, n) {
@@ -6205,13 +6205,13 @@ function IY(e, t) {
   return [.../* @__PURE__ */ new Set([...c.Keys(e), ...c.Keys(t)])].reduce((r, i) => ({ ...r, [i]: vY(e, t, i) }), {});
 }
 function h1(e) {
-  return Q(e) ? e.properties : ge(e) ? CI(e.items) : {};
+  return Q(e) ? e.properties : ge(e) ? TI(e.items) : {};
 }
 function y1(e, t) {
   let n = h1(e), o = h1(t), r = IY(n, o);
   return X(r);
 }
-var AI = p(() => {
+var $I = p(() => {
   I();
   Hu();
   fi();
@@ -6220,40 +6220,40 @@ var AI = p(() => {
   Gt();
   Ku();
   Fu();
-  _I();
+  kI();
   Hm();
-  RI();
+  CI();
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/narrow.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/narrow.mjs
 function wY(e, t) {
   let n = zs(e, t);
   return c.IsEqual(n, Qu) ? e : c.IsEqual(n, el) || c.IsEqual(n, Xu) ? t : Fe();
 }
 function SY(e, t) {
-  let n = $I(e), o = $I(t);
+  let n = RI(e), o = RI(t);
   return n && o ? y1(e, t) : n && !o ? e : !n && o ? t : wY(e, t);
 }
 function b1(e, t) {
   return Dn(e) || lt(e) ? e : Tt(e) || Dn(t) || lt(t) ? t : Tt(t) ? e : SY(e, t);
 }
-var PI = p(() => {
+var AI = p(() => {
   I();
   On();
   en();
   cn();
   tl();
-  AI();
+  $I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/distribute.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/distribute.mjs
 function kY(e, t) {
   return L(e) || L(t);
 }
 function _Y(e, t) {
   let n = kr(e), o = kr(t);
-  return kY(n, o) ? ot([n, o]) : b1(n, o);
+  return kY(n, o) ? it([n, o]) : b1(n, o);
 }
 function x1(e, t, n = []) {
   return c.ShiftLeft(t, (o, r) => x1(e, r, [...n, _Y(o, e)]), () => c.IsEqual(n.length, 0) ? [e] : n);
@@ -6264,15 +6264,15 @@ function v1(e, t, n = []) {
 function nl(e, t = []) {
   return c.ShiftLeft(e, (n, o) => L(n) ? nl(o, v1(n.anyOf, t)) : nl(o, x1(n, t)), () => t);
 }
-var OI = p(() => {
+var PI = p(() => {
   I();
   Ie();
-  PI();
+  AI();
   ye();
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/exclude/operation.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/exclude/operation.mjs
 function EY(e, t) {
   let n = un({}, e, t);
   return ne.IsExtendsTrueLike(n) ? [] : [e];
@@ -6284,7 +6284,7 @@ function Vm(e, t) {
   let n = kr(e), o = L(n) ? n.anyOf : [n], r = I1(o, t);
   return Ln(r);
 }
-var DI = p(() => {
+var OI = p(() => {
   I();
   Ie();
   jr();
@@ -6292,16 +6292,16 @@ var DI = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/evaluate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/evaluate.mjs
 function Br(e, t, n) {
-  let o = ot([e, t]), r = Vm(n, e);
+  let o = it([e, t]), r = Vm(n, e);
   return Ln([o, r]);
 }
 function Rn(e, t = []) {
   return c.ShiftLeft(e, (n, o) => Rn(o, [...t, he(n)]), () => Ln(t));
 }
-function ot(e) {
-  let t = nl(e), n = MI(t);
+function it(e) {
+  let t = nl(e), n = DI(t);
   return Ln(n);
 }
 function fn(e) {
@@ -6309,11 +6309,11 @@ function fn(e) {
   return kr(t);
 }
 function Ln(e) {
-  let t = MI(e);
+  let t = DI(e);
   return yi(t);
 }
 function kr(e) {
-  return yt(e) ? Br(e.if, e.then, e.else) : bt(e) ? Rn(e.enum) : Y(e) ? ot(e.allOf) : qe(e) ? fn(e.pattern) : L(e) ? Ln(e.anyOf) : e;
+  return yt(e) ? Br(e.if, e.then, e.else) : bt(e) ? Rn(e.enum) : Y(e) ? it(e.allOf) : qe(e) ? fn(e.pattern) : L(e) ? Ln(e.anyOf) : e;
 }
 function yi(e) {
   return c.IsEqual(e.length, 1) ? e[0] : c.IsEqual(e.length, 0) ? Fe() : ie(e);
@@ -6327,13 +6327,13 @@ var ye = p(() => {
   en();
   Nn();
   Ie();
+  PI();
+  MI();
   OI();
-  NI();
-  DI();
   Gm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_enum.mjs
 function w1(e, t) {
   let n = Rn(e);
   return bi(n, t);
@@ -6343,7 +6343,7 @@ var S1 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_integer.mjs
 function k1(e, t) {
   return Un(xi, t);
 }
@@ -6352,9 +6352,9 @@ var _1 = p(() => {
   hi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_intersect.mjs
 function E1(e, t) {
-  let n = ot(e);
+  let n = it(e);
   return bi(n, t);
 }
 var T1 = p(() => {
@@ -6362,7 +6362,7 @@ var T1 = p(() => {
   rl();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_literal.mjs
 function C1(e, t) {
   return c.IsString(e) || c.IsNumber(e) ? X({ [e]: t }) : c.IsEqual(e, !1) ? X({ false: t }) : c.IsEqual(e, !0) ? X({ true: t }) : X({});
 }
@@ -6371,7 +6371,7 @@ var R1 = p(() => {
   Ne();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_number.mjs
 function $1(e, t) {
   return Un(js, t);
 }
@@ -6380,7 +6380,7 @@ var A1 = p(() => {
   hi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_string.mjs
 function P1(e, t) {
   return c.HasPropertyKey(e, "pattern") && (c.IsString(e.pattern) || e.pattern instanceof RegExp) ? Un(e.pattern.toString(), t) : Un(zr, t);
 }
@@ -6390,7 +6390,7 @@ var O1 = p(() => {
   hi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_template_literal.mjs
 function D1(e, t) {
   let n = Ju(e);
   return zm(n) ? bi(fn(e), t) : Un(e, t);
@@ -6403,7 +6403,7 @@ var M1 = p(() => {
   hi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/flatten.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/flatten.mjs
 function TY(e) {
   return L(e) ? vi(e.anyOf) : [e];
 }
@@ -6415,9 +6415,9 @@ var Wm = p(() => {
   Ie();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_union.mjs
 function CY(e) {
-  return e.some((t) => Nt(t) || rt(t) || Vt(t));
+  return e.some((t) => Nt(t) || ot(t) || Vt(t));
 }
 function RY(e, t) {
   return c.IsEqual(CY(e), !0) ? Un(zr, t) : void 0;
@@ -6431,7 +6431,7 @@ function AY(e, t) {
 }
 function N1(e, t) {
   let n = vi(e), o = RY(n, t);
-  return ut(o) ? o : AY(n, t);
+  return rt(o) ? o : AY(n, t);
 }
 var U1 = p(() => {
   I();
@@ -6446,9 +6446,9 @@ var U1 = p(() => {
   hi();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/from_key.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key.mjs
 function bi(e, t) {
-  return lt(e) ? i1(t) : En(e) ? s1(t) : bt(e) ? w1(e.enum, t) : Vt(e) ? k1(e, t) : Y(e) ? E1(e.allOf, t) : xe(e) ? C1(e.const, t) : rt(e) ? $1(e, t) : L(e) ? N1(e.anyOf, t) : Nt(e) ? P1(e, t) : qe(e) ? D1(e.pattern, t) : X({});
+  return lt(e) ? i1(t) : En(e) ? s1(t) : bt(e) ? w1(e.enum, t) : Vt(e) ? k1(e, t) : Y(e) ? E1(e.allOf, t) : xe(e) ? C1(e.const, t) : ot(e) ? $1(e, t) : L(e) ? N1(e.anyOf, t) : Nt(e) ? P1(e, t) : qe(e) ? D1(e.pattern, t) : X({});
 }
 var rl = p(() => {
   On();
@@ -6474,13 +6474,13 @@ var rl = p(() => {
   U1();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/instantiate.mjs
-function UI(e, t, n) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/instantiate.mjs
+function NI(e, t, n) {
   return de([e]) ? _.Update(bi(e, t), {}, n) : Jm(e, t, n);
 }
 function L1(e, t, n, o, r) {
   let i = M(e, t, n), a = M(e, t, o);
-  return UI(i, a, r);
+  return NI(i, a, r);
 }
 var Zm = p(() => {
   z();
@@ -6489,18 +6489,18 @@ var Zm = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/record.mjs
 function Jm(e, t, n = {}) {
   return G("Record", [e, t], n);
 }
 function Bs(e, t, n = {}) {
-  return UI(e, t, n);
+  return NI(e, t, n);
 }
 function F1(e, t) {
   return Un(e, t);
 }
 function Ym(e) {
-  return c.IsEqual(e, zr) ? Cn() : c.IsEqual(e, xi) ? _a() : c.IsEqual(e, js) ? Yn() : wI(e);
+  return c.IsEqual(e, zr) ? Cn() : c.IsEqual(e, xi) ? _a() : c.IsEqual(e, js) ? Yn() : II(e);
 }
 function Kt(e) {
   return c.Keys(e.patternProperties)[0];
@@ -6529,7 +6529,7 @@ var xi, js, zr, tn = p(() => {
   xi = `^${Om}$`, js = `^${Um}$`, zr = `^${Lm}$`;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/rest.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/rest.mjs
 function Ca(e) {
   return _.Create({ "~kind": "Rest" }, { type: "rest", items: e }, {});
 }
@@ -6541,11 +6541,11 @@ var qs = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/static.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/static.mjs
 var z1 = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/this.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/this.mjs
 function Xm(e) {
   return _.Create({ "~kind": "This" }, { $ref: "#" }, e);
 }
@@ -6557,7 +6557,7 @@ var ef = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/undefined.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/undefined.mjs
 function Gs(e) {
   return _.Create({ "~kind": "Undefined" }, { type: "undefined" }, e);
 }
@@ -6569,7 +6569,7 @@ var Ks = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/void.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/void.mjs
 function tf(e) {
   return _.Create({ "~kind": "Void" }, { type: "void" }, e);
 }
@@ -6581,13 +6581,13 @@ var Ra = p(() => {
   fe();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/index.mjs
 var ol = p(() => {
-  yI();
+  hI();
   qu();
   fi();
   Hu();
-  bI();
+  yI();
   On();
   kn();
   ka();
@@ -6599,7 +6599,7 @@ var ol = p(() => {
   Fr();
   vr();
   Lu();
-  xI();
+  bI();
   Zn();
   wr();
   so();
@@ -6611,7 +6611,7 @@ var ol = p(() => {
   cn();
   Ea();
   Ne();
-  II();
+  vI();
   xa();
   tn();
   Ir();
@@ -6630,7 +6630,7 @@ var ol = p(() => {
   Ra();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/mapping.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/mapping.mjs
 function OY(e, t) {
   return c.IsEqual(e, "Array") ? Pn(t[0]) : c.IsEqual(e, "Capitalize") ? rf(t[0]) : c.IsEqual(e, "ConstructorParameters") ? uf(t[0]) : c.IsEqual(e, "Evaluate") ? BU(t[0]) : c.IsEqual(e, "Exclude") ? lf(t[0], t[1]) : c.IsEqual(e, "Extract") ? df(t[0], t[1]) : c.IsEqual(e, "Index") ? cl(t[0], t[1]) : c.IsEqual(e, "InstanceType") ? pf(t[0]) : c.IsEqual(e, "Lowercase") ? of(t[0]) : c.IsEqual(e, "NonNullable") ? mf(t[0]) : c.IsEqual(e, "Omit") ? ff(t[0], t[1]) : c.IsEqual(e, "Parameters") ? gf(t[0]) : c.IsEqual(e, "Partial") ? hf(t[0]) : c.IsEqual(e, "Pick") ? yf(t[0], t[1]) : c.IsEqual(e, "Readonly") ? bf(t[0]) : c.IsEqual(e, "KeyOf") ? ul(t[0]) : c.IsEqual(e, "Record") ? Jm(t[0], t[1]) : c.IsEqual(e, "Required") ? xf(t[0]) : c.IsEqual(e, "ReturnType") ? vf(t[0]) : c.IsEqual(e, "Uncapitalize") ? af(t[0]) : c.IsEqual(e, "Uppercase") ? sf(t[0]) : sl(jt(e), t);
 }
@@ -6776,9 +6776,9 @@ function AN(e) {
   let [t, n, o, r, i] = e;
   return DY(B1(t ? ul(j1(n, o)) : j1(n, o), r), i);
 }
-function LI(e, t) {
+function UI(e, t) {
   return c.IsEqual(t.length, 3) ? (() => {
-    let [n, o, r] = t, i = LI(o, r);
+    let [n, o, r] = t, i = UI(o, r);
     if (c.IsEqual(n, "&"))
       return Y(i) ? mn([e, ...i.allOf]) : mn([e, i]);
     if (c.IsEqual(n, "|"))
@@ -6788,11 +6788,11 @@ function LI(e, t) {
 }
 function PN(e) {
   let [t, n] = e;
-  return LI(t, n);
+  return UI(t, n);
 }
 function ON(e) {
   let [t, n] = e;
-  return LI(t, n);
+  return UI(t, n);
 }
 function DN(e) {
   return jU(e[1]);
@@ -6810,7 +6810,7 @@ function LN(e) {
   return `${e}`;
 }
 function FN(e) {
-  return Vt(e[3]) ? xi : rt(e[3]) ? js : uo(e[3]) ? zr : Nt(e[3]) ? zr : $a();
+  return Vt(e[3]) ? xi : ot(e[3]) ? js : uo(e[3]) ? zr : Nt(e[3]) ? zr : $a();
 }
 function zN(e) {
   return e.length > 0;
@@ -7000,12 +7000,12 @@ var zU = p(() => {
   Aa();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/guard.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/guard.mjs
 var Go = p(() => {
   bs();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/match.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/match.mjs
 function ll(e) {
   return Ee(e.length, 2);
 }
@@ -7016,7 +7016,7 @@ var Qn = p(() => {
   Go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/take.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/take.mjs
 function LY(e, t) {
   return Ee(t.indexOf(e), 0) ? [e, t.slice(e.length)] : [];
 }
@@ -7033,21 +7033,21 @@ var lo = p(() => {
   Go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/char.mjs
-function FI(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/char.mjs
+function LI(e, t) {
   return Array.from({ length: t - e + 1 }, (n, o) => String.fromCharCode(e + o));
 }
-var GU, zI, jI, Vs, KU, Ws, Si, wf, HU, Sf, gn = p(() => {
+var GU, FI, zI, Vs, KU, Ws, Si, wf, HU, Sf, gn = p(() => {
   GU = [
-    ...FI(97, 122),
+    ...LI(97, 122),
     // Lowercase
-    ...FI(65, 90)
+    ...LI(65, 90)
     // Uppercase
-  ], zI = "0", jI = FI(49, 57), Vs = [zI, ...jI], KU = " ", Ws = `
+  ], FI = "0", zI = LI(49, 57), Vs = [FI, ...zI], KU = " ", Ws = `
 `, Si = "_", wf = ".", HU = "$", Sf = "-";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/trim.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/trim.mjs
 function ZU(e) {
   let t = e.indexOf(zY);
   return Ee(t, -1) ? "" : e.slice(t + 2);
@@ -7073,36 +7073,36 @@ var VU, WU, zY, po = p(() => {
   VU = "//", WU = "/*", zY = "*/";
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/optional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/optional.mjs
 function _f(e, t) {
   return Se(dt([e], t), (n, o) => [n, o], () => ["", t]);
 }
-var BI = p(() => {
+var jI = p(() => {
   Qn();
   lo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/internal/many.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/many.mjs
 function BY(e, t) {
   return e.includes(t);
 }
 function Zs(e, t, n, o = "") {
   return Se(dt(e, n), (r, i) => BY(t, r) ? Zs(e, t, i, o) : Zs(e, t, i, `${o}${r}`), () => [o, n]);
 }
-var qI = p(() => {
+var BI = p(() => {
   Qn();
   lo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/unsigned_integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/unsigned_integer.mjs
 function qY(e) {
-  return dt(jI, e);
+  return dt(zI, e);
 }
 function KY(e) {
   return Zs(GY, [Si], e);
 }
 function HY(e) {
-  return Se(dt([zI], e), (t, n) => [t, n], () => Se(
+  return Se(dt([FI], e), (t, n) => [t, n], () => Se(
     qY(e),
     (t, n) => Se(KY(n), (o, r) => [`${t}${o}`, r], () => []),
     // fail: did not match Digits
@@ -7116,7 +7116,7 @@ var GY, Tf = p(() => {
   Qn();
   po();
   lo();
-  qI();
+  BI();
   gn();
   gn();
   gn();
@@ -7124,7 +7124,7 @@ var GY, Tf = p(() => {
   GY = [...Vs, Si];
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/integer.mjs
 function VY(e) {
   return _f(Sf, e);
 }
@@ -7139,15 +7139,15 @@ function WY(e) {
 function YU(e) {
   return WY(nn(e));
 }
-var GI = p(() => {
+var qI = p(() => {
   Qn();
   po();
-  BI();
+  jI();
   gn();
   Tf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/bigint.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/bigint.mjs
 function ZY(e) {
   return Se(
     YU(e),
@@ -7156,21 +7156,21 @@ function ZY(e) {
     () => []
   );
 }
-function KI(e) {
+function GI(e) {
   return ZY(e);
 }
 var XU = p(() => {
   Qn();
   lo();
-  GI();
+  qI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/const.mjs
-function HI(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/const.mjs
+function KI(e, t) {
   return dt([e], t);
 }
 function R(e, t) {
-  return Ee(e, "") ? ["", t] : e.startsWith(Ws) ? HI(e, kf(t)) : e.startsWith(KU) ? HI(e, t) : HI(e, nn(t));
+  return Ee(e, "") ? ["", t] : e.startsWith(Ws) ? KI(e, kf(t)) : e.startsWith(KU) ? KI(e, t) : KI(e, nn(t));
 }
 var QU = p(() => {
   Go();
@@ -7181,7 +7181,7 @@ var QU = p(() => {
   gn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/ident.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/ident.mjs
 function JY(e) {
   return dt(eL, e);
 }
@@ -7211,7 +7211,7 @@ var eL, YY, nL = p(() => {
   YY = [...eL, ...Vs];
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/unsigned_number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/unsigned_number.mjs
 function eX(e) {
   return ll(dt([wf], e));
 }
@@ -7245,19 +7245,19 @@ function rX(e) {
 function oL(e) {
   return rX(nn(e));
 }
-var QY, VI = p(() => {
+var QY, HI = p(() => {
   Go();
   Qn();
   po();
   lo();
-  qI();
+  BI();
   gn();
   gn();
   Tf();
   QY = [...Vs, Si];
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/number.mjs
 function oX(e) {
   return _f(Sf, e);
 }
@@ -7275,17 +7275,17 @@ function Cf(e) {
 var iL = p(() => {
   Qn();
   po();
-  BI();
+  jI();
   gn();
-  VI();
+  HI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/rest.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/rest.mjs
 var aL = p(() => {
   Go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/until.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/until.mjs
 function aX(e) {
   return Ee(e, "") ? [] : [e.slice(0, 1), e.slice(1)];
 }
@@ -7304,7 +7304,7 @@ var Rf = p(() => {
   Go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/span.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/span.mjs
 function sX(e, t, n) {
   return Se(
     dt([e], n),
@@ -7334,7 +7334,7 @@ function cX(e, t, n) {
 function cL(e, t, n, o) {
   return n ? sX(e, t, nn(o)) : cX(e, t, nn(o));
 }
-var WI = p(() => {
+var VI = p(() => {
   Qn();
   po();
   gn();
@@ -7342,7 +7342,7 @@ var WI = p(() => {
   Rf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/string.mjs
 function uX(e, t) {
   return dt(e, t);
 }
@@ -7359,10 +7359,10 @@ var uL = p(() => {
   Qn();
   lo();
   po();
-  WI();
+  VI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/until_1.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/until_1.mjs
 function lL(e, t) {
   return Se(ki(e, t), (n, o) => Ee(n, "") ? [] : [n, o], () => []);
 }
@@ -7372,46 +7372,46 @@ var dL = p(() => {
   Rf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/token/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/index.mjs
 var pL = p(() => {
   XU();
   QU();
   nL();
-  GI();
+  qI();
   iL();
   aL();
-  WI();
+  VI();
   uL();
   Tf();
-  VI();
+  HI();
   dL();
   Rf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/parser.mjs
-var g, mX, fX, gX, hX, gL, hL, yX, YI, yL, bX, xX, vX, bL, xL, vL, IX, wX, SX, IL, kX, _X, EX, TX, CX, wL, RX, $X, AX, ZI, SL, XI, PX, OX, DX, MX, NX, UX, LX, kL, FX, zX, jX, BX, _L, EL, TL, CL, Af, qX, GX, KX, HX, Ce, VX, WX, ZX, JX, RL, $L, AL, PL, Pf, OL, YX, QI, XX, QX, mL, DL, ML, eQ, tQ, nQ, rQ, oQ, iQ, fL, NL, UL, LL, aQ, sQ, cQ, uQ, lQ, dQ, pQ, mQ, fQ, gQ, hQ, yQ, bQ, FL, zL, xQ, jL, BL, vQ, IQ, ew, wQ, SQ, kQ, _Q, EQ, TQ, CQ, RQ, qL, JI, tw, XM, GL, $Q, KL, AQ, PQ, OQ, DQ, MQ, HL, VL, NQ, nw, UQ, WL, Fm = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/parser.mjs
+var g, mX, fX, gX, hX, gL, hL, yX, JI, yL, bX, xX, vX, bL, xL, vL, IX, wX, SX, IL, kX, _X, EX, TX, CX, wL, RX, $X, AX, WI, SL, YI, PX, OX, DX, MX, NX, UX, LX, kL, FX, zX, jX, BX, _L, EL, TL, CL, Af, qX, GX, KX, HX, Ce, VX, WX, ZX, JX, RL, $L, AL, PL, Pf, OL, YX, XI, XX, QX, mL, DL, ML, eQ, tQ, nQ, rQ, oQ, iQ, fL, NL, UL, LL, aQ, sQ, cQ, uQ, lQ, dQ, pQ, mQ, fQ, gQ, hQ, yQ, bQ, FL, zL, xQ, jL, BL, vQ, IQ, QI, wQ, SQ, kQ, _Q, EQ, TQ, CQ, RQ, qL, ZI, ew, XM, GL, $Q, KL, AQ, PQ, OQ, DQ, MQ, HL, VL, NQ, tw, UQ, WL, Fm = p(() => {
   zU();
   pL();
-  g = (e, t, n = () => []) => e.length === 2 ? t(e) : n(), mX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [H1(t), n]), fX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [V1(t), n]), gX = (e) => g(g(vt(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [W1(t), n]), hX = (e) => g(vt(e), ([t, n]) => [Z1(t), n]), gL = (e) => g(g(mX(e), ([t, n]) => [t, n], () => g(fX(e), ([t, n]) => [t, n], () => g(gX(e), ([t, n]) => [t, n], () => g(hX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), hL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(gL(o), ([r, i]) => [[n, r], i])), ([n, o]) => hL(o, [...t, n]), () => [t, e]), yX = (e) => g(g(g(gL(e), ([t, n]) => g(hL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [J1(t), n]), YI = (e) => g(g(R("<", e), ([t, n]) => g(yX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Y1(t), n]), yL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => yL(o, [...t, n]), () => [t, e]), bX = (e) => g(g(g(Ce(e), ([t, n]) => g(yL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [X1(t), n]), xX = (e) => g(g(R("<", e), ([t, n]) => g(bX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Q1(t), n]), vX = (e) => g(g(vt(e), ([t, n]) => g(xX(n), ([o, r]) => [[t, o], r])), ([t, n]) => [eN(t), n]), bL = (e) => g(g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [tN(t), n]), xL = (e) => g(R("string", e), ([t, n]) => [nN(t), n]), vL = (e) => g(R("number", e), ([t, n]) => [rN(t), n]), IX = (e) => g(R("boolean", e), ([t, n]) => [oN(t), n]), wX = (e) => g(R("undefined", e), ([t, n]) => [iN(t), n]), SX = (e) => g(R("null", e), ([t, n]) => [aN(t), n]), IL = (e) => g(R("integer", e), ([t, n]) => [sN(t), n]), kX = (e) => g(R("bigint", e), ([t, n]) => [cN(t), n]), _X = (e) => g(R("unknown", e), ([t, n]) => [uN(t), n]), EX = (e) => g(R("any", e), ([t, n]) => [lN(t), n]), TX = (e) => g(R("object", e), ([t, n]) => [dN(t), n]), CX = (e) => g(R("never", e), ([t, n]) => [pN(t), n]), wL = (e) => g(R("symbol", e), ([t, n]) => [mN(t), n]), RX = (e) => g(R("void", e), ([t, n]) => [fN(t), n]), $X = (e) => g(R("this", e), ([t, n]) => [gN(t), n]), AX = (e) => g(g(R("${", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [vN(t), n]), ZI = (e) => g(ki(["${", "`"], e), ([t, n]) => [IN(t), n]), SL = (e) => g(g(g(ZI(e), ([t, n]) => g(AX(n), ([o, r]) => g(SL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(ZI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(ZI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [wN(t), n]), XI = (e) => g(g(R("`", e), ([t, n]) => g(SL(n), ([o, r]) => g(R("`", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [SN(t), n]), PX = (e) => g(XI(e), ([t, n]) => [kN(t), n]), OX = (e) => g(g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R("else", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => [])), ([t, n]) => [_N(t), n]), DX = (e) => g(KI(e), ([t, n]) => [hN(t), n]), MX = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [yN(t), n]), NX = (e) => g(Cf(e), ([t, n]) => [bN(t), n]), UX = (e) => g($f(["'", '"'], e), ([t, n]) => [xN(t), n]), LX = (e) => g(g(g(R("keyof", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [EN(t), n]), kL = (e, t = []) => g(g(g(R("[", e), ([n, o]) => g(Ce(o), ([r, i]) => g(R("]", i), ([a, s]) => [[n, r, a], s]))), ([n, o]) => [n, o], () => g(g(R("[", e), ([n, o]) => g(R("]", o), ([r, i]) => [[n, r], i])), ([n, o]) => [n, o], () => [])), ([n, o]) => kL(o, [...t, n]), () => [t, e]), FX = (e) => g(kL(e), ([t, n]) => [TN(t), n]), zX = (e) => g(g(g(R("extends", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("?", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R(":", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [CN(t), n]), jX = (e) => g(g(g(R("(", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(xL(e), ([t, n]) => [t, n], () => g(vL(e), ([t, n]) => [t, n], () => g(IX(e), ([t, n]) => [t, n], () => g(wX(e), ([t, n]) => [t, n], () => g(SX(e), ([t, n]) => [t, n], () => g(IL(e), ([t, n]) => [t, n], () => g(kX(e), ([t, n]) => [t, n], () => g(_X(e), ([t, n]) => [t, n], () => g(EX(e), ([t, n]) => [t, n], () => g(TX(e), ([t, n]) => [t, n], () => g(CX(e), ([t, n]) => [t, n], () => g(wL(e), ([t, n]) => [t, n], () => g(RX(e), ([t, n]) => [t, n], () => g($X(e), ([t, n]) => [t, n], () => g(DX(e), ([t, n]) => [t, n], () => g(MX(e), ([t, n]) => [t, n], () => g(NX(e), ([t, n]) => [t, n], () => g(UX(e), ([t, n]) => [t, n], () => g(PX(e), ([t, n]) => [t, n], () => g(OX(e), ([t, n]) => [t, n], () => g(XX(e), ([t, n]) => [t, n], () => g(tQ(e), ([t, n]) => [t, n], () => g(sQ(e), ([t, n]) => [t, n], () => g(aQ(e), ([t, n]) => [t, n], () => g(dQ(e), ([t, n]) => [t, n], () => g(vX(e), ([t, n]) => [t, n], () => g(pQ(e), ([t, n]) => [t, n], () => [])))))))))))))))))))))))))))), ([t, n]) => [RN(t), n]), BX = (e) => g(g(g(R("with", e), ([t, n]) => g(jL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$N(t), n]), _L = (e) => g(g(LX(e), ([t, n]) => g(jX(n), ([o, r]) => g(FX(r), ([i, a]) => g(zX(a), ([s, u]) => g(BX(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [AN(t), n]), EL = (e) => g(g(g(R("&", e), ([t, n]) => g(_L(n), ([o, r]) => g(EL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), TL = (e) => g(g(_L(e), ([t, n]) => g(EL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [PN(t), n]), CL = (e) => g(g(g(R("|", e), ([t, n]) => g(TL(n), ([o, r]) => g(CL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), Af = (e) => g(g(TL(e), ([t, n]) => g(CL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [ON(t), n]), qX = (e) => g(g(R("readonly", e), ([t, n]) => g(Af(n), ([o, r]) => [[t, o], r])), ([t, n]) => [DN(t), n]), GX = (e) => g(g(R("|", e), ([t, n]) => g(Af(n), ([o, r]) => [[t, o], r])), ([t, n]) => [MN(t), n]), KX = (e) => g(g(YI(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [NN(t), n]), HX = (e) => g(g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("extends", r), ([i, a]) => g(Af(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => [])), ([t, n]) => [UN(t), n]), Ce = (e) => g(g(HX(e), ([t, n]) => [t, n], () => g(GX(e), ([t, n]) => [t, n], () => g(qX(e), ([t, n]) => [t, n], () => g(Af(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), VX = (e) => g(Cf(e), ([t, n]) => [LN(t), n]), WX = (e) => g(vt(e), ([t, n]) => [t, n]), ZX = (e) => g($f(["'", '"'], e), ([t, n]) => [t, n]), JX = (e) => g(g(R("[", e), ([t, n]) => g(vt(n), ([o, r]) => g(R(":", r), ([i, a]) => g(g(IL(a), ([s, u]) => [s, u], () => g(vL(a), ([s, u]) => [s, u], () => g(xL(a), ([s, u]) => [s, u], () => g(wL(a), ([s, u]) => [s, u], () => [])))), ([s, u]) => g(R("]", u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [FN(t), n]), RL = (e) => g(g(VX(e), ([t, n]) => [t, n], () => g(WX(e), ([t, n]) => [t, n], () => g(ZX(e), ([t, n]) => [t, n], () => g(JX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), $L = (e) => g(g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [zN(t), n]), AL = (e) => g(g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [jN(t), n]), PL = (e) => g(g($L(e), ([t, n]) => g(RL(n), ([o, r]) => g(AL(r), ([i, a]) => g(R(":", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [BN(t), n]), Pf = (e) => g(g(g(R(",", e), ([t, n]) => g(R(`
+  g = (e, t, n = () => []) => e.length === 2 ? t(e) : n(), mX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [H1(t), n]), fX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [V1(t), n]), gX = (e) => g(g(vt(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [W1(t), n]), hX = (e) => g(vt(e), ([t, n]) => [Z1(t), n]), gL = (e) => g(g(mX(e), ([t, n]) => [t, n], () => g(fX(e), ([t, n]) => [t, n], () => g(gX(e), ([t, n]) => [t, n], () => g(hX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), hL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(gL(o), ([r, i]) => [[n, r], i])), ([n, o]) => hL(o, [...t, n]), () => [t, e]), yX = (e) => g(g(g(gL(e), ([t, n]) => g(hL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [J1(t), n]), JI = (e) => g(g(R("<", e), ([t, n]) => g(yX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Y1(t), n]), yL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => yL(o, [...t, n]), () => [t, e]), bX = (e) => g(g(g(Ce(e), ([t, n]) => g(yL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [X1(t), n]), xX = (e) => g(g(R("<", e), ([t, n]) => g(bX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Q1(t), n]), vX = (e) => g(g(vt(e), ([t, n]) => g(xX(n), ([o, r]) => [[t, o], r])), ([t, n]) => [eN(t), n]), bL = (e) => g(g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [tN(t), n]), xL = (e) => g(R("string", e), ([t, n]) => [nN(t), n]), vL = (e) => g(R("number", e), ([t, n]) => [rN(t), n]), IX = (e) => g(R("boolean", e), ([t, n]) => [oN(t), n]), wX = (e) => g(R("undefined", e), ([t, n]) => [iN(t), n]), SX = (e) => g(R("null", e), ([t, n]) => [aN(t), n]), IL = (e) => g(R("integer", e), ([t, n]) => [sN(t), n]), kX = (e) => g(R("bigint", e), ([t, n]) => [cN(t), n]), _X = (e) => g(R("unknown", e), ([t, n]) => [uN(t), n]), EX = (e) => g(R("any", e), ([t, n]) => [lN(t), n]), TX = (e) => g(R("object", e), ([t, n]) => [dN(t), n]), CX = (e) => g(R("never", e), ([t, n]) => [pN(t), n]), wL = (e) => g(R("symbol", e), ([t, n]) => [mN(t), n]), RX = (e) => g(R("void", e), ([t, n]) => [fN(t), n]), $X = (e) => g(R("this", e), ([t, n]) => [gN(t), n]), AX = (e) => g(g(R("${", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [vN(t), n]), WI = (e) => g(ki(["${", "`"], e), ([t, n]) => [IN(t), n]), SL = (e) => g(g(g(WI(e), ([t, n]) => g(AX(n), ([o, r]) => g(SL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(WI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(WI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [wN(t), n]), YI = (e) => g(g(R("`", e), ([t, n]) => g(SL(n), ([o, r]) => g(R("`", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [SN(t), n]), PX = (e) => g(YI(e), ([t, n]) => [kN(t), n]), OX = (e) => g(g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R("else", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => [])), ([t, n]) => [_N(t), n]), DX = (e) => g(GI(e), ([t, n]) => [hN(t), n]), MX = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [yN(t), n]), NX = (e) => g(Cf(e), ([t, n]) => [bN(t), n]), UX = (e) => g($f(["'", '"'], e), ([t, n]) => [xN(t), n]), LX = (e) => g(g(g(R("keyof", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [EN(t), n]), kL = (e, t = []) => g(g(g(R("[", e), ([n, o]) => g(Ce(o), ([r, i]) => g(R("]", i), ([a, s]) => [[n, r, a], s]))), ([n, o]) => [n, o], () => g(g(R("[", e), ([n, o]) => g(R("]", o), ([r, i]) => [[n, r], i])), ([n, o]) => [n, o], () => [])), ([n, o]) => kL(o, [...t, n]), () => [t, e]), FX = (e) => g(kL(e), ([t, n]) => [TN(t), n]), zX = (e) => g(g(g(R("extends", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("?", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R(":", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [CN(t), n]), jX = (e) => g(g(g(R("(", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(xL(e), ([t, n]) => [t, n], () => g(vL(e), ([t, n]) => [t, n], () => g(IX(e), ([t, n]) => [t, n], () => g(wX(e), ([t, n]) => [t, n], () => g(SX(e), ([t, n]) => [t, n], () => g(IL(e), ([t, n]) => [t, n], () => g(kX(e), ([t, n]) => [t, n], () => g(_X(e), ([t, n]) => [t, n], () => g(EX(e), ([t, n]) => [t, n], () => g(TX(e), ([t, n]) => [t, n], () => g(CX(e), ([t, n]) => [t, n], () => g(wL(e), ([t, n]) => [t, n], () => g(RX(e), ([t, n]) => [t, n], () => g($X(e), ([t, n]) => [t, n], () => g(DX(e), ([t, n]) => [t, n], () => g(MX(e), ([t, n]) => [t, n], () => g(NX(e), ([t, n]) => [t, n], () => g(UX(e), ([t, n]) => [t, n], () => g(PX(e), ([t, n]) => [t, n], () => g(OX(e), ([t, n]) => [t, n], () => g(XX(e), ([t, n]) => [t, n], () => g(tQ(e), ([t, n]) => [t, n], () => g(sQ(e), ([t, n]) => [t, n], () => g(aQ(e), ([t, n]) => [t, n], () => g(dQ(e), ([t, n]) => [t, n], () => g(vX(e), ([t, n]) => [t, n], () => g(pQ(e), ([t, n]) => [t, n], () => [])))))))))))))))))))))))))))), ([t, n]) => [RN(t), n]), BX = (e) => g(g(g(R("with", e), ([t, n]) => g(jL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$N(t), n]), _L = (e) => g(g(LX(e), ([t, n]) => g(jX(n), ([o, r]) => g(FX(r), ([i, a]) => g(zX(a), ([s, u]) => g(BX(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [AN(t), n]), EL = (e) => g(g(g(R("&", e), ([t, n]) => g(_L(n), ([o, r]) => g(EL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), TL = (e) => g(g(_L(e), ([t, n]) => g(EL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [PN(t), n]), CL = (e) => g(g(g(R("|", e), ([t, n]) => g(TL(n), ([o, r]) => g(CL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), Af = (e) => g(g(TL(e), ([t, n]) => g(CL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [ON(t), n]), qX = (e) => g(g(R("readonly", e), ([t, n]) => g(Af(n), ([o, r]) => [[t, o], r])), ([t, n]) => [DN(t), n]), GX = (e) => g(g(R("|", e), ([t, n]) => g(Af(n), ([o, r]) => [[t, o], r])), ([t, n]) => [MN(t), n]), KX = (e) => g(g(JI(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [NN(t), n]), HX = (e) => g(g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("extends", r), ([i, a]) => g(Af(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => [])), ([t, n]) => [UN(t), n]), Ce = (e) => g(g(HX(e), ([t, n]) => [t, n], () => g(GX(e), ([t, n]) => [t, n], () => g(qX(e), ([t, n]) => [t, n], () => g(Af(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), VX = (e) => g(Cf(e), ([t, n]) => [LN(t), n]), WX = (e) => g(vt(e), ([t, n]) => [t, n]), ZX = (e) => g($f(["'", '"'], e), ([t, n]) => [t, n]), JX = (e) => g(g(R("[", e), ([t, n]) => g(vt(n), ([o, r]) => g(R(":", r), ([i, a]) => g(g(IL(a), ([s, u]) => [s, u], () => g(vL(a), ([s, u]) => [s, u], () => g(xL(a), ([s, u]) => [s, u], () => g(wL(a), ([s, u]) => [s, u], () => [])))), ([s, u]) => g(R("]", u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [FN(t), n]), RL = (e) => g(g(VX(e), ([t, n]) => [t, n], () => g(WX(e), ([t, n]) => [t, n], () => g(ZX(e), ([t, n]) => [t, n], () => g(JX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), $L = (e) => g(g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [zN(t), n]), AL = (e) => g(g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [jN(t), n]), PL = (e) => g(g($L(e), ([t, n]) => g(RL(n), ([o, r]) => g(AL(r), ([i, a]) => g(R(":", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [BN(t), n]), Pf = (e) => g(g(g(R(",", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(",", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(`
-`, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))))), ([t, n]) => [t, n]), OL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(PL(o), ([r, i]) => [[n, r], i])), ([n, o]) => OL(o, [...t, n]), () => [t, e]), YX = (e) => g(g(g(PL(e), ([t, n]) => g(OL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [qN(t), n]), QI = (e) => g(g(R("{", e), ([t, n]) => g(YX(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [KN(t), n]), XX = (e) => g(QI(e), ([t, n]) => [HN(t), n]), QX = (e) => g(g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])))), ([t, n]) => [VN(t), n]), mL = (e) => g(g(QX(e), ([t, n]) => [t, n], () => g(g($L(e), ([t, n]) => g(Ce(n), ([o, r]) => g(AL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])), ([t, n]) => [WN(t), n]), DL = (e) => g(g(g(R("...", e), ([t, n]) => g(mL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(mL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [ZN(t), n]), ML = (e, t = []) => g(g(R(",", e), ([n, o]) => g(DL(o), ([r, i]) => [[n, r], i])), ([n, o]) => ML(o, [...t, n]), () => [t, e]), eQ = (e) => g(g(g(DL(e), ([t, n]) => g(ML(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [JN(t), n]), tQ = (e) => g(g(R("[", e), ([t, n]) => g(eQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [YN(t), n]), nQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [XN(t), n]), rQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [QN(t), n]), oQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [eU(t), n]), iQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [tU(t), n]), fL = (e) => g(g(nQ(e), ([t, n]) => [t, n], () => g(rQ(e), ([t, n]) => [t, n], () => g(oQ(e), ([t, n]) => [t, n], () => g(iQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), NL = (e) => g(g(g(R("...", e), ([t, n]) => g(fL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(fL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [nU(t), n]), UL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(NL(o), ([r, i]) => [[n, r], i])), ([n, o]) => UL(o, [...t, n]), () => [t, e]), LL = (e) => g(g(g(NL(e), ([t, n]) => g(UL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [rU(t), n]), aQ = (e) => g(g(R("(", e), ([t, n]) => g(LL(n), ([o, r]) => g(R(")", r), ([i, a]) => g(R("=>", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [oU(t), n]), sQ = (e) => g(g(R("new", e), ([t, n]) => g(R("(", n), ([o, r]) => g(LL(r), ([i, a]) => g(R(")", a), ([s, u]) => g(R("=>", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [iU(t), n]), cQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [aU(t), n]), uQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [sU(t), n]), lQ = (e) => g(g(g(R("as", e), ([t, n]) => g(Ce(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [cU(t), n]), dQ = (e) => g(g(R("{", e), ([t, n]) => g(cQ(n), ([o, r]) => g(R("[", r), ([i, a]) => g(vt(a), ([s, u]) => g(R("in", u), ([l, m]) => g(Ce(m), ([h, b]) => g(lQ(b), ([f, y]) => g(R("]", y), ([x, v]) => g(uQ(v), ([S, w]) => g(R(":", w), ([k, C]) => g(Ce(C), ([$, D]) => g(bL(D), ([V, te]) => g(R("}", te), ([Z, $e]) => [[t, o, i, s, l, h, f, x, S, k, $, V, Z], $e]))))))))))))), ([t, n]) => [uU(t), n]), pQ = (e) => g(vt(e), ([t, n]) => [lU(t), n]), mQ = (e) => g(KI(e), ([t, n]) => [dU(t), n]), fQ = (e) => g(Cf(e), ([t, n]) => [pU(t), n]), gQ = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [mU(t), n]), hQ = (e) => g($f(['"', "'"], e), ([t, n]) => [t, n]), yQ = (e) => g(R("null", e), ([t, n]) => [fU(t), n]), bQ = (e) => g(R("undefined", e), ([t, n]) => [void 0, n]), FL = (e) => g(g(RL(e), ([t, n]) => g(R(":", n), ([o, r]) => g(ew(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [gU(t), n]), zL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(FL(o), ([r, i]) => [[n, r], i])), ([n, o]) => zL(o, [...t, n]), () => [t, e]), xQ = (e) => g(g(g(FL(e), ([t, n]) => g(zL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [hU(t), n]), jL = (e) => g(g(R("{", e), ([t, n]) => g(xQ(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [yU(t), n]), BL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(ew(o), ([r, i]) => [[n, r], i])), ([n, o]) => BL(o, [...t, n]), () => [t, e]), vQ = (e) => g(g(g(ew(e), ([t, n]) => g(BL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [bU(t), n]), IQ = (e) => g(g(R("[", e), ([t, n]) => g(vQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [xU(t), n]), ew = (e) => g(g(mQ(e), ([t, n]) => [t, n], () => g(fQ(e), ([t, n]) => [t, n], () => g(gQ(e), ([t, n]) => [t, n], () => g(hQ(e), ([t, n]) => [t, n], () => g(yQ(e), ([t, n]) => [t, n], () => g(bQ(e), ([t, n]) => [t, n], () => g(jL(e), ([t, n]) => [t, n], () => g(IQ(e), ([t, n]) => [t, n], () => [])))))))), ([t, n]) => [t, n]), wQ = (e) => g(R("-?(?:0|[1-9][0-9]*)n", e), ([t, n]) => [vU(t), n]), SQ = (e) => g(R(".*", e), ([t, n]) => [IU(t), n]), kQ = (e) => g(R("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", e), ([t, n]) => [wU(t), n]), _Q = (e) => g(R("-?(?:0|[1-9][0-9]*)", e), ([t, n]) => [SU(t), n]), EQ = (e) => g(R("(?!)", e), ([t, n]) => [kU(t), n]), TQ = (e) => g(lL(["-?(?:0|[1-9][0-9]*)n", ".*", "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", "-?(?:0|[1-9][0-9]*)", "(?!)", "(", ")", "$", "|"], e), ([t, n]) => [_U(t), n]), CQ = (e) => g(g(wQ(e), ([t, n]) => [t, n], () => g(SQ(e), ([t, n]) => [t, n], () => g(kQ(e), ([t, n]) => [t, n], () => g(_Q(e), ([t, n]) => [t, n], () => g(EQ(e), ([t, n]) => [t, n], () => g(RQ(e), ([t, n]) => [t, n], () => g(TQ(e), ([t, n]) => [t, n], () => []))))))), ([t, n]) => [t, n]), RQ = (e) => g(g(R("(", e), ([t, n]) => g(tw(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [EU(t), n]), qL = (e) => g(g(g(JI(e), ([t, n]) => g(R("|", n), ([o, r]) => g(qL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(JI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => []))), ([t, n]) => [TU(t), n]), JI = (e) => g(g(CQ(e), ([t, n]) => g(tw(n), ([o, r]) => [[t, o], r])), ([t, n]) => [CU(t), n]), tw = (e) => g(g(qL(e), ([t, n]) => [t, n], () => g(JI(e), ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), XM = (e) => g(g(R("^", e), ([t, n]) => g(tw(n), ([o, r]) => g(R("$", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [RU(t), n]), GL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => GL(o, [...t, n]), () => [t, e]), $Q = (e) => g(g(g(Ce(e), ([t, n]) => g(GL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$U(t), n]), KL = (e) => g(g(g(R("extends", e), ([t, n]) => g($Q(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [AU(t), n]), AQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(YI(r), ([i, a]) => g(KL(a), ([s, u]) => g(QI(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [PU(t), n]), PQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(KL(r), ([i, a]) => g(QI(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [OU(t), n]), OQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(YI(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [DU(t), n]), DQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("=", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [MU(t), n]), MQ = (e) => g(g(g(R("export", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [NU(t), n]), HL = (e) => g(g(g(R(";", e), ([t, n]) => g(R(`
+`, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))))), ([t, n]) => [t, n]), OL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(PL(o), ([r, i]) => [[n, r], i])), ([n, o]) => OL(o, [...t, n]), () => [t, e]), YX = (e) => g(g(g(PL(e), ([t, n]) => g(OL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [qN(t), n]), XI = (e) => g(g(R("{", e), ([t, n]) => g(YX(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [KN(t), n]), XX = (e) => g(XI(e), ([t, n]) => [HN(t), n]), QX = (e) => g(g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])))), ([t, n]) => [VN(t), n]), mL = (e) => g(g(QX(e), ([t, n]) => [t, n], () => g(g($L(e), ([t, n]) => g(Ce(n), ([o, r]) => g(AL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])), ([t, n]) => [WN(t), n]), DL = (e) => g(g(g(R("...", e), ([t, n]) => g(mL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(mL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [ZN(t), n]), ML = (e, t = []) => g(g(R(",", e), ([n, o]) => g(DL(o), ([r, i]) => [[n, r], i])), ([n, o]) => ML(o, [...t, n]), () => [t, e]), eQ = (e) => g(g(g(DL(e), ([t, n]) => g(ML(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [JN(t), n]), tQ = (e) => g(g(R("[", e), ([t, n]) => g(eQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [YN(t), n]), nQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [XN(t), n]), rQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [QN(t), n]), oQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [eU(t), n]), iQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [tU(t), n]), fL = (e) => g(g(nQ(e), ([t, n]) => [t, n], () => g(rQ(e), ([t, n]) => [t, n], () => g(oQ(e), ([t, n]) => [t, n], () => g(iQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), NL = (e) => g(g(g(R("...", e), ([t, n]) => g(fL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(fL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [nU(t), n]), UL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(NL(o), ([r, i]) => [[n, r], i])), ([n, o]) => UL(o, [...t, n]), () => [t, e]), LL = (e) => g(g(g(NL(e), ([t, n]) => g(UL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [rU(t), n]), aQ = (e) => g(g(R("(", e), ([t, n]) => g(LL(n), ([o, r]) => g(R(")", r), ([i, a]) => g(R("=>", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [oU(t), n]), sQ = (e) => g(g(R("new", e), ([t, n]) => g(R("(", n), ([o, r]) => g(LL(r), ([i, a]) => g(R(")", a), ([s, u]) => g(R("=>", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [iU(t), n]), cQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [aU(t), n]), uQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [sU(t), n]), lQ = (e) => g(g(g(R("as", e), ([t, n]) => g(Ce(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [cU(t), n]), dQ = (e) => g(g(R("{", e), ([t, n]) => g(cQ(n), ([o, r]) => g(R("[", r), ([i, a]) => g(vt(a), ([s, u]) => g(R("in", u), ([l, m]) => g(Ce(m), ([h, b]) => g(lQ(b), ([f, y]) => g(R("]", y), ([x, v]) => g(uQ(v), ([S, w]) => g(R(":", w), ([k, C]) => g(Ce(C), ([$, D]) => g(bL(D), ([V, te]) => g(R("}", te), ([Z, $e]) => [[t, o, i, s, l, h, f, x, S, k, $, V, Z], $e]))))))))))))), ([t, n]) => [uU(t), n]), pQ = (e) => g(vt(e), ([t, n]) => [lU(t), n]), mQ = (e) => g(GI(e), ([t, n]) => [dU(t), n]), fQ = (e) => g(Cf(e), ([t, n]) => [pU(t), n]), gQ = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [mU(t), n]), hQ = (e) => g($f(['"', "'"], e), ([t, n]) => [t, n]), yQ = (e) => g(R("null", e), ([t, n]) => [fU(t), n]), bQ = (e) => g(R("undefined", e), ([t, n]) => [void 0, n]), FL = (e) => g(g(RL(e), ([t, n]) => g(R(":", n), ([o, r]) => g(QI(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [gU(t), n]), zL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(FL(o), ([r, i]) => [[n, r], i])), ([n, o]) => zL(o, [...t, n]), () => [t, e]), xQ = (e) => g(g(g(FL(e), ([t, n]) => g(zL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [hU(t), n]), jL = (e) => g(g(R("{", e), ([t, n]) => g(xQ(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [yU(t), n]), BL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(QI(o), ([r, i]) => [[n, r], i])), ([n, o]) => BL(o, [...t, n]), () => [t, e]), vQ = (e) => g(g(g(QI(e), ([t, n]) => g(BL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [bU(t), n]), IQ = (e) => g(g(R("[", e), ([t, n]) => g(vQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [xU(t), n]), QI = (e) => g(g(mQ(e), ([t, n]) => [t, n], () => g(fQ(e), ([t, n]) => [t, n], () => g(gQ(e), ([t, n]) => [t, n], () => g(hQ(e), ([t, n]) => [t, n], () => g(yQ(e), ([t, n]) => [t, n], () => g(bQ(e), ([t, n]) => [t, n], () => g(jL(e), ([t, n]) => [t, n], () => g(IQ(e), ([t, n]) => [t, n], () => [])))))))), ([t, n]) => [t, n]), wQ = (e) => g(R("-?(?:0|[1-9][0-9]*)n", e), ([t, n]) => [vU(t), n]), SQ = (e) => g(R(".*", e), ([t, n]) => [IU(t), n]), kQ = (e) => g(R("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", e), ([t, n]) => [wU(t), n]), _Q = (e) => g(R("-?(?:0|[1-9][0-9]*)", e), ([t, n]) => [SU(t), n]), EQ = (e) => g(R("(?!)", e), ([t, n]) => [kU(t), n]), TQ = (e) => g(lL(["-?(?:0|[1-9][0-9]*)n", ".*", "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", "-?(?:0|[1-9][0-9]*)", "(?!)", "(", ")", "$", "|"], e), ([t, n]) => [_U(t), n]), CQ = (e) => g(g(wQ(e), ([t, n]) => [t, n], () => g(SQ(e), ([t, n]) => [t, n], () => g(kQ(e), ([t, n]) => [t, n], () => g(_Q(e), ([t, n]) => [t, n], () => g(EQ(e), ([t, n]) => [t, n], () => g(RQ(e), ([t, n]) => [t, n], () => g(TQ(e), ([t, n]) => [t, n], () => []))))))), ([t, n]) => [t, n]), RQ = (e) => g(g(R("(", e), ([t, n]) => g(ew(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [EU(t), n]), qL = (e) => g(g(g(ZI(e), ([t, n]) => g(R("|", n), ([o, r]) => g(qL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(ZI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => []))), ([t, n]) => [TU(t), n]), ZI = (e) => g(g(CQ(e), ([t, n]) => g(ew(n), ([o, r]) => [[t, o], r])), ([t, n]) => [CU(t), n]), ew = (e) => g(g(qL(e), ([t, n]) => [t, n], () => g(ZI(e), ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), XM = (e) => g(g(R("^", e), ([t, n]) => g(ew(n), ([o, r]) => g(R("$", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [RU(t), n]), GL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => GL(o, [...t, n]), () => [t, e]), $Q = (e) => g(g(g(Ce(e), ([t, n]) => g(GL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$U(t), n]), KL = (e) => g(g(g(R("extends", e), ([t, n]) => g($Q(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [AU(t), n]), AQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(JI(r), ([i, a]) => g(KL(a), ([s, u]) => g(XI(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [PU(t), n]), PQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(KL(r), ([i, a]) => g(XI(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [OU(t), n]), OQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(JI(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [DU(t), n]), DQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("=", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [MU(t), n]), MQ = (e) => g(g(g(R("export", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [NU(t), n]), HL = (e) => g(g(g(R(";", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(`
-`, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [t, n]), VL = (e, t = []) => g(g(HL(e), ([n, o]) => g(nw(o), ([r, i]) => [[n, r], i])), ([n, o]) => VL(o, [...t, n]), () => [t, e]), NQ = (e) => g(g(g(nw(e), ([t, n]) => g(VL(n), ([o, r]) => g(g(HL(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [UU(t), n]), nw = (e) => g(g(MQ(e), ([t, n]) => g(g(AQ(n), ([o, r]) => [o, r], () => g(PQ(n), ([o, r]) => [o, r], () => g(OQ(n), ([o, r]) => [o, r], () => g(DQ(n), ([o, r]) => [o, r], () => [])))), ([o, r]) => g(bL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [LU(t), n]), UQ = (e) => g(g(nw(e), ([t, n]) => g(NQ(n), ([o, r]) => [[t, o], r])), ([t, n]) => [FU(t), n]), WL = (e) => g(g(UQ(e), ([t, n]) => [t, n], () => g(KX(e), ([t, n]) => [t, n], () => g(Ce(e), ([t, n]) => [t, n], () => []))), ([t, n]) => [t, n]);
+`, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [t, n]), VL = (e, t = []) => g(g(HL(e), ([n, o]) => g(tw(o), ([r, i]) => [[n, r], i])), ([n, o]) => VL(o, [...t, n]), () => [t, e]), NQ = (e) => g(g(g(tw(e), ([t, n]) => g(VL(n), ([o, r]) => g(g(HL(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [UU(t), n]), tw = (e) => g(g(MQ(e), ([t, n]) => g(g(AQ(n), ([o, r]) => [o, r], () => g(PQ(n), ([o, r]) => [o, r], () => g(OQ(n), ([o, r]) => [o, r], () => g(DQ(n), ([o, r]) => [o, r], () => [])))), ([o, r]) => g(bL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [LU(t), n]), UQ = (e) => g(g(tw(e), ([t, n]) => g(NQ(n), ([o, r]) => [[t, o], r])), ([t, n]) => [FU(t), n]), WL = (e) => g(g(UQ(e), ([t, n]) => [t, n], () => g(KX(e), ([t, n]) => [t, n], () => g(Ce(e), ([t, n]) => [t, n], () => []))), ([t, n]) => [t, n]);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/patterns/template.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/patterns/template.mjs
 function ZL(e) {
-  let t = XI(`\`${e}\``);
+  let t = YI(`\`${e}\``);
   return c.IsEqual(t.length, 2) ? t[0] : ft();
 }
-var rw = p(() => {
+var nw = p(() => {
   Ur();
   I();
   Fm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/encode.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/encode.mjs
 function FQ(e) {
   return e.join("|");
 }
@@ -7451,7 +7451,7 @@ function JL(e, t, n, o = []) {
   return c.ShiftLeft(e, (r, i) => JL(i, t, n, [...o, dl(r, [], "")]), () => _i(t, `${n}(${FQ(o)})`));
 }
 function dl(e, t, n) {
-  return bt(e) ? ZQ(e.enum, t, n) : Vt(e) ? qQ(t, n) : xe(e) ? jQ(e.const, t, n) : Jn(e) ? BQ(t, n) : En(e) ? KQ(t, n) : rt(e) ? GQ(t, n) : Nt(e) ? HQ(t, n) : qe(e) ? VQ(e.pattern, t, n) : XL(e) ? WQ(e.parameters[0], t, n) : L(e) ? JL(e.anyOf, t, n) : $M;
+  return bt(e) ? ZQ(e.enum, t, n) : Vt(e) ? qQ(t, n) : xe(e) ? jQ(e.const, t, n) : Jn(e) ? BQ(t, n) : En(e) ? KQ(t, n) : ot(e) ? GQ(t, n) : Nt(e) ? HQ(t, n) : qe(e) ? VQ(e.pattern, t, n) : XL(e) ? WQ(e.parameters[0], t, n) : L(e) ? JL(e.anyOf, t, n) : $M;
 }
 function _i(e, t) {
   return c.ShiftLeft(e, (n, o) => dl(n, o, t), () => t);
@@ -7463,7 +7463,7 @@ function YL(e) {
   let t = JQ(e);
   return Bm(t);
 }
-var ow = p(() => {
+var rw = p(() => {
   I();
   Fr();
   Mt();
@@ -7480,7 +7480,7 @@ var ow = p(() => {
   Of();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/instantiate.mjs
 function pl(e, t) {
   return de(e) ? _.Update(YL(e), {}, t) : nf(e, t);
 }
@@ -7491,16 +7491,16 @@ function QL(e, t, n, o) {
 var Of = p(() => {
   z();
   Nn();
-  ow();
+  rw();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/template_literal.mjs
 function nf(e, t = {}) {
   return G("TemplateLiteral", [e], t);
 }
 function XL(e) {
-  return ut(e) && c.HasPropertyKey(e, "action") && c.IsEqual(e.action, "TemplateLiteral");
+  return rt(e) && c.HasPropertyKey(e, "action") && c.IsEqual(e.action, "TemplateLiteral");
 }
 function eF(e) {
   return pl(e, {});
@@ -7521,23 +7521,23 @@ var Nn = p(() => {
   I();
   fe();
   Oe();
-  rw();
+  nw();
   Of();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/result.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/result.mjs
 var ne = {};
-st(ne, {
+ct(ne, {
   ExtendsFalse: () => ce,
   ExtendsTrue: () => j,
-  ExtendsUnion: () => iw,
+  ExtendsUnion: () => ow,
   IsExtendsFalse: () => XQ,
   IsExtendsTrue: () => rF,
   IsExtendsTrueLike: () => mo,
   IsExtendsUnion: () => nF,
   Match: () => It
 });
-function iw(e) {
+function ow(e) {
   return _.Create({ "~kind": "ExtendsUnion" }, { inferred: e });
 }
 function nF(e) {
@@ -7566,7 +7566,7 @@ var Ye = p(() => {
   z();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/extends_right.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/extends_right.mjs
 function QQ(e, t, n, o) {
   return It(_e(e, n, o), (r) => j(_.Assign(_.Assign(e, r), { [t]: n })), () => ce());
 }
@@ -7610,9 +7610,9 @@ var hn = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/any.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/any.mjs
 function aF(e, t, n) {
-  return Ct(n) ? Me(e, t, n) : lt(n) ? j(e) : Tt(n) ? j(e) : iw(e);
+  return Ct(n) ? Me(e, t, n) : lt(n) ? j(e) : Tt(n) ? j(e) : ow(e);
 }
 var sF = p(() => {
   wr();
@@ -7622,7 +7622,7 @@ var sF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/array.mjs
 function oee(e, t) {
   let n = Ia(e), o = Ia(t);
   return n && o || !n && o ? !0 : !(n && !o);
@@ -7638,7 +7638,7 @@ var uF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/bigint.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/bigint.mjs
 function lF(e, t, n) {
   return Jn(n) ? j(e) : Me(e, t, n);
 }
@@ -7648,7 +7648,7 @@ var dF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/boolean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/boolean.mjs
 function pF(e, t, n) {
   return En(n) ? j(e) : Me(e, t, n);
 }
@@ -7658,7 +7658,7 @@ var mF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/parameters.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/parameters.mjs
 function iee(e, t, n, o, r) {
   let i = Ct(o) ? t : o, a = Ct(o) ? o : t, s = Bt(t), u = Bt(o);
   return !s && u ? ce() : It(_e(e, i, a), (l) => ml(l, n, r), () => ce());
@@ -7672,7 +7672,7 @@ function see(e, t, n) {
 function ml(e, t, n) {
   return see(e, t, n);
 }
-var aw = p(() => {
+var iw = p(() => {
   I();
   wr();
   fi();
@@ -7680,17 +7680,17 @@ var aw = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/return_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/return_type.mjs
 function Df(e, t, n) {
   return Xn(n) ? j(e) : _e(e, t, n);
 }
-var sw = p(() => {
+var aw = p(() => {
   Ra();
   Fn();
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/constructor.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/constructor.mjs
 function fF(e, t, n, o) {
   return lt(o) ? j(e) : Tt(o) ? j(e) : gt(o) ? It(ml(e, t, o.parameters), (r) => Df(r, n, o.instanceType), () => ce()) : ce();
 }
@@ -7699,11 +7699,11 @@ var gF = p(() => {
   xr();
   cn();
   Ye();
+  iw();
   aw();
-  sw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/dependent.mjs
 function hF(e, t, n, o, r) {
   return It(_e(e, t, r), () => _e(e, n, r), () => _e(e, o, r));
 }
@@ -7712,7 +7712,7 @@ var yF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/enum.mjs
 function bF(e, t, n) {
   let o = Rn(t);
   return _e(e, o, n);
@@ -7722,7 +7722,7 @@ var xF = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/function.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/function.mjs
 function vF(e, t, n, o) {
   return lt(o) ? j(e) : Tt(o) ? j(e) : ht(o) ? It(ml(e, t, o.parameters), (r) => Df(r, n, o.returnType), () => ce()) : ce();
 }
@@ -7731,13 +7731,13 @@ var IF = p(() => {
   vr();
   cn();
   Ye();
+  iw();
   aw();
-  sw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/integer.mjs
 function wF(e, t, n) {
-  return Vt(n) ? j(e) : rt(n) ? j(e) : Me(e, t, n);
+  return Vt(n) ? j(e) : ot(n) ? j(e) : Me(e, t, n);
 }
 var SF = p(() => {
   so();
@@ -7746,9 +7746,9 @@ var SF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/intersect.mjs
 function kF(e, t, n) {
-  let o = ot(t);
+  let o = it(t);
   return _e(e, o, n);
 }
 var _F = p(() => {
@@ -7756,7 +7756,7 @@ var _F = p(() => {
   Js();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/literal.mjs
 function Mf(e, t, n) {
   return t === n ? j(e) : ce();
 }
@@ -7767,7 +7767,7 @@ function uee(e, t, n) {
   return xe(n) ? Mf(e, t, n.const) : En(n) ? j(e) : Me(e, he(t), n);
 }
 function lee(e, t, n) {
-  return xe(n) ? Mf(e, t, n.const) : rt(n) ? j(e) : Me(e, he(t), n);
+  return xe(n) ? Mf(e, t, n.const) : ot(n) ? j(e) : Me(e, he(t), n);
 }
 function dee(e, t, n) {
   return xe(n) ? Mf(e, t, n.const) : Nt(n) ? j(e) : Me(e, he(t), n);
@@ -7777,7 +7777,7 @@ function EF(e, t, n) {
 }
 var TF = p(() => {
   I();
-  iI();
+  oI();
   Mt();
   ka();
   gi();
@@ -7787,7 +7787,7 @@ var TF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/never.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/never.mjs
 function CF(e, t, n) {
   return Ct(n) ? Me(e, t, n) : j(e);
 }
@@ -7797,7 +7797,7 @@ var RF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/null.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/null.mjs
 function $F(e, t, n) {
   return co(n) ? j(e) : Me(e, t, n);
 }
@@ -7807,9 +7807,9 @@ var AF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/number.mjs
 function PF(e, t, n) {
-  return rt(n) ? j(e) : Me(e, t, n);
+  return ot(n) ? j(e) : Me(e, t, n);
 }
 var OF = p(() => {
   Tn();
@@ -7817,7 +7817,7 @@ var OF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/object.mjs
 function pee(e, t, n) {
   return Bt(t) ? Bt(n) ? j(e) : ce() : j(e);
 }
@@ -7875,7 +7875,7 @@ var NF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/record.mjs
 function vee(e, t) {
   return c.IsEqual(c.Keys(t).length, 0) ? j(e) : ce();
 }
@@ -7895,7 +7895,7 @@ var LF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/string.mjs
 function FF(e, t, n) {
   return Nt(n) ? j(e) : Me(e, t, n);
 }
@@ -7905,7 +7905,7 @@ var zF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/symbol.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/symbol.mjs
 function jF(e, t, n) {
   return uo(n) ? j(e) : Me(e, t, n);
 }
@@ -7915,7 +7915,7 @@ var BF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/template_literal.mjs
 function qF(e, t, n) {
   let o = fn(t);
   return _e(e, o, n);
@@ -7925,18 +7925,18 @@ var GF = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/inference.mjs
-function cw(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/inference.mjs
+function sw(e, t) {
   return _.Create({ "~kind": "Inferrable" }, { name: e, type: t }, {});
 }
 function fl(e) {
   return c.IsObject(e) && c.HasPropertyKey(e, "~kind") && c.HasPropertyKey(e, "name") && c.HasPropertyKey(e, "type") && c.IsEqual(e["~kind"], "Inferrable") && c.IsString(e.name) && c.IsObject(e.type);
 }
-function uw(e) {
-  return wi(e) ? Ct(e.items) ? ve(e.items.extends) ? cw(e.items.name, e.items.extends.items) : Tt(e.items.extends) ? cw(e.items.name, e.items.extends) : void 0 : ft() : void 0;
+function cw(e) {
+  return wi(e) ? Ct(e.items) ? ve(e.items.extends) ? sw(e.items.name, e.items.extends.items) : Tt(e.items.extends) ? sw(e.items.name, e.items.extends) : void 0 : ft() : void 0;
 }
 function Nf(e) {
-  return Ct(e) ? cw(e.name, e.extends) : void 0;
+  return Ct(e) ? sw(e.name, e.extends) : void 0;
 }
 function KF(e, t) {
   let n = [];
@@ -7955,7 +7955,7 @@ function Uf(e, t, n, o) {
   let r = KF(n, o);
   return c.IsArray(r) ? j(_.Assign(e, { [t]: ie(r) })) : ce();
 }
-var lw = p(() => {
+var uw = p(() => {
   Ur();
   z();
   I();
@@ -7969,25 +7969,25 @@ var lw = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/tuple.mjs
 function wee(e) {
   return [...e].reverse();
 }
-function dw(e, t) {
+function lw(e, t) {
   return t ? wee(e) : e;
 }
 function See(e) {
-  let t = e.length > 0 ? e[0] : void 0, n = ut(t) ? uw(t) : void 0;
-  return ut(n);
+  let t = e.length > 0 ? e[0] : void 0, n = rt(t) ? cw(t) : void 0;
+  return rt(n);
 }
 function kee(e, t, n, o, r, i) {
   return It(_e(e, n, r), (a) => VF(a, t, o, i), () => ce());
 }
 function _ee(e, t, n, o, r) {
-  let i = uw(o);
+  let i = cw(o);
   return (
     // Rest Inferrable Right Means we delegate to TInferTupleResult to Generate a Result
-    fl(i) ? HF(e, i.name, dw(n, t), i.type) : c.ShiftLeft(n, (a, s) => kee(e, t, a, s, o, r), () => ce())
+    fl(i) ? HF(e, i.name, lw(n, t), i.type) : c.ShiftLeft(n, (a, s) => kee(e, t, a, s, o, r), () => ce())
   );
 }
 function Eee(e, t, n, o) {
@@ -7998,7 +7998,7 @@ function VF(e, t, n, o) {
 }
 function Tee(e, t, n) {
   let o = Ei(e, Xe([], []), n), r = See(o);
-  return VF(e, r, dw(t, r), dw(o, r));
+  return VF(e, r, lw(t, r), lw(o, r));
 }
 function Cee(e, t, n) {
   for (let o of t) {
@@ -8027,10 +8027,10 @@ var ZF = p(() => {
   Ye();
   J();
   J();
-  lw();
+  uw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/undefined.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/undefined.mjs
 function JF(e, t, n) {
   return Xn(n) ? j(e) : _r(n) ? j(e) : Me(e, t, n);
 }
@@ -8041,26 +8041,26 @@ var YF = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/union.mjs
 function XF(e, t, n) {
   return c.ShiftLeft(n, (o, r) => It(_e(e, t, o), (i) => j(i), () => XF(e, t, r)), () => ce());
 }
-function pw(e, t, n) {
-  return c.ShiftLeft(t, (o, r) => It(XF(e, o, n), (i) => pw(i, r, n), () => ce()), () => j(e));
+function dw(e, t, n) {
+  return c.ShiftLeft(t, (o, r) => It(XF(e, o, n), (i) => dw(i, r, n), () => ce()), () => j(e));
 }
 function QF(e, t, n) {
   let o = Nf(n);
-  return fl(o) ? Uf(e, o.name, t, o.type) : L(n) ? pw(e, t, n.anyOf) : pw(e, t, [n]);
+  return fl(o) ? Uf(e, o.name, t, o.type) : L(n) ? dw(e, t, n.anyOf) : dw(e, t, [n]);
 }
 var ez = p(() => {
   I();
   Ie();
   Fn();
   Ye();
-  lw();
+  uw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/unknown.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/unknown.mjs
 function tz(e, t, n) {
   return Ct(n) ? Me(e, t, n) : lt(n) ? j(e) : Tt(n) ? j(e) : ce();
 }
@@ -8072,7 +8072,7 @@ var nz = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/void.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/void.mjs
 function rz(e, t, n) {
   return Xn(n) ? j(e) : Me(e, t, n);
 }
@@ -8082,9 +8082,9 @@ var oz = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/extends_left.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/extends_left.mjs
 function _e(e, t, n) {
-  return lt(t) ? aF(e, t, n) : ve(t) ? cF(e, t, t.items, n) : Jn(t) ? lF(e, t, n) : En(t) ? pF(e, t, n) : gt(t) ? fF(e, t.parameters, t.instanceType, n) : yt(t) ? hF(e, t.if, t.then, t.else, n) : bt(t) ? bF(e, t.enum, n) : ht(t) ? vF(e, t.parameters, t.returnType, n) : Vt(t) ? wF(e, t, n) : Y(t) ? kF(e, t.allOf, n) : xe(t) ? EF(e, t, n) : Dn(t) ? CF(e, t, n) : co(t) ? $F(e, t, n) : rt(t) ? PF(e, t, n) : Q(t) ? MF(e, t.properties, n) : Ue(t) ? UF(e, Kt(t), We(t), n) : Nt(t) ? FF(e, t, n) : uo(t) ? jF(e, t, n) : qe(t) ? qF(e, t.pattern, n) : ge(t) ? WF(e, t.items, n) : _r(t) ? JF(e, t, n) : L(t) ? QF(e, t.anyOf, n) : Tt(t) ? tz(e, t, n) : Xn(t) ? rz(e, t, n) : ce();
+  return lt(t) ? aF(e, t, n) : ve(t) ? cF(e, t, t.items, n) : Jn(t) ? lF(e, t, n) : En(t) ? pF(e, t, n) : gt(t) ? fF(e, t.parameters, t.instanceType, n) : yt(t) ? hF(e, t.if, t.then, t.else, n) : bt(t) ? bF(e, t.enum, n) : ht(t) ? vF(e, t.parameters, t.returnType, n) : Vt(t) ? wF(e, t, n) : Y(t) ? kF(e, t.allOf, n) : xe(t) ? EF(e, t, n) : Dn(t) ? CF(e, t, n) : co(t) ? $F(e, t, n) : ot(t) ? PF(e, t, n) : Q(t) ? MF(e, t.properties, n) : Ue(t) ? UF(e, Kt(t), We(t), n) : Nt(t) ? FF(e, t, n) : uo(t) ? jF(e, t, n) : qe(t) ? qF(e, t.pattern, n) : ge(t) ? WF(e, t.items, n) : _r(t) ? JF(e, t, n) : L(t) ? QF(e, t.anyOf, n) : Tt(t) ? tz(e, t, n) : Xn(t) ? rz(e, t, n) : ce();
 }
 var Fn = p(() => {
   sF();
@@ -8138,16 +8138,16 @@ var Fn = p(() => {
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/interface/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/interface/instantiate.mjs
 function $ee(e, t) {
-  return ot([...e, X(t)]);
+  return it([...e, X(t)]);
 }
-function mw(e, t, n) {
+function pw(e, t, n) {
   return de(e) ? _.Update($ee(e, t), {}, n) : al(e, t, n);
 }
 function iz(e, t, n, o, r) {
   let i = ur(e, t, n), a = gl(e, t, o);
-  return mw(i, a, r);
+  return pw(i, a, r);
 }
 var Lf = p(() => {
   z();
@@ -8159,15 +8159,15 @@ var Lf = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/interface.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/interface.mjs
 function al(e, t, n = {}) {
   return G("Interface", [e, t], n);
 }
 function Ys(e) {
-  return ut(e) && c.HasPropertyKey(e, "action") && c.IsEqual(e.action, "Interface");
+  return rt(e) && c.HasPropertyKey(e, "action") && c.IsEqual(e.action, "Interface");
 }
 function az(e, t, n = {}) {
-  return mw(e, t, n);
+  return pw(e, t, n);
 }
 var hl = p(() => {
   I();
@@ -8176,7 +8176,7 @@ var hl = p(() => {
   Lf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/check.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/check.mjs
 function Aee(e, t, n) {
   return e.includes(n) ? !0 : yl([...e, n], t, t[n]);
 }
@@ -8193,7 +8193,7 @@ function yl(e, t, n) {
 function cz(e, t, n) {
   return yl(e, t, n);
 }
-var fw = p(() => {
+var mw = p(() => {
   I();
   kn();
   xr();
@@ -8208,7 +8208,7 @@ var fw = p(() => {
   hl();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/candidates.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/candidates.mjs
 function Pee(e, t) {
   return t.reduce((n, o) => cz([o], e, e[o]) ? [...n, o] : n, []);
 }
@@ -8216,12 +8216,12 @@ function uz(e) {
   let t = Em(e);
   return Pee(e, t);
 }
-var gw = p(() => {
+var fw = p(() => {
   xa();
-  fw();
+  mw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/dependencies.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/dependencies.mjs
 function Oee(e, t, n) {
   return n.includes(t) ? n : t in e ? bl(e, e[t], [...n, t]) : ft();
 }
@@ -8238,7 +8238,7 @@ function bl(e, t, n) {
 function dz(e, t, n) {
   return bl(e, n, [t]);
 }
-var hw = p(() => {
+var gw = p(() => {
   Ur();
   kn();
   xr();
@@ -8253,7 +8253,7 @@ var hw = p(() => {
   hl();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/extends.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/extends.mjs
 function Dee(e) {
   return Ds();
 }
@@ -8287,10 +8287,10 @@ var mz = p(() => {
   cn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/instantiate.mjs
 function Uee(e, t, n) {
   let o = ur(e, Xe([], []), t), r = gl({}, Xe([], []), n);
-  return ot([...o, X(r)]);
+  return it([...o, X(r)]);
 }
 function Lee(e, t) {
   return c.Keys(e).filter((o) => t.includes(o)).reduce((o, r) => {
@@ -8302,11 +8302,11 @@ function fz(e, t, n) {
   let o = dz(e, t, n), r = Lee(e, o);
   return io(r, t);
 }
-var yw = p(() => {
+var hw = p(() => {
   I();
   Mn();
   Ne();
-  hw();
+  gw();
   Aa();
   J();
   J();
@@ -8314,7 +8314,7 @@ var yw = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/target.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/target.mjs
 function gz(e, t) {
   return t in e ? De(e[t]) ? gz(e, e[t].$ref) : e[t] : Fe();
 }
@@ -8326,17 +8326,17 @@ var Da = p(() => {
   Ir();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/cyclic/index.mjs
-var bw = p(() => {
-  gw();
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/cyclic/index.mjs
+var yw = p(() => {
   fw();
-  hw();
+  mw();
+  gw();
   mz();
-  yw();
+  hw();
   Da();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/extends.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/extends.mjs
 function hz(e) {
   return Be(e) ? pz(e) : Cm(e) ? Dt() : e;
 }
@@ -8349,16 +8349,16 @@ var yz = p(() => {
   cn();
   Rm();
   Fn();
-  bw();
+  yw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/extends/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/index.mjs
 var jr = p(() => {
   yz();
   Ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/compare.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/compare.mjs
 function zs(e, t) {
   let n = [un({}, e, t), un({}, t, e)];
   return ne.IsExtendsTrueLike(n[0]) && ne.IsExtendsTrueLike(n[1]) ? Xu : ne.IsExtendsTrueLike(n[0]) && ne.IsExtendsFalse(n[1]) ? Qu : ne.IsExtendsFalse(n[0]) && ne.IsExtendsTrueLike(n[1]) ? el : vl;
@@ -8368,11 +8368,11 @@ var Xu, vl, Qu, el, tl = p(() => {
   Xu = 0, vl = 1, Qu = 2, el = 3;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/broaden.mjs
-function xw(e, t, n = [], o = t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/broaden.mjs
+function bw(e, t, n = [], o = t) {
   return c.ShiftLeft(t, (r, i) => {
     let a = zs(e, r);
-    return c.IsEqual(a, Qu) || c.IsEqual(a, Xu) ? o : c.IsEqual(a, vl) ? xw(e, i, [...n, r], o) : xw(e, i, n, o);
+    return c.IsEqual(a, Qu) || c.IsEqual(a, Xu) ? o : c.IsEqual(a, vl) ? bw(e, i, [...n, r], o) : bw(e, i, n, o);
   }, () => [...n, e]);
 }
 function Fee(e, t, n) {
@@ -8385,7 +8385,7 @@ function Fee(e, t, n) {
         // ignored: never is dropped
         Q(o) ? Ff(t, [...n, o]) : (
           // objects are always considered (too expensive to compare)
-          Ff(t, xw(o, n))
+          Ff(t, bw(o, n))
         )
       )
     )
@@ -8394,11 +8394,11 @@ function Fee(e, t, n) {
 function Ff(e, t = []) {
   return c.ShiftLeft(e, (n, o) => Fee(n, o, t), () => t);
 }
-function MI(e) {
+function DI(e) {
   let t = Ff(e);
   return vi(t);
 }
-var NI = p(() => {
+var MI = p(() => {
   I();
   On();
   en();
@@ -8409,13 +8409,13 @@ var NI = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/instantiate.mjs
-function vw(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/instantiate.mjs
+function xw(e, t) {
   return _.Update(kr(e), {}, t);
 }
 function bz(e, t, n, o) {
   let r = M(e, t, n);
-  return vw(r, o);
+  return xw(r, o);
 }
 var zf = p(() => {
   z();
@@ -8423,19 +8423,19 @@ var zf = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/evaluate/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/index.mjs
 var Js = p(() => {
-  NI();
+  MI();
   tl();
-  AI();
-  OI();
+  $I();
+  PI();
   ye();
   Wm();
   zf();
-  PI();
+  AI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/call/distribute_arguments.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/call/distribute_arguments.mjs
 function Il(e, t = []) {
   return (
     // Conditional
@@ -8479,7 +8479,7 @@ var Sz = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/call/resolve_target.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/call/resolve_target.mjs
 function Gee() {
   return ["(not-resolvable)", Fe()];
 }
@@ -8504,7 +8504,7 @@ var Ez = p(() => {
   en();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/call/resolve_arguments.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/call/resolve_arguments.mjs
 function Wee(e, t, n) {
   if (Ct(t) || Qs(t) || ne.IsExtendsTrueLike(un({}, t, n)))
     return;
@@ -8517,13 +8517,13 @@ function Tz(e, t, n, o, r) {
 }
 function Zee(e, t, n, o, r) {
   let i = M(e, t, n.extends), a = M(e, t, n.equals);
-  return c.ShiftLeft(r, (s, u) => Iw(Tz(e, t, n.name, i, s), t, o, u), () => Iw(Tz(e, t, n.name, i, a), t, o, []));
+  return c.ShiftLeft(r, (s, u) => vw(Tz(e, t, n.name, i, s), t, o, u), () => vw(Tz(e, t, n.name, i, a), t, o, []));
 }
-function Iw(e, t, n, o) {
+function vw(e, t, n, o) {
   return c.ShiftLeft(n, (r, i) => Zee(e, t, r, i, o), () => e);
 }
 function Cz(e, t, n, o) {
-  return Iw(e, t, n, o);
+  return vw(e, t, n, o);
 }
 var Rz = p(() => {
   I();
@@ -8534,16 +8534,16 @@ var Rz = p(() => {
   Hs();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/call/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/call/instantiate.mjs
 function Jee() {
-  if (!c.IsLessThan(Sw, mt.Get().maxInstantiationCount))
+  if (!c.IsLessThan(ww, mt.Get().maxInstantiationCount))
     throw Error("Type instantiation is excessively deep and possibly infinite");
 }
 function Yee() {
-  Jee(), Sw++, ww++;
+  Jee(), ww++, Iw++;
 }
 function Xee() {
-  ww--, c.IsEqual(ww, 0) && (Sw = 0);
+  Iw--, c.IsEqual(Iw, 0) && (ww = 0);
 }
 function Qee(e) {
   return c.IsGreaterThan(e.callstack.length, 0) ? e.callstack[e.callstack.length - 1] : "";
@@ -8574,7 +8574,7 @@ function jf(e, t, n, o) {
   let r = ur(e, t, o), i = _z(e, n, o), a = i[0], s = i[1];
   return Os(s) ? ete(t, a) ? sl(jt(a), r) : rte(e, t, jt(a), s.parameters, s.expression, r) : sl(n, r);
 }
-var ww, Sw, kw = p(() => {
+var Iw, ww, Sw = p(() => {
   eo();
   I();
   Hs();
@@ -8587,10 +8587,10 @@ var ww, Sw, kw = p(() => {
   Sz();
   Ez();
   Rz();
-  ww = 0, Sw = 0;
+  Iw = 0, ww = 0;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/types/call.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/call.mjs
 function sl(e, t) {
   return _.Create({ "~kind": "Call" }, { type: "call", target: e, arguments: t }, {});
 }
@@ -8603,11 +8603,11 @@ function Qs(e) {
 var Hs = p(() => {
   z();
   fe();
-  kw();
+  Sw();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/immutable/instantiate_remove.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/immutable/instantiate_remove.mjs
 function ote(e) {
   return _.Discard(e, ["~immutable"]);
 }
@@ -8618,19 +8618,19 @@ function Pz(e, t, n, o) {
   let r = M(e, t, n);
   return Az(r, o);
 }
-var _w = p(() => {
+var kw = p(() => {
   z();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/mapping.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/mapping.mjs
 function Oz(e, t) {
   return e(t);
 }
 var Dz = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/from_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/from_literal.mjs
 function Mz(e, t) {
   return c.IsString(t) ? he(Oz(e, t)) : he(t);
 }
@@ -8640,7 +8640,7 @@ var Nz = p(() => {
   Dz();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/from_template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/from_template_literal.mjs
 function Uz(e, t) {
   let n = fn(t);
   return Ko(e, n);
@@ -8650,7 +8650,7 @@ var Lz = p(() => {
   Js();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/from_union.mjs
 function Fz(e, t) {
   let n = t.map((o) => Ko(e, o));
   return ie(n);
@@ -8660,7 +8660,7 @@ var zz = p(() => {
   Bf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/from_type.mjs
 function Ko(e, t) {
   return xe(t) ? Mz(e, t.const) : qe(t) ? Uz(e, t.pattern) : L(t) ? Fz(e, t.anyOf) : t;
 }
@@ -8673,82 +8673,82 @@ var Bf = p(() => {
   zz();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/capitalize.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/capitalize.mjs
 function rf(e, t = {}) {
   return G("Capitalize", [e], t);
 }
 function jz(e, t = {}) {
-  return Ew(e, t);
+  return _w(e, t);
 }
 var qf = p(() => {
   Oe();
   go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/lowercase.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/lowercase.mjs
 function of(e, t = {}) {
   return G("Lowercase", [e], t);
 }
 function Bz(e, t = {}) {
-  return Tw(e, t);
+  return Ew(e, t);
 }
 var Gf = p(() => {
   Oe();
   go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/uncapitalize.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/uncapitalize.mjs
 function af(e, t = {}) {
   return G("Uncapitalize", [e], t);
 }
 function qz(e, t = {}) {
-  return Cw(e, t);
+  return Tw(e, t);
 }
 var Kf = p(() => {
   Oe();
   go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/uppercase.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/uppercase.mjs
 function sf(e, t = {}) {
   return G("Uppercase", [e], t);
 }
 function Gz(e, t = {}) {
-  return Rw(e, t);
+  return Cw(e, t);
 }
 var Hf = p(() => {
   Oe();
   go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/instantiate.mjs
-function Ew(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/instantiate.mjs
+function _w(e, t) {
   return de([e]) ? _.Update(Ko(ite, e), {}, t) : rf(e, t);
 }
-function Tw(e, t) {
+function Ew(e, t) {
   return de([e]) ? _.Update(Ko(ate, e), {}, t) : of(e, t);
 }
-function Cw(e, t) {
+function Tw(e, t) {
   return de([e]) ? _.Update(Ko(ste, e), {}, t) : af(e, t);
 }
-function Rw(e, t) {
+function Cw(e, t) {
   return de([e]) ? _.Update(Ko(cte, e), {}, t) : sf(e, t);
 }
 function Kz(e, t, n, o) {
   let r = M(e, t, n);
-  return Ew(r, o);
+  return _w(r, o);
 }
 function Hz(e, t, n, o) {
   let r = M(e, t, n);
-  return Tw(r, o);
+  return Ew(r, o);
 }
 function Vz(e, t, n, o) {
   let r = M(e, t, n);
-  return Cw(r, o);
+  return Tw(r, o);
 }
 function Wz(e, t, n, o) {
   let r = M(e, t, n);
-  return Rw(r, o);
+  return Cw(r, o);
 }
 var ite, ate, ste, cte, go = p(() => {
   z();
@@ -8761,32 +8761,32 @@ var ite, ate, ste, cte, go = p(() => {
   ite = (e) => e[0].toUpperCase() + e.slice(1), ate = (e) => e.toLowerCase(), ste = (e) => e[0].toLowerCase() + e.slice(1), cte = (e) => e.toUpperCase();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/conditional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/conditional.mjs
 function cf(e, t, n, o, r = {}) {
   return G("Conditional", [e, t, n, o], r);
 }
 function Zz(e, t, n, o, r = {}) {
-  return $w({}, Xe([], []), e, t, n, o, r);
+  return Rw({}, Xe([], []), e, t, n, o, r);
 }
 var Vf = p(() => {
   Oe();
-  Aw();
+  $w();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/conditional/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/conditional/instantiate.mjs
 function ute(e, t, n, o, r, i) {
   let a = un(e, n, o);
   return ne.IsExtendsUnion(a) ? ie([M(a.inferred, t, r), M(e, t, i)]) : ne.IsExtendsTrue(a) ? M(a.inferred, t, r) : M(e, t, i);
 }
-function $w(e, t, n, o, r, i, a) {
+function Rw(e, t, n, o, r, i, a) {
   return de([n, o]) ? _.Update(ute(e, t, n, o, r, i), {}, a) : cf(n, o, r, i, a);
 }
 function Jz(e, t, n, o, r, i, a) {
   let s = M(e, t, n), u = M(e, t, o);
-  return $w(e, t, s, u, r, i, a);
+  return Rw(e, t, s, u, r, i, a);
 }
-var Aw = p(() => {
+var $w = p(() => {
   z();
   Ie();
   jr();
@@ -8794,34 +8794,34 @@ var Aw = p(() => {
   Vf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/conditional/index.mjs
-var Pw = p(() => {
-  Aw();
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/conditional/index.mjs
+var Aw = p(() => {
+  $w();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/constructor_parameters.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/constructor_parameters.mjs
 function uf(e, t = {}) {
   return G("ConstructorParameters", [e], t);
 }
 function Yz(e, t = {}) {
-  return Ow(e, t);
+  return Pw(e, t);
 }
 var Wf = p(() => {
   Oe();
   Zf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/constructor_parameters/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/constructor_parameters/instantiate.mjs
 function lte(e) {
   let t = gt(e) ? e.parameters : [], n = Ei({}, Xe([], []), t);
   return xt(n);
 }
-function Ow(e, t) {
+function Pw(e, t) {
   return de([e]) ? _.Update(lte(e), {}, t) : uf(e, t);
 }
 function Xz(e, t, n, o) {
   let r = M(e, t, n);
-  return Ow(r, o);
+  return Pw(r, o);
 }
 var Zf = p(() => {
   z();
@@ -8833,7 +8833,7 @@ var Zf = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/exclude.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/exclude.mjs
 function lf(e, t, n = {}) {
   return G("Exclude", [e, t], n);
 }
@@ -8845,7 +8845,7 @@ var Jf = p(() => {
   Sl();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/exclude/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/exclude/instantiate.mjs
 function wl(e, t, n) {
   return de([e, t]) ? _.Update(Vm(e, t), {}, n) : lf(e, t, n);
 }
@@ -8857,22 +8857,22 @@ var Sl = p(() => {
   z();
   J();
   Jf();
-  DI();
+  OI();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/extract.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/extract.mjs
 function df(e, t, n = {}) {
   return G("Extract", [e, t], n);
 }
 function tj(e, t, n = {}) {
-  return Dw(e, t, n);
+  return Ow(e, t, n);
 }
 var Yf = p(() => {
   Oe();
   Xf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/extract/operation.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/extract/operation.mjs
 function dte(e, t) {
   let n = un({}, e, t);
   return ne.IsExtendsTrueLike(n) ? [e] : [];
@@ -8892,13 +8892,13 @@ var oj = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/extract/instantiate.mjs
-function Dw(e, t, n) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/extract/instantiate.mjs
+function Ow(e, t, n) {
   return de([e, t]) ? _.Update(rj(e, t), {}, n) : df(e, t, n);
 }
 function ij(e, t, n, o, r) {
   let i = M(e, t, n), a = M(e, t, o);
-  return Dw(i, a, r);
+  return Ow(i, a, r);
 }
 var Xf = p(() => {
   z();
@@ -8907,7 +8907,7 @@ var Xf = p(() => {
   oj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/helpers/keys_to_indexer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/helpers/keys_to_indexer.mjs
 function pte(e) {
   return e.reduce((t, n) => Dm(n) ? [...t, he(n)] : t, []);
 }
@@ -8920,22 +8920,22 @@ var kl = p(() => {
   Ie();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/indexed.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/indexed.mjs
 function cl(e, t, n = {}) {
   return G("Index", [e, t], n);
 }
 function aj(e, t, n = {}) {
   let o = c.IsArray(t) ? ec(t) : t;
-  return Nw(e, o, n);
+  return Mw(e, o, n);
 }
-var Mw = p(() => {
+var Dw = p(() => {
   I();
   Oe();
   kl();
   Qf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_cyclic.mjs
 function sj(e, t) {
   let n = fo(e, t);
   return lr(n);
@@ -8945,7 +8945,7 @@ var cj = p(() => {
   Da();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_dependent.mjs
 function uj(e, t, n) {
   let o = Br(e, t, n);
   return lr(o);
@@ -8955,9 +8955,9 @@ var lj = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_intersect.mjs
 function mte(e, t) {
-  let n = c.Keys(e).filter((m) => !c.HasPropertyKey(t, m)), o = c.Keys(t).filter((m) => !c.HasPropertyKey(e, m)), r = c.Keys(e).filter((m) => c.HasPropertyKey(t, m)), i = n.reduce((m, h) => ({ ...m, [h]: e[h] }), {}), a = o.reduce((m, h) => ({ ...m, [h]: t[h] }), {}), s = r.reduce((m, h) => ({ ...m, [h]: ot([e[h], t[h]]) }), {}), u = _.Assign(i, a);
+  let n = c.Keys(e).filter((m) => !c.HasPropertyKey(t, m)), o = c.Keys(t).filter((m) => !c.HasPropertyKey(e, m)), r = c.Keys(e).filter((m) => c.HasPropertyKey(t, m)), i = n.reduce((m, h) => ({ ...m, [h]: e[h] }), {}), a = o.reduce((m, h) => ({ ...m, [h]: t[h] }), {}), s = r.reduce((m, h) => ({ ...m, [h]: it([e[h], t[h]]) }), {}), u = _.Assign(i, a);
   return _.Assign(u, s);
 }
 function dj(e) {
@@ -8970,22 +8970,22 @@ var pj = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_object.mjs
 var mj = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_tuple.mjs
 function fj(e) {
   let t = g1(xt(e));
   return lr(t);
 }
 var gj = p(() => {
   Gt();
-  RI();
+  CI();
   Ma();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_union.mjs
 function fte(e, t) {
   return c.Keys(e).filter((r) => r in t).reduce((r, i) => ({ ...r, [i]: Ln([e[i], t[i]]) }), {});
 }
@@ -9002,7 +9002,7 @@ var bj = p(() => {
   Ma();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_type.mjs
 function lr(e) {
   return Be(e) ? sj(e.$defs, e.$ref) : yt(e) ? uj(e.if, e.then, e.else) : Y(e) ? dj(e.allOf) : L(e) ? yj(e.anyOf) : ge(e) ? fj(e.items) : Q(e) ? e.properties : {};
 }
@@ -9021,7 +9021,7 @@ var Ma = p(() => {
   bj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/collapse.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/collapse.mjs
 function tc(e) {
   let t = lr(e);
   return X(t);
@@ -9031,12 +9031,12 @@ var xj = p(() => {
   Ma();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/object/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/index.mjs
 var _l = p(() => {
   xj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/helpers/keys.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/helpers/keys.mjs
 function nc(e) {
   let t = `${e}`;
   return gte.test(t) ? parseInt(t) : e;
@@ -9045,7 +9045,7 @@ var gte, El = p(() => {
   gte = new RegExp("^(?:0|[1-9][0-9]*)$");
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/from_array.mjs
 function hte(e) {
   return he(nc(e));
 }
@@ -9073,7 +9073,7 @@ var Sj = p(() => {
   El();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_cyclic.mjs
 function kj(e, t) {
   let n = fo(e, t);
   return er(n);
@@ -9083,7 +9083,7 @@ var _j = p(() => {
   Da();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_dependent.mjs
 function Ej(e, t, n) {
   let o = Br(e, t, n);
   return er(o);
@@ -9093,7 +9093,7 @@ var Tj = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_enum.mjs
 function Cj(e) {
   let t = Rn(e);
   return er(t);
@@ -9103,9 +9103,9 @@ var Rj = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_intersect.mjs
 function $j(e) {
-  let t = ot(e);
+  let t = it(e);
   return er(t);
 }
 var Aj = p(() => {
@@ -9113,14 +9113,14 @@ var Aj = p(() => {
   Ti();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_literal.mjs
 function Pj(e) {
   return [`${e}`];
 }
 var Oj = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_template_literal.mjs
 function Dj(e) {
   let t = fn(e);
   return er(t);
@@ -9130,7 +9130,7 @@ var Mj = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_union.mjs
 function Nj(e) {
   return e.reduce((t, n) => [...t, ...er(n)], []);
 }
@@ -9138,7 +9138,7 @@ var Uj = p(() => {
   Ti();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_type.mjs
 function er(e) {
   return Be(e) ? kj(e.$defs, e.$ref) : yt(e) ? Ej(e.if, e.then, e.else) : bt(e) ? Cj(e.enum) : Y(e) ? $j(e.allOf) : xe(e) ? Pj(e.const) : qe(e) ? Dj(e.pattern) : L(e) ? Nj(e.anyOf) : [];
 }
@@ -9159,7 +9159,7 @@ var Ti = p(() => {
   Uj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/to_indexable_keys.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/to_indexable_keys.mjs
 function rc(e) {
   return er(e);
 }
@@ -9167,7 +9167,7 @@ var eg = p(() => {
   Ti();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/this/expand_this.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/this/expand_this.mjs
 function Tl(e, t) {
   return t.map((n) => Cl(e, n));
 }
@@ -9188,7 +9188,7 @@ var Fj = p(() => {
   Ie();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/from_object.mjs
 function yte(e, t) {
   let n = t in e ? e[t] : Fe();
   return Lj(e, n);
@@ -9208,7 +9208,7 @@ function Ite(e) {
   return Ln(o);
 }
 function jj(e, t) {
-  return rt(t) ? Ite(e) : bte(e, t);
+  return ot(t) ? Ite(e) : bte(e, t);
 }
 var xte, Bj = p(() => {
   Tn();
@@ -9221,14 +9221,14 @@ var xte, Bj = p(() => {
   xte = new RegExp(xi);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/array_indexer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/array_indexer.mjs
 function wte(e) {
   return he(nc(e));
 }
 function qj(e) {
-  return e.map((t) => Uw(t));
+  return e.map((t) => Nw(t));
 }
-function Uw(e) {
+function Nw(e) {
   return Y(e) ? mn(qj(e.allOf)) : L(e) ? ie(qj(e.anyOf)) : xe(e) ? wte(e.const) : e;
 }
 var Gj = p(() => {
@@ -9238,7 +9238,7 @@ var Gj = p(() => {
   El();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/from_tuple.mjs
 function Ste(e, t) {
   return e.reduceRight((n, o, r) => {
     let i = un({}, he(r), t);
@@ -9246,7 +9246,7 @@ function Ste(e, t) {
   }, []);
 }
 function kte(e, t) {
-  let n = Uw(t), o = Ste(e, n);
+  let n = Nw(t), o = Ste(e, n);
   return yi(o);
 }
 function _te(e) {
@@ -9255,7 +9255,7 @@ function _te(e) {
 function Kj(e, t) {
   return (
     // length (intrinsic)
-    xe(t) && c.IsEqual(t.const, "length") ? he(e.length) : rt(t) || Vt(t) ? _te(e) : kte(e, t)
+    xe(t) && c.IsEqual(t.const, "length") ? he(e.length) : ot(t) || Vt(t) ? _te(e) : kte(e, t)
   );
 }
 var Hj = p(() => {
@@ -9268,7 +9268,7 @@ var Hj = p(() => {
   Gj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/from_type.mjs
 function Vj(e, t) {
   return ve(e) ? wj(e.items, t) : Q(e) ? jj(e.properties, t) : ge(e) ? Kj(e.items, t) : Fe();
 }
@@ -9282,16 +9282,16 @@ var Wj = p(() => {
   Hj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/instantiate.mjs
 function Ete(e) {
   return Be(e) || yt(e) || Y(e) || L(e) ? tc(e) : e;
 }
-function Nw(e, t, n) {
+function Mw(e, t, n) {
   return de([e, t]) ? _.Update(Vj(Ete(e), t), {}, n) : cl(e, t, n);
 }
 function Zj(e, t, n, o, r) {
   let i = M(e, t, n), a = M(e, t, o);
-  return Nw(i, a, r);
+  return Mw(i, a, r);
 }
 var Qf = p(() => {
   z();
@@ -9300,33 +9300,33 @@ var Qf = p(() => {
   qt();
   Ie();
   J();
-  Mw();
+  Dw();
   _l();
   Wj();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/instance_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/instance_type.mjs
 function pf(e, t = {}) {
   return G("InstanceType", [e], t);
 }
 function Jj(e, t = {}) {
-  return Lw(e, t);
+  return Uw(e, t);
 }
 var tg = p(() => {
   Oe();
   ng();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/instance_type/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/instance_type/instantiate.mjs
 function Tte(e) {
   return gt(e) ? e.instanceType : Fe();
 }
-function Lw(e, t) {
+function Uw(e, t) {
   return de([e]) ? _.Update(Tte(e), {}, t) : pf(e, t);
 }
 function Yj(e, t, n, o = {}) {
   let r = M(e, t, n);
-  return Lw(r, o);
+  return Uw(r, o);
 }
 var ng = p(() => {
   z();
@@ -9336,19 +9336,19 @@ var ng = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/keyof.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/keyof.mjs
 function ul(e, t = {}) {
   return G("KeyOf", [e], t);
 }
 function Xj(e, t = {}) {
-  return Fw(e, t);
+  return Lw(e, t);
 }
 var rg = p(() => {
   Oe();
   og();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/from_any.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/from_any.mjs
 function Qj() {
   return ie([Yn(), Cn(), Ls()]);
 }
@@ -9359,7 +9359,7 @@ var e4 = p(() => {
   Ie();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/from_array.mjs
 function t4(e) {
   return Yn();
 }
@@ -9367,7 +9367,7 @@ var n4 = p(() => {
   Tn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/from_object.mjs
 function Cte(e) {
   return e.reduce((n, o) => Dm(o) ? [...n, he(nc(o))] : ft(), []);
 }
@@ -9383,7 +9383,7 @@ var o4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/from_record.mjs
 function i4(e) {
   return Ii(e);
 }
@@ -9391,7 +9391,7 @@ var a4 = p(() => {
   tn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/from_tuple.mjs
 function s4(e) {
   let t = e.map((n, o) => he(o));
   return yi(t);
@@ -9401,7 +9401,7 @@ var c4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/from_type.mjs
 function u4(e) {
   return lt(e) ? Qj() : ve(e) ? t4(e.items) : Q(e) ? r4(e.properties) : Ue(e) ? i4(e) : ge(e) ? s4(e.items) : Fe();
 }
@@ -9419,16 +9419,16 @@ var l4 = p(() => {
   c4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/instantiate.mjs
 function Rte(e) {
   return Be(e) || yt(e) || Y(e) || L(e) ? tc(e) : e;
 }
-function Fw(e, t) {
+function Lw(e, t) {
   return de([e]) ? _.Update(u4(Rte(e)), {}, t) : ul(e, t);
 }
 function d4(e, t, n, o) {
   let r = M(e, t, n);
-  return Fw(r, o);
+  return Lw(r, o);
 }
 var og = p(() => {
   z();
@@ -9442,12 +9442,12 @@ var og = p(() => {
   l4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/mapped.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/mapped.mjs
 function il(e, t, n, o, r = {}) {
   return G("Mapped", [e, t, n, o], r);
 }
 function p4(e, t, n, o, r = {}) {
-  return zw({}, Xe([], []), e, t, n, o, r);
+  return Fw({}, Xe([], []), e, t, n, o, r);
 }
 var ig = p(() => {
   Oe();
@@ -9455,7 +9455,7 @@ var ig = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/mapped/mapped_variants.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/mapped/mapped_variants.mjs
 function $te(e) {
   let t = fn(e);
   return sg(t);
@@ -9486,7 +9486,7 @@ var f4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/mapped/mapped_operation.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/mapped/mapped_operation.mjs
 function Dte(e) {
   return qe(e) ? fn(e.pattern) : e;
 }
@@ -9502,7 +9502,7 @@ function Ute(e) {
 }
 function g4(e, t, n, o, r, i) {
   let a = m4(o), s = Nte(e, t, n, a, r, i), u = Ute(s);
-  return ot(u);
+  return it(u);
 }
 var h4 = p(() => {
   z();
@@ -9515,13 +9515,13 @@ var h4 = p(() => {
   f4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/mapped/instantiate.mjs
-function zw(e, t, n, o, r, i, a) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/mapped/instantiate.mjs
+function Fw(e, t, n, o, r, i, a) {
   return de([o]) ? _.Update(g4(e, t, n, o, r, i), {}, a) : il(n, o, r, i, a);
 }
 function y4(e, t, n, o, r, i, a) {
   let s = M(e, t, o);
-  return zw(e, t, n, s, r, i, a);
+  return Fw(e, t, n, s, r, i, a);
 }
 var ag = p(() => {
   z();
@@ -9530,7 +9530,7 @@ var ag = p(() => {
   h4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/module/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/module/instantiate.mjs
 function Lte(e, t, n) {
   let o = _.Assign(e, t);
   return c.Keys(t).filter((i) => n.includes(i)).reduce((i, a) => ({ ...i, [a]: fz(o, a, t[a]) }), {});
@@ -9550,34 +9550,34 @@ var ug = p(() => {
   I();
   z();
   J();
-  gw();
-  yw();
+  fw();
+  hw();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/non_nullable.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/non_nullable.mjs
 function mf(e, t = {}) {
   return G("NonNullable", [e], t);
 }
 function b4(e, t = {}) {
-  return jw(e, t);
+  return zw(e, t);
 }
 var lg = p(() => {
   Oe();
   dg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/non_nullable/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/non_nullable/instantiate.mjs
 function jte(e) {
   let t = ie([Ns(), Gs()]);
   return wl(e, t, {});
 }
-function jw(e, t) {
+function zw(e, t) {
   return de([e]) ? _.Update(jte(e), {}, t) : mf(e, t);
 }
 function x4(e, t, n, o) {
   let r = M(e, t, n);
-  return jw(r, o);
+  return zw(r, o);
 }
 var dg = p(() => {
   z();
@@ -9589,13 +9589,13 @@ var dg = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/omit.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/omit.mjs
 function ff(e, t, n = {}) {
   return G("Omit", [e, t], n);
 }
 function v4(e, t, n = {}) {
   let o = c.IsArray(t) ? ec(t) : t;
-  return Bw(e, o, n);
+  return jw(e, o, n);
 }
 var pg = p(() => {
   I();
@@ -9604,18 +9604,18 @@ var pg = p(() => {
   mg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexable/to_indexable.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/to_indexable.mjs
 function fg(e) {
   let t = tc(e);
   return Q(t) ? t.properties : ft();
 }
-var qw = p(() => {
+var Bw = p(() => {
   Ur();
   Ne();
   _l();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/omit/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/omit/from_type.mjs
 function Bte(e, t) {
   return c.Keys(e).reduce((o, r) => t.includes(r) ? o : { ...o, [r]: e[r] }, {});
 }
@@ -9627,16 +9627,16 @@ var w4 = p(() => {
   I();
   Ne();
   eg();
-  qw();
+  Bw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/omit/instantiate.mjs
-function Bw(e, t, n) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/omit/instantiate.mjs
+function jw(e, t, n) {
   return de([e, t]) ? _.Update(I4(e, t), {}, n) : ff(e, t, n);
 }
 function S4(e, t, n, o, r) {
   let i = M(e, t, n), a = M(e, t, o);
-  return Bw(i, a, r);
+  return jw(i, a, r);
 }
 var mg = p(() => {
   z();
@@ -9645,29 +9645,29 @@ var mg = p(() => {
   w4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/parameters.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/parameters.mjs
 function gf(e, t = {}) {
   return G("Parameters", [e], t);
 }
 function k4(e, t = {}) {
-  return Gw(e, t);
+  return qw(e, t);
 }
 var gg = p(() => {
   Oe();
   hg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/parameters/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/parameters/instantiate.mjs
 function qte(e) {
   let t = ht(e) ? e.parameters : [], n = Ei({}, Xe([], []), t);
   return xt(n);
 }
-function Gw(e, t) {
+function qw(e, t) {
   return de([e]) ? _.Update(qte(e), {}, t) : gf(e, t);
 }
 function _4(e, t, n, o) {
   let r = M(e, t, n);
-  return Gw(r, o);
+  return qw(r, o);
 }
 var hg = p(() => {
   z();
@@ -9679,19 +9679,19 @@ var hg = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/partial.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/partial.mjs
 function hf(e, t = {}) {
   return G("Partial", [e], t);
 }
 function E4(e, t = {}) {
-  return Kw(e, t);
+  return Gw(e, t);
 }
 var yg = p(() => {
   Oe();
   bg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_cyclic.mjs
 function T4(e, t) {
   let n = fo(e, t), o = ho(n);
   return io(_.Assign(e, { [t]: o }), t);
@@ -9703,7 +9703,7 @@ var C4 = p(() => {
   Da();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/from_dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_dependent.mjs
 function R4(e, t, n) {
   let o = Br(e, t, n);
   return ho(o);
@@ -9713,9 +9713,9 @@ var $4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_intersect.mjs
 function A4(e) {
-  let t = ot(e);
+  let t = it(e);
   return ho(t);
 }
 var P4 = p(() => {
@@ -9723,7 +9723,7 @@ var P4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_union.mjs
 function O4(e) {
   let t = e.map((n) => ho(n));
   return ie(t);
@@ -9733,7 +9733,7 @@ var D4 = p(() => {
   oc();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_object.mjs
 function M4(e) {
   let t = c.Keys(e).reduce((o, r) => ({ ...o, [r]: ba(e[r]) }), {});
   return X(t);
@@ -9744,7 +9744,7 @@ var N4 = p(() => {
   Fu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_type.mjs
 function ho(e) {
   return Be(e) ? T4(e.$defs, e.$ref) : yt(e) ? R4(e.if, e.then, e.else) : Y(e) ? A4(e.allOf) : L(e) ? O4(e.anyOf) : Q(e) ? M4(e.properties) : X({});
 }
@@ -9761,13 +9761,13 @@ var oc = p(() => {
   N4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/instantiate.mjs
-function Kw(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/instantiate.mjs
+function Gw(e, t) {
   return de([e]) ? _.Update(ho(e), {}, t) : hf(e, t);
 }
 function U4(e, t, n, o) {
   let r = M(e, t, n);
-  return Kw(r, o);
+  return Gw(r, o);
 }
 var bg = p(() => {
   z();
@@ -9776,13 +9776,13 @@ var bg = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/pick.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/pick.mjs
 function yf(e, t, n = {}) {
   return G("Pick", [e, t], n);
 }
 function L4(e, t, n = {}) {
   let o = c.IsArray(t) ? ec(t) : t;
-  return Hw(e, o, n);
+  return Kw(e, o, n);
 }
 var xg = p(() => {
   I();
@@ -9791,7 +9791,7 @@ var xg = p(() => {
   vg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/pick/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/pick/from_type.mjs
 function Gte(e, t) {
   return c.Keys(e).reduce((o, r) => t.includes(r) ? _.Assign(o, { [r]: e[r] }) : o, {});
 }
@@ -9804,16 +9804,16 @@ var z4 = p(() => {
   I();
   Ne();
   eg();
-  qw();
+  Bw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/pick/instantiate.mjs
-function Hw(e, t, n) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/pick/instantiate.mjs
+function Kw(e, t, n) {
   return de([e, t]) ? _.Update(F4(e, t), {}, n) : yf(e, t, n);
 }
 function j4(e, t, n, o, r) {
   let i = M(e, t, n), a = M(e, t, o);
-  return Hw(i, a, r);
+  return Kw(i, a, r);
 }
 var vg = p(() => {
   z();
@@ -9822,20 +9822,20 @@ var vg = p(() => {
   z4();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/readonly_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/readonly_object.mjs
 function bf(e, t = {}) {
   return G("ReadonlyObject", [e], t);
 }
-function Vw(e, t = {}) {
-  return Ww(e, t);
+function Hw(e, t = {}) {
+  return Vw(e, t);
 }
 var B4, Ig = p(() => {
   Oe();
   wg();
-  B4 = Vw;
+  B4 = Hw;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_array.mjs
 function q4(e) {
   return Ms(Pn(e));
 }
@@ -9844,7 +9844,7 @@ var G4 = p(() => {
   Gu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_cyclic.mjs
 function K4(e, t) {
   let n = fo(e, t), o = yo(n);
   return io(_.Assign(e, { [t]: o }), t);
@@ -9856,7 +9856,7 @@ var H4 = p(() => {
   Da();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_dependent.mjs
 function V4(e, t, n) {
   let o = Br(e, t, n);
   return yo(o);
@@ -9866,9 +9866,9 @@ var W4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_intersect.mjs
 function Z4(e) {
-  let t = ot(e);
+  let t = it(e);
   return yo(t);
 }
 var J4 = p(() => {
@@ -9876,7 +9876,7 @@ var J4 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_object.mjs
 function Y4(e) {
   let t = c.Keys(e).reduce((o, r) => ({ ...o, [r]: wa(e[r]) }), {});
   return X(t);
@@ -9887,7 +9887,7 @@ var X4 = p(() => {
   Ku();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_tuple.mjs
 function Q4(e) {
   return Ms(xt(e));
 }
@@ -9896,7 +9896,7 @@ var e2 = p(() => {
   Gu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_union.mjs
 function t2(e) {
   let t = e.map((n) => yo(n));
   return ie(t);
@@ -9906,7 +9906,7 @@ var n2 = p(() => {
   ic();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_type.mjs
 function yo(e) {
   return ve(e) ? q4(e.items) : Be(e) ? K4(e.$defs, e.$ref) : yt(e) ? V4(e.if, e.then, e.else) : Y(e) ? Z4(e.allOf) : Q(e) ? Y4(e.properties) : ge(e) ? Q4(e.items) : L(e) ? t2(e.anyOf) : e;
 }
@@ -9927,13 +9927,13 @@ var ic = p(() => {
   n2();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/instantiate.mjs
-function Ww(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/instantiate.mjs
+function Vw(e, t) {
   return de([e]) ? _.Update(yo(e), {}, t) : bf(e);
 }
 function r2(e, t, n, o) {
   let r = M(e, t, n);
-  return Ww(r, o);
+  return Vw(r, o);
 }
 var wg = p(() => {
   z();
@@ -9942,16 +9942,16 @@ var wg = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/ref/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/ref/instantiate.mjs
 function o2(e, t, n, o) {
   return t.visited.includes(o) ? n : o in e ? M(e, Xe(t.callstack, [...t.visited, o]), e[o]) : n;
 }
-var Zw = p(() => {
+var Ww = p(() => {
   J();
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_cyclic.mjs
 function i2(e, t) {
   let n = fo(e, t), o = bo(n);
   return io(_.Assign(e, { [t]: o }), t);
@@ -9963,7 +9963,7 @@ var a2 = p(() => {
   Da();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/from_dependent.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_dependent.mjs
 function s2(e, t, n) {
   let o = Br(e, t, n);
   return bo(o);
@@ -9973,9 +9973,9 @@ var c2 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_intersect.mjs
 function u2(e) {
-  let t = ot(e);
+  let t = it(e);
   return bo(t);
 }
 var l2 = p(() => {
@@ -9983,7 +9983,7 @@ var l2 = p(() => {
   ye();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_union.mjs
 function d2(e) {
   let t = e.map((n) => bo(n));
   return ie(t);
@@ -9993,7 +9993,7 @@ var p2 = p(() => {
   ac();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_object.mjs
 function m2(e) {
   let t = c.Keys(e).reduce((o, r) => ({ ...o, [r]: Km(e[r]) }), {});
   return X(t);
@@ -10004,7 +10004,7 @@ var f2 = p(() => {
   Hm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_type.mjs
 function bo(e) {
   return Be(e) ? i2(e.$defs, e.$ref) : yt(e) ? s2(e.if, e.then, e.else) : Y(e) ? u2(e.allOf) : L(e) ? d2(e.anyOf) : Q(e) ? m2(e.properties) : X({});
 }
@@ -10021,25 +10021,25 @@ var ac = p(() => {
   f2();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/required.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/required.mjs
 function xf(e, t = {}) {
   return G("Required", [e], t);
 }
 function g2(e, t = {}) {
-  return Jw(e, t);
+  return Zw(e, t);
 }
 var Sg = p(() => {
   Oe();
   kg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/instantiate.mjs
-function Jw(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/instantiate.mjs
+function Zw(e, t) {
   return de([e]) ? _.Update(bo(e), {}, t) : xf(e, t);
 }
 function h2(e, t, n, o) {
   let r = M(e, t, n);
-  return Jw(r, o);
+  return Zw(r, o);
 }
 var kg = p(() => {
   z();
@@ -10048,28 +10048,28 @@ var kg = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/return_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/return_type.mjs
 function vf(e, t = {}) {
   return G("ReturnType", [e], t);
 }
 function y2(e, t = {}) {
-  return Yw(e, t);
+  return Jw(e, t);
 }
 var _g = p(() => {
   Oe();
   Eg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/return_type/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/return_type/instantiate.mjs
 function Kte(e) {
   return ht(e) ? e.returnType : Fe();
 }
-function Yw(e, t) {
+function Jw(e, t) {
   return de([e]) ? _.Update(Kte(e), {}, t) : vf(e, t);
 }
 function b2(e, t, n, o = {}) {
   let r = M(e, t, n);
-  return Yw(r, o);
+  return Jw(r, o);
 }
 var Eg = p(() => {
   z();
@@ -10079,25 +10079,25 @@ var Eg = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/with.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/with.mjs
 function If(e, t) {
   return G("With", [e, t], {});
 }
 function Tg(e, t) {
-  return Xw(e, t);
+  return Yw(e, t);
 }
 var Cg = p(() => {
   Oe();
   Rg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/with/instantiate.mjs
-function Xw(e, t) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/with/instantiate.mjs
+function Yw(e, t) {
   return de([e]) ? _.Update(e, {}, t) : If(e, t);
 }
 function x2(e, t, n, o) {
   let r = M(e, t, n);
-  return Xw(r, o);
+  return Yw(r, o);
 }
 var Rg = p(() => {
   z();
@@ -10105,11 +10105,11 @@ var Rg = p(() => {
   Cg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/rest/spread.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/rest/spread.mjs
 function Hte(e) {
-  return wi(e) ? ge(e.items) ? Qw(e.items.items) : Ct(e.items) ? [e] : De(e.items) ? [e] : [Fe()] : [e];
+  return wi(e) ? ge(e.items) ? Xw(e.items.items) : Ct(e.items) ? [e] : De(e.items) ? [e] : [Fe()] : [e];
 }
-function Qw(e) {
+function Xw(e) {
   return e.reduce((n, o) => [...n, ...Hte(o)], []);
 }
 var v2 = p(() => {
@@ -10120,12 +10120,12 @@ var v2 = p(() => {
   Gt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/rest/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/rest/index.mjs
 var I2 = p(() => {
   v2();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/instantiate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/instantiate.mjs
 function Xe(e, t) {
   return { callstack: e, visited: t };
 }
@@ -10137,7 +10137,7 @@ function gl(e, t, n) {
 }
 function Ei(e, t, n) {
   let o = ur(e, t, n);
-  return Qw(o);
+  return Xw(o);
 }
 function ur(e, t, n) {
   return n.map((o) => M(e, t, o));
@@ -10184,17 +10184,17 @@ var J = p(() => {
   Ir();
   qs();
   $g();
-  _w();
+  kw();
   km();
-  kI();
+  SI();
   _m();
-  TI();
+  EI();
   fi();
   qu();
   Hu();
-  kw();
+  Sw();
   go();
-  Pw();
+  Aw();
   Zf();
   zf();
   Sl();
@@ -10213,7 +10213,7 @@ var J = p(() => {
   vg();
   wg();
   Zm();
-  Zw();
+  Ww();
   kg();
   Eg();
   Of();
@@ -10223,7 +10223,7 @@ var J = p(() => {
   I2();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/immutable/instantiate_add.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/immutable/instantiate_add.mjs
 function Jte(e) {
   return _.Update(e, { "~immutable": !0 }, {});
 }
@@ -10239,7 +10239,7 @@ var $g = p(() => {
   J();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/_add_immutable.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_add_immutable.mjs
 function jU(e, t = {}) {
   return G("AddImmutable", [e], t);
 }
@@ -10251,58 +10251,58 @@ var Gu = p(() => {
   $g();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/_remove_immutable.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_remove_immutable.mjs
 var S2 = p(() => {
   Oe();
-  _w();
+  kw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/evaluate.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/evaluate.mjs
 function BU(e, t = {}) {
   return G("Evaluate", [e], t);
 }
 function Wt(e, t = {}) {
-  return vw(e, t);
+  return xw(e, t);
 }
-var eS = p(() => {
+var Qw = p(() => {
   Oe();
   zf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/module.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/module.mjs
 function qU(e, t = {}) {
   return G("Module", [e], t);
 }
 function k2(e, t = {}) {
   return cg({}, Xe([], []), e, t);
 }
-var tS = p(() => {
+var eS = p(() => {
   Oe();
   J();
   ug();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/action/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/index.mjs
 var Aa = p(() => {
   Gu();
   Ku();
   Fu();
   S2();
-  _I();
+  kI();
   Hm();
   qf();
   Vf();
   Wf();
-  eS();
+  Qw();
   Jf();
   Yf();
-  Mw();
+  Dw();
   tg();
   hl();
   rg();
   Gf();
   ig();
-  tS();
+  eS();
   lg();
   pg();
   gg();
@@ -10316,104 +10316,104 @@ var Aa = p(() => {
   Cg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/constructor_parameters/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/constructor_parameters/index.mjs
 var _2 = p(() => {
   Zf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/enum/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/enum/index.mjs
 var E2 = p(() => {
   $m();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/exclude/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/exclude/index.mjs
 var T2 = p(() => {
   Sl();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/extract/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/extract/index.mjs
 var C2 = p(() => {
   Xf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/helpers/union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/helpers/union.mjs
 var R2 = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/helpers/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/helpers/index.mjs
 var $2 = p(() => {
   kl();
   El();
   R2();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/indexed/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/index.mjs
 var A2 = p(() => {
   Qf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/instance_type/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/instance_type/index.mjs
 var P2 = p(() => {
   ng();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/interface/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/interface/index.mjs
 var O2 = p(() => {
   Lf();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/intrinsics/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/index.mjs
 var D2 = p(() => {
   go();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/keyof/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/index.mjs
 var M2 = p(() => {
   og();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/mapped/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/mapped/index.mjs
 var N2 = p(() => {
   ag();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/module/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/module/index.mjs
 var U2 = p(() => {
   ug();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/non_nullable/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/non_nullable/index.mjs
 var L2 = p(() => {
   dg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/omit/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/omit/index.mjs
 var F2 = p(() => {
   mg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/parameters/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/parameters/index.mjs
 var z2 = p(() => {
   hg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/patterns/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/patterns/index.mjs
 var j2 = p(() => {
   Yu();
-  rw();
+  nw();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/partial/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/index.mjs
 var B2 = p(() => {
   bg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/pick/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/pick/index.mjs
 var q2 = p(() => {
   vg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/priority/priority.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/priority/priority.mjs
 function Yte(e, t) {
   let n = zs(e, t);
   return c.IsEqual(n, el) || c.IsEqual(n, vl) ? 1 : 0;
@@ -10432,67 +10432,67 @@ var V2 = p(() => {
   tl();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/priority/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/priority/index.mjs
 var W2 = p(() => {
   V2();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/readonly_object/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/index.mjs
 var Z2 = p(() => {
   wg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/record/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/index.mjs
 var J2 = p(() => {
   Zm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/ref/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/ref/index.mjs
 var Y2 = p(() => {
-  Zw();
+  Ww();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/required/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/index.mjs
 var X2 = p(() => {
   kg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/return_type/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/return_type/index.mjs
 var Q2 = p(() => {
   Eg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/static.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/static.mjs
 var e6 = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/is_pattern.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/is_pattern.mjs
 var t6 = p(() => {
   I();
   Yu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/template_literal/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/index.mjs
 var Ag = p(() => {
   qm();
   Gm();
-  ow();
+  rw();
   e6();
   jm();
   t6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/with/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/with/index.mjs
 var n6 = p(() => {
   Rg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/engine/index.mjs
-var nS = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/index.mjs
+var tS = p(() => {
   J();
-  Pw();
+  Aw();
   _2();
-  bw();
+  yw();
   E2();
   Js();
   T2();
@@ -10522,7 +10522,7 @@ var nS = p(() => {
   n6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/script.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/script.mjs
 function r6(...e) {
   let [t, n, o] = le.Match(e, {
     2: (a, s) => c.IsString(a) ? [{}, a, s] : [a, s, {}],
@@ -10541,21 +10541,21 @@ var o6 = p(() => {
   Fm();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/script/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/index.mjs
 var Pg = p(() => {
   o6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/type/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/index.mjs
 var re = p(() => {
   Aa();
-  nS();
+  tS();
   jr();
   Pg();
   ol();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_array.mjs
 function i6(e, t, n) {
   return c.IsArray(n) ? n.map((o) => Zt(e, t.items, o)) : n;
 }
@@ -10564,7 +10564,7 @@ var a6 = p(() => {
   xo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_cyclic.mjs
 function s6(e, t, n) {
   return Zt({ ...e, ...t.$defs }, jt(t.$ref), n);
 }
@@ -10573,7 +10573,7 @@ var c6 = p(() => {
   xo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_intersect.mjs
 function Xte(e, t) {
   let n = c.HasPropertyKey(t, "unevaluatedProperties") ? { additionalProperties: t.unevaluatedProperties } : {}, o = dr(e, t), r = Wt(o);
   return Q(r) ? Tg(r, n) : r;
@@ -10588,27 +10588,27 @@ var l6 = p(() => {
   xo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/additional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/additional.mjs
 function Og(e) {
   return c.HasPropertyKey(e, "additionalProperties") ? e.additionalProperties : void 0;
 }
-var rS = p(() => {
+var nS = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_object.mjs
 function d6(e, t, n) {
   if (!c.IsObject(n) || c.IsArray(n))
     return n;
   let o = Og(t);
   for (let r of c.Keys(n)) {
-    if (c.HasPropertyKey(t.properties, r)) {
+    if (c.HasPropertyKey(t.properties, r) && rt(t.properties[r])) {
       n[r] = Zt(e, t.properties[r], n[r]);
       continue;
     }
     if (
       // 1. additionalProperties: true
-      c.IsBoolean(o) && c.IsEqual(o, !0) || ut(o) && be(e, o, n[r])
+      c.IsBoolean(o) && c.IsEqual(o, !0) || rt(o) && be(e, o, n[r])
     ) {
       n[r] = Zt(e, o, n[r]);
       continue;
@@ -10622,10 +10622,10 @@ var p6 = p(() => {
   I();
   xo();
   zt();
-  rS();
+  nS();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_record.mjs
 function m6(e, t, n) {
   if (!c.IsObject(n))
     return n;
@@ -10637,7 +10637,7 @@ function m6(e, t, n) {
     }
     if (
       // 1. additionalProperties: true
-      c.IsBoolean(o) && c.IsEqual(o, !0) || ut(o) && be(e, o, n[a])
+      c.IsBoolean(o) && c.IsEqual(o, !0) || rt(o) && be(e, o, n[a])
     ) {
       n[a] = Zt(e, o, n[a]);
       continue;
@@ -10651,10 +10651,10 @@ var f6 = p(() => {
   I();
   xo();
   zt();
-  rS();
+  nS();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_ref.mjs
 function g6(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? Zt(e, e[t.$ref], n) : n;
 }
@@ -10663,7 +10663,7 @@ var h6 = p(() => {
   xo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_tuple.mjs
 function y6(e, t, n) {
   if (!c.IsArray(n))
     return n;
@@ -10677,7 +10677,7 @@ var b6 = p(() => {
   xo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clone/clone.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clone/clone.mjs
 function Ze(e) {
   return fa(e);
 }
@@ -10685,12 +10685,12 @@ var x6 = p(() => {
   Au();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clone/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clone/index.mjs
 var zn = p(() => {
   x6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_union.mjs
 function v6(e, t, n) {
   for (let o of t.anyOf) {
     let r = Zt(e, o, Ze(n));
@@ -10705,7 +10705,7 @@ var I6 = p(() => {
   xo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_type.mjs
 function Zt(e, t, n) {
   return ve(t) ? i6(e, t, n) : Be(t) ? s6(e, t, n) : Y(t) ? u6(e, t, n) : Q(t) ? d6(e, t, n) : Ue(t) ? m6(e, t, n) : De(t) ? g6(e, t, n) : ge(t) ? y6(e, t, n) : L(t) ? v6(e, t, n) : n;
 }
@@ -10721,7 +10721,7 @@ var xo = p(() => {
   I6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/shared/union_priority_sort.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/shared/union_priority_sort.mjs
 function Qte(e, t) {
   for (let n of Sp.Keys(e))
     Sp.HasPropertyKey(t, n) || (t[n] = e[n]);
@@ -10734,13 +10734,13 @@ function ene(e) {
   return t;
 }
 function tne(e) {
-  return oS(H2(e));
+  return rS(H2(e));
 }
-function oS(e) {
+function rS(e) {
   return e.map((t) => $l(t));
 }
 function $l(e) {
-  let t = ve(e) ? Pn($l(e.items), Ps(e)) : Y(e) ? mn(oS(e.allOf)) : L(e) ? ie(tne(e.anyOf)) : Q(e) ? X(ene(e.properties)) : Ue(e) ? Bs(Ii(e), $l(We(e))) : ge(e) ? xt(oS(e.items)) : e;
+  let t = ve(e) ? Pn($l(e.items), Ps(e)) : Y(e) ? mn(rS(e.allOf)) : L(e) ? ie(tne(e.anyOf)) : Q(e) ? X(ene(e.properties)) : Ue(e) ? Bs(Ii(e), $l(We(e))) : ge(e) ? xt(rS(e.items)) : e;
   return Qte(e, t);
 }
 function sc(e) {
@@ -10757,7 +10757,7 @@ var Al = p(() => {
   re();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/clean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/clean.mjs
 function Er(...e) {
   let [t, n, o] = le.Match(e, {
     3: (i, a, s) => [i, a, s],
@@ -10771,13 +10771,13 @@ var w6 = p(() => {
   Al();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/clean/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/index.mjs
 var Ua = p(() => {
   w6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_result.mjs
-function iS(e) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_result.mjs
+function oS(e) {
   return c.IsObject(e) && c.HasPropertyKey(e, "value");
 }
 function W(e) {
@@ -10789,7 +10789,7 @@ var Ho = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_array.mjs
 function nne(e) {
   return c.IsArray(e) ? W(e) : W([e]);
 }
@@ -10798,7 +10798,7 @@ var S6 = p(() => {
   Ho();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_bigint.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_bigint.mjs
 function rne(e) {
   return c.IsEqual(e, !0) ? W(BigInt(1)) : W(BigInt(0));
 }
@@ -10815,16 +10815,16 @@ function lne(e) {
   let t = e.toLowerCase();
   return sne(e) ? W(BigInt(e.slice(0, e.length - 1))) : cne(e) ? W(BigInt(e.split(".")[0])) : une(e) ? W(BigInt(e)) : c.IsEqual(t, "false") ? W(BigInt(0)) : c.IsEqual(t, "true") ? W(BigInt(1)) : void 0;
 }
-function aS(e) {
+function iS(e) {
   return c.IsBigInt(e) ? W(e) : c.IsBoolean(e) ? rne(e) : c.IsNumber(e) ? W(BigInt(Math.trunc(e))) : c.IsNull(e) ? W(BigInt(0)) : c.IsString(e) ? lne(e) : c.IsUndefined(e) ? W(BigInt(0)) : void 0;
 }
-var one, ine, ane, sS = p(() => {
+var one, ine, ane, aS = p(() => {
   I();
   Ho();
   one = /^-?(0|[1-9]\d*)n$/, ine = /^-?(0|[1-9]\d*)\.\d+$/, ane = /^-?(0|[1-9]\d*)$/;
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_boolean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_boolean.mjs
 function dne(e) {
   return c.IsEqual(e, BigInt(0)) ? W(!1) : c.IsEqual(e, BigInt(1)) ? W(!0) : void 0;
 }
@@ -10842,7 +10842,7 @@ var k6 = p(() => {
   Ho();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_null.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_null.mjs
 function gne(e) {
   return c.IsEqual(e, BigInt(0)) ? W(null) : void 0;
 }
@@ -10864,7 +10864,7 @@ var _6 = p(() => {
   Ho();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_number.mjs
 function vne(e) {
   return e <= E6 && e >= T6 ? W(Number(e)) : void 0;
 }
@@ -10880,8 +10880,8 @@ function wne(e) {
     return W(0);
   if (c.IsEqual(n, "true"))
     return W(1);
-  let o = aS(e);
-  return iS(o) ? o.value <= E6 && o.value >= T6 ? W(Number(o.value)) : void 0 : void 0;
+  let o = iS(e);
+  return oS(o) ? o.value <= E6 && o.value >= T6 ? W(Number(o.value)) : void 0 : void 0;
 }
 function Sne(e) {
   return c.IsBigInt(e) ? vne(e) : c.IsBoolean(e) ? Ine(e) : c.IsNumber(e) ? W(e) : c.IsNull(e) ? W(0) : c.IsString(e) ? wne(e) : c.IsUndefined(e) ? W(0) : void 0;
@@ -10889,11 +10889,11 @@ function Sne(e) {
 var E6, T6, C6 = p(() => {
   I();
   Ho();
-  sS();
+  aS();
   E6 = BigInt(Number.MAX_SAFE_INTEGER), T6 = BigInt(Number.MIN_SAFE_INTEGER);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_string.mjs
 function kne(e) {
   return c.IsBigInt(e) ? W(e.toString()) : c.IsBoolean(e) ? W(e.toString()) : c.IsNumber(e) ? W(e.toString()) : c.IsNull(e) ? W("null") : c.IsString(e) ? W(e) : c.IsUndefined(e) ? W("") : void 0;
 }
@@ -10902,7 +10902,7 @@ var R6 = p(() => {
   Ho();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try_undefined.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try_undefined.mjs
 function _ne(e) {
   return c.IsEqual(e, BigInt(0)) ? W(void 0) : void 0;
 }
@@ -10924,14 +10924,14 @@ var $6 = p(() => {
   Ho();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/try.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/try.mjs
 var Pe = {};
-st(Pe, {
+ct(Pe, {
   Fail: () => La,
-  IsOk: () => iS,
+  IsOk: () => oS,
   Ok: () => W,
   TryArray: () => nne,
-  TryBigInt: () => aS,
+  TryBigInt: () => iS,
   TryBoolean: () => fne,
   TryNull: () => xne,
   TryNumber: () => Sne,
@@ -10940,7 +10940,7 @@ st(Pe, {
 });
 var A6 = p(() => {
   S6();
-  sS();
+  aS();
   k6();
   _6();
   C6();
@@ -10949,12 +10949,12 @@ var A6 = p(() => {
   $6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/try/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/index.mjs
 var qr = p(() => {
   A6();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_array.mjs
 function P6(e, t, n) {
   return Pe.TryArray(n).value.map((r) => wt(e, t.items, r));
 }
@@ -10963,7 +10963,7 @@ var O6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_bigint.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_bigint.mjs
 function D6(e, t, n) {
   let o = Pe.TryBigInt(n);
   return Pe.IsOk(o) ? o.value : n;
@@ -10972,7 +10972,7 @@ var M6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_boolean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_boolean.mjs
 function N6(e, t, n) {
   let o = Pe.TryBoolean(n);
   return Pe.IsOk(o) ? o.value : n;
@@ -10981,7 +10981,7 @@ var U6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_cyclic.mjs
 function L6(e, t, n) {
   return wt({ ...e, ...t.$defs }, jt(t.$ref), n);
 }
@@ -10990,7 +10990,7 @@ var F6 = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_enum.mjs
 function z6(e, t, n) {
   return wt(e, Wt(t), n);
 }
@@ -10999,7 +10999,7 @@ var j6 = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_integer.mjs
 function B6(e, t, n) {
   let o = Pe.TryNumber(n);
   return Pe.IsOk(o) ? Math.trunc(o.value) : n;
@@ -11008,7 +11008,7 @@ var q6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_intersect.mjs
 function G6(e, t, n) {
   let o = dr(e, t), r = Wt(o);
   return wt(e, r, n);
@@ -11018,7 +11018,7 @@ var K6 = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_literal.mjs
 function $ne(e, t, n) {
   let o = Pe.TryBigInt(n);
   return Pe.IsOk(o) && c.IsEqual(t.const, o.value) ? o.value : n;
@@ -11045,7 +11045,7 @@ var V6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_null.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_null.mjs
 function W6(e, t, n) {
   let o = Pe.TryNull(n);
   return Pe.IsOk(o) ? o.value : n;
@@ -11054,7 +11054,7 @@ var Z6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_number.mjs
 function J6(e, t, n) {
   let o = Pe.TryNumber(n);
   return Pe.IsOk(o) ? o.value : n;
@@ -11063,7 +11063,7 @@ var Y6 = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_additional.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_additional.mjs
 function Dg(e, t, n, o) {
   let r = c.Keys(o);
   for (let [i, a] of t)
@@ -11071,12 +11071,12 @@ function Dg(e, t, n, o) {
       i.test(s) || (o[s] = wt(e, n, o[s]));
   return o;
 }
-var cS = p(() => {
+var sS = p(() => {
   I();
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/shared/optional_undefined.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/shared/optional_undefined.mjs
 function Pl(e, t, n) {
   return Bt(e) && c.IsUndefined(n[t]);
 }
@@ -11085,7 +11085,7 @@ var Mg = p(() => {
   re();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_object.mjs
 function Dne(e, t, n) {
   let o = c.EntriesRegExp(t.properties), r = c.Keys(n);
   for (let [i, a] of o)
@@ -11099,11 +11099,11 @@ function X6(e, t, n) {
 var Q6 = p(() => {
   I();
   pr();
-  cS();
+  sS();
   Mg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_record.mjs
 function Mne(e, t, n) {
   let o = c.EntriesRegExp(t.patternProperties), r = c.Keys(n);
   for (let [i, a] of o)
@@ -11117,10 +11117,10 @@ function eB(e, t, n) {
 var tB = p(() => {
   I();
   pr();
-  cS();
+  sS();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_ref.mjs
 function nB(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? wt(e, e[t.$ref], n) : n;
 }
@@ -11129,7 +11129,7 @@ var rB = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_string.mjs
 function oB(e, t, n) {
   let o = Pe.TryString(n);
   return Pe.IsOk(o) ? o.value : n;
@@ -11138,7 +11138,7 @@ var iB = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_template_literal.mjs
 function aB(e, t, n) {
   return wt(e, Wt(t), n);
 }
@@ -11147,7 +11147,7 @@ var sB = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_tuple.mjs
 function cB(e, t, n) {
   if (!c.IsArray(n))
     return n;
@@ -11160,7 +11160,7 @@ var uB = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_undefined.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_undefined.mjs
 function lB(e, t, n) {
   let o = Pe.TryUndefined(n);
   return Pe.IsOk(o) ? o.value : n;
@@ -11169,7 +11169,7 @@ var dB = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_union.mjs
 function pB(e, t, n) {
   if (t.anyOf.some((a) => be(e, a, n)))
     return n;
@@ -11183,7 +11183,7 @@ var mB = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_void.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_void.mjs
 function fB(e, t, n) {
   let o = Pe.TryUndefined(n);
   return Pe.IsOk(o) ? void 0 : n;
@@ -11192,9 +11192,9 @@ var gB = p(() => {
   qr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_type.mjs
 function wt(e, t, n) {
-  return ve(t) ? P6(e, t, n) : Jn(t) ? D6(e, t, n) : En(t) ? N6(e, t, n) : Be(t) ? L6(e, t, n) : bt(t) ? z6(e, t, n) : Vt(t) ? B6(e, t, n) : Y(t) ? G6(e, t, n) : xe(t) ? H6(e, t, n) : co(t) ? W6(e, t, n) : rt(t) ? J6(e, t, n) : Q(t) ? X6(e, t, n) : Ue(t) ? eB(e, t, n) : De(t) ? nB(e, t, n) : Nt(t) ? oB(e, t, n) : qe(t) ? aB(e, t, n) : ge(t) ? cB(e, t, n) : _r(t) ? lB(e, t, n) : L(t) ? pB(e, t, n) : Xn(t) ? fB(e, t, n) : n;
+  return ve(t) ? P6(e, t, n) : Jn(t) ? D6(e, t, n) : En(t) ? N6(e, t, n) : Be(t) ? L6(e, t, n) : bt(t) ? z6(e, t, n) : Vt(t) ? B6(e, t, n) : Y(t) ? G6(e, t, n) : xe(t) ? H6(e, t, n) : co(t) ? W6(e, t, n) : ot(t) ? J6(e, t, n) : Q(t) ? X6(e, t, n) : Ue(t) ? eB(e, t, n) : De(t) ? nB(e, t, n) : Nt(t) ? oB(e, t, n) : qe(t) ? aB(e, t, n) : ge(t) ? cB(e, t, n) : _r(t) ? lB(e, t, n) : L(t) ? pB(e, t, n) : Xn(t) ? fB(e, t, n) : n;
 }
 var pr = p(() => {
   re();
@@ -11219,7 +11219,7 @@ var pr = p(() => {
   gB();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/convert.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/convert.mjs
 function Gr(...e) {
   let [t, n, o] = le.Match(e, {
     3: (r, i, a) => [r, i, a],
@@ -11232,12 +11232,12 @@ var hB = p(() => {
   pr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/convert/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/index.mjs
 var Fa = p(() => {
   hB();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_array.mjs
 function yB(e, t, n) {
   if (!c.IsArray(n))
     return n;
@@ -11250,7 +11250,7 @@ var bB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_cyclic.mjs
 function xB(e, t, n) {
   return Jt({ ...e, ...t.$defs }, jt(t.$ref), n);
 }
@@ -11259,7 +11259,7 @@ var vB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_default.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_default.mjs
 function IB(e, t) {
   return c.IsUndefined(t) ? c.IsFunction(e.default) ? e.default() : Ze(e.default) : t;
 }
@@ -11268,7 +11268,7 @@ var wB = p(() => {
   zn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_intersect.mjs
 function SB(e, t, n) {
   let o = dr(e, t), r = Wt(o);
   return Jt(e, r, n);
@@ -11278,7 +11278,7 @@ var kB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_object.mjs
 function _B(e, t, n) {
   if (!c.IsObject(n))
     return n;
@@ -11300,7 +11300,7 @@ var EB = p(() => {
   je();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_record.mjs
 function TB(e, t, n) {
   if (!c.IsObject(n))
     return n;
@@ -11320,7 +11320,7 @@ var CB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_ref.mjs
 function RB(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? Jt(e, e[t.$ref], n) : n;
 }
@@ -11329,7 +11329,7 @@ var $B = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_tuple.mjs
 function AB(e, t, n) {
   if (!c.IsArray(n))
     return n;
@@ -11343,7 +11343,7 @@ var PB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_union.mjs
 function OB(e, t, n) {
   for (let o of t.anyOf) {
     let r = Jt(e, o, Ze(n));
@@ -11358,7 +11358,7 @@ var DB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_type.mjs
 function Jt(e, t, n) {
   let o = Hn(t) ? IB(t, n) : n;
   return ve(t) ? yB(e, t, o) : Be(t) ? xB(e, t, o) : Y(t) ? SB(e, t, o) : Q(t) ? _B(e, t, o) : Ue(t) ? TB(e, t, o) : De(t) ? RB(e, t, o) : ge(t) ? AB(e, t, o) : L(t) ? OB(e, t, o) : o;
@@ -11377,7 +11377,7 @@ var vo = p(() => {
   DB();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/default.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/default.mjs
 function Vo(...e) {
   let [t, n, o] = le.Match(e, {
     3: (r, i, a) => [r, i, a],
@@ -11390,12 +11390,12 @@ var MB = p(() => {
   vo();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/default/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/index.mjs
 var cc = p(() => {
   MB();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/pipeline/pipeline.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/pipeline/pipeline.mjs
 function uc(e) {
   return (...t) => {
     let [n, o, r] = le.Match(t, {
@@ -11409,12 +11409,12 @@ var NB = p(() => {
   Et();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/pipeline/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/pipeline/index.mjs
 var Ol = p(() => {
   NB();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/callback.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/callback.mjs
 function Nne(e, t, n) {
   return t["~codec"].decode(n);
 }
@@ -11429,12 +11429,12 @@ var Io = p(() => {
   re();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_array.mjs
 function Lne(e, t, n, o) {
   if (!c.IsArray(o))
     return o;
   for (let r = 0; r < o.length; r++)
-    o[r] = it(e, t, n.items, o[r]);
+    o[r] = at(e, t, n.items, o[r]);
   return tt(e, t, n, o);
 }
 function Fne(e, t, n, o) {
@@ -11442,7 +11442,7 @@ function Fne(e, t, n, o) {
   if (!c.IsArray(r))
     return r;
   for (let i = 0; i < r.length; i++)
-    r[i] = it(e, t, n.items, r[i]);
+    r[i] = at(e, t, n.items, r[i]);
   return r;
 }
 function UB(e, t, n, o) {
@@ -11454,9 +11454,9 @@ var LB = p(() => {
   Io();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_cyclic.mjs
 function FB(e, t, n, o) {
-  return o = it(e, { ...t, ...n.$defs }, jt(n.$ref), o), tt(e, t, n, o);
+  return o = at(e, { ...t, ...n.$defs }, jt(n.$ref), o), tt(e, t, n, o);
 }
 var zB = p(() => {
   re();
@@ -11464,7 +11464,7 @@ var zB = p(() => {
   Io();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_intersect.mjs
 function jB(e) {
   return e.reduce((t, n) => ({ ...t, ...n }), {});
 }
@@ -11477,13 +11477,13 @@ function BB(e, t) {
 function zne(e, t, n, o) {
   if (c.IsEqual(n.allOf.length, 0))
     return tt(e, t, n, o);
-  let r = n.allOf.map((s) => it(e, t, s, Er(s, Ze(o)))), a = r.every((s) => c.IsObject(s)) ? jB(r) : BB(o, r);
+  let r = n.allOf.map((s) => at(e, t, s, Er(s, Ze(o)))), a = r.every((s) => c.IsObject(s)) ? jB(r) : BB(o, r);
   return tt(e, t, n, a);
 }
 function jne(e, t, n, o) {
   if (c.IsEqual(n.allOf.length, 0))
     return tt(e, t, n, o);
-  let r = tt(e, t, n, o), i = n.allOf.map((s) => it(e, t, s, Er(s, Ze(r))));
+  let r = tt(e, t, n, o), i = n.allOf.map((s) => at(e, t, s, Er(s, Ze(r))));
   return i.every((s) => c.IsObject(s)) ? jB(i) : BB(r, i);
 }
 function qB(e, t, n, o) {
@@ -11497,12 +11497,12 @@ var GB = p(() => {
   Ua();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_object.mjs
 function Bne(e, t, n, o) {
   if (!c.IsObjectNotArray(o))
     return o;
   for (let r of c.Keys(n.properties))
-    !c.HasPropertyKey(o, r) || Pl(n.properties[r], r, o) || (o[r] = it(e, t, n.properties[r], o[r]));
+    !c.HasPropertyKey(o, r) || Pl(n.properties[r], r, o) || (o[r] = at(e, t, n.properties[r], o[r]));
   return tt(e, t, n, o);
 }
 function qne(e, t, n, o) {
@@ -11510,7 +11510,7 @@ function qne(e, t, n, o) {
   if (!c.IsObjectNotArray(r))
     return r;
   for (let i of c.Keys(n.properties))
-    !c.HasPropertyKey(r, i) || Pl(n.properties[i], i, r) || (r[i] = it(e, t, n.properties[i], r[i]));
+    !c.HasPropertyKey(r, i) || Pl(n.properties[i], i, r) || (r[i] = at(e, t, n.properties[i], r[i]));
   return r;
 }
 function KB(e, t, n, o) {
@@ -11523,13 +11523,13 @@ var HB = p(() => {
   Mg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_record.mjs
 function Gne(e, t, n, o) {
   if (!c.IsObjectNotArray(o))
     return o;
   let r = new RegExp(Kt(n));
   for (let i of c.Keys(o))
-    r.test(i) && (o[i] = it(e, t, We(n), o[i]));
+    r.test(i) && (o[i] = at(e, t, We(n), o[i]));
   return tt(e, t, n, o);
 }
 function Kne(e, t, n, o) {
@@ -11538,7 +11538,7 @@ function Kne(e, t, n, o) {
     return r;
   let i = new RegExp(Kt(n));
   for (let a of c.Keys(r))
-    i.test(a) && (r[a] = it(e, t, We(n), r[a]));
+    i.test(a) && (r[a] = at(e, t, We(n), r[a]));
   return r;
 }
 function VB(e, t, n, o) {
@@ -11551,9 +11551,9 @@ var WB = p(() => {
   Io();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_ref.mjs
 function ZB(e, t, n, o) {
-  return c.HasPropertyKey(t, n.$ref) ? it(e, t, t[n.$ref], o) : o;
+  return c.HasPropertyKey(t, n.$ref) ? at(e, t, t[n.$ref], o) : o;
 }
 function JB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? tt(e, t, n, ZB(e, t, n, o)) : ZB(e, t, n, tt(e, t, n, o));
@@ -11564,12 +11564,12 @@ var YB = p(() => {
   Io();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_tuple.mjs
 function Hne(e, t, n, o) {
   if (!c.IsArray(o))
     return o;
   for (let r = 0; r < Math.min(n.items.length, o.length); r++)
-    o[r] = it(e, t, n.items[r], o[r]);
+    o[r] = at(e, t, n.items[r], o[r]);
   return tt(e, t, n, o);
 }
 function Vne(e, t, n, o) {
@@ -11577,7 +11577,7 @@ function Vne(e, t, n, o) {
   if (!c.IsArray(r))
     return o;
   for (let i = 0; i < Math.min(n.items.length, r.length); i++)
-    r[i] = it(e, t, n.items[i], r[i]);
+    r[i] = at(e, t, n.items[i], r[i]);
   return r;
 }
 function XB(e, t, n, o) {
@@ -11589,12 +11589,12 @@ var QB = p(() => {
   Io();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_union.mjs
 function Wne(e, t, n, o) {
   for (let r of n.anyOf) {
     if (!be(t, r, o))
       continue;
-    let i = it(e, t, r, o);
+    let i = at(e, t, r, o);
     return tt(e, t, n, i);
   }
   return o;
@@ -11602,7 +11602,7 @@ function Wne(e, t, n, o) {
 function Zne(e, t, n, o) {
   let r = tt(e, t, n, o);
   for (let i of n.anyOf) {
-    let a = it(e, t, i, Ze(r));
+    let a = at(e, t, i, Ze(r));
     if (be(t, i, a))
       return a;
   }
@@ -11619,8 +11619,8 @@ var tq = p(() => {
   zt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/from_type.mjs
-function it(e, t, n, o) {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_type.mjs
+function at(e, t, n, o) {
   return ve(n) ? UB(e, t, n, o) : Be(n) ? FB(e, t, n, o) : Y(n) ? qB(e, t, n, o) : Q(n) ? KB(e, t, n, o) : Ue(n) ? VB(e, t, n, o) : De(n) ? JB(e, t, n, o) : ge(n) ? XB(e, t, n, o) : L(n) ? eq(e, t, n, o) : tt(e, t, n, o);
 }
 var Kr = p(() => {
@@ -11636,24 +11636,24 @@ var Kr = p(() => {
   Io();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/decode.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/decode.mjs
 function Jne(e, t, n) {
   if (!be(e, t, n))
-    throw new uS(n, br(e, t, n));
+    throw new cS(n, br(e, t, n));
   return n;
 }
 function Yne(e, t, n) {
   let o = mt.Get().unionPrioritySort ? sc(t) : t;
-  return it("Decode", e, o, n);
+  return at("Decode", e, o, n);
 }
-function lS(...e) {
+function uS(...e) {
   let [t, n, o] = le.Match(e, {
     3: (r, i, a) => [r, i, a],
     2: (r, i) => [{}, r, i]
   });
   return Xne(t, n, o);
 }
-var uS, Xne, nq = p(() => {
+var cS, Xne, nq = p(() => {
   ga();
   ya();
   zt();
@@ -11665,7 +11665,7 @@ var uS, Xne, nq = p(() => {
   Ol();
   Kr();
   Al();
-  uS = class extends Bo {
+  cS = class extends Bo {
     constructor(t, n) {
       super("Decode", t, n);
     }
@@ -11680,24 +11680,24 @@ var uS, Xne, nq = p(() => {
   ]);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/encode.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/encode.mjs
 function Qne(e, t, n) {
   if (!be(e, t, n))
-    throw new dS(n, br(e, t, n));
+    throw new lS(n, br(e, t, n));
   return n;
 }
 function ere(e, t, n) {
   let o = mt.Get().unionPrioritySort ? sc(t) : t;
-  return it("Encode", e, o, n);
+  return at("Encode", e, o, n);
 }
-function pS(...e) {
+function dS(...e) {
   let [t, n, o] = le.Match(e, {
     3: (r, i, a) => [r, i, a],
     2: (r, i) => [{}, r, i]
   });
   return tre(t, n, o);
 }
-var dS, tre, rq = p(() => {
+var lS, tre, rq = p(() => {
   ga();
   ya();
   zt();
@@ -11709,7 +11709,7 @@ var dS, tre, rq = p(() => {
   Ol();
   Kr();
   Al();
-  dS = class extends Bo {
+  lS = class extends Bo {
     constructor(t, n) {
       super("Encode", t, n);
     }
@@ -11724,7 +11724,7 @@ var dS, tre, rq = p(() => {
   ]);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/has.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/has.mjs
 function nre(e, t) {
   return _n(t) || Ci(e, t.items);
 }
@@ -11741,7 +11741,7 @@ function are(e, t) {
   return _n(t) || Ci(e, We(t));
 }
 function oq(e, t) {
-  return mS.has(t.$ref) ? !1 : (mS.add(t.$ref), _n(t) || c.HasPropertyKey(e, t.$ref) && Ci(e, e[t.$ref]));
+  return pS.has(t.$ref) ? !1 : (pS.add(t.$ref), _n(t) || c.HasPropertyKey(e, t.$ref) && Ci(e, e[t.$ref]));
 }
 function sre(e, t) {
   return _n(t) || t.items.some((n) => Ci(e, n));
@@ -11752,14 +11752,14 @@ function cre(e, t) {
 function Ci(e, t) {
   return ve(t) ? nre(e, t) : Be(t) ? rre(e, t) : Y(t) ? ore(e, t) : Q(t) ? ire(e, t) : Ue(t) ? are(e, t) : De(t) ? oq(e, t) : ge(t) ? sre(e, t) : L(t) ? cre(e, t) : _n(t);
 }
-function fS(...e) {
+function mS(...e) {
   let [t, n] = le.Match(e, {
     2: (o, r) => [o, r],
     1: (o) => [{}, o]
   });
-  return mS.clear(), Ci(t, n);
+  return pS.clear(), Ci(t, n);
 }
-var mS, iq = p(() => {
+var pS, iq = p(() => {
   Et();
   I();
   re();
@@ -11771,17 +11771,17 @@ var mS, iq = p(() => {
   re();
   re();
   re();
-  mS = /* @__PURE__ */ new Set();
+  pS = /* @__PURE__ */ new Set();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/codec/index.mjs
-var gS = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/index.mjs
+var fS = p(() => {
   nq();
   rq();
   iq();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/error.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/error.mjs
 var Tr, za = p(() => {
   Tr = class extends Error {
     constructor(t, n) {
@@ -11790,7 +11790,7 @@ var Tr, za = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_default.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_default.mjs
 function aq(e, t) {
   return c.IsFunction(t.default) ? t.default(t) : c.IsObject(t.default) ? Ze(t.default) : t.default;
 }
@@ -11799,7 +11799,7 @@ var sq = p(() => {
   zn();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_array.mjs
 function cq(e, t) {
   if (ci(t) && !Hn(t))
     throw new Tr(t, "Arrays with uniqueItems constraints must specify a default annotation");
@@ -11812,7 +11812,7 @@ var uq = p(() => {
   za();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_bigint.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_bigint.mjs
 function lq(e, t) {
   return Mo(t) ? BigInt(t.exclusiveMinimum) + BigInt(1) : No(t) ? BigInt(t.minimum) : BigInt(0);
 }
@@ -11820,14 +11820,14 @@ var dq = p(() => {
   je();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_boolean.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_boolean.mjs
 function pq(e, t) {
   return !1;
 }
 var mq = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_constructor.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_constructor.mjs
 function fq(e, t) {
   let n = St(e, t.instanceType);
   return class {
@@ -11840,7 +11840,7 @@ var gq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_cyclic.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_cyclic.mjs
 function hq(e, t) {
   return St({ ...e, ...t.$defs }, jt(t.$ref));
 }
@@ -11849,7 +11849,7 @@ var yq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_enum.mjs
 function bq(e, t) {
   return St(e, Wt(t));
 }
@@ -11858,7 +11858,7 @@ var xq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_function.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_function.mjs
 function vq(e, t) {
   let n = St(e, t.returnType);
   return () => n;
@@ -11867,7 +11867,7 @@ var Iq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_integer.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_integer.mjs
 function wq(e, t) {
   return Mo(t) && c.IsNumber(t.exclusiveMinimum) ? t.exclusiveMinimum + 1 : No(t) ? t.minimum : 0;
 }
@@ -11876,7 +11876,7 @@ var Sq = p(() => {
   je();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_intersect.mjs
 function kq(e, t) {
   let n = dr(e, t), o = Wt(n);
   return St(e, o);
@@ -11886,14 +11886,14 @@ var _q = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_literal.mjs
 function Eq(e, t) {
   return t.const;
 }
 var Tq = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_never.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_never.mjs
 function Cq(e, t) {
   throw new Tr(t, "Cannot create TNever types");
 }
@@ -11901,14 +11901,14 @@ var Rq = p(() => {
   za();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_null.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_null.mjs
 function $q(e, t) {
   return null;
 }
 var Aq = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_number.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_number.mjs
 function Pq(e, t) {
   return Mo(t) && c.IsNumber(t.exclusiveMinimum) ? t.exclusiveMinimum + 1 : No(t) ? t.minimum : 0;
 }
@@ -11917,7 +11917,7 @@ var Oq = p(() => {
   je();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_object.mjs
 function Dq(e, t) {
   return (c.IsUndefined(t.required) ? [] : t.required).reduce((o, r) => ({ ...o, [r]: St(e, t.properties[r]) }), {});
 }
@@ -11926,7 +11926,7 @@ var Mq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_record.mjs
 function Nq(e, t) {
   if (mu(t) && !Hn(t))
     throw new Tr(t, "Record with the minProperties constraint must have a default annotation");
@@ -11937,7 +11937,7 @@ var Uq = p(() => {
   za();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_ref.mjs
 function Lq(e, t) {
   return c.HasPropertyKey(e, t.$ref) ? St(e, e[t.$ref]) : (() => {
     throw new Tr(t, "Unable to deref Ref");
@@ -11949,7 +11949,7 @@ var Fq = p(() => {
   za();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_string.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_string.mjs
 function zq(e, t) {
   if ((fu(t) || lu(t)) && !Hn(t))
     throw Error("Strings with format or pattern constraints must specify default");
@@ -11960,14 +11960,14 @@ var jq = p(() => {
   je();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_symbol.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_symbol.mjs
 function Bq(e, t) {
   return /* @__PURE__ */ Symbol();
 }
 var qq = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_template_literal.mjs
 function Gq(e, t) {
   let n = Fs(t.pattern);
   if (Nt(n))
@@ -11981,7 +11981,7 @@ var Kq = p(() => {
   za();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_tuple.mjs
 function Hq(e, t) {
   return Array.from({ length: t.minItems }, (n, o) => St(e, t.items[o]));
 }
@@ -11989,11 +11989,11 @@ var Vq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_undefined.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_undefined.mjs
 var Wq = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_union.mjs
 function Zq(e, t) {
   if (c.IsEqual(t.anyOf.length, 0))
     throw Error("Unable to create Union with no variants");
@@ -12004,11 +12004,11 @@ var Jq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_void.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_void.mjs
 var Yq = p(() => {
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_type.mjs
 function St(e, t) {
   return (
     // -----------------------------------------------------
@@ -12018,7 +12018,7 @@ function St(e, t) {
       // -----------------------------------------------------
       // Types
       // -----------------------------------------------------
-      ve(t) ? cq(e, t) : Jn(t) ? lq(e, t) : En(t) ? pq(e, t) : gt(t) ? fq(e, t) : Be(t) ? hq(e, t) : bt(t) ? bq(e, t) : ht(t) ? vq(e, t) : Vt(t) ? wq(e, t) : Y(t) ? kq(e, t) : xe(t) ? Eq(e, t) : Dn(t) ? Cq(e, t) : co(t) ? $q(e, t) : rt(t) ? Pq(e, t) : Q(t) ? Dq(e, t) : Ue(t) ? Nq(e, t) : De(t) ? Lq(e, t) : Nt(t) ? zq(e, t) : uo(t) ? Bq(e, t) : qe(t) ? Gq(e, t) : ge(t) ? Hq(e, t) : _r(t) ? void 0 : L(t) ? Zq(e, t) : Xn(t) ? void 0 : void 0
+      ve(t) ? cq(e, t) : Jn(t) ? lq(e, t) : En(t) ? pq(e, t) : gt(t) ? fq(e, t) : Be(t) ? hq(e, t) : bt(t) ? bq(e, t) : ht(t) ? vq(e, t) : Vt(t) ? wq(e, t) : Y(t) ? kq(e, t) : xe(t) ? Eq(e, t) : Dn(t) ? Cq(e, t) : co(t) ? $q(e, t) : ot(t) ? Pq(e, t) : Q(t) ? Dq(e, t) : Ue(t) ? Nq(e, t) : De(t) ? Lq(e, t) : Nt(t) ? zq(e, t) : uo(t) ? Bq(e, t) : qe(t) ? Gq(e, t) : ge(t) ? Hq(e, t) : _r(t) ? void 0 : L(t) ? Zq(e, t) : Xn(t) ? void 0 : void 0
     )
   );
 }
@@ -12051,7 +12051,7 @@ var mr = p(() => {
   Yq();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/create.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/create.mjs
 function Yt(...e) {
   let [t, n] = le.Match(e, {
     2: (o, r) => [o, r],
@@ -12064,13 +12064,13 @@ var Xq = p(() => {
   mr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/create/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/index.mjs
 var wo = p(() => {
   za();
   Xq();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/equal/equal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/equal/equal.mjs
 function Ng(e, t) {
   return c.IsDeepEqual(e, t);
 }
@@ -12078,12 +12078,12 @@ var Qq = p(() => {
   I();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/equal/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/equal/index.mjs
 var Ug = p(() => {
   Qq();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/hash/hash.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/hash/hash.mjs
 function Lg(e) {
   return zo.Hash(e);
 }
@@ -12091,12 +12091,12 @@ var eG = p(() => {
   Cu();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/hash/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/hash/index.mjs
 var Fg = p(() => {
   eG();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/parse/parse.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/parse/parse.mjs
 function ure(e, t, n) {
   Ou();
   let o = br(e, t, n);
@@ -12142,12 +12142,12 @@ var Dl, tG, rG = p(() => {
   ]);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/parse/index.mjs
-var hS = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/parse/index.mjs
+var gS = p(() => {
   rG();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/delta/diff.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/delta/diff.mjs
 function zg(e, t) {
   return { type: "update", path: e, value: t };
 }
@@ -12205,7 +12205,7 @@ var cG = p(() => {
   Ug();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/delta/edit.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/delta/edit.mjs
 var fre, gre, hre, Lit, uG = p(() => {
   re();
   fre = X({
@@ -12222,12 +12222,12 @@ var fre, gre, hre, Lit, uG = p(() => {
   }), Lit = ie([fre, gre, hre]);
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/pointer/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/pointer/index.mjs
 var Bg = p(() => {
   jp();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/delta/patch.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/delta/patch.mjs
 function yre(e) {
   return e.length > 0 && e[0].path === "" && e[0].type === "update";
 }
@@ -12262,14 +12262,14 @@ var dG = p(() => {
   Bg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/delta/index.mjs
-var yS = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/delta/index.mjs
+var hS = p(() => {
   cG();
   uG();
   dG();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/error.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/error.mjs
 var Wo, qg = p(() => {
   Wo = class extends Error {
     constructor(t, n, o, r) {
@@ -12278,7 +12278,7 @@ var Wo, qg = p(() => {
   };
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_array.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_array.mjs
 function xre(e) {
   let [t, n] = [/* @__PURE__ */ new Set(), []];
   for (let o of e) {
@@ -12308,7 +12308,7 @@ var mG = p(() => {
   qg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_enum.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_enum.mjs
 function fG(e, t, n) {
   return Ut(e, Wt(t), n);
 }
@@ -12317,7 +12317,7 @@ var gG = p(() => {
   Hr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_intersect.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_intersect.mjs
 function hG(e, t, n) {
   let o = dr(e, t), r = Wt(o);
   return Ut(e, r, n);
@@ -12327,7 +12327,7 @@ var yG = p(() => {
   Hr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_object.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_object.mjs
 function bG(e, t, n) {
   if (be(e, t, n))
     return n;
@@ -12350,7 +12350,7 @@ var xG = p(() => {
   Hr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_record.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_record.mjs
 function vG(e, t, n) {
   if (be(e, t, n))
     return n;
@@ -12373,7 +12373,7 @@ var IG = p(() => {
   Hr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_ref.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_ref.mjs
 function wG(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? Ut(e, e[t.$ref], n) : (() => {
     throw new Wo(e, t, n, "Unable to de-reference target type");
@@ -12385,7 +12385,7 @@ var SG = p(() => {
   qg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_template_literal.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_template_literal.mjs
 function kG(e, t, n) {
   let o = Fs(t.pattern);
   return Ut(e, o, n);
@@ -12395,7 +12395,7 @@ var _G = p(() => {
   Hr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_tuple.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_tuple.mjs
 function EG(e, t, n) {
   return be(e, t, n) ? n : c.IsArray(n) ? t.items.map((o, r) => Ut(e, o, n[r])) : Yt(e, t);
 }
@@ -12406,7 +12406,7 @@ var TG = p(() => {
   Hr();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/shared/union_score_select.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/shared/union_score_select.mjs
 function CG(e, t, n) {
   return De(t) ? c.HasPropertyKey(e, t.$ref) ? CG(e, e[t.$ref], n) : (() => {
     throw new Error("Unable to Deref target");
@@ -12429,13 +12429,13 @@ function RG(e, t, n) {
   }
   return r;
 }
-var bS = p(() => {
+var yS = p(() => {
   re();
   I();
   zt();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_union.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_union.mjs
 function Ire(e, t, n) {
   let o = ie(vi(t.anyOf)), r = RG(e, o, n);
   return Ut(e, r, n);
@@ -12451,10 +12451,10 @@ var AG = p(() => {
   zn();
   wo();
   Hr();
-  bS();
+  yS();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_unknown.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_unknown.mjs
 function PG(e, t, n) {
   if (be(e, t, n))
     return n;
@@ -12467,7 +12467,7 @@ var OG = p(() => {
   Fa();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/from_type.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/from_type.mjs
 function wre(e, t, n) {
   if (Pt.IsDate(n) || Pt.IsMap(n) || Pt.IsSet(n) || Pt.IsTypeArray(n) || c.IsConstructor(n) || c.IsFunction(n))
     throw new Wo(e, t, n, "Value is not repairable");
@@ -12505,7 +12505,7 @@ var Hr = p(() => {
   qg();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/repair.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/repair.mjs
 function DG(...e) {
   let [t, n, o] = le.Match(e, {
     3: (i, a, s) => [i, a, s],
@@ -12519,84 +12519,84 @@ var MG = p(() => {
   ya();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/repair/index.mjs
-var xS = p(() => {
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/repair/index.mjs
+var bS = p(() => {
   MG();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/shared/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/shared/index.mjs
 var NG = p(() => {
   Mg();
   Al();
-  bS();
+  yS();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/value.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/value.mjs
 var Ml = {};
-st(Ml, {
+ct(Ml, {
   Assert: () => Sm,
   Check: () => be,
   Clean: () => Er,
   Clone: () => Ze,
   Convert: () => Gr,
   Create: () => Yt,
-  Decode: () => lS,
+  Decode: () => uS,
   Default: () => Vo,
   Diff: () => sG,
-  Encode: () => pS,
+  Encode: () => dS,
   Equal: () => Ng,
   Errors: () => br,
-  HasCodec: () => fS,
+  HasCodec: () => mS,
   Hash: () => Lg,
   Parse: () => nG,
   Patch: () => lG,
   Pointer: () => Mr,
   Repair: () => DG
 });
+var xS = p(() => {
+  ya();
+  zt();
+  Ua();
+  zn();
+  fS();
+  Fa();
+  wo();
+  cc();
+  Ug();
+  ha();
+  Fg();
+  gS();
+  hS();
+  Bg();
+  bS();
+});
+
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/index.mjs
 var vS = p(() => {
   ya();
   zt();
   Ua();
   zn();
-  gS();
-  Fa();
-  wo();
-  cc();
-  Ug();
-  ha();
-  Fg();
-  hS();
-  yS();
-  Bg();
-  xS();
-});
-
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/value/index.mjs
-var IS = p(() => {
-  ya();
-  zt();
-  Ua();
-  zn();
-  gS();
+  fS();
   Fa();
   wo();
   ha();
   cc();
   Ug();
   Fg();
+  gS();
   hS();
-  yS();
   Ol();
   Bg();
-  xS();
+  bS();
   NG();
-  vS();
-  vS();
+  xS();
+  xS();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/typebox.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/typebox.mjs
 var d = {};
-st(d, {
+ct(d, {
   Any: () => Ds,
   Array: () => Pn,
   BigInt: () => Wu,
@@ -12652,7 +12652,7 @@ st(d, {
   IsLiteral: () => xe,
   IsNever: () => Dn,
   IsNull: () => co,
-  IsNumber: () => rt,
+  IsNumber: () => ot,
   IsObject: () => Q,
   IsOptional: () => Bt,
   IsParameter: () => JM,
@@ -12661,7 +12661,7 @@ st(d, {
   IsRef: () => De,
   IsRefine: () => Vu,
   IsRest: () => wi,
-  IsSchema: () => ut,
+  IsSchema: () => rt,
   IsString: () => Nt,
   IsSymbol: () => uo,
   IsTemplateLiteral: () => qe,
@@ -12689,7 +12689,7 @@ st(d, {
   Partial: () => E4,
   Pick: () => L4,
   Readonly: () => GM,
-  ReadonlyObject: () => Vw,
+  ReadonlyObject: () => Hw,
   ReadonlyType: () => B4,
   Record: () => Bs,
   RecordKey: () => Ii,
@@ -12715,14 +12715,14 @@ st(d, {
   Void: () => tf,
   With: () => Tg
 });
-var wS = p(() => {
+var IS = p(() => {
   J();
   jr();
   Pg();
   qf();
   Vf();
   Wf();
-  eS();
+  Qw();
   Jf();
   Yf();
   Aa();
@@ -12731,7 +12731,7 @@ var wS = p(() => {
   rg();
   Gf();
   ig();
-  tS();
+  eS();
   lg();
   pg();
   gg();
@@ -12743,11 +12743,11 @@ var wS = p(() => {
   Kf();
   Hf();
   Cg();
-  yI();
+  hI();
   qu();
   fi();
   Hu();
-  bI();
+  yI();
   On();
   kn();
   ka();
@@ -12758,7 +12758,7 @@ var wS = p(() => {
   Fr();
   vr();
   Lu();
-  xI();
+  bI();
   Zn();
   wr();
   so();
@@ -12768,7 +12768,7 @@ var wS = p(() => {
   Us();
   Tn();
   Ne();
-  II();
+  vI();
   tn();
   Ir();
   qs();
@@ -12785,15 +12785,15 @@ var wS = p(() => {
   Ra();
 });
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/index.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/index.mjs
 var Vr = p(() => {
   Aa();
-  nS();
+  tS();
   jr();
   Pg();
   ol();
-  wS();
-  wS();
+  IS();
+  IS();
 });
 
 // openclaw/packages/gateway-protocol/src/schema/closed-object.ts
@@ -12878,11 +12878,11 @@ var qG, Lre, Fre, U, edt, tdt, zre, GG, ndt, KG, rdt, odt, Kg, jre, Bre, qre, Gr
 });
 
 // openclaw/packages/gateway-protocol/src/schema/session-participant.ts
-var HG, VG, SS, kS, ldt, WG = p(() => {
+var HG, VG, wS, SS, ldt, WG = p(() => {
   Vr();
   Zo();
   ja();
-  HG = 4, VG = 32, SS = d.Union([
+  HG = 4, VG = 32, wS = d.Union([
     F({ type: d.Literal("profile"), id: U }),
     F({ type: d.Literal("agent"), id: U }),
     F({
@@ -12905,8 +12905,8 @@ var HG, VG, SS, kS, ldt, WG = p(() => {
       source: d.Union([d.String(), d.Null()]),
       id: d.String()
     })
-  ]), kS = F({
-    identity: SS,
+  ]), SS = F({
+    identity: wS,
     label: d.Optional(U),
     avatarUrl: d.Optional(U)
   }), ldt = F({
@@ -12932,13 +12932,13 @@ var Jo, Hg, ZG = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/punycode.js@2.3.1/node_modules/punycode.js/punycode.js
-var k9 = IR((Hdt, S9) => {
+var k9 = vR((Hdt, S9) => {
   "use strict";
   var Ioe = /^xn--/, woe = /[^\0-\x7F]/, Soe = /[\x2E\u3002\uFF0E\uFF61]/g, koe = {
     overflow: "Overflow: input needs wider integers to process",
     "not-basic": "Illegal input >= 0x80 (not a basic code point)",
     "invalid-input": "Invalid input"
-  }, DS = 35, So = Math.floor, MS = String.fromCharCode;
+  }, OS = 35, So = Math.floor, DS = String.fromCharCode;
   function $i(e) {
     throw new RangeError(koe[e]);
   }
@@ -12972,9 +12972,9 @@ var k9 = IR((Hdt, S9) => {
     return e + 22 + 75 * (e < 26) - ((t != 0) << 5);
   }, v9 = function(e, t, n) {
     let o = 0;
-    for (e = n ? So(e / 700) : e >> 1, e += So(e / t); e > DS * 26 >> 1; o += 36)
-      e = So(e / DS);
-    return So(o + (DS + 1) * e / (e + 38));
+    for (e = n ? So(e / 700) : e >> 1, e += So(e / t); e > OS * 26 >> 1; o += 36)
+      e = So(e / OS);
+    return So(o + (OS + 1) * e / (e + 38));
   }, I9 = function(e) {
     let t = [], n = e.length, o = 0, r = 128, i = 72, a = e.lastIndexOf("-");
     a < 0 && (a = 0);
@@ -13001,7 +13001,7 @@ var k9 = IR((Hdt, S9) => {
     e = x9(e);
     let n = e.length, o = 128, r = 0, i = 72;
     for (let u of e)
-      u < 128 && t.push(MS(u));
+      u < 128 && t.push(DS(u));
     let a = t.length, s = a;
     for (a && t.push("-"); s < n; ) {
       let u = 2147483647;
@@ -13018,10 +13018,10 @@ var k9 = IR((Hdt, S9) => {
               break;
             let y = h - f, x = 36 - f;
             t.push(
-              MS(y9(f + y % x, 0))
+              DS(y9(f + y % x, 0))
             ), h = So(y / x);
           }
-          t.push(MS(y9(h, 0))), i = v9(r, l, s === a), r = 0, ++s;
+          t.push(DS(y9(h, 0))), i = v9(r, l, s === a), r = 0, ++s;
         }
       ++r, ++o;
     }
@@ -13061,7 +13061,7 @@ var k9 = IR((Hdt, S9) => {
 });
 
 // openclaw/node_modules/.pnpm/ipaddr.js@2.5.0/node_modules/ipaddr.js/lib/ipaddr.js
-var eK = IR((Q9, nh) => {
+var eK = vR((Q9, nh) => {
   (function(e) {
     "use strict";
     let t = "(0?\\d+|0x[a-f0-9]+)", n = {
@@ -13564,7 +13564,7 @@ var eK = IR((Q9, nh) => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-sharing-values.ts
-var ub, rV, fR = p(() => {
+var ub, rV, mR = p(() => {
   Vr();
   ub = d.Union([
     d.Literal("shared"),
@@ -13580,11 +13580,11 @@ var ub, rV, fR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/human-mentions.ts
-var tde, nde, iV, $o, gR, aV, sV, oV, rde, cV, Jyt, ode, Yyt, ide, Xyt, Qyt, uV, ebt, tbt, lV = p(() => {
+var tde, nde, iV, $o, fR, aV, sV, oV, rde, cV, Jyt, ode, Yyt, ide, Xyt, Qyt, uV, ebt, tbt, lV = p(() => {
   Vr();
   Zo();
-  fR();
-  tde = 10, nde = 100, iV = 100, $o = d.String({ minLength: 1, maxLength: 256 }), gR = d.String({ minLength: 1, maxLength: 256 }), aV = d.String({ minLength: 1, maxLength: 512 }), sV = d.String({ minLength: 1, maxLength: 2048 }), oV = d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), rde = F({
+  mR();
+  tde = 10, nde = 100, iV = 100, $o = d.String({ minLength: 1, maxLength: 256 }), fR = d.String({ minLength: 1, maxLength: 256 }), aV = d.String({ minLength: 1, maxLength: 512 }), sV = d.String({ minLength: 1, maxLength: 2048 }), oV = d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), rde = F({
     profileId: $o,
     start: d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
     end: d.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
@@ -13603,7 +13603,7 @@ var tde, nde, iV, $o, gR, aV, sV, oV, rde, cV, Jyt, ode, Yyt, ide, Xyt, Qyt, uV,
     })
   ]), ode = F({
     profileId: $o,
-    displayName: gR,
+    displayName: fR,
     avatarUrl: d.Optional(sV),
     online: d.Boolean()
   }), Yyt = F({
@@ -13612,11 +13612,11 @@ var tde, nde, iV, $o, gR, aV, sV, oV, rde, cV, Jyt, ode, Yyt, ide, Xyt, Qyt, uV,
   }), ide = F({
     id: $o,
     senderProfileId: $o,
-    senderLabel: gR,
+    senderLabel: fR,
     senderAvatarUrl: d.Optional(sV),
     sessionKey: aV,
     agentId: $o,
-    sessionTitle: gR,
+    sessionTitle: fR,
     messageId: $o,
     createdAt: oV,
     expiresAt: oV,
@@ -13642,11 +13642,11 @@ var dV, pV, mV = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-activity-summary.ts
-var hR, cbt, ubt, fV = p(() => {
+var gR, cbt, ubt, fV = p(() => {
   Vr();
   Zo();
   ja();
-  hR = F({
+  gR = F({
     /** Caller-specific participation permission; operator.write is required separately. */
     canEnsure: d.Optional(d.Boolean()),
     text: d.Optional(d.String({ maxLength: 900 })),
@@ -13670,7 +13670,7 @@ var hR, cbt, ubt, fV = p(() => {
       F({
         key: U,
         agentId: U,
-        activitySummary: hR
+        activitySummary: gR
       }),
       { maxItems: 20 }
     )
@@ -13724,7 +13724,7 @@ var xV, vbt, vV = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-row.ts
-var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
+var hR, ade, sde, cde, yR, db, ude, lde, dde, pde, Abt, IV = p(() => {
   Vr();
   Zo();
   ja();
@@ -13733,8 +13733,8 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
   fV();
   bV();
   vV();
-  fR();
-  yR = d.Union([
+  mR();
+  hR = d.Union([
     d.Literal("read-only"),
     d.Literal("guarded"),
     d.Literal("workspace"),
@@ -13756,7 +13756,7 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
     d.Literal("age-retention"),
     d.Literal("stale-dashboard"),
     d.Literal("restart-recovery")
-  ]), bR = F({
+  ]), yR = F({
     mcpServers: d.Optional(d.Record(d.String({ minLength: 1 }), d.Boolean())),
     mcpToolsDeny: d.Optional(
       d.Record(d.String({ minLength: 1 }), d.Array(U))
@@ -13770,7 +13770,7 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
     /** Durable profile avatar route; absent for actors without a stored profile avatar. */
     avatarUrl: d.Optional(U),
     /** Display identity is separate from the actor fields used by ownership policy. */
-    identity: d.Optional(SS)
+    identity: d.Optional(wS)
   }), ude = F({
     actor: db,
     assignedBy: d.Optional(db),
@@ -13806,7 +13806,11 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
     {
       key: d.String(),
       /** Fields outside the requested projection must not clear a client's full-row cache. */
-      rowMode: d.Optional(d.Union([d.Literal("compact"), d.Literal("dashboard")])),
+      rowMode: d.Optional(
+        d.Union([d.Literal("compact"), d.Literal("dashboard"), d.Literal("sidebar")])
+      ),
+      /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
+      sharedFacts: d.Optional(d.Array(d.Integer({ minimum: 0 }))),
       sessionId: d.Optional(d.String()),
       /** Incarnation revision for invalidating session-scoped client caches after resets. */
       lifecycleRevision: d.Optional(U),
@@ -13846,7 +13850,7 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
       chatType: d.Optional(
         d.Union([d.Literal("direct"), d.Literal("group"), d.Literal("channel")])
       ),
-      activitySummary: d.Optional(hR),
+      activitySummary: d.Optional(gR),
       updatedAt: d.Optional(d.Union([d.Number(), d.Null()])),
       /** Gateway sampling time, retained when a read reuses a cached projection. */
       snapshotAt: d.Optional(d.Number()),
@@ -13913,7 +13917,7 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
       projectId: d.Optional(d.String()),
       /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
       workspaceDir: d.Optional(d.String()),
-      permissionMode: d.Optional(yR),
+      permissionMode: d.Optional(hR),
       communication: d.Optional(hV),
       effectiveCommunication: d.Optional(yV),
       /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
@@ -13939,10 +13943,10 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
       createdActor: d.Optional(db),
       owner: d.Optional(ude),
       participants: d.Optional(
-        d.Array(kS, { maxItems: HG })
+        d.Array(SS, { maxItems: HG })
       ),
       expandedParticipants: d.Optional(
-        d.Array(kS, { maxItems: VG })
+        d.Array(SS, { maxItems: VG })
       ),
       participantCount: d.Optional(d.Integer({ minimum: 0 })),
       visibility: d.Optional(ub),
@@ -13978,7 +13982,7 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
           d.Null()
         ])
       ),
-      toolOverrides: d.Optional(bR)
+      toolOverrides: d.Optional(yR)
     },
     { additionalProperties: !0 }
   ), pde = F({
@@ -13994,7 +13998,7 @@ var yR, ade, sde, cde, bR, db, ude, lde, dde, pde, Abt, IV = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/logs-chat.ts
-var qbt, Gbt, pb, Kbt, mde, fde, gde, xR, hde, yde, bde, Hbt, Vbt, Wbt, Zbt, Jbt, Ybt, xde, vde, Ide, wde, Sde, kde, Xbt, Qbt, ext, qd, _de, Ede, Tde, Cde, Rde, $de, Ade, Xc, Pde, Ode, txt, SV = p(() => {
+var qbt, Gbt, pb, Kbt, mde, fde, gde, bR, hde, yde, bde, Hbt, Vbt, Wbt, Zbt, Jbt, Ybt, xde, vde, Ide, wde, Sde, kde, Xbt, Qbt, ext, qd, _de, Ede, Tde, Cde, Rde, $de, Ade, Xc, Pde, Ode, txt, SV = p(() => {
   Le();
   Ji();
   Vr();
@@ -14080,7 +14084,7 @@ var qbt, Gbt, pb, Kbt, mde, fde, gde, xR, hde, yde, bde, Hbt, Vbt, Wbt, Zbt, Jbt
       consumedByEventId: U
     }),
     { maxItems: 50 }
-  ), xR = F({
+  ), bR = F({
     itemId: U,
     phase: d.Union([d.Literal("start"), d.Literal("update"), d.Literal("end")]),
     kind: d.String(),
@@ -14111,7 +14115,7 @@ var qbt, Gbt, pb, Kbt, mde, fde, gde, xR, hde, yde, bde, Hbt, Vbt, Wbt, Zbt, Jbt
     approvalSlug: d.Optional(d.String())
   }), hde = F({
     messageId: U,
-    items: d.Array(xR)
+    items: d.Array(bR)
   }), yde = F({
     kind: d.Literal("delta"),
     messages: d.Array(d.Unknown()),
@@ -14264,8 +14268,8 @@ var qbt, Gbt, pb, Kbt, mde, fde, gde, xR, hde, yde, bde, Hbt, Vbt, Wbt, Zbt, Jbt
     // the Gateway steers the session's direct run or starts a turn when idle.
     expectedLeafEntryId: d.Optional(d.Union([U, d.Null()])),
     expectedSessionRoutingContract: d.Optional(U),
-    expectedPermissionMode: d.Optional(d.Union([yR, d.Null()])),
-    expectedToolOverrides: d.Optional(d.Union([bR, d.Null()])),
+    expectedPermissionMode: d.Optional(d.Union([hR, d.Null()])),
+    expectedToolOverrides: d.Optional(d.Union([yR, d.Null()])),
     idempotencyKey: U
   }), Qbt = F({
     sessionKey: U,
@@ -14380,7 +14384,7 @@ Sb();
 
 // openclaw/ui/src/api/gateway.ts
 tp();
-Kb();
+Gb();
 
 // openclaw/ui/src/api/gateway-browser-socket.ts
 tp();
@@ -14449,14 +14453,14 @@ var vZ = Object.freeze([
 ]);
 
 // openclaw/src/shared/device-bootstrap-profile.ts
-Ub();
+Nb();
 var dp = [
   "operator.approvals",
   "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write"
-], jge = new Set(dp), Hb = [
+], jge = new Set(dp), Kb = [
   "operator.admin",
   "operator.approvals",
   "operator.pairing",
@@ -14465,7 +14469,7 @@ var dp = [
   "operator.talk.secrets",
   "operator.write"
 ], Bge = new Set(
-  Hb
+  Kb
 ), l$ = [
   "operator.admin",
   ...dp
@@ -14478,7 +14482,7 @@ var Gge = {
   scopes: [...dp]
 }, Kge = {
   roles: ["operator"],
-  scopes: [...Hb],
+  scopes: [...Kb],
   purpose: "control-ui-owner"
 }, Hge = {
   roles: ["node", "operator"],
@@ -15028,6 +15032,8 @@ var au = {
     },
     sidebar: {
       campaignTarget: "{status} \xB7 {target}",
+      checking: "Checking for updates\u2026",
+      checkFailed: "Could not check the latest update. Try again.",
       updating: "Updating Gateway\u2026",
       availableTitle: "Update available",
       availableSummary: "A newer revision is ready.",
@@ -15315,6 +15321,7 @@ Delete without a snapshot?`
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
     openSession: "Open session",
+    openFailed: "Could not open this session. Try again.",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
@@ -15336,6 +15343,9 @@ Delete without a snapshot?`
     unread: "Unread",
     automationAttached: "Automation attached",
     incognito: "Incognito session",
+    incognitoLabel: "Incognito",
+    incognitoDescription: "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+    incognitoLimits: "Your model provider still processes messages. Tools, plugins, and uploads may save data.",
     cloudWorkerPlacement: "Placement: {state}",
     placementWorkspaceConflict: "{placement} \xB7 1 workspace conflict",
     placementWorkspaceConflicts: "{placement} \xB7 {count} workspace conflicts",
@@ -15982,8 +15992,6 @@ Delete without a snapshot?`
     more: "More",
     home: "Home",
     pages: "Pages",
-    scopeMine: "Mine",
-    scopeAll: "All",
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
@@ -16388,6 +16396,27 @@ Delete without a snapshot?`
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     sessionRestarted: "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    autoSetup: {
+      title: "AI setup",
+      connecting: "Connecting your AI...",
+      verifying: "Checking a real conversation. This may take a minute or more.",
+      using: "Using {label} ({modelRef}) on {gateway}",
+      thisComputer: "This computer",
+      thisGateway: "this Gateway",
+      alternatives: "Or use another AI",
+      signInTitle: "Connect ChatGPT to get started",
+      signInBody: "OpenClaw is ready to connect your ChatGPT account.",
+      signIn: "Sign in with ChatGPT",
+      startingSignIn: "Opening ChatGPT sign-in...",
+      unavailableTitle: "Your AI needs a little help",
+      unavailableBody: "OpenClaw could not connect an AI automatically.",
+      nativeSetup: "Open AI setup",
+      commandHint: "To connect an AI, run",
+      differentGateway: "Use a different Gateway",
+      reviewPermissions: "Review permissions",
+      failed: "OpenClaw could not finish AI setup. Try again.",
+      safety: "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust."
+    },
     panel: {
       title: "OpenClaw",
       toggle: "Toggle Ask OpenClaw",
@@ -17118,6 +17147,7 @@ Delete without a snapshot?`
     },
     waitingForApproval: "Waiting for approval\u2026",
     waitingOnSubagents: "Waiting on subagents",
+    waitingOnSubagentCount: "Waiting on {count} subagent",
     waitingOnSubagentsCount: "Waiting on {count} subagents",
     waitingOnSubagent: "Waiting on {name}",
     waitingOnSession: "Waiting on 1 session",
@@ -17147,6 +17177,7 @@ Delete without a snapshot?`
       finished: "Finished ({count})",
       callsOne: "{count} call",
       callsMany: "{count} calls",
+      callsAtLeast: "{count}+ calls",
       empty: "No subagents in this conversation.",
       noRunning: "No running subagents",
       refresh: "Refresh subagents",
@@ -17272,6 +17303,7 @@ Delete without a snapshot?`
     },
     sessionSharing: {
       menu: "Session sharing",
+      share: "Share",
       current: "Session visibility: {visibility}",
       visibility: "Visibility",
       shared: "Shared",
@@ -17293,7 +17325,9 @@ Delete without a snapshot?`
       disablePublicAccess: "Disable public access",
       copyPublicLink: "Copy public link",
       publicConfirmTitle: "Make this session world-readable?",
-      publicConfirmMessage: "Anyone with the public link can read existing and future conversation text without signing in. Tools, reasoning, files, and widgets are excluded. Review the conversation for private information before sharing. Disabling access cannot recall copies already downloaded.",
+      publicConfirmMessage: `Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.
+
+Reasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.`,
       publicConfirmEnable: "Make public",
       publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
       publicDisabled: "Public access disabled.",
@@ -17340,6 +17374,7 @@ Delete without a snapshot?`
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
       openParent: "Open parent session {title}",
+      subagentsRunning: "Subagents \xB7 {count} running",
       panels: "Panels",
       layout: "Layout",
       continueInTerminal: {
@@ -17358,13 +17393,14 @@ Delete without a snapshot?`
       copyPath: "Copy path",
       copyBranch: "Copy branch name",
       copied: "Copied",
-      incognito: "Incognito session",
-      branches: "Session branches",
-      branchSwitchUnavailable: "Branch switch is unavailable while the agent is working.",
-      untitledBranch: "Untitled branch",
+      branches: "Versions",
+      versionsHelpLabel: "About versions",
+      versionsHelp: "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
+      branchSwitchUnavailable: "Versions cannot be switched while the agent is working.",
+      untitledBranch: "Untitled version",
       oneMessage: "{count} message",
       messages: "{count} messages",
-      activeBranch: "Active branch"
+      activeBranch: "Current version"
     },
     board: {
       faceLabel: "Session face",
@@ -17640,6 +17676,7 @@ Delete without a snapshot?`
       dropOpenHere: "Open here"
     },
     sidebar: {
+      mySessions: "My sessions",
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       serverUpdatedTitle: "Server updated",
@@ -17749,6 +17786,8 @@ Delete without a snapshot?`
       draftConflict: "This question was edited in another tab. Copy your answer before reloading."
     },
     questions: {
+      showSecret: "Show secret",
+      hideSecret: "Hide secret",
       resourcePreview: "Preview resource",
       addResources: "Add resources",
       resourceUploadTooLarge: "Selected resources exceed the upload limits.",
@@ -17779,7 +17818,8 @@ Delete without a snapshot?`
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",
       expired: "Expired",
-      disconnected: "Not connected. Try again after reconnecting."
+      disconnected: "Not connected. Try again after reconnecting.",
+      loadFailed: "Could not load this question. Try again."
     },
     imageLightbox: {
       actions: "Image actions",
@@ -17962,6 +18002,8 @@ Delete without a snapshot?`
       badge: "Expired"
     },
     composer: {
+      running: "running",
+      viewSubagents: "View",
       composerInput: "Chat composer",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
@@ -18046,6 +18088,7 @@ Delete without a snapshot?`
         clear: "Clear session overrides"
       },
       contextUsage: {
+        label: "Context",
         title: "Context usage details",
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
@@ -18728,7 +18771,7 @@ Delete without a snapshot?`
 };
 
 // openclaw/ui/src/api/gateway-connect-plan.ts
-Kb();
+Gb();
 
 // openclaw/ui/src/i18n/locales/en-browser.ts
 var g$ = {
@@ -18815,17 +18858,17 @@ var wZ = String.raw`function openclawInspectBrowserElement(x, y) {
 
 // openclaw/ui/src/components/browser/browser-target.ts
 Le();
-function Vb(e, t = 128) {
+function Hb(e, t = 128) {
   return typeof e == "string" && e.length > 0 && e.length <= t && e.trim() === e;
 }
-function Wb(e) {
+function Vb(e) {
   let t = At(e);
-  if (!Vb(t?.targetId) || !Vb(t.profile))
+  if (!Hb(t?.targetId) || !Hb(t.profile))
     return;
   let n = { targetId: t.targetId, profile: t.profile };
   if (t.target === "host" && t.node === void 0)
     return { ...n, target: "host" };
-  if (t.target === "node" && Vb(t.node, 256))
+  if (t.target === "node" && Hb(t.node, 256))
     return { ...n, target: "node", node: t.node };
 }
 function y$(e) {
@@ -18836,7 +18879,7 @@ function y$(e) {
 h$();
 
 // openclaw/ui/src/lib/chat/tool-cards.ts
-t0();
+e0();
 
 // openclaw/packages/net-policy/src/url-protocol.ts
 function kZ(e) {
@@ -18958,7 +19001,7 @@ var RZ = [
 function _$(e) {
   return typeof e == "string" ? e.toLowerCase() : "";
 }
-function Zb(e) {
+function Wb(e) {
   let t = _$(e);
   return t === "toolcall" || t === "tool_call" || t === "tooluse" || t === "tool_use";
 }
@@ -19006,9 +19049,6 @@ function T$(e) {
   }
   return OZ(n.status);
 }
-
-// openclaw/ui/src/lib/chat/tool-cards.ts
-Nb();
 
 // openclaw/ui/src/lib/chat/message-normalizer.ts
 Po();
@@ -19074,17 +19114,17 @@ var obe = new TextEncoder();
 wM();
 Po();
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/compile/code.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/compile/code.mjs
 Et();
 jo();
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/compile/compile.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/compile/compile.mjs
 Et();
 
-// openclaw/node_modules/.pnpm/typebox@1.3.34/node_modules/typebox/build/compile/validator.mjs
+// openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/compile/validator.mjs
 wm();
 eo();
-IS();
+vS();
 jo();
 
 // openclaw/packages/llm-core/src/validation.ts
@@ -19143,8 +19183,8 @@ Ji();
 Ar();
 
 // openclaw/node_modules/.pnpm/mdurl@2.1.0/node_modules/mdurl/index.mjs
-var _S = {};
-st(_S, {
+var kS = {};
+ct(kS, {
   decode: () => Nl,
   encode: () => Ri,
   format: () => lc,
@@ -19340,16 +19380,16 @@ Zg.prototype.parseHost = function(e) {
 var Ul = roe;
 
 // openclaw/node_modules/.pnpm/uc.micro@3.0.0/node_modules/uc.micro/build/index.mjs
-var $S = {};
-st($S, {
-  Any: () => ES,
-  Cc: () => TS,
+var RS = {};
+ct(RS, {
+  Any: () => _S,
+  Cc: () => ES,
   Cf: () => ooe,
   P: () => Ll,
-  S: () => CS,
-  Z: () => RS
+  S: () => TS,
+  Z: () => CS
 });
-var ES = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, TS = /[\0-\x1F\x7F-\x9F]/, ooe = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, Ll = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, CS = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, RS = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
+var _S = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, ES = /[\0-\x1F\x7F-\x9F]/, ooe = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, Ll = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, TS = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, CS = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/decode-codepoint.js
 var ioe = [
@@ -19478,10 +19518,10 @@ var yn;
 (function(e) {
   e[e.AMP = 38] = "AMP", e[e.NUM = 35] = "NUM", e[e.SEMI = 59] = "SEMI", e[e.EQUALS = 61] = "EQUALS", e[e.ZERO = 48] = "ZERO", e[e.NINE = 57] = "NINE", e[e.LOWER_A = 97] = "LOWER_A", e[e.LOWER_X = 120] = "LOWER_X";
 })(yn || (yn = {}));
-var Jg = 32, u9 = 21, soe = 2097151, AS = 2047, l9 = 0;
+var Jg = 32, u9 = 21, soe = 2097151, $S = 2047, l9 = 0;
 function coe(e) {
   let t = e >>> u9;
-  return t === AS ? l9 : t;
+  return t === $S ? l9 : t;
 }
 function d9(e) {
   return e - yn.ZERO >>> 0 <= 9;
@@ -19499,10 +19539,10 @@ var s9;
 (function(e) {
   e[e.EntityStart = 0] = "EntityStart", e[e.NumericStart = 1] = "NumericStart", e[e.NumericDecimal = 2] = "NumericDecimal", e[e.NumericHex = 3] = "NumericHex", e[e.NamedEntity = 4] = "NamedEntity";
 })(s9 || (s9 = {}));
-var PS;
+var AS;
 (function(e) {
   e[e.Legacy = 0] = "Legacy", e[e.Strict = 1] = "Strict", e[e.Attribute = 2] = "Attribute";
-})(PS || (PS = {}));
+})(AS || (AS = {}));
 function doe(e, t, n, o) {
   let r = (t & Ht.BRANCH_LENGTH) >> 7, i = t & Ht.JUMP_TABLE;
   if (i) {
@@ -19555,7 +19595,7 @@ function poe(e, t, n) {
     return 0;
   o < n && e.charCodeAt(o) === yn.SEMI && (o += 1), r > 1114111 && (r = 1114112);
   let a = o - t;
-  return a >= AS && (l9 = a, a = AS), a << u9 | r;
+  return a >= $S && (l9 = a, a = $S), a << u9 | r;
 }
 function moe(e, t, n) {
   let o = a9, r = e.indexOf("&");
@@ -19659,9 +19699,9 @@ var f9;
 
 // openclaw/node_modules/.pnpm/linkify-it@6.1.0/node_modules/linkify-it/build/index.mjs
 var goe = class {
-  src_Any = ES.source;
-  src_Cc = TS.source;
-  src_Z = RS.source;
+  src_Any = _S.source;
+  src_Cc = ES.source;
+  src_Z = CS.source;
   src_P = Ll.source;
   src_ZPCc = [
     this.src_Z,
@@ -19788,7 +19828,7 @@ var goe = class {
   get_schema_at_start() {
     return this.cache.schema_at_start ??= new RegExp(`^${this.get_schema_search().source}`, "i");
   }
-}, OS = {
+}, PS = {
   validate: (e, t, n) => {
     let o = n.re.get_http_validator();
     o.lastIndex = t;
@@ -19797,9 +19837,9 @@ var goe = class {
   },
   normalize: (e, t) => t.normalize(e)
 }, hoe = {
-  "http:": OS,
-  "https:": OS,
-  "ftp:": OS,
+  "http:": PS,
+  "https:": PS,
+  "ftp:": PS,
   "//": {
     validate: function(e, t, n) {
       let o = n.re.get_relative_proto_validator();
@@ -20098,7 +20138,7 @@ var voe = {
 };
 
 // openclaw/node_modules/.pnpm/markdown-it@15.0.2/node_modules/markdown-it/dist/markdown-it.mjs
-var zS = wR(k9(), 1);
+var FS = IR(k9(), 1);
 var _9 = Object.defineProperty, U9 = (e, t) => {
   let n = {};
   for (var o in e) _9(n, o, {
@@ -20116,8 +20156,8 @@ var _9 = Object.defineProperty, U9 = (e, t) => {
   isMdAsciiPunct: () => Bl,
   isPunctChar: () => z9,
   isPunctCharCode: () => jl,
-  isSpace: () => at,
-  isValidEntityCode: () => jS,
+  isSpace: () => st,
+  isValidEntityCode: () => zS,
   isWhiteSpace: () => zl,
   lib: () => qoe,
   normalizeReference: () => eh,
@@ -20133,7 +20173,7 @@ function L9(e) {
 function Poe(e, t, n) {
   return [].concat(e.slice(0, t), n, e.slice(t + 1));
 }
-function jS(e) {
+function zS(e) {
   return !(e >= 55296 && e <= 57343 || e >= 64976 && e <= 65007 || (e & 65535) === 65535 || (e & 65535) === 65534 || e >= 0 && e <= 8 || e === 11 || e >= 14 && e <= 31 || e >= 127 && e <= 159 || e > 1114111);
 }
 function Fl(e) {
@@ -20148,7 +20188,7 @@ var F9 = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, Ooe = new RegExp(`${F9.so
 function Moe(e, t) {
   if (t.charCodeAt(0) === 35 && Doe.test(t)) {
     let o = t[1].toLowerCase() === "x" ? parseInt(t.slice(2), 16) : parseInt(t.slice(1), 10);
-    return jS(o) ? Fl(o) : e;
+    return zS(o) ? Fl(o) : e;
   }
   let n = Yg(e);
   return n !== e ? n : e;
@@ -20177,7 +20217,7 @@ var joe = /[.?*+^$[\]\\(){}|-]/g;
 function Boe(e) {
   return e.replace(joe, "\\$&");
 }
-function at(e) {
+function st(e) {
   switch (e) {
     case 9:
     case 32:
@@ -20204,7 +20244,7 @@ function zl(e) {
   return !1;
 }
 function z9(e) {
-  return Ll.test(e) || CS.test(e);
+  return Ll.test(e) || TS.test(e);
 }
 function jl(e) {
   return z9(Fl(e));
@@ -20262,8 +20302,8 @@ function th(e) {
   return e.slice(t, n + 1);
 }
 var qoe = {
-  mdurl: _S,
-  ucmicro: $S
+  mdurl: kS,
+  ucmicro: RS
 };
 function Goe(e, t, n) {
   let o, r, i, a, s = e.posMax, u = e.pos;
@@ -21054,7 +21094,7 @@ function bie(e) {
     t !== n && (a.length = n);
   }
 }
-var NS = [
+var MS = [
   ["normalize", Xoe],
   ["block", Qoe],
   ["strip_references", eie],
@@ -21073,7 +21113,7 @@ var NS = [
       "ruler",
       new Gl()
     ), H(this, "State", B9);
-    for (let e = 0; e < NS.length; e++) this.ruler.push(NS[e][0], NS[e][1]);
+    for (let e = 0; e < MS.length; e++) this.ruler.push(MS[e][0], MS[e][1]);
   }
   /**
   * Executes core chain rules.
@@ -21088,7 +21128,7 @@ var NS = [
     let r = this.src;
     for (let i = 0, a = 0, s = 0, u = 0, l = r.length, m = !1; a < l; a++) {
       let h = r.charCodeAt(a);
-      if (!m) if (at(h)) {
+      if (!m) if (st(h)) {
         s++, h === 9 ? u += 4 - u % 4 : u++;
         continue;
       } else m = !0;
@@ -21108,12 +21148,12 @@ var NS = [
     return e;
   }
   skipSpaces(e) {
-    for (let t = this.src.length; e < t && at(this.src.charCodeAt(e)); e++) ;
+    for (let t = this.src.length; e < t && st(this.src.charCodeAt(e)); e++) ;
     return e;
   }
   skipSpacesBack(e, t) {
     if (e <= t) return e;
-    for (; e > t; ) if (!at(this.src.charCodeAt(--e))) return e + 1;
+    for (; e > t; ) if (!st(this.src.charCodeAt(--e))) return e + 1;
     return e;
   }
   skipChars(e, t) {
@@ -21132,7 +21172,7 @@ var NS = [
       let s = 0, u = this.bMarks[a], l = u, m;
       for (a + 1 < t || o ? m = this.eMarks[a] + 1 : m = this.eMarks[a]; l < m && s < n; ) {
         let h = this.src.charCodeAt(l);
-        if (at(h)) h === 9 ? s += 4 - (s + this.bsCount[a]) % 4 : s++;
+        if (st(h)) h === 9 ? s += 4 - (s + this.bsCount[a]) % 4 : s++;
         else if (l - u < this.tShift[a]) s++;
         else break;
         l++;
@@ -21142,7 +21182,7 @@ var NS = [
     return r.join("");
   }
 }, xie = 65536;
-function US(e, t) {
+function NS(e, t) {
   let n = e.bMarks[t] + e.tShift[t], o = e.eMarks[t];
   return e.src.slice(n, o);
 }
@@ -21161,13 +21201,13 @@ function vie(e, t, n, o) {
   let a = e.src.charCodeAt(i++);
   if (a !== 124 && a !== 45 && a !== 58 || i >= e.eMarks[r]) return !1;
   let s = e.src.charCodeAt(i++);
-  if (s !== 124 && s !== 45 && s !== 58 && !at(s) || a === 45 && at(s)) return !1;
+  if (s !== 124 && s !== 45 && s !== 58 && !st(s) || a === 45 && st(s)) return !1;
   for (; i < e.eMarks[r]; ) {
     let C = e.src.charCodeAt(i);
-    if (C !== 124 && C !== 45 && C !== 58 && !at(C)) return !1;
+    if (C !== 124 && C !== 45 && C !== 58 && !st(C)) return !1;
     i++;
   }
-  let u = US(e, t + 1), l = u.split("|"), m = [];
+  let u = NS(e, t + 1), l = u.split("|"), m = [];
   for (let C = 0; C < l.length; C++) {
     let $ = l[C].trim();
     if (!$) {
@@ -21177,7 +21217,7 @@ function vie(e, t, n, o) {
     if (!/^:?-+:?$/.test($)) return !1;
     $.charCodeAt($.length - 1) === 58 ? m.push($.charCodeAt(0) === 58 ? "center" : "right") : $.charCodeAt(0) === 58 ? m.push("left") : m.push("");
   }
-  if (u = US(e, t).trim(), u.indexOf("|") === -1 || e.sCount[t] - e.blkIndent >= 4) return !1;
+  if (u = NS(e, t).trim(), u.indexOf("|") === -1 || e.sCount[t] - e.blkIndent >= 4) return !1;
   l = $9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop();
   let h = l.length;
   if (h === 0 || h !== m.length) return !1;
@@ -21204,7 +21244,7 @@ function vie(e, t, n, o) {
       C = !0;
       break;
     }
-    if (C || (u = US(e, r).trim(), !u) || e.sCount[r] - e.blkIndent >= 4 || (l = $9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop(), k += h - l.length, k > xie)) break;
+    if (C || (u = NS(e, r).trim(), !u) || e.sCount[r] - e.blkIndent >= 4 || (l = $9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop(), k += h - l.length, k > xie)) break;
     if (r === t + 2) {
       let D = e.push("tbody_open", "tbody", 1);
       D.map = w = [t + 2, 0];
@@ -21279,7 +21319,7 @@ function Sie(e, t, n, o) {
       let te = $;
       for (s.push(e.bMarks[y]), e.bMarks[y] = r; r < i; ) {
         let Z = e.src.charCodeAt(r);
-        if (at(Z)) Z === 9 ? te += 4 - (te + e.bsCount[y] + (V ? 1 : 0)) % 4 : te++;
+        if (st(Z)) Z === 9 ? te += 4 - (te + e.bsCount[y] + (V ? 1 : 0)) % 4 : te++;
         else break;
         r++;
       }
@@ -21318,7 +21358,7 @@ function kie(e, t, n, o) {
   let s = 1;
   for (; i < r; ) {
     let l = e.src.charCodeAt(i++);
-    if (l !== a && !at(l)) return !1;
+    if (l !== a && !st(l)) return !1;
     l === a && s++;
   }
   if (s < 3) return !1;
@@ -21329,7 +21369,7 @@ function kie(e, t, n, o) {
 }
 function A9(e, t) {
   let n = e.eMarks[t], o = e.bMarks[t] + e.tShift[t], r = e.src.charCodeAt(o++);
-  return r !== 42 && r !== 45 && r !== 43 || o < n && !at(e.src.charCodeAt(o)) ? -1 : o;
+  return r !== 42 && r !== 45 && r !== 43 || o < n && !st(e.src.charCodeAt(o)) ? -1 : o;
 }
 function P9(e, t) {
   let n = e.bMarks[t] + e.tShift[t], o = e.eMarks[t], r = n;
@@ -21345,7 +21385,7 @@ function P9(e, t) {
     if (i === 41 || i === 46) break;
     return -1;
   }
-  return r < o && (i = e.src.charCodeAt(r), !at(i)) ? -1 : r;
+  return r < o && (i = e.src.charCodeAt(r), !st(i)) ? -1 : r;
 }
 function _ie(e, t) {
   let n = e.level + 2;
@@ -21444,7 +21484,7 @@ function Tie(e, t, n, o) {
     if (C === 10) {
       let $ = s(a);
       $ !== null && (u += $, i = u.length, a++);
-    } else if (!at(C))
+    } else if (!st(C))
       break;
   }
   let m = e.md.helpers.parseLinkDestination(u, r, i);
@@ -21458,7 +21498,7 @@ function Tie(e, t, n, o) {
     if (C === 10) {
       let $ = s(a);
       $ !== null && (u += $, i = u.length, a++);
-    } else if (!at(C))
+    } else if (!st(C))
       break;
   }
   let x = e.md.helpers.parseLinkTitle(u, r, i);
@@ -21468,10 +21508,10 @@ function Tie(e, t, n, o) {
     u += C, r = i, i = u.length, a++, x = e.md.helpers.parseLinkTitle(u, r, i, x);
   }
   let v;
-  for (r < i && y !== r && x.ok ? (v = x.str, r = x.pos) : (v = "", r = b, a = f); r < i && at(u.charCodeAt(r)); )
+  for (r < i && y !== r && x.ok ? (v = x.str, r = x.pos) : (v = "", r = b, a = f); r < i && st(u.charCodeAt(r)); )
     r++;
   if (r < i && u.charCodeAt(r) !== 10 && v)
-    for (v = "", r = b, a = f; r < i && at(u.charCodeAt(r)); )
+    for (v = "", r = b, a = f; r < i && st(u.charCodeAt(r)); )
       r++;
   if (r < i && u.charCodeAt(r) !== 10) return !1;
   let S = eh(u.slice(1, l));
@@ -21613,11 +21653,11 @@ function Pie(e, t, n, o) {
   let s = 1;
   for (a = e.src.charCodeAt(++r); a === 35 && r < i && s <= 6; )
     s++, a = e.src.charCodeAt(++r);
-  if (s > 6 || r < i && !at(a)) return !1;
+  if (s > 6 || r < i && !st(a)) return !1;
   if (o) return !0;
   i = e.skipSpacesBack(i, r);
   let u = e.skipCharsBack(i, 35, r);
-  u > r && at(e.src.charCodeAt(u - 1)) && (i = u), e.line = t + 1;
+  u > r && st(e.src.charCodeAt(u - 1)) && (i = u), e.line = t + 1;
   let l = e.push("heading_open", `h${s}`, 1);
   l.markup = "########".slice(0, s), l.map = [t, e.line];
   let m = e.push("inline", "", 0);
@@ -21897,20 +21937,20 @@ function zie(e, t) {
   } else
     e.pending = e.pending.slice(0, -1), e.push("softbreak", "br", 0);
   else e.push("softbreak", "br", 0);
-  for (n++; n < r && at(e.src.charCodeAt(n)); ) n++;
+  for (n++; n < r && st(e.src.charCodeAt(n)); ) n++;
   return e.pos = n, !0;
 }
-var BS = [];
-for (let e = 0; e < 256; e++) BS.push(0);
+var jS = [];
+for (let e = 0; e < 256; e++) jS.push(0);
 "\\!\"#$%&'()*+,./:;<=>?@[]^_`{|}~-".split("").forEach(function(e) {
-  BS[e.charCodeAt(0)] = 1;
+  jS[e.charCodeAt(0)] = 1;
 });
 function jie(e, t) {
   let n = e.pos, o = e.posMax;
   if (e.src.charCodeAt(n) !== 92 || (n++, n >= o)) return !1;
   let r = e.src.charCodeAt(n);
   if (r === 10) {
-    for (t || e.push("hardbreak", "br", 0), n++; n < o && (r = e.src.charCodeAt(n), !!at(r)); )
+    for (t || e.push("hardbreak", "br", 0), n++; n < o && (r = e.src.charCodeAt(n), !!st(r)); )
       n++;
     return e.pos = n, !0;
   }
@@ -21929,7 +21969,7 @@ function jie(e, t) {
   let a = "\\" + i;
   if (!t) {
     let s = e.push("text_special", "", 0);
-    r < 256 && BS[r] !== 0 ? s.content = i : s.content = a, s.markup = a, s.info = "escape";
+    r < 256 && jS[r] !== 0 ? s.content = i : s.content = a, s.markup = a, s.info = "escape";
   }
   return e.pos = n + 1, !0;
 }
@@ -22060,14 +22100,14 @@ function Wie(e, t) {
   if (f < 0) return !1;
   let y = f + 1;
   if (y < h && e.src.charCodeAt(y) === 40) {
-    for (l = !1, y++; y < h && (n = e.src.charCodeAt(y), !(!at(n) && n !== 10)); y++)
+    for (l = !1, y++; y < h && (n = e.src.charCodeAt(y), !(!st(n) && n !== 10)); y++)
       ;
     if (y >= h) return !1;
     if (u = y, r = e.md.helpers.parseLinkDestination(e.src, y, e.posMax), r.ok) {
-      for (a = e.md.normalizeLink(r.str), e.md.validateLink(a) ? y = r.pos : a = "", u = y; y < h && (n = e.src.charCodeAt(y), !(!at(n) && n !== 10)); y++)
+      for (a = e.md.normalizeLink(r.str), e.md.validateLink(a) ? y = r.pos : a = "", u = y; y < h && (n = e.src.charCodeAt(y), !(!st(n) && n !== 10)); y++)
         ;
       if (r = e.md.helpers.parseLinkTitle(e.src, y, e.posMax), y < h && u !== y && r.ok)
-        for (s = r.str, y = r.pos; y < h && (n = e.src.charCodeAt(y), !(!at(n) && n !== 10)); y++)
+        for (s = r.str, y = r.pos; y < h && (n = e.src.charCodeAt(y), !(!st(n) && n !== 10)); y++)
           ;
     }
     (y >= h || e.src.charCodeAt(y) !== 41) && (l = !0), y++;
@@ -22095,13 +22135,13 @@ function Zie(e, t) {
   let f = e.pos + 2, y = e.md.helpers.parseLinkLabel(e, e.pos + 1, !1);
   if (y < 0) return !1;
   if (i = y + 1, i < b && e.src.charCodeAt(i) === 40) {
-    for (i++; i < b && (n = e.src.charCodeAt(i), !(!at(n) && n !== 10)); i++)
+    for (i++; i < b && (n = e.src.charCodeAt(i), !(!st(n) && n !== 10)); i++)
       ;
     if (i >= b) return !1;
-    for (l = i, s = e.md.helpers.parseLinkDestination(e.src, i, e.posMax), s.ok && (m = e.md.normalizeLink(s.str), e.md.validateLink(m) ? i = s.pos : m = ""), l = i; i < b && (n = e.src.charCodeAt(i), !(!at(n) && n !== 10)); i++)
+    for (l = i, s = e.md.helpers.parseLinkDestination(e.src, i, e.posMax), s.ok && (m = e.md.normalizeLink(s.str), e.md.validateLink(m) ? i = s.pos : m = ""), l = i; i < b && (n = e.src.charCodeAt(i), !(!st(n) && n !== 10)); i++)
       ;
     if (s = e.md.helpers.parseLinkTitle(e.src, i, e.posMax), i < b && l !== i && s.ok)
-      for (u = s.str, i = s.pos; i < b && (n = e.src.charCodeAt(i), !(!at(n) && n !== 10)); i++)
+      for (u = s.str, i = s.pos; i < b && (n = e.src.charCodeAt(i), !(!st(n) && n !== 10)); i++)
         ;
     else u = "";
     if (i >= b || e.src.charCodeAt(i) !== 41)
@@ -22198,7 +22238,7 @@ function iae(e, t) {
     if (r) {
       if (!t) {
         let i = r[1][0].toLowerCase() === "x" ? parseInt(r[1].slice(1), 16) : parseInt(r[1], 10), a = e.push("text_special", "", 0);
-        a.content = jS(i) ? Fl(i) : Fl(65533), a.markup = r[0], a.info = "entity";
+        a.content = zS(i) ? Fl(i) : Fl(65533), a.markup = r[0], a.info = "entity";
       }
       return e.pos += r[0].length, !0;
     }
@@ -22262,7 +22302,7 @@ function sae(e) {
     r[t].nesting < 0 && o--, r[t].level = o, r[t].nesting > 0 && o++, r[t].type === "text" && t + 1 < i && r[t + 1].type === "text" ? r[t + 1].content = r[t].content + r[t + 1].content : (t !== n && (r[n] = r[t]), n++);
   t !== n && (r.length = n);
 }
-var LS = [
+var US = [
   ["text", Nie],
   ["linkify", Fie],
   ["newline", zie],
@@ -22275,7 +22315,7 @@ var LS = [
   ["autolink", Xie],
   ["html_inline", nae],
   ["entity", iae]
-], FS = [
+], LS = [
   ["balance_pairs", aae],
   ["strikethrough", J9.postProcess],
   ["emphasis", Y9.postProcess],
@@ -22298,8 +22338,8 @@ var LS = [
       "ruler2",
       new Gl()
     ), H(this, "State", Z9);
-    for (let e = 0; e < LS.length; e++) this.ruler.push(LS[e][0], LS[e][1]);
-    for (let e = 0; e < FS.length; e++) this.ruler2.push(FS[e][0], FS[e][1]);
+    for (let e = 0; e < US.length; e++) this.ruler.push(US[e][0], US[e][1]);
+    for (let e = 0; e < LS.length; e++) this.ruler2.push(LS[e][0], LS[e][1]);
   }
   skipToken(e) {
     let t = e.pos, n = this.ruler.getRules(""), o = n.length, r = e.md.options.maxNesting, i = e.cache;
@@ -22477,7 +22517,7 @@ var LS = [
     let t = Ul(e, !0);
     if (t.hostname && (!t.protocol || N9.indexOf(t.protocol) >= 0))
       try {
-        t.hostname = zS.default.toASCII(t.hostname);
+        t.hostname = FS.default.toASCII(t.hostname);
       } catch {
       }
     return t.auth && (t.auth = Ri(t.auth)), t.hostname && (t.hostname = Ri(t.hostname)), t.pathname && (t.pathname = Ri(t.pathname)), t.search && (t.search = Ri(t.search)), t.hash && (t.hash = Ri(t.hash)), lc(t);
@@ -22489,7 +22529,7 @@ var LS = [
     let t = Ul(e, !0);
     if (t.hostname && (!t.protocol || N9.indexOf(t.protocol) >= 0))
       try {
-        t.hostname = zS.default.toUnicode(t.hostname);
+        t.hostname = FS.default.toUnicode(t.hostname);
       } catch {
       }
     return Nl(lc(t), Nl.defaultChars + "%");
@@ -22746,7 +22786,7 @@ var dae = L9(_o);
 
 // openclaw/packages/net-policy/src/ip.ts
 pt();
-var tK = wR(eK(), 1);
+var tK = IR(eK(), 1);
 var lpt = [tK.default.IPv4.parse("198.18.0.0"), 15];
 
 // openclaw/src/media/parse-output.ts
@@ -22765,15 +22805,15 @@ var hpt = new TextEncoder();
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/external.js
 var an = {};
-st(an, {
-  $brand: () => nk,
-  $input: () => TE,
-  $output: () => EE,
+ct(an, {
+  $brand: () => tk,
+  $input: () => EE,
+  $output: () => _E,
   INVALID: () => qn,
-  NEVER: () => tk,
-  TimePrecision: () => LE,
-  ZodAny: () => _C,
-  ZodArray: () => RC,
+  NEVER: () => ek,
+  TimePrecision: () => UE,
+  ZodAny: () => kC,
+  ZodArray: () => CC,
   ZodBase64: () => Qy,
   ZodBase64URL: () => eb,
   ZodBigInt: () => Wc,
@@ -22783,94 +22823,94 @@ st(an, {
   ZodCIDRv6: () => Xy,
   ZodCUID: () => Gy,
   ZodCUID2: () => Ky,
-  ZodCatch: () => JC,
+  ZodCatch: () => ZC,
   ZodCodec: () => Ld,
   ZodCompileAsyncError: () => Jr,
   ZodCompileUnsupportedError: () => Re,
-  ZodCreditCard: () => yC,
+  ZodCreditCard: () => hC,
   ZodCustom: () => Fd,
   ZodCustomStringFormat: () => ss,
   ZodDate: () => Pd,
-  ZodDefault: () => GC,
-  ZodDiscriminatedUnion: () => AC,
+  ZodDefault: () => qC,
+  ZodDiscriminatedUnion: () => $C,
   ZodE164: () => tb,
   ZodEmail: () => zy,
   ZodEmoji: () => By,
   ZodEnum: () => Gc,
   ZodError: () => Tle,
   ZodExactOptional: () => sb,
-  ZodFile: () => zC,
-  ZodFirstPartyTypeKind: () => lR,
-  ZodFunction: () => aR,
+  ZodFile: () => FC,
+  ZodFirstPartyTypeKind: () => uR,
+  ZodFunction: () => iR,
   ZodGUID: () => jy,
-  ZodIBAN: () => bC,
+  ZodIBAN: () => yC,
   ZodIPv4: () => Zy,
   ZodIPv6: () => Jy,
   ZodISODate: () => ji,
   ZodISODateTime: () => zi,
   ZodISODuration: () => qi,
   ZodISOTime: () => Bi,
-  ZodInstanceOf: () => uR,
-  ZodIntersection: () => PC,
+  ZodInstanceOf: () => cR,
+  ZodIntersection: () => AC,
   ZodIssueCode: () => $le,
   ZodJWT: () => nb,
   ZodKSUID: () => Wy,
-  ZodLazy: () => rR,
-  ZodLiteral: () => FC,
-  ZodMAC: () => hC,
-  ZodMap: () => UC,
-  ZodNaN: () => XC,
+  ZodLazy: () => nR,
+  ZodLiteral: () => LC,
+  ZodMAC: () => gC,
+  ZodMap: () => NC,
+  ZodNaN: () => YC,
   ZodNanoID: () => qy,
-  ZodNever: () => TC,
+  ZodNever: () => EC,
   ZodNonOptional: () => cb,
-  ZodNull: () => SC,
-  ZodNullable: () => qC,
+  ZodNull: () => wC,
+  ZodNullable: () => BC,
   ZodNumber: () => Hc,
   ZodNumberFormat: () => cs,
   ZodObject: () => Dd,
   ZodOptional: () => Nd,
   ZodPipe: () => Ud,
-  ZodPrefault: () => HC,
-  ZodPreprocess: () => QC,
-  ZodPromise: () => iR,
-  ZodReadonly: () => eR,
+  ZodPrefault: () => KC,
+  ZodPreprocess: () => XC,
+  ZodPromise: () => oR,
+  ZodReadonly: () => QC,
   ZodRealError: () => ir,
   ZodRecord: () => qc,
-  ZodSet: () => LC,
+  ZodSet: () => UC,
   ZodString: () => Kc,
   ZodStringFormat: () => Je,
-  ZodSuccess: () => ZC,
-  ZodSymbol: () => IC,
-  ZodTemplateLiteral: () => nR,
-  ZodTransform: () => jC,
-  ZodTuple: () => DC,
+  ZodSuccess: () => WC,
+  ZodSymbol: () => vC,
+  ZodTemplateLiteral: () => tR,
+  ZodTransform: () => zC,
+  ZodTuple: () => OC,
   ZodType: () => we,
   ZodULID: () => Hy,
   ZodURL: () => Ad,
   ZodUUID: () => Ro,
-  ZodUndefined: () => wC,
+  ZodUndefined: () => IC,
   ZodUnion: () => Md,
-  ZodUnknown: () => EC,
-  ZodVoid: () => CC,
+  ZodUnknown: () => _C,
+  ZodVoid: () => TC,
   ZodXID: () => Vy,
-  ZodXor: () => $C,
+  ZodXor: () => RC,
   _ZodString: () => Fy,
-  _default: () => KC,
+  _default: () => GC,
   _function: () => M5,
   any: () => p5,
   array: () => Od,
   base64: () => HH,
   base64url: () => VH,
   bigint: () => s5,
-  boolean: () => vC,
-  catch: () => YC,
+  boolean: () => xC,
+  catch: () => JC,
   check: () => N5,
   cidrv4: () => GH,
   cidrv6: () => KH,
   clone: () => Ge,
   codec: () => A5,
-  coerce: () => pR,
-  compile: () => AE,
+  coerce: () => dR,
+  compile: () => $E,
   config: () => Lt,
   core: () => ti,
   creditCard: () => ZH,
@@ -22879,19 +22919,19 @@ st(an, {
   currencyCode: () => t5,
   custom: () => U5,
   date: () => f5,
-  decode: () => uC,
-  decodeAsync: () => dC,
+  decode: () => cC,
+  decodeAsync: () => lC,
   deepPartial: () => J5,
   describe: () => L5,
   discriminatedUnion: () => v5,
   e164: () => WH,
   email: () => EH,
   emoji: () => DH,
-  encode: () => cC,
-  encodeAsync: () => lC,
+  encode: () => sC,
+  encodeAsync: () => uC,
   endsWith: () => Pc,
   enum: () => ib,
-  exactOptional: () => BC,
+  exactOptional: () => jC,
   file: () => T5,
   flattenError: () => ed,
   float32: () => r5,
@@ -22899,7 +22939,7 @@ st(an, {
   formatError: () => td,
   fromJSONSchema: () => W5,
   function: () => M5,
-  getDiscriminatedOption: () => eE,
+  getDiscriminatedOption: () => Q_,
   getErrorMap: () => Ple,
   globalRegistry: () => xn,
   gt: () => To,
@@ -22916,7 +22956,7 @@ st(an, {
   int: () => Uy,
   int32: () => i5,
   int64: () => c5,
-  intersection: () => OC,
+  intersection: () => PC,
   invertCodec: () => P5,
   ipv4: () => jH,
   ipv6: () => qH,
@@ -22925,7 +22965,7 @@ st(an, {
   jwt: () => YH,
   keyof: () => g5,
   ksuid: () => zH,
-  lazy: () => oR,
+  lazy: () => rR,
   length: () => ns,
   literal: () => E5,
   locales: () => Id,
@@ -22950,40 +22990,40 @@ st(an, {
   negative: () => Ey,
   never: () => ob,
   nonnegative: () => Cy,
-  nonoptional: () => WC,
+  nonoptional: () => VC,
   nonpositive: () => Ty,
   normalize: () => Mc,
-  null: () => kC,
+  null: () => SC,
   nullable: () => $d,
   nullish: () => C5,
-  number: () => xC,
+  number: () => bC,
   object: () => h5,
   optional: () => is,
   output: () => Q5,
   overwrite: () => Yr,
-  parse: () => oC,
-  parseAsync: () => iC,
+  parse: () => rC,
+  parseAsync: () => oC,
   partialRecord: () => I5,
   pipe: () => Ly,
   positive: () => _y,
-  prefault: () => VC,
+  prefault: () => HC,
   preprocess: () => q5,
-  prettifyError: () => sk,
+  prettifyError: () => ak,
   promise: () => D5,
   properties: () => Oc,
   property: () => Ry,
-  readonly: () => tR,
-  record: () => NC,
-  refine: () => sR,
+  readonly: () => eR,
+  record: () => MC,
+  refine: () => aR,
   regex: () => Tc,
   regexes: () => $r,
   registry: () => ey,
-  safeDecode: () => mC,
-  safeDecodeAsync: () => gC,
-  safeEncode: () => pC,
-  safeEncodeAsync: () => fC,
-  safeParse: () => aC,
-  safeParseAsync: () => sC,
+  safeDecode: () => pC,
+  safeDecodeAsync: () => fC,
+  safeEncode: () => dC,
+  safeEncodeAsync: () => mC,
+  safeParse: () => iC,
+  safeParseAsync: () => aC,
   set: () => k5,
   setErrorMap: () => Ale,
   size: () => es,
@@ -22994,7 +23034,7 @@ st(an, {
   stringFormat: () => XH,
   stringbool: () => j5,
   success: () => R5,
-  superRefine: () => cR,
+  superRefine: () => sR,
   symbol: () => l5,
   templateLiteral: () => O5,
   toJSONSchema: () => Oy,
@@ -23002,9 +23042,9 @@ st(an, {
   toUpperCase: () => Lc,
   toZod: () => Kl,
   transform: () => ab,
-  treeifyError: () => ak,
+  treeifyError: () => ik,
   trim: () => Nc,
-  tuple: () => MC,
+  tuple: () => DC,
   uint32: () => a5,
   uint64: () => u5,
   ulid: () => LH,
@@ -23028,146 +23068,146 @@ st(an, {
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/index.js
 var ti = {};
-st(ti, {
-  $ZodAny: () => H_,
-  $ZodArray: () => Y_,
+ct(ti, {
+  $ZodAny: () => K_,
+  $ZodArray: () => J_,
   $ZodAsyncError: () => rr,
-  $ZodBase64: () => D_,
-  $ZodBase64URL: () => M_,
+  $ZodBase64: () => O_,
+  $ZodBase64URL: () => D_,
   $ZodBigInt: () => zh,
-  $ZodBigIntFormat: () => B_,
+  $ZodBigIntFormat: () => j_,
   $ZodBoolean: () => md,
-  $ZodCIDRv4: () => P_,
-  $ZodCIDRv6: () => O_,
-  $ZodCUID: () => v_,
-  $ZodCUID2: () => I_,
-  $ZodCatch: () => hE,
+  $ZodCIDRv4: () => A_,
+  $ZodCIDRv6: () => P_,
+  $ZodCUID: () => x_,
+  $ZodCUID2: () => v_,
+  $ZodCatch: () => gE,
   $ZodCheck: () => Qe,
-  $ZodCheckBigIntFormat: () => Vk,
-  $ZodCheckEndsWith: () => i_,
+  $ZodCheckBigIntFormat: () => Hk,
+  $ZodCheckEndsWith: () => o_,
   $ZodCheckGreaterThan: () => kh,
-  $ZodCheckIncludes: () => r_,
-  $ZodCheckLengthEquals: () => Qk,
+  $ZodCheckIncludes: () => n_,
+  $ZodCheckLengthEquals: () => Xk,
   $ZodCheckLessThan: () => Sh,
-  $ZodCheckLowerCase: () => t_,
-  $ZodCheckMaxLength: () => Yk,
-  $ZodCheckMaxSize: () => Wk,
-  $ZodCheckMimeType: () => c_,
-  $ZodCheckMinLength: () => Xk,
-  $ZodCheckMinSize: () => Zk,
-  $ZodCheckMultipleOf: () => Kk,
-  $ZodCheckNumberFormat: () => Hk,
-  $ZodCheckOverwrite: () => u_,
-  $ZodCheckProperties: () => s_,
-  $ZodCheckProperty: () => a_,
-  $ZodCheckRegex: () => e_,
-  $ZodCheckSizeEquals: () => Jk,
-  $ZodCheckStartsWith: () => o_,
+  $ZodCheckLowerCase: () => e_,
+  $ZodCheckMaxLength: () => Jk,
+  $ZodCheckMaxSize: () => Vk,
+  $ZodCheckMimeType: () => s_,
+  $ZodCheckMinLength: () => Yk,
+  $ZodCheckMinSize: () => Wk,
+  $ZodCheckMultipleOf: () => Gk,
+  $ZodCheckNumberFormat: () => Kk,
+  $ZodCheckOverwrite: () => c_,
+  $ZodCheckProperties: () => a_,
+  $ZodCheckProperty: () => i_,
+  $ZodCheckRegex: () => Qk,
+  $ZodCheckSizeEquals: () => Zk,
+  $ZodCheckStartsWith: () => r_,
   $ZodCheckStringFormat: () => wc,
-  $ZodCheckUpperCase: () => n_,
+  $ZodCheckUpperCase: () => t_,
   $ZodCodec: () => gd,
-  $ZodCreditCard: () => U_,
-  $ZodCustom: () => SE,
-  $ZodCustomStringFormat: () => z_,
+  $ZodCreditCard: () => N_,
+  $ZodCustom: () => wE,
+  $ZodCustomStringFormat: () => F_,
   $ZodCyclicError: () => Vh,
-  $ZodDate: () => J_,
-  $ZodDefault: () => pE,
-  $ZodDiscriminatedUnion: () => tE,
-  $ZodE164: () => N_,
-  $ZodEmail: () => f_,
-  $ZodEmoji: () => b_,
+  $ZodDate: () => Z_,
+  $ZodDefault: () => dE,
+  $ZodDiscriminatedUnion: () => eE,
+  $ZodE164: () => M_,
+  $ZodEmail: () => m_,
+  $ZodEmoji: () => y_,
   $ZodEncodeError: () => Di,
-  $ZodEnum: () => aE,
-  $ZodError: () => ik,
-  $ZodExactOptional: () => lE,
-  $ZodFile: () => cE,
-  $ZodFunction: () => IE,
-  $ZodGUID: () => p_,
-  $ZodIBAN: () => L_,
-  $ZodIPv4: () => R_,
-  $ZodIPv6: () => $_,
-  $ZodISODate: () => E_,
-  $ZodISODateTime: () => __,
-  $ZodISODuration: () => C_,
-  $ZodISOTime: () => T_,
-  $ZodIntersection: () => nE,
-  $ZodJWT: () => F_,
-  $ZodKSUID: () => k_,
+  $ZodEnum: () => iE,
+  $ZodError: () => ok,
+  $ZodExactOptional: () => uE,
+  $ZodFile: () => sE,
+  $ZodFunction: () => vE,
+  $ZodGUID: () => d_,
+  $ZodIBAN: () => U_,
+  $ZodIPv4: () => C_,
+  $ZodIPv6: () => R_,
+  $ZodISODate: () => __,
+  $ZodISODateTime: () => k_,
+  $ZodISODuration: () => T_,
+  $ZodISOTime: () => E_,
+  $ZodIntersection: () => tE,
+  $ZodJWT: () => L_,
+  $ZodKSUID: () => S_,
   $ZodLazy: () => hd,
-  $ZodLiteral: () => sE,
-  $ZodMAC: () => A_,
-  $ZodMap: () => oE,
-  $ZodNaN: () => yE,
-  $ZodNanoID: () => x_,
-  $ZodNever: () => W_,
-  $ZodNonOptional: () => fE,
-  $ZodNull: () => K_,
-  $ZodNullable: () => dE,
+  $ZodLiteral: () => aE,
+  $ZodMAC: () => $_,
+  $ZodMap: () => rE,
+  $ZodNaN: () => hE,
+  $ZodNanoID: () => b_,
+  $ZodNever: () => V_,
+  $ZodNonOptional: () => mE,
+  $ZodNull: () => G_,
+  $ZodNullable: () => lE,
   $ZodNumber: () => Fh,
-  $ZodNumberFormat: () => j_,
+  $ZodNumberFormat: () => z_,
   $ZodObject: () => NK,
-  $ZodObjectJIT: () => X_,
+  $ZodObjectJIT: () => Y_,
   $ZodOptional: () => Bh,
   $ZodPipe: () => qh,
-  $ZodPrefault: () => mE,
-  $ZodPreprocess: () => bE,
-  $ZodPromise: () => wE,
-  $ZodReadonly: () => xE,
+  $ZodPrefault: () => pE,
+  $ZodPreprocess: () => yE,
+  $ZodPromise: () => IE,
+  $ZodReadonly: () => bE,
   $ZodRealError: () => or,
-  $ZodRecord: () => rE,
+  $ZodRecord: () => nE,
   $ZodRegistry: () => Qh,
-  $ZodSet: () => iE,
+  $ZodSet: () => oE,
   $ZodString: () => Za,
   $ZodStringFormat: () => Ke,
-  $ZodSuccess: () => gE,
-  $ZodSymbol: () => q_,
-  $ZodTemplateLiteral: () => vE,
-  $ZodTransform: () => uE,
+  $ZodSuccess: () => fE,
+  $ZodSymbol: () => B_,
+  $ZodTemplateLiteral: () => xE,
+  $ZodTransform: () => cE,
   $ZodTuple: () => jh,
   $ZodType: () => pe,
-  $ZodULID: () => w_,
-  $ZodURL: () => y_,
-  $ZodUUID: () => m_,
-  $ZodUndefined: () => G_,
+  $ZodULID: () => I_,
+  $ZodURL: () => h_,
+  $ZodUUID: () => p_,
+  $ZodUndefined: () => q_,
   $ZodUnion: () => fd,
-  $ZodUnknown: () => V_,
-  $ZodVoid: () => Z_,
-  $ZodXID: () => S_,
-  $ZodXor: () => Q_,
-  $brand: () => nk,
+  $ZodUnknown: () => H_,
+  $ZodVoid: () => W_,
+  $ZodXID: () => w_,
+  $ZodXor: () => X_,
+  $brand: () => tk,
   $constructor: () => E,
-  $input: () => TE,
-  $output: () => EE,
+  $input: () => EE,
+  $output: () => _E,
   Doc: () => Wa,
   INVALID: () => qn,
   JSONSchema: () => SH,
   JSONSchemaGenerator: () => Dy,
-  NEVER: () => tk,
-  TimePrecision: () => LE,
-  URL_BAD_FORMAT: () => g_,
+  NEVER: () => ek,
+  TimePrecision: () => UE,
+  URL_BAD_FORMAT: () => f_,
   URL_UNPARSEABLE: () => cd,
   ZodCompileAsyncError: () => Jr,
   ZodCompileUnsupportedError: () => Re,
-  _any: () => tT,
-  _array: () => cT,
+  _any: () => eT,
+  _array: () => sT,
   _base64: () => Iy,
   _base64url: () => wy,
-  _bigint: () => WE,
-  _boolean: () => HE,
+  _bigint: () => VE,
+  _boolean: () => KE,
   _catch: () => gle,
   _check: () => sH,
   _cidrv4: () => xy,
   _cidrv6: () => vy,
-  _coercedBigint: () => ZE,
-  _coercedBoolean: () => VE,
-  _coercedDate: () => aT,
-  _coercedNumber: () => zE,
-  _coercedString: () => DE,
-  _creditCard: () => NE,
+  _coercedBigint: () => WE,
+  _coercedBoolean: () => HE,
+  _coercedDate: () => iT,
+  _coercedNumber: () => FE,
+  _coercedString: () => OE,
+  _creditCard: () => ME,
   _cuid: () => py,
   _cuid2: () => my,
-  _custom: () => lT,
-  _date: () => iT,
+  _custom: () => uT,
+  _date: () => oT,
   _decode: () => ph,
   _decodeAsync: () => fh,
   _default: () => ple,
@@ -23179,17 +23219,17 @@ st(ti, {
   _encodeAsync: () => mh,
   _endsWith: () => Pc,
   _enum: () => ale,
-  _file: () => uT,
-  _float32: () => BE,
-  _float64: () => qE,
+  _file: () => cT,
+  _float32: () => jE,
+  _float64: () => BE,
   _gt: () => To,
   _gte: () => gr,
   _guid: () => iy,
-  _iban: () => UE,
+  _iban: () => NE,
   _includes: () => $c,
-  _int: () => jE,
-  _int32: () => GE,
-  _int64: () => JE,
+  _int: () => zE,
+  _int32: () => qE,
+  _int64: () => ZE,
   _intersection: () => tle,
   _ipv4: () => yy,
   _ipv6: () => by,
@@ -23205,7 +23245,7 @@ st(ti, {
   _lowercase: () => Cc,
   _lt: () => Eo,
   _lte: () => fr,
-  _mac: () => ME,
+  _mac: () => DE,
   _map: () => ole,
   _max: () => fr,
   _maxLength: () => ts,
@@ -23215,18 +23255,18 @@ st(ti, {
   _minLength: () => ei,
   _minSize: () => Co,
   _multipleOf: () => Mi,
-  _nan: () => sT,
+  _nan: () => aT,
   _nanoid: () => dy,
   _nativeEnum: () => sle,
   _negative: () => Ey,
-  _never: () => rT,
+  _never: () => nT,
   _nonnegative: () => Cy,
   _nonoptional: () => mle,
   _nonpositive: () => Ty,
   _normalize: () => Mc,
-  _null: () => eT,
+  _null: () => QE,
   _nullable: () => dle,
-  _number: () => FE,
+  _number: () => LE,
   _optional: () => lle,
   _overwrite: () => Yr,
   _parse: () => bc,
@@ -23238,7 +23278,7 @@ st(ti, {
   _property: () => Ry,
   _readonly: () => yle,
   _record: () => rle,
-  _refine: () => dT,
+  _refine: () => lT,
   _regex: () => Tc,
   _safeDecode: () => hh,
   _safeDecodeAsync: () => bh,
@@ -23250,52 +23290,52 @@ st(ti, {
   _size: () => es,
   _slugify: () => Fc,
   _startsWith: () => Ac,
-  _string: () => OE,
+  _string: () => PE,
   _stringFormat: () => rs,
-  _stringbool: () => gT,
+  _stringbool: () => fT,
   _success: () => fle,
-  _superRefine: () => pT,
-  _symbol: () => XE,
+  _superRefine: () => dT,
+  _symbol: () => YE,
   _templateLiteral: () => ble,
   _toLowerCase: () => Uc,
   _toUpperCase: () => Lc,
   _transform: () => ule,
   _trim: () => Nc,
   _tuple: () => nle,
-  _uint32: () => KE,
-  _uint64: () => YE,
+  _uint32: () => GE,
+  _uint64: () => JE,
   _ulid: () => fy,
-  _undefined: () => QE,
+  _undefined: () => XE,
   _union: () => Xue,
-  _unknown: () => nT,
+  _unknown: () => tT,
   _uppercase: () => Rc,
   _url: () => wd,
   _uuid: () => ay,
   _uuidv4: () => sy,
   _uuidv6: () => cy,
   _uuidv7: () => uy,
-  _void: () => oT,
+  _void: () => rT,
   _xid: () => gy,
   _xor: () => Que,
   base64Charset: () => Dh,
   base64urlCharset: () => pd,
-  canParseURL: () => h_,
+  canParseURL: () => g_,
   clone: () => Ge,
-  compile: () => AE,
+  compile: () => $E,
   compileFn: () => ny,
   config: () => Lt,
   createStandardJSONSchemaMethod: () => zc,
-  createToJSONSchemaMethod: () => yT,
+  createToJSONSchemaMethod: () => hT,
   decode: () => nse,
   decodeAsync: () => ose,
-  describe: () => mT,
+  describe: () => pT,
   encode: () => tse,
   encodeAsync: () => rse,
   extractDefs: () => Li,
   finalize: () => Fi,
   flattenError: () => ed,
   formatError: () => td,
-  getDiscriminatedOption: () => eE,
+  getDiscriminatedOption: () => Q_,
   globalConfig: () => ln,
   globalRegistry: () => xn,
   handleUnrepresentable: () => rn,
@@ -23312,11 +23352,11 @@ st(ti, {
   locales: () => Id,
   memoizer: () => xd,
   mergeValues: () => Sc,
-  meta: () => fT,
+  meta: () => mT,
   parse: () => uh,
   parseAsync: () => lh,
   parseURLObject: () => OK,
-  prettifyError: () => sk,
+  prettifyError: () => ak,
   process: () => He,
   processSchema: () => He,
   regexes: () => $r,
@@ -23332,26 +23372,26 @@ st(ti, {
   toDotPath: () => pK,
   toJSONSchema: () => Oy,
   toZod: () => Kl,
-  treeifyError: () => ak,
+  treeifyError: () => ik,
   urlHostnameOk: () => Ah,
   urlProtocolOk: () => Ph,
   util: () => A,
   validate: () => nd,
   validateAsync: () => rd,
   validateURL: () => $h,
-  version: () => l_,
+  version: () => u_,
   withParser: () => ty
 });
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/util.js
 var A = {};
-st(A, {
+ct(A, {
   BIGINT_FORMAT_RANGES: () => Jl,
   CONSTANT_CATCH: () => sh,
-  Class: () => KS,
+  Class: () => GS,
   NUMBER_FORMAT_RANGES: () => Zl,
   aborted: () => Bn,
-  allowsEval: () => WS,
+  allowsEval: () => VS,
   assert: () => hae,
   assertEqual: () => pae,
   assertIs: () => fae,
@@ -23368,14 +23408,14 @@ st(A, {
   clone: () => Ge,
   cloneDef: () => xae,
   codePointLength: () => Ha,
-  constantCatch: () => QS,
+  constantCatch: () => XS,
   createTransparentProxy: () => _ae,
-  defineLazy: () => HS,
+  defineLazy: () => KS,
   defineLazyInternal: () => ke,
   derived: () => Fae,
   esc: () => jn,
   escapeRegex: () => Rr,
-  explicitlyAborted: () => YS,
+  explicitlyAborted: () => JS,
   extend: () => Cae,
   finalizeIssue: () => nr,
   floatSafeRemainder: () => Hl,
@@ -23392,7 +23432,7 @@ st(A, {
   issue: () => yc,
   joinValues: () => T,
   jsonStringifyReplacer: () => fc,
-  members: () => XS,
+  members: () => YS,
   merge: () => $ae,
   mergeDefs: () => Zr,
   normalizeParams: () => N,
@@ -23400,13 +23440,13 @@ st(A, {
   numKeys: () => Sae,
   objectClone: () => yae,
   omit: () => Tae,
-  optionalKeys: () => JS,
+  optionalKeys: () => ZS,
   own: () => Oi,
   parsedType: () => O,
   partial: () => Aae,
   pick: () => Eae,
   prefixIssues: () => tr,
-  primitiveTypes: () => ZS,
+  primitiveTypes: () => WS,
   promiseAllObject: () => Iae,
   propertyKeyTypes: () => Wl,
   randomString: () => wae,
@@ -23414,7 +23454,7 @@ st(A, {
   required: () => Pae,
   safeExtend: () => Rae,
   shallowClone: () => Vl,
-  slugify: () => VS,
+  slugify: () => HS,
   stringifyPrimitive: () => P,
   toZod: () => Kl,
   uint8ArrayToBase64: () => sK,
@@ -23448,7 +23488,7 @@ function T(e, t = "|") {
 function fc(e, t) {
   return typeof t == "bigint" ? t.toString() : t;
 }
-var GS = class {
+var qS = class {
   constructor(t) {
     this._getter = t, this._value = void 0;
   }
@@ -23458,7 +23498,7 @@ var GS = class {
   }
 };
 function gc(e) {
-  return new GS(e);
+  return new qS(e);
 }
 function rh(e) {
   return e == null;
@@ -23472,7 +23512,7 @@ function Hl(e, t) {
   return Math.abs(n - o) < r ? 0 : n - o;
 }
 var nK = /* @__PURE__ */ Symbol("evaluating");
-function HS(e, t, n) {
+function KS(e, t, n) {
   let o;
   Object.defineProperty(e, t, {
     get() {
@@ -23567,7 +23607,7 @@ function wae(e = 10) {
 function jn(e) {
   return JSON.stringify(e);
 }
-function VS(e) {
+function HS(e) {
   return e.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 var oh = "captureStackTrace" in Error ? Error.captureStackTrace : (...e) => {
@@ -23575,7 +23615,7 @@ var oh = "captureStackTrace" in Error ? Error.captureStackTrace : (...e) => {
 function Ka(e) {
   return typeof e == "object" && e !== null && !Array.isArray(e);
 }
-var WS = /* @__PURE__ */ gc(() => {
+var VS = /* @__PURE__ */ gc(() => {
   if (ln.jitless || typeof navigator < "u" && navigator?.userAgent?.includes("Cloudflare"))
     return !1;
   try {
@@ -23625,7 +23665,7 @@ var kae = (e) => {
     default:
       throw new Error(`Unknown data type: ${t}`);
   }
-}, Wl = /* @__PURE__ */ new Set(["string", "number", "symbol"]), ZS = /* @__PURE__ */ new Set([
+}, Wl = /* @__PURE__ */ new Set(["string", "number", "symbol"]), WS = /* @__PURE__ */ new Set([
   "string",
   "number",
   "bigint",
@@ -23682,7 +23722,7 @@ function _ae(e) {
 function P(e) {
   return typeof e == "bigint" ? e.toString() + "n" : typeof e == "string" ? `"${e}"` : `${e}`;
 }
-function JS(e) {
+function ZS(e) {
   return Object.keys(e).filter((t) => e[t]._zod.optin !== void 0 && e[t]._zod.optout === "optional");
 }
 var Zl = {
@@ -23777,7 +23817,7 @@ function Bn(e, t = 0) {
       return !0;
   return !1;
 }
-function YS(e, t = 0) {
+function JS(e, t = 0) {
   if (e.aborted === !0)
     return !0;
   for (let n = t; n < e.issues.length; n++)
@@ -23884,11 +23924,11 @@ function Uae(e) {
 function Lae(e) {
   return Array.from(e).map((t) => t.toString(16).padStart(2, "0")).join("");
 }
-var KS = class {
+var GS = class {
   constructor(...t) {
   }
 };
-function XS(e, t) {
+function YS(e, t) {
   for (let n in t) {
     let o = Object.getOwnPropertyDescriptor(t, n);
     o.get ? Object.defineProperty(e, n, { ...o, enumerable: !1 }) : zae(e, n, o.value);
@@ -23932,7 +23972,7 @@ function jae(e, t) {
   let n = Object.getPrototypeOf(e);
   return t in n ? void 0 : n;
 }
-var qS, Pi = !1, Bae = {
+var BS, Pi = !1, Bae = {
   configurable: !0,
   get() {
     Pi = !0;
@@ -23940,11 +23980,11 @@ var qS, Pi = !1, Bae = {
 };
 function ke(e, t, n) {
   let o = Object.getPrototypeOf(e._zod);
-  if (t in o && qS !== e._zod) {
-    qS = void 0;
+  if (t in o && BS !== e._zod) {
+    BS = void 0;
     return;
   }
-  qS = e._zod, Object.defineProperty(o, t, {
+  BS = e._zod, Object.defineProperty(o, t, {
     configurable: !0,
     get() {
       Object.defineProperty(this, t, Bae);
@@ -23976,15 +24016,15 @@ function qae(e, t, n, o) {
   });
 }
 var sh = "~constantCatch";
-function QS(e) {
+function XS(e) {
   let t = () => e;
   return t[sh] = !0, t;
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/core.js
-var cK, tk = /* @__PURE__ */ Object.freeze({
+var cK, ek = /* @__PURE__ */ Object.freeze({
   status: "aborted"
-}), ek = { value: void 0, enumerable: !1 }, uK = "captureStackTrace" in Error ? Error : null;
+}), QS = { value: void 0, enumerable: !1 }, uK = "captureStackTrace" in Error ? Error : null;
 function Gae(e) {
   let t = uK;
   if (t) {
@@ -24017,11 +24057,11 @@ function E(e, t, n, o) {
       if (b._zod.traits.has(e))
         return;
     } else {
-      ek.value = new i(f);
+      QS.value = new i(f);
       try {
-        Object.defineProperty(b, "_zod", ek);
+        Object.defineProperty(b, "_zod", QS);
       } finally {
-        ek.value = void 0;
+        QS.value = void 0;
       }
     }
     if (b._zod.traits.add(e), t(b, f), s) {
@@ -24029,7 +24069,7 @@ function E(e, t, n, o) {
       for (; S && S !== v; )
         S = Object.getPrototypeOf(S);
       let w = S ?? x;
-      s.has(w) || (s.add(w), XS(w, a));
+      s.has(w) || (s.add(w), YS(w, a));
     }
     let y = h.prototype;
     for (let x in y)
@@ -24055,7 +24095,7 @@ function E(e, t, n, o) {
     value: (b) => o?.Parent && b instanceof o.Parent ? !0 : b?._zod?.traits?.has(e)
   }), Object.defineProperty(h, "name", { value: e }), h;
 }
-var nk = /* @__PURE__ */ Symbol("zod_brand"), rr = class extends Error {
+var tk = /* @__PURE__ */ Symbol("zod_brand"), rr = class extends Error {
   constructor() {
     super("Encountered Promise during synchronous parse. Use .parseAsync() instead.");
   }
@@ -24083,8 +24123,8 @@ var Vae = {
   set: Hae,
   enumerable: !0,
   configurable: !0
-}, ok = { value: void 0, enumerable: !1 }, lK = /* @__PURE__ */ new WeakSet([Object.prototype, Error.prototype]), dK = (e, t) => {
-  e.name = "$ZodError", ok.value = t, Object.defineProperty(e, "issues", ok), ok.value = void 0, Object.defineProperty(e, "message", Vae);
+}, rk = { value: void 0, enumerable: !1 }, lK = /* @__PURE__ */ new WeakSet([Object.prototype, Error.prototype]), dK = (e, t) => {
+  e.name = "$ZodError", rk.value = t, Object.defineProperty(e, "issues", rk), rk.value = void 0, Object.defineProperty(e, "message", Vae);
   let n = Object.getPrototypeOf(e);
   lK.has(n) || (lK.add(n), Object.defineProperty(n, "toString", {
     configurable: !0,
@@ -24097,7 +24137,7 @@ var Vae = {
       Object.defineProperty(this, "toString", { value: o, configurable: !0, writable: !0 });
     }
   }));
-}, ik = E("$ZodError", dK), or = E("$ZodError", dK, void 0, {
+}, ok = E("$ZodError", dK), or = E("$ZodError", dK, void 0, {
   Parent: Error
 });
 function Wae(e, t, n) {
@@ -24144,7 +24184,7 @@ function td(e, t = (n) => n.message) {
   };
   return o(e), n;
 }
-function ak(e, t = (n) => n.message) {
+function ik(e, t = (n) => n.message) {
   let n = { errors: [] }, o = (r, i = []) => {
     var a;
     for (let s of r.issues)
@@ -24180,7 +24220,7 @@ function pK(e) {
     typeof o == "number" ? t.push(`[${o}]`) : typeof o == "symbol" ? t.push(`[${JSON.stringify(String(o))}]`) : /[^\w$]/.test(o) ? t.push(`[${JSON.stringify(o)}]`) : (t.length && t.push("."), t.push(o));
   return t.join("");
 }
-function sk(e) {
+function ak(e) {
   let t = [], n = [...e.issues].sort((o, r) => (o.path ?? []).length - (r.path ?? []).length);
   for (let o of n)
     t.push(`\u2716 ${o.message}`), o.path?.length && t.push(`  \u2192 at ${pK(o.path)}`);
@@ -24282,46 +24322,46 @@ var rd = async (e, t, n) => {
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/regexes.js
 var $r = {};
-st($r, {
-  anyString: () => Dk,
-  base64: () => _k,
-  base64url: () => Ek,
-  bigint: () => Nk,
-  boolean: () => Uk,
+ct($r, {
+  anyString: () => Ok,
+  base64: () => kk,
+  base64url: () => _k,
+  bigint: () => Mk,
+  boolean: () => Nk,
   browserEmail: () => hse,
-  cidrv4: () => Sk,
-  cidrv6: () => kk,
+  cidrv4: () => wk,
+  cidrv6: () => Sk,
   creditCard: () => xh,
-  cuid: () => uk,
-  cuid2: () => lk,
-  currencyCode: () => $k,
-  date: () => Ak,
-  datetime: () => Ok,
-  domain: () => Ck,
-  duration: () => hk,
-  e164: () => Rk,
-  email: () => bk,
-  emoji: () => xk,
+  cuid: () => ck,
+  cuid2: () => uk,
+  currencyCode: () => Rk,
+  date: () => $k,
+  datetime: () => Pk,
+  domain: () => Tk,
+  duration: () => gk,
+  e164: () => Ck,
+  email: () => yk,
+  emoji: () => bk,
   extendedDuration: () => use,
-  guid: () => yk,
-  hex: () => Bk,
-  hostname: () => Tk,
+  guid: () => hk,
+  hex: () => jk,
+  hostname: () => Ek,
   html5Email: () => mse,
   httpProtocol: () => od,
   iban: () => vh,
   idnEmail: () => gse,
   integer: () => id,
-  ipv4: () => vk,
-  ipv6: () => Ik,
-  ksuid: () => mk,
-  lowercase: () => zk,
-  mac: () => wk,
+  ipv4: () => xk,
+  ipv6: () => vk,
+  ksuid: () => pk,
+  lowercase: () => Fk,
+  mac: () => Ik,
   md5_base64: () => vse,
   md5_base64url: () => Ise,
   md5_hex: () => xse,
-  nanoid: () => fk,
-  nanoidOfLength: () => gk,
-  null: () => Lk,
+  nanoid: () => mk,
+  nanoidOfLength: () => fk,
+  null: () => Uk,
   number: () => Qo,
   rfc5322Email: () => fse,
   sha1_base64: () => Sse,
@@ -24336,53 +24376,53 @@ st($r, {
   sha512_base64: () => Pse,
   sha512_base64url: () => Ose,
   sha512_hex: () => Ase,
-  string: () => Mk,
-  time: () => Pk,
-  ulid: () => dk,
-  undefined: () => Fk,
+  string: () => Dk,
+  time: () => Ak,
+  ulid: () => lk,
+  undefined: () => Lk,
   unicodeEmail: () => fK,
-  uppercase: () => jk,
+  uppercase: () => zk,
   uuid: () => Va,
   uuid4: () => lse,
   uuid6: () => dse,
   uuid7: () => pse,
-  xid: () => pk
+  xid: () => dk
 });
-var uk = /^[cC][0-9a-z]{6,}$/, lk = /^[0-9a-z]+$/, dk = /^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$/, pk = /^[0-9a-vA-V]{20}$/, mk = /^[A-Za-z0-9]{27}$/, fk = /^[a-zA-Z0-9_-]{21}$/;
-function gk(e) {
+var ck = /^[cC][0-9a-z]{6,}$/, uk = /^[0-9a-z]+$/, lk = /^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$/, dk = /^[0-9a-vA-V]{20}$/, pk = /^[A-Za-z0-9]{27}$/, mk = /^[a-zA-Z0-9_-]{21}$/;
+function fk(e) {
   return new RegExp(`^[a-zA-Z0-9_-]{${e}}$`);
 }
-var hk = /^P(?:(\d+W)|(?!.*W)(?=\d|T\d)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+([.,]\d+)?S)?)?)$/, use = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/, yk = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/, Va = (e) => e ? new RegExp(`^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-${e}[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$`) : /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/, lse = /* @__PURE__ */ Va(4), dse = /* @__PURE__ */ Va(6), pse = /* @__PURE__ */ Va(7), bk = /^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/, mse = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/, fse = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/, fK = /^[^\s@"]{1,64}@[^\s@]{1,255}$/u, gse = fK, hse = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/, yse = "^(?=[\\s\\S]*[\\p{Extended_Pictographic}\\p{Regional_Indicator}\\u20E3])[\\p{Extended_Pictographic}\\p{Emoji_Component}]+$";
-function xk() {
+var gk = /^P(?:(\d+W)|(?!.*W)(?=\d|T\d)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+([.,]\d+)?S)?)?)$/, use = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/, hk = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/, Va = (e) => e ? new RegExp(`^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-${e}[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$`) : /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/, lse = /* @__PURE__ */ Va(4), dse = /* @__PURE__ */ Va(6), pse = /* @__PURE__ */ Va(7), yk = /^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/, mse = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/, fse = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/, fK = /^[^\s@"]{1,64}@[^\s@]{1,255}$/u, gse = fK, hse = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/, yse = "^(?=[\\s\\S]*[\\p{Extended_Pictographic}\\p{Regional_Indicator}\\u20E3])[\\p{Extended_Pictographic}\\p{Emoji_Component}]+$";
+function bk() {
   return new RegExp(yse, "u");
 }
-var vk = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/, Ik = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/, wk = (e) => {
+var xk = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/, vk = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/, Ik = (e) => {
   let t = Rr(e ?? ":");
   return new RegExp(`^(?:[0-9A-F]{2}${t}){5}[0-9A-F]{2}$|^(?:[0-9a-f]{2}${t}){5}[0-9a-f]{2}$`);
-}, Sk = /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/([0-9]|[1-2][0-9]|3[0-2])$/, kk = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/, _k = /^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$/, Ek = /^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2,3})?$/, Tk = /^(?=.{1,253}\.?$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[-0-9a-zA-Z]{0,61}[0-9a-zA-Z])?)*\.?$/, Ck = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$/, od = /^https?$/, Rk = /^\+[1-9]\d{6,14}$/, xh = /^\d(?:[ -]?\d){11,18}$/, $k = /^(?:AED|AFN|ALL|AMD|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAD|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XCG|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG)$/, vh = /^[A-Z]{2}(?!00|01|99)\d{2}[A-Z0-9]{11,30}$/, gK = "(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))";
+}, wk = /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/([0-9]|[1-2][0-9]|3[0-2])$/, Sk = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/, kk = /^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$/, _k = /^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2,3})?$/, Ek = /^(?=.{1,253}\.?$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[-0-9a-zA-Z]{0,61}[0-9a-zA-Z])?)*\.?$/, Tk = /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$/, od = /^https?$/, Ck = /^\+[1-9]\d{6,14}$/, xh = /^\d(?:[ -]?\d){11,18}$/, Rk = /^(?:AED|AFN|ALL|AMD|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAD|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XCG|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG)$/, vh = /^[A-Z]{2}(?!00|01|99)\d{2}[A-Z0-9]{11,30}$/, gK = "(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))";
 function bse(e) {
   return new RegExp(`^${e}$`);
 }
-var Ak = /* @__PURE__ */ bse(gK);
-function ck(e) {
+var $k = /* @__PURE__ */ bse(gK);
+function sk(e) {
   let t = "(?:[01]\\d|2[0-3]):[0-5]\\d";
   return typeof e.precision == "number" ? e.precision === -1 ? `${t}` : e.precision === 0 ? `${t}:[0-5]\\d` : `${t}:[0-5]\\d\\.\\d{${e.precision}}` : e.seconds ? `${t}:[0-5]\\d(?:\\.\\d+)?` : `${t}(?::[0-5]\\d(?:\\.\\d+)?)?`;
 }
-function Pk(e) {
-  return new RegExp(`^${ck(e)}$`);
+function Ak(e) {
+  return new RegExp(`^${sk(e)}$`);
 }
-function Ok(e) {
+function Pk(e) {
   let t = ["Z"];
   e.offset && t.push("([+-](?:[01]\\d|2[0-3]):[0-5]\\d)");
-  let n = `${ck({ precision: e.precision, seconds: !0 })}(?:${t.join("|")})`, o = e.local ? `${n}|${ck({ precision: e.precision })}` : n;
+  let n = `${sk({ precision: e.precision, seconds: !0 })}(?:${t.join("|")})`, o = e.local ? `${n}|${sk({ precision: e.precision })}` : n;
   return new RegExp(`^${gK}T(?:${o})$`);
 }
-var Dk = /^[\s\S]{0,}$/, Mk = (e) => {
+var Ok = /^[\s\S]{0,}$/, Dk = (e) => {
   let t = e ? `[\\s\\S]{${e?.minimum ?? 0},${e?.maximum ?? ""}}` : "[\\s\\S]*";
   return new RegExp(`^${t}$`);
-}, Nk = /^-?\d+n?$/, id = /^-?\d+$/, Qo = /^-?\d+(?:\.\d+)?$/, Uk = /^(?:true|false)$/i, Lk = /^null$/i;
-var Fk = /^undefined$/i;
-var zk = /^[^A-Z]*$/, jk = /^[^a-z]*$/, Bk = /^[0-9a-fA-F]*$/;
+}, Mk = /^-?\d+n?$/, id = /^-?\d+$/, Qo = /^-?\d+(?:\.\d+)?$/, Nk = /^(?:true|false)$/i, Uk = /^null$/i;
+var Lk = /^undefined$/i;
+var Fk = /^[^A-Z]*$/, zk = /^[^a-z]*$/, jk = /^[0-9a-fA-F]*$/;
 function ad(e, t) {
   return new RegExp(`^[A-Za-z0-9+/]{${e}}${t}$`);
 }
@@ -24395,10 +24435,10 @@ var xse = /^[0-9a-fA-F]{32}$/, vse = /* @__PURE__ */ ad(22, "=="), Ise = /* @__P
 var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
   var n;
   e._zod ?? (e._zod = {}), e._zod.def = t, (n = e._zod).onattach ?? (n.onattach = []);
-}), qk = (e) => {
+}), Bk = (e) => {
   let t = e.value;
   return !rh(t) && t.size !== void 0;
-}, Gk = (e) => {
+}, qk = (e) => {
   let t = e.value;
   return !rh(t) && t.length !== void 0;
 }, Ih = {
@@ -24433,7 +24473,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Kk = /* @__PURE__ */ E("$ZodCheckMultipleOf", (e, t) => {
+}), Gk = /* @__PURE__ */ E("$ZodCheckMultipleOf", (e, t) => {
   Qe.init(e, t), e._zod.check = (n) => {
     if (typeof n.value != typeof t.value)
       throw new Error("Cannot mix number and bigint in multiple_of check.");
@@ -24449,7 +24489,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Hk = /* @__PURE__ */ E("$ZodCheckNumberFormat", (e, t) => {
+}), Kk = /* @__PURE__ */ E("$ZodCheckNumberFormat", (e, t) => {
   Qe.init(e, t), t.format = t.format || "float64";
   let n = t.format?.includes("int"), o = n ? "int" : "number", [r, i] = Zl[t.format];
   e._zod.check = (a) => {
@@ -24507,7 +24547,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Vk = /* @__PURE__ */ E("$ZodCheckBigIntFormat", (e, t) => {
+}), Hk = /* @__PURE__ */ E("$ZodCheckBigIntFormat", (e, t) => {
   Qe.init(e, t);
   let [n, o] = Jl[t.format];
   e._zod.check = (r) => {
@@ -24530,9 +24570,9 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Wk = /* @__PURE__ */ E("$ZodCheckMaxSize", (e, t) => {
+}), Vk = /* @__PURE__ */ E("$ZodCheckMaxSize", (e, t) => {
   var n;
-  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = qk), e._zod.check = (o) => {
+  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = Bk), e._zod.check = (o) => {
     let r = o.value;
     r.size <= t.maximum || o.issues.push({
       origin: Yl(r),
@@ -24544,9 +24584,9 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Zk = /* @__PURE__ */ E("$ZodCheckMinSize", (e, t) => {
+}), Wk = /* @__PURE__ */ E("$ZodCheckMinSize", (e, t) => {
   var n;
-  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = qk), e._zod.check = (o) => {
+  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = Bk), e._zod.check = (o) => {
     let r = o.value;
     r.size >= t.minimum || o.issues.push({
       origin: Yl(r),
@@ -24558,9 +24598,9 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Jk = /* @__PURE__ */ E("$ZodCheckSizeEquals", (e, t) => {
+}), Zk = /* @__PURE__ */ E("$ZodCheckSizeEquals", (e, t) => {
   var n;
-  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = qk), e._zod.check = (o) => {
+  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = Bk), e._zod.check = (o) => {
     let r = o.value, i = r.size;
     if (i === t.size)
       return;
@@ -24575,9 +24615,9 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Yk = /* @__PURE__ */ E("$ZodCheckMaxLength", (e, t) => {
+}), Jk = /* @__PURE__ */ E("$ZodCheckMaxLength", (e, t) => {
   var n;
-  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = Gk), e._zod.check = (o) => {
+  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = qk), e._zod.check = (o) => {
     let r = o.value, i = r.length;
     if ((typeof r == "string" && i > t.maximum ? Ha(r) : i) <= t.maximum)
       return;
@@ -24592,9 +24632,9 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Xk = /* @__PURE__ */ E("$ZodCheckMinLength", (e, t) => {
+}), Yk = /* @__PURE__ */ E("$ZodCheckMinLength", (e, t) => {
   var n;
-  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = Gk), e._zod.check = (o) => {
+  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = qk), e._zod.check = (o) => {
     let r = o.value, i = r.length;
     if ((typeof r == "string" && i >= t.minimum && i < t.minimum * 2 ? Ha(r) : i) >= t.minimum)
       return;
@@ -24609,9 +24649,9 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), Qk = /* @__PURE__ */ E("$ZodCheckLengthEquals", (e, t) => {
+}), Xk = /* @__PURE__ */ E("$ZodCheckLengthEquals", (e, t) => {
   var n;
-  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = Gk), e._zod.check = (o) => {
+  Qe.init(e, t), (n = e._zod.def).when ?? (n.when = qk), e._zod.check = (o) => {
     let r = o.value, i = r.length, a = typeof r == "string" && i >= t.length && i <= t.length * 2 ? Ha(r) : i;
     if (a === t.length)
       return;
@@ -24640,7 +24680,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
     });
   }) : (o = e._zod).check ?? (o.check = () => {
   });
-}), e_ = /* @__PURE__ */ E("$ZodCheckRegex", (e, t) => {
+}), Qk = /* @__PURE__ */ E("$ZodCheckRegex", (e, t) => {
   wc.init(e, t), e._zod.check = (n) => {
     t.pattern.lastIndex = 0, !t.pattern.test(n.value) && n.issues.push({
       origin: "string",
@@ -24652,11 +24692,11 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), t_ = /* @__PURE__ */ E("$ZodCheckLowerCase", (e, t) => {
+}), e_ = /* @__PURE__ */ E("$ZodCheckLowerCase", (e, t) => {
+  t.pattern ?? (t.pattern = Fk), wc.init(e, t);
+}), t_ = /* @__PURE__ */ E("$ZodCheckUpperCase", (e, t) => {
   t.pattern ?? (t.pattern = zk), wc.init(e, t);
-}), n_ = /* @__PURE__ */ E("$ZodCheckUpperCase", (e, t) => {
-  t.pattern ?? (t.pattern = jk), wc.init(e, t);
-}), r_ = /* @__PURE__ */ E("$ZodCheckIncludes", (e, t) => {
+}), n_ = /* @__PURE__ */ E("$ZodCheckIncludes", (e, t) => {
   Qe.init(e, t);
   let n = Rr(t.includes), o = new RegExp(typeof t.position == "number" ? `^.{${t.position},}${n}` : n);
   t.pattern = o, e._zod.check = (r) => {
@@ -24670,7 +24710,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), o_ = /* @__PURE__ */ E("$ZodCheckStartsWith", (e, t) => {
+}), r_ = /* @__PURE__ */ E("$ZodCheckStartsWith", (e, t) => {
   Qe.init(e, t);
   let n = new RegExp(`^${Rr(t.prefix)}.*`);
   t.pattern ?? (t.pattern = n), e._zod.check = (o) => {
@@ -24684,7 +24724,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
       continue: !t.abort
     });
   };
-}), i_ = /* @__PURE__ */ E("$ZodCheckEndsWith", (e, t) => {
+}), o_ = /* @__PURE__ */ E("$ZodCheckEndsWith", (e, t) => {
   Qe.init(e, t);
   let n = new RegExp(`.*${Rr(t.suffix)}$`);
   t.pattern ?? (t.pattern = n), e._zod.check = (o) => {
@@ -24702,7 +24742,7 @@ var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
 function wh(e, t, n) {
   e.issues.length && t.issues.push(...tr(n, e.issues));
 }
-var a_ = /* @__PURE__ */ E("$ZodCheckProperty", (e, t) => {
+var i_ = /* @__PURE__ */ E("$ZodCheckProperty", (e, t) => {
   Qe.init(e, t), e._zod.check = (n) => {
     let o = t.schema._zod.run({
       value: n.value[t.property],
@@ -24712,7 +24752,7 @@ var a_ = /* @__PURE__ */ E("$ZodCheckProperty", (e, t) => {
       return o.then((r) => wh(r, n, t.property));
     wh(o, n, t.property);
   };
-}), s_ = /* @__PURE__ */ E("$ZodCheckProperties", (e, t) => {
+}), a_ = /* @__PURE__ */ E("$ZodCheckProperties", (e, t) => {
   Qe.init(e, t), Ql(e, Symbol.iterator, function* () {
     yield e;
   });
@@ -24732,7 +24772,7 @@ var a_ = /* @__PURE__ */ E("$ZodCheckProperty", (e, t) => {
       return Promise.all(i).then(() => {
       });
   };
-}), c_ = /* @__PURE__ */ E("$ZodCheckMimeType", (e, t) => {
+}), s_ = /* @__PURE__ */ E("$ZodCheckMimeType", (e, t) => {
   Qe.init(e, t);
   let n = new Set(t.mime);
   e._zod.check = (o) => {
@@ -24744,7 +24784,7 @@ var a_ = /* @__PURE__ */ E("$ZodCheckProperty", (e, t) => {
       continue: !t.abort
     });
   };
-}), u_ = /* @__PURE__ */ E("$ZodCheckOverwrite", (e, t) => {
+}), c_ = /* @__PURE__ */ E("$ZodCheckOverwrite", (e, t) => {
   Qe.init(e, t), e._zod.check = (n) => {
     n.value = t.tx(n.value);
   };
@@ -24784,7 +24824,7 @@ ${n.join(`
 };
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/versions.js
-var l_ = {
+var u_ = {
   major: 4,
   minor: 6,
   patch: 5
@@ -24793,7 +24833,7 @@ var l_ = {
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/schemas.js
 var pe = /* @__PURE__ */ E("$ZodType", (e, t) => {
   var n;
-  e ?? (e = {}), e._zod.def = t, e._zod.bag = e._zod.bag || {}, e._zod.version = l_;
+  e ?? (e = {}), e._zod.def = t, e._zod.bag = e._zod.bag || {}, e._zod.version = u_;
   let o = e._zod.def.checks, r = e._zod.traits.has("$ZodCheck") ? [e, ...o ?? []] : o?.length ? [...o] : [];
   for (let i of r)
     for (let a of i._zod.onattach)
@@ -24809,7 +24849,7 @@ var pe = /* @__PURE__ */ E("$ZodType", (e, t) => {
       let m = Bn(s), h;
       for (let b of u) {
         if (b._zod.def.when) {
-          if (YS(s) || !b._zod.def.when(s))
+          if (JS(s) || !b._zod.def.when(s))
             continue;
         } else if (m)
           continue;
@@ -24884,7 +24924,7 @@ function Rh(e) {
   };
 }
 var Za = /* @__PURE__ */ E("$ZodString", (e, t) => {
-  pe.init(e, t), e._zod.pattern = t.pattern ?? Dk, e._zod.parse = (n, o) => {
+  pe.init(e, t), e._zod.pattern = t.pattern ?? Ok, e._zod.parse = (n, o) => {
     if (t.coerce)
       try {
         n.value = String(n.value);
@@ -24899,9 +24939,9 @@ var Za = /* @__PURE__ */ E("$ZodString", (e, t) => {
   };
 }), Ke = /* @__PURE__ */ E("$ZodStringFormat", (e, t) => {
   wc.init(e, t), Za.init(e, t);
-}), p_ = /* @__PURE__ */ E("$ZodGUID", (e, t) => {
-  t.pattern ?? (t.pattern = yk), Ke.init(e, t);
-}), m_ = /* @__PURE__ */ E("$ZodUUID", (e, t) => {
+}), d_ = /* @__PURE__ */ E("$ZodGUID", (e, t) => {
+  t.pattern ?? (t.pattern = hk), Ke.init(e, t);
+}), p_ = /* @__PURE__ */ E("$ZodUUID", (e, t) => {
   if (t.version) {
     let o = {
       v1: 1,
@@ -24919,10 +24959,10 @@ var Za = /* @__PURE__ */ E("$ZodString", (e, t) => {
   } else
     t.pattern ?? (t.pattern = Va());
   Ke.init(e, t);
-}), f_ = /* @__PURE__ */ E("$ZodEmail", (e, t) => {
-  t.pattern ?? (t.pattern = bk), Ke.init(e, t);
-}), g_ = 1, cd = 2;
-function h_(e) {
+}), m_ = /* @__PURE__ */ E("$ZodEmail", (e, t) => {
+  t.pattern ?? (t.pattern = yk), Ke.init(e, t);
+}), f_ = 1, cd = 2;
+function g_(e) {
   try {
     return typeof URL < "u" && typeof URL.canParse == "function" ? URL.canParse(e) : (new URL(e), !0);
   } catch {
@@ -24930,11 +24970,11 @@ function h_(e) {
   }
 }
 function $h(e, t) {
-  return !("normalize" in t) && !("hostname" in t) && !("protocol" in t) ? h_(e) || cd : OK(e, t);
+  return !("normalize" in t) && !("hostname" in t) && !("protocol" in t) ? g_(e) || cd : OK(e, t);
 }
 function OK(e, t) {
   if (!t.normalize && t.protocol?.source === od.source && !/^https?:\/\//i.test(e))
-    return g_;
+    return f_;
   try {
     if (typeof URL < "u") {
       let n = URL;
@@ -24956,11 +24996,11 @@ function Ah(e, t) {
 function Ph(e, t) {
   return t.lastIndex = 0, t.test(e.protocol.endsWith(":") ? e.protocol.slice(0, -1) : e.protocol);
 }
-var y_ = /* @__PURE__ */ E("$ZodURL", (e, t) => {
+var h_ = /* @__PURE__ */ E("$ZodURL", (e, t) => {
   Ke.init(e, t), e._zod.check = (n) => {
     try {
       let o = n.value.trim(), r = $h(o, t);
-      if (r === g_) {
+      if (r === f_) {
         n.issues.push({
           code: "invalid_format",
           format: "url",
@@ -25013,38 +25053,38 @@ var y_ = /* @__PURE__ */ E("$ZodURL", (e, t) => {
       });
     }
   };
-}), b_ = /* @__PURE__ */ E("$ZodEmoji", (e, t) => {
-  t.pattern ?? (t.pattern = xk()), Ke.init(e, t);
-}), x_ = /* @__PURE__ */ E("$ZodNanoID", (e, t) => {
+}), y_ = /* @__PURE__ */ E("$ZodEmoji", (e, t) => {
+  t.pattern ?? (t.pattern = bk()), Ke.init(e, t);
+}), b_ = /* @__PURE__ */ E("$ZodNanoID", (e, t) => {
   if (t.length !== void 0 && (!Number.isInteger(t.length) || t.length < 1))
     throw new Error(`Invalid nanoid length: ${t.length}`);
-  t.pattern ?? (t.pattern = t.length === void 0 ? fk : gk(t.length)), Ke.init(e, t);
-}), v_ = /* @__PURE__ */ E("$ZodCUID", (e, t) => {
+  t.pattern ?? (t.pattern = t.length === void 0 ? mk : fk(t.length)), Ke.init(e, t);
+}), x_ = /* @__PURE__ */ E("$ZodCUID", (e, t) => {
+  t.pattern ?? (t.pattern = ck), Ke.init(e, t);
+}), v_ = /* @__PURE__ */ E("$ZodCUID2", (e, t) => {
   t.pattern ?? (t.pattern = uk), Ke.init(e, t);
-}), I_ = /* @__PURE__ */ E("$ZodCUID2", (e, t) => {
+}), I_ = /* @__PURE__ */ E("$ZodULID", (e, t) => {
   t.pattern ?? (t.pattern = lk), Ke.init(e, t);
-}), w_ = /* @__PURE__ */ E("$ZodULID", (e, t) => {
+}), w_ = /* @__PURE__ */ E("$ZodXID", (e, t) => {
   t.pattern ?? (t.pattern = dk), Ke.init(e, t);
-}), S_ = /* @__PURE__ */ E("$ZodXID", (e, t) => {
+}), S_ = /* @__PURE__ */ E("$ZodKSUID", (e, t) => {
   t.pattern ?? (t.pattern = pk), Ke.init(e, t);
-}), k_ = /* @__PURE__ */ E("$ZodKSUID", (e, t) => {
-  t.pattern ?? (t.pattern = mk), Ke.init(e, t);
-}), __ = /* @__PURE__ */ E("$ZodISODateTime", (e, t) => {
-  t.pattern ?? (t.pattern = Ok(t)), Ke.init(e, t);
-}), E_ = /* @__PURE__ */ E("$ZodISODate", (e, t) => {
-  t.pattern ?? (t.pattern = Ak), Ke.init(e, t);
-}), T_ = /* @__PURE__ */ E("$ZodISOTime", (e, t) => {
+}), k_ = /* @__PURE__ */ E("$ZodISODateTime", (e, t) => {
   t.pattern ?? (t.pattern = Pk(t)), Ke.init(e, t);
-}), C_ = /* @__PURE__ */ E("$ZodISODuration", (e, t) => {
-  t.pattern ?? (t.pattern = hk), Ke.init(e, t);
-}), R_ = /* @__PURE__ */ E("$ZodIPv4", (e, t) => {
-  t.pattern ?? (t.pattern = vk), Ke.init(e, t);
+}), __ = /* @__PURE__ */ E("$ZodISODate", (e, t) => {
+  t.pattern ?? (t.pattern = $k), Ke.init(e, t);
+}), E_ = /* @__PURE__ */ E("$ZodISOTime", (e, t) => {
+  t.pattern ?? (t.pattern = Ak(t)), Ke.init(e, t);
+}), T_ = /* @__PURE__ */ E("$ZodISODuration", (e, t) => {
+  t.pattern ?? (t.pattern = gk), Ke.init(e, t);
+}), C_ = /* @__PURE__ */ E("$ZodIPv4", (e, t) => {
+  t.pattern ?? (t.pattern = xk), Ke.init(e, t);
 }), Nse = /^[0-9a-fA-F:.]+$/;
 function ld(e) {
-  return Nse.test(e) ? h_(`http://[${e}]`) : !1;
+  return Nse.test(e) ? g_(`http://[${e}]`) : !1;
 }
-var $_ = /* @__PURE__ */ E("$ZodIPv6", (e, t) => {
-  t.pattern ?? (t.pattern = Ik), Ke.init(e, t), e._zod.check = (n) => {
+var R_ = /* @__PURE__ */ E("$ZodIPv6", (e, t) => {
+  t.pattern ?? (t.pattern = vk), Ke.init(e, t), e._zod.check = (n) => {
     ld(n.value) || n.issues.push({
       code: "invalid_format",
       format: "ipv6",
@@ -25053,10 +25093,10 @@ var $_ = /* @__PURE__ */ E("$ZodIPv6", (e, t) => {
       continue: !t.abort
     });
   };
-}), A_ = /* @__PURE__ */ E("$ZodMAC", (e, t) => {
-  t.pattern ?? (t.pattern = wk(t.delimiter)), Ke.init(e, t);
-}), P_ = /* @__PURE__ */ E("$ZodCIDRv4", (e, t) => {
-  t.pattern ?? (t.pattern = Sk), Ke.init(e, t);
+}), $_ = /* @__PURE__ */ E("$ZodMAC", (e, t) => {
+  t.pattern ?? (t.pattern = Ik(t.delimiter)), Ke.init(e, t);
+}), A_ = /* @__PURE__ */ E("$ZodCIDRv4", (e, t) => {
+  t.pattern ?? (t.pattern = wk), Ke.init(e, t);
 });
 function Oh(e) {
   let t = e.split("/");
@@ -25068,8 +25108,8 @@ function Oh(e) {
   let r = Number(o);
   return `${r}` !== o || r < 0 || r > 128 ? !1 : ld(n);
 }
-var O_ = /* @__PURE__ */ E("$ZodCIDRv6", (e, t) => {
-  t.pattern ?? (t.pattern = kk), Ke.init(e, t), e._zod.check = (n) => {
+var P_ = /* @__PURE__ */ E("$ZodCIDRv6", (e, t) => {
+  t.pattern ?? (t.pattern = Sk), Ke.init(e, t), e._zod.check = (n) => {
     Oh(n.value) || n.issues.push({
       code: "invalid_format",
       format: "cidrv6",
@@ -25090,7 +25130,7 @@ function dd(e) {
     return !1;
   }
 }
-var Dh = /^[0-9a-zA-Z+/]*={0,2}$/, D_ = /* @__PURE__ */ E("$ZodBase64", (e, t) => {
+var Dh = /^[0-9a-zA-Z+/]*={0,2}$/, O_ = /* @__PURE__ */ E("$ZodBase64", (e, t) => {
   t.pattern ?? (t.pattern = Dh), Ke.init(e, t), e._zod.check = (n) => {
     dd(n.value) || n.issues.push({
       code: "invalid_format",
@@ -25107,7 +25147,7 @@ function Mh(e) {
   let t = e.replace(/[-_]/g, (o) => o === "-" ? "+" : "/"), n = t.padEnd(Math.ceil(t.length / 4) * 4, "=");
   return dd(n);
 }
-var M_ = /* @__PURE__ */ E("$ZodBase64URL", (e, t) => {
+var D_ = /* @__PURE__ */ E("$ZodBase64URL", (e, t) => {
   t.pattern ?? (t.pattern = pd), Ke.init(e, t), e._zod.check = (n) => {
     Mh(n.value) || n.issues.push({
       code: "invalid_format",
@@ -25117,8 +25157,8 @@ var M_ = /* @__PURE__ */ E("$ZodBase64URL", (e, t) => {
       continue: !t.abort
     });
   };
-}), N_ = /* @__PURE__ */ E("$ZodE164", (e, t) => {
-  t.pattern ?? (t.pattern = Rk), Ke.init(e, t);
+}), M_ = /* @__PURE__ */ E("$ZodE164", (e, t) => {
+  t.pattern ?? (t.pattern = Ck), Ke.init(e, t);
 }), Use = /[- ]/g;
 function Lse(e) {
   let t = e.length, n = 1, o = 0;
@@ -25131,7 +25171,7 @@ function Lse(e) {
 function Nh(e) {
   return xh.test(e) ? Lse(e.replace(Use, "")) : !1;
 }
-var U_ = /* @__PURE__ */ E("$ZodCreditCard", (e, t) => {
+var N_ = /* @__PURE__ */ E("$ZodCreditCard", (e, t) => {
   t.pattern ?? (t.pattern = xh), Ke.init(e, t), e._zod.check = (n) => {
     Nh(n.value) || n.issues.push({
       code: "invalid_format",
@@ -25157,7 +25197,7 @@ function Fse(e) {
 function Uh(e) {
   return vh.test(e) ? Fse(e) : !1;
 }
-var L_ = /* @__PURE__ */ E("$ZodIBAN", (e, t) => {
+var U_ = /* @__PURE__ */ E("$ZodIBAN", (e, t) => {
   t.pattern ?? (t.pattern = vh), Ke.init(e, t), e._zod.check = (n) => {
     Uh(n.value) || n.issues.push({
       code: "invalid_format",
@@ -25182,7 +25222,7 @@ function Lh(e, t = null) {
     return !1;
   }
 }
-var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
+var L_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
   Ke.init(e, t), e._zod.check = (n) => {
     Lh(n.value, t.alg) || n.issues.push({
       code: "invalid_format",
@@ -25192,7 +25232,7 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       continue: !t.abort
     });
   };
-}), z_ = /* @__PURE__ */ E("$ZodCustomStringFormat", (e, t) => {
+}), F_ = /* @__PURE__ */ E("$ZodCustomStringFormat", (e, t) => {
   Ke.init(e, t), e._zod.check = (n) => {
     t.fn(n.value) || n.issues.push({
       code: "invalid_format",
@@ -25221,10 +25261,10 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       ...i ? { received: i } : {}
     }), n;
   };
-}), j_ = /* @__PURE__ */ E("$ZodNumberFormat", (e, t) => {
-  Hk.init(e, t), Fh.init(e, t);
+}), z_ = /* @__PURE__ */ E("$ZodNumberFormat", (e, t) => {
+  Kk.init(e, t), Fh.init(e, t);
 }), md = /* @__PURE__ */ E("$ZodBoolean", (e, t) => {
-  pe.init(e, t), e._zod.pattern = Uk, e._zod.parse = (n, o) => {
+  pe.init(e, t), e._zod.pattern = Nk, e._zod.parse = (n, o) => {
     if (t.coerce)
       try {
         n.value = !!n.value;
@@ -25239,7 +25279,7 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
     }), n;
   };
 }), zh = /* @__PURE__ */ E("$ZodBigInt", (e, t) => {
-  pe.init(e, t), e._zod.pattern = Nk, e._zod.parse = (n, o) => {
+  pe.init(e, t), e._zod.pattern = Mk, e._zod.parse = (n, o) => {
     if (t.coerce)
       try {
         n.value = BigInt(n.value);
@@ -25252,9 +25292,9 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       inst: e
     }), n;
   };
-}), B_ = /* @__PURE__ */ E("$ZodBigIntFormat", (e, t) => {
-  Vk.init(e, t), zh.init(e, t);
-}), q_ = /* @__PURE__ */ E("$ZodSymbol", (e, t) => {
+}), j_ = /* @__PURE__ */ E("$ZodBigIntFormat", (e, t) => {
+  Hk.init(e, t), zh.init(e, t);
+}), B_ = /* @__PURE__ */ E("$ZodSymbol", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     let r = n.value;
     return typeof r == "symbol" || n.issues.push({
@@ -25264,8 +25304,8 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       inst: e
     }), n;
   };
-}), G_ = /* @__PURE__ */ E("$ZodUndefined", (e, t) => {
-  pe.init(e, t), e._zod.pattern = Fk, e._zod.values = /* @__PURE__ */ new Set([void 0]), e._zod.parse = (n, o) => {
+}), q_ = /* @__PURE__ */ E("$ZodUndefined", (e, t) => {
+  pe.init(e, t), e._zod.pattern = Lk, e._zod.values = /* @__PURE__ */ new Set([void 0]), e._zod.parse = (n, o) => {
     let r = n.value;
     return typeof r > "u" || n.issues.push({
       expected: "undefined",
@@ -25274,8 +25314,8 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       inst: e
     }), n;
   };
-}), K_ = /* @__PURE__ */ E("$ZodNull", (e, t) => {
-  pe.init(e, t), e._zod.pattern = Lk, e._zod.values = /* @__PURE__ */ new Set([null]), e._zod.parse = (n, o) => {
+}), G_ = /* @__PURE__ */ E("$ZodNull", (e, t) => {
+  pe.init(e, t), e._zod.pattern = Uk, e._zod.values = /* @__PURE__ */ new Set([null]), e._zod.parse = (n, o) => {
     let r = n.value;
     return r === null || n.issues.push({
       expected: "null",
@@ -25284,18 +25324,18 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       inst: e
     }), n;
   };
-}), H_ = /* @__PURE__ */ E("$ZodAny", (e, t) => {
+}), K_ = /* @__PURE__ */ E("$ZodAny", (e, t) => {
   pe.init(e, t), e._zod.parse = (n) => n;
-}), V_ = /* @__PURE__ */ E("$ZodUnknown", (e, t) => {
+}), H_ = /* @__PURE__ */ E("$ZodUnknown", (e, t) => {
   pe.init(e, t), e._zod.parse = (n) => n;
-}), W_ = /* @__PURE__ */ E("$ZodNever", (e, t) => {
+}), V_ = /* @__PURE__ */ E("$ZodNever", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => (n.issues.push({
     expected: "never",
     code: "invalid_type",
     input: n.value,
     inst: e
   }), n);
-}), Z_ = /* @__PURE__ */ E("$ZodVoid", (e, t) => {
+}), W_ = /* @__PURE__ */ E("$ZodVoid", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     let r = n.value;
     return typeof r > "u" || n.issues.push({
@@ -25305,7 +25345,7 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
       inst: e
     }), n;
   };
-}), J_ = /* @__PURE__ */ E("$ZodDate", (e, t) => {
+}), Z_ = /* @__PURE__ */ E("$ZodDate", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     if (t.coerce)
       try {
@@ -25325,7 +25365,7 @@ var F_ = /* @__PURE__ */ E("$ZodJWT", (e, t) => {
 function yK(e, t, n) {
   e.issues.length && t.issues.push(...tr(n, e.issues)), t.value[n] = e.value;
 }
-var Y_ = /* @__PURE__ */ E("$ZodArray", (e, t) => {
+var J_ = /* @__PURE__ */ E("$ZodArray", (e, t) => {
   pe.init(e, t);
   let n = ln.memoizer;
   n?.attach(e), e._zod.parse = (o, r) => {
@@ -25378,7 +25418,7 @@ function DK(e) {
   for (let a of r)
     if (!e.shape?.[a]?._zod?.traits?.has("$ZodType"))
       throw new Error(`Invalid element at key "${String(a)}": expected a Zod schema`);
-  let i = JS(e.shape);
+  let i = ZS(e.shape);
   return {
     ...e,
     allKeys: r,
@@ -25469,7 +25509,7 @@ var NK = /* @__PURE__ */ E("$ZodObject", (e, t) => {
     }
     return a ? MK(b, h, l, m, r.value, e, y === !0) : b.length ? Promise.all(b).then(() => l) : l;
   };
-}), X_ = /* @__PURE__ */ E("$ZodObjectJIT", (e, t) => {
+}), Y_ = /* @__PURE__ */ E("$ZodObjectJIT", (e, t) => {
   NK.init(e, t);
   let n = e._zod.parse, o = gc(() => DK(t)), r = ln.memoizer, i = (f) => {
     let y = o.value, x = y.symbolKeys, v = new Wa(["payload", "ctx"], { shape: f, inst: e, memo: r, syms: x }), S = ($) => `shape[${$}]._zod.run({ value: input[${$}], issues: [] }, ctx)`, w = ($, D) => `
@@ -25538,7 +25578,7 @@ var NK = /* @__PURE__ */ E("$ZodObject", (e, t) => {
       `);
     }
     return v.write("payload.value = newResult;"), v.write("return payload;"), v.compile();
-  }, a, s = Ka, u = !ln.jitless, m = u && WS.value, h = t.catchall, b;
+  }, a, s = Ka, u = !ln.jitless, m = u && VS.value, h = t.catchall, b;
   e._zod.parse = (f, y) => {
     b ?? (b = o.value);
     let x = f.value;
@@ -25611,7 +25651,7 @@ function xK(e, t, n, o) {
     matches: r
   }), t);
 }
-var Q_ = /* @__PURE__ */ E("$ZodXor", (e, t) => {
+var X_ = /* @__PURE__ */ E("$ZodXor", (e, t) => {
   fd.init(e, t), t.inclusive = !1;
   let n = t.options.length === 1 ? t.options[0]._zod.run : null;
   e._zod.parse = (o, r) => {
@@ -25628,7 +25668,7 @@ var Q_ = /* @__PURE__ */ E("$ZodXor", (e, t) => {
     return i ? Promise.all(a).then((s) => xK(s, o, e, r)) : xK(a, o, e, r);
   };
 });
-function eE(e, t) {
+function Q_(e, t) {
   let n = e._zod, o = n.bag.optionsMap;
   o || (o = UK(n.def), n.bag.optionsMap = o);
   let r = o.get(t);
@@ -25652,7 +25692,7 @@ function UK(e) {
   }
   return t;
 }
-var tE = /* @__PURE__ */ E("$ZodDiscriminatedUnion", (e, t) => {
+var eE = /* @__PURE__ */ E("$ZodDiscriminatedUnion", (e, t) => {
   t.inclusive = !1, fd.init(e, t);
   let n = e._zod.parse;
   ke(e, "propValues", (r) => {
@@ -25696,7 +25736,7 @@ var tE = /* @__PURE__ */ E("$ZodDiscriminatedUnion", (e, t) => {
       inst: e
     }), r);
   };
-}), nE = /* @__PURE__ */ E("$ZodIntersection", (e, t) => {
+}), tE = /* @__PURE__ */ E("$ZodIntersection", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     let r = n.value, i = t.left._zod.run({ value: r, issues: [] }, o), a = t.right._zod.run({ value: r, issues: [] }, o);
     return i instanceof Promise || a instanceof Promise ? Promise.all([i, a]).then(([u, l]) => vK(n, u, l)) : vK(n, i, a);
@@ -25858,7 +25898,7 @@ function SK(e, t, n, o, r) {
     t.value.length = i;
   return t;
 }
-var rE = /* @__PURE__ */ E("$ZodRecord", (e, t) => {
+var nE = /* @__PURE__ */ E("$ZodRecord", (e, t) => {
   pe.init(e, t);
   let n = ln.memoizer;
   n?.attach(e), e._zod.parse = (o, r) => {
@@ -25960,7 +26000,7 @@ var rE = /* @__PURE__ */ E("$ZodRecord", (e, t) => {
     }
     return a.length ? Promise.all(a).then(() => o) : o;
   };
-}), oE = /* @__PURE__ */ E("$ZodMap", (e, t) => {
+}), rE = /* @__PURE__ */ E("$ZodMap", (e, t) => {
   pe.init(e, t);
   let n = ln.memoizer;
   n?.attach(e), e._zod.parse = (o, r) => {
@@ -26005,7 +26045,7 @@ function kK(e, t, n, o, r, i, a) {
     issues: t.issues.map((s) => nr(s, a, Lt()))
   })), n.value.set(e.value, t.value);
 }
-var iE = /* @__PURE__ */ E("$ZodSet", (e, t) => {
+var oE = /* @__PURE__ */ E("$ZodSet", (e, t) => {
   pe.init(e, t);
   let n = ln.memoizer;
   n?.attach(e), e._zod.parse = (o, r) => {
@@ -26035,7 +26075,7 @@ var iE = /* @__PURE__ */ E("$ZodSet", (e, t) => {
 function _K(e, t) {
   e.issues.length && t.issues.push(...e.issues), t.value.add(e.value);
 }
-var aE = /* @__PURE__ */ E("$ZodEnum", (e, t) => {
+var iE = /* @__PURE__ */ E("$ZodEnum", (e, t) => {
   pe.init(e, t);
   let n = mc(t.entries), o = new Set(n);
   e._zod.values = o, ke(e, "pattern", (r) => {
@@ -26050,7 +26090,7 @@ var aE = /* @__PURE__ */ E("$ZodEnum", (e, t) => {
       inst: e
     }), r;
   };
-}), sE = /* @__PURE__ */ E("$ZodLiteral", (e, t) => {
+}), aE = /* @__PURE__ */ E("$ZodLiteral", (e, t) => {
   pe.init(e, t);
   let n = new Set(t.values);
   e._zod.values = n, ke(e, "pattern", (o) => {
@@ -26065,7 +26105,7 @@ var aE = /* @__PURE__ */ E("$ZodEnum", (e, t) => {
       inst: e
     }), o;
   };
-}), cE = /* @__PURE__ */ E("$ZodFile", (e, t) => {
+}), sE = /* @__PURE__ */ E("$ZodFile", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     let r = n.value;
     return r instanceof File || n.issues.push({
@@ -26075,7 +26115,7 @@ var aE = /* @__PURE__ */ E("$ZodEnum", (e, t) => {
       inst: e
     }), n;
   };
-}), uE = /* @__PURE__ */ E("$ZodTransform", (e, t) => {
+}), cE = /* @__PURE__ */ E("$ZodTransform", (e, t) => {
   pe.init(e, t), e._zod.optin = "optional", ln.memoizer?.guard(e), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
       throw new Di(e.constructor.name);
@@ -26106,14 +26146,14 @@ var Bh = /* @__PURE__ */ E("$ZodOptional", (e, t) => {
     }
     return t.innerType._zod.run(n, o);
   };
-}), lE = /* @__PURE__ */ E("$ZodExactOptional", (e, t) => {
+}), uE = /* @__PURE__ */ E("$ZodExactOptional", (e, t) => {
   Bh.init(e, t), ke(e, "values", (n) => n.def.innerType._zod.values), ke(e, "pattern", (n) => n.def.innerType._zod.pattern), e._zod.parse = (n, o) => t.innerType._zod.run(n, o);
-}), dE = /* @__PURE__ */ E("$ZodNullable", (e, t) => {
+}), lE = /* @__PURE__ */ E("$ZodNullable", (e, t) => {
   pe.init(e, t), ke(e, "optin", (n) => n.def.innerType._zod.optin), ke(e, "optout", (n) => n.def.innerType._zod.optout), ke(e, "pattern", (n) => {
     let o = n.def.innerType._zod.pattern;
     return o ? new RegExp(`^(${Xo(o.source)}|null)$`) : void 0;
   }), ke(e, "values", (n) => n.def.innerType._zod.values ? /* @__PURE__ */ new Set([...n.def.innerType._zod.values, null]) : void 0), e._zod.parse = (n, o) => n.value === null ? n : t.innerType._zod.run(n, o);
-}), pE = /* @__PURE__ */ E("$ZodDefault", (e, t) => {
+}), dE = /* @__PURE__ */ E("$ZodDefault", (e, t) => {
   pe.init(e, t), e._zod.optin = "defaulted", ke(e, "values", (n) => n.def.innerType._zod.values), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
       return t.innerType._zod.run(n, o);
@@ -26126,9 +26166,9 @@ var Bh = /* @__PURE__ */ E("$ZodOptional", (e, t) => {
 function TK(e, t) {
   return e.value === void 0 && (e.value = t.defaultValue), e;
 }
-var mE = /* @__PURE__ */ E("$ZodPrefault", (e, t) => {
+var pE = /* @__PURE__ */ E("$ZodPrefault", (e, t) => {
   pe.init(e, t), e._zod.optin = "defaulted", ke(e, "values", (n) => n.def.innerType._zod.values), e._zod.parse = (n, o) => (o.direction === "backward" || n.value === void 0 && (n.value = t.defaultValue), t.innerType._zod.run(n, o));
-}), fE = /* @__PURE__ */ E("$ZodNonOptional", (e, t) => {
+}), mE = /* @__PURE__ */ E("$ZodNonOptional", (e, t) => {
   pe.init(e, t), ke(e, "values", (n) => {
     let o = n.def.innerType._zod.values;
     return o ? new Set([...o].filter((r) => r !== void 0)) : void 0;
@@ -26145,7 +26185,7 @@ function CK(e, t) {
     inst: t
   }), e;
 }
-var gE = /* @__PURE__ */ E("$ZodSuccess", (e, t) => {
+var fE = /* @__PURE__ */ E("$ZodSuccess", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
       throw new Di("ZodSuccess");
@@ -26163,14 +26203,14 @@ function RK(e, t, n, o) {
     input: e.value
   }), e) : (e.value = t.value, t.memo && (e.memo = !0), e);
 }
-var hE = /* @__PURE__ */ E("$ZodCatch", (e, t) => {
+var gE = /* @__PURE__ */ E("$ZodCatch", (e, t) => {
   pe.init(e, t), ke(e, "optin", (n) => n.def.innerType._zod.optin === "defaulted" ? "defaulted" : "optional"), ke(e, "optout", (n) => n.def.innerType._zod.optout), ke(e, "values", (n) => n.def.innerType._zod.values), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
       return t.innerType._zod.run(n, o);
     let r = t.innerType._zod.run({ value: n.value, issues: [] }, o);
     return r instanceof Promise ? r.then((i) => RK(n, i, t, o)) : RK(n, r, t, o);
   };
-}), yE = /* @__PURE__ */ E("$ZodNaN", (e, t) => {
+}), hE = /* @__PURE__ */ E("$ZodNaN", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => ((typeof n.value != "number" || !Number.isNaN(n.value)) && n.issues.push({
     input: n.value,
     inst: e,
@@ -26215,9 +26255,9 @@ function Eh(e, t, n) {
 function Th(e, t, n, o) {
   return e.issues.length ? (e.aborted = !0, e) : n._zod.run({ value: t, issues: e.issues }, o);
 }
-var bE = /* @__PURE__ */ E("$ZodPreprocess", (e, t) => {
+var yE = /* @__PURE__ */ E("$ZodPreprocess", (e, t) => {
   qh.init(e, t);
-}), xE = /* @__PURE__ */ E("$ZodReadonly", (e, t) => {
+}), bE = /* @__PURE__ */ E("$ZodReadonly", (e, t) => {
   pe.init(e, t), ke(e, "propValues", (n) => n.def.innerType._zod.propValues), ke(e, "values", (n) => n.def.innerType._zod.values), ke(e, "optin", (n) => n.def.innerType?._zod?.optin), ke(e, "optout", (n) => n.def.innerType?._zod?.optout), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
       return t.innerType._zod.run(n, o);
@@ -26241,33 +26281,33 @@ function jse(e) {
   if (r !== void 0 && i !== void 0 && r > i)
     return "(?!)";
   if (r !== void 0 || i !== void 0)
-    return Mk({ minimum: r, maximum: i }).source;
+    return Dk({ minimum: r, maximum: i }).source;
   let a = e._zod.pattern;
   return (o && a === Qo ? id : a)?.source;
 }
-function d_(e) {
+function l_(e) {
   let t = e._zod.def, n = e._zod.pattern?.source, o = t.innerType ?? e._zod.innerType;
   if (o) {
-    let r = o._zod.pattern?.source, i = d_(o);
+    let r = o._zod.pattern?.source, i = l_(o);
     return n && r && i && i !== r ? n.replace(Xo(r), () => Xo(i)) : n;
   }
   if (t.options) {
-    let r = t.options.map(d_);
+    let r = t.options.map(l_);
     if (r.every(Boolean))
       return `^(${r.map((i) => Xo(i)).join("|")})$`;
   }
   return jse(e);
 }
-var vE = /* @__PURE__ */ E("$ZodTemplateLiteral", (e, t) => {
+var xE = /* @__PURE__ */ E("$ZodTemplateLiteral", (e, t) => {
   pe.init(e, t);
   let n = [];
   for (let o of t.parts)
     if (typeof o == "object" && o !== null) {
-      let r = d_(o);
+      let r = l_(o);
       if (!r)
         throw new Error(`Invalid template literal part, no pattern found: ${[...o._zod.traits].shift()}`);
       n.push(Xo(r));
-    } else if (o === null || ZS.has(typeof o))
+    } else if (o === null || WS.has(typeof o))
       n.push(Rr(`${o}`));
     else
       throw new Error(`Invalid template literal part: ${o}`);
@@ -26283,7 +26323,7 @@ var vE = /* @__PURE__ */ E("$ZodTemplateLiteral", (e, t) => {
     format: t.format ?? "template_literal",
     pattern: e._zod.pattern.source
   }), o);
-}), IE = /* @__PURE__ */ E("$ZodFunction", (e, t) => (pe.init(e, t), Object.defineProperty(e, "_def", { value: t }), e._zod.def = t, e.implement = (n) => {
+}), vE = /* @__PURE__ */ E("$ZodFunction", (e, t) => (pe.init(e, t), Object.defineProperty(e, "_def", { value: t }), e._zod.def = t, e.implement = (n) => {
   if (typeof n != "function")
     throw new Error("implement() must be called with a function");
   return Object.defineProperty(function(...o) {
@@ -26324,14 +26364,14 @@ var vE = /* @__PURE__ */ E("$ZodTemplateLiteral", (e, t) => {
     input: e._def.input,
     output: n
   });
-}, e)), wE = /* @__PURE__ */ E("$ZodPromise", (e, t) => {
+}, e)), IE = /* @__PURE__ */ E("$ZodPromise", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => Promise.resolve(n.value).then((r) => t.innerType._zod.run({ value: r, issues: [] }, o));
 }), hd = /* @__PURE__ */ E("$ZodLazy", (e, t) => {
-  pe.init(e, t), HS(e._zod, "innerType", () => {
+  pe.init(e, t), KS(e._zod, "innerType", () => {
     let n = t;
     return n._cachedInner || (n._cachedInner = t.getter()), n._cachedInner;
   }), ke(e, "pattern", (n) => n.innerType?._zod?.pattern), ke(e, "propValues", (n) => n.innerType?._zod?.propValues), ke(e, "optin", (n) => n.innerType?._zod?.optin ?? void 0), ke(e, "optout", (n) => n.innerType?._zod?.optout ?? void 0), e._zod.parse = (n, o) => e._zod.innerType._zod.run(n, o);
-}), SE = /* @__PURE__ */ E("$ZodCustom", (e, t) => {
+}), wE = /* @__PURE__ */ E("$ZodCustom", (e, t) => {
   Qe.init(e, t), pe.init(e, t), e._zod.parse = (n, o) => n, e._zod.check = (n) => {
     let o = n.value, r = t.fn(o);
     if (r instanceof Promise)
@@ -26360,11 +26400,11 @@ var Vh = class extends Error {
   constructor() {
     super("Cannot parse a reference cycle that closes through a transform"), this.name = "ZodCyclicError";
   }
-}, _E = "~memo", FK = [];
+}, kE = "~memo", FK = [];
 function zK(e) {
   return e !== null && typeof e == "object";
 }
-function kE(e) {
+function SE(e) {
   return e.map((t) => t.path ? { ...t, path: t.path.slice() } : { ...t });
 }
 var jK = /* @__PURE__ */ new WeakMap(), kc = 0, Hh = 1, yd = 2;
@@ -26528,18 +26568,18 @@ var Gh, Kh = [], Gse = {
         let m = u.value;
         if (!zK(m))
           return a(u, l);
-        let h = l[_E];
-        h || (h = { buckets: /* @__PURE__ */ new WeakMap(), backEdges: void 0 }, l[_E] = h);
+        let h = l[kE];
+        h || (h = { buckets: /* @__PURE__ */ new WeakMap(), backEdges: void 0 }, l[kE] = h);
         let b;
         r === l ? b = i : (b = qse(h, e), r = l, i = b);
         let f = b.get(m);
         if (f)
-          return u.value = f.value, f.issues ? f.issues.length && u.issues.push(...kE(f.issues)) : (u.memo = !0, h.backEdges ?? (h.backEdges = /* @__PURE__ */ new WeakSet()), h.backEdges.add(f.value)), u;
+          return u.value = f.value, f.issues ? f.issues.length && u.issues.push(...SE(f.issues)) : (u.memo = !0, h.backEdges ?? (h.backEdges = /* @__PURE__ */ new WeakSet()), h.backEdges.add(f.value)), u;
         Gh = b;
         let y = Kh.length, x = a(u, l);
         Gh = void 0;
         let v = Kh.length > y ? Kh.pop() : void 0;
-        return x instanceof Promise ? x.then((S) => (v && (v.issues = S.issues.length ? kE(S.issues) : FK), S)) : (v && (v.issues = x.issues.length ? kE(x.issues) : FK), x);
+        return x instanceof Promise ? x.then((S) => (v && (v.issues = S.issues.length ? SE(S.issues) : FK), S)) : (v && (v.issues = x.issues.length ? SE(x.issues) : FK), x);
       };
       e._zod.parse = s, e._zod.run === a && (e._zod.run = s);
     });
@@ -26549,13 +26589,13 @@ function xd() {
   return Gse;
 }
 function Zh(e, t) {
-  let n = e[_E]?.backEdges;
+  let n = e[kE]?.backEdges;
   return n !== void 0 && zK(t) && n.has(t);
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/index.js
 var Id = {};
-st(Id, {
+ct(Id, {
   ar: () => BK,
   az: () => qK,
   be: () => KK,
@@ -32616,7 +32656,7 @@ function Y3() {
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/registries.js
-var X3, EE = /* @__PURE__ */ Symbol("ZodOutput"), TE = /* @__PURE__ */ Symbol("ZodInput"), Qh = class {
+var X3, _E = /* @__PURE__ */ Symbol("ZodOutput"), EE = /* @__PURE__ */ Symbol("ZodInput"), Qh = class {
   constructor() {
     this._map = /* @__PURE__ */ new WeakMap(), this._idmap = /* @__PURE__ */ new Map();
   }
@@ -32668,7 +32708,7 @@ function Qce(e, t) {
     return t;
   }
 }
-function AE(e, t) {
+function $E(e, t) {
   try {
     let n = ny(e), o = ty(e, n);
     return o._zod.bag.validator = Qce(e, n), o;
@@ -32804,17 +32844,17 @@ function oue(e, t, n, o) {
         iH(e, s, i);
         break;
       case "min_length": {
-        let u = Ja(s.minimum, "min_length"), l = CE(e, t, i, `${i}.length >= ${u} && ${i}.length < ${s.minimum * 2}`);
+        let u = Ja(s.minimum, "min_length"), l = TE(e, t, i, `${i}.length >= ${u} && ${i}.length < ${s.minimum * 2}`);
         e.write(`if (${l} < ${u}) return INVALID;`);
         break;
       }
       case "max_length": {
-        let u = Ja(s.maximum, "max_length"), l = CE(e, t, i, `${i}.length > ${u}`);
+        let u = Ja(s.maximum, "max_length"), l = TE(e, t, i, `${i}.length > ${u}`);
         e.write(`if (${l} > ${u}) return INVALID;`);
         break;
       }
       case "length_equals": {
-        let u = Ja(s.length, "length_equals"), l = CE(e, t, i, `${i}.length >= ${u} && ${i}.length <= ${s.length * 2}`);
+        let u = Ja(s.length, "length_equals"), l = TE(e, t, i, `${i}.length >= ${u} && ${i}.length <= ${s.length * 2}`);
         e.write(`if (${l} !== ${u}) return INVALID;`);
         break;
       }
@@ -32856,7 +32896,7 @@ function oue(e, t, n, o) {
   }
   return i;
 }
-function CE(e, t, n, o) {
+function TE(e, t, n, o) {
   let r = ae(t, Ha), i = ee(t);
   return e.write(`const ${i} = typeof ${n} === "string" && ${o} ? ${r}(${n}) : ${n}.length;`), i;
 }
@@ -32964,10 +33004,10 @@ function pue(e, t, n, o, r) {
   let a = ae(t, i);
   e.write(`const ${r} = ${a}(${o});`);
 }
-function RE() {
+function CE() {
   throw new rr();
 }
-function PE(e) {
+function AE(e) {
   this.issues.push(e);
 }
 function mue(e, t, n, o) {
@@ -32975,15 +33015,15 @@ function mue(e, t, n, o) {
   if (r.fn) {
     if (Qa(r.fn))
       throw new Jr("z.compile: async .refine() predicates are not supported");
-    let i = Xa(t, r.fn), a = ae(t, RE), s = ee(t);
+    let i = Xa(t, r.fn), a = ae(t, CE), s = ee(t);
     return e.write(`const ${s} = ${i}(${o});`), e.write(`if (${s} instanceof Promise) ${a}();`), e.write(`if (!${s}) return INVALID;`), o;
   }
   if (n._zod.check) {
     if (Qa(n._zod.check))
       throw new Jr("z.compile: async .superRefine() / check functions are not supported");
     let i = n._zod.check, s = Xa(t, (l) => {
-      let m = { value: l, issues: [], addIssue: PE };
-      return i(m) instanceof Promise && RE(), m.issues.length === 0 ? m.value : qn;
+      let m = { value: l, issues: [], addIssue: AE };
+      return i(m) instanceof Promise && CE(), m.issues.length === 0 ? m.value : qn;
     }), u = ee(t);
     return e.write(`const ${u} = ${s}(${o});`), e.write(`if (${u} === INVALID) return INVALID;`), u;
   }
@@ -33298,7 +33338,7 @@ function _ue(e, t, n, o, r = !0) {
       }), e.write("}");
     } else (w === "unknown" || w === "any") && !y._zod.def.checks?.length ? x = "passthrough" : x = "schema";
   }
-  let v = ee(t), S = l.some((w) => eH(b[w]) || $E(b[w]));
+  let v = ee(t), S = l.some((w) => eH(b[w]) || RE(b[w]));
   if (!r) {
     if (x === "schema") {
       let w = s.length > 0 ? ae(t, new Set(s)) : null;
@@ -33314,7 +33354,7 @@ function _ue(e, t, n, o, r = !0) {
     e.write(`const ${v} = {};`);
     for (let w of l) {
       let k = m(w), C = f.get(w);
-      $E(b[w]) ? e.write(`if (${k} in ${o}) ${v}[${k}] = ${C};`) : eH(b[w]) ? e.write(`if (${C} !== undefined || ${k} in ${o}) ${v}[${k}] = ${C};`) : e.write(`${v}[${k}] = ${C};`);
+      RE(b[w]) ? e.write(`if (${k} in ${o}) ${v}[${k}] = ${C};`) : eH(b[w]) ? e.write(`if (${C} !== undefined || ${k} in ${o}) ${v}[${k}] = ${C};`) : e.write(`${v}[${k}] = ${C};`);
     }
   } else {
     let w = l.map((k) => `${h(k)}: ${f.get(k)}`).join(", ");
@@ -33419,7 +33459,7 @@ function Ya(e) {
       return !0;
   }
 }
-function $E(e) {
+function RE(e) {
   return e._zod.optin === "optional" && e._zod.optout === "optional";
 }
 function eH(e) {
@@ -33565,7 +33605,7 @@ function Mue(e, t, n, o) {
           let x = $n(f, t, h, y);
           f.write(`${l}[${m}] = ${x};`);
         }), b.write("} else {"), b.indented((f) => {
-          if ($E(h)) {
+          if (RE(h)) {
             f.write(`${l}.length = ${m};`);
             return;
           }
@@ -33775,7 +33815,7 @@ function Vue(e, t, n, o) {
     if (Qa(r.transform))
       throw new Jr("z.compile: async transforms in pipes are not supported");
     let a = r.transform, u = Xa(t, (m) => {
-      let h = { value: m, issues: [], addIssue: PE }, b = a(m, h);
+      let h = { value: m, issues: [], addIssue: AE }, b = a(m, h);
       return b instanceof Promise ? qn : h.issues.length === 0 ? b : qn;
     }), l = ee(t);
     return e.write(`const ${l} = ${u}(${i});`), e.write(`if (${l} === INVALID) return INVALID;`), kt(e, t, r.out, l);
@@ -33790,7 +33830,7 @@ function Wue(e, t, n, o) {
   if (r.fn) {
     if (Qa(r.fn))
       throw new Jr("z.compile: async custom predicates are not supported");
-    let i = Xa(t, r.fn), a = ae(t, RE), s = ee(t);
+    let i = Xa(t, r.fn), a = ae(t, CE), s = ee(t);
     e.write(`const ${s} = ${i}(${o});`), e.write(`if (${s} instanceof Promise) ${a}();`), e.write(`if (!${s}) return INVALID;`);
   } else
     throw new Re("custom schema without a predicate function");
@@ -33823,7 +33863,7 @@ function Yue(e, t, n, o) {
     if (Qa(r.transform))
       throw new Jr("z.compile: async transforms are not supported");
     let i = r.transform, s = Xa(t, (l) => {
-      let m = { value: l, issues: [], addIssue: PE }, h = i(l, m);
+      let m = { value: l, issues: [], addIssue: AE }, h = i(l, m);
       return h instanceof Promise ? qn : m.issues.length === 0 ? h : qn;
     }), u = ee(t);
     return e.write(`const ${u} = ${s}(${o});`), e.write(`if (${u} === INVALID) return INVALID;`), u;
@@ -33836,11 +33876,11 @@ function ry(e) {
   return e.checks && (e.checks = [...e.checks]), e;
 }
 // @__NO_SIDE_EFFECTS__
-function OE(e, t) {
+function PE(e, t) {
   return new e(ry({ type: "string", ...N(t) }));
 }
 // @__NO_SIDE_EFFECTS__
-function DE(e, t) {
+function OE(e, t) {
   return new e(ry({ type: "string", coerce: !0, ...N(t) }));
 }
 // @__NO_SIDE_EFFECTS__
@@ -34007,7 +34047,7 @@ function by(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function ME(e, t) {
+function DE(e, t) {
   return new e({
     type: "string",
     format: "mac",
@@ -34067,7 +34107,7 @@ function Sy(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function NE(e, t) {
+function ME(e, t) {
   return new e({
     type: "string",
     format: "credit_card",
@@ -34077,7 +34117,7 @@ function NE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function UE(e, t) {
+function NE(e, t) {
   return new e({
     type: "string",
     format: "iban",
@@ -34096,7 +34136,7 @@ function ky(e, t) {
     ...N(t)
   });
 }
-var LE = {
+var UE = {
   Any: null,
   Minute: -1,
   Second: 0,
@@ -34144,15 +34184,15 @@ function Ed(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function FE(e, t) {
+function LE(e, t) {
   return new e(ry({ type: "number", checks: [], ...N(t) }));
 }
 // @__NO_SIDE_EFFECTS__
-function zE(e, t) {
+function FE(e, t) {
   return new e(ry({ type: "number", coerce: !0, checks: [], ...N(t) }));
 }
 // @__NO_SIDE_EFFECTS__
-function jE(e, t) {
+function zE(e, t) {
   return new e({
     type: "number",
     check: "number_format",
@@ -34162,7 +34202,7 @@ function jE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function BE(e, t) {
+function jE(e, t) {
   return new e({
     type: "number",
     check: "number_format",
@@ -34172,7 +34212,7 @@ function BE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function qE(e, t) {
+function BE(e, t) {
   return new e({
     type: "number",
     check: "number_format",
@@ -34182,7 +34222,7 @@ function qE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function GE(e, t) {
+function qE(e, t) {
   return new e({
     type: "number",
     check: "number_format",
@@ -34192,7 +34232,7 @@ function GE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function KE(e, t) {
+function GE(e, t) {
   return new e({
     type: "number",
     check: "number_format",
@@ -34202,17 +34242,24 @@ function KE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function HE(e, t) {
+function KE(e, t) {
   return new e({
     type: "boolean",
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function VE(e, t) {
+function HE(e, t) {
   return new e({
     type: "boolean",
     coerce: !0,
+    ...N(t)
+  });
+}
+// @__NO_SIDE_EFFECTS__
+function VE(e, t) {
+  return new e({
+    type: "bigint",
     ...N(t)
   });
 }
@@ -34220,19 +34267,12 @@ function VE(e, t) {
 function WE(e, t) {
   return new e({
     type: "bigint",
-    ...N(t)
-  });
-}
-// @__NO_SIDE_EFFECTS__
-function ZE(e, t) {
-  return new e({
-    type: "bigint",
     coerce: !0,
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function JE(e, t) {
+function ZE(e, t) {
   return new e({
     type: "bigint",
     check: "bigint_format",
@@ -34242,7 +34282,7 @@ function JE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function YE(e, t) {
+function JE(e, t) {
   return new e({
     type: "bigint",
     check: "bigint_format",
@@ -34252,49 +34292,56 @@ function YE(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function XE(e, t) {
+function YE(e, t) {
   return new e({
     type: "symbol",
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function QE(e, t) {
+function XE(e, t) {
   return new e({
     type: "undefined",
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function eT(e, t) {
+function QE(e, t) {
   return new e({
     type: "null",
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function tT(e) {
+function eT(e) {
   return new e({
     type: "any"
   });
 }
 // @__NO_SIDE_EFFECTS__
-function nT(e) {
+function tT(e) {
   return new e({
     type: "unknown"
   });
 }
 // @__NO_SIDE_EFFECTS__
-function rT(e, t) {
+function nT(e, t) {
   return new e({
     type: "never",
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function oT(e, t) {
+function rT(e, t) {
   return new e({
     type: "void",
+    ...N(t)
+  });
+}
+// @__NO_SIDE_EFFECTS__
+function oT(e, t) {
+  return new e({
+    type: "date",
     ...N(t)
   });
 }
@@ -34302,19 +34349,12 @@ function oT(e, t) {
 function iT(e, t) {
   return new e({
     type: "date",
-    ...N(t)
-  });
-}
-// @__NO_SIDE_EFFECTS__
-function aT(e, t) {
-  return new e({
-    type: "date",
     coerce: !0,
     ...N(t)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function sT(e, t) {
+function aT(e, t) {
   return new e({
     type: "nan",
     ...N(t)
@@ -34374,7 +34414,7 @@ function Cy(e) {
 }
 // @__NO_SIDE_EFFECTS__
 function Mi(e, t) {
-  return new Kk({
+  return new Gk({
     check: "multiple_of",
     ...N(t),
     value: e
@@ -34382,7 +34422,7 @@ function Mi(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Ni(e, t) {
-  return new Wk({
+  return new Vk({
     check: "max_size",
     ...N(t),
     maximum: e
@@ -34390,7 +34430,7 @@ function Ni(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Co(e, t) {
-  return new Zk({
+  return new Wk({
     check: "min_size",
     ...N(t),
     minimum: e
@@ -34398,7 +34438,7 @@ function Co(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function es(e, t) {
-  return new Jk({
+  return new Zk({
     check: "size_equals",
     ...N(t),
     size: e
@@ -34406,7 +34446,7 @@ function es(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function ts(e, t) {
-  return new Yk({
+  return new Jk({
     check: "max_length",
     ...N(t),
     maximum: e
@@ -34414,7 +34454,7 @@ function ts(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function ei(e, t) {
-  return new Xk({
+  return new Yk({
     check: "min_length",
     ...N(t),
     minimum: e
@@ -34422,7 +34462,7 @@ function ei(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function ns(e, t) {
-  return new Qk({
+  return new Xk({
     check: "length_equals",
     ...N(t),
     length: e
@@ -34430,7 +34470,7 @@ function ns(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Tc(e, t) {
-  return new e_({
+  return new Qk({
     check: "string_format",
     format: "regex",
     ...N(t),
@@ -34439,7 +34479,7 @@ function Tc(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Cc(e) {
-  return new t_({
+  return new e_({
     check: "string_format",
     format: "lowercase",
     ...N(e)
@@ -34447,7 +34487,7 @@ function Cc(e) {
 }
 // @__NO_SIDE_EFFECTS__
 function Rc(e) {
-  return new n_({
+  return new t_({
     check: "string_format",
     format: "uppercase",
     ...N(e)
@@ -34455,7 +34495,7 @@ function Rc(e) {
 }
 // @__NO_SIDE_EFFECTS__
 function $c(e, t) {
-  return new r_({
+  return new n_({
     check: "string_format",
     format: "includes",
     ...N(t),
@@ -34464,7 +34504,7 @@ function $c(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Ac(e, t) {
-  return new o_({
+  return new r_({
     check: "string_format",
     format: "starts_with",
     ...N(t),
@@ -34473,7 +34513,7 @@ function Ac(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Pc(e, t) {
-  return new i_({
+  return new o_({
     check: "string_format",
     format: "ends_with",
     ...N(t),
@@ -34482,7 +34522,7 @@ function Pc(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Ry(e, t, n) {
-  return new a_({
+  return new i_({
     check: "property",
     property: e,
     schema: t,
@@ -34491,7 +34531,7 @@ function Ry(e, t, n) {
 }
 // @__NO_SIDE_EFFECTS__
 function Oc(e, t) {
-  return new s_({
+  return new a_({
     check: "properties",
     shape: e,
     ...N(t)
@@ -34499,7 +34539,7 @@ function Oc(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Dc(e, t) {
-  return new c_({
+  return new s_({
     check: "mime_type",
     mime: e,
     ...N(t)
@@ -34507,7 +34547,7 @@ function Dc(e, t) {
 }
 // @__NO_SIDE_EFFECTS__
 function Yr(e) {
-  return new u_({
+  return new c_({
     check: "overwrite",
     tx: e
   });
@@ -34530,10 +34570,10 @@ function Lc() {
 }
 // @__NO_SIDE_EFFECTS__
 function Fc() {
-  return /* @__PURE__ */ Yr((e) => VS(e));
+  return /* @__PURE__ */ Yr((e) => HS(e));
 }
 // @__NO_SIDE_EFFECTS__
-function cT(e, t, n) {
+function sT(e, t, n) {
   return new e({
     type: "array",
     element: t,
@@ -34638,7 +34678,7 @@ function cle(e, t, n) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function uT(e, t) {
+function cT(e, t) {
   return new e({
     type: "file",
     ...N(t)
@@ -34695,7 +34735,7 @@ function gle(e, t, n) {
   return new e({
     type: "catch",
     innerType: t,
-    catchValue: typeof n == "function" ? n : QS(n)
+    catchValue: typeof n == "function" ? n : XS(n)
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -34736,7 +34776,7 @@ function vle(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function lT(e, t, n) {
+function uT(e, t, n) {
   let o = N(n);
   return o.abort ?? (o.abort = !0), new e({
     type: "custom",
@@ -34746,7 +34786,7 @@ function lT(e, t, n) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function dT(e, t, n) {
+function lT(e, t, n) {
   return new e({
     type: "custom",
     check: "custom",
@@ -34755,7 +34795,7 @@ function dT(e, t, n) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function pT(e, t) {
+function dT(e, t) {
   let n = /* @__PURE__ */ sH((o) => (o.addIssue = (r) => {
     if (typeof r == "string")
       o.issues.push(yc(r, o.value, n._zod.def));
@@ -34775,7 +34815,7 @@ function sH(e, t) {
   return n._zod.check = e, n;
 }
 // @__NO_SIDE_EFFECTS__
-function mT(e) {
+function pT(e) {
   let t = new Qe({ check: "describe" });
   return t._zod.onattach = [
     (n) => {
@@ -34786,7 +34826,7 @@ function mT(e) {
   }, t;
 }
 // @__NO_SIDE_EFFECTS__
-function fT(e) {
+function mT(e) {
   let t = new Qe({ check: "meta" });
   return t._zod.onattach = [
     (n) => {
@@ -34797,7 +34837,7 @@ function fT(e) {
   }, t;
 }
 // @__NO_SIDE_EFFECTS__
-function gT(e, t) {
+function fT(e, t) {
   let n = N(t), o = n.truthy ?? ["true", "1", "yes", "on", "y", "enabled"], r = n.falsy ?? ["false", "0", "no", "off", "n", "disabled"];
   n.case !== "sensitive" && (o = o.map((f) => typeof f == "string" ? f.toLowerCase() : f), r = r.map((f) => typeof f == "string" ? f.toLowerCase() : f));
   let i = new Set(o), a = new Set(r), s = e.Codec ?? gd, u = e.Boolean ?? md, l = e.String ?? Za, m = new l({ type: "string", error: n.error }), h = new u({ type: "boolean", error: n.error }), b = new s({
@@ -35000,7 +35040,7 @@ function lH(e) {
   let t = e.additionalProperties;
   return t === void 0 || t === !1 || typeof t != "object" || t === null ? null : Object.keys(t).length ? t : null;
 }
-function hT(e) {
+function gT(e) {
   let t = [];
   for (let i of e) {
     if (typeof i != "object" || i.type !== "object")
@@ -35020,7 +35060,7 @@ function hT(e) {
         let m = l.properties?.[a] ?? lH(l);
         m != null && (s.some((h) => JSON.stringify(h) === JSON.stringify(m)) || s.push(m));
       }
-      let u = s.length === 1 ? s[0] : hT(s) ?? { allOf: s };
+      let u = s.length === 1 ? s[0] : gT(s) ?? { allOf: s };
       bn(n, a, u);
     }
     for (let a of i.required ?? [])
@@ -35048,12 +35088,12 @@ function Ile(e) {
       return;
   let n = t.filter((r) => uH.some((i) => Array.isArray(r[i]))), o = null;
   if (!n.length)
-    o = hT(t);
+    o = gT(t);
   else {
     let r = n[0], i = uH.find((u) => Array.isArray(r[u]));
     if (Object.keys(r).length !== 1)
       return;
-    let a = t.filter((u) => u !== r), s = r[i].map((u) => hT([...a, u]));
+    let a = t.filter((u) => u !== r), s = r[i].map((u) => gT([...a, u]));
     if (s.some((u) => !u))
       return;
     o = { [i]: s };
@@ -35192,7 +35232,7 @@ function Gn(e, t) {
   }
   return !1;
 }
-var yT = (e, t = {}) => (n) => {
+var hT = (e, t = {}) => (n) => {
   let o = Ui({ ...n, processors: t });
   return He(e, o), Li(o, e), Fi(o, e);
 }, zc = (e, t, n = {}) => (o) => {
@@ -35254,9 +35294,9 @@ var Sle = {
   regex: ""
   // do not set
 }, kle = /* @__PURE__ */ new Map([
-  [Dh, _k],
-  [pd, Ek]
-]), IH = (e) => kle.get(e) ?? e, vT = (e, t, n, o) => {
+  [Dh, kk],
+  [pd, _k]
+]), IH = (e) => kle.get(e) ?? e, xT = (e, t, n, o) => {
   let r = n;
   r.type = "string";
   let { minimum: i, maximum: a, format: s, patterns: u, contentEncoding: l, laxFormat: m } = on(e);
@@ -35269,7 +35309,7 @@ var Sle = {
       }))
     ]);
   }
-}, IT = (e, t, n, o) => {
+}, vT = (e, t, n, o) => {
   let r = n, { minimum: i, maximum: a, multipleOf: s, exclusiveMaximum: u, exclusiveMinimum: l, isInt: m } = on(e);
   r.type = m ? "integer" : "number";
   let h = typeof l == "number" && l >= (i ?? Number.NEGATIVE_INFINITY), b = typeof u == "number" && u <= (a ?? Number.POSITIVE_INFINITY), f = t.target === "draft-04" || t.target === "openapi-3.0";
@@ -35280,32 +35320,32 @@ var Sle = {
     let [x, ...v] = y;
     x !== void 0 && (r.multipleOf = x), v.length && (r.allOf = [...r.allOf ?? [], ...v.map((S) => ({ multipleOf: S }))]);
   }
-}, wT = (e, t, n, o) => {
+}, IT = (e, t, n, o) => {
   n.type = "boolean";
-}, ST = (e, t, n, o) => {
+}, wT = (e, t, n, o) => {
   rn(e, t, n, o, "BigInt cannot be represented in JSON Schema");
-}, kT = (e, t, n, o) => {
+}, ST = (e, t, n, o) => {
   rn(e, t, n, o, "Symbols cannot be represented in JSON Schema");
-}, _T = (e, t, n, o) => {
+}, kT = (e, t, n, o) => {
   t.target === "openapi-3.0" ? (n.type = "string", n.nullable = !0, n.enum = [null]) : n.type = "null";
-}, ET = (e, t, n, o) => {
+}, _T = (e, t, n, o) => {
   rn(e, t, n, o, "Undefined cannot be represented in JSON Schema");
-}, TT = (e, t, n, o) => {
+}, ET = (e, t, n, o) => {
   rn(e, t, n, o, "Void cannot be represented in JSON Schema");
-}, CT = (e, t, n, o) => {
+}, TT = (e, t, n, o) => {
   n.not = {};
+}, CT = (e, t, n, o) => {
 }, RT = (e, t, n, o) => {
 }, $T = (e, t, n, o) => {
-}, AT = (e, t, n, o) => {
   rn(e, t, n, o, "Date cannot be represented in JSON Schema");
-}, PT = (e, t, n, o) => {
+}, AT = (e, t, n, o) => {
   let r = e._zod.def, i = mc(r.entries);
   if (i.length === 0) {
     n.not = {};
     return;
   }
   i.every((a) => typeof a == "number") && (n.type = "number"), i.every((a) => typeof a == "string") && (n.type = "string"), n.enum = i;
-}, OT = (e, t, n, o) => {
+}, PT = (e, t, n, o) => {
   let r = e._zod.def;
   if (r.values.length === 0) {
     n.not = {};
@@ -35328,31 +35368,31 @@ var Sle = {
       n.type = a === null ? "null" : typeof a, t.target === "draft-04" || t.target === "openapi-3.0" ? n.enum = [a] : n.const = a;
     } else
       i.every((a) => typeof a == "number") && (n.type = "number"), i.every((a) => typeof a == "string") && (n.type = "string"), i.every((a) => typeof a == "boolean") && (n.type = "boolean"), i.every((a) => a === null) && (n.type = "null"), n.enum = i;
-}, DT = (e, t, n, o) => {
+}, OT = (e, t, n, o) => {
   rn(e, t, n, o, "NaN cannot be represented in JSON Schema");
-}, MT = (e, t, n, o) => {
+}, DT = (e, t, n, o) => {
   let r = n, i = e._zod.pattern;
   if (!i)
     throw new Error("Pattern not found in template literal");
   r.type = "string", r.pattern = i.source;
-}, NT = (e, t, n, o) => {
+}, MT = (e, t, n, o) => {
   let r = n;
   r.type = "string", r.format = "binary", r.contentEncoding = "binary";
   let { minimum: i, maximum: a, mime: s } = on(e);
   i !== void 0 && (r.minLength = i), a !== void 0 && (r.maxLength = a), s && (s.length === 0 ? r.not = {} : s.length === 1 ? r.contentMediaType = s[0] : r.anyOf = s.map((u) => ({ contentMediaType: u })));
-}, UT = (e, t, n, o) => {
+}, NT = (e, t, n, o) => {
   n.type = "boolean";
-}, LT = (e, t, n, o) => {
+}, UT = (e, t, n, o) => {
   rn(e, t, n, o, "Custom types cannot be represented in JSON Schema");
-}, FT = (e, t, n, o) => {
+}, LT = (e, t, n, o) => {
   rn(e, t, n, o, "Function types cannot be represented in JSON Schema");
-}, zT = (e, t, n, o) => {
+}, FT = (e, t, n, o) => {
   rn(e, t, n, o, "Transforms cannot be represented in JSON Schema");
-}, jT = (e, t, n, o) => {
+}, zT = (e, t, n, o) => {
   rn(e, t, n, o, "Map cannot be represented in JSON Schema");
-}, BT = (e, t, n, o) => {
+}, jT = (e, t, n, o) => {
   rn(e, t, n, o, "Set cannot be represented in JSON Schema");
-}, qT = (e, t, n, o) => {
+}, BT = (e, t, n, o) => {
   let r = n, i = e._zod.def, { minimum: a, maximum: s } = on(e);
   typeof a == "number" && (r.minItems = a), typeof s == "number" && (r.maxItems = s), r.type = "array", r.items = He(i.element, t, {
     ...o,
@@ -35363,7 +35403,7 @@ function Cd(e) {
   let t = e._zod.def;
   return t.type === "pipe" && t.in._zod.traits.has("$ZodTransform") ? Cd(t.out) : t.type === "catch" ? Cd(t.innerType) : e._zod.optin;
 }
-var GT = (e, t, n, o) => {
+var qT = (e, t, n, o) => {
   let r = n, i = e._zod.def, a = i.shape;
   if (Object.getOwnPropertySymbols(a).length && rn(e, t, r, o, "Symbol keys cannot be represented in JSON Schema"))
     return;
@@ -35388,7 +35428,7 @@ var GT = (e, t, n, o) => {
     path: [...o.path, i ? "oneOf" : "anyOf", u]
   }));
   i ? n.oneOf = a : n.anyOf = a;
-}, KT = (e, t, n, o) => {
+}, GT = (e, t, n, o) => {
   let r = e._zod.def, i = He(r.left, t, {
     ...o,
     path: [...o.path, "allOf", 0]
@@ -35400,7 +35440,7 @@ var GT = (e, t, n, o) => {
     ...s(a) ? a.allOf : [a]
   ];
   n.allOf = u, t.intersections.push(u);
-}, HT = (e, t, n, o) => {
+}, KT = (e, t, n, o) => {
   let r = n, i = e._zod.def;
   r.type = "array";
   let a = t.target === "draft-2020-12" ? "prefixItems" : "items", s = t.target === "draft-2020-12" || t.target === "openapi-3.0" ? "items" : "additionalItems", u = i.items.map((x, v) => He(x, t, {
@@ -35423,7 +35463,7 @@ var GT = (e, t, n, o) => {
   let { minimum: f, maximum: y } = on(e);
   typeof f == "number" && (r.minItems = f), typeof y == "number" && (r.maxItems = y);
 };
-function bT(e, t, n) {
+function yT(e, t, n) {
   if (t.$ref) {
     if (n.has(t))
       return t;
@@ -35431,14 +35471,14 @@ function bT(e, t, n) {
     let y = e.get(t)?.def;
     if (!y)
       return t;
-    let x = bT(e, y, n);
+    let x = yT(e, y, n);
     return x === y ? t : x;
   }
   for (let y of ["anyOf", "oneOf"]) {
     let x = t[y];
     if (!Array.isArray(x))
       continue;
-    let v = x.map((S) => bT(e, S, n));
+    let v = x.map((S) => yT(e, S, n));
     v.some((S, w) => S !== x[w]) && (t = { ...t, [y]: v });
   }
   let o = Array.isArray(t.type) ? t.type : [t.type], r = !o.includes("string") && o.some((y) => y === "number" || y === "integer"), i = t.enum ?? (t.const !== void 0 ? [t.const] : void 0);
@@ -35447,17 +35487,17 @@ function bT(e, t, n) {
   let { minimum: a, maximum: s, exclusiveMinimum: u, exclusiveMaximum: l, multipleOf: m, format: h, id: b, ...f } = t;
   return f.enum ? f.enum = f.enum.map((y) => typeof y == "number" ? String(y) : y) : typeof f.const == "number" && (f.const = String(f.const)), r && (f.type = "string", i || (f.pattern = (o.includes("number") ? Qo : id).source)), f;
 }
-var xT = /* @__PURE__ */ new WeakMap();
+var bT = /* @__PURE__ */ new WeakMap();
 function _le(e) {
   let t = /* @__PURE__ */ new Map();
   for (let o of e.seen.values())
     o.def && !t.has(o.schema) && t.set(o.schema, o);
   let n = /* @__PURE__ */ new Map();
-  for (let o of xT.get(e) ?? []) {
+  for (let o of bT.get(e) ?? []) {
     let r = e.seen.get(o), i = (r?.def ?? r?.schema)?.propertyNames;
     if (!i || i === !0 || n.has(i))
       continue;
-    let a = bT(t, i, /* @__PURE__ */ new Set());
+    let a = yT(t, i, /* @__PURE__ */ new Set());
     a !== i && n.set(i, a);
   }
   if (n.size)
@@ -35467,7 +35507,7 @@ function _le(e) {
         i && (r.propertyNames = i);
       }
 }
-var VT = (e, t, n, o) => {
+var HT = (e, t, n, o) => {
   let r = n, i = e._zod.def;
   r.type = "object";
   let a = i.keyType, s = on(a).patterns;
@@ -35485,8 +35525,8 @@ var VT = (e, t, n, o) => {
         ...o,
         path: [...o.path, "propertyNames"]
       });
-      let m = xT.get(t);
-      m || (m = [], xT.set(t, m), t.deferred.push(() => _le(t))), m.push(e);
+      let m = bT.get(t);
+      m || (m = [], bT.set(t, m), t.deferred.push(() => _le(t))), m.push(e);
     }
     r.additionalProperties = He(i.valueType, t, {
       ...o,
@@ -35498,35 +35538,35 @@ var VT = (e, t, n, o) => {
     let m = [...u].filter((h) => typeof h == "string" || typeof h == "number");
     m.length > 0 && (r.required = m.map(String));
   }
-}, WT = (e, t, n, o) => {
+}, VT = (e, t, n, o) => {
   let r = e._zod.def, i = He(r.innerType, t, o), a = t.seen.get(e);
   t.target === "openapi-3.0" ? (a.ref = r.innerType, n.nullable = !0) : n.anyOf = [i, { type: "null" }];
-}, ZT = (e, t, n, o) => {
+}, WT = (e, t, n, o) => {
   let r = e._zod.def;
   He(r.innerType, t, o);
   let i = t.seen.get(e);
   i.ref = r.innerType;
-}, JT = /* @__PURE__ */ Symbol();
+}, ZT = /* @__PURE__ */ Symbol();
 function wH(e, t, n, o, r) {
   let i = !1, a = JSON.stringify(e, (s, u) => typeof u != "bigint" ? u : (i = !0, null));
-  return i ? (rn(t, n, o, r, "BigInt defaults cannot be represented in JSON Schema"), JT) : JSON.parse(a);
+  return i ? (rn(t, n, o, r, "BigInt defaults cannot be represented in JSON Schema"), ZT) : JSON.parse(a);
 }
-var YT = (e, t, n, o) => {
+var JT = (e, t, n, o) => {
   let r = e._zod.def;
   He(r.innerType, t, o);
   let i = t.seen.get(e);
   i.ref = r.innerType;
   let a = wH(r.defaultValue, e, t, n, o);
-  a !== JT && (n.default = a);
-}, XT = (e, t, n, o) => {
+  a !== ZT && (n.default = a);
+}, YT = (e, t, n, o) => {
   let r = e._zod.def;
   He(r.innerType, t, o);
   let i = t.seen.get(e);
   if (i.ref = r.innerType, t.io !== "input")
     return;
   let a = wH(r.defaultValue, e, t, n, o);
-  a !== JT && (n._prefault = a);
-}, QT = (e, t, n, o) => {
+  a !== ZT && (n._prefault = a);
+}, XT = (e, t, n, o) => {
   let r = e._zod.def;
   He(r.innerType, t, o);
   let i = t.seen.get(e);
@@ -35539,17 +35579,17 @@ var YT = (e, t, n, o) => {
     return;
   }
   n.default = a;
-}, eC = (e, t, n, o) => {
+}, QT = (e, t, n, o) => {
   let r = e._zod.def, i = r.in._zod.traits.has("$ZodTransform"), a = t.io === "input" ? i ? r.out : r.in : r.out;
   He(a, t, o);
   let s = t.seen.get(e);
   s.ref = a;
-}, tC = (e, t, n, o) => {
+}, eC = (e, t, n, o) => {
   let r = e._zod.def;
   He(r.innerType, t, o);
   let i = t.seen.get(e);
   i.ref = r.innerType, n.readOnly = !0;
-}, nC = (e, t, n, o) => {
+}, tC = (e, t, n, o) => {
   let r = e._zod.def;
   He(r.innerType, t, o);
   let i = t.seen.get(e);
@@ -35559,51 +35599,51 @@ var YT = (e, t, n, o) => {
   He(r.innerType, t, o);
   let i = t.seen.get(e);
   i.ref = r.innerType;
-}, rC = (e, t, n, o) => {
+}, nC = (e, t, n, o) => {
   let r = e._zod.innerType;
   He(r, t, o);
   let i = t.seen.get(e);
   i.ref = r;
 }, $y = {
-  string: vT,
-  number: IT,
-  boolean: wT,
-  bigint: ST,
-  symbol: kT,
-  null: _T,
-  undefined: ET,
-  void: TT,
-  never: CT,
-  any: RT,
-  unknown: $T,
-  date: AT,
-  enum: PT,
-  literal: OT,
-  nan: DT,
-  template_literal: MT,
-  file: NT,
-  success: UT,
-  custom: LT,
-  function: FT,
-  transform: zT,
-  map: jT,
-  set: BT,
-  array: qT,
-  object: GT,
+  string: xT,
+  number: vT,
+  boolean: IT,
+  bigint: wT,
+  symbol: ST,
+  null: kT,
+  undefined: _T,
+  void: ET,
+  never: TT,
+  any: CT,
+  unknown: RT,
+  date: $T,
+  enum: AT,
+  literal: PT,
+  nan: OT,
+  template_literal: DT,
+  file: MT,
+  success: NT,
+  custom: UT,
+  function: LT,
+  transform: FT,
+  map: zT,
+  set: jT,
+  array: BT,
+  object: qT,
   union: Ay,
-  intersection: KT,
-  tuple: HT,
-  record: VT,
-  nullable: WT,
-  nonoptional: ZT,
-  default: YT,
-  prefault: XT,
-  catch: QT,
-  pipe: eC,
-  readonly: tC,
-  promise: nC,
+  intersection: GT,
+  tuple: KT,
+  record: HT,
+  nullable: VT,
+  nonoptional: WT,
+  default: JT,
+  prefault: YT,
+  catch: XT,
+  pipe: QT,
+  readonly: eC,
+  promise: tC,
   optional: Py,
-  lazy: rC
+  lazy: nC
 };
 function Oy(e, t) {
   if ("_idmap" in e) {
@@ -35702,9 +35742,9 @@ var SH = {};
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
 var Jc = {};
-st(Jc, {
-  ZodAny: () => _C,
-  ZodArray: () => RC,
+ct(Jc, {
+  ZodAny: () => kC,
+  ZodArray: () => CC,
   ZodBase64: () => Qy,
   ZodBase64URL: () => eb,
   ZodBigInt: () => Wc,
@@ -35714,81 +35754,81 @@ st(Jc, {
   ZodCIDRv6: () => Xy,
   ZodCUID: () => Gy,
   ZodCUID2: () => Ky,
-  ZodCatch: () => JC,
+  ZodCatch: () => ZC,
   ZodCodec: () => Ld,
-  ZodCreditCard: () => yC,
+  ZodCreditCard: () => hC,
   ZodCustom: () => Fd,
   ZodCustomStringFormat: () => ss,
   ZodDate: () => Pd,
-  ZodDefault: () => GC,
-  ZodDiscriminatedUnion: () => AC,
+  ZodDefault: () => qC,
+  ZodDiscriminatedUnion: () => $C,
   ZodE164: () => tb,
   ZodEmail: () => zy,
   ZodEmoji: () => By,
   ZodEnum: () => Gc,
   ZodExactOptional: () => sb,
-  ZodFile: () => zC,
-  ZodFunction: () => aR,
+  ZodFile: () => FC,
+  ZodFunction: () => iR,
   ZodGUID: () => jy,
-  ZodIBAN: () => bC,
+  ZodIBAN: () => yC,
   ZodIPv4: () => Zy,
   ZodIPv6: () => Jy,
   ZodISODate: () => ji,
   ZodISODateTime: () => zi,
   ZodISODuration: () => qi,
   ZodISOTime: () => Bi,
-  ZodInstanceOf: () => uR,
-  ZodIntersection: () => PC,
+  ZodInstanceOf: () => cR,
+  ZodIntersection: () => AC,
   ZodJWT: () => nb,
   ZodKSUID: () => Wy,
-  ZodLazy: () => rR,
-  ZodLiteral: () => FC,
-  ZodMAC: () => hC,
-  ZodMap: () => UC,
-  ZodNaN: () => XC,
+  ZodLazy: () => nR,
+  ZodLiteral: () => LC,
+  ZodMAC: () => gC,
+  ZodMap: () => NC,
+  ZodNaN: () => YC,
   ZodNanoID: () => qy,
-  ZodNever: () => TC,
+  ZodNever: () => EC,
   ZodNonOptional: () => cb,
-  ZodNull: () => SC,
-  ZodNullable: () => qC,
+  ZodNull: () => wC,
+  ZodNullable: () => BC,
   ZodNumber: () => Hc,
   ZodNumberFormat: () => cs,
   ZodObject: () => Dd,
   ZodOptional: () => Nd,
   ZodPipe: () => Ud,
-  ZodPrefault: () => HC,
-  ZodPreprocess: () => QC,
-  ZodPromise: () => iR,
-  ZodReadonly: () => eR,
+  ZodPrefault: () => KC,
+  ZodPreprocess: () => XC,
+  ZodPromise: () => oR,
+  ZodReadonly: () => QC,
   ZodRecord: () => qc,
-  ZodSet: () => LC,
+  ZodSet: () => UC,
   ZodString: () => Kc,
   ZodStringFormat: () => Je,
-  ZodSuccess: () => ZC,
-  ZodSymbol: () => IC,
-  ZodTemplateLiteral: () => nR,
-  ZodTransform: () => jC,
-  ZodTuple: () => DC,
+  ZodSuccess: () => WC,
+  ZodSymbol: () => vC,
+  ZodTemplateLiteral: () => tR,
+  ZodTransform: () => zC,
+  ZodTuple: () => OC,
   ZodType: () => we,
   ZodULID: () => Hy,
   ZodURL: () => Ad,
   ZodUUID: () => Ro,
-  ZodUndefined: () => wC,
+  ZodUndefined: () => IC,
   ZodUnion: () => Md,
-  ZodUnknown: () => EC,
-  ZodVoid: () => CC,
+  ZodUnknown: () => _C,
+  ZodVoid: () => TC,
   ZodXID: () => Vy,
-  ZodXor: () => $C,
+  ZodXor: () => RC,
   _ZodString: () => Fy,
-  _default: () => KC,
+  _default: () => GC,
   _function: () => M5,
   any: () => p5,
   array: () => Od,
   base64: () => HH,
   base64url: () => VH,
   bigint: () => s5,
-  boolean: () => vC,
-  catch: () => YC,
+  boolean: () => xC,
+  catch: () => JC,
   check: () => N5,
   cidrv4: () => GH,
   cidrv6: () => KH,
@@ -35805,7 +35845,7 @@ st(Jc, {
   email: () => EH,
   emoji: () => DH,
   enum: () => ib,
-  exactOptional: () => BC,
+  exactOptional: () => jC,
   file: () => T5,
   float32: () => r5,
   float64: () => o5,
@@ -35820,7 +35860,7 @@ st(Jc, {
   int: () => Uy,
   int32: () => i5,
   int64: () => c5,
-  intersection: () => OC,
+  intersection: () => PC,
   invertCodec: () => P5,
   ipv4: () => jH,
   ipv6: () => qH,
@@ -35828,7 +35868,7 @@ st(Jc, {
   jwt: () => YH,
   keyof: () => g5,
   ksuid: () => zH,
-  lazy: () => oR,
+  lazy: () => rR,
   literal: () => E5,
   looseObject: () => b5,
   looseRecord: () => w5,
@@ -35839,32 +35879,32 @@ st(Jc, {
   nanoid: () => MH,
   nativeEnum: () => _5,
   never: () => ob,
-  nonoptional: () => WC,
-  null: () => kC,
+  nonoptional: () => VC,
+  null: () => SC,
   nullable: () => $d,
   nullish: () => C5,
-  number: () => xC,
+  number: () => bC,
   object: () => h5,
   optional: () => is,
   partialRecord: () => I5,
   pipe: () => Ly,
-  prefault: () => VC,
+  prefault: () => HC,
   preprocess: () => q5,
   promise: () => D5,
-  readonly: () => tR,
-  record: () => NC,
-  refine: () => sR,
+  readonly: () => eR,
+  record: () => MC,
+  refine: () => aR,
   set: () => k5,
   strictObject: () => y5,
   string: () => Rd,
   stringFormat: () => XH,
   stringbool: () => j5,
   success: () => R5,
-  superRefine: () => cR,
+  superRefine: () => sR,
   symbol: () => l5,
   templateLiteral: () => O5,
   transform: () => ab,
-  tuple: () => MC,
+  tuple: () => DC,
   uint32: () => a5,
   uint64: () => u5,
   ulid: () => LH,
@@ -35883,7 +35923,7 @@ st(Jc, {
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/checks.js
 var My = {};
-st(My, {
+ct(My, {
   endsWith: () => Pc,
   gt: () => To,
   gte: () => gr,
@@ -35932,7 +35972,7 @@ function Ny(e, t, n) {
   });
 }
 var _H = (e, t) => {
-  ik.init(e, t), e.name = "ZodError";
+  ok.init(e, t), e.name = "ZodError";
   let n = Object.getPrototypeOf(e);
   kH.has(n) || (kH.add(n), Ny(n, "format", (o) => (r) => td(o, r)), Ny(n, "flatten", (o) => (r) => ed(o, r)), Ny(n, "addIssue", (o) => (r) => {
     o.issues.push(r), o.message = JSON.stringify(o.issues, fc, 2);
@@ -35950,7 +35990,7 @@ var _H = (e, t) => {
 });
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/parse.js
-var oC = /* @__PURE__ */ bc(ir), iC = /* @__PURE__ */ xc(ir), aC = /* @__PURE__ */ vc(ir), sC = /* @__PURE__ */ Ic(ir), cC = /* @__PURE__ */ dh(ir), uC = /* @__PURE__ */ ph(ir), lC = /* @__PURE__ */ mh(ir), dC = /* @__PURE__ */ fh(ir), pC = /* @__PURE__ */ gh(ir), mC = /* @__PURE__ */ hh(ir), fC = /* @__PURE__ */ yh(ir), gC = /* @__PURE__ */ bh(ir);
+var rC = /* @__PURE__ */ bc(ir), oC = /* @__PURE__ */ xc(ir), iC = /* @__PURE__ */ vc(ir), aC = /* @__PURE__ */ Ic(ir), sC = /* @__PURE__ */ dh(ir), cC = /* @__PURE__ */ ph(ir), uC = /* @__PURE__ */ mh(ir), lC = /* @__PURE__ */ fh(ir), dC = /* @__PURE__ */ gh(ir), pC = /* @__PURE__ */ hh(ir), mC = /* @__PURE__ */ yh(ir), fC = /* @__PURE__ */ bh(ir);
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
 function Rle() {
@@ -35982,10 +36022,10 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
     return e.add(this, t), this;
   },
   refine(e, t) {
-    return this.check(sR(e, t));
+    return this.check(aR(e, t));
   },
   superRefine(e, t) {
-    return this.check(cR(e, t));
+    return this.check(sR(e, t));
   },
   overwrite(e) {
     return this.check(Yr(e));
@@ -35994,7 +36034,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
     return is(this);
   },
   exactOptional() {
-    return BC(this);
+    return jC(this);
   },
   nullable() {
     return $d(this);
@@ -36003,7 +36043,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
     return is($d(this));
   },
   nonoptional(e) {
-    return WC(this, e);
+    return VC(this, e);
   },
   array() {
     return Od(this);
@@ -36012,25 +36052,25 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
     return Zc([this, e]);
   },
   and(e) {
-    return OC(this, e);
+    return PC(this, e);
   },
   transform(e) {
     return Ly(this, ab(e));
   },
   default(e) {
-    return KC(this, e);
+    return GC(this, e);
   },
   prefault(e) {
-    return VC(this, e);
+    return HC(this, e);
   },
   catch(e) {
-    return YC(this, e);
+    return JC(this, e);
   },
   pipe(e) {
     return Ly(this, e);
   },
   readonly() {
-    return tR(this);
+    return eR(this);
   },
   describe(e) {
     let t = this.clone();
@@ -36065,16 +36105,16 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
     A.own(this, "~standard", e);
   },
   parse: function e(t, n) {
-    return oC(this, t, n, { callee: e });
+    return rC(this, t, n, { callee: e });
   },
   parseAsync: async function e(t, n) {
-    return await iC(this, t, n, { callee: e });
+    return await oC(this, t, n, { callee: e });
   },
   safeParse(e, t) {
-    return aC(this, e, t);
+    return iC(this, e, t);
   },
   async safeParseAsync(e, t) {
-    return sC(this, e, t);
+    return aC(this, e, t);
   },
   // `spa` is an alias: same function object as `safeParseAsync`, as before.
   get spa() {
@@ -36090,31 +36130,31 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
     return rd(this, e, t);
   },
   encode: function e(t, n) {
-    return cC(this, t, n, { callee: e });
+    return sC(this, t, n, { callee: e });
   },
   decode: function e(t, n) {
-    return uC(this, t, n, { callee: e });
+    return cC(this, t, n, { callee: e });
   },
   encodeAsync: async function e(t, n) {
-    return await lC(this, t, n, { callee: e });
+    return await uC(this, t, n, { callee: e });
   },
   decodeAsync: async function e(t, n) {
-    return await dC(this, t, n, { callee: e });
+    return await lC(this, t, n, { callee: e });
   },
   safeEncode(e, t) {
-    return pC(this, e, t);
+    return dC(this, e, t);
   },
   safeDecode(e, t) {
-    return mC(this, e, t);
+    return pC(this, e, t);
   },
   async safeEncodeAsync(e, t) {
-    return fC(this, e, t);
+    return mC(this, e, t);
   },
   async safeDecodeAsync(e, t) {
-    return gC(this, e, t);
+    return fC(this, e, t);
   },
   toJSONSchema(e) {
-    return yT(this, {})(e);
+    return hT(this, {})(e);
   },
   // Reads through to the registry on every access, so it must not cache.
   get description() {
@@ -36127,7 +36167,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
 }), Fy = /* @__PURE__ */ E(
   "_ZodString",
   (e, t) => {
-    Za.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => vT(e, n, o, r);
+    Za.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => xT(e, n, o, r);
   },
   /* @__PURE__ */ A.derived({
     format: (e) => on(e).format ?? null,
@@ -36263,32 +36303,32 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Rle(), pe.init(e, t), e.def = t
   }
 });
 function Rd(e) {
-  return OE(Kc, e);
+  return PE(Kc, e);
 }
 var Je = /* @__PURE__ */ E("ZodStringFormat", (e, t) => {
   Ke.init(e, t), Fy.init(e, t);
 }), zi = /* @__PURE__ */ E("ZodISODateTime", (e, t) => {
-  __.init(e, t), Je.init(e, t);
+  k_.init(e, t), Je.init(e, t);
 }), ji = /* @__PURE__ */ E("ZodISODate", (e, t) => {
-  E_.init(e, t), Je.init(e, t);
+  __.init(e, t), Je.init(e, t);
 }), Bi = /* @__PURE__ */ E("ZodISOTime", (e, t) => {
-  T_.init(e, t), Je.init(e, t);
+  E_.init(e, t), Je.init(e, t);
 }), qi = /* @__PURE__ */ E("ZodISODuration", (e, t) => {
-  C_.init(e, t), Je.init(e, t);
+  T_.init(e, t), Je.init(e, t);
 }), zy = /* @__PURE__ */ E("ZodEmail", (e, t) => {
-  f_.init(e, t), Je.init(e, t);
+  m_.init(e, t), Je.init(e, t);
 });
 function EH(e) {
   return oy(zy, e);
 }
 var jy = /* @__PURE__ */ E("ZodGUID", (e, t) => {
-  p_.init(e, t), Je.init(e, t);
+  d_.init(e, t), Je.init(e, t);
 });
 function TH(e) {
   return iy(jy, e);
 }
 var Ro = /* @__PURE__ */ E("ZodUUID", (e, t) => {
-  m_.init(e, t), Je.init(e, t);
+  p_.init(e, t), Je.init(e, t);
 });
 function CH(e) {
   return ay(Ro, e);
@@ -36303,7 +36343,7 @@ function AH(e) {
   return uy(Ro, e);
 }
 var Ad = /* @__PURE__ */ E("ZodURL", (e, t) => {
-  y_.init(e, t), Je.init(e, t);
+  h_.init(e, t), Je.init(e, t);
 });
 function PH(e) {
   return wd(Ad, e);
@@ -36311,132 +36351,132 @@ function PH(e) {
 function OH(e) {
   return wd(Ad, {
     protocol: od,
-    hostname: Ck,
+    hostname: Tk,
     ...A.normalizeParams(e)
   });
 }
 var By = /* @__PURE__ */ E("ZodEmoji", (e, t) => {
-  b_.init(e, t), Je.init(e, t);
+  y_.init(e, t), Je.init(e, t);
 });
 function DH(e) {
   return ly(By, e);
 }
 var qy = /* @__PURE__ */ E("ZodNanoID", (e, t) => {
-  x_.init(e, t), Je.init(e, t);
+  b_.init(e, t), Je.init(e, t);
 });
 function MH(e) {
   return dy(qy, e);
 }
 var Gy = /* @__PURE__ */ E("ZodCUID", (e, t) => {
-  v_.init(e, t), Je.init(e, t);
+  x_.init(e, t), Je.init(e, t);
 });
 function NH(e) {
   return py(Gy, e);
 }
 var Ky = /* @__PURE__ */ E("ZodCUID2", (e, t) => {
-  I_.init(e, t), Je.init(e, t);
+  v_.init(e, t), Je.init(e, t);
 });
 function UH(e) {
   return my(Ky, e);
 }
 var Hy = /* @__PURE__ */ E("ZodULID", (e, t) => {
-  w_.init(e, t), Je.init(e, t);
+  I_.init(e, t), Je.init(e, t);
 });
 function LH(e) {
   return fy(Hy, e);
 }
 var Vy = /* @__PURE__ */ E("ZodXID", (e, t) => {
-  S_.init(e, t), Je.init(e, t);
+  w_.init(e, t), Je.init(e, t);
 });
 function FH(e) {
   return gy(Vy, e);
 }
 var Wy = /* @__PURE__ */ E("ZodKSUID", (e, t) => {
-  k_.init(e, t), Je.init(e, t);
+  S_.init(e, t), Je.init(e, t);
 });
 function zH(e) {
   return hy(Wy, e);
 }
 var Zy = /* @__PURE__ */ E("ZodIPv4", (e, t) => {
-  R_.init(e, t), Je.init(e, t);
+  C_.init(e, t), Je.init(e, t);
 });
 function jH(e) {
   return yy(Zy, e);
 }
-var hC = /* @__PURE__ */ E("ZodMAC", (e, t) => {
-  A_.init(e, t), Je.init(e, t);
+var gC = /* @__PURE__ */ E("ZodMAC", (e, t) => {
+  $_.init(e, t), Je.init(e, t);
 });
 function BH(e) {
-  return ME(hC, e);
+  return DE(gC, e);
 }
 var Jy = /* @__PURE__ */ E("ZodIPv6", (e, t) => {
-  $_.init(e, t), Je.init(e, t);
+  R_.init(e, t), Je.init(e, t);
 });
 function qH(e) {
   return by(Jy, e);
 }
 var Yy = /* @__PURE__ */ E("ZodCIDRv4", (e, t) => {
-  P_.init(e, t), Je.init(e, t);
+  A_.init(e, t), Je.init(e, t);
 });
 function GH(e) {
   return xy(Yy, e);
 }
 var Xy = /* @__PURE__ */ E("ZodCIDRv6", (e, t) => {
-  O_.init(e, t), Je.init(e, t);
+  P_.init(e, t), Je.init(e, t);
 });
 function KH(e) {
   return vy(Xy, e);
 }
 var Qy = /* @__PURE__ */ E("ZodBase64", (e, t) => {
-  D_.init(e, t), Je.init(e, t);
+  O_.init(e, t), Je.init(e, t);
 });
 function HH(e) {
   return Iy(Qy, e);
 }
 var eb = /* @__PURE__ */ E("ZodBase64URL", (e, t) => {
-  M_.init(e, t), Je.init(e, t);
+  D_.init(e, t), Je.init(e, t);
 });
 function VH(e) {
   return wy(eb, e);
 }
 var tb = /* @__PURE__ */ E("ZodE164", (e, t) => {
-  N_.init(e, t), Je.init(e, t);
+  M_.init(e, t), Je.init(e, t);
 });
 function WH(e) {
   return Sy(tb, e);
 }
-var yC = /* @__PURE__ */ E("ZodCreditCard", (e, t) => {
-  U_.init(e, t), Je.init(e, t);
+var hC = /* @__PURE__ */ E("ZodCreditCard", (e, t) => {
+  N_.init(e, t), Je.init(e, t);
 });
 function ZH(e) {
-  return NE(yC, e);
+  return ME(hC, e);
 }
-var bC = /* @__PURE__ */ E("ZodIBAN", (e, t) => {
-  L_.init(e, t), Je.init(e, t);
+var yC = /* @__PURE__ */ E("ZodIBAN", (e, t) => {
+  U_.init(e, t), Je.init(e, t);
 });
 function JH(e) {
-  return UE(bC, e);
+  return NE(yC, e);
 }
 var nb = /* @__PURE__ */ E("ZodJWT", (e, t) => {
-  F_.init(e, t), Je.init(e, t);
+  L_.init(e, t), Je.init(e, t);
 });
 function YH(e) {
   return ky(nb, e);
 }
 var ss = /* @__PURE__ */ E("ZodCustomStringFormat", (e, t) => {
-  z_.init(e, t), Je.init(e, t);
+  F_.init(e, t), Je.init(e, t);
 });
 function XH(e, t, n = {}) {
   return rs(ss, e, t, n);
 }
 function QH(e) {
-  return rs(ss, "hostname", Tk, e);
+  return rs(ss, "hostname", Ek, e);
 }
 function e5(e) {
-  return rs(ss, "hex", Bk, e);
+  return rs(ss, "hex", jk, e);
 }
 function t5(e) {
-  return rs(ss, "currency_code", $k, e);
+  return rs(ss, "currency_code", Rk, e);
 }
 function n5(e, t) {
   let n = t?.enc ?? "hex", o = `${e}_${n}`, r = $r[o];
@@ -36447,7 +36487,7 @@ function n5(e, t) {
 var Hc = /* @__PURE__ */ E(
   "ZodNumber",
   (e, t) => {
-    Fh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => IT(e, n, o, r), e.isFinite = !0;
+    Fh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => vT(e, n, o, r), e.isFinite = !0;
   },
   /* @__PURE__ */ A.derived({
     minValue: (e) => {
@@ -36511,37 +36551,37 @@ var Hc = /* @__PURE__ */ E(
     }
   })
 );
-function xC(e) {
-  return FE(Hc, e);
+function bC(e) {
+  return LE(Hc, e);
 }
 var cs = /* @__PURE__ */ E("ZodNumberFormat", (e, t) => {
-  j_.init(e, t), Hc.init(e, t);
+  z_.init(e, t), Hc.init(e, t);
 });
 function Uy(e) {
-  return jE(cs, e);
+  return zE(cs, e);
 }
 function r5(e) {
-  return BE(cs, e);
+  return jE(cs, e);
 }
 function o5(e) {
-  return qE(cs, e);
+  return BE(cs, e);
 }
 function i5(e) {
-  return GE(cs, e);
+  return qE(cs, e);
 }
 function a5(e) {
-  return KE(cs, e);
+  return GE(cs, e);
 }
 var Vc = /* @__PURE__ */ E("ZodBoolean", (e, t) => {
-  md.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => wT(e, n, o, r);
+  md.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => IT(e, n, o, r);
 });
-function vC(e) {
-  return HE(Vc, e);
+function xC(e) {
+  return KE(Vc, e);
 }
 var Wc = /* @__PURE__ */ E(
   "ZodBigInt",
   (e, t) => {
-    zh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => ST(e, n, o, r);
+    zh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => wT(e, n, o, r);
   },
   /* @__PURE__ */ A.derived({
     minValue: (e) => on(e).minimum ?? null,
@@ -36584,63 +36624,63 @@ var Wc = /* @__PURE__ */ E(
   })
 );
 function s5(e) {
-  return WE(Wc, e);
+  return VE(Wc, e);
 }
 var rb = /* @__PURE__ */ E("ZodBigIntFormat", (e, t) => {
-  B_.init(e, t), Wc.init(e, t);
+  j_.init(e, t), Wc.init(e, t);
 });
 function c5(e) {
-  return JE(rb, e);
+  return ZE(rb, e);
 }
 function u5(e) {
-  return YE(rb, e);
+  return JE(rb, e);
 }
-var IC = /* @__PURE__ */ E("ZodSymbol", (e, t) => {
-  q_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => kT(e, n, o, r);
+var vC = /* @__PURE__ */ E("ZodSymbol", (e, t) => {
+  B_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => ST(e, n, o, r);
 });
 function l5(e) {
-  return XE(IC, e);
+  return YE(vC, e);
 }
-var wC = /* @__PURE__ */ E("ZodUndefined", (e, t) => {
-  G_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => ET(e, n, o, r);
+var IC = /* @__PURE__ */ E("ZodUndefined", (e, t) => {
+  q_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => _T(e, n, o, r);
 });
 function d5(e) {
+  return XE(IC, e);
+}
+var wC = /* @__PURE__ */ E("ZodNull", (e, t) => {
+  G_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => kT(e, n, o, r);
+});
+function SC(e) {
   return QE(wC, e);
 }
-var SC = /* @__PURE__ */ E("ZodNull", (e, t) => {
-  K_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => _T(e, n, o, r);
-});
-function kC(e) {
-  return eT(SC, e);
-}
-var _C = /* @__PURE__ */ E("ZodAny", (e, t) => {
-  H_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => RT(e, n, o, r);
+var kC = /* @__PURE__ */ E("ZodAny", (e, t) => {
+  K_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => CT(e, n, o, r);
 });
 function p5() {
-  return tT(_C);
+  return eT(kC);
 }
-var EC = /* @__PURE__ */ E("ZodUnknown", (e, t) => {
-  V_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => $T(e, n, o, r);
+var _C = /* @__PURE__ */ E("ZodUnknown", (e, t) => {
+  H_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => RT(e, n, o, r);
 });
 function os() {
-  return nT(EC);
+  return tT(_C);
 }
-var TC = /* @__PURE__ */ E("ZodNever", (e, t) => {
-  W_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => CT(e, n, o, r);
+var EC = /* @__PURE__ */ E("ZodNever", (e, t) => {
+  V_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => TT(e, n, o, r);
 });
 function ob(e) {
-  return rT(TC, e);
+  return nT(EC, e);
 }
-var CC = /* @__PURE__ */ E("ZodVoid", (e, t) => {
-  Z_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => TT(e, n, o, r);
+var TC = /* @__PURE__ */ E("ZodVoid", (e, t) => {
+  W_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => ET(e, n, o, r);
 });
 function m5(e) {
-  return oT(CC, e);
+  return rT(TC, e);
 }
 var Pd = /* @__PURE__ */ E(
   "ZodDate",
   (e, t) => {
-    J_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => AT(e, n, o, r), e.min = (n, o) => e.check(gr(n, o)), e.max = (n, o) => e.check(fr(n, o));
+    Z_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => $T(e, n, o, r), e.min = (n, o) => e.check(gr(n, o)), e.max = (n, o) => e.check(fr(n, o));
   },
   /* @__PURE__ */ A.derived({
     minDate: (e) => {
@@ -36654,10 +36694,10 @@ var Pd = /* @__PURE__ */ E(
   }, {})
 );
 function f5(e) {
-  return iT(Pd, e);
+  return oT(Pd, e);
 }
-var RC = /* @__PURE__ */ E("ZodArray", (e, t) => {
-  as(), Y_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => qT(e, n, o, r), e.element = t.element;
+var CC = /* @__PURE__ */ E("ZodArray", (e, t) => {
+  as(), J_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => BT(e, n, o, r), e.element = t.element;
 }, {
   min(e, t) {
     return this.check(ei(e, t));
@@ -36676,14 +36716,14 @@ var RC = /* @__PURE__ */ E("ZodArray", (e, t) => {
   }
 });
 function Od(e, t) {
-  return cT(RC, e, t);
+  return sT(CC, e, t);
 }
 function g5(e) {
   let t = e._zod.def.shape;
   return ib(Object.keys(t));
 }
 var Dd = /* @__PURE__ */ E("ZodObject", (e, t) => {
-  as(), X_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => GT(e, n, o, r), A.installLazyProp(e, "shape", (n) => n._zod.def.shape, !1);
+  as(), Y_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => qT(e, n, o, r), A.installLazyProp(e, "shape", (n) => n._zod.def.shape, !1);
 }, {
   keyof() {
     return ib(Object.keys(this._zod.def.shape));
@@ -36762,40 +36802,40 @@ function Zc(e, t) {
     ...A.normalizeParams(t)
   });
 }
-var $C = /* @__PURE__ */ E("ZodXor", (e, t) => {
-  Md.init(e, t), Q_.init(e, t), e._zod.processJSONSchema = (n, o, r) => Ay(e, n, o, r), e.options = t.options;
+var RC = /* @__PURE__ */ E("ZodXor", (e, t) => {
+  Md.init(e, t), X_.init(e, t), e._zod.processJSONSchema = (n, o, r) => Ay(e, n, o, r), e.options = t.options;
 });
 function x5(e, t) {
-  return new $C({
+  return new RC({
     type: "union",
     options: e,
     inclusive: !1,
     ...A.normalizeParams(t)
   });
 }
-var AC = /* @__PURE__ */ E("ZodDiscriminatedUnion", (e, t) => {
-  Md.init(e, t), tE.init(e, t);
+var $C = /* @__PURE__ */ E("ZodDiscriminatedUnion", (e, t) => {
+  Md.init(e, t), eE.init(e, t);
 });
 function v5(e, t, n) {
-  return new AC({
+  return new $C({
     type: "union",
     options: t,
     discriminator: e,
     ...A.normalizeParams(n)
   });
 }
-var PC = /* @__PURE__ */ E("ZodIntersection", (e, t) => {
-  nE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => KT(e, n, o, r);
+var AC = /* @__PURE__ */ E("ZodIntersection", (e, t) => {
+  tE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => GT(e, n, o, r);
 });
-function OC(e, t) {
-  return new PC({
+function PC(e, t) {
+  return new AC({
     type: "intersection",
     left: e,
     right: t
   });
 }
-var DC = /* @__PURE__ */ E("ZodTuple", (e, t) => {
-  as(), jh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => HT(e, n, o, r);
+var OC = /* @__PURE__ */ E("ZodTuple", (e, t) => {
+  as(), jh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => KT(e, n, o, r);
 }, {
   rest(e) {
     return this.clone({
@@ -36813,9 +36853,9 @@ var DC = /* @__PURE__ */ E("ZodTuple", (e, t) => {
     });
   }
 });
-function MC(e, t, n) {
+function DC(e, t, n) {
   let o = t instanceof pe, r = o ? n : t, i = o ? t : null;
-  return new DC({
+  return new OC({
     type: "tuple",
     items: e,
     rest: i,
@@ -36823,9 +36863,9 @@ function MC(e, t, n) {
   });
 }
 var qc = /* @__PURE__ */ E("ZodRecord", (e, t) => {
-  as(), rE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => VT(e, n, o, r), e.keyType = t.keyType, e.valueType = t.valueType;
+  as(), nE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => HT(e, n, o, r), e.keyType = t.keyType, e.valueType = t.valueType;
 });
-function NC(e, t, n) {
+function MC(e, t, n) {
   return !t || !t._zod ? new qc({
     type: "record",
     keyType: Rd(),
@@ -36856,29 +36896,29 @@ function w5(e, t, n) {
     ...A.normalizeParams(n)
   });
 }
-var UC = /* @__PURE__ */ E("ZodMap", (e, t) => {
-  as(), oE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => jT(e, n, o, r), e.keyType = t.keyType, e.valueType = t.valueType, e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Ni(...n)), e.size = (...n) => e.check(es(...n));
+var NC = /* @__PURE__ */ E("ZodMap", (e, t) => {
+  as(), rE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => zT(e, n, o, r), e.keyType = t.keyType, e.valueType = t.valueType, e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Ni(...n)), e.size = (...n) => e.check(es(...n));
 });
 function S5(e, t, n) {
-  return new UC({
+  return new NC({
     type: "map",
     keyType: e,
     valueType: t,
     ...A.normalizeParams(n)
   });
 }
-var LC = /* @__PURE__ */ E("ZodSet", (e, t) => {
-  as(), iE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => BT(e, n, o, r), e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Ni(...n)), e.size = (...n) => e.check(es(...n));
+var UC = /* @__PURE__ */ E("ZodSet", (e, t) => {
+  as(), oE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => jT(e, n, o, r), e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Ni(...n)), e.size = (...n) => e.check(es(...n));
 });
 function k5(e, t) {
-  return new LC({
+  return new UC({
     type: "set",
     valueType: e,
     ...A.normalizeParams(t)
   });
 }
 var Gc = /* @__PURE__ */ E("ZodEnum", (e, t) => {
-  aE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (o, r, i) => PT(e, o, r, i), e.enum = t.entries, e.options = [...e._zod.values];
+  iE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (o, r, i) => AT(e, o, r, i), e.enum = t.entries, e.options = [...e._zod.values];
   let n = new Set(Object.keys(t.entries));
   e.extract = (o, r) => {
     let i = {};
@@ -36923,8 +36963,8 @@ function _5(e, t) {
     ...A.normalizeParams(t)
   });
 }
-var FC = /* @__PURE__ */ E("ZodLiteral", (e, t) => {
-  sE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => OT(e, n, o, r), e.values = new Set(t.values), Object.defineProperty(e, "value", {
+var LC = /* @__PURE__ */ E("ZodLiteral", (e, t) => {
+  aE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => PT(e, n, o, r), e.values = new Set(t.values), Object.defineProperty(e, "value", {
     get() {
       if (t.values.length > 1)
         throw new Error("This schema contains multiple valid literal values. Use `.values` instead.");
@@ -36933,20 +36973,20 @@ var FC = /* @__PURE__ */ E("ZodLiteral", (e, t) => {
   });
 });
 function E5(e, t) {
-  return new FC({
+  return new LC({
     type: "literal",
     values: Array.isArray(e) ? e : [e],
     ...A.normalizeParams(t)
   });
 }
-var zC = /* @__PURE__ */ E("ZodFile", (e, t) => {
-  cE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => NT(e, n, o, r), e.min = (n, o) => e.check(Co(n, o)), e.max = (n, o) => e.check(Ni(n, o)), e.mime = (n, o) => e.check(Dc(Array.isArray(n) ? n : [n], o));
+var FC = /* @__PURE__ */ E("ZodFile", (e, t) => {
+  sE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => MT(e, n, o, r), e.min = (n, o) => e.check(Co(n, o)), e.max = (n, o) => e.check(Ni(n, o)), e.mime = (n, o) => e.check(Dc(Array.isArray(n) ? n : [n], o));
 });
 function T5(e) {
-  return uT(zC, e);
+  return cT(FC, e);
 }
-var jC = /* @__PURE__ */ E("ZodTransform", (e, t) => {
-  as(), uE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => zT(e, n, o, r), e._zod.parse = (n, o) => {
+var zC = /* @__PURE__ */ E("ZodTransform", (e, t) => {
+  as(), cE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => FT(e, n, o, r), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
       throw new Di(e.constructor.name);
     n.addIssue = (i) => {
@@ -36962,7 +37002,7 @@ var jC = /* @__PURE__ */ E("ZodTransform", (e, t) => {
   };
 });
 function ab(e) {
-  return new jC({
+  return new zC({
     type: "transform",
     transform: e
   });
@@ -36977,19 +37017,19 @@ function is(e) {
   });
 }
 var sb = /* @__PURE__ */ E("ZodExactOptional", (e, t) => {
-  lE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => Py(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+  uE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => Py(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
-function BC(e) {
+function jC(e) {
   return new sb({
     type: "optional",
     innerType: e
   });
 }
-var qC = /* @__PURE__ */ E("ZodNullable", (e, t) => {
-  dE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => WT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+var BC = /* @__PURE__ */ E("ZodNullable", (e, t) => {
+  lE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => VT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
 function $d(e) {
-  return new qC({
+  return new BC({
     type: "nullable",
     innerType: e
   });
@@ -36997,11 +37037,11 @@ function $d(e) {
 function C5(e) {
   return is($d(e));
 }
-var GC = /* @__PURE__ */ E("ZodDefault", (e, t) => {
-  pE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => YT(e, n, o, r), e.unwrap = () => e._zod.def.innerType, e.removeDefault = e.unwrap;
+var qC = /* @__PURE__ */ E("ZodDefault", (e, t) => {
+  dE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => JT(e, n, o, r), e.unwrap = () => e._zod.def.innerType, e.removeDefault = e.unwrap;
 });
-function KC(e, t) {
-  return new GC({
+function GC(e, t) {
+  return new qC({
     type: "default",
     innerType: e,
     get defaultValue() {
@@ -37009,11 +37049,11 @@ function KC(e, t) {
     }
   });
 }
-var HC = /* @__PURE__ */ E("ZodPrefault", (e, t) => {
-  mE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => XT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+var KC = /* @__PURE__ */ E("ZodPrefault", (e, t) => {
+  pE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => YT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
-function VC(e, t) {
-  return new HC({
+function HC(e, t) {
+  return new KC({
     type: "prefault",
     innerType: e,
     get defaultValue() {
@@ -37022,42 +37062,42 @@ function VC(e, t) {
   });
 }
 var cb = /* @__PURE__ */ E("ZodNonOptional", (e, t) => {
-  fE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => ZT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+  mE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => WT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
-function WC(e, t) {
+function VC(e, t) {
   return new cb({
     type: "nonoptional",
     innerType: e,
     ...A.normalizeParams(t)
   });
 }
-var ZC = /* @__PURE__ */ E("ZodSuccess", (e, t) => {
-  gE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => UT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+var WC = /* @__PURE__ */ E("ZodSuccess", (e, t) => {
+  fE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => NT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
 function R5(e) {
-  return new ZC({
+  return new WC({
     type: "success",
     innerType: e
   });
 }
-var JC = /* @__PURE__ */ E("ZodCatch", (e, t) => {
-  hE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => QT(e, n, o, r), e.unwrap = () => e._zod.def.innerType, e.removeCatch = e.unwrap;
+var ZC = /* @__PURE__ */ E("ZodCatch", (e, t) => {
+  gE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => XT(e, n, o, r), e.unwrap = () => e._zod.def.innerType, e.removeCatch = e.unwrap;
 });
-function YC(e, t) {
-  return new JC({
+function JC(e, t) {
+  return new ZC({
     type: "catch",
     innerType: e,
     catchValue: typeof t == "function" ? t : A.constantCatch(t)
   });
 }
-var XC = /* @__PURE__ */ E("ZodNaN", (e, t) => {
-  yE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => DT(e, n, o, r);
+var YC = /* @__PURE__ */ E("ZodNaN", (e, t) => {
+  hE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => OT(e, n, o, r);
 });
 function $5(e) {
-  return sT(XC, e);
+  return aT(YC, e);
 }
 var Ud = /* @__PURE__ */ E("ZodPipe", (e, t) => {
-  qh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => eC(e, n, o, r), e.in = t.in, e.out = t.out;
+  qh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => QT(e, n, o, r), e.in = t.in, e.out = t.out;
 });
 function Ly(e, t) {
   return new Ud({
@@ -37089,57 +37129,57 @@ function P5(e) {
     reverseTransform: t.transform
   });
 }
-var QC = /* @__PURE__ */ E("ZodPreprocess", (e, t) => {
-  Ud.init(e, t), bE.init(e, t);
-}), eR = /* @__PURE__ */ E("ZodReadonly", (e, t) => {
-  xE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => tC(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+var XC = /* @__PURE__ */ E("ZodPreprocess", (e, t) => {
+  Ud.init(e, t), yE.init(e, t);
+}), QC = /* @__PURE__ */ E("ZodReadonly", (e, t) => {
+  bE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => eC(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
-function tR(e) {
-  return new eR({
+function eR(e) {
+  return new QC({
     type: "readonly",
     innerType: e
   });
 }
-var nR = /* @__PURE__ */ E("ZodTemplateLiteral", (e, t) => {
-  vE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => MT(e, n, o, r);
+var tR = /* @__PURE__ */ E("ZodTemplateLiteral", (e, t) => {
+  xE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => DT(e, n, o, r);
 });
 function O5(e, t) {
-  return new nR({
+  return new tR({
     type: "template_literal",
     parts: e,
     ...A.normalizeParams(t)
   });
 }
-var rR = /* @__PURE__ */ E("ZodLazy", (e, t) => {
-  hd.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => rC(e, n, o, r), e.unwrap = () => e._zod.def.getter();
+var nR = /* @__PURE__ */ E("ZodLazy", (e, t) => {
+  hd.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => nC(e, n, o, r), e.unwrap = () => e._zod.def.getter();
 });
-function oR(e) {
-  return new rR({
+function rR(e) {
+  return new nR({
     type: "lazy",
     getter: e
   });
 }
-var iR = /* @__PURE__ */ E("ZodPromise", (e, t) => {
-  wE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => nC(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
+var oR = /* @__PURE__ */ E("ZodPromise", (e, t) => {
+  IE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => tC(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
 function D5(e) {
-  return new iR({
+  return new oR({
     type: "promise",
     innerType: e
   });
 }
-var aR = /* @__PURE__ */ E("ZodFunction", (e, t) => {
-  IE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => FT(e, n, o, r);
+var iR = /* @__PURE__ */ E("ZodFunction", (e, t) => {
+  vE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => LT(e, n, o, r);
 });
 function M5(e) {
-  return new aR({
+  return new iR({
     type: "function",
-    input: Array.isArray(e?.input) ? MC(e?.input) : e?.input ?? Od(os()),
+    input: Array.isArray(e?.input) ? DC(e?.input) : e?.input ?? Od(os()),
     output: e?.output ?? os()
   });
 }
 var Fd = /* @__PURE__ */ E("ZodCustom", (e, t) => {
-  SE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => LT(e, n, o, r);
+  wE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => UT(e, n, o, r);
 });
 function N5(e) {
   let t = new Qe({
@@ -37149,15 +37189,15 @@ function N5(e) {
   return t._zod.check = e, t;
 }
 function U5(e, t) {
-  return lT(Fd, e ?? (() => !0), t);
+  return uT(Fd, e ?? (() => !0), t);
 }
-function sR(e, t = {}) {
-  return dT(Fd, e, t);
+function aR(e, t = {}) {
+  return lT(Fd, e, t);
 }
-function cR(e, t) {
-  return pT(e, t);
+function sR(e, t) {
+  return dT(e, t);
 }
-var L5 = mT, F5 = fT, uR = /* @__PURE__ */ E("ZodInstanceOf", (e, t) => {
+var L5 = pT, F5 = mT, cR = /* @__PURE__ */ E("ZodInstanceOf", (e, t) => {
   Fd.init(e, t);
 }, {
   properties(e, t) {
@@ -37165,7 +37205,7 @@ var L5 = mT, F5 = fT, uR = /* @__PURE__ */ E("ZodInstanceOf", (e, t) => {
   }
 });
 function z5(e, t = {}) {
-  let n = new uR({
+  let n = new cR({
     type: "custom",
     check: "custom",
     fn: (o) => o instanceof e,
@@ -37182,17 +37222,17 @@ function z5(e, t = {}) {
     });
   }, n;
 }
-var j5 = (...e) => gT({
+var j5 = (...e) => fT({
   Codec: Ld,
   Boolean: Vc,
   String: Kc
 }, ...e);
 function B5(e) {
-  let t = oR(() => Zc([Rd(e), xC(), vC(), kC(), Od(t), NC(Rd(), t)]));
+  let t = rR(() => Zc([Rd(e), bC(), xC(), SC(), Od(t), MC(Rd(), t)]));
   return t;
 }
 function q5(e, t) {
-  return new QC({
+  return new XC({
     type: "pipe",
     in: ab(e),
     out: t
@@ -37221,12 +37261,12 @@ function Ale(e) {
 function Ple() {
   return Lt().customError;
 }
-var lR;
-lR || (lR = {});
+var uR;
+uR || (uR = {});
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/iso.js
 var zd = {};
-st(zd, {
+ct(zd, {
   ZodISODate: () => ji,
   ZodISODateTime: () => zi,
   ZodISODuration: () => qi,
@@ -37388,7 +37428,7 @@ function jle(e, t) {
       }
   }).pipe(e);
 }
-function dR(e, t) {
+function lR(e, t) {
   if (e === null)
     return "z";
   let n = typeof e;
@@ -37405,7 +37445,7 @@ function dR(e, t) {
     if (Array.isArray(e)) {
       let i = [];
       for (let a of e) {
-        let s = dR(a, t);
+        let s = lR(a, t);
         if (s === null)
           return null;
         i.push(s);
@@ -37414,7 +37454,7 @@ function dR(e, t) {
     }
     let o = Object.keys(e).sort(), r = [];
     for (let i of o) {
-      let a = dR(e[i], t);
+      let a = lR(e[i], t);
       if (a === null)
         return null;
       r.push(`${i.length}:${i}=${a}`);
@@ -37462,7 +37502,7 @@ function Gle(e, t) {
       if (t.uniqueItems === !0) {
         let i = /* @__PURE__ */ new Map();
         for (let a = 0; a < r.length; a++) {
-          let s = dR(r[a], /* @__PURE__ */ new Set());
+          let s = lR(r[a], /* @__PURE__ */ new Set());
           if (s === null)
             continue;
           let u = i.get(s);
@@ -37887,8 +37927,8 @@ function Q5(e) {
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/coerce.js
-var pR = {};
-st(pR, {
+var dR = {};
+ct(dR, {
   bigint: () => Yle,
   boolean: () => Jle,
   date: () => Xle,
@@ -37896,19 +37936,19 @@ st(pR, {
   string: () => Wle
 });
 function Wle(e) {
-  return DE(Kc, e);
+  return OE(Kc, e);
 }
 function Zle(e) {
-  return zE(Hc, e);
+  return FE(Hc, e);
 }
 function Jle(e) {
-  return VE(Vc, e);
+  return HE(Vc, e);
 }
 function Yle(e) {
-  return ZE(Wc, e);
+  return WE(Wc, e);
 }
 function Xle(e) {
-  return aT(Pd, e);
+  return iT(Pd, e);
 }
 
 // openclaw/src/shared/clawhub-recommendations.ts
@@ -37952,7 +37992,7 @@ pt();
 pt();
 
 // openclaw/ui/src/lib/chat/message-normalizer.ts
-function mR(e) {
+function pR(e) {
   return pp($t(e)?.role);
 }
 
@@ -37965,7 +38005,7 @@ function nV(e) {
 
 // openclaw/ui/src/lib/chat/tool-call-grouping.ts
 Le();
-IS();
+vS();
 SV();
 
 // openclaw/src/agents/agent-activity-presentation.ts
@@ -38012,7 +38052,7 @@ var gxt = new Map([
 function kV(e) {
   let t = $t(e)?.activity;
   return Array.isArray(t) ? t.filter(
-    (n) => Ml.Check(xR, n)
+    (n) => Ml.Check(bR, n)
   ) : [];
 }
 
@@ -38093,7 +38133,7 @@ function zde(e, t, n) {
   let o = S$(e), r = o?.surface === "assistant_message" ? { ...o, surface: "assistant_message" } : Fde(t);
   if (r)
     return { preview: { ...r, surface: "assistant_message" } };
-  let i = At(At(e)?.browserTab), a = Wb(i);
+  let i = At(At(e)?.browserTab), a = Vb(i);
   if (n !== "browser" || !i || !a)
     return {};
   let s = typeof i.url == "string" ? ds(i.url, 2048) : "";
@@ -38110,7 +38150,7 @@ function zde(e, t, n) {
 function TV(e, t) {
   return E$(e) ?? Xt(e.callId) ?? Xt(t.toolCallId) ?? Xt(t.tool_call_id) ?? Xt(t.toolUseId) ?? Xt(t.tool_use_id);
 }
-function vR(e, t) {
+function xR(e, t) {
   return Xt(e.name) ?? Xt(t.toolName) ?? Xt(t.tool_name) ?? "tool";
 }
 function jde(e) {
@@ -38126,10 +38166,10 @@ function jde(e) {
 }
 var Bde = 0;
 function qde(e) {
-  return Zb(e.type) || typeof e.name == "string" && (e.arguments != null || e.args != null || e.input != null);
+  return Wb(e.type) || typeof e.name == "string" && (e.arguments != null || e.args != null || e.input != null);
 }
 function CV(e) {
-  let t = e, n = typeof t.role == "string" ? t.role.toLowerCase() : "", o = mR(e) || n === "tool" || n === "function" || typeof t.toolName == "string" || typeof t.tool_name == "string", r = Mde(t.content), i = mp(t), a = t.__openclawToolStreamLive === !0, s = nV(t.__openclawToolStreamDiffStat), u = [], l = /* @__PURE__ */ new WeakSet(), m = Dde(t), h = wb(t)?.runId ?? ze(t.runId), b = (x, v, S = !1) => {
+  let t = e, n = typeof t.role == "string" ? t.role.toLowerCase() : "", o = pR(e) || n === "tool" || n === "function" || typeof t.toolName == "string" || typeof t.tool_name == "string", r = Mde(t.content), i = mp(t), a = t.__openclawToolStreamLive === !0, s = nV(t.__openclawToolStreamDiffStat), u = [], l = /* @__PURE__ */ new WeakSet(), m = Dde(t), h = wb(t)?.runId ?? ze(t.runId), b = (x, v, S = !1) => {
     let w = Ude(x), k = x.details ?? t.details, C = At(x.__openclaw), $ = mp(x) ?? i, D = Lde(
       x,
       k,
@@ -38151,7 +38191,7 @@ function CV(e) {
     let v = r[x] ?? {}, S = qde(v);
     if (!S && !pp(v.type))
       continue;
-    let w = ze(v.runId) ?? h, k = ze(v.parentToolCallId), C = TV(v, t), $ = vR(v, t), D = {
+    let w = ze(v.runId) ?? h, k = ze(v.parentToolCallId), C = TV(v, t), $ = xR(v, t), D = {
       id: C ?? `${$}:${x}`,
       ...C ? { callId: C } : {},
       ...w ? { runId: w } : {},
@@ -38179,7 +38219,7 @@ function CV(e) {
         // Same-name fallback belongs to legacy blocks missing an explicit identity.
         (!C || !ue.callId) && ue.name === $ && ue.outputText === void 0 && !l.has(ue)
       )
-    ), Z = o ? vR({}, t) : void 0, $e = Z && Z !== "browser" ? Z : te?.name ?? Z ?? $, me = b(v, $e);
+    ), Z = o ? xR({}, t) : void 0, $e = Z && Z !== "browser" ? Z : te?.name ?? Z ?? $, me = b(v, $e);
     if (te) {
       l.add(te), te.callId ??= C, te.runId ??= w, te.parentToolCallId ??= k, a || (te.completed = !0), Object.assign(te, me, {
         preview: me.preview,
@@ -38196,11 +38236,11 @@ function CV(e) {
   if (o && u.length === 0) {
     let x = typeof t.toolName == "string" && t.toolName || typeof t.tool_name == "string" && t.tool_name || "tool", v = TV({}, t);
     u.push({
-      id: v ?? `${vR({}, t)}:0`,
+      id: v ?? `${xR({}, t)}:0`,
       ...v ? { callId: v } : {},
       ...h ? { runId: h } : {},
       name: x,
-      completed: mR(e) || n === "tool" || n === "function",
+      completed: pR(e) || n === "tool" || n === "function",
       messageId: m,
       ...b(t, x, !0)
     });
@@ -38249,11 +38289,11 @@ function DV(e, t) {
 }
 
 // octogee/app/openclaw-browser/resources.ts
-function Jxt(e, t) {
+function Wxt(e, t) {
   return [...DV(e, []).values()].filter((o) => o.tab.target === "host" && o.tab.profile === t).at(-1) ?? null;
 }
 export {
-  Jxt as latestNativeBrowserTab
+  Wxt as latestNativeBrowserTab
 };
 /*! Bundled license information:
 
