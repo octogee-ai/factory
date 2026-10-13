@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@google-cloud/kms": "^6.2.0",
+    "@google-cloud/kms": "^6.2.1",
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
     "express": "^5.2.1",
