@@ -5,6 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import request from "supertest";
 
 import { addAdminFleetRoutes } from "./admin-fleet-router.js";
+import { readSharedSourceRecoveryAuthority } from './shared-source-recovery.js';
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,
@@ -1572,6 +1573,55 @@ describe('POST /gateways/:id/recover-source', () => {
     expect(input.managementRecovery.failures[0].receipt).toEqual(before['glmOperations/export-0']);
     expect(input.managementRecovery.users[0].migration).toEqual((before['users/source-user-0'].provisioning as any).openclaw.migration);
     for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
+  });
+  it('captures an explicitly absent marker for an exact terminal released failure without changing the customer', async () => {
+    const seed = managementSeed(), manifest = immutableBuild();
+    delete (seed['users/source-user-0'].provisioning as any).openclaw.migration;
+    const before = structuredClone(seed['users/source-user-0']);
+    const h = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
+    const captured = opsIn(h.store, 'restart-gateway')[0].input.sourceRecovery.managementRecovery;
+    expect(captured.users.find((row: any) => row.uid === 'source-user-0')).toEqual({ uid: 'source-user-0', migration: null });
+    expect(h.store.get('users/source-user-0')).toEqual(before);
+  });
+  function terminalQuiesceSeed() {
+    const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
+    row.attemptHistory[0].steps = [{ name: 'quiesce-source', status: 'done' }, { name: 'final-sync-state', status: 'failed' },
+      ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))];
+    row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'target-scheduler-ready', status: 'done' },
+      { name: 'wait-for-active-work', status: 'done' }, { name: 'quiesce-source', status: 'failed', error: row.error },
+      ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))];
+    row.attemptHistory[1].steps = structuredClone(row.steps);
+    return seed;
+  }
+  it('captures a terminal revoked quiesce failure after complete prior final-sync rollback', async () => {
+    const seed = terminalQuiesceSeed(), row = seed['glmOperations/export-0'] as any;
+    const h = mkApp(seed, { releaseAuthority: buildAuthority(immutableBuild()) });
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: immutableBuild().sourceSha }).expect(202);
+    expect(opsIn(h.store, 'restart-gateway')[0].input.sourceRecovery.managementRecovery.failures[0].receipt).toEqual(row);
+  });
+  it('captures the terminal source authority with explicit absent migration custody', async () => {
+    const seed = terminalQuiesceSeed();
+    delete (seed['users/source-user-0'].provisioning as any).openclaw.migration;
+    const { db } = makeDb(seed);
+    const captured = await db.runTransaction(tx => readSharedSourceRecoveryAuthority(db, tx, 'shared-0'));
+    expect(captured.managementRecovery!.users[0]).toEqual({ uid: 'source-user-0', migration: null });
+  });
+  it.each(['prior-rollback', 'current-rollback', 'prior-cutover', 'prior-verify', 'running-task', 'present-null'])('refuses terminal recovery with %s', async change => {
+    const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
+    row.attemptHistory[0].steps.push({ name: 'final-sync-state', status: 'failed' });
+    if (change === 'prior-rollback') row.attemptHistory[0].steps = row.attemptHistory[0].steps.filter((step: any) => step.name !== 'rollback:resume-ingress');
+    if (change === 'current-rollback') {
+      row.steps.push({ name: 'quiesce-source', status: 'failed', error: row.error });
+      row.attemptHistory[1].steps = structuredClone(row.steps);
+    }
+    if (change === 'prior-cutover') row.attemptHistory[0].steps.push({ name: 'cutover-firestore', status: 'done' });
+    if (change === 'prior-verify') row.attemptHistory[0].steps.push({ name: 'verify-target', status: 'done' });
+    if (change === 'running-task') seed['glmMigrationTransferTasks/task'] = { status: 'running', sourceGatewayId: 'shared-0', targetGatewayId: 'shared-1' };
+    if (change === 'present-null') (seed['users/source-user-0'].provisioning as any).openclaw.migration = null;
+    const h = mkApp(seed, { releaseAuthority: buildAuthority(immutableBuild()) });
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: immutableBuild().sourceSha }).expect(409);
+    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(0);
   });
   it.each(['unreleased', 'history-release', 'missing-history', 'duplicate-history', 'zero-history', 'marker', 'cutover', 'running', 'receipt', 'unready', 'roster'])('refuses management recovery with %s custody', async change => {
     const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;

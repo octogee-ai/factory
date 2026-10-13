@@ -73,6 +73,11 @@ function pristineOutbound(row, gatewayId, sourceUids) {
             "firstStartedAt", "lastProgressAt", "resumeCount", "lastResumedAt", "error", "output", "rolledBack"]
             .every(key => row[key] === undefined)].every(Boolean);
 }
+async function assertNoSourceTransferTask(db, tx, gatewayId) {
+    const tasks = await tx.get(db.collection('glmMigrationTransferTasks').where('status', '==', 'running'));
+    if (tasks.docs.some(row => [row.data().sourceGatewayId, row.data().targetGatewayId].includes(gatewayId)))
+        conflict('source recovery transfer task is running');
+}
 export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOperationId, predecessorId) {
     const [rootSnap, roster, active, failed] = await Promise.all([
         tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.collection(`gateways/${gatewayId}/assignments`)),
@@ -100,6 +105,7 @@ export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOp
     if (root.desiredStatus === "draining" && managementFailures.every(row => row !== undefined)) {
         if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid))))
             conflict("another source operation is active");
+        await assertNoSourceTransferTask(db, tx, gatewayId);
         const failures = managementFailures;
         if (users.some((user, index) => !managementUserMatches(user.data() ?? {}, assignments[index], failures[index], gatewayId)))
             conflict("source recovery customer authority changed");
@@ -113,7 +119,8 @@ export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOp
         }
         return { root: rootIdentity(root), assignments,
             failedExports: failures.map(({ operationId, receipt: row }) => ({ operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: row.steps })),
-            managementRecovery: { ...pod, failures, users: users.map((user, index) => ({ uid: assignments[index].uid, migration: user.data().provisioning.openclaw.migration })) } };
+            managementRecovery: { ...pod, failures, users: users.map((user, index) => ({ uid: assignments[index].uid,
+                    migration: user.data().provisioning.openclaw.migration ?? null })) } };
     }
     if (users.some((user, index) => !userMatches(user.data() ?? {}, assignments[index], gatewayId)))
         conflict("source recovery customer authority changed");

@@ -72,6 +72,10 @@ function pristineOutbound(row: DocumentData, gatewayId: string, sourceUids: Set<
       "firstStartedAt", "lastProgressAt", "resumeCount", "lastResumedAt", "error", "output", "rolledBack"]
       .every(key => row[key] === undefined)].every(Boolean);
 }
+async function assertNoSourceTransferTask(db: Firestore, tx: Transaction, gatewayId: string): Promise<void> {
+  const tasks = await tx.get(db.collection('glmMigrationTransferTasks').where('status', '==', 'running'));
+  if (tasks.docs.some(row => [row.data().sourceGatewayId, row.data().targetGatewayId].includes(gatewayId))) conflict('source recovery transfer task is running');
+}
 export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Transaction, gatewayId: string, ownOperationId?: string, predecessorId?: string): Promise<SharedSourceRecoveryAuthority> {
   const [rootSnap, roster, active, failed] = await Promise.all([
     tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.collection(`gateways/${gatewayId}/assignments`)),
@@ -96,6 +100,7 @@ export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Trans
   });
   if (root.desiredStatus === "draining" && managementFailures.every(row => row !== undefined)) {
     if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)))) conflict("another source operation is active");
+    await assertNoSourceTransferTask(db, tx, gatewayId);
     const failures = managementFailures as { operationId: string; receipt: DocumentData }[];
     if (users.some((user, index) => !managementUserMatches(user.data() ?? {}, assignments[index]!, failures[index]!, gatewayId))) conflict("source recovery customer authority changed");
     const runtime = await tx.get(db.doc(`glmGateways/${gatewayId}`));
@@ -103,7 +108,8 @@ export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Trans
     try { pod = managementPodIdentity(runtime.data() ?? {}, assignments, fenced); } catch { return conflict("source management runtime custody is unavailable"); }
     return { root: rootIdentity(root), assignments,
       failedExports: failures.map(({ operationId, receipt: row }) => ({ operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: row.steps })),
-      managementRecovery: { ...pod, failures, users: users.map((user, index) => ({ uid: assignments[index]!.uid, migration: user.data()!.provisioning.openclaw.migration })) } };
+      managementRecovery: { ...pod, failures, users: users.map((user, index) => ({ uid: assignments[index]!.uid,
+        migration: user.data()!.provisioning.openclaw.migration ?? null })) } };
   }
   if (users.some((user, index) => !userMatches(user.data() ?? {}, assignments[index]!, gatewayId))) conflict("source recovery customer authority changed");
   const failedExports = assignments.map(identity => {

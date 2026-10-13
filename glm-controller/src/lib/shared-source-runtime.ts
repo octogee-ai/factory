@@ -130,7 +130,7 @@ function releaseCapturedPlacements(deps: SharedPodRecoveryDeps, tx: Transaction,
     const assignment = input.assignments[index]!, user = input.managementRecovery!.users[index]!;
     const receipt = { operationId: op.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt };
     tx.update(deps.db.doc(`glmOperations/${failure.operationId}`), { sourceRuntimeRecovery: receipt });
-    tx.update(deps.db.doc(`users/${assignment.uid}`), { 'provisioning.openclaw.migration': FieldValue.delete() });
+    if (user.migration !== null) tx.update(deps.db.doc(`users/${assignment.uid}`), { 'provisioning.openclaw.migration': FieldValue.delete() });
     return { operationId: failure.operationId, uid: assignment.uid, assignmentEpoch: assignment.assignmentEpoch, marker: user.migration };
   });
 }
