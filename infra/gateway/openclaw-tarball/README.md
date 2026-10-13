@@ -127,8 +127,8 @@ Upstream is operator-selected main
 frozen for the October 12 recut. The operator approved independent local
 qualification rather than waiting for full upstream CI to recover. OpenClaw
 validation stays local; no full-upstream, fork-CI or iOS-green claim is made.
-Exact overlay source is `4408d087223f08b3ca344154f255d660fc647b55` on
-`ceckert/openclaw:codex/openclaw-controlled-main-oct12`.
+Exact overlay source is `121c7fd5a090f812464d4c41120a7f2419cd8b85` on
+`ceckert/openclaw:codex/native-sqlite-maintenance-context`.
 Package version `2026.10.2` identifies a main snapshot, not a released tag.
 
 Shared-state schema 21, agent schema 26 and protocol 4 follow the selected
@@ -157,6 +157,7 @@ do not repair this layout. Agent 25 → 26 uses the unchanged native migration.
 
 | Retained contract | Consumer / condition for removal |
 | --- | --- |
+| Current SQLite maintenance admission context | Lazy loading must not restore an expired task over fresh cleanup authority. Maintenance uses the existing non-creating worker facts channel and preserves native closure, reader and writer checks. Remove when the selected upstream has equivalent lifetime handling. |
 | Startup/reload settlement, typed supersession retry and queued SQLite authority | Builder admission; retain FIFO, live revocation and single-open behavior until native owners provide equivalent contracts. |
 | Committed reload debt across superseding catalog/config work | Customer mounts/config writes; preserve successor-owned service work without repeating completed replacement. |
 | Tenant-bound requester/reviewer and execution-time authority | Computer/connector approvals; native roles alone do not bind an action to a live VM/run. |
