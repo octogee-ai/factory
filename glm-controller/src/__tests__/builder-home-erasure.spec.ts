@@ -8,7 +8,7 @@ function fixture(){
  const update=async(patch:any)=>{for(const [key,value] of Object.entries(patch))owner.provisioning[key.split('.')[1]]=value;};
  const ref={get:async()=>({data:()=>owner}),update};
  const db:any={collection:()=>({doc:()=>ref}),runTransaction:async(work:any)=>work({get:ref.get,update:(_:any,patch:any)=>update(patch)})};
- const deps={db,copy:{abort:vi.fn(async()=>true),sweep:vi.fn(async()=>true)},removeStoppedHome:vi.fn(async()=>true)};
+ const deps={db,copy:{abort:vi.fn(async()=>true),sweep:vi.fn(async()=>true)},removeStoppedHome:vi.fn(async()=>true),remainingOwnerHomes:vi.fn(async()=>[] as string[]),log:vi.fn()};
  return {owner,source,target,deps,run:()=>eraseBuilderHomeMigrationStorage(deps,"owner")};
 }
 it("keeps all disk identities until asynchronous erasure completes and preserves original claim identity",async()=>{
@@ -26,4 +26,18 @@ it("cleans unadopted helpers before touching tracked homes and retains the queue
  h.deps.removeStoppedHome.mockRejectedValueOnce(new Error("disk ownership changed"));
  await expect(h.run()).rejects.toThrow(/ownership/);
  expect(h.owner.provisioning.homeErasure[0]).toEqual(h.source);
+});
+it("treats an already-erased owner record as finished only when no owner-labelled home storage remains",async()=>{
+ const h=fixture();const ref={get:async()=>({data:()=>undefined}),update:vi.fn()};
+ h.deps.db.collection=()=>({doc:()=>ref});
+ expect(await h.run()).toBe(true);
+ expect(h.deps.remainingOwnerHomes).toHaveBeenCalledWith("owner");
+ expect(h.deps.removeStoppedHome).not.toHaveBeenCalled();expect(h.deps.copy.sweep).not.toHaveBeenCalled();
+ expect(ref.update).not.toHaveBeenCalled();expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("owner record already erased"));
+});
+it("refuses to finish when the owner record is gone but home storage remains",async()=>{
+ const h=fixture();h.deps.db.collection=()=>({doc:()=>({get:async()=>({data:()=>undefined}),update:vi.fn()})});
+ h.deps.remainingOwnerHomes.mockResolvedValueOnce(["projects/octogee/zones/us-central1-b/disks/orphan-home","pvc/home-copy-x-home"]);
+ await expect(h.run()).rejects.toThrow(/home storage remains: projects\/octogee\/zones\/us-central1-b\/disks\/orphan-home, pvc\/home-copy-x-home/);
+ expect(h.deps.log).not.toHaveBeenCalled();
 });

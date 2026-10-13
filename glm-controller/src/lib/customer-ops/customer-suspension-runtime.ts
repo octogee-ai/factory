@@ -9,7 +9,7 @@ import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { customerRestoreFencePresent, customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 
 const TERMINAL_STRIPE_SUBSCRIPTION_STATUSES = new Set(["canceled", "incomplete_expired"]);
-const FIRESTORE_VISIBILITY_BATCH_SIZE = 400;
+const FIRESTORE_WRITE_BATCH_SIZE = 400;
 
 type VisibilityWrite = {
   kind: "update" | "delete";
@@ -133,9 +133,9 @@ export async function deactivateCustomerVisibility(
         .map((doc) => [doc.ref.path, doc.ref]),
     ).values(), (ref) => ({ kind: "delete" as const, ref })),
   ];
-  for (let offset = 0; offset < writes.length; offset += FIRESTORE_VISIBILITY_BATCH_SIZE) {
+  for (let offset = 0; offset < writes.length; offset += FIRESTORE_WRITE_BATCH_SIZE) {
     const batch = db.batch();
-    for (const write of writes.slice(offset, offset + FIRESTORE_VISIBILITY_BATCH_SIZE)) {
+    for (const write of writes.slice(offset, offset + FIRESTORE_WRITE_BATCH_SIZE)) {
       if (write.kind === "update") batch.update(write.ref, { ownerActive: false });
       else batch.delete(write.ref);
     }
@@ -373,12 +373,18 @@ export async function revokeOwnerModelBrokerTokens(
       .where("ownerUid", "==", uid)
       .get(),
   ]);
-  const batch = db.batch();
-  for (const token of tokens.docs) {
-    batch.set(token.ref, { revoked: true, revokedAt: now }, { merge: true });
+  const writes = [
+    ...tokens.docs.map((token) => ({ kind: "revoke" as const, ref: token.ref })),
+    ...pointers.docs.map((pointer) => ({ kind: "delete" as const, ref: pointer.ref })),
+  ];
+  for (let offset = 0; offset < writes.length; offset += FIRESTORE_WRITE_BATCH_SIZE) {
+    const batch = db.batch();
+    for (const write of writes.slice(offset, offset + FIRESTORE_WRITE_BATCH_SIZE)) {
+      if (write.kind === "revoke") batch.set(write.ref, { revoked: true, revokedAt: now }, { merge: true });
+      else batch.delete(write.ref);
+    }
+    await batch.commit();
   }
-  for (const pointer of pointers.docs) batch.delete(pointer.ref);
-  await batch.commit();
 }
 
 export async function disableCreditAutoTopUp(

@@ -24,6 +24,7 @@ interface ComputeHomeResource {
   id?: string; sizeGb?: string; type?: string; users?: string[]; labels?: Record<string, string>; status?: string;
   metadata?: { items?: Array<{ key?: string; value?: string }> };
   disks?: Array<{ deviceName?: string; source: string; boot?: boolean; autoDelete?: boolean }>;
+  items?: Record<string, { disks?: Array<{ selfLink?: string; name?: string }> }>;
 }
 interface HomeProviderDeps {
   db: Firestore;
@@ -309,6 +310,16 @@ class BuilderHomeProvider {
     if (instance.id !== computer.instanceId || !attached || attached.autoDelete !== false || (await this.disk(attached.source)).id !== source.disk.id) throw new Error("retained home attachment changed before cleanup");
     await this.deps.journal("detach-expired-builder-home", uid, () => this.compute(`${url}/detachDisk?deviceName=octogee-home`, "POST"));
   }
+  async remainingOwnerHomes(uid: string): Promise<string[]> {
+    const filter = encodeURIComponent(`labels.octogee-owner-uid="${uid.toLowerCase()}"`);
+    const aggregated = await this.compute(`${this.base}/aggregated/disks?filter=${filter}`, "GET");
+    const disks = Object.values(aggregated.items ?? {}).flatMap(scope => scope.disks ?? [])
+      .map(disk => (disk.selfLink ?? disk.name ?? "").replace(/^https:\/\/(?:www|compute)\.googleapis\.com\/compute\/v1\//u, ""));
+    const claims = await this.kube(["-n", this.deps.namespace, "get", "pvc", "-o", "json"]);
+    const owned = (claims?.items ?? []).filter(claim => claim.metadata.annotations?.[OWNER_ANNOTATION] === uid)
+      .map(claim => `pvc/${claim.metadata.name}`);
+    return [...disks, ...owned];
+  }
   async removeStoppedHome(uid: string, source: BuilderHomeLocation): Promise<boolean> {
     const observed = await this.observedForRemoval(uid, source);
     if (source.runtime === "cluster") return this.removeClusterHome(uid, source, observed);
@@ -324,11 +335,12 @@ class BuilderHomeProvider {
   }
 }
 
-export function createBuilderHomeProvider(deps: HomeProviderDeps): Pick<BuilderHomeMigrationDeps, "inventory" | "verifyStopped" | "adopt" | "nativeZone" | "removeStoppedHome"> & { clusterTarget: ClusterHomeTarget } {
+export function createBuilderHomeProvider(deps: HomeProviderDeps): Pick<BuilderHomeMigrationDeps, "inventory" | "verifyStopped" | "adopt" | "nativeZone" | "removeStoppedHome"> & { clusterTarget: ClusterHomeTarget; remainingOwnerHomes(uid: string): Promise<string[]> } {
   const provider = new BuilderHomeProvider(deps);
   return {
     inventory: provider.inventory.bind(provider), verifyStopped: provider.verifyStopped.bind(provider),
     adopt: provider.adopt.bind(provider), removeStoppedHome: provider.removeStoppedHome.bind(provider),
+    remainingOwnerHomes: provider.remainingOwnerHomes.bind(provider),
     clusterTarget: { ensure: provider.ensureClusterTarget.bind(provider), read: provider.readClusterTarget.bind(provider), remove: provider.removeClusterTarget.bind(provider) },
     nativeZone: async uid => (await provider.ownedComputer(uid))?.zone ?? null,
   };

@@ -390,7 +390,7 @@ describe("Firestore suspension fences", () => {
     expect(deleted).toEqual(["connectFlows/flow-1", "byosubFlows/flow-1"]);
   });
 
-  it("revokes every owner token and deletes every owner pointer in one batch", async () => {
+  it("revokes every owner token and deletes every owner pointer", async () => {
     const writes: string[] = [];
     const docs = (ids: string[]) => ids.map((id) => ({ id, ref: { path: id } }));
     const db = {
@@ -405,6 +405,26 @@ describe("Firestore suspension fences", () => {
     };
     await revokeOwnerModelBrokerTokens(db as never, "uid-1", 50);
     expect(writes).toEqual(["set:t1:50", "set:t2:50", "delete:p1"]);
+  });
+
+  it("revokes tens of thousands of owner tokens in bounded batches", async () => {
+    const docs = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({ ref: { path: `${prefix}/${index}` } }));
+    const committed: number[] = [];
+    const db = {
+      collection: (name: string) => ({
+        where: () => ({ get: async () => ({ docs: name === "modelBrokerTokens" ? docs("tokens", 1_050) : docs("pointers", 3) }) }),
+      }),
+      batch: () => {
+        let size = 0;
+        return {
+          set: () => { size += 1; },
+          delete: () => { size += 1; },
+          commit: async () => { committed.push(size); },
+        };
+      },
+    };
+    await revokeOwnerModelBrokerTokens(db as never, "uid-1", 50);
+    expect(committed).toEqual([400, 400, 253]);
   });
 
   it("disables automatic top-up without deleting the financial balance", async () => {

@@ -9,6 +9,7 @@ export interface GatewayUnmountTarget {
 export interface UnmountFromGatewayDeps {
   resolveGatewayUnmountTarget: (gatewayId: string) => Promise<GatewayUnmountTarget | null>;
   isRetiredSharedGateway: (gatewayId: string) => Promise<boolean>;
+  isGatewayAbsent: (gatewayId: string) => Promise<boolean>;
 
   readAvailableReplicas: (revisionId: string) => Promise<number | null>;
 
@@ -56,6 +57,10 @@ export function createUnmountFromGateway(
     const target = await deps.resolveGatewayUnmountTarget(gatewayId);
     if (!target && await deps.isRetiredSharedGateway(gatewayId)) {
       deps.log(`[deprovision] unmount skipped for ${slug}: Shared gateway ${gatewayId} has completed retirement and no runtime`);
+      return "skipped-no-live-pod";
+    }
+    if (!target && !/^shared-/.test(gatewayId) && await deps.isGatewayAbsent(gatewayId)) {
+      deps.log(`[deprovision] unmount skipped for ${slug}: Builder gateway ${gatewayId} has no root record, runtime record, deployment, pods or tenant references`);
       return "skipped-no-live-pod";
     }
     if (!target || target.gatewayId !== gatewayId) {

@@ -4062,6 +4062,17 @@ function createCustomerDeletionUnmount(
   return createUnmountFromGateway({
     isRetiredSharedGateway: (gatewayId) => isRetiredSharedGateway(db, gatewayId,
       (id) => retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, id, deploymentNameForInstance(id))),
+    isGatewayAbsent: async (gatewayId) => {
+      const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+      const [root, runtime, assignments, users] = await Promise.all([
+        rootRef.get(),
+        db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
+        rootRef.collection("assignments").limit(1).get(),
+        db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId).limit(1).get(),
+      ]);
+      return !root.exists && !runtime.exists && assignments.empty && users.empty &&
+        await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId));
+    },
     resolveGatewayUnmountTarget: async (gatewayId) => {
       const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       const authorization = gatewayAuthorizationFromRootDocument(
@@ -4189,7 +4200,7 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
             if (!runtime) throw new Error("the VM gateway runtime is not initialised; cannot delete the Builder's computer");
             const deleted = await runtime.deleteComputer(uid);
             const homes = createBuilderHomeServices(db, logFn);
-            if (!await eraseBuilderHomeMigrationStorage({ db, removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy }, uid)) {
+            if (!await eraseBuilderHomeMigrationStorage({ db, removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
               throw new Error("Builder home cleanup is still converging; erasure tracking retained for retry");
             }
             return deleted;

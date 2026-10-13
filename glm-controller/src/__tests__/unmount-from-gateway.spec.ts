@@ -17,6 +17,7 @@ function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGat
     })),
     readAvailableReplicas: vi.fn(async () => 1),
     isRetiredSharedGateway: vi.fn(async () => false),
+    isGatewayAbsent: vi.fn(async () => false),
     unmountRpc: vi.fn(async () => undefined),
     wait: vi.fn(async () => undefined),
     now: vi.fn(() => 0),
@@ -44,6 +45,28 @@ describe("createUnmountFromGateway — durable runtime resolution", () => {
     });
     await expect(createUnmountFromGateway(deps)("shared-old", "alice")).rejects.toThrow(/no validated serving revision/);
     expect(deps.isRetiredSharedGateway).not.toHaveBeenCalled();
+  });
+
+  it("skips a Builder gateway whose root, runtime, deployment and pods are all gone", async () => {
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => null),
+      isGatewayAbsent: vi.fn(async () => true),
+    });
+    await expect(createUnmountFromGateway(deps)("jefe-s-e30a3e14", "jefe"))
+      .resolves.toBe("skipped-no-live-pod");
+    expect(deps.isGatewayAbsent).toHaveBeenCalledWith("jefe-s-e30a3e14");
+    expect(deps.unmountRpc).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("no root record, runtime record, deployment, pods or tenant references"));
+  });
+
+  it("never lets generic absence stand in for Shared retirement proof", async () => {
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => null),
+      isRetiredSharedGateway: vi.fn(async () => false),
+      isGatewayAbsent: vi.fn(async () => true),
+    });
+    await expect(createUnmountFromGateway(deps)("shared-old", "alice")).rejects.toThrow(/no validated serving revision/);
+    expect(deps.isGatewayAbsent).not.toHaveBeenCalled();
   });
 
   it("throws when the gateway has no validated serving revision", async () => {

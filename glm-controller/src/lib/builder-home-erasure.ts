@@ -6,10 +6,17 @@ export async function eraseBuilderHomeMigrationStorage(deps: {
   db: Firestore;
   removeStoppedHome(uid: string, home: BuilderHomeLocation): Promise<boolean>;
   copy: { abort(input: HomeCopyInput): Promise<boolean>; sweep(input: HomeCopyInput): Promise<boolean> };
+  remainingOwnerHomes(uid: string): Promise<string[]>;
+  log(message: string): void;
 }, uid: string): Promise<boolean> {
   const ref = deps.db.collection("users").doc(uid);
   const owner = (await ref.get()).data() as BuilderHomeOwner & { provisioning?: { homeErasure?: BuilderHomeLocation[] } } | undefined;
-  if (!owner) throw new Error("home erasure owner record is missing");
+  if (!owner) {
+    const remaining = await deps.remainingOwnerHomes(uid);
+    if (remaining.length) throw new Error(`home erasure owner record is missing while home storage remains: ${remaining.join(", ")}`);
+    deps.log(`[home-erasure] ${uid}: owner record already erased and no owner-labelled home storage remains`);
+    return true;
+  }
   const provisioning = owner.provisioning ?? {};
   const migration = provisioning.homeMigration as BuilderHomeMigration | undefined;
   if (migration?.copy) {
