@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const eventLogger = createServiceLogger("cowboy");
 import type {
@@ -3256,7 +3257,7 @@ function sourceOnlyRollbackCompleted(data: Record<string, unknown>, request: Enq
     step?.name === "recover-source" && step.status === "done";
 }
 
-async function assertPreRpcRetryAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput): Promise<void> {
+async function assertPreRpcRetryAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput): Promise<FirebaseFirestore.DocumentData> {
   const [user, source, target] = await Promise.all([
     transaction.get(input.db.collection("users").doc(request.uid)),
     transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
@@ -3269,6 +3270,7 @@ async function assertPreRpcRetryAuthority(input: FirestorePlacementPolicyInput, 
     retrySourceAssignmentMatches(assignment, request) &&
     continuousPlacementMigrationOperationId({ ...request, sourceAssignmentEpoch: assignment.epoch }) === request.operationId;
   if (!exact) throw new Error("workspace migration retry authority remains blocked");
+  return assignment!;
 }
 
 function retrySourceAssignmentMatches(assignment: FirebaseFirestore.DocumentData | undefined, request: EnqueuePlacementMigrationInput): assignment is FirebaseFirestore.DocumentData {
@@ -3332,6 +3334,59 @@ async function assertSharedRevisionReturnAuthority(
     authority.assignment?.slug === request.builderSlug && openclaw?.migration === undefined &&
     openclaw?.nativeSharedContextRestore === undefined && !previousTargetAssignment.exists;
   if (!exact) throw new Error("Builder revision return retry authority changed");
+}
+
+function proofRows(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.every(row => record(row) !== null) ? value : [];
+}
+function sourceRepairProofParts(repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput) {
+  const source = record(record(repair.input)?.sourceRecovery) ?? {}, completed = record(repair.sourceRuntimeRecovery) ?? {};
+  const management = record(source.managementRecovery) ?? {};
+  return { source, completed,
+    assignment: proofRows(source.assignments).find(row => row.uid === request.uid) ?? {},
+    failure: proofRows(management.failures).find(row => row.operationId === request.operationId) ?? {},
+    released: proofRows(completed.releasedPlacements), marker: proofRows(management.users).find(row => row.uid === request.uid)?.migration };
+}
+function repairedPlacementProofMatches(data: Record<string, unknown>, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const proof = record(data.sourceRuntimeRecovery), { source, completed, assignment, failure, released, marker } = sourceRepairProofParts(repair, request);
+  const original = { ...data }; delete original.sourceRuntimeRecovery;
+  return [repair.kind === 'restart-gateway', ['running', 'succeeded'].includes(String(repair.status)), repair.cancellationRequestedAt === undefined,
+    record(repair.input)?.gatewayId === request.fromGatewayId, completed.gatewayId === request.fromGatewayId,
+    Number.isSafeInteger(completed.completedAt), Number(completed.completedAt) > 0,
+    assignment.slug === request.builderSlug, source.sourceSha === completed.sourceSha,
+    isDeepStrictEqual(source.images, completed.images), isDeepStrictEqual(failure.receipt, original),
+    isDeepStrictEqual(proof, { operationId: repair.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt: completed.completedAt }),
+    released.some(row => isDeepStrictEqual(row, { operationId: request.operationId, uid: request.uid, assignmentEpoch: assignment.assignmentEpoch, marker })),
+    record(completed.managementHealth)?.attemptId === repair.id, record(completed.managementHealth)?.health === true,
+    record(completed.doctor)?.requestId === repair.id, Number(record(completed.doctor)?.completedAt) > 0].every(Boolean);
+}
+async function assertCurrentRepairTarget(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, sourceImage: string): Promise<void> {
+  const [target, runtime, pool, user] = await Promise.all([
+    transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.toGatewayId}`)),
+    transaction.get(input.db.doc(`${GLM_GATEWAYS_COLLECTION}/${request.toGatewayId}`)), readSharedGatewayPoolConfig(input.db, transaction),
+    transaction.get(input.db.doc(`users/${request.uid}`)),
+  ]);
+  const root = projectGatewayDesiredRootForGateway(target.data(), request.toGatewayId);
+  const release = root ? await transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.toGatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${root.liveRelease}`)) : null;
+  const payload = release?.data()?.payload;
+  const exact = [sharedReturnTargetReady(root, runtime.data(), request, input.now()), pool?.sharedGatewayIds.includes(request.toGatewayId),
+    target.data()?.runtimeRestartFence === undefined, target.data()?.retirementClaim == null,
+    isReleasePayload(payload) && releasePayloadHash(payload) === releasePayloadHash(input.platformArtifact) &&
+      sourceImage.startsWith(payload.imageRepository + ':') && sourceImage.endsWith('@' + payload.imageTag.split('@')[1]),
+    user.data()?.username === request.builderSlug, user.data()?.provisioning?.openclaw?.status === 'complete'].every(Boolean);
+  if (!exact) throw new Error('repaired source placement current target authority changed');
+}
+async function assertRepairedSourcePlacementAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, data: Record<string, unknown>): Promise<void> {
+  const proof = record(data.sourceRuntimeRecovery), operationId = proof?.operationId;
+  if (typeof operationId !== 'string' || !operationId || operationId.includes('/')) throw new Error('source repair placement receipt is unavailable');
+  const snapshot = await transaction.get(input.db.doc(`${GLM_OPERATIONS_COLLECTION}/${operationId}`));
+  const repair: Record<string, unknown> = { ...snapshot.data(), id: operationId };
+  if (!repairedPlacementProofMatches(data, repair, request)) throw new Error('source repair placement receipt changed');
+  const assignment = await assertPreRpcRetryAuthority(input, transaction, request);
+  if (assignment.epoch !== proof?.sourceAssignmentEpoch || assignment.slug !== request.builderSlug) throw new Error('source repair assignment changed');
+  const sourceImage = record(record(repair.sourceRuntimeRecovery)?.images)?.gateway;
+  if (typeof sourceImage !== 'string') throw new Error('source repair image receipt is unavailable');
+  await assertCurrentRepairTarget(input, transaction, request, sourceImage);
 }
 
 function rearmedPlacementMigrationPatch(): Record<string, unknown> {
@@ -3450,6 +3505,10 @@ export async function enqueuePlacementMigration(
       throw new Error(`migration operation ${ref.id} does not match activation demand`);
     }
     if (placementMigrationIsNonTerminal(data)) return;
+    if (data.sourceRuntimeRecovery !== undefined) {
+      await assertRepairedSourcePlacementAuthority(input, transaction, request, data);
+      await applyTerminalPlacementRearm({ transaction, ref }); return;
+    }
     if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {
       await assertPreRpcRetryAuthority(input, transaction, request);
       transaction.update(ref, { ...rearmedPlacementMigrationPatch(), schedulerHandoff: FieldValue.delete(), "input.recoverSourceOnly": FieldValue.delete() });

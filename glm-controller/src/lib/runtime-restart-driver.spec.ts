@@ -1,5 +1,6 @@
+import { Script } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
-import { proveRuntimeRestart, runtimeRestartDriverSource } from './runtime-restart-driver.js';
+import { proveRuntimeRestart, runtimeRestartDriverSource, proveManagementHealth, managementHealthDriverSource } from './runtime-restart-driver.js';
 function harness(boots = ['boot-a', 'boot-b']) {
  let now=0,index=0;
  const connections=boots.map(bootId=>({bootId,request:vi.fn(async()=>({ok:true,status:'scheduled',restart:{ok:true}})),close:vi.fn(),alive:()=>true}));
@@ -18,4 +19,24 @@ describe('runtime restart completion proof',()=>{
  it.each([null,{}, {ok:true,status:'done',restart:{ok:true}}])('refuses malformed acknowledgement %j',async ack=>{const h=harness();h.connections[0]!.request.mockResolvedValue(ack as never);await expect(proveRuntimeRestart('attempt-1',h.deps,2000)).rejects.toThrow('acknowledgement');});
  it('refuses absent boot before dispatch',async()=>{const h=harness(['']);await expect(proveRuntimeRestart('attempt-1',h.deps,2000)).rejects.toThrow('boot');expect(h.connections[0]!.request).not.toHaveBeenCalled();});
  it('serializes bounded generic failure output',()=>{const s=runtimeRestartDriverSource('attempt-1');expect(s).toContain('180000');expect(s).toContain('runtime restart unconfirmed');expect(()=>runtimeRestartDriverSource('../invalid')).toThrow();});
+});
+
+describe('read-only management health proof', () => {
+ it('uses a fresh authenticated connection and health only, then closes it', async () => {
+  const h = harness(); expect(await proveManagementHealth('attempt-1', h.deps)).toEqual({ version:1, attemptId:'attempt-1', bootId:'boot-a', health:true });
+  expect(h.connections[0]!.request).toHaveBeenCalledExactlyOnceWith('health', {}); expect(h.connections[0]!.close).toHaveBeenCalledOnce();
+ });
+ it.each(['health', 'closed', 'ready'])('refuses failed %s proof and closes the connection', async failure => {
+  const h = harness();
+  if (failure === 'health') h.connections[0]!.request.mockRejectedValue(new Error('revoked'));
+  if (failure === 'closed') h.connections[0]!.alive = () => false;
+  if (failure === 'ready') h.deps.ready.mockResolvedValue(false);
+  await expect(proveManagementHealth('attempt-1', h.deps)).rejects.toThrow(); expect(h.connections[0]!.close).toHaveBeenCalledOnce();
+ });
+ it('serializes a bounded readonly probe without restart RPC', () => {
+  expect(() => new Script(managementHealthDriverSource('attempt-1'))).not.toThrow();
+  expect(managementHealthDriverSource('attempt-1')).toContain('process.stdout.write(JSON.stringify(r))');
+  expect(managementHealthDriverSource('attempt-1')).not.toContain('gateway.restart.request');
+  expect(managementHealthDriverSource('attempt-1')).toContain('45000'); expect(() => managementHealthDriverSource('../invalid')).toThrow();
+ });
 });

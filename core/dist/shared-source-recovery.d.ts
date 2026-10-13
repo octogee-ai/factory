@@ -1,3 +1,4 @@
+import { type ManagementSourceRecovery } from "./shared-source-management-recovery.js";
 import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
 export interface SourceRecoveryAssignment {
     uid: string;
@@ -18,6 +19,7 @@ export interface SharedSourceRecoveryAuthority {
     root: DocumentData;
     assignments: SourceRecoveryAssignment[];
     failedExports: SourceRecoveryExport[];
+    managementRecovery?: ManagementSourceRecovery;
 }
 export declare class SharedSourceRecoveryConflict extends Error {
 }

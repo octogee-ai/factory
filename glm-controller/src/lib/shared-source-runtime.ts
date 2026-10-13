@@ -1,3 +1,4 @@
+import { managementHealthDriverSource } from './runtime-restart-driver.js';
 import { isDeepStrictEqual } from 'node:util';
 import { FieldValue, type DocumentData, type Transaction } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
@@ -51,6 +52,8 @@ async function reserve(deps: SharedPodRecoveryDeps, op: Operation, input: Source
       await transferPredecessor({ deps, tx, op, input, pod, root }); return;
     }
     if (input.supersede) throw new Error('captured source recovery predecessor fence is absent');
+    if (input.managementRecovery && (!pod.status.conditions?.some((condition: Row) => condition.type === 'Ready' && condition.status === 'True') ||
+      !pod.status.containerStatuses?.every((status: Row) => status.ready === true))) throw new Error('source management Pod is unready');
     const fence = newFence(deps, op, input, pod);
     tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: fence });
   });
@@ -121,14 +124,27 @@ async function recordInstalled(deps: SharedPodRecoveryDeps, op: Operation, input
     return true;
   });
 }
-async function finish(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row): Promise<void> {
+function releaseCapturedPlacements(deps: SharedPodRecoveryDeps, tx: Transaction, op: Operation, input: SourceRecovery, completedAt: number): Row[] {
+  if (!input.managementRecovery) return [];
+  return input.managementRecovery.failures.map((failure, index) => {
+    const assignment = input.assignments[index]!, user = input.managementRecovery!.users[index]!;
+    const receipt = { operationId: op.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt };
+    tx.update(deps.db.doc(`glmOperations/${failure.operationId}`), { sourceRuntimeRecovery: receipt });
+    tx.update(deps.db.doc(`users/${assignment.uid}`), { 'provisioning.openclaw.migration': FieldValue.delete() });
+    return { operationId: failure.operationId, uid: assignment.uid, assignmentEpoch: assignment.assignmentEpoch, marker: user.migration };
+  });
+}
+async function finish(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, managementHealth?: Row): Promise<void> {
   await deps.db.runTransaction(async tx => {
     const root = await authority(deps, tx, op, input), fence = object(root.runtimeRestartFence);
     assertOwnedFence(fence, op, input, pod);
+    if (input.managementRecovery && !managementHealth) throw new Error('source management health is unavailable');
     if (!doctorComplete(fence, input) || !recoveredPodReady(pod, fence.target, input.images)) throw new Error('source repair acknowledgment is unavailable');
+    const completedAt = (deps.now ?? Date.now)();
+    const releasedPlacements = releaseCapturedPlacements(deps, tx, op, input, completedAt);
     tx.update(deps.db.doc(`glmOperations/${op.id}`), { sourceRuntimeRecovery: { gatewayId: op.input.gatewayId,
       sourceSha: input.sourceSha, images: input.images, podUid: pod.metadata.uid, doctor: fence.doctor, installedImage: fence.installedImage,
-      completedAt: (deps.now ?? Date.now)() } });
+      ...(managementHealth ? { managementHealth, releasedPlacements } : {}), completedAt } });
     tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: FieldValue.delete() });
   });
 }
@@ -139,6 +155,8 @@ export async function recoverSharedSourceRuntime(deps: SharedPodRecoveryDeps, op
   const prior = object((await deps.db.doc(`glmOperations/${op.id}`).get()).data()?.sourceRuntimeRecovery);
   if (prior.completedAt > 0 && prior.sourceSha === input.sourceSha && isDeepStrictEqual(prior.images, input.images)) return;
   const pod = await existingOwnedPod(deps, gatewayId);
+  if (input.managementRecovery && (pod.metadata.uid !== input.managementRecovery.podUid || pod.metadata.name !== input.managementRecovery.podName ||
+    pod.metadata.namespace !== deps.namespace)) throw new Error('source management Pod custody changed');
   await reserve(deps, op, input, pod);
   const saved = await dispatch(deps, op, input, pod);
   if (Object.entries(input.images).some(([name, image]) => pod.spec.containers.find((container: Row) => container.name === name)?.image !== image)) {
@@ -164,9 +182,28 @@ async function waitForSourceRepair(request: {
     assertOwnedFence(fence, op, input, current);
     if (fence.doctor?.error !== undefined) throw new Error('source Doctor failed; outcome remains fenced');
     if (doctorComplete(fence, input) && recoveredPodReady(current, fence.target, input.images)) {
-      await finish(deps, op, input, current); return;
+      if (input.managementRecovery) {
+        const proof = await managementHealth(deps, op, current);
+        await ctx.assertActiveClaim!();
+        const after = await json(deps, ['get', 'pod', pod.metadata.name]);
+        await finish(deps, op, input, after, proof);
+      } else await finish(deps, op, input, current);
+      return;
     }
     await wait(1000);
   }
   throw new Error('source repair is not ready; outcome remains fenced');
+}
+
+async function managementHealth(deps: SharedPodRecoveryDeps, op: Operation, pod: Row): Promise<Row> {
+  const result = await deps.runKubectl(['-n', deps.namespace, 'exec', pod.metadata.name, '-c', 'gateway', '-i', '--', 'node', '--input-type=commonjs'],
+    { stdin: managementHealthDriverSource(op.id), timeoutMs: 50_000 }).catch(cause => {
+      throw new Error('source management health unconfirmed; outcome remains fenced', { cause });
+    });
+  if (result.code !== 0) throw new Error('source management health unconfirmed; outcome remains fenced');
+  let proof: Row;
+  try { proof = JSON.parse(result.stdout.trim()); } catch { throw new Error('source management health receipt invalid'); }
+  if (!isDeepStrictEqual(Object.keys(proof).sort(), ['attemptId', 'bootId', 'health', 'version']) || proof.version !== 1 || proof.attemptId !== op.id ||
+    proof.health !== true || typeof proof.bootId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(proof.bootId)) throw new Error('source management health receipt invalid');
+  return proof;
 }

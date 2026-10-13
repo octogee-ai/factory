@@ -1,3 +1,4 @@
+import { managementExportMatches, managementUserMatches, managementPodIdentity } from "./shared-source-management-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 export class SharedSourceRecoveryConflict extends Error {
 }
@@ -85,12 +86,35 @@ export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOp
     if (!assignments.length || new Set(assignments.map(row => row.slug)).size !== assignments.length)
         conflict("source recovery roster is unavailable");
     const sourceUids = new Set(assignments.map(row => row.uid));
-    const fenced = ownedSourceFence(root, ownOperationId, assignments) || ownedSourceFence(root, predecessorId, assignments);
+    const fenced = [ownOperationId, predecessorId].some(owner => ownedSourceFence(root, owner, assignments));
     if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)) &&
         !(fenced && pristineOutbound(row.data(), gatewayId, sourceUids)))) {
         conflict("another source operation is active");
     }
     const users = await Promise.all(assignments.map(row => tx.get(db.doc(`users/${row.uid}`))));
+    const managementFailures = assignments.map(identity => {
+        const matched = failed.docs.filter(row => managementExportMatches(row.data(), row.id, identity, gatewayId))
+            .sort((a, b) => b.data().completedAt - a.data().completedAt)[0];
+        return matched ? { operationId: matched.id, receipt: matched.data() } : undefined;
+    });
+    if (root.desiredStatus === "draining" && managementFailures.every(row => row !== undefined)) {
+        if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid))))
+            conflict("another source operation is active");
+        const failures = managementFailures;
+        if (users.some((user, index) => !managementUserMatches(user.data() ?? {}, assignments[index], failures[index], gatewayId)))
+            conflict("source recovery customer authority changed");
+        const runtime = await tx.get(db.doc(`glmGateways/${gatewayId}`));
+        let pod;
+        try {
+            pod = managementPodIdentity(runtime.data() ?? {}, assignments, fenced);
+        }
+        catch {
+            return conflict("source management runtime custody is unavailable");
+        }
+        return { root: rootIdentity(root), assignments,
+            failedExports: failures.map(({ operationId, receipt: row }) => ({ operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: row.steps })),
+            managementRecovery: { ...pod, failures, users: users.map((user, index) => ({ uid: assignments[index].uid, migration: user.data().provisioning.openclaw.migration })) } };
+    }
     if (users.some((user, index) => !userMatches(user.data() ?? {}, assignments[index], gatewayId)))
         conflict("source recovery customer authority changed");
     const failedExports = assignments.map(identity => {
@@ -104,7 +128,7 @@ export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOp
     return { root: rootIdentity(root), assignments, failedExports };
 }
 export function assertSharedSourceRecoveryUnchanged(current, captured) {
-    if (!isDeepStrictEqual(current, { root: captured.root, assignments: captured.assignments, failedExports: captured.failedExports })) {
+    if (!isDeepStrictEqual(current, { root: captured.root, assignments: captured.assignments, failedExports: captured.failedExports, ...(captured.managementRecovery ? { managementRecovery: captured.managementRecovery } : {}) })) {
         conflict("source recovery custody changed");
     }
 }
@@ -145,7 +169,8 @@ export function assertSharedSourceRecoveryPredecessor(request) {
     if (!failedPredecessorMatches(row, gatewayId) || !predecessorFenceMatches({ fence, operationId, source, input, row })) {
         conflict("source recovery predecessor is unavailable");
     }
-    assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports }, input);
+    assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports,
+        ...(source.managementRecovery ? { managementRecovery: source.managementRecovery } : {}) }, input);
     return { operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
 }
 export async function readSharedSourceRecoverySupersession(db, tx, gatewayId, operationId) {

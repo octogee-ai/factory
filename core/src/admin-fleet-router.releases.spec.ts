@@ -1537,6 +1537,59 @@ describe('POST /gateways/:id/recover-source', () => {
     }
     return seed;
   }
+  function managementSeed() {
+    const seed = sourceSeed();
+    for (let index = 2; index < 6; index++) {
+      delete seed[`users/source-user-${index}`]; delete seed[`gateways/shared-0/assignments/source-user-${index}`]; delete seed[`glmOperations/export-${index}`];
+    }
+    seed['glmGateways/shared-0'] = { runtime: 'cluster', release: 1, lifecycle: 'serving',
+      kubernetes: { totalPods: 1, readyPods: 1, status: 'ready', pods: [{ uid: 'same-pod', name: 'same-name' }] },
+      heartbeat: { status: 'ready', lastHeartbeatAt: Date.now(), mountedCustomers: ['jdog99', 'oct01'], migratingIn: [] } };
+    for (let index = 0; index < 2; index++) {
+      const row = seed[`glmOperations/export-${index}`] as any, uid = `source-user-${index}`, slug = ['jdog99', 'oct01'][index];
+      row.input.builderSlug = slug; row.input.source = 'continuous-placement-policy';
+      row.origin = 'automatic'; row.createdBy = 'glm-controller-placement-policy'; row.attempts = 2;
+      row.error = '/quiesce/shared-0: 500 ' + JSON.stringify({ error: 'quiesce failed', message: 'WorkerTaskError: Session history database read was revoked: code=unavailable' });
+      row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' },
+        { name: 'target-scheduler-ready', status: 'done' }, { name: 'wait-for-active-work', status: 'failed', error: row.error },
+        { name: 'rollback:unmount-target', status: 'done' }];
+      row.rolledBack = true; row.schedulerHandoffReleased = true; row.schedulerHandoffReleasedAt = 450;
+      row.schedulerHandoff = { migrationId: `mig-export-${index}:scheduler:2`, fromGatewayId: 'shared-0', toGatewayId: 'shared-1', uid, slug };
+      row.attemptHistory = [{ attempt: 1, startedAt: 100, completedAt: 200, steps: [
+        { name: 'quiesce-source', status: 'failed' }, ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))] }];
+      row.attemptHistory.push({ attempt: 2, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) });
+      (seed[`users/${uid}`].provisioning as any).openclaw.mounted = true;
+      (seed[`users/${uid}`].provisioning as any).openclaw.migration = { state: 'preparing', phase: 'waiting', operationId: `export-${index}`, startedAt: 300 };
+    }
+    return seed;
+  }
+  it('captures terminal rolled-back management failures and their exact retained markers without changing customer state', async () => {
+    const seed = managementSeed(), before = structuredClone(seed), manifest = immutableBuild();
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
+    const input = opsIn(store, 'restart-gateway')[0].input.sourceRecovery;
+    expect(input.managementRecovery).toMatchObject({ podUid: 'same-pod', podName: 'same-name' });
+    expect(input.managementRecovery.failures[0].receipt).toEqual(before['glmOperations/export-0']);
+    expect(input.managementRecovery.users[0].migration).toEqual((before['users/source-user-0'].provisioning as any).openclaw.migration);
+    for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
+  });
+  it.each(['unreleased', 'history-release', 'missing-history', 'duplicate-history', 'zero-history', 'marker', 'cutover', 'running', 'receipt', 'unready', 'roster'])('refuses management recovery with %s custody', async change => {
+    const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
+    if (change === 'unreleased') row.schedulerHandoffReleased = false;
+    if (change === 'history-release') row.attemptHistory[0].steps.pop();
+    if (change === 'missing-history') row.attemptHistory.pop();
+    if (change === 'zero-history') { row.attempts = 0; row.attemptHistory = []; }
+    if (change === 'duplicate-history') row.attemptHistory[0].attempt = 2;
+    if (change === 'marker') (seed['users/source-user-0'].provisioning as any).openclaw.migration.operationId = 'foreign';
+    if (change === 'cutover') row.cutoverCommittedAt = 350;
+    if (change === 'running') row.status = 'running';
+    if (change === 'receipt') row.restoreAttempt = {};
+    if (change === 'unready') (seed['glmGateways/shared-0'].kubernetes as any).readyPods = 0;
+    if (change === 'roster') (seed['glmGateways/shared-0'].heartbeat as any).mountedCustomers.pop();
+    const manifest = immutableBuild(), h = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
+    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(0);
+  });
   async function failedSourceRepair() {
     const manifest = immutableBuild(), authority = buildAuthority(manifest), h = mkApp(sourceSeed(), { releaseAuthority: authority });
     const first = await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);

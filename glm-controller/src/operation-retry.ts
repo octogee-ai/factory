@@ -21,6 +21,7 @@ export function isGatewayStartupUnavailable(error: string | undefined): boolean 
 // we recognize as environmental (network/K8s-API hiccups, timeouts, preemption)
 // get an automatic retry.
 const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /^source management health unconfirmed; outcome remains fenced$/,
   /^restore recovery Kubernetes outcome is unresolved$/,
   /^restore recovery images are not ready; outcome remains fenced$/,
   /rsync import port \d+ is already serving migrationId=/,
@@ -264,6 +265,12 @@ function isLevelTriggeredContinuousPlacement(
     /^placement-[a-f0-9]{32}$/.test(op.id);
 }
 
+function isFencedManagementHealthFailure(op: OperationCompletionInput["op"], error: string): boolean {
+  const source = op.input?.sourceRecovery as { managementRecovery?: unknown } | undefined;
+  return op.kind === "restart-gateway" && source?.managementRecovery !== undefined &&
+    error === "source management health unconfirmed; outcome remains fenced";
+}
+
 interface FailureCompletionContext {
   error: string;
   classification: OperationFailureClassification;
@@ -376,11 +383,7 @@ export function buildOperationCompletionUpdate(
   if (result.success) return successfulCompletion(input, persistedSteps, attempts);
 
   const failure = failureCompletionContext(input, persistedSteps, attempts);
-  const retryBeyondCap =
-    failure.levelTriggeredFence ||
-    (isComputerPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
-    (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
-    isLevelTriggeredContinuousPlacement(op);
+  const retryBeyondCap = retriesBeyondAttemptCap(op, failure, attempts);
   const retry = !needsSharedRollbackRecovery(input, persistedSteps) && shouldRetry(
     op,
     result,
@@ -391,6 +394,14 @@ export function buildOperationCompletionUpdate(
   return retry
     ? pendingCompletion(input, attempts, failure)
     : failedCompletion(input, persistedSteps, attempts, failure);
+}
+
+function retriesBeyondAttemptCap(op: OperationCompletionInput["op"], failure: FailureCompletionContext, attempts: number): boolean {
+  return failure.levelTriggeredFence ||
+    isFencedManagementHealthFailure(op, failure.error) ||
+    (isComputerPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
+    (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
+    isLevelTriggeredContinuousPlacement(op);
 }
 
 function shouldRetry(
