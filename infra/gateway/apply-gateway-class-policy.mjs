@@ -600,17 +600,21 @@ function objectValue(value) {
 
 const INSTALLED_PLUGIN_INDEX_STATE_KEY = "plugins.installedIndex";
 const RETIRED_MATTERMOST_FILE_SPEC_PREFIX = "@openclaw/mattermost@file:";
-const STALE_CODEX_ARCHIVE_SPEC_PREFIX = "@openclaw/codex@file:";
+const BUNDLED_CODEX_NPM_PACKAGE = "@openclaw/codex";
 
 function removeRetiredMattermostInstallRecord(openclawDir) {
-  return removeStaleFileInstallRecord(openclawDir, "mattermost", RETIRED_MATTERMOST_FILE_SPEC_PREFIX);
+  return removeMatchingNpmInstallRecord(openclawDir, "mattermost", (spec) =>
+    spec.startsWith(RETIRED_MATTERMOST_FILE_SPEC_PREFIX),
+  );
 }
 
 function removeStaleCodexInstallRecord(openclawDir) {
-  return removeStaleFileInstallRecord(openclawDir, "codex", STALE_CODEX_ARCHIVE_SPEC_PREFIX);
+  return removeMatchingNpmInstallRecord(openclawDir, "codex", (spec) =>
+    spec === BUNDLED_CODEX_NPM_PACKAGE || spec.startsWith(`${BUNDLED_CODEX_NPM_PACKAGE}@`),
+  );
 }
 
-function removeStaleFileInstallRecord(openclawDir, pluginId, fileSpecPrefix) {
+function removeMatchingNpmInstallRecord(openclawDir, pluginId, matchesSpec) {
   const dbPath = path.join(openclawDir, "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) return false;
   const db = new DatabaseSync(dbPath);
@@ -631,7 +635,7 @@ function removeStaleFileInstallRecord(openclawDir, pluginId, fileSpecPrefix) {
     if (
       record?.source !== "npm" ||
       typeof record.spec !== "string" ||
-      !record.spec.startsWith(fileSpecPrefix)
+      !matchesSpec(record.spec)
     ) {
       return false;
     }
@@ -1600,7 +1604,7 @@ export function applyGatewayClassPolicy({ openclawJsonPath, env = process.env } 
     const installRecordRemoved = retiredMattermostInstallRecordRemoved || staleCodexInstallRecordRemoved;
     let reason = "already-set";
     if (retiredMattermostInstallRecordRemoved) reason = "retired-mattermost-install";
-    else if (staleCodexInstallRecordRemoved) reason = "stale-codex-archive-install";
+    else if (staleCodexInstallRecordRemoved) reason = "source-mismatched-codex-install";
     return {
       applied: installRecordRemoved,
       reason,

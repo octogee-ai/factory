@@ -1043,7 +1043,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(row.updated_at_ms).toBe(value.revision);
   });
 
-  it("removes only the archive-installed Codex record from restored runtime state", () => {
+  it("removes the archive-installed Codex override while preserving unrelated plugins", () => {
     const result = runPolicyWithDir(
       "builder",
       { plugins: { allow: ["codex"], entries: { codex: { enabled: true } } } },
@@ -1101,7 +1101,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(row.updated_at_ms).toBe(value.revision);
   });
 
-  it("leaves a registry-installed Codex record in restored runtime state alone", () => {
+  it.each(["@openclaw/codex", "@openclaw/codex@2026.10.2"])("restores bundled Codex selection instead of the npm override %s", (spec) => {
     const result = runPolicyWithDir(
       "builder",
       { plugins: { allow: ["codex"], entries: { codex: { enabled: true } } } },
@@ -1124,7 +1124,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
             revision: 5,
             index: {
               installRecords: {
-                codex: { source: "npm", spec: "@openclaw/codex@2026.9.5", installPath: "/restored/codex" },
+                codex: { source: "npm", spec, resolvedSpec: "@openclaw/codex@2026.10.2", installPath: "/restored/codex" },
+                parallel: { source: "npm", spec: "@openclaw/parallel@2026.10.2", installPath: "/restored/parallel" },
               },
               plugins: [],
             },
@@ -1140,10 +1141,14 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "SELECT value_json FROM config_machine_state WHERE state_key = ?",
     ).get("plugins.installedIndex") as { value_json: string };
     db.close();
-    expect(JSON.parse(row.value_json)).toMatchObject({
-      revision: 5,
-      index: { installRecords: { codex: { spec: "@openclaw/codex@2026.9.5" } } },
+    const value = JSON.parse(row.value_json);
+    expect(value.index.installRecords).not.toHaveProperty("codex");
+    expect(value.revision).toBeGreaterThan(5);
+    expect(value.index.installRecords.parallel).toEqual({
+      source: "npm", spec: "@openclaw/parallel@2026.10.2", installPath: "/restored/parallel",
     });
+    expect(result.config.plugins.allow).toContain("codex");
+    expect(result.config.plugins.entries.codex).toEqual({ enabled: true });
   });
 
   it("shared class purges native OAuth credentials, runtime pins, and affected sessions before startup", () => {
