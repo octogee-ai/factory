@@ -38,7 +38,7 @@
     "firebase-admin": "^14.3.0",
     "google-auth-library": "^11.0.2",
     "picocolors": "1.1.1",
-    "stripe": "^22.6.2",
+    "stripe": "^23.0.0",
     "tsx": "^4.23.15",
     "ws": "^8.21.3",
     "yaml": "^2.9.1",
