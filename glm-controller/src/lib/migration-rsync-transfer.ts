@@ -1,4 +1,4 @@
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { spawn } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import { createHash, randomBytes } from "node:crypto";
@@ -214,13 +214,14 @@ async function postSignedJson<Resp>(
     ? MIGRATION_IMPORT_FINISH_TIMEOUT_MS : MIGRATION_TRANSFER_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`${opts.path} timed out after ${timeoutMs}ms`)), timeoutMs);
-  const init: RequestInit & { dispatcher?: Agent } = {
+  const init = {
     method: "POST", headers: { "content-type": "application/json", [SIGNATURE_HEADER]: signature },
     body: rawBody, signal: controller.signal,
-    ...(deps.fetchImpl === globalThis.fetch ? { dispatcher: controlDispatcher } : {}),
   };
   try {
-    const res = await deps.fetchImpl(url, init);
+    const res = deps.fetchImpl === globalThis.fetch
+      ? await undiciFetch(url, { ...init, dispatcher: controlDispatcher })
+      : await deps.fetchImpl(url, init);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`${opts.path}: ${res.status} ${text}`);
