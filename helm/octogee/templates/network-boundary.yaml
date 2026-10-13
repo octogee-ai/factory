@@ -78,7 +78,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [cloud-sql-proxy, glm-controller, llm-broker, octogee-api, octogee-ops-agent]
+        values: [cloud-sql-proxy, glm-controller, llm-broker, octogee-api, octogee-ops-agent, octogee-native-context-worker]
   policyTypes: [Egress]
   egress:
     - to:
@@ -107,7 +107,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [cloud-sql-proxy, gitea, glm-controller, llm-broker, mattermost, octogee-api, octogee-ops-agent]
+        values: [cloud-sql-proxy, gitea, glm-controller, llm-broker, mattermost, octogee-api, octogee-ops-agent, octogee-native-context-worker]
   policyTypes: [Egress]
   egress:
     - to:

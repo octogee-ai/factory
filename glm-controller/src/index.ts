@@ -2414,6 +2414,7 @@ function startControllerBackgroundTasks({
   });
   const stopNativeReturnHoldReaper = startNativeReturnHoldReaper({
     db,
+    vm: createGatewayComputeClient(log),
     informer,
     log,
     intervalMs: 60_000,

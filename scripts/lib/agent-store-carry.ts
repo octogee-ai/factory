@@ -1,3 +1,5 @@
+import { listSqliteStores } from "@octogee/core/agent-store-inventory";
+export { isSqliteVolatileArtifactPath, isSqliteStorePath, listSqliteStores } from "@octogee/core/agent-store-inventory";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -29,11 +31,6 @@ export const SQLITE_SIDECAR_EXCLUDE_ARGS = SQLITE_SIDECAR_SUFFIXES.map(
 // as volatile: lock databases it holds exclusively during a reindex or
 // generation swap, and temp copies it is still writing. They are recreated on
 // the destination and cannot be checkpointed while held.
-const SQLITE_VOLATILE_SIDECAR_SUFFIX = /(?:-wal|-shm|-journal)$/iu;
-const SQLITE_VOLATILE_LOCK_SHAPE = /\.sqlite\.(?:generation-lock|generation-writer|reindex-lock)\.sqlite$/iu;
-const SQLITE_VOLATILE_TEMP_SHAPE = /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f-]{36}$/iu;
-const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
 // Glob twins of the pattern above for tar/rsync, which see the whole copy set
 // including the customer's workspace checkout: the uuid stamp keeps a workspace
 // file that merely resembles a temp copy in the transfer.
@@ -53,42 +50,7 @@ export const SQLITE_CARRY_EXCLUDE_ARGS = [
   ...SQLITE_VOLATILE_EXCLUDE_ARGS,
 ];
 
-export function isSqliteVolatileArtifactPath(candidate: string): boolean {
-  const base = candidate.replace(SQLITE_VOLATILE_SIDECAR_SUFFIX, "");
-  if (SQLITE_VOLATILE_LOCK_SHAPE.test(base)) return true;
-  return SQLITE_VOLATILE_TEMP_SHAPE.test(base) && UUID_SHAPE.test(base.slice(-36));
-}
-
-export interface UnreadableCarriedStore {
-  path: string;
-  message: string;
-}
-
-export function isSqliteStorePath(candidate: string): boolean {
-  return candidate.endsWith(SQLITE_SUFFIX) && !isSqliteVolatileArtifactPath(candidate);
-}
-
-export async function listSqliteStores(root: string): Promise<string[]> {
-  const stat = await fs.stat(root).catch(() => null);
-  if (!stat) return [];
-  if (stat.isFile()) return isSqliteStorePath(root) ? [root] : [];
-  if (!stat.isDirectory()) return [];
-  const stores: string[] = [];
-  await collectSqliteStores(root, stores);
-  return stores.sort();
-}
-
-async function collectSqliteStores(dir: string, stores: string[]): Promise<void> {
-  for (const dirent of await fs.readdir(dir, { withFileTypes: true })) {
-    const abs = path.join(dir, dirent.name);
-    if (dirent.isDirectory()) {
-      await collectSqliteStores(abs, stores);
-      continue;
-    }
-    if (dirent.isFile() && isSqliteStorePath(dirent.name)) stores.push(abs);
-  }
-}
-
+export interface UnreadableCarriedStore { path: string; message: string }
 const CHECKPOINT_BUSY_TIMEOUT_MS = 5_000;
 
 export function checkpointSqliteStore(dbPath: string): void {

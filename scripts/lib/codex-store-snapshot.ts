@@ -1,3 +1,5 @@
+import { isCodexDatabase } from "@octogee/core/agent-store-inventory";
+export { isCodexDatabase } from "@octogee/core/agent-store-inventory";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -12,18 +14,12 @@ const BUDGET_MS = 5_000;
 const MAX_BYTES = 64 * 1024 ** 2;
 const MAX_TOTAL_BYTES = 128 * 1024 ** 2;
 const MAX_STORES = 32;
-const DATABASE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}\.sqlite$/;
 type Log = (message: string) => void;
 type Source = { cwd: string; path: string };
 interface Artifact { sha256: string; size: number }
 interface Options { log?: Log; signal?: AbortSignal; timeoutMs?: number }
 
-export function isCodexDatabase(relative: string): boolean {
-  const parts = relative.split("/");
-  return parts.length === 5 && parts[0] === "agents" && !!parts[1] &&
-    parts[2] === "agent" && parts[3] === "codex-home" &&
-    DATABASE.test(parts[4]!) && parts[4] !== "openclaw-agent.sqlite";
-}
+
 
 export const CODEX_STORE_EXCLUDE_ARGS = ["", "-wal", "-shm", "-journal"].map(
   suffix => `--exclude=/agents/*/agent/codex-home/*.sqlite${suffix}`,

@@ -1,3 +1,4 @@
+import { sharedContextCheckpointObjectPath } from "../../shared/types/fleet-broker.js";
 import { assertMatchingSharedContextPreparation } from "../lib/shared-agent-context-preparation.js";
 import { customerAgentRuntimePresent } from "../lib/customer-agent-runtime.js";
 import { evictLocalCustomer } from "../lib/fleet-provisioner.js";
@@ -3884,8 +3885,8 @@ describe("agent sqlite stores across an rsync carry", () => {
     const bytes = await fs.readFile(file);
     const checkpoint = { name: "20261011T181450Z.tar.gz", generation: "12345", coverage: "builder-home-v2" as const, writerProtocol: 3 as const,
       instanceId: "123456789", completedAt: 30, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
-    const sharedContextCheckpoint = vi.fn(async () => ({ ...checkpoint, download: { url: "https://storage.googleapis.com/private-pinned-object", method: "GET" as const,
-      gcsPath: `customers/chris/computer-home/checkpoints/${checkpoint.name}`, expiresAt: "2099-01-01" } }));
+    const sharedContextCheckpoint = vi.fn(async () => ({ checkpoint, generation: "67890", size: bytes.length, sha256: checkpoint.sha256, download: { url: "https://storage.googleapis.com/derived-context-object", method: "GET" as const,
+      gcsPath: sharedContextCheckpointObjectPath("chris", checkpoint, input.archive), expiresAt: "2099-01-01" } }));
     const deps = mkDeps({ adapter: mkAdapter({ ...sharedRestoreAdapter(importDir, input.archive, "restore-after-pod-loss"), sharedContextCheckpoint }),
       fetch: vi.fn(async () => new Response(bytes)), runOpenClaw: fakeOpenClaw() });
     deps.adapter.hasCustomerAgentRuntime = slug => customerAgentRuntimePresent(path.join(importDir, "agents"), slug);
@@ -3947,7 +3948,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     if (variant === "matching-partial") expect(await fs.readFile(nonDatabase, "utf8")).toBe("shared-memory");
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
     expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
-    expect(sharedContextCheckpoint).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ archiveId: input.archive.archiveId, checkpoint }));
+    expect(sharedContextCheckpoint).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ archiveId: input.archive.archiveId, checkpoint }), expect.any(AbortSignal));
     await expect(fs.access(path.join(importDir, "desktop-home"))).rejects.toThrow();
     const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('later-turn')"); db.close();
     const replay = await finishImport(deps, "restore-after-pod-loss", "final", { mode: "restore-shared", archive: input.archive }, "c".repeat(64), { checkpoint });

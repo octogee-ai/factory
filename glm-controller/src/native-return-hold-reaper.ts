@@ -1,3 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
+import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import type { GatewayVmClient } from "./lib/compute-vm.js";
+import { nativeReturnSourceIdentity, nativeReturnSourceStopped } from "./lib/native-return-source-fence.js";
 import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, type OperationStatus } from "@octogee/shared/types/glm";
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
@@ -8,6 +12,7 @@ export const NATIVE_RETURN_HOLD_REAPER_CREATOR = "glm-controller-native-return-h
 export interface NativeReturnHoldReaperDeps {
   db: Pick<Firestore, "collection" | "runTransaction">;
   informer: Pick<FleetInformer, "glmGateways">;
+  vm: Pick<GatewayVmClient, "describe">;
   log: (msg: string) => void;
   now: () => number;
 }
@@ -41,6 +46,13 @@ function releaseJournalId(gatewayId: string, returnOperationId: string): string 
   return `native-return-hold-release-${gatewayId}-${returnOperationId}`;
 }
 
+function rollbackStillOwnsSource(runtime: FirebaseFirestore.DocumentData | undefined, desired: FirebaseFirestore.DocumentData,
+  op: FirebaseFirestore.DocumentData | undefined, user: FirebaseFirestore.DocumentData | undefined, gatewayId: string): boolean {
+  return [runtime?.runtime === "gce-vm", ["failed", "rolled-back"].includes(op?.status), op?.kind === "migrate-customer",
+    op?.cutoverCommittedAt === undefined, op?.input?.uid === desired.ownerUid, op?.input?.fromGatewayId === gatewayId,
+    user?.provisioning?.openclaw?.gatewayId === gatewayId, desired.desiredStatus === "running"].every(Boolean);
+}
+
 async function releaseTerminalHold(
   deps: NativeReturnHoldReaperDeps,
   gatewayId: string,
@@ -49,9 +61,25 @@ async function releaseTerminalHold(
   const gatewayRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
   const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(returnOperationId);
   const journalRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(releaseJournalId(gatewayId, returnOperationId));
+  const rootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const [held, terminal, root] = await Promise.all([gatewayRef.get(), operationRef.get(), rootRef.get()]);
+  if (heldReturnOperationId(held.data()) !== returnOperationId || !TERMINAL.has(returnOperationStatus(terminal))) return null;
+  const runtime = held.data(), desired = root.data(), op = terminal.data();
+  if (desired?.gatewayClass !== "builder" || typeof desired.ownerUid !== "string") throw new Error("source ownership unavailable; hold retained");
+  const userRef = deps.db.collection("users").doc(desired.ownerUid);
+  const owner = await userRef.get();
+  const user = owner.data();
+  const rollback = rollbackStillOwnsSource(runtime, desired, op, user, gatewayId);
+  if (!rollback) {
+    const identity = nativeReturnSourceIdentity(runtime, desired);
+    if (!identity || !await nativeReturnSourceStopped(deps.vm, identity)) throw new Error("exact source is not stopped or absent; hold retained");
+  }
   return deps.db.runTransaction(async (tx) => {
-    const [gateway, operation, journal] = await Promise.all([tx.get(gatewayRef), tx.get(operationRef), tx.get(journalRef)]);
-    if (heldReturnOperationId(gateway.data()) !== returnOperationId) return null;
+    const [gateway, operation, journal, currentRoot, currentUser] = await Promise.all([
+      tx.get(gatewayRef), tx.get(operationRef), tx.get(journalRef), tx.get(rootRef), tx.get(userRef),
+    ]);
+    if (![isDeepStrictEqual(gateway.data(), runtime), isDeepStrictEqual(operation.data(), op),
+      isDeepStrictEqual(currentRoot.data(), desired), isDeepStrictEqual(currentUser.data(), user)].every(Boolean)) return null;
     const status = returnOperationStatus(operation);
     if (!TERMINAL.has(status)) return null;
     const now = deps.now();

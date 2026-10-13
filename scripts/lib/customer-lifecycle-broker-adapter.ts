@@ -1828,7 +1828,7 @@ export function buildBrokeredLifecycleAdapter(
     clearCustomerMigratingIn: (slug) => clearMigratingInPin(CUSTOMERS_DIR, slug),
     listMigratingInSlugs: () => listMigratingInSlugs(CUSTOMERS_DIR, MIGRATING_IN_PIN_TTL_MS),
 
-    sharedContextCheckpoint: request => ctx.client.sharedContextCheckpoint(request),
+    sharedContextCheckpoint: (request, signal) => ctx.client.sharedContextCheckpoint(request, signal),
     loadUserSnapshot: async (uid, options) => {
       if (options?.refresh) invalidateSnapshot(ctx, uid);
       const snapshot = await snapshotForUid(ctx, uid);

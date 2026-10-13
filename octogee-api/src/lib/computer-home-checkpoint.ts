@@ -63,6 +63,23 @@ export function computerHomePruneCandidates(input: {
     .map((entry) => entry.path);
 }
 
+export function computerHomeContextPruneCandidates(input: {
+  checkpointsPrefix: string; checkpointPaths: readonly string[]; contextPaths: readonly string[];
+  currentName: string | null; keep: number;
+}): string[] {
+  const retained = new Set(input.checkpointPaths);
+  for (const expired of computerHomePruneCandidates({ ...input, objectPaths: input.checkpointPaths })) retained.delete(expired);
+  const prefix = `${input.checkpointsPrefix.slice(0, -"checkpoints".length)}shared-context/`;
+  return input.contextPaths.filter(objectPath => {
+    if (!objectPath.startsWith(prefix) || input.currentName === null) return false;
+    const [name, generation, archiveId, digest, ...extra] = objectPath.slice(prefix.length).split("/");
+    const exact = COMPUTER_HOME_CHECKPOINT_NAME_RE.test(name ?? "") && /^[1-9]\d*$/u.test(generation ?? "") &&
+      /^[A-Za-z0-9_.:-]{1,200}$/u.test(archiveId ?? "") && archiveId !== "." && archiveId !== ".." &&
+      /^[a-f0-9]{64}\.tar\.gz$/u.test(digest ?? "") && extra.length === 0;
+    return exact && name! < input.currentName && !retained.has(`${input.checkpointsPrefix}/${name}`);
+  });
+}
+
 function statusOf(error: unknown): number | undefined {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === "number" ? code : undefined;
@@ -189,8 +206,18 @@ export function createGcsComputerHomeStore(): ComputerHomeStore {
         currentName,
         keep,
       });
+      const contextPrefix = `${checkpointsPrefix.slice(0, -"checkpoints".length)}shared-context/`;
+      const [contextFiles] = await store.getFiles({ prefix: contextPrefix });
+      const contextCandidates = new Set(computerHomeContextPruneCandidates({ checkpointsPrefix,
+        checkpointPaths: files.map(file => file.name), contextPaths: contextFiles.map(file => file.name), currentName, keep }));
       await Promise.all(candidates.map((path) => store.file(path).delete({ ignoreNotFound: true })));
-      return candidates.length;
+      for (const file of contextFiles) {
+        if (!contextCandidates.has(file.name)) continue;
+        const generation = file.metadata.generation;
+        if (typeof generation !== "string" || !/^[1-9]\d*$/u.test(generation)) throw new Error("Shared context prune generation is invalid");
+        await file.delete({ ignoreNotFound: true, ifGenerationMatch: generation });
+      }
+      return candidates.length + contextCandidates.size;
     },
   };
 }

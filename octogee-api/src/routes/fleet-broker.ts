@@ -1,3 +1,5 @@
+import { SharedContextPendingError } from "../lib/native-shared-context-job.js";
+import { createGcsSharedContextObjectStore, type SharedContextObjectStore } from "../lib/native-shared-context-object.js";
 import { authorizeSharedContextCheckpoint } from "../lib/native-shared-context-checkpoint.js";
 import { nativeSharedContextRestoreHeld } from "@octogee/core/assigned-roster";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
@@ -269,6 +271,7 @@ interface FleetBrokerRouteDeps {
   readBlobMetadata?: ReadBlobMetadata;
   pruneBuilderRuntimeState?: PruneBuilderRuntimeState;
   computerHomeStore?: ComputerHomeStore;
+  sharedContextObjectStore?: SharedContextObjectStore;
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
@@ -1801,6 +1804,7 @@ type ResolvedFleetBrokerRouteDeps = {
   readBlobMetadata: ReadBlobMetadata;
   pruneBuilderRuntimeState: PruneBuilderRuntimeState;
   computerHomeStore: ComputerHomeStore;
+  sharedContextObjectStore: SharedContextObjectStore;
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
@@ -1873,6 +1877,7 @@ function resolveFleetBrokerRouteDeps(
 ): ResolvedFleetBrokerRouteDeps {
   return {
     db: opts.db,
+    sharedContextObjectStore: opts.sharedContextObjectStore ?? createGcsSharedContextObjectStore(),
     resolveFreeTierModel: createCachedFreeTierModelResolver({
       db: opts.db,
       onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
@@ -3137,11 +3142,19 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
       if (!bound) return;
       const slug = typeof req.body.slug === "string" ? req.body.slug : "";
       try {
-        const checkpoint = await authorizeSharedContextCheckpoint(db, bound.gatewayId, slug, req.body.agentContextRestore);
-        const download = await createBlobSignedUrl({ gcsPath: computerHomeCheckpointPath(slug, checkpoint.name), action: "read", generation: checkpoint.generation });
-        res.json({ ...checkpoint, download });
+        const recovery = await authorizeSharedContextCheckpoint(db, bound.gatewayId, slug, req.body.agentContextRestore);
+        const object = await deps.sharedContextObjectStore.derive({ checkpoint: recovery.checkpoint, archive: recovery.archive });
+        const current = await authorizeSharedContextCheckpoint(db, bound.gatewayId, slug, req.body.agentContextRestore);
+        if (current.claimedStartedAt !== recovery.claimedStartedAt) throw new Error("Shared context checkpoint attempt changed");
+        const download = await createBlobSignedUrl({ gcsPath: object.gcsPath, action: "read", generation: object.generation });
+        res.json({ checkpoint: recovery.checkpoint, size: object.size, sha256: object.sha256, generation: object.generation, download });
       } catch (error) {
-        logger.error("Shared context checkpoint download refused", { gatewayId: bound.gatewayId, message: String(error) });
+        if (error instanceof SharedContextPendingError) {
+          res.setHeader("Retry-After", "5");
+          res.status(503).json({ error: "shared_context_checkpoint_preparing" });
+          return;
+        }
+        logger.error("Shared context checkpoint download refused", { gatewayId: bound.gatewayId });
         res.status(403).json(FORBIDDEN);
       }
       return;

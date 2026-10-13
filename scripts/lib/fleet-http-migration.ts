@@ -2267,7 +2267,7 @@ async function recoverMissingSharedRestore(deps: MigrationHandlerDeps, body: Fin
     await validateAgentContextTransfer(deps, body, "target", "final");
     const snapshot = await sharedRecoverySnapshot(deps, body);
     if (!deps.adapter.sharedContextCheckpoint) throw new Error("Shared context checkpoint recovery is unavailable");
-    const download = await deps.adapter.sharedContextCheckpoint({ ...snapshot.nativeSharedContextRestore!, checkpoint: recovery.checkpoint });
+    const download = await deps.adapter.sharedContextCheckpoint({ ...snapshot.nativeSharedContextRestore!, checkpoint: recovery.checkpoint }, controller.signal);
     const recovered = await recoverSharedAgentContextCheckpoint({ archive, recovery,
       download, fetch: deps.fetch ?? globalThis.fetch, signal: controller.signal });
     try {

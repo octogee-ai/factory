@@ -45,6 +45,8 @@ spec:
             - name: http
               containerPort: {{ .Values.port }}
           env:
+            - name: NATIVE_SHARED_CONTEXT_WORKER_IMAGE
+              value: "{{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}"
             - name: LOG_LEVEL
               value: {{ (.Values.global).logLevel | default "info" | quote }}
             - name: PORT

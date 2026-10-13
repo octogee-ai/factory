@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { nativeReturnSourceIdentity, nativeReturnSourceStopped } from "./native-return-source-fence.js";
 import { FieldValue, type DocumentData, type Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
@@ -57,11 +59,15 @@ function returnRequest(data: Record<string, unknown> | undefined, operationId: s
 async function claimCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<number> {
   const source = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
   return deps.db.runTransaction(async (tx) => {
-    const [snap, user, root] = await Promise.all([
+    const [snap, user, root, operation] = await Promise.all([
       tx.get(source), tx.get(deps.db.collection("users").doc(input.uid)),
       tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
     ]);
     const data = snap.data();
+    if (!precutoverOperationMatches(operation.data(), input) || operation.data()?.cancellationRequestedAt !== undefined) {
+      throw new Error("native return checkpoint claim authority changed");
+    }
     assertOwner(root.data(), input);
     if (data?.runtime !== "gce-vm" || !data.vm) throw new Error("native computer runtime changed");
     if (user.data()?.provisioning?.openclaw?.gatewayId !== input.fromGatewayId) {
@@ -80,7 +86,7 @@ async function claimCheckpoint(deps: NativeReturnDeps, input: NativeComputerRetu
   });
 }
 
-async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, committed = false): Promise<void> {
+async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null, fence: ReturnType<typeof nativeReturnSourceIdentity>): Promise<void> {
   const source = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
   await deps.db.runTransaction(async (tx) => {
     const [snap, root, operation, user] = await Promise.all([
@@ -90,8 +96,8 @@ async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerRe
     ]);
     if (returnRequest(snap.data(), input.operationId) === null) return;
     assertOwner(root.data(), input);
-    if (committed && (!committedOperationMatches(operation.data(), input) ||
-        user.data()?.provisioning?.openclaw?.gatewayId !== input.toGatewayId)) {
+    if (returnRequest(snap.data(), input.operationId) !== requestedAt ||
+        !releaseAuthorityMatches(input, fence, { operation: operation.data(), user: user.data(), source: snap.data(), root: root.data() })) {
       throw new Error("native return checkpoint release authority changed");
     }
     tx.update(source, {
@@ -102,11 +108,27 @@ async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerRe
   });
 }
 
-function committedOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+function currentOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
   return op?.kind === "migrate-customer" && op.status === "running" &&
-    typeof input.claimedStartedAt === "number" && op.startedAt === input.claimedStartedAt && op.cancellationRequestedAt === undefined &&
-    typeof op.cutoverCommittedAt === "number" && op.cutoverCommittedAt > 0 &&
+    typeof input.claimedStartedAt === "number" && op.startedAt === input.claimedStartedAt &&
     op.input?.uid === input.uid && op.input.fromGatewayId === input.fromGatewayId && op.input.toGatewayId === input.toGatewayId;
+}
+
+function precutoverOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  return currentOperationMatches(op, input) && op?.cutoverCommittedAt === undefined;
+}
+
+function releaseAuthorityMatches(input: NativeComputerReturnInput, fence: ReturnType<typeof nativeReturnSourceIdentity>,
+  records: { operation?: DocumentData; user?: DocumentData; source?: DocumentData; root?: DocumentData }): boolean {
+  const { operation, user, source, root } = records;
+  const current = user?.provisioning?.openclaw?.gatewayId;
+  if (!fence) return precutoverOperationMatches(operation, input) && current === input.fromGatewayId;
+  return committedOperationMatches(operation, input) && current === input.toGatewayId &&
+    isDeepStrictEqual(fence, nativeReturnSourceIdentity(source, root));
+}
+
+function committedOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  return currentOperationMatches(op, input) && typeof op?.cutoverCommittedAt === "number" && op.cutoverCommittedAt > 0;
 }
 
 function sharedAssignmentMatches(assignment: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
@@ -183,32 +205,31 @@ async function acknowledgeCompletedSchedulerHandoff(deps: NativeReturnDeps, inpu
   });
 }
 
-async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<void> {
+async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<void> {
+  let fence: ReturnType<typeof nativeReturnSourceIdentity> = null;
   const committed = await pauseCommittedSource(deps, input);
   if (committed) {
     const deadline = deps.now() + (deps.timeoutMs ?? 300_000);
-    while (!await isSourceFencedOff(deps, input)) {
+    fence = await stoppedSourceIdentity(deps, input);
+    while (!fence) {
       if (deps.now() >= deadline) throw new Error("native return source stop timed out; final checkpoint remains held");
       await deps.wait(Math.min(5_000, deadline - deps.now()));
+      fence = await stoppedSourceIdentity(deps, input);
     }
     if (!await pauseCommittedSource(deps, input)) throw new Error("native return source pause authority changed");
   }
-  await releaseCheckpoint(deps, input, committed);
+  await releaseCheckpoint(deps, input, requestedAt, fence);
 }
 
-async function isSourceFencedOff(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
+async function stoppedSourceIdentity(deps: NativeReturnDeps, input: NativeComputerReturnInput) {
   const [source, root] = await Promise.all([
     deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
     deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
   ]);
   const desired = root.data();
   assertOwner(desired, input);
-  if (desired?.desiredStatus !== "paused" && desired?.desiredStatus !== "retired") return false;
-  const vm = source.data()?.vm;
-  if (!vm?.instanceName || !vm.zone || !vm.instanceId) return false;
-  const current = await deps.vm.describe(vm.instanceName, vm.zone);
-  return current === null || current.instanceId === vm.instanceId &&
-    (current.status === "TERMINATED" || current.status === "STOPPED");
+  const identity = nativeReturnSourceIdentity(source.data(), desired);
+  return identity && await nativeReturnSourceStopped(deps.vm, identity) ? identity : null;
 }
 
 export async function prepareNativeComputerReturn(
@@ -222,18 +243,19 @@ export async function prepareNativeComputerReturn(
   ]);
   if (source.data()?.runtime !== "gce-vm" || target.data()?.gatewayClass !== "shared") return null;
   assertOwner(root.data(), input);
+  let requestedAt = returnRequest(source.data(), input.operationId);
   return {
     checkpointRequested: returnRequest(source.data(), input.operationId) !== null,
     checkpoint: async () => {
-      const requestedAt = await claimCheckpoint(deps, input);
+      requestedAt = await claimCheckpoint(deps, input);
       const result = await awaitHomeCheckpoint({
         ...deps,
         readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(deps.db, gatewayId),
       }, { gatewayId: input.fromGatewayId, requestedAt });
       if (result.outcome !== "completed") throw new Error(`native computer checkpoint ${result.outcome}; source retained`);
     },
-    release: () => releaseReturnCheckpoint(deps, input),
+    release: () => releaseReturnCheckpoint(deps, input, requestedAt),
     acknowledgeCompletedSchedulerHandoff: () => acknowledgeCompletedSchedulerHandoff(deps, input),
-    isSourceFencedOff: () => isSourceFencedOff(deps, input),
+    isSourceFencedOff: async () => await stoppedSourceIdentity(deps, input) !== null,
   };
 }

@@ -1,4 +1,4 @@
-import type { FleetBrokerComputerHomeDownload, FleetBrokerNativeSharedContextCheckpointRequest } from "@octogee/shared/types/fleet-broker";
+import type { FleetBrokerNativeSharedContextDownload, FleetBrokerNativeSharedContextCheckpointRequest } from "@octogee/shared/types/fleet-broker";
 import type { NativeSharedAgentContextRestoreHold } from "@octogee/shared/types/fleet-controller";
 import { withLogContext, setLogContext } from "@octogee/shared/server/service-logger";
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
@@ -81,7 +81,7 @@ export interface CustomerContext {
 export type MmUpdate = Record<string, unknown>;
 
 export interface CustomerLifecycleAdapter {
-  sharedContextCheckpoint?: (request: FleetBrokerNativeSharedContextCheckpointRequest) => Promise<FleetBrokerComputerHomeDownload>;
+  sharedContextCheckpoint?: (request: FleetBrokerNativeSharedContextCheckpointRequest, signal?: AbortSignal) => Promise<FleetBrokerNativeSharedContextDownload>;
   log: (msg: string) => void;
 
   isBuilderGateway?: () => boolean;
