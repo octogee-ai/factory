@@ -624,7 +624,7 @@ function hasProjectCloneSource(target: ProjectCloneTarget): boolean {
   return githubRepoSourceOf(target) !== null || Boolean(target.giteaRepoName);
 }
 
-async function cloneProjectsFromSnapshot(
+export async function cloneProjectsFromSnapshot(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
 ): Promise<{ steps: AddCustomerStep[]; pending: string[] }> {

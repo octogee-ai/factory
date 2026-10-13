@@ -38,6 +38,14 @@ export interface ConfigPatchResult {
     config?: unknown;
     hash?: string;
 }
+export interface DegradedSecretOwner {
+    ownerKind: string;
+    ownerId: string;
+    state: "unavailable";
+    degradationState?: "cold" | "stale";
+    paths: string[];
+    reason: string;
+}
 export interface SecretsReloadResult {
     warningCount?: number;
     ok?: boolean;
@@ -214,6 +222,7 @@ export interface GatewayRpcClient {
     channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
     channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
     secretsReload(): Promise<SecretsReloadResult>;
+    degradedSecretsStatus?(): Promise<DegradedSecretOwner[]>;
     gatewayRestartRequest(params: {
         reason: string;
         skipDeferral?: boolean;

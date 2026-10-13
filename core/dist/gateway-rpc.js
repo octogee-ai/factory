@@ -11,6 +11,19 @@ import { log as defaultLog } from "./config.js";
 import { loadOrCreateDeviceIdentity, signConnectDevice, } from "./gateway-device-identity.js";
 export { OpenclawWireError, } from "@octogee/shared/types/openclaw-wire-core";
 const INVALID_RESPONSE = "invalid-response";
+function parseDegradedSecretOwners(payload) {
+    const owners = payload?.degradedSecretOwners;
+    if (!Array.isArray(owners) || owners.some((owner) => !owner || typeof owner !== "object" || typeof owner.ownerKind !== "string" ||
+        typeof owner.ownerId !== "string" || owner.state !== "unavailable" ||
+        (owner.degradationState !== undefined && owner.degradationState !== "cold" && owner.degradationState !== "stale") ||
+        !Array.isArray(owner.paths) || owner.paths.some((p) => typeof p !== "string") ||
+        typeof owner.reason !== "string")) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "status payload missing valid degradedSecretOwners");
+    }
+    return owners.map(({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
+        ownerKind, ownerId, state, ...(degradationState ? { degradationState } : {}), paths, reason,
+    }));
+}
 function parseSecretsReloadPayload(payload) {
     if (!payload || typeof payload !== "object") {
         throw new OpenclawWireError(INVALID_RESPONSE, "secrets.reload returned non-object payload");
@@ -584,6 +597,9 @@ export function createGatewayRpc(opts = {}) {
         agentsDelete: (params) => callAgentsDelete(call, params),
         async secretsReload() {
             return parseSecretsReloadPayload(await call("secrets.reload", {}));
+        },
+        async degradedSecretsStatus() {
+            return parseDegradedSecretOwners(await call("status", { includeChannelSummary: false }));
         },
         async isGatewayUp(timeoutMs) {
             const t = timeoutMs ?? connectTimeoutMs;

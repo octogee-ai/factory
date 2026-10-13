@@ -1116,6 +1116,63 @@ expect(captured).toEqual({});
       expect(result.warningCount).toBe(3);
     });
 
+    it("reads redacted degraded owners from native status without channel summary", async () => {
+      let captured: unknown;
+      const owners = [
+  {
+    "ownerKind": "capability",
+    "ownerId": "memory-provider:octogee-bravo-proj-timer-coach",
+    "state": "unavailable",
+    "degradationState": "cold",
+    "paths": [
+      "agents.entries.octogee-bravo-proj-timer-coach.memory.search.remote.apiKey"
+    ],
+    "reason": "secret provider failed"
+  },
+  {
+    "ownerKind": "account",
+    "ownerId": "[\"/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent/openclaw-agent.sqlite\",\"anthropic:default\"]",
+    "state": "unavailable",
+    "degradationState": "cold",
+    "paths": [
+      "/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent.auth-profiles.anthropic:default.key"
+    ],
+    "reason": "secret provider failed"
+  },
+  {
+    "ownerKind": "account",
+    "ownerId": "[\"/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent/openclaw-agent.sqlite\",\"platform-openrouter:default\"]",
+    "state": "unavailable",
+    "degradationState": "cold",
+    "paths": [
+      "/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent.auth-profiles.platform-openrouter:default.key"
+    ],
+    "reason": "secret provider failed"
+  },
+  {
+    "ownerKind": "account",
+    "ownerId": "[\"/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent/openclaw-agent.sqlite\",\"platform-openai:default\"]",
+    "state": "unavailable",
+    "degradationState": "stale",
+    "paths": [
+      "/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent.auth-profiles.platform-openai:default.key"
+    ],
+    "reason": "secret provider failed"
+  }
+];
+      server.setHandler("status", (params) => {
+        captured = params;
+        return { ok: true, payload: { degradedSecretOwners: owners, sensitive: "must-not-return" } };
+      });
+      expect(await client.degradedSecretsStatus!()).toEqual(owners);
+      expect(captured).toEqual({ includeChannelSummary: false });
+    });
+
+    it.each([{}, { degradedSecretOwners: "unknown" }, { degradedSecretOwners: [{ ownerKind: "account", ownerId: "x", state: "unavailable", paths: "x", reason: "secret provider failed" }] }])("refuses incomplete owner diagnostics %j", async (payload) => {
+      server.setHandler("status", () => ({ ok: true, payload }));
+      await expect(client.degradedSecretsStatus!()).rejects.toMatchObject({ code: "invalid-response" });
+    });
+
     it("throws OpenclawWireError('invalid-response') if the gateway returns a non-object payload", async () => {
       server.setHandler("secrets.reload", () => ({ ok: true, payload: "boom" }));
       await expect(client.secretsReload()).rejects.toMatchObject({

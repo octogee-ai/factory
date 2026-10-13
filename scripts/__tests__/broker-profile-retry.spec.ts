@@ -3,6 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { stagedSecretWarningsOnly, unassignedConfiguredAgents } from "../lib/shared-broker-profile-readiness.js";
+import type { DegradedSecretOwner } from "../lib/gateway-rpc.js";
+
 import { DatabaseSync } from "node:sqlite";
 
 import { OpenClawSecretsApplyError } from "@octogee/core/agent-model-token-materializer";
@@ -248,4 +251,142 @@ describe("broker profile retry (level-triggered)", () => {
 
     expect(logs.some((m) => m.includes("config unreadable"))).toBe(true);
   });
+  it("settles Shared readiness for eight staged unassigned Bravo owners without granting their profiles", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+    const staged = ["octogee-bravo-coach", "octogee-bravo-proj-timer-coach"];
+    const owners = staged.flatMap((agent) => [
+      { ownerKind: "capability", ownerId: `memory-provider:${agent}`, state: "unavailable", degradationState: "cold", paths: ["memorySearch.remote.apiKey"], reason: "secret provider failed" },
+      ...["anthropic:default", "platform-openrouter:default", "platform-openai:default"].map((profile) => ({
+        ownerKind: "account", ownerId: JSON.stringify([path.join(agentsDir, agent, "agent", "openclaw-agent.sqlite"), profile]),
+        state: "unavailable", degradationState: "stale", paths: [`profiles.${profile}.key`], reason: "secret provider failed",
+      })),
+    ]);
+    const result = await materializeDeferredBrokerProfiles((m) => logs.push(m), {
+      agentsDir,
+      readConfig: () => ({ agents: { entries: Object.fromEntries([AGENT, ...staged].map((id) => [id, { model: "house" }])) } }),
+      readAssignedSlugs: async () => ["alice"],
+      secretsApply: { apply },
+      secretsReload: { secretsReload: async () => ({ ok: true, warningCount: 8 }), degradedSecretsStatus: async () => owners },
+    });
+    expect(result).toEqual({ settled: true, deferred: [] });
+    expect(apply.mock.calls.flatMap(([plan]) => plan.targets).every((target) => target.agentId === AGENT)).toBe(true);
+    expect(logs.some((m) => m.includes("staged unassigned"))).toBe(true);
+  });
+
+  it.each(["serving", "unknown", "wrong-path", "wrong-profile", "wrong-reason", "unexplained", "duplicate"])("keeps %s secret warnings blocking", (failure) => {
+    const staged = "octogee-bravo-coach";
+    const owners: DegradedSecretOwner[] = [{ ownerKind: "account", ownerId: JSON.stringify([path.join(agentsDir, staged, "agent", "openclaw-agent.sqlite"), "anthropic:default"]), state: "unavailable", paths: ["profiles.anthropic:default.key"], reason: "secret provider failed" }];
+    const excluded = unassignedConfiguredAgents([AGENT, staged, "octogee-unmatched-route"], ["alice"]);
+    let warningCount = 1;
+    if (failure === "serving") owners[0]!.ownerId = JSON.stringify([path.join(agentsDir, AGENT, "agent", "openclaw-agent.sqlite"), "anthropic:default"]);
+    if (failure === "unknown") owners[0]!.ownerKind = "gateway";
+    if (failure === "wrong-path") owners[0]!.ownerId = JSON.stringify([path.join(agentsDir, staged, "agent", "..", "other.sqlite"), "anthropic:default"]);
+    if (failure === "wrong-profile") owners[0]!.ownerId = JSON.stringify([path.join(agentsDir, staged, "agent", "openclaw-agent.sqlite"), "foreign:default"]);
+    if (failure === "wrong-reason") owners[0]!.reason = "auth profile migration required";
+    if (failure === "unexplained") warningCount = 2;
+    if (failure === "duplicate") { owners.push(owners[0]!); warningCount = 2; }
+    expect(stagedSecretWarningsOnly({ warningCount, owners, excluded, agentsDir })).toBe(false);
+    expect(excluded.has("octogee-unmatched-route")).toBe(false);
+  });
+
+  it("rechecks assignment after diagnostics and on later sweeps", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    const staged = "octogee-bravo-coach";
+    seedAgentStore(agentsDir, staged);
+    applyOutcome = "accept";
+    const readAssignedSlugs = vi.fn().mockResolvedValueOnce(["alice"]).mockResolvedValue(["alice", "bravo"]);
+    const scoped = () => materializeDeferredBrokerProfiles((m) => logs.push(m), {
+      agentsDir,
+      readConfig: () => ({ agents: { entries: { [AGENT]: {}, [staged]: {} } } }),
+      readAssignedSlugs,
+      secretsApply: { apply },
+      secretsReload: {
+        secretsReload: async () => ({ ok: true, warningCount: 1 }),
+        degradedSecretsStatus: async () => [{ ownerKind: "capability", ownerId: `memory-provider:${staged}`, state: "unavailable", paths: [], reason: "secret provider failed" }],
+      },
+    });
+    expect((await scoped()).settled).toBe(false);
+    expect((await scoped()).settled).toBe(false);
+    expect(apply.mock.calls.flatMap(([plan]) => plan.targets).some((target) => target.agentId === staged)).toBe(true);
+  });
+
+  it("retains strict warning refusal without a Shared assignment reader", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+    reload.mockResolvedValue({ ok: true, warningCount: 8 });
+    expect((await sweep()).settled).toBe(false);
+  });
+
+  it("does not reload unchanged settled Shared profiles but reloads a changed assignment", async () => {
+    seedAgentStore(agentsDir, AGENT);
+    applyOutcome = "accept";
+    let assigned = ["alice"];
+    const scoped = () => materializeDeferredBrokerProfiles(() => {}, {
+      agentsDir, readConfig, readAssignedSlugs: async () => assigned,
+      secretsApply: { apply }, secretsReload: { secretsReload: reload },
+    });
+    expect((await scoped()).settled).toBe(true);
+    expect((await scoped()).settled).toBe(true);
+    expect(reload).toHaveBeenCalledOnce();
+    assigned = ["alice", "bravo"];
+    expect((await scoped()).settled).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("recognizes the four staged project owners observed in c0 status", () => {
+    const owners: DegradedSecretOwner[] = [
+  {
+    "ownerKind": "capability",
+    "ownerId": "memory-provider:octogee-bravo-proj-timer-coach",
+    "state": "unavailable",
+    "degradationState": "cold",
+    "paths": [
+      "agents.entries.octogee-bravo-proj-timer-coach.memory.search.remote.apiKey"
+    ],
+    "reason": "secret provider failed"
+  },
+  {
+    "ownerKind": "account",
+    "ownerId": "[\"/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent/openclaw-agent.sqlite\",\"anthropic:default\"]",
+    "state": "unavailable",
+    "degradationState": "cold",
+    "paths": [
+      "/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent.auth-profiles.anthropic:default.key"
+    ],
+    "reason": "secret provider failed"
+  },
+  {
+    "ownerKind": "account",
+    "ownerId": "[\"/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent/openclaw-agent.sqlite\",\"platform-openrouter:default\"]",
+    "state": "unavailable",
+    "degradationState": "cold",
+    "paths": [
+      "/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent.auth-profiles.platform-openrouter:default.key"
+    ],
+    "reason": "secret provider failed"
+  },
+  {
+    "ownerKind": "account",
+    "ownerId": "[\"/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent/openclaw-agent.sqlite\",\"platform-openai:default\"]",
+    "state": "unavailable",
+    "degradationState": "stale",
+    "paths": [
+      "/home/node/.openclaw/agents/octogee-bravo-proj-timer-coach/agent.auth-profiles.platform-openai:default.key"
+    ],
+    "reason": "secret provider failed"
+  }
+];
+    expect(stagedSecretWarningsOnly({
+      warningCount: 4, owners,
+      agentsDir: "/home/node/.openclaw/agents",
+      excluded: unassignedConfiguredAgents(["octogee-bravo-proj-timer-coach"], ["charlie"]),
+    })).toBe(true);
+    expect(stagedSecretWarningsOnly({
+      warningCount: 8, owners,
+      agentsDir: "/home/node/.openclaw/agents",
+      excluded: unassignedConfiguredAgents(["octogee-bravo-proj-timer-coach"], ["charlie"]),
+    })).toBe(false);
+  });
+
 });

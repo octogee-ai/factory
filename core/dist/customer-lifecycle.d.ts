@@ -278,6 +278,10 @@ export interface AddCustomerOptions {
 }
 export declare function addCustomerToGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: AddCustomerOptions): Promise<AddCustomerResult>;
 export declare function restoreCustomerRuntimeFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, opts?: AddCustomerOptions): Promise<RestoreCustomerRuntimeResult>;
+export declare function cloneProjectsFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot): Promise<{
+    steps: AddCustomerStep[];
+    pending: string[];
+}>;
 export interface CloneMissingProjectsOptions {
     githubCheckouts?: "hydrate-here" | "defer";
 }

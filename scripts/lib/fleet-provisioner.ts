@@ -1,4 +1,5 @@
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
+import { unassignedConfiguredAgents, stagedSecretWarningsOnly } from "./shared-broker-profile-readiness.js";
 import { builderToolchainRoot } from "./builder-storage.js";
 import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
 import express from "express";
@@ -80,6 +81,7 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import {
   addCustomerToGateway,
   cloneMissingProjects,
+  cloneProjectsFromSnapshot,
   removeCustomerFromGateway,
 } from "./customer-lifecycle.js";
 import type { AddCustomerOptions } from "./customer-lifecycle.js";
@@ -759,6 +761,7 @@ const BROKER_PROFILE_RETRY_INTERVAL_MS = 20 * 1000;
  *  timer and must not reprint the same warning forever. */
 let lastDeferredSignature: string | null = null;
 let brokerProfileSnapshotReloadPending = false;
+let settledBrokerProfileScope: string | null = null;
 let lastBrokerProfileSnapshotReloadError: string | null = null;
 let brokerProfileSweepInFlight: Promise<BrokerProfileReadiness> | null = null;
 
@@ -767,6 +770,7 @@ let brokerProfileSweepInFlight: Promise<BrokerProfileReadiness> | null = null;
 export function _resetBrokerProfileLogStateForTests(): void {
   lastDeferredSignature = null;
   brokerProfileSnapshotReloadPending = false;
+  settledBrokerProfileScope = null;
   lastBrokerProfileSnapshotReloadError = null;
   brokerProfileSweepInFlight = null;
 }
@@ -812,17 +816,56 @@ function brokerProfileSweepOptions(
   };
 }
 
+interface BrokerProfileReloadScope {
+  excluded: Set<string>;
+  agentsDir: string;
+  readAssignedSlugs: () => Promise<string[]>;
+  assignedSlugs: string[];
+  signature: string;
+}
+
+async function readBrokerProfileScope(agentIds: string[], deps: {
+  agentsDir?: string;
+  readAssignedSlugs?: () => Promise<string[]>;
+}): Promise<BrokerProfileReloadScope | undefined> {
+  if (!deps.readAssignedSlugs) return undefined;
+  const assignedSlugs = await deps.readAssignedSlugs();
+  const agentsDir = deps.agentsDir ?? path.join(OPENCLAW_DIR, "agents");
+  return {
+    excluded: unassignedConfiguredAgents(agentIds, assignedSlugs), agentsDir,
+    readAssignedSlugs: deps.readAssignedSlugs, assignedSlugs,
+    signature: JSON.stringify([agentsDir, [...agentIds].sort(), [...assignedSlugs].sort()]),
+  };
+}
+
+async function verifyStagedSecretWarnings(input: {
+  warningCount: number;
+  scope?: BrokerProfileReloadScope;
+  rpc: Pick<GatewayRpcClient, "secretsReload" | "degradedSecretsStatus">;
+}): Promise<boolean> {
+  const { scope, rpc, warningCount } = input;
+  if (!scope || !rpc.degradedSecretsStatus || warningCount <= 0) return false;
+  if (!stagedSecretWarningsOnly({ warningCount, owners: await rpc.degradedSecretsStatus(), ...scope })) return false;
+  const current = (await scope.readAssignedSlugs()).sort();
+  return JSON.stringify(current) === JSON.stringify([...scope.assignedSlugs].sort());
+}
+
 async function reloadBrokerProfileSnapshot(
   log: (msg: string) => void,
-  secretsReload: Pick<GatewayRpcClient, "secretsReload"> | undefined,
+  secretsReload: Pick<GatewayRpcClient, "secretsReload" | "degradedSecretsStatus"> | undefined,
+  scope?: BrokerProfileReloadScope,
 ): Promise<void> {
+  if (scope && scope.signature !== settledBrokerProfileScope) brokerProfileSnapshotReloadPending = true;
   if (!brokerProfileSnapshotReloadPending || !secretsReload) return;
   try {
     const result = await secretsReload.secretsReload();
     const warningCount = result.warningCount ?? 0;
-    if (result.ok !== true || warningCount > 0) {
+    const stagedOnly = result.ok === true && await verifyStagedSecretWarnings({ warningCount, scope, rpc: secretsReload });
+    if (result.ok !== true || (warningCount > 0 && !stagedOnly)) {
       throw new Error(`secrets.reload returned ok=${String(result.ok)} warnings=${warningCount}`);
     }
+    if (scope) settledBrokerProfileScope = scope.signature;
+    if (stagedOnly) log(`[agent-model-token] ${warningCount} staged unassigned secret owners remain isolated`);
     brokerProfileSnapshotReloadPending = false;
     lastBrokerProfileSnapshotReloadError = null;
     log("[agent-model-token] active secret snapshot reloaded after broker profile materialization");
@@ -861,23 +904,25 @@ async function runDeferredBrokerProfileSweep(
   deps: {
     agentsDir?: string;
     readConfig?: () => unknown;
+    readAssignedSlugs?: () => Promise<string[]>;
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
-    secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
+    secretsReload?: Pick<GatewayRpcClient, "secretsReload" | "degradedSecretsStatus">;
   } = {},
 ): Promise<BrokerProfileReadiness> {
   const agentIds = readBrokerProfileAgentIds(log, deps.readConfig ?? readOpenClawConfig);
   if (!agentIds) {
     return { settled: false, deferred: [], reason: "config unreadable" };
   }
+  const scope = await readBrokerProfileScope(agentIds, deps);
   const sweep = await materializeBrokerProfilesForAgents(
-    agentIds,
+    agentIds.filter((id) => !scope?.excluded.has(id)),
     brokerProfileSweepOptions(deps, log),
   );
   if (sweep.materialized > 0) {
     log(`[agent-model-token] post-boot sweep materialized ${sweep.materialized} agent(s)`);
     if (deps.secretsReload) brokerProfileSnapshotReloadPending = true;
   }
-  await reloadBrokerProfileSnapshot(log, deps.secretsReload);
+  await reloadBrokerProfileSnapshot(log, deps.secretsReload, scope);
   reportBrokerProfileSweep(log, sweep);
   const reloadSettled = !brokerProfileSnapshotReloadPending;
   let reason: string | undefined;
@@ -895,8 +940,9 @@ export function materializeDeferredBrokerProfiles(
   deps: {
     agentsDir?: string;
     readConfig?: () => unknown;
+    readAssignedSlugs?: () => Promise<string[]>;
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
-    secretsReload?: Pick<GatewayRpcClient, "secretsReload">;
+    secretsReload?: Pick<GatewayRpcClient, "secretsReload" | "degradedSecretsStatus">;
   } = {},
 ): Promise<BrokerProfileReadiness> {
   if (brokerProfileSweepInFlight) return brokerProfileSweepInFlight;
@@ -929,15 +975,16 @@ export async function waitForBrokerProfilesSettled(input: {
 function startBrokerProfileRetry(
   provisions: boolean,
   log: (msg: string) => void,
-  secretsReload: Pick<GatewayRpcClient, "secretsReload">,
+  secretsReload: Pick<GatewayRpcClient, "secretsReload" | "degradedSecretsStatus">,
   onReadiness?: (readiness: BrokerProfileReadiness) => void,
+  readAssignedSlugs?: () => Promise<string[]>,
 ): NodeJS.Timeout | null {
   if (!provisions) return null;
   let sweepInFlight = false;
   const sweep = () => {
     if (sweepInFlight) return;
     sweepInFlight = true;
-    void materializeDeferredBrokerProfiles(log, { secretsReload })
+    void materializeDeferredBrokerProfiles(log, { secretsReload, readAssignedSlugs })
       .then((readiness) => { if (!readiness.skipped) onReadiness?.(readiness); })
       .catch((error) => {
         const reason = String(error);
@@ -1478,6 +1525,11 @@ function assignedRosterReader(
   if (opts.readDesiredSlugs) return opts.readDesiredSlugs;
   const db = opts.db;
   return db ? () => readAssignedSlugsForGateway(db, opts.gatewayId) : null;
+}
+
+function sharedBrokerProfileRoster(opts: StartFleetOptions): (() => Promise<string[]>) | undefined {
+  if (!opts.gatewayId.startsWith("shared-")) return undefined;
+  return assignedRosterReader(opts) ?? undefined;
 }
 
 export function createVerifyAttachPending(input: {
@@ -2330,12 +2382,16 @@ function reservedTargetOpenClawHeld(
 
 type PreparedBuilderTarget = BuilderSurgeTargetRequest & { inputs: string };
 
-async function builderPreparationFingerprint(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string): Promise<string> {
+async function builderPreparationInputs(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string) {
   const uid = await adapter.uidForSlug(slug);
   if (!uid) throw new Error("prepared Builder no longer has an owner");
   const snapshot = await adapter.loadUserSnapshot(uid, { refresh: true });
   if (!snapshot || snapshot.slug !== slug) throw new Error("prepared Builder ownership changed");
-  return JSON.stringify({ snapshot, manifest: await readActivationManifest(openclawDir, slug) });
+  return { snapshot, manifest: await readActivationManifest(openclawDir, slug) };
+}
+
+async function builderPreparationFingerprint(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string): Promise<string> {
+  return JSON.stringify(await builderPreparationInputs(adapter, openclawDir, slug));
 }
 
 async function prepareConfiguredBuilderTarget(input: {
@@ -2354,11 +2410,12 @@ async function prepareConfiguredBuilderTarget(input: {
     throw new Error("Builder preparation requires its reserved OpenClaw process to remain held");
   }
   await input.waitForActiveProvisioningDrain();
-  const inputs = await builderPreparationFingerprint(adapter, input.openclawDir, request.slug);
+  const prepared = await builderPreparationInputs(adapter, input.openclawDir, request.slug);
+  const inputs = JSON.stringify(prepared);
   await runProvisioningWork({ provisioning, work: async (onWorkSettled) => {
     const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
     if (attachedSlug !== request.slug) throw new Error("Builder preparation attached the wrong customer");
-    const checkouts = await cloneMissingProjects(adapter, request.slug, { githubCheckouts: "hydrate-here" });
+    const checkouts = await cloneProjectsFromSnapshot(adapter, prepared.snapshot);
     if (checkouts.pending.length > 0) throw new Error(`Builder preparation has pending repositories: ${checkouts.pending.join(", ")}`);
   } });
   const lockSha256 = process.env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim();
@@ -2654,6 +2711,7 @@ export async function startFleetController(
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
   const dashboardBridgeRequired = process.env.OPENCLAW_DASHBOARD_BRIDGE_REQUIRED === "true";
+  const sharedProfileRoster = sharedBrokerProfileRoster(opts);
   let brokerProfilesSettled = !caps.provision;
 
 const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
@@ -2702,6 +2760,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
           try {
             const profileReadiness = await materializeDeferredBrokerProfiles(opts.log, {
               secretsReload: opts.rpc,
+              readAssignedSlugs: sharedProfileRoster,
             });
             brokerProfilesSettled = profileReadiness.settled;
             lastSweepError = null;
@@ -2814,6 +2873,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     (profileReadiness) => {
       brokerProfilesSettled = profileReadiness.settled;
     },
+    sharedProfileRoster,
   );
 
   const surgeGate = createBuilderSurgeGateWiring({

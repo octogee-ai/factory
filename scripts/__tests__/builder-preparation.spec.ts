@@ -38,9 +38,12 @@ async function preparationFixture() {
   temporaryDirectories.push(root);
   await writeActivationManifest(root, manifest("initial"));
   const customersDir = path.join(root, "customers");
-  let cloned = false;
-  const cloneProjectRepo = vi.fn(async () => { cloned = true; return true; });
-  const loadUserSnapshot = vi.fn(async () => ({ uid: "uid-alice", slug: request.slug, projects: [] }));
+  const project = {
+    projectSlug: "new-project", giteaRepoName: null,
+    repoSource: { provider: "github" as const, owner: "alice", repo: "new-project" },
+  };
+  const cloneProjectRepo = vi.fn(async () => true);
+  const loadUserSnapshot = vi.fn(async () => ({ uid: "uid-alice", slug: request.slug, projects: [project] }));
   const adapter = {
     uidForSlug: async () => "uid-alice",
     loadUserSnapshot,
@@ -52,10 +55,7 @@ async function preparationFixture() {
     listLocalCustomerSlugs: () => hasMountedMarker(customersDir, request.slug) ? [request.slug] : [],
     hasWorkspaceGitDir: () => true,
     hasGitRemote: () => true,
-    listProjectsNeedingClone: async () => cloned ? [] : [{
-      projectSlug: "new-project", giteaRepoName: null,
-      repoSource: { provider: "github", owner: "alice", repo: "new-project" },
-    }],
+    listProjectsNeedingClone: async () => [project],
     cloneProjectRepo,
   } as unknown as CustomerLifecycleAdapter;
   const attach = vi.fn(async () => { writeMountedMarker(customersDir, request.slug); return request.slug; });
@@ -72,7 +72,7 @@ async function preparationFixture() {
     log: vi.fn(), provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     attachConfiguredBuilderBeforeOpenClaw: attach,
   });
-  return { root, customersDir, adapter, attach, ready, processGate, cloneProjectRepo, wiring, loadUserSnapshot };
+  return { root, customersDir, adapter, attach, ready, processGate, cloneProjectRepo, wiring, loadUserSnapshot, project };
 }
 
 describe("offline Builder preparation", () => {
@@ -134,7 +134,12 @@ describe("offline Builder preparation", () => {
     expect(fixture.processGate.permit).not.toHaveBeenCalled();
     expect(fixture.ready).not.toHaveBeenCalled();
     if (changed === "manifest") await writeActivationManifest(fixture.root, manifest("updated-source"));
-    if (changed === "projects") fixture.loadUserSnapshot.mockResolvedValue({ uid: "uid-alice", slug: request.slug, projects: [{ projectSlug: "added-project" }] } as never);
+    if (changed === "projects") fixture.loadUserSnapshot.mockResolvedValue({
+      uid: "uid-alice", slug: request.slug, projects: [fixture.project, {
+        projectSlug: "added-project", giteaRepoName: null,
+        repoSource: { provider: "github", owner: "alice", repo: "added-project" },
+      }],
+    });
     await fixture.wiring.releaseSurgeReadiness(request);
     expect(fixture.attach).toHaveBeenCalledTimes(changed === "same" ? 1 : 2);
     expect(fixture.processGate.permit).toHaveBeenCalledExactlyOnceWith(request);

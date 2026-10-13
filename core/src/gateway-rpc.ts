@@ -75,6 +75,31 @@ export interface ConfigPatchResult {
 hash?: string;
 }
 
+export interface DegradedSecretOwner {
+  ownerKind: string;
+  ownerId: string;
+  state: "unavailable";
+  degradationState?: "cold" | "stale";
+  paths: string[];
+  reason: string;
+}
+
+function parseDegradedSecretOwners(payload: unknown): DegradedSecretOwner[] {
+  const owners = (payload as { degradedSecretOwners?: unknown } | null)?.degradedSecretOwners;
+  if (!Array.isArray(owners) || owners.some((owner) =>
+    !owner || typeof owner !== "object" || typeof owner.ownerKind !== "string" ||
+    typeof owner.ownerId !== "string" || owner.state !== "unavailable" ||
+    (owner.degradationState !== undefined && owner.degradationState !== "cold" && owner.degradationState !== "stale") ||
+    !Array.isArray(owner.paths) || owner.paths.some((p: unknown) => typeof p !== "string") ||
+    typeof owner.reason !== "string"
+  )) {
+    throw new OpenclawWireError(INVALID_RESPONSE, "status payload missing valid degradedSecretOwners");
+  }
+  return owners.map(({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
+    ownerKind, ownerId, state, ...(degradationState ? { degradationState } : {}), paths, reason,
+  }));
+}
+
 export interface SecretsReloadResult {
   warningCount?: number;
   ok?: boolean;
@@ -302,6 +327,7 @@ export interface GatewayRpcClient {
   channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
   channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
+  degradedSecretsStatus?(): Promise<DegradedSecretOwner[]>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   sessionsList(params: { agentId: string; includeGlobal?: boolean; includeUnknown?: boolean; archived?: "all"; offset?: number }): Promise<GatewaySessionsListResult>;
   sessionsReset(params: {
@@ -1028,6 +1054,10 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     async secretsReload() {
       return parseSecretsReloadPayload(await call("secrets.reload", {}));
+    },
+
+    async degradedSecretsStatus() {
+      return parseDegradedSecretOwners(await call("status", { includeChannelSummary: false }));
     },
 
     async isGatewayUp(timeoutMs) {

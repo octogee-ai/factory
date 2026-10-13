@@ -179,7 +179,7 @@ function projectCloneSourceLabel(target) {
 function hasProjectCloneSource(target) {
     return githubRepoSourceOf(target) !== null || Boolean(target.giteaRepoName);
 }
-async function cloneProjectsFromSnapshot(adapter, snapshot) {
+export async function cloneProjectsFromSnapshot(adapter, snapshot) {
     const steps = [];
     const pending = [];
     for (const project of snapshot.projects ?? []) {
