@@ -51,7 +51,7 @@
     "prom-client": "^15.1.3",
     "resend": "^6.30.0",
     "sharp": "^0.35.5",
-    "stripe": "^22.6.2",
+    "stripe": "^23.0.0",
     "tar": "^7.5.16",
     "undici": "^8.11.2",
     "unique-names-generator": "^4.7.1",
