@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
 import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
+import { isDuplicateAssetUpload } from "./workspace-manifest-conflict.js";
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 5_000;
@@ -589,6 +590,8 @@ async function gitRebaseOntoRemoteBranch(
     { timeoutMs: GIT_COMMIT_TIMEOUT_MS },
   );
   if (rebaseResult.ok) return { ok: true };
+  const resolution = await resolveDuplicateAssetUpload(customerDir, options.author);
+  if (resolution?.ok) return { ok: true };
 
   const abortResult = await runGit(
     customerDir,
@@ -605,6 +608,46 @@ async function gitRebaseOntoRemoteBranch(
     };
   }
   return rebaseResult;
+}
+
+const ASSET_MANIFEST = ".files/manifest.json";
+
+async function hasRegularManifestConflict(cwd: string): Promise<boolean> {
+  const conflicts = await runGit(cwd, ["ls-files", "--unmerged", "-z"]);
+  if (!conflicts.ok) return false;
+  const rows = conflicts.stdout.split(NUL).filter(Boolean);
+  if (rows.length < 2 || rows.length > 3) return false;
+  const stages = rows.map((row) => /^100644 [a-f0-9]{40,64} ([123])\t\.files\/manifest\.json$/u.exec(row)?.[1]);
+  if (stages.some((stage) => !stage) || !stages.includes("2") || !stages.includes("3")) return false;
+  try {
+    const directory = await fs.lstat(path.join(cwd, ".files"));
+    const file = await fs.lstat(path.join(cwd, ASSET_MANIFEST));
+    return directory.isDirectory() && !directory.isSymbolicLink() && file.isFile() && !file.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+async function resolveDuplicateAssetUpload(cwd: string, author: CommitAuthor): Promise<GitRunOk | null> {
+  const identity = customerGitIdentity(cwd);
+  if (!identity || path.relative(identity.customersRoot, cwd).split(path.sep).length !== 3) return null;
+  if (!await hasRegularManifestConflict(cwd)) return null;
+  const remote = await runGit(cwd, ["show", `:2:${ASSET_MANIFEST}`]);
+  const local = await runGit(cwd, ["show", `:3:${ASSET_MANIFEST}`]);
+  const prefix = `customers/${identity.slug}/projects/${identity.repoName}`;
+  if (!remote.ok || !local.ok || !isDuplicateAssetUpload(remote.stdout, local.stdout, prefix)) return null;
+  const checkout = await runGit(cwd, ["checkout", "--ours", "--", ASSET_MANIFEST]);
+  if (!checkout.ok) return null;
+  const add = await runGit(cwd, ["add", "--", ASSET_MANIFEST]);
+  if (!add.ok) return null;
+  const staged = await runGit(cwd, ["diff", "--cached", "--quiet"]);
+  const command = staged.ok ? "--skip" : "--continue";
+  if (!staged.ok && (staged.error.code !== "GIT_FAILED" || staged.error.status !== 1)) return null;
+  const continued = await runGit(cwd, [
+    "-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`,
+    "rebase", command,
+  ], { timeoutMs: GIT_COMMIT_TIMEOUT_MS, noEdit: true });
+  return continued.ok ? continued : null;
 }
 
 function clampLimit(n: number): number {
@@ -991,7 +1034,7 @@ async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | nul
 async function runGit(
   cwd: string,
   args: ReadonlyArray<string>,
-  options: { timeoutMs?: number; githubToken?: string } = {},
+  options: { timeoutMs?: number; githubToken?: string; noEdit?: boolean } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const unsafeConfigKey = await unsafeLocalRepositoryConfigKey(cwd);
@@ -1021,7 +1064,9 @@ async function runGit(
       proc = spawn("/usr/bin/git", fullArgs, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        env: workspaceGitEnvironment(process.env, cwd, options.githubToken),
+        env: { ...workspaceGitEnvironment(process.env, cwd, options.githubToken),
+          ...(options.noEdit ? { GIT_EDITOR: "/usr/bin/true" } : {}),
+        },
       });
     } catch (err) {
       resolve({
