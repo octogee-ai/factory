@@ -25,7 +25,7 @@ COPY gateway-edge/src/ ./src/
 # MODULE_NOT_FOUND @shared/* runtime failure. See README "Shared code".
 RUN npm run build
 
-FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS gitleaks-builder
+FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS gitleaks-builder
 ARG GITLEAKS_VERSION=8.30.1
 RUN GODEBUG=http2client=0 CGO_ENABLED=0 go install \
       -ldflags="-X github.com/zricethezav/gitleaks/v8/version.Version=${GITLEAKS_VERSION} -X github.com/zricethezav/gitleaks/v8/version.DefaultMsg=${GITLEAKS_VERSION}" \
