@@ -127,9 +127,19 @@ Upstream is operator-selected main
 frozen for the October 12 recut. The operator approved independent local
 qualification rather than waiting for full upstream CI to recover. OpenClaw
 validation stays local; no full-upstream, fork-CI or iOS-green claim is made.
-Exact overlay source is `121c7fd5a090f812464d4c41120a7f2419cd8b85` on
-`ceckert/openclaw:codex/native-sqlite-maintenance-context`.
+Exact overlay source is `cf903690a3b353de156f2af39759bc78ddbfebeb` on
+`ceckert/openclaw:codex/test-agent-schema-admission`.
 Package version `2026.10.2` identifies a main snapshot, not a released tag.
+
+This source adds one correction to the qualified October 12 overlay. A schema
+admission receipt keeps its process-local identity across worker structured
+clones, so adopting the same proof cannot veto a legitimate schema refresh.
+The guard still rejects a superseded, revoked proof. The production usage-refresh
+regression reproduced TEST's exact exception before the fix; all 71 focused
+cache/usage checks and affected type/lint checks pass. Fork CI reports inherited
+architecture, unrelated test-lint and restart-test setup failures; it is not
+aggregate green. The reported paths are unchanged from the qualified predecessor.
+This correction neither changes database versions nor repairs live stores.
 
 Shared-state schema 21, agent schema 26 and protocol 4 follow the selected
 native contracts; there is no fork schema 22. Native admission and backups remain authoritative;
