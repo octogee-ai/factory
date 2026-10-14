@@ -140,18 +140,19 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`0f13444e2a6b60348b146c95bdd8c7146f758aa3`](https://github.com/openclaw/openclaw/commit/0f13444e2a6b60348b146c95bdd8c7146f758aa3),
-frozen for the October 13 native-first recut. Exact native source is
-`860b241f3e39838c97d8556b284b4ceb3110f5b9`, branch
-`codex/openclaw-controlled-main-oct13`. Package `2026.10.2` is a main
+[`9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8`](https://github.com/openclaw/openclaw/commit/9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8),
+frozen for the October 14 native-first recut. Exact native source is
+`4bc64daa9b66440da1df0c78e434812bda681586`, branch
+`codex/openclaw-controlled-main-oct14`. Package `2026.10.3` is a main
 snapshot, not a released tag. OpenClaw validation stays local; no full upstream,
 fork-CI or iOS-green claim is made.
 
-`current.json` selects the write-once pair `openclaw-fork-94300a20.tgz` and
-`openclaw-mattermost-5a3a7073.tgz`. Their exact published generations were
-downloaded and compared byte-for-byte with the qualified local archives.
-The native branch was pushed normally and its full head read back; no hosted
-OpenClaw CI was triggered.
+`current.json` selects `openclaw-fork-0cbb167c.tgz` (generation
+`1791994927723077`) and `openclaw-mattermost-711a7dfb.tgz` (generation
+`1791994881545700`). Both were published with generation-match zero, downloaded
+at those exact generations and compared byte-for-byte and by complete SHA256.
+The native branch was pushed normally and its full head read back; all sixteen
+native push workflows are main-only. No hosted OpenClaw CI is dispatched.
 
 Shared-state schema **22**, agent schema **26** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
@@ -179,10 +180,16 @@ native. Obsolete run-completion claims, hook-isolation machinery and fork
 database-admission/startup owners are also removed where upstream supplies the
 contract. No new manager replaces them.
 
-Using the same runtime-only filter against each selected upstream, the overlay
-fell from 198 to 165 changed files and from 6,136 to 5,172 added lines. This
-excludes tests, docs and generated output and compares the prior qualified
-`121c7fd` line, not the entire Octogee adapter or compiled bundle.
+This pass also adopts native create-if-absent session entries and the new
+storage-engine interfaces, removes obsolete admission-capture scaffolding and
+redundant cron schema probes, and keeps cron reads inside the native worker
+transaction. The approved offline legacy import is not a new runtime schema.
+
+Using the same runtime-only filter against each selected upstream, this pass
+reduces 165 changed files and 5,172 added lines to 163 files and 5,070 added
+lines. The cumulative comparison with the qualified `121c7fd` line is 198→163
+files and 6,136→5,070 added lines. This excludes tests, docs and generated
+output, not the entire Octogee adapter or compiled bundle.
 
 ### Remaining gaps and removal conditions
 
@@ -215,81 +222,75 @@ native; no agent-version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-The full pinned-package-manager native build passed with exact source build-info
-and all 155 public SDK gate subpaths. Maintained sequential packers, native root
-archive integrity, the matched isolated npm install and actual arm64/amd64
-full-plugin installer gates passed. The full arm64 Gateway recipe passed its
-type, native-module, extension, runtime-dependency and runtime-image gates.
-Dirty local images have `BUILD_SHA=unknown`; they are not immutable Build main
-release digests or full amd64 Builder-runtime-image qualification.
+The full pinned-package-manager native build passed in 29m18.2s with exact
+source build-info and all 155 public SDK subpaths. Maintained sequential
+packers, native root archive integrity, the matched isolated npm install and
+actual arm64/amd64 full-plugin installer gates passed. These local installer
+images are not immutable Build main release digests or complete Builder
+runtime-image qualification. No desktop OS image change is included.
 
-Genuine synthetic stores were authored through the exact published
-`cf903690` predecessor, not by downgrading candidate DDL. Actual installed
-candidate Doctor and unmodified image boot owners upgraded both closed copies:
-shared 21→22, agents 26, canonical rows/JSON/rowids, sessions, transcripts,
-retained plugin data, jobs, scratch and fences preserved. Thirteen operations
-and seven fences imported to native KV; the >1 MiB snapshot reconstructed
-exactly. Native backup groups completed and passed. A second pre-spawn inspection
-skipped Doctor and left database bytes unchanged. The failed-boot claim was
-synthetic; no candidate Gateway or live/source-Doctor acknowledgment was made.
-Original native-valid fixture workspaces are outside the Octogee portable
-Builder root; that refusal is retained, not passed off as consumer config proof.
-Cursor/ACP stores are empty in this predecessor, so populated migration coverage
-is not claimed.
+One fresh synthetic store was authored through native RPCs in the exact
+published `cf903690` predecessor, with networking and job execution disabled,
+then shut down normally. Candidate Doctor upgraded only a closed Linux copy:
+shared 21→22, four agents at 26, canonical rows/JSON/rowids, sessions,
+transcripts, jobs and scratch preserved. Three held/exported/retired operations
+and their fences imported to native KV in original order; snapshot bytes
+reconstructed exactly. The five native SQLite backups preserve original
+schema and data; the sealed original's nonvolatile file hashes remain unchanged.
+Full Git state capture was unavailable in the read-only home (`EROFS`), not
+claimed successful. Empty-WAL/volatile-SHM inventory and earlier seed-config
+refusal controls are preserved. This proves the focused data upgrade, not a
+candidate Gateway boot, live acknowledgment, running receipts, populated
+ACP/Cursor migration or provider readiness.
 
-Fresh Shared and VM-Builder configs were materialized through the current
-policy, roster, account, pre-boot and catalog writers on Linux tmpfs as node
-UID 1000. All six native validate→Doctor→validate commands exited 0. Structural
-defaults, per-agent models/tools/browser policy and native steer queues stayed
-unchanged. Builder's literal Mattermost config comparison changed because
-Doctor made the owner sender list explicit; 144 installed-native before/after
-decisions preserve normal multi-human admission and control-command authority.
-The original false literal comparison and later fixture-export failures are
-retained. Fresh installed checks keep that literal change visible and verify
-the actual ingress decisions separately, without claiming a full state export
-or relabeling the original harness as green.
+Config compatibility uses current Shared and VM-Builder policy, roster,
+account, native merge-patch, pre-boot, final gateway-class and catalog writers.
+The final class-policy writer must be included, and merge-patch deletion
+sentinels must pass through the native merge owner rather than be written as
+literal config. The initial fixture-composition refusal is retained; it is not
+a product regression or a reason to add a runtime compatibility patch.
 
-Full offline Doctor is not a semantic no-op. It changes metadata, plugin indexes,
-model maps, skills and wizard defaults. Builder's implicit native global model
-also causes genuine Codex plugin enablement; Shared's explicit Codex disable
-remains respected. Configured coach/project models do not change. Shared's
-global unavailable-model fallback and failed model-specific tool-schema
-inspection do not establish provider readiness. Standalone Doctor skips agent
-catalog discovery; its config-only registry cannot resolve the authored
-`platform-openrouter` rows. Installed-native disk and captured-source registries
-resolve all four Shared agents' selected models before and after Doctor, with
-the exact broker transport. Native preparation preserves those authored
-`models.json` rows in merge mode. This is metadata-resolution proof, not
-credential, inference or live-readiness acceptance; no duplicate global provider
-registration was added to silence the warning.
+Both class configs passed native validate→Doctor→validate as UID 1000 with the
+actual resolver bundle and image ownership/mode. Shared's protected policy and
+catalog assertions passed. Builder's literal equality assertion failed because
+canonical Doctor added owner `groupAllowFrom` to two accounts; that failure is
+preserved. Eight installed-native before/after ingress cases retain ordinary
+group admission and owner-only control commands. No policy is reapplied after
+Doctor to manufacture equivalence.
 
-The earlier candidate's offline Doctor warning, `SQLite facts require their
-retained admission`, exposed a retained-patch regression. An actual scheduler
-and admission control failed its first checkpoint there and passed on the
-selected unpatched upstream. Ordinary maintenance now keeps native bootstrap
-root context instead of capturing a completed opening operation; the separately
-needed noncreating worker-lifetime relay remains. The owning regression and
-worker/WAL siblings pass, and fresh installed Shared/Builder Doctor runs no
-longer emit that warning. Original failures are preserved. This does not prove
-every long-running WAL outcome. Healthy boots retain bounded native inspection
-and do not run full Doctor; actual runtime acceptance remains required.
+This installer-only check lacks Octogee extensions: Doctor removes ten Shared
+and twelve Builder unavailable plugins, and disables 32 unavailable skills.
+It proves schema acceptance and scoped configured policy, not complete plugin
+preservation or readiness. Actual custom-plugin acceptance remains in TEST.
+
+Full offline Doctor is not a semantic no-op. Metadata, model defaults, plugin
+indexes, skills and wizard settings may change. Unavailable model/auth and
+model-specific tool-schema warnings are not provider-readiness proof; no
+duplicate provider registration is added to silence them. Configured per-agent
+policy and authored broker catalogs are checked separately from those defaults.
+
+The earlier retained-admission maintenance repair remains covered by owning
+regressions. Healthy boots keep native bounded inspection; full Doctor is not
+added to their hot path. Actual long-running/runtime behavior belongs in TEST.
 
 All six generated native provenance/license records select this source.
 Browser and Computer retain native HTMLElement bridges and React
 mount/update/destroy contracts, with one shared graph for remaining Lit islands.
 The landed React model picker/tool icons and read-only tenant-filtered
-Automations remain. Focused consumers, app and sidecar production builds pass.
-Inspected local Chrome before/after frames cover empty Browser/Computer panels
-at desktop/narrow widths in light/dark themes, not connected capability, full
-layout parity or authenticated TEST acceptance.
+Automations remain. All 176 focused consumer cases across nineteen files and
+both app/sidecar production builds passed. Earlier synthetic Chrome frames are
+prior evidence, not this cut's connected capability, layout parity or TEST
+acceptance.
 
-The original isolated review found one P2: a missing permanent-retirement fence
-could escape import validation. It was independently reproduced and repaired;
-actual Doctor and owning cron persistence controls pass. The original report
-is not described as scoped-clean. Required guards, assertion/mock/timeout
-budgets and inherited line-cap limits are not weakened. Advisory size/CSS,
-TypeScript experimental and native dependency warnings remain visible.
-There is no aggregate `pnpm check`, paid-response or faster-startup claim.
+The prior cut's independently repaired permanent-retirement-fence finding is
+retained, not relabeled clean. Fresh full-overlay and owner-delta isolated
+reviews reported no actionable P0–P2 findings. Focused behavioral/type checks
+and the changed-source line-cap ratchet passed. The inherited env-read budget
+failure is also present on unpatched upstream (455 against 454); native
+`agent-tools.ts` exceeds its cap at 718 counted lines, while this cut is 712.
+No guard or budget is weakened. Size/CSS, experimental TypeScript, deprecated
+SDK and dependency warnings remain visible. There is no aggregate
+`pnpm check`, paid-response, Doctor no-op or faster-startup claim.
 
 Only a successful immutable main build and coordinated TEST rollout can qualify
 live service behavior. Recovery retains sole Fleet/acceptance ownership until

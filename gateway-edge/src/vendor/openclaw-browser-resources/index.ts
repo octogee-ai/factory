@@ -40,10 +40,10 @@ var IR = (e, t, n) => (n = e != null ? NV(FV(e)) : {}, jV(
 function ar(e) {
   return e !== null && typeof e == "object" && !Array.isArray(e);
 }
-function $t(e) {
+function At(e) {
   return ar(e) ? e : void 0;
 }
-function At(e) {
+function $t(e) {
   return ar(e) ? e : null;
 }
 function gb(e) {
@@ -72,16 +72,16 @@ var pt = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/number-coercion.ts
-function Ao(e) {
+function $o(e) {
   return typeof e == "number" && Number.isFinite(e) ? e : void 0;
 }
-var BV, Jde, Po = p(() => {
+var BV, Yde, Po = p(() => {
   pt();
-  BV = 2147e6, Jde = Math.floor(BV / 1e3);
+  BV = 2147e6, Yde = Math.floor(BV / 1e3);
 });
 
 // openclaw/node_modules/.pnpm/@noble+ed25519@3.2.0/node_modules/@noble/ed25519/index.js
-var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, K, VV, hb, AR, Vi, Qc, Hi, WV, ZV, Xr, JV, kR, YV, vb, XV, _R, ER, QV, PR = p(() => {
+var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, AR, HV, Ki, _t, SR, K, VV, hb, $R, Vi, Qc, Hi, WV, ZV, Xr, JV, kR, YV, vb, XV, _R, ER, QV, PR = p(() => {
   TR = Object.freeze, ls = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn, yb = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn, Gd = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n, bb = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an, xb = 0x6666666666666666666666666666666666666666666666666666666666666658n, Kd = ls - 1n, qV = TR({
     p: ls,
     n: yb,
@@ -100,7 +100,7 @@ var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, 
     for (let n of Hd(e))
       t += CR(n, 2);
     return t;
-  }, $R = (e) => {
+  }, AR = (e) => {
     let t = "hex invalid";
     if (typeof e != "string")
       throw new TypeError(t);
@@ -148,7 +148,7 @@ var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, 
     if (e instanceof Vi)
       return e;
     throw new TypeError("Point expected");
-  }, AR = 2n ** 256n, Vi = class e {
+  }, $R = 2n ** 256n, Vi = class e {
     static BASE;
     static ZERO;
     X;
@@ -158,7 +158,7 @@ var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, 
     // Constructor only bounds-checks and freezes XYZT coordinates; it does not prove the point is
     // on-curve or that T matches X*Y/Z.
     constructor(t, n, o, r) {
-      let i = AR;
+      let i = $R;
       this.X = Ki(t, 0n, i), this.Y = Ki(n, 0n, i), this.Z = Ki(o, 1n, i), this.T = Ki(r, 0n, i), TR(this);
     }
     static CURVE() {
@@ -182,7 +182,7 @@ var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, 
       return h !== !!(m & 1n) && (m = _t(-m)), new e(m, i, 1n, K(m * i));
     }
     static fromHex(t, n) {
-      return e.fromBytes($R(t), n);
+      return e.fromBytes(AR(t), n);
     }
     get x() {
       return this.toAffine().x;
@@ -222,8 +222,8 @@ var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, 
     }
     /** Point addition. Complete formula. Cost: `9M + 1*a + 1*d + 7add`. */
     add(t) {
-      let { X: n, Y: o, Z: r, T: i } = this, { X: a, Y: s, Z: u, T: l } = hb(t), m = Kd, h = Gd, b = K(n * a), f = K(o * s), y = K(K(i * h) * l), x = K(r * u), v = _t(K(_t(n + o) * _t(a + s)) - b - f), S = _t(x - y), w = _t(x + y), k = _t(f - K(m * b)), C = K(v * S), $ = K(w * k), D = K(v * k), V = K(S * w);
-      return new e(C, $, V, D);
+      let { X: n, Y: o, Z: r, T: i } = this, { X: a, Y: s, Z: u, T: l } = hb(t), m = Kd, h = Gd, b = K(n * a), f = K(o * s), y = K(K(i * h) * l), x = K(r * u), v = _t(K(_t(n + o) * _t(a + s)) - b - f), S = _t(x - y), w = _t(x + y), k = _t(f - K(m * b)), C = K(v * S), A = K(w * k), D = K(v * k), V = K(S * w);
+      return new e(C, A, V, D);
     }
     subtract(t) {
       return this.add(hb(t).negate());
@@ -280,7 +280,7 @@ var TR, ls, yb, Gd, bb, xb, Kd, qV, GV, wR, Hd, KV, CR, RR, $R, HV, Ki, _t, SR, 
   }, Qc = new Vi(bb, xb, 1n, _t(bb * xb)), Hi = new Vi(0n, 1n, 1n, 0n);
   Vi.BASE = Qc;
   Vi.ZERO = Hi;
-  WV = (e) => $R(CR(Ki(e, 0n, AR), 64)).reverse(), ZV = (e) => BigInt("0x" + RR(Uint8Array.from(Hd(e)).reverse())), Xr = (e, t) => {
+  WV = (e) => AR(CR(Ki(e, 0n, $R), 64)).reverse(), ZV = (e) => BigInt("0x" + RR(Uint8Array.from(Hd(e)).reverse())), Xr = (e, t) => {
     let n = e;
     for (; t-- > 0; )
       n = K(n * n);
@@ -345,9 +345,9 @@ var Vd = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/connect-error-details.ts
-var Ae, cpe, upe, Ib = p(() => {
+var $e, upe, lpe, Ib = p(() => {
   Vd();
-  Ae = {
+  $e = {
     AUTH_REQUIRED: "AUTH_REQUIRED",
     AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
     AUTH_TOKEN_MISSING: "AUTH_TOKEN_MISSING",
@@ -387,29 +387,29 @@ var Ae, cpe, upe, Ib = p(() => {
     PAIRING_REJECTED: "PAIRING_REJECTED",
     PAIRING_EXPIRED: "PAIRING_EXPIRED",
     CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH"
-  }, cpe = /* @__PURE__ */ new Map([
-    ["token_missing", Ae.AUTH_TOKEN_MISSING],
-    ["token_mismatch", Ae.AUTH_TOKEN_MISMATCH],
-    ["token_missing_config", Ae.AUTH_TOKEN_NOT_CONFIGURED],
-    ["password_missing", Ae.AUTH_PASSWORD_MISSING],
-    ["password_mismatch", Ae.AUTH_PASSWORD_MISMATCH],
-    ["password_missing_config", Ae.AUTH_PASSWORD_NOT_CONFIGURED],
-    ["bootstrap_token_invalid", Ae.AUTH_BOOTSTRAP_TOKEN_INVALID],
-    ["tailscale_user_missing", Ae.AUTH_TAILSCALE_IDENTITY_MISSING],
-    ["tailscale_proxy_missing", Ae.AUTH_TAILSCALE_PROXY_MISSING],
-    ["tailscale_whois_failed", Ae.AUTH_TAILSCALE_WHOIS_FAILED],
-    ["tailscale_user_mismatch", Ae.AUTH_TAILSCALE_IDENTITY_MISMATCH],
-    ["rate_limited", Ae.AUTH_RATE_LIMITED],
-    ["device_token_mismatch", Ae.AUTH_DEVICE_TOKEN_MISMATCH],
-    ["scope_mismatch", Ae.AUTH_SCOPE_MISMATCH],
-    [void 0, Ae.AUTH_REQUIRED]
-  ]), upe = /* @__PURE__ */ new Map([
-    ["device-id-mismatch", Ae.DEVICE_AUTH_DEVICE_ID_MISMATCH],
-    ["device-signature-stale", Ae.DEVICE_AUTH_SIGNATURE_EXPIRED],
-    ["device-nonce-missing", Ae.DEVICE_AUTH_NONCE_REQUIRED],
-    ["device-nonce-mismatch", Ae.DEVICE_AUTH_NONCE_MISMATCH],
-    ["device-signature", Ae.DEVICE_AUTH_SIGNATURE_INVALID],
-    ["device-public-key", Ae.DEVICE_AUTH_PUBLIC_KEY_INVALID]
+  }, upe = /* @__PURE__ */ new Map([
+    ["token_missing", $e.AUTH_TOKEN_MISSING],
+    ["token_mismatch", $e.AUTH_TOKEN_MISMATCH],
+    ["token_missing_config", $e.AUTH_TOKEN_NOT_CONFIGURED],
+    ["password_missing", $e.AUTH_PASSWORD_MISSING],
+    ["password_mismatch", $e.AUTH_PASSWORD_MISMATCH],
+    ["password_missing_config", $e.AUTH_PASSWORD_NOT_CONFIGURED],
+    ["bootstrap_token_invalid", $e.AUTH_BOOTSTRAP_TOKEN_INVALID],
+    ["tailscale_user_missing", $e.AUTH_TAILSCALE_IDENTITY_MISSING],
+    ["tailscale_proxy_missing", $e.AUTH_TAILSCALE_PROXY_MISSING],
+    ["tailscale_whois_failed", $e.AUTH_TAILSCALE_WHOIS_FAILED],
+    ["tailscale_user_mismatch", $e.AUTH_TAILSCALE_IDENTITY_MISMATCH],
+    ["rate_limited", $e.AUTH_RATE_LIMITED],
+    ["device_token_mismatch", $e.AUTH_DEVICE_TOKEN_MISMATCH],
+    ["scope_mismatch", $e.AUTH_SCOPE_MISMATCH],
+    [void 0, $e.AUTH_REQUIRED]
+  ]), lpe = /* @__PURE__ */ new Map([
+    ["device-id-mismatch", $e.DEVICE_AUTH_DEVICE_ID_MISMATCH],
+    ["device-signature-stale", $e.DEVICE_AUTH_SIGNATURE_EXPIRED],
+    ["device-nonce-missing", $e.DEVICE_AUTH_NONCE_REQUIRED],
+    ["device-nonce-mismatch", $e.DEVICE_AUTH_NONCE_MISMATCH],
+    ["device-signature", $e.DEVICE_AUTH_SIGNATURE_INVALID],
+    ["device-public-key", $e.DEVICE_AUTH_PUBLIC_KEY_INVALID]
   ]);
 });
 
@@ -494,23 +494,23 @@ function sW(e = {}) {
           await t(eu(s * 2 ** (k - 1)));
           continue;
         }
-        let $ = {
+        let A = {
           attempt: k,
           maxAttempts: b,
           err: C,
           label: m.label
-        }, D = m.retryAfterMs?.(C), V = typeof D == "number" && Number.isFinite(D), te = typeof m.delayMs == "function" ? m.delayMs($) : m.delayMs, Z = te === void 0 ? void 0 : eu(te), $e = V ? Math.max(D, f) : Z === void 0 ? f * 2 ** (k - 1) : Math.max(Z, f), me = V ? x : y, ue = Math.min($e, me), Rt = V && (D ?? 0) <= me, vn = h.jitter === "full" && !V || Rt;
+        }, D = m.retryAfterMs?.(C), V = typeof D == "number" && Number.isFinite(D), te = typeof m.delayMs == "function" ? m.delayMs(A) : m.delayMs, Z = te === void 0 ? void 0 : eu(te), Ae = V ? Math.max(D, f) : Z === void 0 ? f * 2 ** (k - 1) : Math.max(Z, f), me = V ? x : y, ue = Math.min(Ae, me), Rt = V && (D ?? 0) <= me, vn = h.jitter === "full" && !V || Rt;
         ue = iW(
           ue,
           h.jitter,
           vn ? "positive" : "symmetric",
           v
-        ), ue = Math.min(Math.max(ue, f), me), await m.onRetry?.({ ...$, delayMs: ue }), ue > 0 && await S(ue);
+        ), ue = Math.min(Math.max(ue, f), me), await m.onRetry?.({ ...A, delayMs: ue }), ue > 0 && await S(ue);
       }
     throw o(u);
   };
 }
-var zR, tW, hpe, jR = p(() => {
+var zR, tW, ype, jR = p(() => {
   zR = {
     attempts: 3,
     minDelayMs: 300,
@@ -525,7 +525,7 @@ var zR, tW, hpe, jR = p(() => {
       }), t -= n;
     } while (t > 0);
   };
-  hpe = sW();
+  ype = sW();
 });
 
 // openclaw/packages/gateway-client/src/protocol-client.ts
@@ -535,24 +535,24 @@ var BR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var Cpe, qR = p(() => {
+var Rpe, qR = p(() => {
   Ib();
-  Cpe = /* @__PURE__ */ new Set([
-    Ae.AUTH_TOKEN_MISSING,
-    Ae.AUTH_BOOTSTRAP_TOKEN_INVALID,
-    Ae.AUTH_PASSWORD_MISSING,
-    Ae.AUTH_PASSWORD_MISMATCH,
-    Ae.AUTH_RATE_LIMITED,
-    Ae.AUTH_DEVICE_TOKEN_MISMATCH,
-    Ae.AUTH_SCOPE_MISMATCH,
-    Ae.AUTH_IDENTITY_HEADER_REQUIRED,
-    Ae.AUTH_VERIFIED_USER_REQUIRED,
-    Ae.CONTROL_UI_BUILD_MISMATCH,
-    Ae.PAIRING_REQUIRED,
-    Ae.PAIRING_REJECTED,
-    Ae.PAIRING_EXPIRED,
-    Ae.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-    Ae.DEVICE_IDENTITY_REQUIRED
+  Rpe = /* @__PURE__ */ new Set([
+    $e.AUTH_TOKEN_MISSING,
+    $e.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    $e.AUTH_PASSWORD_MISSING,
+    $e.AUTH_PASSWORD_MISMATCH,
+    $e.AUTH_RATE_LIMITED,
+    $e.AUTH_DEVICE_TOKEN_MISMATCH,
+    $e.AUTH_SCOPE_MISMATCH,
+    $e.AUTH_IDENTITY_HEADER_REQUIRED,
+    $e.AUTH_VERIFIED_USER_REQUIRED,
+    $e.CONTROL_UI_BUILD_MISMATCH,
+    $e.PAIRING_REQUIRED,
+    $e.PAIRING_REJECTED,
+    $e.PAIRING_EXPIRED,
+    $e.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+    $e.DEVICE_IDENTITY_REQUIRED
   ]);
 });
 
@@ -569,7 +569,7 @@ function HR(e) {
   return typeof e == "number" && Number.isSafeInteger(e) && e > 0 ? e : null;
 }
 function VR(e, t) {
-  let n = At(At(e)?.__openclaw);
+  let n = $t($t(e)?.__openclaw);
   return HR(n?.seq) ?? HR(t?.messageSeq);
 }
 function tu(e) {
@@ -577,11 +577,11 @@ function tu(e) {
   return t?.endsWith(":user") ? t.slice(0, -5) || null : t;
 }
 function wb(e, t) {
-  let n = At(e), o = Ft(n?.role)?.toLowerCase();
+  let n = $t(e), o = Ft(n?.role)?.toLowerCase();
   if (!n || !o)
     return null;
-  let r = At(n.__openclaw), i = Ft(r?.importedFrom), a = Ft(r?.cliSessionId), s = Ft(r?.externalId), u = At(r?.transcriptPosition), l = Ft(u?.source), h = !(l !== null && l.length <= 128 && typeof u?.rawSeq == "number" && Number.isSafeInteger(u.rawSeq) && u.rawSeq >= 0) && !!(i || a || s), b = Ft(r?.idempotencyKey) ?? Ft(n.idempotencyKey) ?? Ft(t?.idempotencyKey) ?? Ft(t?.clientRunId), f = tu(b), y = tu(t?.runId), x = tu(r?.runId), v = tu(
-    At(n.openclawStreamFallback)?.runId
+  let r = $t(n.__openclaw), i = Ft(r?.importedFrom), a = Ft(r?.cliSessionId), s = Ft(r?.externalId), u = $t(r?.transcriptPosition), l = Ft(u?.source), h = !(l !== null && l.length <= 128 && typeof u?.rawSeq == "number" && Number.isSafeInteger(u.rawSeq) && u.rawSeq >= 0) && !!(i || a || s), b = Ft(r?.idempotencyKey) ?? Ft(n.idempotencyKey) ?? Ft(t?.idempotencyKey) ?? Ft(t?.clientRunId), f = tu(b), y = tu(t?.runId), x = tu(r?.runId), v = tu(
+    $t(n.openclawStreamFallback)?.runId
   ), S = Ft(r?.mirrorOrigin) !== null, w = o === "assistant" && Ft(n.api)?.toLowerCase() === "cli", k = w && f?.startsWith("cli-assistant:") ? Ft(f.slice(14)) : f, C = o === "assistant" ? x ?? y ?? v ?? (w || !S ? k : null) : x ?? k ?? y;
   return {
     role: o,
@@ -627,7 +627,7 @@ var YR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/client-info.ts
-var _b, Eb, Xpe, Qpe, Tb = p(() => {
+var _b, Eb, Qpe, eme, Tb = p(() => {
   pt();
   _b = {
     WEBCHAT_UI: "webchat-ui",
@@ -657,7 +657,7 @@ var _b, Eb, Xpe, Qpe, Tb = p(() => {
     WORKER: "worker",
     PROBE: "probe",
     TEST: "test"
-  }, Xpe = new Set(Object.values(_b)), Qpe = new Set(Object.values(Eb));
+  }, Qpe = new Set(Object.values(_b)), eme = new Set(Object.values(Eb));
 });
 
 // openclaw/packages/gateway-protocol/src/startup-unavailable.ts
@@ -697,7 +697,7 @@ var n0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/cjk-chars.ts
-var Cb, Sme, kme, r0 = p(() => {
+var Cb, kme, _me, r0 = p(() => {
   Cb = [
     [
       [183, 183],
@@ -737,12 +737,12 @@ var Cb, Sme, kme, r0 = p(() => {
       [131072, 195103],
       [196608, 210047]
     ]
-  ], Sme = new RegExp(
+  ], kme = new RegExp(
     `[${Cb.flatMap(
       (e) => e.map(([t, n]) => `\\u{${t.toString(16)}}-\\u{${n.toString(16)}}`)
     ).join("")}]`,
     "u"
-  ), kme = (() => {
+  ), _me = (() => {
     let e = Math.max(
       ...Cb.flatMap((n) => n.map(([, o]) => o))
     ), t = new Uint8Array(e + 1);
@@ -771,16 +771,16 @@ var cW, i0, a0, o0, s0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/expect.ts
-var $b = p(() => {
+var Ab = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/format.ts
 var c0 = p(() => {
-  $b();
+  Ab();
 });
 
 // openclaw/packages/normalization-core/src/json-coercion.ts
-function Ab(e) {
+function $b(e) {
   try {
     return JSON.parse(e);
   } catch {
@@ -788,7 +788,7 @@ function Ab(e) {
   }
 }
 function Zi(e) {
-  return /^[\t\n\r ]*\{/.test(e) ? $t(Ab(e)) : void 0;
+  return /^[\t\n\r ]*\{/.test(e) ? At($b(e)) : void 0;
 }
 var Pb = p(() => {
   Le();
@@ -831,13 +831,13 @@ var Ji = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/index.ts
-var Ar = p(() => {
+var $r = p(() => {
   t0();
   n0();
   r0();
   Rb();
   s0();
-  $b();
+  Ab();
   c0();
   Pb();
   Po();
@@ -867,8 +867,8 @@ var h0 = p(() => {
 });
 
 // openclaw/packages/acp-core/src/structured-auth-redaction.ts
-var Jd, ni, ps, ms, Oo, Do, Yd, Yi, ut, nfe, rfe, y0 = p(() => {
-  Jd = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ni = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, ps = String.raw`\\{1,64}t`, ms = String.raw`(?:[ \t]+|${ps})`, Oo = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]*)`, Do = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]+)`, Yd = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${ps})|[ \t]*\\{1,64}n(?:[ \t]*|${ps})|[ \t]*${ps}[ \t]*)`, Yi = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, ut = String.raw`(?:\\{1,64}["']|["']|)`, nfe = String.raw`${Yi}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${ut}[ \t]*[:=]${Oo}${ut}([^\s\\"',;]+)`, rfe = new RegExp(
+var Jd, ni, ps, ms, Oo, Do, Yd, Yi, ut, rfe, ofe, y0 = p(() => {
+  Jd = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ni = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, ps = String.raw`\\{1,64}t`, ms = String.raw`(?:[ \t]+|${ps})`, Oo = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]*)`, Do = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]+)`, Yd = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${ps})|[ \t]*\\{1,64}n(?:[ \t]*|${ps})|[ \t]*${ps}[ \t]*)`, Yi = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, ut = String.raw`(?:\\{1,64}["']|["']|)`, rfe = String.raw`${Yi}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${ut}[ \t]*[:=]${Oo}${ut}([^\s\\"',;]+)`, ofe = new RegExp(
     String.raw`${Yi}(?:Proxy-)?Authorization${ut}[ \t]*[:=]${Oo}${ut}(${Jd})${Do}`,
     "giu"
   );
@@ -895,7 +895,7 @@ function T0(e) {
   }
   return !1;
 }
-function* AW(e) {
+function* $W(e) {
   if (!T0(e))
     return;
   let t = {
@@ -924,7 +924,7 @@ function* AW(e) {
     if (r && s >= r.start && (u === r.closing && m === r.closingEscapeDepth ? (r.end = Math.min(r.end, s), r = void 0) : ("?#\"'<>`|()[]{}".includes(u) && (r.end = Math.min(r.end, s)), r.queryOrFragment ||= u === "?" || u === "#", r.authorityEnd === -1 && (r.hasAt ||= u === "@", "/?#".includes(u) ? r.authorityEnd = s : s < r.end && (u === ":" ? (r.portValid &&= r.portStart === -1, r.portStart = s) : r.portStart !== -1 && (u < "0" || u > "9") && (r.portValid = !1))))), RW.test(u))
       o === -1 && (o = s);
     else {
-      if ((!r || s >= r.end && !r.queryOrFragment) && u === ":" && e.startsWith("//", s + 1) && o !== -1 && $W.test(e[o])) {
+      if ((!r || s >= r.end && !r.queryOrFragment) && u === ":" && e.startsWith("//", s + 1) && o !== -1 && AW.test(e[o])) {
         let h = e[o - 1], b = 0;
         for (let f = o - 2; f >= 0 && e[f] === "\\"; f--)
           b++;
@@ -978,15 +978,15 @@ function* NW(e) {
 ` || a === "\r" ? o = !1 : (a === "=" || a === ":" && !MW.test(e[r + 1] ?? " ")) && (o = !0);
   }
 }
-var w0, fs, uW, Qd, lW, dW, S0, Mb, k0, pW, _0, v0, cfe, mW, fW, gW, hW, yW, bW, xW, vW, IW, wW, SW, kW, _W, EW, TW, Xi, Xd, E0, CW, RW, $W, PW, OW, I0, DW, MW, UW, LW, FW, C0, R0, ep, zW, jW, BW, qW, GW, KW, HW, VW, WW, ZW, JW, $0, A0 = p(() => {
+var w0, fs, uW, Qd, lW, dW, S0, Mb, k0, pW, _0, v0, ufe, mW, fW, gW, hW, yW, bW, xW, vW, IW, wW, SW, kW, _W, EW, TW, Xi, Xd, E0, CW, RW, AW, PW, OW, I0, DW, MW, UW, LW, FW, C0, R0, ep, zW, jW, BW, qW, GW, KW, HW, VW, WW, ZW, JW, A0, $0 = p(() => {
   y0();
   x0();
-  w0 = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, fs = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, uW = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, Qd = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, lW = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${Qd}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, dW = String.raw`${lW}|app[-_]?secret|credential|${fs}`, S0 = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${fs}`, Mb = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${fs}`, k0 = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${fs}`, pW = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, _0 = String.raw`password|passphrase|pass|passwd`, v0 = String.raw`${Qd}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${fs}`, cfe = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, mW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${w0})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, fW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${w0})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, gW = String.raw`(^|[\s,;({\["])(?:${S0})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, hW = String.raw`(^|[\s,;({\["])(?:${S0})=(["'\x60]?[^\s&#"'\x60<>]+)`, yW = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${fs}`, bW = String.raw`/(^|[\s,{])(?:(?:${yW})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${_0})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, xW = String.raw`/(^|[\s,{])(?:(?:${k0})\s*:\s*|(?:${Mb})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, vW = String.raw`/(^|[\s,{])(?:${pW})=([^\s#"'\x60<>]+)/g`, IW = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${_0})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, wW = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, SW = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${Qd}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, kW = String.raw`"(?:${uW})"\s*:\s*"([^"]+)"`, _W = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, EW = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, TW = String.raw`(^|[^A-Za-z0-9])`, Xi = (e) => String.raw`${TW}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, Xd = String.raw`(^|[^A-Za-z0-9_])`;
+  w0 = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, fs = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, uW = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, Qd = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, lW = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${Qd}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, dW = String.raw`${lW}|app[-_]?secret|credential|${fs}`, S0 = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${fs}`, Mb = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${fs}`, k0 = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${fs}`, pW = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, _0 = String.raw`password|passphrase|pass|passwd`, v0 = String.raw`${Qd}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${fs}`, ufe = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, mW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${w0})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, fW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${w0})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, gW = String.raw`(^|[\s,;({\["])(?:${S0})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, hW = String.raw`(^|[\s,;({\["])(?:${S0})=(["'\x60]?[^\s&#"'\x60<>]+)`, yW = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${fs}`, bW = String.raw`/(^|[\s,{])(?:(?:${yW})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${_0})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, xW = String.raw`/(^|[\s,{])(?:(?:${k0})\s*:\s*|(?:${Mb})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, vW = String.raw`/(^|[\s,{])(?:${pW})=([^\s#"'\x60<>]+)/g`, IW = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${_0})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, wW = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${Mb})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, SW = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${Qd}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, kW = String.raw`"(?:${uW})"\s*:\s*"([^"]+)"`, _W = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, EW = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, TW = String.raw`(^|[^A-Za-z0-9])`, Xi = (e) => String.raw`${TW}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, Xd = String.raw`(^|[^A-Za-z0-9_])`;
   E0 = /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
-  CW = /\s/, RW = /[A-Za-z0-9+.-]/, $W = /[A-Za-z]/;
+  CW = /\s/, RW = /[A-Za-z0-9+.-]/, AW = /[A-Za-z]/;
   PW = Object.freeze({
     source: "aws-secret-access-key",
-    exec: AW,
+    exec: $W,
     couldMatch: T0
   }), OW = new RegExp(
     String.raw`(?<![A-Za-z0-9])(pass|${k0})\s*:\s*`,
@@ -1123,7 +1123,7 @@ var w0, fs, uW, Qd, lW, dW, S0, Mb, k0, pW, _0, v0, cfe, mW, fW, gW, hW, yW, bW,
     String.raw`(r8_[A-Za-z0-9]{10,})`,
     LW,
     FW
-  ], $0 = [
+  ], A0 = [
     ...ZW,
     ...JW,
     PW
@@ -1131,19 +1131,19 @@ var w0, fs, uW, Qd, lW, dW, S0, Mb, k0, pW, _0, v0, cfe, mW, fW, gW, hW, yW, bW,
 });
 
 // openclaw/ui/src/lib/browser-redact.ts
-var yfe, P0 = p(() => {
+var bfe, P0 = p(() => {
   f0();
   Ji();
   h0();
-  A0();
-  yfe = $0.map(
+  $0();
+  bfe = A0.map(
     (e) => typeof e == "string" ? new RegExp(...g0(e)) : e
   );
 });
 
 // openclaw/ui/src/lib/format-error.ts
 var tp = p(() => {
-  Ar();
+  $r();
   P0();
 });
 
@@ -1269,7 +1269,7 @@ function J0(e, t, n) {
 function Y0(e, t, n) {
   return e & t ^ e & n ^ t & n;
 }
-var iu, X0, Q0, e$, t$, n$ = p(() => {
+var iu, X0, Q0, eA, tA, nA = p(() => {
   Fb();
   qb();
   iu = class {
@@ -1345,7 +1345,7 @@ var iu, X0, Q0, e$, t$, n$ = p(() => {
     1750603025,
     1694076839,
     3204075428
-  ]), e$ = /* @__PURE__ */ Uint32Array.from([
+  ]), eA = /* @__PURE__ */ Uint32Array.from([
     3418070365,
     3238371032,
     1654270250,
@@ -1362,7 +1362,7 @@ var iu, X0, Q0, e$, t$, n$ = p(() => {
     1694076839,
     1203062813,
     3204075428
-  ]), t$ = /* @__PURE__ */ Uint32Array.from([
+  ]), tA = /* @__PURE__ */ Uint32Array.from([
     1779033703,
     4089235720,
     3144134277,
@@ -1383,8 +1383,8 @@ var iu, X0, Q0, e$, t$, n$ = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/@noble+hashes@2.4.0/node_modules/@noble/hashes/sha2.js
-var o$ = {};
-ct(o$, {
+var oA = {};
+ct(oA, {
   _SHA224: () => ap,
   _SHA256: () => ip,
   _SHA384: () => cp,
@@ -1398,8 +1398,8 @@ ct(o$, {
   sha512_224: () => gZ,
   sha512_256: () => fZ
 });
-var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, pZ, mZ, fZ, gZ, i$ = p(() => {
-  n$();
+var iZ, ri, op, ip, ap, rA, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, pZ, mZ, fZ, gZ, iA = p(() => {
+  nA();
   Fb();
   qb();
   iZ = /* @__PURE__ */ Uint32Array.from([
@@ -1522,7 +1522,7 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
     constructor() {
       super(28, Q0);
     }
-  }, r$ = F0([
+  }, rA = F0([
     "0x428a2f98d728ae22",
     "0x7137449123ef65cd",
     "0xb5c0fbcfec4d3b2f",
@@ -1603,7 +1603,7 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
     "0x597f299cfc657e2a",
     "0x5fcb6fab3ad6faec",
     "0x6c44198c4a475817"
-  ].map((e) => BigInt(e))), aZ = r$[0], sZ = r$[1], oi = /* @__PURE__ */ new Uint32Array(80), ii = /* @__PURE__ */ new Uint32Array(80), gs = class extends iu {
+  ].map((e) => BigInt(e))), aZ = rA[0], sZ = rA[1], oi = /* @__PURE__ */ new Uint32Array(80), ii = /* @__PURE__ */ new Uint32Array(80), gs = class extends iu {
     // We cannot use array here since array allows indexing by variable
     // which means optimizer/compiler cannot use registers.
     // h -- high 32 bits, l -- low 32 bits
@@ -1644,14 +1644,14 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
       for (let k = 0; k < 16; k++, n += 4)
         oi[k] = t.getUint32(n), ii[k] = t.getUint32(n += 4);
       for (let k = 16; k < 80; k++) {
-        let C = oi[k - 15] | 0, $ = ii[k - 15] | 0, D = Qi(C, $, 1) ^ Qi(C, $, 8) ^ Ub(C, $, 7), V = ea(C, $, 1) ^ ea(C, $, 8) ^ Lb(C, $, 7), te = oi[k - 2] | 0, Z = ii[k - 2] | 0, $e = Qi(te, Z, 19) ^ nu(te, Z, 61) ^ Ub(te, Z, 6), me = ea(te, Z, 19) ^ ru(te, Z, 61) ^ Lb(te, Z, 6), ue = q0(V, me, ii[k - 7], ii[k - 16]), Rt = G0(ue, D, $e, oi[k - 7], oi[k - 16]);
+        let C = oi[k - 15] | 0, A = ii[k - 15] | 0, D = Qi(C, A, 1) ^ Qi(C, A, 8) ^ Ub(C, A, 7), V = ea(C, A, 1) ^ ea(C, A, 8) ^ Lb(C, A, 7), te = oi[k - 2] | 0, Z = ii[k - 2] | 0, Ae = Qi(te, Z, 19) ^ nu(te, Z, 61) ^ Ub(te, Z, 6), me = ea(te, Z, 19) ^ ru(te, Z, 61) ^ Lb(te, Z, 6), ue = q0(V, me, ii[k - 7], ii[k - 16]), Rt = G0(ue, D, Ae, oi[k - 7], oi[k - 16]);
         oi[k] = Rt | 0, ii[k] = ue | 0;
       }
       let { Ah: o, Al: r, Bh: i, Bl: a, Ch: s, Cl: u, Dh: l, Dl: m, Eh: h, El: b, Fh: f, Fl: y, Gh: x, Gl: v, Hh: S, Hl: w } = this;
       for (let k = 0; k < 80; k++) {
-        let C = Qi(h, b, 14) ^ Qi(h, b, 18) ^ nu(h, b, 41), $ = ea(h, b, 14) ^ ea(h, b, 18) ^ ru(h, b, 41), D = h & f ^ ~h & x, V = b & y ^ ~b & v, te = K0(w, $, V, sZ[k], ii[k]), Z = H0(te, S, C, D, aZ[k], oi[k]), $e = te | 0, me = Qi(o, r, 28) ^ nu(o, r, 34) ^ nu(o, r, 39), ue = ea(o, r, 28) ^ ru(o, r, 34) ^ ru(o, r, 39), Rt = o & i ^ o & s ^ i & s, vn = r & a ^ r & u ^ a & u;
-        S = x | 0, w = v | 0, x = f | 0, v = y | 0, f = h | 0, y = b | 0, { h, l: b } = Qr(l | 0, m | 0, Z | 0, $e | 0), l = s | 0, m = u | 0, s = i | 0, u = a | 0, i = o | 0, a = r | 0;
-        let dn = j0($e, ue, vn);
+        let C = Qi(h, b, 14) ^ Qi(h, b, 18) ^ nu(h, b, 41), A = ea(h, b, 14) ^ ea(h, b, 18) ^ ru(h, b, 41), D = h & f ^ ~h & x, V = b & y ^ ~b & v, te = K0(w, A, V, sZ[k], ii[k]), Z = H0(te, S, C, D, aZ[k], oi[k]), Ae = te | 0, me = Qi(o, r, 28) ^ nu(o, r, 34) ^ nu(o, r, 39), ue = ea(o, r, 28) ^ ru(o, r, 34) ^ ru(o, r, 39), Rt = o & i ^ o & s ^ i & s, vn = r & a ^ r & u ^ a & u;
+        S = x | 0, w = v | 0, x = f | 0, v = y | 0, f = h | 0, y = b | 0, { h, l: b } = Qr(l | 0, m | 0, Z | 0, Ae | 0), l = s | 0, m = u | 0, s = i | 0, u = a | 0, i = o | 0, a = r | 0;
+        let dn = j0(Ae, ue, vn);
         o = B0(dn, Z, me, Rt), r = dn | 0;
       }
       ({ h: o, l: r } = Qr(this.Ah | 0, this.Al | 0, o | 0, r | 0)), { h: i, l: a } = Qr(this.Bh | 0, this.Bl | 0, i | 0, a | 0), { h: s, l: u } = Qr(this.Ch | 0, this.Cl | 0, s | 0, u | 0), { h: l, l: m } = Qr(this.Dh | 0, this.Dl | 0, l | 0, m | 0), { h, l: b } = Qr(this.Eh | 0, this.El | 0, h | 0, b | 0), { h: f, l: y } = Qr(this.Fh | 0, this.Fl | 0, f | 0, y | 0), { h: x, l: v } = Qr(this.Gh | 0, this.Gl | 0, x | 0, v | 0), { h: S, l: w } = Qr(this.Hh | 0, this.Hl | 0, S | 0, w | 0), this.set(o, r, i, a, s, u, l, m, h, b, f, y, x, v, S, w);
@@ -1664,11 +1664,11 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
     }
   }, sp = class extends gs {
     constructor() {
-      super(64, t$);
+      super(64, tA);
     }
   }, cp = class extends gs {
     constructor() {
-      super(48, e$);
+      super(48, eA);
     }
   }, cZ = /* @__PURE__ */ Uint32Array.from([
     2352822216,
@@ -1734,15 +1734,15 @@ var iZ, ri, op, ip, ap, r$, aZ, sZ, oi, ii, gs, sp, cp, cZ, uZ, up, lp, lZ, dZ, 
 });
 
 // openclaw/ui/src/lib/nodes/index.ts
-var bZ, a$, Gb = p(() => {
+var bZ, aA, Gb = p(() => {
   PR();
   Le();
   M0();
   Nb();
   N0();
   U0();
-  bZ = () => Promise.resolve().then(() => (i$(), o$)), a$ = vb.sha512Async;
-  vb.sha512Async = async (e) => globalThis.crypto?.subtle && a$ ? await a$(e) : Uint8Array.from((await bZ()).sha512(e));
+  bZ = () => Promise.resolve().then(() => (iA(), oA)), aA = vb.sha512Async;
+  vb.sha512Async = async (e) => globalThis.crypto?.subtle && aA ? await aA(e) : Uint8Array.from((await bZ()).sha512(e));
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/unicode/unicode_segment.mjs
@@ -1752,7 +1752,7 @@ function ys(e, t, n) {
 function FZ(e) {
   return e === 8205;
 }
-function P$(e) {
+function PA(e) {
   return ys(e, 127462, 127487);
 }
 function zZ(e) {
@@ -1764,7 +1764,7 @@ function jZ(e) {
 function hp(e) {
   return e > 65535 ? 2 : 1;
 }
-function O$(e, t) {
+function OA(e, t) {
   for (; t < e.length; ) {
     let n = e.codePointAt(t);
     if (jZ(n) || zZ(n))
@@ -1776,19 +1776,19 @@ function O$(e, t) {
 }
 function BZ(e, t) {
   let n = e.codePointAt(t), o = t + hp(n);
-  for (o = O$(e, o); o < e.length - 1 && FZ(e.codePointAt(o)); ) {
+  for (o = OA(e, o); o < e.length - 1 && FZ(e.codePointAt(o)); ) {
     let r = e.codePointAt(o + 1);
-    o += 1 + hp(r), o = O$(e, o);
+    o += 1 + hp(r), o = OA(e, o);
   }
-  return P$(n) && o < e.length && P$(e.codePointAt(o)) && (o += hp(e.codePointAt(o))), o;
+  return PA(n) && o < e.length && PA(e.codePointAt(o)) && (o += hp(e.codePointAt(o))), o;
 }
-function D$(e) {
+function DA(e) {
   let t = 0, n = 0;
   for (; n < e.length; )
     n = BZ(e, n), t++;
   return t;
 }
-var M$ = p(() => {
+var MA = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/unicode/unicode.mjs
@@ -1800,13 +1800,13 @@ function yp(e) {
   }
   return t;
 }
-function N$(e, t) {
+function NA(e, t) {
   return e.length <= t || e.length <= t << 1 && yp(e) <= t;
 }
-function U$(e, t) {
+function UA(e, t) {
   return e.length >= t << 1 || e.length >= t && yp(e) >= t;
 }
-var L$ = p(() => {
+var LA = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/guard.mjs
@@ -1822,16 +1822,16 @@ ct(c, {
   HasPropertyKey: () => s8,
   IsArray: () => cu,
   IsBigInt: () => su,
-  IsBoolean: () => F$,
+  IsBoolean: () => FA,
   IsClassInstance: () => YZ,
   IsConstructor: () => KZ,
   IsDeepEqual: () => Yb,
   IsEqual: () => Ee,
-  IsFunction: () => z$,
-  IsGreaterEqualThan: () => B$,
+  IsFunction: () => zA,
+  IsGreaterEqualThan: () => BA,
   IsGreaterThan: () => WZ,
   IsInteger: () => Zb,
-  IsLessEqualThan: () => j$,
+  IsLessEqualThan: () => jA,
   IsLessThan: () => ZZ,
   IsMaxLength: () => e8,
   IsMinLength: () => t8,
@@ -1843,8 +1843,8 @@ ct(c, {
   IsString: () => Ip,
   IsSymbol: () => VZ,
   IsUndefined: () => Jb,
-  IsUnsafePropertyKey: () => G$,
-  IsValueLike: () => q$,
+  IsUnsafePropertyKey: () => GA,
+  IsValueLike: () => qA,
   Keys: () => bp,
   ShiftLeft: () => wp,
   Some: () => o8,
@@ -1858,16 +1858,16 @@ function cu(e) {
 function su(e) {
   return Ee(typeof e, "bigint");
 }
-function F$(e) {
+function FA(e) {
   return Ee(typeof e, "boolean");
 }
 function KZ(e) {
-  if (Jb(e) || !z$(e))
+  if (Jb(e) || !zA(e))
     return !1;
   let t = Function.prototype.toString.call(e);
   return !!(/^class\s/.test(t) || /\[native code\]/.test(t));
 }
-function z$(e) {
+function zA(e) {
   return Ee(typeof e, "function");
 }
 function Zb(e) {
@@ -1903,10 +1903,10 @@ function WZ(e, t) {
 function ZZ(e, t) {
   return e < t;
 }
-function j$(e, t) {
+function jA(e, t) {
   return e <= t;
 }
-function B$(e, t) {
+function BA(e, t) {
   return e >= t;
 }
 function JZ(e, t) {
@@ -1924,20 +1924,20 @@ function YZ(e) {
   let t = globalThis.Object.getPrototypeOf(e);
   return xp(t) ? !1 : Ee(typeof t.constructor, "function") && !(Ee(t.constructor, globalThis.Object) || Ee(t.constructor.name, "Object"));
 }
-function q$(e) {
-  return su(e) || F$(e) || xp(e) || vp(e) || Ip(e) || Jb(e);
+function qA(e) {
+  return su(e) || FA(e) || xp(e) || vp(e) || Ip(e) || Jb(e);
 }
 function XZ(e) {
-  return D$(e);
+  return DA(e);
 }
 function QZ(e) {
   return yp(e);
 }
 function e8(e, t) {
-  return N$(e, t);
+  return NA(e, t);
 }
 function t8(e, t) {
-  return U$(e, t);
+  return UA(e, t);
 }
 function n8(e, t, n) {
   return e.every((o, r) => r < t || n(o, r));
@@ -1963,11 +1963,11 @@ function a8(e, t) {
 function wp(e, t, n) {
   return Ee(e.length, 0) ? n() : t(e[0], e.slice(1));
 }
-function G$(e) {
+function GA(e) {
   return Ee(e, "__proto__") || Ee(e, "constructor") || Ee(e, "prototype");
 }
 function s8(e, t) {
-  return G$(t) ? Object.prototype.hasOwnProperty.call(e, t) : t in e;
+  return GA(t) ? Object.prototype.hasOwnProperty.call(e, t) : t in e;
 }
 function c8(e) {
   return bp(e).map((t) => [new RegExp(`^${t}$`), e[t]]);
@@ -1997,12 +1997,12 @@ function Yb(e, t) {
   return cu(e) ? m8(e, t) : uu(e) ? p8(e, t) : Ee(e, t);
 }
 var bs = p(() => {
-  M$();
-  L$();
+  MA();
+  LA();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/emit.mjs
-var K$ = p(() => {
+var KA = p(() => {
   bs();
 });
 
@@ -2012,7 +2012,7 @@ ct(Pt, {
   IsBigInt64Array: () => T8,
   IsBigUint64Array: () => C8,
   IsBoolean: () => f8,
-  IsDate: () => $8,
+  IsDate: () => A8,
   IsFloat32Array: () => _8,
   IsFloat64Array: () => E8,
   IsInt16Array: () => I8,
@@ -2021,7 +2021,7 @@ ct(Pt, {
   IsMap: () => P8,
   IsNumber: () => g8,
   IsRegExp: () => R8,
-  IsSet: () => A8,
+  IsSet: () => $8,
   IsString: () => h8,
   IsTypeArray: () => y8,
   IsUint16Array: () => w8,
@@ -2077,28 +2077,28 @@ function C8(e) {
 function R8(e) {
   return e instanceof globalThis.RegExp;
 }
-function $8(e) {
+function A8(e) {
   return e instanceof globalThis.Date;
 }
-function A8(e) {
+function $8(e) {
   return e instanceof globalThis.Set;
 }
 function P8(e) {
   return e instanceof globalThis.Map;
 }
-var H$ = p(() => {
+var HA = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/native.mjs
-var V$ = p(() => {
+var VA = p(() => {
   bs();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/guard/index.mjs
 var Sp, I = p(() => {
-  K$();
-  H$();
-  V$();
+  KA();
+  HA();
+  VA();
   bs();
   bs();
   Sp = c;
@@ -2147,19 +2147,19 @@ var eo = p(() => {
 function _p(e) {
   return c.HasPropertyKey(e, "~refine") && c.IsArray(e["~refine"]) && c.Every(e["~refine"], 0, (t) => c.IsObject(t) && c.HasPropertyKey(t, "check") && c.HasPropertyKey(t, "error") && c.IsFunction(t.check) && c.IsFunction(t.error));
 }
-var W$ = p(() => {
+var WA = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/schema.mjs
-function An(e) {
+function $n(e) {
   return c.IsObject(e) && !c.IsArray(e);
 }
 function oa(e) {
   return c.IsBoolean(e);
 }
 function oe(e) {
-  return An(e) || oa(e);
+  return $n(e) || oa(e);
 }
 var Ot = p(() => {
   I();
@@ -2169,7 +2169,7 @@ var Ot = p(() => {
 function Ep(e) {
   return c.HasPropertyKey(e, "additionalItems") && oe(e.additionalItems);
 }
-var Z$ = p(() => {
+var ZA = p(() => {
   I();
   Ot();
 });
@@ -2178,7 +2178,7 @@ var Z$ = p(() => {
 function hr(e) {
   return c.HasPropertyKey(e, "additionalProperties") && oe(e.additionalProperties);
 }
-var J$ = p(() => {
+var JA = p(() => {
   I();
   Ot();
 });
@@ -2187,16 +2187,16 @@ var J$ = p(() => {
 function Tp(e) {
   return c.HasPropertyKey(e, "allOf") && c.IsArray(e.allOf) && e.allOf.every((t) => oe(t));
 }
-var Y$ = p(() => {
+var YA = p(() => {
   I();
   Ot();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/anchor.mjs
-function X$(e) {
+function XA(e) {
   return c.HasPropertyKey(e, "$anchor") && c.IsString(e.$anchor);
 }
-var Q$ = p(() => {
+var QA = p(() => {
   I();
 });
 
@@ -2204,7 +2204,7 @@ var Q$ = p(() => {
 function Cp(e) {
   return c.HasPropertyKey(e, "anyOf") && c.IsArray(e.anyOf) && e.anyOf.every((t) => oe(t));
 }
-var eA = p(() => {
+var e$ = p(() => {
   I();
   Ot();
 });
@@ -2213,7 +2213,7 @@ var eA = p(() => {
 function Qb(e) {
   return c.HasPropertyKey(e, "const");
 }
-var tA = p(() => {
+var t$ = p(() => {
   I();
 });
 
@@ -2221,7 +2221,7 @@ var tA = p(() => {
 function ai(e) {
   return c.HasPropertyKey(e, "contains") && oe(e.contains);
 }
-var nA = p(() => {
+var n$ = p(() => {
   I();
   Ot();
 });
@@ -2230,12 +2230,12 @@ var nA = p(() => {
 function Hn(e) {
   return c.HasPropertyKey(e, "default");
 }
-var rA = p(() => {
+var r$ = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/defs.mjs
-var oA = p(() => {
+var o$ = p(() => {
   I();
   Ot();
 });
@@ -2244,7 +2244,7 @@ var oA = p(() => {
 function ex(e) {
   return c.HasPropertyKey(e, "dependencies") && c.IsObject(e.dependencies) && Object.values(e.dependencies).every((t) => oe(t) || c.IsArray(t) && t.every((n) => c.IsString(n)));
 }
-var iA = p(() => {
+var i$ = p(() => {
   I();
   Ot();
 });
@@ -2253,7 +2253,7 @@ var iA = p(() => {
 function tx(e) {
   return c.HasPropertyKey(e, "dependentRequired") && c.IsObject(e.dependentRequired) && Object.values(e.dependentRequired).every((t) => c.IsArray(t) && t.every((n) => c.IsString(n)));
 }
-var aA = p(() => {
+var a$ = p(() => {
   I();
 });
 
@@ -2261,7 +2261,7 @@ var aA = p(() => {
 function Rp(e) {
   return c.HasPropertyKey(e, "dependentSchemas") && c.IsObject(e.dependentSchemas) && Object.values(e.dependentSchemas).every((t) => oe(t));
 }
-var sA = p(() => {
+var s$ = p(() => {
   I();
   Ot();
 });
@@ -2270,23 +2270,23 @@ var sA = p(() => {
 function si(e) {
   return c.HasPropertyKey(e, "$dynamicAnchor") && c.IsString(e.$dynamicAnchor);
 }
-var cA = p(() => {
+var c$ = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/dynamicRef.mjs
-function $p(e) {
+function Ap(e) {
   return c.HasPropertyKey(e, "$dynamicRef") && c.IsString(e.$dynamicRef);
 }
-var uA = p(() => {
+var u$ = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/else.mjs
-function Ap(e) {
+function $p(e) {
   return c.HasPropertyKey(e, "else") && oe(e.else);
 }
-var lA = p(() => {
+var l$ = p(() => {
   I();
   Ot();
 });
@@ -2295,7 +2295,7 @@ var lA = p(() => {
 function nx(e) {
   return c.HasPropertyKey(e, "enum") && c.IsArray(e.enum);
 }
-var dA = p(() => {
+var d$ = p(() => {
   I();
 });
 
@@ -2303,7 +2303,7 @@ var dA = p(() => {
 function rx(e) {
   return c.HasPropertyKey(e, "exclusiveMaximum") && (c.IsNumber(e.exclusiveMaximum) || c.IsBigInt(e.exclusiveMaximum));
 }
-var pA = p(() => {
+var p$ = p(() => {
   I();
 });
 
@@ -2311,7 +2311,7 @@ var pA = p(() => {
 function Mo(e) {
   return c.HasPropertyKey(e, "exclusiveMinimum") && (c.IsNumber(e.exclusiveMinimum) || c.IsBigInt(e.exclusiveMinimum));
 }
-var mA = p(() => {
+var m$ = p(() => {
   I();
 });
 
@@ -2319,7 +2319,7 @@ var mA = p(() => {
 function lu(e) {
   return c.HasPropertyKey(e, "format") && c.IsString(e.format);
 }
-var fA = p(() => {
+var f$ = p(() => {
   I();
 });
 
@@ -2327,7 +2327,7 @@ var fA = p(() => {
 function In(e) {
   return c.HasPropertyKey(e, "$id") && c.IsString(e.$id);
 }
-var gA = p(() => {
+var g$ = p(() => {
   I();
 });
 
@@ -2335,7 +2335,7 @@ var gA = p(() => {
 function Pp(e) {
   return c.HasPropertyKey(e, "if") && oe(e.if);
 }
-var hA = p(() => {
+var h$ = p(() => {
   I();
   Ot();
 });
@@ -2347,7 +2347,7 @@ function ia(e) {
 function Op(e) {
   return ia(e) && c.IsArray(e.items);
 }
-var yA = p(() => {
+var y$ = p(() => {
   I();
   Ot();
 });
@@ -2356,7 +2356,7 @@ var yA = p(() => {
 function ox(e) {
   return c.HasPropertyKey(e, "maximum") && (c.IsNumber(e.maximum) || c.IsBigInt(e.maximum));
 }
-var bA = p(() => {
+var b$ = p(() => {
   I();
 });
 
@@ -2364,7 +2364,7 @@ var bA = p(() => {
 function ix(e) {
   return c.HasPropertyKey(e, "maxContains") && c.IsNumber(e.maxContains);
 }
-var xA = p(() => {
+var x$ = p(() => {
   I();
 });
 
@@ -2372,7 +2372,7 @@ var xA = p(() => {
 function du(e) {
   return c.HasPropertyKey(e, "maxItems") && c.IsNumber(e.maxItems);
 }
-var vA = p(() => {
+var v$ = p(() => {
   I();
 });
 
@@ -2380,7 +2380,7 @@ var vA = p(() => {
 function ax(e) {
   return c.HasPropertyKey(e, "maxLength") && c.IsNumber(e.maxLength);
 }
-var IA = p(() => {
+var I$ = p(() => {
   I();
 });
 
@@ -2388,7 +2388,7 @@ var IA = p(() => {
 function sx(e) {
   return c.HasPropertyKey(e, "maxProperties") && c.IsNumber(e.maxProperties);
 }
-var wA = p(() => {
+var w$ = p(() => {
   I();
 });
 
@@ -2396,7 +2396,7 @@ var wA = p(() => {
 function No(e) {
   return c.HasPropertyKey(e, "minimum") && (c.IsNumber(e.minimum) || c.IsBigInt(e.minimum));
 }
-var SA = p(() => {
+var S$ = p(() => {
   I();
 });
 
@@ -2404,7 +2404,7 @@ var SA = p(() => {
 function aa(e) {
   return c.HasPropertyKey(e, "minContains") && c.IsNumber(e.minContains);
 }
-var kA = p(() => {
+var k$ = p(() => {
   I();
 });
 
@@ -2412,7 +2412,7 @@ var kA = p(() => {
 function sa(e) {
   return c.HasPropertyKey(e, "minItems") && c.IsNumber(e.minItems);
 }
-var _A = p(() => {
+var _$ = p(() => {
   I();
 });
 
@@ -2420,7 +2420,7 @@ var _A = p(() => {
 function pu(e) {
   return c.HasPropertyKey(e, "minLength") && c.IsNumber(e.minLength);
 }
-var EA = p(() => {
+var E$ = p(() => {
   I();
 });
 
@@ -2428,7 +2428,7 @@ var EA = p(() => {
 function mu(e) {
   return c.HasPropertyKey(e, "minProperties") && c.IsNumber(e.minProperties);
 }
-var TA = p(() => {
+var T$ = p(() => {
   I();
 });
 
@@ -2436,7 +2436,7 @@ var TA = p(() => {
 function cx(e) {
   return c.HasPropertyKey(e, "multipleOf") && (c.IsNumber(e.multipleOf) || c.IsBigInt(e.multipleOf));
 }
-var CA = p(() => {
+var C$ = p(() => {
   I();
 });
 
@@ -2444,7 +2444,7 @@ var CA = p(() => {
 function Dp(e) {
   return c.HasPropertyKey(e, "not") && oe(e.not);
 }
-var RA = p(() => {
+var R$ = p(() => {
   I();
   Ot();
 });
@@ -2453,7 +2453,7 @@ var RA = p(() => {
 function Mp(e) {
   return c.HasPropertyKey(e, "oneOf") && c.IsArray(e.oneOf) && e.oneOf.every((t) => oe(t));
 }
-var $A = p(() => {
+var A$ = p(() => {
   I();
   Ot();
 });
@@ -2462,7 +2462,7 @@ var $A = p(() => {
 function fu(e) {
   return c.HasPropertyKey(e, "pattern") && (c.IsString(e.pattern) || e.pattern instanceof RegExp);
 }
-var AA = p(() => {
+var $$ = p(() => {
   I();
 });
 
@@ -2470,7 +2470,7 @@ var AA = p(() => {
 function xs(e) {
   return c.HasPropertyKey(e, "patternProperties") && c.IsObject(e.patternProperties) && Object.values(e.patternProperties).every((t) => oe(t));
 }
-var PA = p(() => {
+var P$ = p(() => {
   I();
   Ot();
 });
@@ -2479,7 +2479,7 @@ var PA = p(() => {
 function ca(e) {
   return c.HasPropertyKey(e, "prefixItems") && c.IsArray(e.prefixItems) && e.prefixItems.every((t) => oe(t));
 }
-var OA = p(() => {
+var O$ = p(() => {
   I();
   Ot();
 });
@@ -2488,7 +2488,7 @@ var OA = p(() => {
 function vs(e) {
   return c.HasPropertyKey(e, "properties") && c.IsObject(e.properties) && Object.values(e.properties).every((t) => oe(t));
 }
-var DA = p(() => {
+var D$ = p(() => {
   I();
   Ot();
 });
@@ -2497,7 +2497,7 @@ var DA = p(() => {
 function Np(e) {
   return c.HasPropertyKey(e, "propertyNames") && (c.IsObject(e.propertyNames) || oe(e.propertyNames));
 }
-var MA = p(() => {
+var M$ = p(() => {
   I();
   Ot();
 });
@@ -2509,7 +2509,7 @@ function N8(e) {
 function gu(e) {
   return N8(e) && c.IsEqual(e.$recursiveAnchor, !0);
 }
-var NA = p(() => {
+var N$ = p(() => {
   I();
 });
 
@@ -2517,7 +2517,7 @@ var NA = p(() => {
 function Up(e) {
   return c.HasPropertyKey(e, "$recursiveRef") && c.IsString(e.$recursiveRef);
 }
-var UA = p(() => {
+var U$ = p(() => {
   I();
 });
 
@@ -2525,7 +2525,7 @@ var UA = p(() => {
 function Lp(e) {
   return c.HasPropertyKey(e, "$ref") && c.IsString(e.$ref);
 }
-var LA = p(() => {
+var L$ = p(() => {
   I();
 });
 
@@ -2533,7 +2533,7 @@ var LA = p(() => {
 function ua(e) {
   return c.HasPropertyKey(e, "required") && c.IsArray(e.required) && e.required.every((t) => c.IsString(t));
 }
-var FA = p(() => {
+var F$ = p(() => {
   I();
 });
 
@@ -2541,7 +2541,7 @@ var FA = p(() => {
 function Fp(e) {
   return c.HasPropertyKey(e, "then") && oe(e.then);
 }
-var zA = p(() => {
+var z$ = p(() => {
   I();
   Ot();
 });
@@ -2550,7 +2550,7 @@ var zA = p(() => {
 function ux(e) {
   return c.HasPropertyKey(e, "type") && (c.IsString(e.type) || c.IsArray(e.type) && e.type.every((t) => c.IsString(t)));
 }
-var jA = p(() => {
+var j$ = p(() => {
   I();
 });
 
@@ -2558,7 +2558,7 @@ var jA = p(() => {
 function ci(e) {
   return c.HasPropertyKey(e, "uniqueItems") && c.IsBoolean(e.uniqueItems);
 }
-var BA = p(() => {
+var B$ = p(() => {
   I();
 });
 
@@ -2566,7 +2566,7 @@ var BA = p(() => {
 function hu(e) {
   return c.HasPropertyKey(e, "unevaluatedItems") && oe(e.unevaluatedItems);
 }
-var qA = p(() => {
+var q$ = p(() => {
   I();
   Ot();
 });
@@ -2575,64 +2575,64 @@ var qA = p(() => {
 function yu(e) {
   return c.HasPropertyKey(e, "unevaluatedProperties") && oe(e.unevaluatedProperties);
 }
-var GA = p(() => {
+var G$ = p(() => {
   I();
   Ot();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/types/index.mjs
 var je = p(() => {
-  W$();
-  Z$();
-  J$();
-  Y$();
-  Q$();
-  eA();
-  tA();
-  nA();
-  rA();
-  oA();
-  iA();
-  aA();
-  sA();
-  cA();
-  uA();
-  lA();
-  dA();
-  pA();
-  mA();
-  fA();
-  gA();
-  hA();
-  yA();
-  bA();
-  xA();
-  vA();
-  IA();
-  wA();
-  SA();
-  kA();
-  _A();
-  EA();
-  TA();
-  CA();
-  RA();
-  $A();
-  AA();
-  PA();
-  OA();
-  DA();
-  MA();
-  NA();
-  UA();
-  LA();
-  FA();
+  WA();
+  ZA();
+  JA();
+  YA();
+  QA();
+  e$();
+  t$();
+  n$();
+  r$();
+  o$();
+  i$();
+  a$();
+  s$();
+  c$();
+  u$();
+  l$();
+  d$();
+  p$();
+  m$();
+  f$();
+  g$();
+  h$();
+  y$();
+  b$();
+  x$();
+  v$();
+  I$();
+  w$();
+  S$();
+  k$();
+  _$();
+  E$();
+  T$();
+  C$();
+  R$();
+  A$();
+  $$();
+  P$();
+  O$();
+  D$();
+  M$();
+  N$();
+  U$();
+  L$();
+  F$();
   Ot();
-  zA();
-  jA();
-  BA();
-  qA();
-  GA();
+  z$();
+  j$();
+  B$();
+  q$();
+  G$();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_context.mjs
@@ -2708,10 +2708,10 @@ var Uo = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/_refine.mjs
-function KA(e, t, n, o) {
+function K$(e, t, n, o) {
   return c.Every(n["~refine"], 0, (r, i) => r.check(o));
 }
-function HA(e, t, n, o, r, i) {
+function H$(e, t, n, o, r, i) {
   return c.EveryAll(r["~refine"], 0, (a, s) => a.check(i) || t.AddError("~refine", n, o, { index: s, message: a.error(i) }));
 }
 var lx = p(() => {
@@ -2724,7 +2724,7 @@ function Lo(e, t) {
   return URL.canParse(e, t) ? new URL(e, t) : c.IsEqual(t, bu) ? new URL(`${t}:${e}`) : new URL(`${t.slice(0, t.lastIndexOf(":"))}:${e}`);
 }
 function ws(e, t) {
-  let n = An(t) && In(t) ? Lo(t.$id, bu).href : bu;
+  let n = $n(t) && In(t) ? Lo(t.$id, bu).href : bu;
   return {
     context: e,
     schema: t,
@@ -2746,7 +2746,7 @@ function dx(e, t, n = !0) {
     return e;
   if (Array.isArray(t))
     return t.reduce((r, i) => dx(r, i, !1), e);
-  if (!An(t) || !n && In(t))
+  if (!$n(t) || !n && In(t))
     return e;
   let o = !n && si(t) ? [...e, t] : e;
   return Object.keys(t).reduce((r, i) => dx(r, t[i], !1), o);
@@ -2754,7 +2754,7 @@ function dx(e, t, n = !0) {
 function xu(e, t) {
   return e.resourceEntries.get(t);
 }
-function VA(e, t) {
+function V$(e, t) {
   return e.enteredResource || xu(e, t) !== void 0;
 }
 function U8(e) {
@@ -2773,27 +2773,27 @@ function z8(e, t) {
 function j8(e, t) {
   return In(t) ? !1 : e.pendingResource;
 }
-function WA(e, t) {
+function W$(e, t) {
   let n = xu(e, t);
   return n ? n.base : In(t) ? Lo(t.$id, e.lexicalBase).href : e.lexicalBase;
 }
-function ZA(e, t) {
+function Z$(e, t) {
   let n = xu(e, t);
   return n ? n.base : In(t) && e.pendingResource ? Lo(t.$id, e.resourceBase).href : e.resourceBase;
 }
-function JA(e, t) {
+function J$(e, t) {
   return In(t) ? !U8(t) : e.useResourceBaseForReference;
 }
 function B8(e, t) {
-  let n = VA(e, t), o = JA(e, t);
-  return n || o ? ZA(e, t) : WA(e, t);
+  let n = V$(e, t), o = J$(e, t);
+  return n || o ? Z$(e, t) : W$(e, t);
 }
 function q8(e, t) {
   let n = xu(e, t);
   return n ? n.root : In(t) ? t : e.lexicalSchema;
 }
 function G8(e, t) {
-  return An(t) && (In(t) || si(t) || c.IsUndefined(e.recursiveAnchor) && gu(t) || !c.IsUndefined(xu(e, t)));
+  return $n(t) && (In(t) || si(t) || c.IsUndefined(e.recursiveAnchor) && gu(t) || !c.IsUndefined(xu(e, t)));
 }
 function Ss(e, t) {
   return G8(e, t) ? {
@@ -2802,12 +2802,12 @@ function Ss(e, t) {
     dynamicAnchors: z8(e, t),
     recursiveAnchor: F8(e, t),
     pendingResource: j8(e, t),
-    lexicalBase: WA(e, t),
-    resourceBase: ZA(e, t),
-    useResourceBaseForReference: JA(e, t),
+    lexicalBase: W$(e, t),
+    resourceBase: Z$(e, t),
+    useResourceBaseForReference: J$(e, t),
     referenceBase: B8(e, t),
     lexicalSchema: q8(e, t),
-    enteredResource: VA(e, t)
+    enteredResource: V$(e, t)
   } : e;
 }
 var bu, vu = p(() => {
@@ -2821,14 +2821,14 @@ var Dr = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/additionalItems.mjs
-function YA(e) {
+function Y$(e) {
   return ia(e) && c.IsArray(e.items);
 }
-function XA(e, t, n, o) {
-  return YA(n) ? c.Every(o, 0, (i, a) => c.IsLessThan(a, n.items.length) || sr(e, t, n.additionalItems, i) && t.AddIndex(a)) : !0;
+function X$(e, t, n, o) {
+  return Y$(n) ? c.Every(o, 0, (i, a) => c.IsLessThan(a, n.items.length) || sr(e, t, n.additionalItems, i) && t.AddIndex(a)) : !0;
 }
-function QA(e, t, n, o, r, i) {
-  return YA(r) ? c.Every(i, 0, (s, u) => {
+function Q$(e, t, n, o, r, i) {
+  return Y$(r) ? c.Every(i, 0, (s, u) => {
     let l = `${n}/additionalItems`, m = `${o}/${u}`;
     return c.IsLessThan(u, r.items.length) || cr(e, t, l, m, r.additionalItems, s) && t.AddIndex(u);
   }) : !0;
@@ -3099,17 +3099,17 @@ ct(yr, {
   RecursiveRef: () => vJ,
   Ref: () => bJ
 });
-function $x(e, t) {
-  return An(e) && In(e) ? Lo(e.$id, t.href) : t;
+function Ax(e, t) {
+  return $n(e) && In(e) ? Lo(e.$id, t.href) : t;
 }
-function Ax(e) {
+function $x(e) {
   return Lo(e, bu);
 }
 function Cx(e) {
   return e.href.split("#")[0];
 }
 function Y8(e, t, n) {
-  return Rx(e, Ax(t), n);
+  return Rx(e, $x(t), n);
 }
 function X8(e, t) {
   return t.$ref.startsWith("#") || e.enteredResource ? e.lexicalSchema : e.schema;
@@ -3130,7 +3130,7 @@ function IP(e, t) {
 function Rx(e, t, n) {
   if (c.IsEqual(e, n))
     return t.href;
-  let o = $x(e, t);
+  let o = Ax(e, t);
   if (c.IsArray(e))
     for (let r of e) {
       let i = Rx(r, o, n);
@@ -3163,7 +3163,7 @@ function eJ(e, t, n) {
     return n.hash.startsWith("#") ? wP(e, n) : e;
 }
 function tJ(e, t, n) {
-  if (!X$(e))
+  if (!XA(e))
     return;
   let o = new URL(`#${e.$anchor}`, t.href), r = new URL(n.href, t.href);
   return c.IsEqual(o.href, r.href) ? e : void 0;
@@ -3175,7 +3175,7 @@ function nJ(e, t, n) {
   return c.IsEqual(o.href, r.href) ? e : void 0;
 }
 function rJ(e, t, n) {
-  if (An(e))
+  if ($n(e))
     return eJ(e, t, n) ?? tJ(e, t, n) ?? nJ(e, t, n) ?? wP(e, n);
 }
 function oJ(e, t, n) {
@@ -3195,15 +3195,15 @@ function iJ(e, t, n) {
     }, void 0);
 }
 function Bp(e, t, n) {
-  let o = $x(e, t);
+  let o = Ax(e, t);
   return rJ(e, o, n) ?? oJ(e, o, n) ?? iJ(e, o, n);
 }
 function aJ(e, t, n, o) {
   let r = qp(e, t, n, o);
-  return An(r) && In(r) ? r : void 0;
+  return $n(r) && In(r) ? r : void 0;
 }
 function sJ(e, t, n) {
-  if (!t.$ref.startsWith("#") || !An(e.schema) || c.HasPropertyKey(e.schema, "$schema"))
+  if (!t.$ref.startsWith("#") || !$n(e.schema) || c.HasPropertyKey(e.schema, "$schema"))
     return;
   let o = Y8(e.lexicalSchema, e.referenceBase, n);
   if (!(c.IsUndefined(o) || c.IsEqual(o, e.referenceBase)))
@@ -3214,7 +3214,7 @@ function sJ(e, t, n) {
 }
 function cJ(e, t, n) {
   let o = e.context[t];
-  if (An(o))
+  if ($n(o))
     return { target: n, base: t, root: o };
 }
 function uJ(e, t, n, o, r) {
@@ -3244,11 +3244,11 @@ function mJ(e, t, n) {
   let o = Cx(n);
   if (!c.HasPropertyKey(e, o) || c.IsEqual(o, Cx(t)))
     return;
-  let r = e[o], i = $x(r, new URL(o));
+  let r = e[o], i = Ax(r, new URL(o));
   return c.IsEqual(n.hash, "") ? r : Bp(r, i, n);
 }
 function qp(e, t, n, o) {
-  let r = Ax(n), i = Lo(o, r.href);
+  let r = $x(n), i = Lo(o, r.href);
   return dJ(e, o) ?? pJ(t, r, i) ?? mJ(e, r, i);
 }
 function fJ(e, t) {
@@ -3273,23 +3273,23 @@ function yJ(e, t) {
 }
 function bJ(e, t) {
   let n = qp(e.context, X8(e, t), e.referenceBase, t.$ref);
-  return An(n) ? hJ(e, t, n) : yJ(e, n);
+  return $n(n) ? hJ(e, t, n) : yJ(e, n);
 }
 function xJ(e) {
-  return An(e.lexicalSchema) && gu(e.lexicalSchema);
+  return $n(e.lexicalSchema) && gu(e.lexicalSchema);
 }
 function vJ(e, t) {
   let n = xJ(e) ? e.recursiveAnchor : e.lexicalSchema;
   return qp(e.context, n, e.lexicalBase, t.$recursiveRef);
 }
 function kP(e, t) {
-  return Lo(t.$dynamicRef, Ax(e.lexicalBase).href).hash;
+  return Lo(t.$dynamicRef, $x(e.lexicalBase).href).hash;
 }
 function _P(e, t) {
   return e.dynamicAnchors.find((n) => c.IsEqual(n.$dynamicAnchor, t)) ?? IP(e.schema, t);
 }
 function IJ(e, t, n) {
-  if (!An(n) || !si(n))
+  if (!$n(n) || !si(n))
     return n;
   let o = kP(e, t);
   return Q8(o) ? n : _P(e, n.$dynamicAnchor);
@@ -3334,7 +3334,7 @@ var RP = p(() => {
 function Dx(e, t, n, o) {
   return c.Some(n.enum, (r) => c.IsValueLike(r) ? c.IsEqual(o, r) : c.IsDeepEqual(o, r));
 }
-function $P(e, t, n, o, r, i) {
+function AP(e, t, n, o, r, i) {
   return Dx(e, t, r, i) || t.AddError("enum", n, o, { allowedValues: r.enum });
 }
 var Mx = p(() => {
@@ -3346,7 +3346,7 @@ var Mx = p(() => {
 function Nx(e, t, n, o) {
   return c.IsLessThan(o, n.exclusiveMaximum);
 }
-function AP(e, t, n, o, r, i) {
+function $P(e, t, n, o, r, i) {
   return Nx(e, t, r, i) || t.AddError("exclusiveMaximum", n, o, { comparison: "<", limit: r.exclusiveMaximum });
 }
 var Ux = p(() => {
@@ -3428,10 +3428,10 @@ var RJ, Bx = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/pattern/pattern.mjs
-var OP, DP, MP, Rs, $J, NP, AJ, PJ, OJ, qx, DJ, UP, Gx, MJ, LP, Zp, FP, zP, Kx, jP, NJ, UJ, BP, qP, $s = p(() => {
-  OP = /^(?!-).*(?<!-)$/, DP = /^(?!..--)/, MP = /^[a-zA-Z0-9-]*$/, Rs = /[^\p{ASCII}]/u, $J = /[0-9]/, NP = /[\u{0660}-\u{0669}]/u, AJ = /[\u{06f0}-\u{06f9}]/u, PJ = /[\u{002e}\u{002c}\u{003a}\u{002f}]/u, OJ = /[\u{002d}\u{002b}]/u, qx = /\p{Mn}/u, DJ = /\p{Mc}/u, UP = /[\p{Mn}\p{Mc}\p{Me}]/u, Gx = /\p{L}/u, MJ = /\p{Nd}/u, LP = /\p{Script=Greek}/u, Zp = /\p{Script=Hebrew}/u, FP = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, zP = /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Mandaic}]/u, Kx = /[\u{094d}\u{09cd}\u{0a4d}\u{0acd}\u{0b4d}\u{0bcd}\u{0c4d}\u{0ccd}\u{0d3b}\u{0d3c}\u{0d4d}\u{0dca}\u{1b44}\u{1baa}\u{1bab}\u{a9c0}\u{11046}\u{1107f}\u{110b9}\u{11133}\u{11134}\u{111c0}\u{11235}\u{1134d}\u{11442}\u{114c2}\u{115bf}\u{1163f}\u{116b6}\u{11c3f}\u{11d44}\u{11d45}]/u, jP = /[\u{0640}\u{07fa}\u{302e}\u{302f}\u{3031}\u{3032}\u{3033}\u{3034}\u{3035}\u{303b}]/u, NJ = /[\u{00b7}\u{0375}\u{05f3}\u{05f4}\u{200c}\u{200d}\u{30fb}]/u, UJ = /[\u{00df}\u{03c2}\u{06fd}\u{06fe}\u{0f0b}\u{3007}]/u, BP = new RegExp([
-    $J,
-    AJ
+var OP, DP, MP, Rs, AJ, NP, $J, PJ, OJ, qx, DJ, UP, Gx, MJ, LP, Zp, FP, zP, Kx, jP, NJ, UJ, BP, qP, As = p(() => {
+  OP = /^(?!-).*(?<!-)$/, DP = /^(?!..--)/, MP = /^[a-zA-Z0-9-]*$/, Rs = /[^\p{ASCII}]/u, AJ = /[0-9]/, NP = /[\u{0660}-\u{0669}]/u, $J = /[\u{06f0}-\u{06f9}]/u, PJ = /[\u{002e}\u{002c}\u{003a}\u{002f}]/u, OJ = /[\u{002d}\u{002b}]/u, qx = /\p{Mn}/u, DJ = /\p{Mc}/u, UP = /[\p{Mn}\p{Mc}\p{Me}]/u, Gx = /\p{L}/u, MJ = /\p{Nd}/u, LP = /\p{Script=Greek}/u, Zp = /\p{Script=Hebrew}/u, FP = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, zP = /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Mandaic}]/u, Kx = /[\u{094d}\u{09cd}\u{0a4d}\u{0acd}\u{0b4d}\u{0bcd}\u{0c4d}\u{0ccd}\u{0d3b}\u{0d3c}\u{0d4d}\u{0dca}\u{1b44}\u{1baa}\u{1bab}\u{a9c0}\u{11046}\u{1107f}\u{110b9}\u{11133}\u{11134}\u{111c0}\u{11235}\u{1134d}\u{11442}\u{114c2}\u{115bf}\u{1163f}\u{116b6}\u{11c3f}\u{11d44}\u{11d45}]/u, jP = /[\u{0640}\u{07fa}\u{302e}\u{302f}\u{3031}\u{3032}\u{3033}\u{3034}\u{3035}\u{303b}]/u, NJ = /[\u{00b7}\u{0375}\u{05f3}\u{05f4}\u{200c}\u{200d}\u{30fb}]/u, UJ = /[\u{00df}\u{03c2}\u{06fd}\u{06fe}\u{0f0b}\u{3007}]/u, BP = new RegExp([
+    AJ,
+    $J
   ].map((e) => e.source).join("|"), "u"), qP = new RegExp([
     Gx,
     OJ,
@@ -3449,7 +3449,7 @@ function GP(e) {
   return OP.test(e) && DP.test(e) && MP.test(e);
 }
 var KP = p(() => {
-  $s();
+  As();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/format/puny.mjs
@@ -3517,7 +3517,7 @@ function JP(e) {
   return o.join("");
 }
 var Nr, _u, Eu, FJ, zJ, VP, WP, jJ, Xp = p(() => {
-  $s();
+  As();
   Nr = 36, _u = 1, Eu = 26, FJ = 38, zJ = 700, VP = 72, WP = 128;
   jJ = new RegExp(Rs.source, "gu");
 });
@@ -3563,7 +3563,7 @@ function em(e) {
 }
 var BJ, YP, qJ, Wx = p(() => {
   Xp();
-  $s();
+  As();
   BJ = /^(?:R|AL|AN|EN|ES|CS|ET|ON|BN|NSM)$/, YP = /^(?:L|EN|ES|CS|ET|ON|BN|NSM)$/, qJ = /^(?:R|AL|AN)$/;
 });
 
@@ -3619,7 +3619,7 @@ function tm(e) {
   return !(e.includes("\u30FB") && !r);
 }
 var Zx = p(() => {
-  $s();
+  As();
   Wx();
   Xp();
 });
@@ -3641,7 +3641,7 @@ function nm(e) {
 var Jx = p(() => {
   Xp();
   Zx();
-  $s();
+  As();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/format/idna/hostname.mjs
@@ -3947,11 +3947,11 @@ var gv = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/if.mjs
 function mO(e, t, n, o) {
-  let r = Fp(n) ? n.then : !0, i = Ap(n) ? n.else : !0;
+  let r = Fp(n) ? n.then : !0, i = $p(n) ? n.else : !0;
   return Te(e, t, n.if, o) ? Te(e, t, r, o) : Te(e, t, i, o);
 }
 function fO(e, t, n, o, r, i) {
-  let a = Fp(r) ? r.then : !0, s = Ap(r) ? r.else : !0, u = new sn(), l = Ve(e, u, `${n}/if`, o, r.if, i) ? Ve(e, u, `${n}/then`, o, a, i) || t.AddError("if", n, o, { failingKeyword: "then" }) : Ve(e, t, `${n}/else`, o, s, i) || t.AddError("if", n, o, { failingKeyword: "else" });
+  let a = Fp(r) ? r.then : !0, s = $p(r) ? r.else : !0, u = new sn(), l = Ve(e, u, `${n}/if`, o, r.if, i) ? Ve(e, u, `${n}/then`, o, a, i) || t.AddError("if", n, o, { failingKeyword: "then" }) : Ve(e, t, `${n}/else`, o, s, i) || t.AddError("if", n, o, { failingKeyword: "else" });
   return l && t.Merge([u]), l;
 }
 var hv = p(() => {
@@ -4080,13 +4080,13 @@ var Rv = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/schema/engine/minimum.mjs
-function $v(e, t, n, o) {
+function Av(e, t, n, o) {
   return c.IsGreaterEqualThan(o, n.minimum);
 }
 function SO(e, t, n, o, r, i) {
-  return $v(e, t, r, i) || t.AddError("minimum", n, o, { comparison: ">=", limit: r.minimum });
+  return Av(e, t, r, i) || t.AddError("minimum", n, o, { comparison: ">=", limit: r.minimum });
 }
-var Av = p(() => {
+var $v = p(() => {
   I();
 });
 
@@ -4157,7 +4157,7 @@ function RO(e, t, n, o) {
   }, []);
   return c.IsEqual(r.length, 1) && t.Merge(r);
 }
-function $O(e, t, n, o, r, i) {
+function AO(e, t, n, o, r, i) {
   let a = [], s = [], u = r.oneOf.reduce((m, h, b) => {
     let f = new sn(), y = `${n}/oneOf/${b}`, x = Ve(e, f, y, o, h, i);
     return x && s.push(b), x || a.push(f), x ? [...m, f] : m;
@@ -4176,7 +4176,7 @@ var Bv = p(() => {
 function qv(e, t, n, o) {
   return (c.IsString(n.pattern) ? ui(n.pattern) : n.pattern).test(o);
 }
-function AO(e, t, n, o, r, i) {
+function $O(e, t, n, o, r, i) {
   return qv(e, t, r, i) || t.AddError("pattern", n, o, { pattern: r.pattern });
 }
 var Gv = p(() => {
@@ -4419,7 +4419,7 @@ function S7(e) {
   return typeof e == "number";
 }
 function Qt(e) {
-  As = As ^ E7[e], As = As * k7 % _7;
+  $s = $s ^ E7[e], $s = $s * k7 % _7;
 }
 function T7(e) {
   Qt(Sn.Array);
@@ -4437,10 +4437,10 @@ function eD(e) {
 function R7(e) {
   Qt(Sn.Constructor), li(e.toString());
 }
-function $7(e) {
+function A7(e) {
   Qt(Sn.Date), li(e.getTime());
 }
-function A7(e) {
+function $7(e) {
   Qt(Sn.Function), li(e.toString());
 }
 function P7(e) {
@@ -4482,21 +4482,21 @@ function L7(e) {
   return Qt(Sn.Undefined);
 }
 function li(e) {
-  return Pt.IsTypeArray(e) ? U7(e) : Pt.IsDate(e) ? $7(e) : Pt.IsRegExp(e) ? D7(e) : Pt.IsBoolean(e) ? eD(e.valueOf()) : Pt.IsString(e) ? iI(e.valueOf()) : Pt.IsNumber(e) ? tD(e.valueOf()) : S7(e) ? tD(e) : c.IsArray(e) ? T7(e) : c.IsBoolean(e) ? eD(e) : c.IsBigInt(e) ? C7(e) : c.IsConstructor(e) ? R7(e) : c.IsNull(e) ? P7(e) : c.IsObject(e) ? O7(e) : c.IsString(e) ? iI(e) : c.IsSymbol(e) ? N7(e) : c.IsUndefined(e) ? L7(e) : c.IsFunction(e) ? A7(e) : ft();
+  return Pt.IsTypeArray(e) ? U7(e) : Pt.IsDate(e) ? A7(e) : Pt.IsRegExp(e) ? D7(e) : Pt.IsBoolean(e) ? eD(e.valueOf()) : Pt.IsString(e) ? iI(e.valueOf()) : Pt.IsNumber(e) ? tD(e.valueOf()) : S7(e) ? tD(e) : c.IsArray(e) ? T7(e) : c.IsBoolean(e) ? eD(e) : c.IsBigInt(e) ? C7(e) : c.IsConstructor(e) ? R7(e) : c.IsNull(e) ? P7(e) : c.IsObject(e) ? O7(e) : c.IsString(e) ? iI(e) : c.IsSymbol(e) ? N7(e) : c.IsUndefined(e) ? L7(e) : c.IsFunction(e) ? $7(e) : ft();
 }
 function iD(e) {
-  return As = BigInt("14695981039346656037"), li(e), As;
+  return $s = BigInt("14695981039346656037"), li(e), $s;
 }
 function F7(e) {
   return iD(e).toString(16).padStart(16, "0");
 }
-var Sn, As, k7, _7, E7, nD, rD, oD, M7, aD = p(() => {
+var Sn, $s, k7, _7, E7, nD, rD, oD, M7, aD = p(() => {
   Ur();
   I();
   (function(e) {
     e[e.Array = 0] = "Array", e[e.BigInt = 1] = "BigInt", e[e.Boolean = 2] = "Boolean", e[e.Date = 3] = "Date", e[e.Constructor = 4] = "Constructor", e[e.Function = 5] = "Function", e[e.Null = 6] = "Null", e[e.Number = 7] = "Number", e[e.Object = 8] = "Object", e[e.RegExp = 9] = "RegExp", e[e.String = 10] = "String", e[e.Symbol = 11] = "Symbol", e[e.TypeArray = 12] = "TypeArray", e[e.Undefined = 13] = "Undefined";
   })(Sn || (Sn = {}));
-  As = BigInt("14695981039346656037"), [k7, _7] = [BigInt("1099511628211"), BigInt(
+  $s = BigInt("14695981039346656037"), [k7, _7] = [BigInt("1099511628211"), BigInt(
     "18446744073709551616"
     /* 2 ^ 64 */
   )], E7 = Array.from({ length: 256 }).map((e, t) => BigInt(t)), nD = new Float64Array(1), rD = new DataView(nD.buffer), oD = new Uint8Array(nD.buffer);
@@ -4538,7 +4538,7 @@ function sr(e, t, n, o) {
 }
 function Te(e, t, n, o) {
   let r = Ss(e, n);
-  return oa(n) ? bx(r, t, n, o) : (!ux(n) || WO(r, t, n, o)) && (!(c.IsObject(o) && !c.IsArray(o)) || (!ua(n) || KO(r, t, n, o)) && (!hr(n) || tP(r, t, n, o)) && (!ex(n) || lP(r, t, n, o)) && (!tx(n) || pP(r, t, n, o)) && (!Rp(n) || fP(r, t, n, o)) && (!xs(n) || PO(r, t, n, o)) && (!vs(n) || UO(r, t, n, o)) && (!Np(n) || FO(r, t, n, o)) && (!mu(n) || Nv(r, t, n, o)) && (!sx(n) || Ev(r, t, n, o))) && (!c.IsArray(o) || (!Ep(n) || XA(r, t, n, o)) && (!ai(n) || wx(r, t, n, o)) && (!ia(n) || gO(r, t, n, o)) && (!aa(n) || Cv(r, t, n, o)) && (!ix(n) || bv(r, t, n, o)) && (!sa(n) || Pv(r, t, n, o)) && (!du(n) || wv(r, t, n, o)) && (!ca(n) || DO(r, t, n, o)) && (!ci(n) || cD(r, t, n, o))) && (!c.IsString(o) || (!pu(n) || Dv(r, t, n, o)) && (!ax(n) || kv(r, t, n, o)) && (!lu(n) || fv(r, t, n, o)) && (!fu(n) || qv(r, t, n, o))) && (!(c.IsNumber(o) || c.IsBigInt(o)) || (!Mo(n) || Lx(r, t, n, o)) && (!rx(n) || Nx(r, t, n, o)) && (!No(n) || $v(r, t, n, o)) && (!ox(n) || vv(r, t, n, o)) && (!cx(n) || Lv(r, t, n, o))) && (!Lp(n) || qO(r, t, n, o)) && (!Up(n) || jO(r, t, n, o)) && (!$p(n) || TP(r, t, n, o)) && (!Qb(n) || vx(r, t, n, o)) && (!nx(n) || Dx(r, t, n, o)) && (!Pp(n) || mO(r, t, n, o)) && (!Dp(n) || zv(r, t, n, o)) && (!Tp(n) || rP(r, t, n, o)) && (!Cp(n) || iP(r, t, n, o)) && (!Mp(n) || RO(r, t, n, o)) && (!hu(n) || !c.IsArray(o) || JO(r, t, n, o)) && (!yu(n) || !c.IsObject(o) || XO(r, t, n, o)) && (!_p(n) || KA(r, t, n, o));
+  return oa(n) ? bx(r, t, n, o) : (!ux(n) || WO(r, t, n, o)) && (!(c.IsObject(o) && !c.IsArray(o)) || (!ua(n) || KO(r, t, n, o)) && (!hr(n) || tP(r, t, n, o)) && (!ex(n) || lP(r, t, n, o)) && (!tx(n) || pP(r, t, n, o)) && (!Rp(n) || fP(r, t, n, o)) && (!xs(n) || PO(r, t, n, o)) && (!vs(n) || UO(r, t, n, o)) && (!Np(n) || FO(r, t, n, o)) && (!mu(n) || Nv(r, t, n, o)) && (!sx(n) || Ev(r, t, n, o))) && (!c.IsArray(o) || (!Ep(n) || X$(r, t, n, o)) && (!ai(n) || wx(r, t, n, o)) && (!ia(n) || gO(r, t, n, o)) && (!aa(n) || Cv(r, t, n, o)) && (!ix(n) || bv(r, t, n, o)) && (!sa(n) || Pv(r, t, n, o)) && (!du(n) || wv(r, t, n, o)) && (!ca(n) || DO(r, t, n, o)) && (!ci(n) || cD(r, t, n, o))) && (!c.IsString(o) || (!pu(n) || Dv(r, t, n, o)) && (!ax(n) || kv(r, t, n, o)) && (!lu(n) || fv(r, t, n, o)) && (!fu(n) || qv(r, t, n, o))) && (!(c.IsNumber(o) || c.IsBigInt(o)) || (!Mo(n) || Lx(r, t, n, o)) && (!rx(n) || Nx(r, t, n, o)) && (!No(n) || Av(r, t, n, o)) && (!ox(n) || vv(r, t, n, o)) && (!cx(n) || Lv(r, t, n, o))) && (!Lp(n) || qO(r, t, n, o)) && (!Up(n) || jO(r, t, n, o)) && (!Ap(n) || TP(r, t, n, o)) && (!Qb(n) || vx(r, t, n, o)) && (!nx(n) || Dx(r, t, n, o)) && (!Pp(n) || mO(r, t, n, o)) && (!Dp(n) || zv(r, t, n, o)) && (!Tp(n) || rP(r, t, n, o)) && (!Cp(n) || iP(r, t, n, o)) && (!Mp(n) || RO(r, t, n, o)) && (!hu(n) || !c.IsArray(o) || JO(r, t, n, o)) && (!yu(n) || !c.IsObject(o) || XO(r, t, n, o)) && (!_p(n) || K$(r, t, n, o));
 }
 function cr(e, t, n, o, r, i) {
   return t.Push() && Ve(e, t, n, o, r, i) && t.Pop();
@@ -4547,7 +4547,7 @@ function Ve(e, t, n, o, r, i) {
   if (t.AtCapacity())
     return !1;
   let a = Ss(e, r);
-  return oa(r) ? sP(a, t, n, o, r, i) : !!(+(!ux(r) || ZO(a, t, n, o, r, i)) & +(!(c.IsObject(i) && !c.IsArray(i)) || !!(+(!ua(r) || HO(a, t, n, o, r, i)) & +(!hr(r) || nP(a, t, n, o, r, i)) & +(!ex(r) || dP(a, t, n, o, r, i)) & +(!tx(r) || mP(a, t, n, o, r, i)) & +(!Rp(r) || gP(a, t, n, o, r, i)) & +(!xs(r) || OO(a, t, n, o, r, i)) & +(!vs(r) || LO(a, t, n, o, r, i)) & +(!Np(r) || zO(a, t, n, o, r, i)) & +(!mu(r) || EO(a, t, n, o, r, i)) & +(!sx(r) || IO(a, t, n, o, r, i)))) & +(!c.IsArray(i) || !!(+(!Ep(r) || QA(a, t, n, o, r, i)) & +(!ai(r) || uP(a, t, n, o, r, i)) & +(!ia(r) || hO(a, t, n, o, r, i)) & +(!aa(r) || wO(a, t, n, o, r, i)) & +(!ix(r) || yO(a, t, n, o, r, i)) & +(!sa(r) || kO(a, t, n, o, r, i)) & +(!du(r) || xO(a, t, n, o, r, i)) & +(!ca(r) || MO(a, t, n, o, r, i)) & +(!ci(r) || uD(a, t, n, o, r, i)))) & +(!c.IsString(i) || !!(+(!pu(r) || _O(a, t, n, o, r, i)) & +(!ax(r) || vO(a, t, n, o, r, i)) & +(!lu(r) || pO(a, t, n, o, r, i)) & +(!fu(r) || AO(a, t, n, o, r, i)))) & +(!(c.IsNumber(i) || c.IsBigInt(i)) || !!(+(!Mo(r) || PP(a, t, n, o, r, i)) & +(!rx(r) || AP(a, t, n, o, r, i)) & +(!No(r) || SO(a, t, n, o, r, i)) & +(!ox(r) || bO(a, t, n, o, r, i)) & +(!cx(r) || TO(a, t, n, o, r, i)))) & +(!Lp(r) || GO(a, t, n, o, r, i)) & +(!Up(r) || BO(a, t, n, o, r, i)) & +(!$p(r) || CP(a, t, n, o, r, i)) & +(!Qb(r) || cP(a, t, n, o, r, i)) & +(!nx(r) || $P(a, t, n, o, r, i)) & +(!Pp(r) || fO(a, t, n, o, r, i)) & +(!Dp(r) || CO(a, t, n, o, r, i)) & +(!Tp(r) || oP(a, t, n, o, r, i)) & +(!Cp(r) || aP(a, t, n, o, r, i)) & +(!Mp(r) || $O(a, t, n, o, r, i)) & +(!hu(r) || !c.IsArray(i) || YO(a, t, n, o, r, i)) & +(!yu(r) || !c.IsObject(i) || QO(a, t, n, o, r, i))) && (!_p(r) || HA(a, t, n, o, r, i));
+  return oa(r) ? sP(a, t, n, o, r, i) : !!(+(!ux(r) || ZO(a, t, n, o, r, i)) & +(!(c.IsObject(i) && !c.IsArray(i)) || !!(+(!ua(r) || HO(a, t, n, o, r, i)) & +(!hr(r) || nP(a, t, n, o, r, i)) & +(!ex(r) || dP(a, t, n, o, r, i)) & +(!tx(r) || mP(a, t, n, o, r, i)) & +(!Rp(r) || gP(a, t, n, o, r, i)) & +(!xs(r) || OO(a, t, n, o, r, i)) & +(!vs(r) || LO(a, t, n, o, r, i)) & +(!Np(r) || zO(a, t, n, o, r, i)) & +(!mu(r) || EO(a, t, n, o, r, i)) & +(!sx(r) || IO(a, t, n, o, r, i)))) & +(!c.IsArray(i) || !!(+(!Ep(r) || Q$(a, t, n, o, r, i)) & +(!ai(r) || uP(a, t, n, o, r, i)) & +(!ia(r) || hO(a, t, n, o, r, i)) & +(!aa(r) || wO(a, t, n, o, r, i)) & +(!ix(r) || yO(a, t, n, o, r, i)) & +(!sa(r) || kO(a, t, n, o, r, i)) & +(!du(r) || xO(a, t, n, o, r, i)) & +(!ca(r) || MO(a, t, n, o, r, i)) & +(!ci(r) || uD(a, t, n, o, r, i)))) & +(!c.IsString(i) || !!(+(!pu(r) || _O(a, t, n, o, r, i)) & +(!ax(r) || vO(a, t, n, o, r, i)) & +(!lu(r) || pO(a, t, n, o, r, i)) & +(!fu(r) || $O(a, t, n, o, r, i)))) & +(!(c.IsNumber(i) || c.IsBigInt(i)) || !!(+(!Mo(r) || PP(a, t, n, o, r, i)) & +(!rx(r) || $P(a, t, n, o, r, i)) & +(!No(r) || SO(a, t, n, o, r, i)) & +(!ox(r) || bO(a, t, n, o, r, i)) & +(!cx(r) || TO(a, t, n, o, r, i)))) & +(!Lp(r) || GO(a, t, n, o, r, i)) & +(!Up(r) || BO(a, t, n, o, r, i)) & +(!Ap(r) || CP(a, t, n, o, r, i)) & +(!Qb(r) || cP(a, t, n, o, r, i)) & +(!nx(r) || AP(a, t, n, o, r, i)) & +(!Pp(r) || fO(a, t, n, o, r, i)) & +(!Dp(r) || CO(a, t, n, o, r, i)) & +(!Tp(r) || oP(a, t, n, o, r, i)) & +(!Cp(r) || aP(a, t, n, o, r, i)) & +(!Mp(r) || AO(a, t, n, o, r, i)) & +(!hu(r) || !c.IsArray(i) || YO(a, t, n, o, r, i)) & +(!yu(r) || !c.IsObject(i) || QO(a, t, n, o, r, i))) && (!_p(r) || H$(a, t, n, o, r, i));
 }
 var nt = p(() => {
   je();
@@ -4577,7 +4577,7 @@ var nt = p(() => {
   _v();
   Tv();
   Rv();
-  Av();
+  $v();
   Ov();
   Mv();
   Uv();
@@ -4637,7 +4637,7 @@ var Ru = p(() => {
   Ov();
   Mv();
   Uv();
-  Av();
+  $v();
   Fv();
   jv();
   Bv();
@@ -4833,11 +4833,11 @@ var RD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/hu_HU.mjs
-var $D = p(() => {
+var AD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/id_ID.mjs
-var AD = p(() => {
+var $D = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/locale/it_IT.mjs
@@ -4940,8 +4940,8 @@ var XD = p(() => {
   TD();
   CD();
   RD();
-  $D();
   AD();
+  $D();
   PD();
   OD();
   DD();
@@ -4984,7 +4984,7 @@ var Lr, pa = p(() => {
 function di(e) {
   return mt.Get().immutableTypes ? Object.freeze(e) : e;
 }
-var $u = p(() => {
+var Au = p(() => {
   eo();
 });
 
@@ -4994,7 +4994,7 @@ function q7(e, t) {
 }
 var eM = p(() => {
   pa();
-  $u();
+  Au();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/clone.mjs
@@ -5043,7 +5043,7 @@ function ma(e) {
 function fa(e) {
   return Lr.clone += 1, ma(e);
 }
-var Au = p(() => {
+var $u = p(() => {
   I();
   pa();
 });
@@ -5070,7 +5070,7 @@ function eY(e, t, n = {}) {
 var nM = p(() => {
   eo();
   pa();
-  $u();
+  Au();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/discard.mjs
@@ -5088,8 +5088,8 @@ function tY(e, t) {
 var rM = p(() => {
   I();
   pa();
-  $u();
   Au();
+  $u();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/update.mjs
@@ -5115,8 +5115,8 @@ function nY(e, t, n) {
 var oM = p(() => {
   eo();
   pa();
-  $u();
   Au();
+  $u();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/system/memory/memory.mjs
@@ -5131,7 +5131,7 @@ ct(_, {
 });
 var iM = p(() => {
   eM();
-  Au();
+  $u();
   nM();
   rM();
   pa();
@@ -5527,10 +5527,10 @@ function Fe(e) {
 function Dn(e) {
   return q(e, "Never");
 }
-var $M, en = p(() => {
+var AM, en = p(() => {
   z();
   fe();
-  $M = "(?!)";
+  AM = "(?!)";
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_add_optional.mjs
@@ -5546,7 +5546,7 @@ var Fu = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_optional.mjs
-function AM(e) {
+function $M(e) {
   return ba(e);
 }
 function Bt(e) {
@@ -5668,7 +5668,7 @@ function NM(e) {
 function UM(e) {
   return c.Keys(e).filter((n) => isNaN(n)).reduce((n, o) => [...n, e[o]], []);
 }
-var $m = p(() => {
+var Am = p(() => {
   I();
 });
 
@@ -5687,8 +5687,8 @@ var Fr = p(() => {
   I();
   z();
   fe();
-  $m();
-  $m();
+  Am();
+  Am();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/intersect.mjs
@@ -5707,16 +5707,16 @@ var qt = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/types/_codec.mjs
-function Am(e) {
+function $m(e) {
   return new Bu(e);
 }
 function jM(e, t) {
-  return Am(e).Decode(t).Encode(() => {
+  return $m(e).Decode(t).Encode(() => {
     throw Error("Encode not implemented");
   });
 }
 function BM(e, t) {
-  return Am(e).Decode(() => {
+  return $m(e).Decode(() => {
     throw Error("Decode not implemented");
   }).Encode(t);
 }
@@ -5974,7 +5974,7 @@ var Lm, Sr = p(() => {
 function ie(e, t = {}) {
   return _.Create({ "~kind": "Union" }, { anyOf: e }, t);
 }
-function L(e) {
+function F(e) {
   return q(e, "Union");
 }
 function YM(e) {
@@ -6006,7 +6006,7 @@ function e1(e) {
   return c.IsEqual(e.length, 0) ? !1 : QM(e);
 }
 function dY(e) {
-  return L(e) ? e1(e.anyOf) : xe(e) ? lY(e.const) : !1;
+  return F(e) ? e1(e.anyOf) : xe(e) ? lY(e.const) : !1;
 }
 function zm(e) {
   return e1(e);
@@ -6036,7 +6036,7 @@ function n1(e, t, n = []) {
   return c.ShiftLeft(t, (o, r) => n1(e, r, [...n, ...r1(e, o)]), () => n);
 }
 function r1(e, t) {
-  return L(t) ? n1(e, t.anyOf) : xe(t) ? pY(e, t.const) : ft();
+  return F(t) ? n1(e, t.anyOf) : xe(t) ? pY(e, t.const) : ft();
 }
 function o1(e, t) {
   return c.ShiftLeft(t, (n, o) => o1(r1(e, n), o), () => e);
@@ -6211,7 +6211,7 @@ function y1(e, t) {
   let n = h1(e), o = h1(t), r = wY(n, o);
   return X(r);
 }
-var $I = p(() => {
+var AI = p(() => {
   I();
   Hu();
   fi();
@@ -6238,18 +6238,18 @@ function kY(e, t) {
 function b1(e, t) {
   return Dn(e) || lt(e) ? e : Tt(e) || Dn(t) || lt(t) ? t : Tt(t) ? e : kY(e, t);
 }
-var AI = p(() => {
+var $I = p(() => {
   I();
   On();
   en();
   cn();
   tl();
-  $I();
+  AI();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/distribute.mjs
 function _Y(e, t) {
-  return L(e) || L(t);
+  return F(e) || F(t);
 }
 function EY(e, t) {
   let n = kr(e), o = kr(t);
@@ -6262,12 +6262,12 @@ function v1(e, t, n = []) {
   return c.ShiftLeft(e, (o, r) => v1(r, t, [...n, ...nl([o], t)]), () => n);
 }
 function nl(e, t = []) {
-  return c.ShiftLeft(e, (n, o) => L(n) ? nl(o, v1(n.anyOf, t)) : nl(o, x1(n, t)), () => t);
+  return c.ShiftLeft(e, (n, o) => F(n) ? nl(o, v1(n.anyOf, t)) : nl(o, x1(n, t)), () => t);
 }
 var PI = p(() => {
   I();
   Ie();
-  AI();
+  $I();
   ye();
   ye();
 });
@@ -6281,7 +6281,7 @@ function I1(e, t, n = []) {
   return c.ShiftLeft(e, (o, r) => I1(r, t, [...n, ...TY(o, t)]), () => n);
 }
 function Vm(e, t) {
-  let n = kr(e), o = L(n) ? n.anyOf : [n], r = I1(o, t);
+  let n = kr(e), o = F(n) ? n.anyOf : [n], r = I1(o, t);
   return Ln(r);
 }
 var OI = p(() => {
@@ -6313,7 +6313,7 @@ function Ln(e) {
   return yi(t);
 }
 function kr(e) {
-  return yt(e) ? Br(e.if, e.then, e.else) : bt(e) ? Rn(e.enum) : Y(e) ? it(e.allOf) : qe(e) ? fn(e.pattern) : L(e) ? Ln(e.anyOf) : e;
+  return yt(e) ? Br(e.if, e.then, e.else) : bt(e) ? Rn(e.enum) : Y(e) ? it(e.allOf) : qe(e) ? fn(e.pattern) : F(e) ? Ln(e.anyOf) : e;
 }
 function yi(e) {
   return c.IsEqual(e.length, 1) ? e[0] : c.IsEqual(e.length, 0) ? Fe() : ie(e);
@@ -6372,10 +6372,10 @@ var R1 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key_number.mjs
-function $1(e, t) {
+function A1(e, t) {
   return Un(js, t);
 }
-var A1 = p(() => {
+var $1 = p(() => {
   tn();
   hi();
 });
@@ -6405,7 +6405,7 @@ var M1 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/evaluate/flatten.mjs
 function CY(e) {
-  return L(e) ? vi(e.anyOf) : [e];
+  return F(e) ? vi(e.anyOf) : [e];
 }
 function vi(e, t = []) {
   return c.ShiftLeft(e, (n, o) => vi(o, [...t, ...CY(n)]), () => t);
@@ -6419,18 +6419,18 @@ var Wm = p(() => {
 function RY(e) {
   return e.some((t) => Nt(t) || ot(t) || Vt(t));
 }
-function $Y(e, t) {
+function AY(e, t) {
   return c.IsEqual(RY(e), !0) ? Un(zr, t) : void 0;
 }
-function AY(e, t) {
+function $Y(e, t) {
   return e.reduce((n, o) => xe(o) && (c.IsString(o.const) || c.IsNumber(o.const)) ? { ...n, [o.const]: t } : n, {});
 }
 function PY(e, t) {
-  let n = AY(e, t);
+  let n = $Y(e, t);
   return X(n);
 }
 function N1(e, t) {
-  let n = vi(e), o = $Y(n, t);
+  let n = vi(e), o = AY(n, t);
   return rt(o) ? o : PY(n, t);
 }
 var U1 = p(() => {
@@ -6448,7 +6448,7 @@ var U1 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/record/from_key.mjs
 function bi(e, t) {
-  return lt(e) ? i1(t) : En(e) ? s1(t) : bt(e) ? w1(e.enum, t) : Vt(e) ? k1(e, t) : Y(e) ? E1(e.allOf, t) : xe(e) ? C1(e.const, t) : ot(e) ? $1(e, t) : L(e) ? N1(e.anyOf, t) : Nt(e) ? P1(e, t) : qe(e) ? D1(e.pattern, t) : X({});
+  return lt(e) ? i1(t) : En(e) ? s1(t) : bt(e) ? w1(e.enum, t) : Vt(e) ? k1(e, t) : Y(e) ? E1(e.allOf, t) : xe(e) ? C1(e.const, t) : ot(e) ? A1(e, t) : F(e) ? N1(e.anyOf, t) : Nt(e) ? P1(e, t) : qe(e) ? D1(e.pattern, t) : X({});
 }
 var rl = p(() => {
   On();
@@ -6468,7 +6468,7 @@ var rl = p(() => {
   _1();
   T1();
   R1();
-  A1();
+  $1();
   O1();
   M1();
   U1();
@@ -6634,7 +6634,7 @@ var ol = p(() => {
 function DY(e, t) {
   return c.IsEqual(e, "Array") ? Pn(t[0]) : c.IsEqual(e, "Capitalize") ? rf(t[0]) : c.IsEqual(e, "ConstructorParameters") ? uf(t[0]) : c.IsEqual(e, "Evaluate") ? BU(t[0]) : c.IsEqual(e, "Exclude") ? lf(t[0], t[1]) : c.IsEqual(e, "Extract") ? df(t[0], t[1]) : c.IsEqual(e, "Index") ? cl(t[0], t[1]) : c.IsEqual(e, "InstanceType") ? pf(t[0]) : c.IsEqual(e, "Lowercase") ? of(t[0]) : c.IsEqual(e, "NonNullable") ? mf(t[0]) : c.IsEqual(e, "Omit") ? ff(t[0], t[1]) : c.IsEqual(e, "Parameters") ? gf(t[0]) : c.IsEqual(e, "Partial") ? hf(t[0]) : c.IsEqual(e, "Pick") ? yf(t[0], t[1]) : c.IsEqual(e, "Readonly") ? bf(t[0]) : c.IsEqual(e, "KeyOf") ? ul(t[0]) : c.IsEqual(e, "Record") ? Jm(t[0], t[1]) : c.IsEqual(e, "Required") ? xf(t[0]) : c.IsEqual(e, "ReturnType") ? vf(t[0]) : c.IsEqual(e, "Uncapitalize") ? af(t[0]) : c.IsEqual(e, "Uppercase") ? sf(t[0]) : sl(jt(e), t);
 }
-function $a() {
+function Aa() {
   throw Error("Unreachable");
 }
 function K1(e, t = []) {
@@ -6757,13 +6757,13 @@ function CN(e) {
 function RN(e) {
   return c.IsArray(e) && c.IsEqual(e.length, 3) ? e[1] : e;
 }
-function $N(e) {
+function AN(e) {
   return c.IsEqual(e.length, 2) ? e[1] : [];
 }
 function j1(e, t) {
   return t.reduce((n, o) => {
     let r = o;
-    return c.IsEqual(r.length, 1) ? cl(n, r[0]) : c.IsEqual(r.length, 0) ? Pn(n) : $a();
+    return c.IsEqual(r.length, 1) ? cl(n, r[0]) : c.IsEqual(r.length, 0) ? Pn(n) : Aa();
   }, e);
 }
 function B1(e, t) {
@@ -6772,7 +6772,7 @@ function B1(e, t) {
 function MY(e, t) {
   return c.IsArray(t) && c.IsEqual(t.length, 0) ? e : If(e, t);
 }
-function AN(e) {
+function $N(e) {
   let [t, n, o, r, i] = e;
   return MY(B1(t ? ul(j1(n, o)) : j1(n, o), r), i);
 }
@@ -6782,8 +6782,8 @@ function UI(e, t) {
     if (c.IsEqual(n, "&"))
       return Y(i) ? mn([e, ...i.allOf]) : mn([e, i]);
     if (c.IsEqual(n, "|"))
-      return L(i) ? ie([e, ...i.anyOf]) : ie([e, i]);
-    $a();
+      return F(i) ? ie([e, ...i.anyOf]) : ie([e, i]);
+    Aa();
   })() : e;
 }
 function PN(e) {
@@ -6804,13 +6804,13 @@ function NN(e) {
   return mi(e[0], e[2]);
 }
 function UN(e) {
-  return c.IsEqual(e.length, 4) ? zu(e[1], e[3]) : c.IsEqual(e.length, 2) ? zu(e[1], Dt()) : $a();
+  return c.IsEqual(e.length, 4) ? zu(e[1], e[3]) : c.IsEqual(e.length, 2) ? zu(e[1], Dt()) : Aa();
 }
 function LN(e) {
   return `${e}`;
 }
 function FN(e) {
-  return Vt(e[3]) ? xi : ot(e[3]) ? js : uo(e[3]) ? zr : Nt(e[3]) ? zr : $a();
+  return Vt(e[3]) ? xi : ot(e[3]) ? js : uo(e[3]) ? zr : Nt(e[3]) ? zr : Aa();
 }
 function zN(e) {
   return e.length > 0;
@@ -6838,7 +6838,7 @@ function HN(e) {
   return X(t, o);
 }
 function VN(e) {
-  return c.IsEqual(e.length, 5) ? ao(oo(e[4])) : c.IsEqual(e.length, 3) ? e[2] : c.IsEqual(e.length, 4) ? c.IsEqual(e[2], "readonly") ? ao(e[3]) : oo(e[3]) : $a();
+  return c.IsEqual(e.length, 5) ? ao(oo(e[4])) : c.IsEqual(e.length, 3) ? e[2] : c.IsEqual(e.length, 4) ? c.IsEqual(e[2], "readonly") ? ao(e[3]) : oo(e[3]) : Aa();
 }
 function WN(e) {
   if (!c.IsArray(e) || !c.IsEqual(e.length, 3))
@@ -6847,7 +6847,7 @@ function WN(e) {
   return t && o ? ao(oo(n)) : t && !o ? ao(n) : !t && o ? oo(n) : n;
 }
 function ZN(e) {
-  return c.IsEqual(e.length, 2) ? Ca(e[1]) : c.IsEqual(e.length, 1) ? e[0] : $a();
+  return c.IsEqual(e.length, 2) ? Ca(e[1]) : c.IsEqual(e.length, 1) ? e[0] : Aa();
 }
 function JN(e) {
   return qo(e);
@@ -6868,7 +6868,7 @@ function tU(e) {
   return e[2];
 }
 function nU(e) {
-  return c.IsEqual(e.length, 2) ? Ca(e[1]) : c.IsEqual(e.length, 1) ? e[0] : $a();
+  return c.IsEqual(e.length, 2) ? Ca(e[1]) : c.IsEqual(e.length, 1) ? e[0] : Aa();
 }
 function rU(e) {
   return qo(e);
@@ -6960,10 +6960,10 @@ function CU(e) {
 function RU(e) {
   return e[1];
 }
-function $U(e) {
+function AU(e) {
   return qo(e);
 }
-function AU(e) {
+function $U(e) {
   return c.IsEqual(e.length, 2) ? e[1] : [];
 }
 function PU(e) {
@@ -6997,7 +6997,7 @@ var zU = p(() => {
   z();
   I();
   ol();
-  Aa();
+  $a();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/token/internal/guard.mjs
@@ -7352,7 +7352,7 @@ function dX(e, t) {
 function pX(e, t) {
   return Se(lX(e, t), (n, o) => dX(n, `${n}${o}`), () => []);
 }
-function $f(e, t) {
+function Af(e, t) {
   return pX(e, nn(t));
 }
 var uL = p(() => {
@@ -7389,13 +7389,13 @@ var pL = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/script/parser.mjs
-var g, fX, gX, hX, yX, gL, hL, bX, JI, yL, xX, vX, IX, bL, xL, vL, wX, SX, kX, IL, _X, EX, TX, CX, RX, wL, $X, AX, PX, WI, SL, YI, OX, DX, MX, NX, UX, LX, FX, kL, zX, jX, BX, qX, _L, EL, TL, CL, Af, GX, KX, HX, VX, Ce, WX, ZX, JX, YX, RL, $L, AL, PL, Pf, OL, XX, XI, QX, eQ, mL, DL, ML, tQ, nQ, rQ, oQ, iQ, aQ, fL, NL, UL, LL, sQ, cQ, uQ, lQ, dQ, pQ, mQ, fQ, gQ, hQ, yQ, bQ, xQ, FL, zL, vQ, jL, BL, IQ, wQ, QI, SQ, kQ, _Q, EQ, TQ, CQ, RQ, $Q, qL, ZI, ew, XM, GL, AQ, KL, PQ, OQ, DQ, MQ, NQ, HL, VL, UQ, tw, LQ, WL, Fm = p(() => {
+var g, fX, gX, hX, yX, gL, hL, bX, JI, yL, xX, vX, IX, bL, xL, vL, wX, SX, kX, IL, _X, EX, TX, CX, RX, wL, AX, $X, PX, WI, SL, YI, OX, DX, MX, NX, UX, LX, FX, kL, zX, jX, BX, qX, _L, EL, TL, CL, $f, GX, KX, HX, VX, Ce, WX, ZX, JX, YX, RL, AL, $L, PL, Pf, OL, XX, XI, QX, eQ, mL, DL, ML, tQ, nQ, rQ, oQ, iQ, aQ, fL, NL, UL, LL, sQ, cQ, uQ, lQ, dQ, pQ, mQ, fQ, gQ, hQ, yQ, bQ, xQ, FL, zL, vQ, jL, BL, IQ, wQ, QI, SQ, kQ, _Q, EQ, TQ, CQ, RQ, AQ, qL, ZI, ew, XM, GL, $Q, KL, PQ, OQ, DQ, MQ, NQ, HL, VL, UQ, tw, LQ, WL, Fm = p(() => {
   zU();
   pL();
-  g = (e, t, n = () => []) => e.length === 2 ? t(e) : n(), fX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [H1(t), n]), gX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [V1(t), n]), hX = (e) => g(g(vt(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [W1(t), n]), yX = (e) => g(vt(e), ([t, n]) => [Z1(t), n]), gL = (e) => g(g(fX(e), ([t, n]) => [t, n], () => g(gX(e), ([t, n]) => [t, n], () => g(hX(e), ([t, n]) => [t, n], () => g(yX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), hL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(gL(o), ([r, i]) => [[n, r], i])), ([n, o]) => hL(o, [...t, n]), () => [t, e]), bX = (e) => g(g(g(gL(e), ([t, n]) => g(hL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [J1(t), n]), JI = (e) => g(g(R("<", e), ([t, n]) => g(bX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Y1(t), n]), yL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => yL(o, [...t, n]), () => [t, e]), xX = (e) => g(g(g(Ce(e), ([t, n]) => g(yL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [X1(t), n]), vX = (e) => g(g(R("<", e), ([t, n]) => g(xX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Q1(t), n]), IX = (e) => g(g(vt(e), ([t, n]) => g(vX(n), ([o, r]) => [[t, o], r])), ([t, n]) => [eN(t), n]), bL = (e) => g(g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [tN(t), n]), xL = (e) => g(R("string", e), ([t, n]) => [nN(t), n]), vL = (e) => g(R("number", e), ([t, n]) => [rN(t), n]), wX = (e) => g(R("boolean", e), ([t, n]) => [oN(t), n]), SX = (e) => g(R("undefined", e), ([t, n]) => [iN(t), n]), kX = (e) => g(R("null", e), ([t, n]) => [aN(t), n]), IL = (e) => g(R("integer", e), ([t, n]) => [sN(t), n]), _X = (e) => g(R("bigint", e), ([t, n]) => [cN(t), n]), EX = (e) => g(R("unknown", e), ([t, n]) => [uN(t), n]), TX = (e) => g(R("any", e), ([t, n]) => [lN(t), n]), CX = (e) => g(R("object", e), ([t, n]) => [dN(t), n]), RX = (e) => g(R("never", e), ([t, n]) => [pN(t), n]), wL = (e) => g(R("symbol", e), ([t, n]) => [mN(t), n]), $X = (e) => g(R("void", e), ([t, n]) => [fN(t), n]), AX = (e) => g(R("this", e), ([t, n]) => [gN(t), n]), PX = (e) => g(g(R("${", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [vN(t), n]), WI = (e) => g(ki(["${", "`"], e), ([t, n]) => [IN(t), n]), SL = (e) => g(g(g(WI(e), ([t, n]) => g(PX(n), ([o, r]) => g(SL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(WI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(WI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [wN(t), n]), YI = (e) => g(g(R("`", e), ([t, n]) => g(SL(n), ([o, r]) => g(R("`", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [SN(t), n]), OX = (e) => g(YI(e), ([t, n]) => [kN(t), n]), DX = (e) => g(g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R("else", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => [])), ([t, n]) => [_N(t), n]), MX = (e) => g(GI(e), ([t, n]) => [hN(t), n]), NX = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [yN(t), n]), UX = (e) => g(Cf(e), ([t, n]) => [bN(t), n]), LX = (e) => g($f(["'", '"'], e), ([t, n]) => [xN(t), n]), FX = (e) => g(g(g(R("keyof", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [EN(t), n]), kL = (e, t = []) => g(g(g(R("[", e), ([n, o]) => g(Ce(o), ([r, i]) => g(R("]", i), ([a, s]) => [[n, r, a], s]))), ([n, o]) => [n, o], () => g(g(R("[", e), ([n, o]) => g(R("]", o), ([r, i]) => [[n, r], i])), ([n, o]) => [n, o], () => [])), ([n, o]) => kL(o, [...t, n]), () => [t, e]), zX = (e) => g(kL(e), ([t, n]) => [TN(t), n]), jX = (e) => g(g(g(R("extends", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("?", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R(":", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [CN(t), n]), BX = (e) => g(g(g(R("(", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(xL(e), ([t, n]) => [t, n], () => g(vL(e), ([t, n]) => [t, n], () => g(wX(e), ([t, n]) => [t, n], () => g(SX(e), ([t, n]) => [t, n], () => g(kX(e), ([t, n]) => [t, n], () => g(IL(e), ([t, n]) => [t, n], () => g(_X(e), ([t, n]) => [t, n], () => g(EX(e), ([t, n]) => [t, n], () => g(TX(e), ([t, n]) => [t, n], () => g(CX(e), ([t, n]) => [t, n], () => g(RX(e), ([t, n]) => [t, n], () => g(wL(e), ([t, n]) => [t, n], () => g($X(e), ([t, n]) => [t, n], () => g(AX(e), ([t, n]) => [t, n], () => g(MX(e), ([t, n]) => [t, n], () => g(NX(e), ([t, n]) => [t, n], () => g(UX(e), ([t, n]) => [t, n], () => g(LX(e), ([t, n]) => [t, n], () => g(OX(e), ([t, n]) => [t, n], () => g(DX(e), ([t, n]) => [t, n], () => g(QX(e), ([t, n]) => [t, n], () => g(nQ(e), ([t, n]) => [t, n], () => g(cQ(e), ([t, n]) => [t, n], () => g(sQ(e), ([t, n]) => [t, n], () => g(pQ(e), ([t, n]) => [t, n], () => g(IX(e), ([t, n]) => [t, n], () => g(mQ(e), ([t, n]) => [t, n], () => [])))))))))))))))))))))))))))), ([t, n]) => [RN(t), n]), qX = (e) => g(g(g(R("with", e), ([t, n]) => g(jL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$N(t), n]), _L = (e) => g(g(FX(e), ([t, n]) => g(BX(n), ([o, r]) => g(zX(r), ([i, a]) => g(jX(a), ([s, u]) => g(qX(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [AN(t), n]), EL = (e) => g(g(g(R("&", e), ([t, n]) => g(_L(n), ([o, r]) => g(EL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), TL = (e) => g(g(_L(e), ([t, n]) => g(EL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [PN(t), n]), CL = (e) => g(g(g(R("|", e), ([t, n]) => g(TL(n), ([o, r]) => g(CL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), Af = (e) => g(g(TL(e), ([t, n]) => g(CL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [ON(t), n]), GX = (e) => g(g(R("readonly", e), ([t, n]) => g(Af(n), ([o, r]) => [[t, o], r])), ([t, n]) => [DN(t), n]), KX = (e) => g(g(R("|", e), ([t, n]) => g(Af(n), ([o, r]) => [[t, o], r])), ([t, n]) => [MN(t), n]), HX = (e) => g(g(JI(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [NN(t), n]), VX = (e) => g(g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("extends", r), ([i, a]) => g(Af(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => [])), ([t, n]) => [UN(t), n]), Ce = (e) => g(g(VX(e), ([t, n]) => [t, n], () => g(KX(e), ([t, n]) => [t, n], () => g(GX(e), ([t, n]) => [t, n], () => g(Af(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), WX = (e) => g(Cf(e), ([t, n]) => [LN(t), n]), ZX = (e) => g(vt(e), ([t, n]) => [t, n]), JX = (e) => g($f(["'", '"'], e), ([t, n]) => [t, n]), YX = (e) => g(g(R("[", e), ([t, n]) => g(vt(n), ([o, r]) => g(R(":", r), ([i, a]) => g(g(IL(a), ([s, u]) => [s, u], () => g(vL(a), ([s, u]) => [s, u], () => g(xL(a), ([s, u]) => [s, u], () => g(wL(a), ([s, u]) => [s, u], () => [])))), ([s, u]) => g(R("]", u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [FN(t), n]), RL = (e) => g(g(WX(e), ([t, n]) => [t, n], () => g(ZX(e), ([t, n]) => [t, n], () => g(JX(e), ([t, n]) => [t, n], () => g(YX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), $L = (e) => g(g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [zN(t), n]), AL = (e) => g(g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [jN(t), n]), PL = (e) => g(g($L(e), ([t, n]) => g(RL(n), ([o, r]) => g(AL(r), ([i, a]) => g(R(":", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [BN(t), n]), Pf = (e) => g(g(g(R(",", e), ([t, n]) => g(R(`
+  g = (e, t, n = () => []) => e.length === 2 ? t(e) : n(), fX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [H1(t), n]), gX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [V1(t), n]), hX = (e) => g(g(vt(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [W1(t), n]), yX = (e) => g(vt(e), ([t, n]) => [Z1(t), n]), gL = (e) => g(g(fX(e), ([t, n]) => [t, n], () => g(gX(e), ([t, n]) => [t, n], () => g(hX(e), ([t, n]) => [t, n], () => g(yX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), hL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(gL(o), ([r, i]) => [[n, r], i])), ([n, o]) => hL(o, [...t, n]), () => [t, e]), bX = (e) => g(g(g(gL(e), ([t, n]) => g(hL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [J1(t), n]), JI = (e) => g(g(R("<", e), ([t, n]) => g(bX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Y1(t), n]), yL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => yL(o, [...t, n]), () => [t, e]), xX = (e) => g(g(g(Ce(e), ([t, n]) => g(yL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [X1(t), n]), vX = (e) => g(g(R("<", e), ([t, n]) => g(xX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Q1(t), n]), IX = (e) => g(g(vt(e), ([t, n]) => g(vX(n), ([o, r]) => [[t, o], r])), ([t, n]) => [eN(t), n]), bL = (e) => g(g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [tN(t), n]), xL = (e) => g(R("string", e), ([t, n]) => [nN(t), n]), vL = (e) => g(R("number", e), ([t, n]) => [rN(t), n]), wX = (e) => g(R("boolean", e), ([t, n]) => [oN(t), n]), SX = (e) => g(R("undefined", e), ([t, n]) => [iN(t), n]), kX = (e) => g(R("null", e), ([t, n]) => [aN(t), n]), IL = (e) => g(R("integer", e), ([t, n]) => [sN(t), n]), _X = (e) => g(R("bigint", e), ([t, n]) => [cN(t), n]), EX = (e) => g(R("unknown", e), ([t, n]) => [uN(t), n]), TX = (e) => g(R("any", e), ([t, n]) => [lN(t), n]), CX = (e) => g(R("object", e), ([t, n]) => [dN(t), n]), RX = (e) => g(R("never", e), ([t, n]) => [pN(t), n]), wL = (e) => g(R("symbol", e), ([t, n]) => [mN(t), n]), AX = (e) => g(R("void", e), ([t, n]) => [fN(t), n]), $X = (e) => g(R("this", e), ([t, n]) => [gN(t), n]), PX = (e) => g(g(R("${", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [vN(t), n]), WI = (e) => g(ki(["${", "`"], e), ([t, n]) => [IN(t), n]), SL = (e) => g(g(g(WI(e), ([t, n]) => g(PX(n), ([o, r]) => g(SL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(WI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(WI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [wN(t), n]), YI = (e) => g(g(R("`", e), ([t, n]) => g(SL(n), ([o, r]) => g(R("`", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [SN(t), n]), OX = (e) => g(YI(e), ([t, n]) => [kN(t), n]), DX = (e) => g(g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R("else", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => [])), ([t, n]) => [_N(t), n]), MX = (e) => g(GI(e), ([t, n]) => [hN(t), n]), NX = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [yN(t), n]), UX = (e) => g(Cf(e), ([t, n]) => [bN(t), n]), LX = (e) => g(Af(["'", '"'], e), ([t, n]) => [xN(t), n]), FX = (e) => g(g(g(R("keyof", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [EN(t), n]), kL = (e, t = []) => g(g(g(R("[", e), ([n, o]) => g(Ce(o), ([r, i]) => g(R("]", i), ([a, s]) => [[n, r, a], s]))), ([n, o]) => [n, o], () => g(g(R("[", e), ([n, o]) => g(R("]", o), ([r, i]) => [[n, r], i])), ([n, o]) => [n, o], () => [])), ([n, o]) => kL(o, [...t, n]), () => [t, e]), zX = (e) => g(kL(e), ([t, n]) => [TN(t), n]), jX = (e) => g(g(g(R("extends", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("?", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R(":", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [CN(t), n]), BX = (e) => g(g(g(R("(", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(xL(e), ([t, n]) => [t, n], () => g(vL(e), ([t, n]) => [t, n], () => g(wX(e), ([t, n]) => [t, n], () => g(SX(e), ([t, n]) => [t, n], () => g(kX(e), ([t, n]) => [t, n], () => g(IL(e), ([t, n]) => [t, n], () => g(_X(e), ([t, n]) => [t, n], () => g(EX(e), ([t, n]) => [t, n], () => g(TX(e), ([t, n]) => [t, n], () => g(CX(e), ([t, n]) => [t, n], () => g(RX(e), ([t, n]) => [t, n], () => g(wL(e), ([t, n]) => [t, n], () => g(AX(e), ([t, n]) => [t, n], () => g($X(e), ([t, n]) => [t, n], () => g(MX(e), ([t, n]) => [t, n], () => g(NX(e), ([t, n]) => [t, n], () => g(UX(e), ([t, n]) => [t, n], () => g(LX(e), ([t, n]) => [t, n], () => g(OX(e), ([t, n]) => [t, n], () => g(DX(e), ([t, n]) => [t, n], () => g(QX(e), ([t, n]) => [t, n], () => g(nQ(e), ([t, n]) => [t, n], () => g(cQ(e), ([t, n]) => [t, n], () => g(sQ(e), ([t, n]) => [t, n], () => g(pQ(e), ([t, n]) => [t, n], () => g(IX(e), ([t, n]) => [t, n], () => g(mQ(e), ([t, n]) => [t, n], () => [])))))))))))))))))))))))))))), ([t, n]) => [RN(t), n]), qX = (e) => g(g(g(R("with", e), ([t, n]) => g(jL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [AN(t), n]), _L = (e) => g(g(FX(e), ([t, n]) => g(BX(n), ([o, r]) => g(zX(r), ([i, a]) => g(jX(a), ([s, u]) => g(qX(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [$N(t), n]), EL = (e) => g(g(g(R("&", e), ([t, n]) => g(_L(n), ([o, r]) => g(EL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), TL = (e) => g(g(_L(e), ([t, n]) => g(EL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [PN(t), n]), CL = (e) => g(g(g(R("|", e), ([t, n]) => g(TL(n), ([o, r]) => g(CL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), $f = (e) => g(g(TL(e), ([t, n]) => g(CL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [ON(t), n]), GX = (e) => g(g(R("readonly", e), ([t, n]) => g($f(n), ([o, r]) => [[t, o], r])), ([t, n]) => [DN(t), n]), KX = (e) => g(g(R("|", e), ([t, n]) => g($f(n), ([o, r]) => [[t, o], r])), ([t, n]) => [MN(t), n]), HX = (e) => g(g(JI(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [NN(t), n]), VX = (e) => g(g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("extends", r), ([i, a]) => g($f(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => [])), ([t, n]) => [UN(t), n]), Ce = (e) => g(g(VX(e), ([t, n]) => [t, n], () => g(KX(e), ([t, n]) => [t, n], () => g(GX(e), ([t, n]) => [t, n], () => g($f(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), WX = (e) => g(Cf(e), ([t, n]) => [LN(t), n]), ZX = (e) => g(vt(e), ([t, n]) => [t, n]), JX = (e) => g(Af(["'", '"'], e), ([t, n]) => [t, n]), YX = (e) => g(g(R("[", e), ([t, n]) => g(vt(n), ([o, r]) => g(R(":", r), ([i, a]) => g(g(IL(a), ([s, u]) => [s, u], () => g(vL(a), ([s, u]) => [s, u], () => g(xL(a), ([s, u]) => [s, u], () => g(wL(a), ([s, u]) => [s, u], () => [])))), ([s, u]) => g(R("]", u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [FN(t), n]), RL = (e) => g(g(WX(e), ([t, n]) => [t, n], () => g(ZX(e), ([t, n]) => [t, n], () => g(JX(e), ([t, n]) => [t, n], () => g(YX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), AL = (e) => g(g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [zN(t), n]), $L = (e) => g(g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [jN(t), n]), PL = (e) => g(g(AL(e), ([t, n]) => g(RL(n), ([o, r]) => g($L(r), ([i, a]) => g(R(":", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [BN(t), n]), Pf = (e) => g(g(g(R(",", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(",", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(`
-`, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))))), ([t, n]) => [t, n]), OL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(PL(o), ([r, i]) => [[n, r], i])), ([n, o]) => OL(o, [...t, n]), () => [t, e]), XX = (e) => g(g(g(PL(e), ([t, n]) => g(OL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [qN(t), n]), XI = (e) => g(g(R("{", e), ([t, n]) => g(XX(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [KN(t), n]), QX = (e) => g(XI(e), ([t, n]) => [HN(t), n]), eQ = (e) => g(g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])))), ([t, n]) => [VN(t), n]), mL = (e) => g(g(eQ(e), ([t, n]) => [t, n], () => g(g($L(e), ([t, n]) => g(Ce(n), ([o, r]) => g(AL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])), ([t, n]) => [WN(t), n]), DL = (e) => g(g(g(R("...", e), ([t, n]) => g(mL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(mL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [ZN(t), n]), ML = (e, t = []) => g(g(R(",", e), ([n, o]) => g(DL(o), ([r, i]) => [[n, r], i])), ([n, o]) => ML(o, [...t, n]), () => [t, e]), tQ = (e) => g(g(g(DL(e), ([t, n]) => g(ML(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [JN(t), n]), nQ = (e) => g(g(R("[", e), ([t, n]) => g(tQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [YN(t), n]), rQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [XN(t), n]), oQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [QN(t), n]), iQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [eU(t), n]), aQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [tU(t), n]), fL = (e) => g(g(rQ(e), ([t, n]) => [t, n], () => g(oQ(e), ([t, n]) => [t, n], () => g(iQ(e), ([t, n]) => [t, n], () => g(aQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), NL = (e) => g(g(g(R("...", e), ([t, n]) => g(fL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(fL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [nU(t), n]), UL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(NL(o), ([r, i]) => [[n, r], i])), ([n, o]) => UL(o, [...t, n]), () => [t, e]), LL = (e) => g(g(g(NL(e), ([t, n]) => g(UL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [rU(t), n]), sQ = (e) => g(g(R("(", e), ([t, n]) => g(LL(n), ([o, r]) => g(R(")", r), ([i, a]) => g(R("=>", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [oU(t), n]), cQ = (e) => g(g(R("new", e), ([t, n]) => g(R("(", n), ([o, r]) => g(LL(r), ([i, a]) => g(R(")", a), ([s, u]) => g(R("=>", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [iU(t), n]), uQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [aU(t), n]), lQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [sU(t), n]), dQ = (e) => g(g(g(R("as", e), ([t, n]) => g(Ce(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [cU(t), n]), pQ = (e) => g(g(R("{", e), ([t, n]) => g(uQ(n), ([o, r]) => g(R("[", r), ([i, a]) => g(vt(a), ([s, u]) => g(R("in", u), ([l, m]) => g(Ce(m), ([h, b]) => g(dQ(b), ([f, y]) => g(R("]", y), ([x, v]) => g(lQ(v), ([S, w]) => g(R(":", w), ([k, C]) => g(Ce(C), ([$, D]) => g(bL(D), ([V, te]) => g(R("}", te), ([Z, $e]) => [[t, o, i, s, l, h, f, x, S, k, $, V, Z], $e]))))))))))))), ([t, n]) => [uU(t), n]), mQ = (e) => g(vt(e), ([t, n]) => [lU(t), n]), fQ = (e) => g(GI(e), ([t, n]) => [dU(t), n]), gQ = (e) => g(Cf(e), ([t, n]) => [pU(t), n]), hQ = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [mU(t), n]), yQ = (e) => g($f(['"', "'"], e), ([t, n]) => [t, n]), bQ = (e) => g(R("null", e), ([t, n]) => [fU(t), n]), xQ = (e) => g(R("undefined", e), ([t, n]) => [void 0, n]), FL = (e) => g(g(RL(e), ([t, n]) => g(R(":", n), ([o, r]) => g(QI(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [gU(t), n]), zL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(FL(o), ([r, i]) => [[n, r], i])), ([n, o]) => zL(o, [...t, n]), () => [t, e]), vQ = (e) => g(g(g(FL(e), ([t, n]) => g(zL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [hU(t), n]), jL = (e) => g(g(R("{", e), ([t, n]) => g(vQ(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [yU(t), n]), BL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(QI(o), ([r, i]) => [[n, r], i])), ([n, o]) => BL(o, [...t, n]), () => [t, e]), IQ = (e) => g(g(g(QI(e), ([t, n]) => g(BL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [bU(t), n]), wQ = (e) => g(g(R("[", e), ([t, n]) => g(IQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [xU(t), n]), QI = (e) => g(g(fQ(e), ([t, n]) => [t, n], () => g(gQ(e), ([t, n]) => [t, n], () => g(hQ(e), ([t, n]) => [t, n], () => g(yQ(e), ([t, n]) => [t, n], () => g(bQ(e), ([t, n]) => [t, n], () => g(xQ(e), ([t, n]) => [t, n], () => g(jL(e), ([t, n]) => [t, n], () => g(wQ(e), ([t, n]) => [t, n], () => [])))))))), ([t, n]) => [t, n]), SQ = (e) => g(R("-?(?:0|[1-9][0-9]*)n", e), ([t, n]) => [vU(t), n]), kQ = (e) => g(R(".*", e), ([t, n]) => [IU(t), n]), _Q = (e) => g(R("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", e), ([t, n]) => [wU(t), n]), EQ = (e) => g(R("-?(?:0|[1-9][0-9]*)", e), ([t, n]) => [SU(t), n]), TQ = (e) => g(R("(?!)", e), ([t, n]) => [kU(t), n]), CQ = (e) => g(lL(["-?(?:0|[1-9][0-9]*)n", ".*", "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", "-?(?:0|[1-9][0-9]*)", "(?!)", "(", ")", "$", "|"], e), ([t, n]) => [_U(t), n]), RQ = (e) => g(g(SQ(e), ([t, n]) => [t, n], () => g(kQ(e), ([t, n]) => [t, n], () => g(_Q(e), ([t, n]) => [t, n], () => g(EQ(e), ([t, n]) => [t, n], () => g(TQ(e), ([t, n]) => [t, n], () => g($Q(e), ([t, n]) => [t, n], () => g(CQ(e), ([t, n]) => [t, n], () => []))))))), ([t, n]) => [t, n]), $Q = (e) => g(g(R("(", e), ([t, n]) => g(ew(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [EU(t), n]), qL = (e) => g(g(g(ZI(e), ([t, n]) => g(R("|", n), ([o, r]) => g(qL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(ZI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => []))), ([t, n]) => [TU(t), n]), ZI = (e) => g(g(RQ(e), ([t, n]) => g(ew(n), ([o, r]) => [[t, o], r])), ([t, n]) => [CU(t), n]), ew = (e) => g(g(qL(e), ([t, n]) => [t, n], () => g(ZI(e), ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), XM = (e) => g(g(R("^", e), ([t, n]) => g(ew(n), ([o, r]) => g(R("$", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [RU(t), n]), GL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => GL(o, [...t, n]), () => [t, e]), AQ = (e) => g(g(g(Ce(e), ([t, n]) => g(GL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$U(t), n]), KL = (e) => g(g(g(R("extends", e), ([t, n]) => g(AQ(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [AU(t), n]), PQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(JI(r), ([i, a]) => g(KL(a), ([s, u]) => g(XI(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [PU(t), n]), OQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(KL(r), ([i, a]) => g(XI(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [OU(t), n]), DQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(JI(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [DU(t), n]), MQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("=", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [MU(t), n]), NQ = (e) => g(g(g(R("export", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [NU(t), n]), HL = (e) => g(g(g(R(";", e), ([t, n]) => g(R(`
+`, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))))), ([t, n]) => [t, n]), OL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(PL(o), ([r, i]) => [[n, r], i])), ([n, o]) => OL(o, [...t, n]), () => [t, e]), XX = (e) => g(g(g(PL(e), ([t, n]) => g(OL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [qN(t), n]), XI = (e) => g(g(R("{", e), ([t, n]) => g(XX(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [KN(t), n]), QX = (e) => g(XI(e), ([t, n]) => [HN(t), n]), eQ = (e) => g(g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])))), ([t, n]) => [VN(t), n]), mL = (e) => g(g(eQ(e), ([t, n]) => [t, n], () => g(g(AL(e), ([t, n]) => g(Ce(n), ([o, r]) => g($L(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])), ([t, n]) => [WN(t), n]), DL = (e) => g(g(g(R("...", e), ([t, n]) => g(mL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(mL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [ZN(t), n]), ML = (e, t = []) => g(g(R(",", e), ([n, o]) => g(DL(o), ([r, i]) => [[n, r], i])), ([n, o]) => ML(o, [...t, n]), () => [t, e]), tQ = (e) => g(g(g(DL(e), ([t, n]) => g(ML(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [JN(t), n]), nQ = (e) => g(g(R("[", e), ([t, n]) => g(tQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [YN(t), n]), rQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [XN(t), n]), oQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [QN(t), n]), iQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [eU(t), n]), aQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [tU(t), n]), fL = (e) => g(g(rQ(e), ([t, n]) => [t, n], () => g(oQ(e), ([t, n]) => [t, n], () => g(iQ(e), ([t, n]) => [t, n], () => g(aQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), NL = (e) => g(g(g(R("...", e), ([t, n]) => g(fL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(fL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [nU(t), n]), UL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(NL(o), ([r, i]) => [[n, r], i])), ([n, o]) => UL(o, [...t, n]), () => [t, e]), LL = (e) => g(g(g(NL(e), ([t, n]) => g(UL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [rU(t), n]), sQ = (e) => g(g(R("(", e), ([t, n]) => g(LL(n), ([o, r]) => g(R(")", r), ([i, a]) => g(R("=>", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [oU(t), n]), cQ = (e) => g(g(R("new", e), ([t, n]) => g(R("(", n), ([o, r]) => g(LL(r), ([i, a]) => g(R(")", a), ([s, u]) => g(R("=>", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [iU(t), n]), uQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [aU(t), n]), lQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [sU(t), n]), dQ = (e) => g(g(g(R("as", e), ([t, n]) => g(Ce(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [cU(t), n]), pQ = (e) => g(g(R("{", e), ([t, n]) => g(uQ(n), ([o, r]) => g(R("[", r), ([i, a]) => g(vt(a), ([s, u]) => g(R("in", u), ([l, m]) => g(Ce(m), ([h, b]) => g(dQ(b), ([f, y]) => g(R("]", y), ([x, v]) => g(lQ(v), ([S, w]) => g(R(":", w), ([k, C]) => g(Ce(C), ([A, D]) => g(bL(D), ([V, te]) => g(R("}", te), ([Z, Ae]) => [[t, o, i, s, l, h, f, x, S, k, A, V, Z], Ae]))))))))))))), ([t, n]) => [uU(t), n]), mQ = (e) => g(vt(e), ([t, n]) => [lU(t), n]), fQ = (e) => g(GI(e), ([t, n]) => [dU(t), n]), gQ = (e) => g(Cf(e), ([t, n]) => [pU(t), n]), hQ = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [mU(t), n]), yQ = (e) => g(Af(['"', "'"], e), ([t, n]) => [t, n]), bQ = (e) => g(R("null", e), ([t, n]) => [fU(t), n]), xQ = (e) => g(R("undefined", e), ([t, n]) => [void 0, n]), FL = (e) => g(g(RL(e), ([t, n]) => g(R(":", n), ([o, r]) => g(QI(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [gU(t), n]), zL = (e, t = []) => g(g(Pf(e), ([n, o]) => g(FL(o), ([r, i]) => [[n, r], i])), ([n, o]) => zL(o, [...t, n]), () => [t, e]), vQ = (e) => g(g(g(FL(e), ([t, n]) => g(zL(n), ([o, r]) => g(g(Pf(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [hU(t), n]), jL = (e) => g(g(R("{", e), ([t, n]) => g(vQ(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [yU(t), n]), BL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(QI(o), ([r, i]) => [[n, r], i])), ([n, o]) => BL(o, [...t, n]), () => [t, e]), IQ = (e) => g(g(g(QI(e), ([t, n]) => g(BL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [bU(t), n]), wQ = (e) => g(g(R("[", e), ([t, n]) => g(IQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [xU(t), n]), QI = (e) => g(g(fQ(e), ([t, n]) => [t, n], () => g(gQ(e), ([t, n]) => [t, n], () => g(hQ(e), ([t, n]) => [t, n], () => g(yQ(e), ([t, n]) => [t, n], () => g(bQ(e), ([t, n]) => [t, n], () => g(xQ(e), ([t, n]) => [t, n], () => g(jL(e), ([t, n]) => [t, n], () => g(wQ(e), ([t, n]) => [t, n], () => [])))))))), ([t, n]) => [t, n]), SQ = (e) => g(R("-?(?:0|[1-9][0-9]*)n", e), ([t, n]) => [vU(t), n]), kQ = (e) => g(R(".*", e), ([t, n]) => [IU(t), n]), _Q = (e) => g(R("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", e), ([t, n]) => [wU(t), n]), EQ = (e) => g(R("-?(?:0|[1-9][0-9]*)", e), ([t, n]) => [SU(t), n]), TQ = (e) => g(R("(?!)", e), ([t, n]) => [kU(t), n]), CQ = (e) => g(lL(["-?(?:0|[1-9][0-9]*)n", ".*", "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", "-?(?:0|[1-9][0-9]*)", "(?!)", "(", ")", "$", "|"], e), ([t, n]) => [_U(t), n]), RQ = (e) => g(g(SQ(e), ([t, n]) => [t, n], () => g(kQ(e), ([t, n]) => [t, n], () => g(_Q(e), ([t, n]) => [t, n], () => g(EQ(e), ([t, n]) => [t, n], () => g(TQ(e), ([t, n]) => [t, n], () => g(AQ(e), ([t, n]) => [t, n], () => g(CQ(e), ([t, n]) => [t, n], () => []))))))), ([t, n]) => [t, n]), AQ = (e) => g(g(R("(", e), ([t, n]) => g(ew(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [EU(t), n]), qL = (e) => g(g(g(ZI(e), ([t, n]) => g(R("|", n), ([o, r]) => g(qL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(ZI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => []))), ([t, n]) => [TU(t), n]), ZI = (e) => g(g(RQ(e), ([t, n]) => g(ew(n), ([o, r]) => [[t, o], r])), ([t, n]) => [CU(t), n]), ew = (e) => g(g(qL(e), ([t, n]) => [t, n], () => g(ZI(e), ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), XM = (e) => g(g(R("^", e), ([t, n]) => g(ew(n), ([o, r]) => g(R("$", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [RU(t), n]), GL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => GL(o, [...t, n]), () => [t, e]), $Q = (e) => g(g(g(Ce(e), ([t, n]) => g(GL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [AU(t), n]), KL = (e) => g(g(g(R("extends", e), ([t, n]) => g($Q(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$U(t), n]), PQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(JI(r), ([i, a]) => g(KL(a), ([s, u]) => g(XI(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [PU(t), n]), OQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(KL(r), ([i, a]) => g(XI(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [OU(t), n]), DQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(JI(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [DU(t), n]), MQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("=", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [MU(t), n]), NQ = (e) => g(g(g(R("export", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [NU(t), n]), HL = (e) => g(g(g(R(";", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(`
 `, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [t, n]), VL = (e, t = []) => g(g(HL(e), ([n, o]) => g(tw(o), ([r, i]) => [[n, r], i])), ([n, o]) => VL(o, [...t, n]), () => [t, e]), UQ = (e) => g(g(g(tw(e), ([t, n]) => g(VL(n), ([o, r]) => g(g(HL(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [UU(t), n]), tw = (e) => g(g(NQ(e), ([t, n]) => g(g(PQ(n), ([o, r]) => [o, r], () => g(OQ(n), ([o, r]) => [o, r], () => g(DQ(n), ([o, r]) => [o, r], () => g(MQ(n), ([o, r]) => [o, r], () => [])))), ([o, r]) => g(bL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [LU(t), n]), LQ = (e) => g(g(tw(e), ([t, n]) => g(UQ(n), ([o, r]) => [[t, o], r])), ([t, n]) => [FU(t), n]), WL = (e) => g(g(LQ(e), ([t, n]) => [t, n], () => g(HX(e), ([t, n]) => [t, n], () => g(Ce(e), ([t, n]) => [t, n], () => []))), ([t, n]) => [t, n]);
 });
@@ -7451,7 +7451,7 @@ function JL(e, t, n, o = []) {
   return c.ShiftLeft(e, (r, i) => JL(i, t, n, [...o, dl(r, [], "")]), () => _i(t, `${n}(${zQ(o)})`));
 }
 function dl(e, t, n) {
-  return bt(e) ? JQ(e.enum, t, n) : Vt(e) ? GQ(t, n) : xe(e) ? BQ(e.const, t, n) : Jn(e) ? qQ(t, n) : En(e) ? HQ(t, n) : ot(e) ? KQ(t, n) : Nt(e) ? VQ(t, n) : qe(e) ? WQ(e.pattern, t, n) : XL(e) ? ZQ(e.parameters[0], t, n) : L(e) ? JL(e.anyOf, t, n) : $M;
+  return bt(e) ? JQ(e.enum, t, n) : Vt(e) ? GQ(t, n) : xe(e) ? BQ(e.const, t, n) : Jn(e) ? qQ(t, n) : En(e) ? HQ(t, n) : ot(e) ? KQ(t, n) : Nt(e) ? VQ(t, n) : qe(e) ? WQ(e.pattern, t, n) : XL(e) ? ZQ(e.parameters[0], t, n) : F(e) ? JL(e.anyOf, t, n) : AM;
 }
 function _i(e, t) {
   return c.ShiftLeft(e, (n, o) => dl(n, o, t), () => t);
@@ -7591,7 +7591,7 @@ function iF(e, t, n) {
   return c.ShiftLeft(n, (o, r) => It(_e(e, t, o), (i) => j(i), () => iF(e, t, r)), () => ce());
 }
 function Me(e, t, n) {
-  return lt(n) ? tee(e, t) : yt(n) ? nee(e, t, n.if, n.then, n.else) : bt(n) ? ree(e, t, n.enum) : Ct(n) ? eee(e, n.name, t, n.extends) : Y(n) ? oF(e, t, n.allOf) : qe(n) ? oee(e, t, n.pattern) : L(n) ? iF(e, t, n.anyOf) : Tt(n) ? j(e) : ce();
+  return lt(n) ? tee(e, t) : yt(n) ? nee(e, t, n.if, n.then, n.else) : bt(n) ? ree(e, t, n.enum) : Ct(n) ? eee(e, n.name, t, n.extends) : Y(n) ? oF(e, t, n.allOf) : qe(n) ? oee(e, t, n.pattern) : F(n) ? iF(e, t, n.anyOf) : Tt(n) ? j(e) : ce();
 }
 var hn = p(() => {
   I();
@@ -7798,10 +7798,10 @@ var RF = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/null.mjs
-function $F(e, t, n) {
+function AF(e, t, n) {
   return co(n) ? j(e) : Me(e, t, n);
 }
-var AF = p(() => {
+var $F = p(() => {
   Us();
   hn();
   Ye();
@@ -7847,7 +7847,7 @@ function bee(e, t, n) {
 function xee(e, t) {
   return c.Keys(t).reduce((n, o) => ({
     ...n,
-    [o]: c.HasPropertyKey(e, o) ? L(n[o]) ? ie([...n[o].anyOf, t[o]]) : ie([e[o], t[o]]) : t[o]
+    [o]: c.HasPropertyKey(e, o) ? F(n[o]) ? ie([...n[o].anyOf, t[o]]) : ie([e[o], t[o]]) : t[o]
   }), e);
 }
 function DF(e, t, n, o) {
@@ -8009,13 +8009,13 @@ function Ree(e, t, n) {
   }
   return j(e);
 }
-function $ee(e, t, n) {
+function Aee(e, t, n) {
   let o = Nf(n);
   return fl(o) ? Uf(e, o.name, t, o.type) : Ree(e, t, n);
 }
 function WF(e, t, n) {
   let o = Ei(e, Xe([], []), t);
-  return ge(n) ? Cee(e, o, n.items) : ve(n) ? $ee(e, o, n.items) : Me(e, xt(o), n);
+  return ge(n) ? Cee(e, o, n.items) : ve(n) ? Aee(e, o, n.items) : Me(e, xt(o), n);
 }
 var ZF = p(() => {
   I();
@@ -8050,7 +8050,7 @@ function dw(e, t, n) {
 }
 function QF(e, t, n) {
   let o = Nf(n);
-  return fl(o) ? Uf(e, o.name, t, o.type) : L(n) ? dw(e, t, n.anyOf) : dw(e, t, [n]);
+  return fl(o) ? Uf(e, o.name, t, o.type) : F(n) ? dw(e, t, n.anyOf) : dw(e, t, [n]);
 }
 var ez = p(() => {
   I();
@@ -8084,7 +8084,7 @@ var oz = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/extends/extends_left.mjs
 function _e(e, t, n) {
-  return lt(t) ? aF(e, t, n) : ve(t) ? cF(e, t, t.items, n) : Jn(t) ? lF(e, t, n) : En(t) ? pF(e, t, n) : gt(t) ? fF(e, t.parameters, t.instanceType, n) : yt(t) ? hF(e, t.if, t.then, t.else, n) : bt(t) ? bF(e, t.enum, n) : ht(t) ? vF(e, t.parameters, t.returnType, n) : Vt(t) ? wF(e, t, n) : Y(t) ? kF(e, t.allOf, n) : xe(t) ? EF(e, t, n) : Dn(t) ? CF(e, t, n) : co(t) ? $F(e, t, n) : ot(t) ? PF(e, t, n) : Q(t) ? MF(e, t.properties, n) : Ue(t) ? UF(e, Kt(t), We(t), n) : Nt(t) ? FF(e, t, n) : uo(t) ? jF(e, t, n) : qe(t) ? qF(e, t.pattern, n) : ge(t) ? WF(e, t.items, n) : _r(t) ? JF(e, t, n) : L(t) ? QF(e, t.anyOf, n) : Tt(t) ? tz(e, t, n) : Xn(t) ? rz(e, t, n) : ce();
+  return lt(t) ? aF(e, t, n) : ve(t) ? cF(e, t, t.items, n) : Jn(t) ? lF(e, t, n) : En(t) ? pF(e, t, n) : gt(t) ? fF(e, t.parameters, t.instanceType, n) : yt(t) ? hF(e, t.if, t.then, t.else, n) : bt(t) ? bF(e, t.enum, n) : ht(t) ? vF(e, t.parameters, t.returnType, n) : Vt(t) ? wF(e, t, n) : Y(t) ? kF(e, t.allOf, n) : xe(t) ? EF(e, t, n) : Dn(t) ? CF(e, t, n) : co(t) ? AF(e, t, n) : ot(t) ? PF(e, t, n) : Q(t) ? MF(e, t.properties, n) : Ue(t) ? UF(e, Kt(t), We(t), n) : Nt(t) ? FF(e, t, n) : uo(t) ? jF(e, t, n) : qe(t) ? qF(e, t.pattern, n) : ge(t) ? WF(e, t.items, n) : _r(t) ? JF(e, t, n) : F(t) ? QF(e, t.anyOf, n) : Tt(t) ? tz(e, t, n) : Xn(t) ? rz(e, t, n) : ce();
 }
 var Fn = p(() => {
   sF();
@@ -8099,7 +8099,7 @@ var Fn = p(() => {
   _F();
   TF();
   RF();
-  AF();
+  $F();
   OF();
   NF();
   LF();
@@ -8139,11 +8139,11 @@ var Fn = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/interface/instantiate.mjs
-function Aee(e, t) {
+function $ee(e, t) {
   return it([...e, X(t)]);
 }
 function pw(e, t, n) {
-  return de(e) ? _.Update(Aee(e, t), {}, n) : al(e, t, n);
+  return de(e) ? _.Update($ee(e, t), {}, n) : al(e, t, n);
 }
 function iz(e, t, n, o, r) {
   let i = ur(e, t, n), a = gl(e, t, o);
@@ -8153,7 +8153,7 @@ var Lf = p(() => {
   z();
   Ne();
   ye();
-  Aa();
+  $a();
   J();
   J();
   J();
@@ -8188,7 +8188,7 @@ function Pa(e, t, n) {
   return c.ShiftLeft(n, (o, r) => yl(e, t, o) ? !0 : Pa(e, t, r), () => !1);
 }
 function yl(e, t, n) {
-  return De(n) ? Pee(e, t, n.$ref) : ve(n) ? yl(e, t, n.items) : gt(n) ? Pa(e, t, [...n.parameters, n.instanceType]) : ht(n) ? Pa(e, t, [...n.parameters, n.returnType]) : Ys(n) ? sz(e, t, n.parameters[1]) : Y(n) ? Pa(e, t, n.allOf) : Q(n) ? sz(e, t, n.properties) : L(n) ? Pa(e, t, n.anyOf) : ge(n) ? Pa(e, t, n.items) : Ue(n) ? yl(e, t, We(n)) : !1;
+  return De(n) ? Pee(e, t, n.$ref) : ve(n) ? yl(e, t, n.items) : gt(n) ? Pa(e, t, [...n.parameters, n.instanceType]) : ht(n) ? Pa(e, t, [...n.parameters, n.returnType]) : Ys(n) ? sz(e, t, n.parameters[1]) : Y(n) ? Pa(e, t, n.allOf) : Q(n) ? sz(e, t, n.properties) : F(n) ? Pa(e, t, n.anyOf) : ge(n) ? Pa(e, t, n.items) : Ue(n) ? yl(e, t, We(n)) : !1;
 }
 function cz(e, t, n) {
   return yl(e, t, n);
@@ -8233,7 +8233,7 @@ function Xs(e, t, n) {
   return t.reduce((o, r) => bl(e, r, o), n);
 }
 function bl(e, t, n) {
-  return De(t) ? Dee(e, t.$ref, n) : ve(t) ? bl(e, t.items, n) : gt(t) ? Xs(e, [...t.parameters, t.instanceType], n) : ht(t) ? Xs(e, [...t.parameters, t.returnType], n) : Ys(t) ? lz(e, t.parameters[1], n) : Y(t) ? Xs(e, t.allOf, n) : Q(t) ? lz(e, t.properties, n) : L(t) ? Xs(e, t.anyOf, n) : ge(t) ? Xs(e, t.items, n) : Ue(t) ? bl(e, We(t), n) : n;
+  return De(t) ? Dee(e, t.$ref, n) : ve(t) ? bl(e, t.items, n) : gt(t) ? Xs(e, [...t.parameters, t.instanceType], n) : ht(t) ? Xs(e, [...t.parameters, t.returnType], n) : Ys(t) ? lz(e, t.parameters[1], n) : Y(t) ? Xs(e, t.allOf, n) : Q(t) ? lz(e, t.properties, n) : F(t) ? Xs(e, t.anyOf, n) : ge(t) ? Xs(e, t.items, n) : Ue(t) ? bl(e, We(t), n) : n;
 }
 function dz(e, t, n) {
   return bl(e, n, [t]);
@@ -8264,7 +8264,7 @@ function xl(e) {
   return e.reduce((t, n) => [...t, Oa(n)], []);
 }
 function Oa(e) {
-  return De(e) ? Mee(e.$ref) : ve(e) ? Pn(Oa(e.items), Ps(e)) : gt(e) ? no(xl(e.parameters), Oa(e.instanceType)) : ht(e) ? ro(xl(e.parameters), Oa(e.returnType)) : Y(e) ? mn(xl(e.allOf)) : Q(e) ? X(Nee(e.properties)) : Ue(e) ? Bs(Ii(e), Oa(We(e))) : L(e) ? ie(xl(e.anyOf)) : ge(e) ? xt(xl(e.items)) : e;
+  return De(e) ? Mee(e.$ref) : ve(e) ? Pn(Oa(e.items), Ps(e)) : gt(e) ? no(xl(e.parameters), Oa(e.instanceType)) : ht(e) ? ro(xl(e.parameters), Oa(e.returnType)) : Y(e) ? mn(xl(e.allOf)) : Q(e) ? X(Nee(e.properties)) : Ue(e) ? Bs(Ii(e), Oa(We(e))) : F(e) ? ie(xl(e.anyOf)) : ge(e) ? xt(xl(e.items)) : e;
 }
 function Uee(e, t) {
   return t in e ? Oa(e[t]) : Dt();
@@ -8307,7 +8307,7 @@ var hw = p(() => {
   Mn();
   Ne();
   gw();
-  Aa();
+  $a();
   J();
   J();
   J();
@@ -8427,12 +8427,12 @@ var zf = p(() => {
 var Js = p(() => {
   MI();
   tl();
-  $I();
+  AI();
   PI();
   ye();
   Wm();
   zf();
-  AI();
+  $I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/call/distribute_arguments.mjs
@@ -8453,7 +8453,7 @@ function Bee(e) {
 }
 function qee(e) {
   let t = Bee(e);
-  return L(t) ? [...t.anyOf] : [t];
+  return F(t) ? [...t.anyOf] : [t];
 }
 function Gee(e, t) {
   return e.reduce((n, o) => [...n, [...o, t]], []);
@@ -8594,7 +8594,7 @@ var Iw, ww, Sw = p(() => {
 function sl(e, t) {
   return _.Create({ "~kind": "Call" }, { type: "call", target: e, arguments: t }, {});
 }
-function $z(e, t) {
+function Az(e, t) {
   return jf({}, Xe([], []), e, t);
 }
 function Qs(e) {
@@ -8611,12 +8611,12 @@ var Hs = p(() => {
 function ite(e) {
   return _.Discard(e, ["~immutable"]);
 }
-function Az(e, t) {
+function $z(e, t) {
   return _.Update(ite(e), {}, t);
 }
 function Pz(e, t, n, o) {
   let r = M(e, t, n);
-  return Az(r, o);
+  return $z(r, o);
 }
 var kw = p(() => {
   z();
@@ -8662,7 +8662,7 @@ var zz = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/intrinsics/from_type.mjs
 function Ko(e, t) {
-  return xe(t) ? Mz(e, t.const) : qe(t) ? Uz(e, t.pattern) : L(t) ? Fz(e, t.anyOf) : t;
+  return xe(t) ? Mz(e, t.const) : qe(t) ? Uz(e, t.pattern) : F(t) ? Fz(e, t.anyOf) : t;
 }
 var Bf = p(() => {
   Mt();
@@ -8770,7 +8770,7 @@ function Zz(e, t, n, o, r = {}) {
 }
 var Vf = p(() => {
   Oe();
-  $w();
+  Aw();
   J();
 });
 
@@ -8786,7 +8786,7 @@ function Jz(e, t, n, o, r, i, a) {
   let s = M(e, t, n), u = M(e, t, o);
   return Rw(e, t, s, u, r, i, a);
 }
-var $w = p(() => {
+var Aw = p(() => {
   z();
   Ie();
   jr();
@@ -8795,8 +8795,8 @@ var $w = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/conditional/index.mjs
-var Aw = p(() => {
-  $w();
+var $w = p(() => {
+  Aw();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/constructor_parameters.mjs
@@ -8881,7 +8881,7 @@ function nj(e, t, n = []) {
   return c.ShiftLeft(e, (o, r) => nj(r, t, [...n, ...pte(o, t)]), () => n);
 }
 function rj(e, t) {
-  let n = kr(e), o = L(n) ? n.anyOf : [n], r = nj(o, t);
+  let n = kr(e), o = F(n) ? n.anyOf : [n], r = nj(o, t);
   return Ln(r);
 }
 var oj = p(() => {
@@ -9004,7 +9004,7 @@ var bj = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/object/from_type.mjs
 function lr(e) {
-  return Be(e) ? sj(e.$defs, e.$ref) : yt(e) ? uj(e.if, e.then, e.else) : Y(e) ? dj(e.allOf) : L(e) ? yj(e.anyOf) : ge(e) ? fj(e.items) : Q(e) ? e.properties : {};
+  return Be(e) ? sj(e.$defs, e.$ref) : yt(e) ? uj(e.if, e.then, e.else) : Y(e) ? dj(e.allOf) : F(e) ? yj(e.anyOf) : ge(e) ? fj(e.items) : Q(e) ? e.properties : {};
 }
 var Ma = p(() => {
   Mn();
@@ -9053,7 +9053,7 @@ function vj(e) {
   return e.map((t) => Ij(t));
 }
 function Ij(e) {
-  return Y(e) ? mn(vj(e.allOf)) : L(e) ? ie(vj(e.anyOf)) : xe(e) ? yte(e.const) : e;
+  return Y(e) ? mn(vj(e.allOf)) : F(e) ? ie(vj(e.anyOf)) : xe(e) ? yte(e.const) : e;
 }
 function wj(e, t) {
   let n = Ij(t), o = un({}, n, Yn());
@@ -9104,11 +9104,11 @@ var Rj = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_intersect.mjs
-function $j(e) {
+function Aj(e) {
   let t = it(e);
   return er(t);
 }
-var Aj = p(() => {
+var $j = p(() => {
   ye();
   Ti();
 });
@@ -9140,7 +9140,7 @@ var Uj = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexable/from_type.mjs
 function er(e) {
-  return Be(e) ? kj(e.$defs, e.$ref) : yt(e) ? Ej(e.if, e.then, e.else) : bt(e) ? Cj(e.enum) : Y(e) ? $j(e.allOf) : xe(e) ? Pj(e.const) : qe(e) ? Dj(e.pattern) : L(e) ? Nj(e.anyOf) : [];
+  return Be(e) ? kj(e.$defs, e.$ref) : yt(e) ? Ej(e.if, e.then, e.else) : bt(e) ? Cj(e.enum) : Y(e) ? Aj(e.allOf) : xe(e) ? Pj(e.const) : qe(e) ? Dj(e.pattern) : F(e) ? Nj(e.anyOf) : [];
 }
 var Ti = p(() => {
   Mn();
@@ -9153,7 +9153,7 @@ var Ti = p(() => {
   _j();
   Tj();
   Rj();
-  Aj();
+  $j();
   Oj();
   Mj();
   Uj();
@@ -9172,7 +9172,7 @@ function Tl(e, t) {
   return t.map((n) => Cl(e, n));
 }
 function Cl(e, t) {
-  return ve(t) ? Pn(Cl(e, t.items)) : gt(t) ? no(Tl(e, t.parameters), Cl(e, t.instanceType)) : ht(t) ? ro(Tl(e, t.parameters), Cl(e, t.returnType)) : ge(t) ? xt(Tl(e, t.items)) : L(t) ? ie(Tl(e, t.anyOf)) : Y(t) ? mn(Tl(e, t.allOf)) : Qm(t) ? X(e) : t;
+  return ve(t) ? Pn(Cl(e, t.items)) : gt(t) ? no(Tl(e, t.parameters), Cl(e, t.instanceType)) : ht(t) ? ro(Tl(e, t.parameters), Cl(e, t.returnType)) : ge(t) ? xt(Tl(e, t.items)) : F(t) ? ie(Tl(e, t.anyOf)) : Y(t) ? mn(Tl(e, t.allOf)) : Qm(t) ? X(e) : t;
 }
 function Lj(e, t) {
   return Cl(e, t);
@@ -9229,7 +9229,7 @@ function qj(e) {
   return e.map((t) => Nw(t));
 }
 function Nw(e) {
-  return Y(e) ? mn(qj(e.allOf)) : L(e) ? ie(qj(e.anyOf)) : xe(e) ? Ste(e.const) : e;
+  return Y(e) ? mn(qj(e.allOf)) : F(e) ? ie(qj(e.anyOf)) : xe(e) ? Ste(e.const) : e;
 }
 var Gj = p(() => {
   Ie();
@@ -9284,7 +9284,7 @@ var Wj = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/instantiate.mjs
 function Tte(e) {
-  return Be(e) || yt(e) || Y(e) || L(e) ? tc(e) : e;
+  return Be(e) || yt(e) || Y(e) || F(e) ? tc(e) : e;
 }
 function Mw(e, t, n) {
   return de([e, t]) ? _.Update(Vj(Tte(e), t), {}, n) : cl(e, t, n);
@@ -9420,11 +9420,11 @@ var l4 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/keyof/instantiate.mjs
-function $te(e) {
-  return Be(e) || yt(e) || Y(e) || L(e) ? tc(e) : e;
+function Ate(e) {
+  return Be(e) || yt(e) || Y(e) || F(e) ? tc(e) : e;
 }
 function Lw(e, t) {
-  return de([e]) ? _.Update(u4($te(e)), {}, t) : ul(e, t);
+  return de([e]) ? _.Update(u4(Ate(e)), {}, t) : ul(e, t);
 }
 function d4(e, t, n, o) {
   let r = M(e, t, n);
@@ -9456,7 +9456,7 @@ var ig = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/mapped/mapped_variants.mjs
-function Ate(e) {
+function $te(e) {
   let t = fn(e);
   return sg(t);
 }
@@ -9471,7 +9471,7 @@ function Dte(e) {
   return c.IsNumber(e) ? [he(`${e}`)] : [he(e)];
 }
 function sg(e) {
-  return bt(e) ? Ote(e.enum) : xe(e) ? Dte(e.const) : qe(e) ? Ate(e.pattern) : L(e) ? Pte(e.anyOf) : [e];
+  return bt(e) ? Ote(e.enum) : xe(e) ? Dte(e.const) : qe(e) ? $te(e.pattern) : F(e) ? Pte(e.anyOf) : [e];
 }
 function m4(e) {
   return sg(e);
@@ -9708,13 +9708,13 @@ function R4(e, t, n) {
   let o = Br(e, t, n);
   return ho(o);
 }
-var $4 = p(() => {
+var A4 = p(() => {
   oc();
   ye();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_intersect.mjs
-function A4(e) {
+function $4(e) {
   let t = it(e);
   return ho(t);
 }
@@ -9746,7 +9746,7 @@ var N4 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/partial/from_type.mjs
 function ho(e) {
-  return Be(e) ? T4(e.$defs, e.$ref) : yt(e) ? R4(e.if, e.then, e.else) : Y(e) ? A4(e.allOf) : L(e) ? O4(e.anyOf) : Q(e) ? M4(e.properties) : X({});
+  return Be(e) ? T4(e.$defs, e.$ref) : yt(e) ? R4(e.if, e.then, e.else) : Y(e) ? $4(e.allOf) : F(e) ? O4(e.anyOf) : Q(e) ? M4(e.properties) : X({});
 }
 var oc = p(() => {
   Mn();
@@ -9755,7 +9755,7 @@ var oc = p(() => {
   Ne();
   Ie();
   C4();
-  $4();
+  A4();
   P4();
   D4();
   N4();
@@ -9908,7 +9908,7 @@ var n2 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/readonly_object/from_type.mjs
 function yo(e) {
-  return ve(e) ? q4(e.items) : Be(e) ? K4(e.$defs, e.$ref) : yt(e) ? V4(e.if, e.then, e.else) : Y(e) ? Z4(e.allOf) : Q(e) ? Y4(e.properties) : ge(e) ? Q4(e.items) : L(e) ? t2(e.anyOf) : e;
+  return ve(e) ? q4(e.items) : Be(e) ? K4(e.$defs, e.$ref) : yt(e) ? V4(e.if, e.then, e.else) : Y(e) ? Z4(e.allOf) : Q(e) ? Y4(e.properties) : ge(e) ? Q4(e.items) : F(e) ? t2(e.anyOf) : e;
 }
 var ic = p(() => {
   kn();
@@ -10006,7 +10006,7 @@ var f2 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/required/from_type.mjs
 function bo(e) {
-  return Be(e) ? i2(e.$defs, e.$ref) : yt(e) ? s2(e.if, e.then, e.else) : Y(e) ? u2(e.allOf) : L(e) ? d2(e.anyOf) : Q(e) ? m2(e.properties) : X({});
+  return Be(e) ? i2(e.$defs, e.$ref) : yt(e) ? s2(e.if, e.then, e.else) : Y(e) ? u2(e.allOf) : F(e) ? d2(e.anyOf) : Q(e) ? m2(e.properties) : X({});
 }
 var ac = p(() => {
   Mn();
@@ -10156,7 +10156,7 @@ function Zte(e, t, n, o, r) {
   );
 }
 function Jte(e, t, n) {
-  let o = De(n) ? o2(e, t, n, n.$ref) : ve(n) ? Pn(M(e, t, n.items), Ps(n)) : Qs(n) ? jf(e, t, n.target, n.arguments) : gt(n) ? no(ur(e, t, n.parameters), M(e, t, n.instanceType), CM(n)) : ht(n) ? ro(ur(e, t, n.parameters), M(e, t, n.returnType), RM(n)) : yt(n) ? va(M(e, t, n.if), M(e, t, n.then), M(e, t, n.else), MM(n)) : Y(n) ? mn(ur(e, t, n.allOf), zM(n)) : Q(n) ? X(gl(e, t, n.properties), OM(n)) : Ue(n) ? F1(Kt(n), M(e, t, We(n))) : wi(n) ? Ca(M(e, t, n.items)) : ge(n) ? xt(Ei(e, t, n.items), u1(n)) : L(n) ? ie(ur(e, t, n.anyOf), YM(n)) : n;
+  let o = De(n) ? o2(e, t, n, n.$ref) : ve(n) ? Pn(M(e, t, n.items), Ps(n)) : Qs(n) ? jf(e, t, n.target, n.arguments) : gt(n) ? no(ur(e, t, n.parameters), M(e, t, n.instanceType), CM(n)) : ht(n) ? ro(ur(e, t, n.parameters), M(e, t, n.returnType), RM(n)) : yt(n) ? va(M(e, t, n.if), M(e, t, n.then), M(e, t, n.else), MM(n)) : Y(n) ? mn(ur(e, t, n.allOf), zM(n)) : Q(n) ? X(gl(e, t, n.properties), OM(n)) : Ue(n) ? F1(Kt(n), M(e, t, We(n))) : wi(n) ? Ca(M(e, t, n.items)) : ge(n) ? xt(Ei(e, t, n.items), u1(n)) : F(n) ? ie(ur(e, t, n.anyOf), YM(n)) : n;
   return Wte(n, o);
 }
 function M(e, t, n) {
@@ -10167,7 +10167,7 @@ function dr(e, t) {
 }
 var J = p(() => {
   I();
-  $g();
+  Ag();
   km();
   _m();
   kn();
@@ -10183,7 +10183,7 @@ var J = p(() => {
   Ie();
   Ir();
   qs();
-  $g();
+  Ag();
   kw();
   km();
   SI();
@@ -10194,7 +10194,7 @@ var J = p(() => {
   Hu();
   Sw();
   go();
-  Aw();
+  $w();
   Zf();
   zf();
   Sl();
@@ -10234,7 +10234,7 @@ function w2(e, t, n, o) {
   let r = M(e, t, n);
   return Rl(r, o);
 }
-var $g = p(() => {
+var Ag = p(() => {
   z();
   J();
 });
@@ -10248,7 +10248,7 @@ function Ms(e, t = {}) {
 }
 var Gu = p(() => {
   Oe();
-  $g();
+  Ag();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/_remove_immutable.mjs
@@ -10283,7 +10283,7 @@ var eS = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/action/index.mjs
-var Aa = p(() => {
+var $a = p(() => {
   Gu();
   Ku();
   Fu();
@@ -10323,7 +10323,7 @@ var _2 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/enum/index.mjs
 var E2 = p(() => {
-  $m();
+  Am();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/exclude/index.mjs
@@ -10341,14 +10341,14 @@ var R2 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/helpers/index.mjs
-var $2 = p(() => {
+var A2 = p(() => {
   kl();
   El();
   R2();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/indexed/index.mjs
-var A2 = p(() => {
+var $2 = p(() => {
   Qf();
 });
 
@@ -10473,7 +10473,7 @@ var t6 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/template_literal/index.mjs
-var Ag = p(() => {
+var $g = p(() => {
   qm();
   Gm();
   rw();
@@ -10490,15 +10490,15 @@ var n6 = p(() => {
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/engine/index.mjs
 var tS = p(() => {
   J();
-  Aw();
+  $w();
   _2();
   yw();
   E2();
   Js();
   T2();
   C2();
-  $2();
   A2();
+  $2();
   P2();
   O2();
   D2();
@@ -10518,7 +10518,7 @@ var tS = p(() => {
   Y2();
   X2();
   Q2();
-  Ag();
+  $g();
   n6();
 });
 
@@ -10548,7 +10548,7 @@ var Pg = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/type/index.mjs
 var re = p(() => {
-  Aa();
+  $a();
   tS();
   jr();
   Pg();
@@ -10682,7 +10682,7 @@ function Ze(e) {
   return fa(e);
 }
 var x6 = p(() => {
-  Au();
+  $u();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clone/index.mjs
@@ -10707,7 +10707,7 @@ var I6 = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/from_type.mjs
 function Zt(e, t, n) {
-  return ve(t) ? i6(e, t, n) : Be(t) ? s6(e, t, n) : Y(t) ? u6(e, t, n) : Q(t) ? d6(e, t, n) : Ue(t) ? m6(e, t, n) : De(t) ? g6(e, t, n) : ge(t) ? y6(e, t, n) : L(t) ? v6(e, t, n) : n;
+  return ve(t) ? i6(e, t, n) : Be(t) ? s6(e, t, n) : Y(t) ? u6(e, t, n) : Q(t) ? d6(e, t, n) : Ue(t) ? m6(e, t, n) : De(t) ? g6(e, t, n) : ge(t) ? y6(e, t, n) : F(t) ? v6(e, t, n) : n;
 }
 var xo = p(() => {
   re();
@@ -10730,23 +10730,23 @@ function ene(e, t) {
 function tne(e) {
   let t = {};
   for (let n of Sp.Keys(e))
-    t[n] = $l(e[n]);
+    t[n] = Al(e[n]);
   return t;
 }
 function nne(e) {
   return rS(H2(e));
 }
 function rS(e) {
-  return e.map((t) => $l(t));
+  return e.map((t) => Al(t));
 }
-function $l(e) {
-  let t = ve(e) ? Pn($l(e.items), Ps(e)) : Y(e) ? mn(rS(e.allOf)) : L(e) ? ie(nne(e.anyOf)) : Q(e) ? X(tne(e.properties)) : Ue(e) ? Bs(Ii(e), $l(We(e))) : ge(e) ? xt(rS(e.items)) : e;
+function Al(e) {
+  let t = ve(e) ? Pn(Al(e.items), Ps(e)) : Y(e) ? mn(rS(e.allOf)) : F(e) ? ie(nne(e.anyOf)) : Q(e) ? X(tne(e.properties)) : Ue(e) ? Bs(Ii(e), Al(We(e))) : ge(e) ? xt(rS(e.items)) : e;
   return ene(e, t);
 }
 function sc(e) {
-  return $l(e);
+  return Al(e);
 }
-var Al = p(() => {
+var $l = p(() => {
   I();
   re();
   re();
@@ -10768,7 +10768,7 @@ function Er(...e) {
 var w6 = p(() => {
   ga();
   xo();
-  Al();
+  $l();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/clean/index.mjs
@@ -10916,10 +10916,10 @@ function Rne(e) {
   let t = e.toLowerCase();
   return c.IsEqual(t, "undefined") || c.IsEqual(t, "null") || c.IsEqual(e, "") || c.IsEqual(e, "0") ? W(void 0) : void 0;
 }
-function $ne(e) {
+function Ane(e) {
   return c.IsBigInt(e) ? Ene(e) : c.IsBoolean(e) ? Tne(e) : c.IsNumber(e) ? Cne(e) : c.IsNull(e) ? W(void 0) : c.IsString(e) ? Rne(e) : c.IsUndefined(e) ? W(e) : void 0;
 }
-var $6 = p(() => {
+var A6 = p(() => {
   I();
   Ho();
 });
@@ -10936,9 +10936,9 @@ ct(Pe, {
   TryNull: () => vne,
   TryNumber: () => kne,
   TryString: () => _ne,
-  TryUndefined: () => $ne
+  TryUndefined: () => Ane
 });
-var A6 = p(() => {
+var $6 = p(() => {
   S6();
   aS();
   k6();
@@ -10946,12 +10946,12 @@ var A6 = p(() => {
   C6();
   Ho();
   R6();
-  $6();
+  A6();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/try/index.mjs
 var qr = p(() => {
-  A6();
+  $6();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_array.mjs
@@ -11019,7 +11019,7 @@ var K6 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_literal.mjs
-function Ane(e, t, n) {
+function $ne(e, t, n) {
   let o = Pe.TryBigInt(n);
   return Pe.IsOk(o) && c.IsEqual(t.const, o.value) ? o.value : n;
 }
@@ -11036,7 +11036,7 @@ function Dne(e, t, n) {
   return Pe.IsOk(o) && c.IsEqual(t.const, o.value) ? o.value : n;
 }
 function H6(e, t, n) {
-  return c.IsEqual(t.const, n) ? n : WM(t) ? Ane(e, t, n) : ZM(t) ? Pne(e, t, n) : Mm(t) ? One(e, t, n) : Nm(t) ? Dne(e, t, n) : ft();
+  return c.IsEqual(t.const, n) ? n : WM(t) ? $ne(e, t, n) : ZM(t) ? Pne(e, t, n) : Mm(t) ? One(e, t, n) : Nm(t) ? Dne(e, t, n) : ft();
 }
 var V6 = p(() => {
   Ur();
@@ -11194,7 +11194,7 @@ var gB = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/convert/from_type.mjs
 function wt(e, t, n) {
-  return ve(t) ? P6(e, t, n) : Jn(t) ? D6(e, t, n) : En(t) ? N6(e, t, n) : Be(t) ? L6(e, t, n) : bt(t) ? z6(e, t, n) : Vt(t) ? B6(e, t, n) : Y(t) ? G6(e, t, n) : xe(t) ? H6(e, t, n) : co(t) ? W6(e, t, n) : ot(t) ? J6(e, t, n) : Q(t) ? X6(e, t, n) : Ue(t) ? eB(e, t, n) : De(t) ? nB(e, t, n) : Nt(t) ? oB(e, t, n) : qe(t) ? aB(e, t, n) : ge(t) ? cB(e, t, n) : _r(t) ? lB(e, t, n) : L(t) ? pB(e, t, n) : Xn(t) ? fB(e, t, n) : n;
+  return ve(t) ? P6(e, t, n) : Jn(t) ? D6(e, t, n) : En(t) ? N6(e, t, n) : Be(t) ? L6(e, t, n) : bt(t) ? z6(e, t, n) : Vt(t) ? B6(e, t, n) : Y(t) ? G6(e, t, n) : xe(t) ? H6(e, t, n) : co(t) ? W6(e, t, n) : ot(t) ? J6(e, t, n) : Q(t) ? X6(e, t, n) : Ue(t) ? eB(e, t, n) : De(t) ? nB(e, t, n) : Nt(t) ? oB(e, t, n) : qe(t) ? aB(e, t, n) : ge(t) ? cB(e, t, n) : _r(t) ? lB(e, t, n) : F(t) ? pB(e, t, n) : Xn(t) ? fB(e, t, n) : n;
 }
 var pr = p(() => {
   re();
@@ -11324,13 +11324,13 @@ var CB = p(() => {
 function RB(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? Jt(e, e[t.$ref], n) : n;
 }
-var $B = p(() => {
+var AB = p(() => {
   I();
   vo();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_tuple.mjs
-function AB(e, t, n) {
+function $B(e, t, n) {
   if (!c.IsArray(n))
     return n;
   let [o, r] = [t.items, Math.max(t.items.length, n.length)];
@@ -11361,7 +11361,7 @@ var DB = p(() => {
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/default/from_type.mjs
 function Jt(e, t, n) {
   let o = Hn(t) ? IB(t, n) : n;
-  return ve(t) ? yB(e, t, o) : Be(t) ? xB(e, t, o) : Y(t) ? SB(e, t, o) : Q(t) ? _B(e, t, o) : Ue(t) ? TB(e, t, o) : De(t) ? RB(e, t, o) : ge(t) ? AB(e, t, o) : L(t) ? OB(e, t, o) : o;
+  return ve(t) ? yB(e, t, o) : Be(t) ? xB(e, t, o) : Y(t) ? SB(e, t, o) : Q(t) ? _B(e, t, o) : Ue(t) ? TB(e, t, o) : De(t) ? RB(e, t, o) : ge(t) ? $B(e, t, o) : F(t) ? OB(e, t, o) : o;
 }
 var vo = p(() => {
   jo();
@@ -11372,7 +11372,7 @@ var vo = p(() => {
   kB();
   EB();
   CB();
-  $B();
+  AB();
   PB();
   DB();
 });
@@ -11621,7 +11621,7 @@ var tq = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/codec/from_type.mjs
 function at(e, t, n, o) {
-  return ve(n) ? UB(e, t, n, o) : Be(n) ? FB(e, t, n, o) : Y(n) ? qB(e, t, n, o) : Q(n) ? KB(e, t, n, o) : Ue(n) ? VB(e, t, n, o) : De(n) ? JB(e, t, n, o) : ge(n) ? XB(e, t, n, o) : L(n) ? eq(e, t, n, o) : tt(e, t, n, o);
+  return ve(n) ? UB(e, t, n, o) : Be(n) ? FB(e, t, n, o) : Y(n) ? qB(e, t, n, o) : Q(n) ? KB(e, t, n, o) : Ue(n) ? VB(e, t, n, o) : De(n) ? JB(e, t, n, o) : ge(n) ? XB(e, t, n, o) : F(n) ? eq(e, t, n, o) : tt(e, t, n, o);
 }
 var Kr = p(() => {
   re();
@@ -11664,7 +11664,7 @@ var cS, Qne, nq = p(() => {
   cc();
   Ol();
   Kr();
-  Al();
+  $l();
   cS = class extends Bo {
     constructor(t, n) {
       super("Decode", t, n);
@@ -11708,7 +11708,7 @@ var lS, nre, rq = p(() => {
   cc();
   Ol();
   Kr();
-  Al();
+  $l();
   lS = class extends Bo {
     constructor(t, n) {
       super("Encode", t, n);
@@ -11750,7 +11750,7 @@ function ure(e, t) {
   return _n(t) || t.anyOf.some((n) => Ci(e, n));
 }
 function Ci(e, t) {
-  return ve(t) ? rre(e, t) : Be(t) ? ore(e, t) : Y(t) ? ire(e, t) : Q(t) ? are(e, t) : Ue(t) ? sre(e, t) : De(t) ? oq(e, t) : ge(t) ? cre(e, t) : L(t) ? ure(e, t) : _n(t);
+  return ve(t) ? rre(e, t) : Be(t) ? ore(e, t) : Y(t) ? ire(e, t) : Q(t) ? are(e, t) : Ue(t) ? sre(e, t) : De(t) ? oq(e, t) : ge(t) ? cre(e, t) : F(t) ? ure(e, t) : _n(t);
 }
 function mS(...e) {
   let [t, n] = le.Match(e, {
@@ -11902,10 +11902,10 @@ var Rq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_null.mjs
-function $q(e, t) {
+function Aq(e, t) {
   return null;
 }
-var Aq = p(() => {
+var $q = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/create/from_number.mjs
@@ -11976,7 +11976,7 @@ function Gq(e, t) {
 }
 var Kq = p(() => {
   re();
-  Ag();
+  $g();
   mr();
   za();
 });
@@ -12018,7 +12018,7 @@ function St(e, t) {
       // -----------------------------------------------------
       // Types
       // -----------------------------------------------------
-      ve(t) ? cq(e, t) : Jn(t) ? lq(e, t) : En(t) ? pq(e, t) : gt(t) ? fq(e, t) : Be(t) ? hq(e, t) : bt(t) ? bq(e, t) : ht(t) ? vq(e, t) : Vt(t) ? wq(e, t) : Y(t) ? kq(e, t) : xe(t) ? Eq(e, t) : Dn(t) ? Cq(e, t) : co(t) ? $q(e, t) : ot(t) ? Pq(e, t) : Q(t) ? Dq(e, t) : Ue(t) ? Nq(e, t) : De(t) ? Lq(e, t) : Nt(t) ? zq(e, t) : uo(t) ? Bq(e, t) : qe(t) ? Gq(e, t) : ge(t) ? Hq(e, t) : _r(t) ? void 0 : L(t) ? Zq(e, t) : Xn(t) ? void 0 : void 0
+      ve(t) ? cq(e, t) : Jn(t) ? lq(e, t) : En(t) ? pq(e, t) : gt(t) ? fq(e, t) : Be(t) ? hq(e, t) : bt(t) ? bq(e, t) : ht(t) ? vq(e, t) : Vt(t) ? wq(e, t) : Y(t) ? kq(e, t) : xe(t) ? Eq(e, t) : Dn(t) ? Cq(e, t) : co(t) ? Aq(e, t) : ot(t) ? Pq(e, t) : Q(t) ? Dq(e, t) : Ue(t) ? Nq(e, t) : De(t) ? Lq(e, t) : Nt(t) ? zq(e, t) : uo(t) ? Bq(e, t) : qe(t) ? Gq(e, t) : ge(t) ? Hq(e, t) : _r(t) ? void 0 : F(t) ? Zq(e, t) : Xn(t) ? void 0 : void 0
     )
   );
 }
@@ -12037,7 +12037,7 @@ var mr = p(() => {
   _q();
   Tq();
   Rq();
-  Aq();
+  $q();
   Oq();
   Mq();
   Uq();
@@ -12206,7 +12206,7 @@ var cG = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/delta/edit.mjs
-var gre, hre, yre, Bit, uG = p(() => {
+var gre, hre, yre, qit, uG = p(() => {
   re();
   gre = X({
     type: he("insert"),
@@ -12219,7 +12219,7 @@ var gre, hre, yre, Bit, uG = p(() => {
   }), yre = X({
     type: he("delete"),
     path: Cn()
-  }), Bit = ie([gre, hre, yre]);
+  }), qit = ie([gre, hre, yre]);
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/pointer/index.mjs
@@ -12391,7 +12391,7 @@ function kG(e, t, n) {
   return Ut(e, o, n);
 }
 var _G = p(() => {
-  Ag();
+  $g();
   Hr();
 });
 
@@ -12440,10 +12440,10 @@ function wre(e, t, n) {
   let o = ie(vi(t.anyOf)), r = RG(e, o, n);
   return Ut(e, r, n);
 }
-function $G(e, t, n) {
+function AG(e, t, n) {
   return be(e, t, n) ? Ze(n) : Hn(t) ? Yt(e, t) : wre(e, t, n);
 }
-var AG = p(() => {
+var $G = p(() => {
   je();
   re();
   Js();
@@ -12484,7 +12484,7 @@ function Ere(e, t, n) {
 }
 function Ut(e, t, n) {
   Sre(e, t, n), kre(e, t, n);
-  let o = _re(e, t, n), r = ve(t) ? pG(e, t, o) : bt(t) ? fG(e, t, o) : Y(t) ? hG(e, t, o) : Q(t) ? bG(e, t, o) : Ue(t) ? vG(e, t, o) : De(t) ? wG(e, t, o) : qe(t) ? kG(e, t, o) : ge(t) ? EG(e, t, o) : L(t) ? $G(e, t, o) : PG(e, t, o);
+  let o = _re(e, t, n), r = ve(t) ? pG(e, t, o) : bt(t) ? fG(e, t, o) : Y(t) ? hG(e, t, o) : Q(t) ? bG(e, t, o) : Ue(t) ? vG(e, t, o) : De(t) ? wG(e, t, o) : qe(t) ? kG(e, t, o) : ge(t) ? EG(e, t, o) : F(t) ? AG(e, t, o) : PG(e, t, o);
   return Ere(e, t, r);
 }
 var Hr = p(() => {
@@ -12500,7 +12500,7 @@ var Hr = p(() => {
   SG();
   _G();
   TG();
-  AG();
+  $G();
   OG();
   qg();
 });
@@ -12527,7 +12527,7 @@ var bS = p(() => {
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/value/shared/index.mjs
 var NG = p(() => {
   Mg();
-  Al();
+  $l();
   yS();
 });
 
@@ -12601,9 +12601,9 @@ ct(d, {
   Array: () => Pn,
   BigInt: () => Wu,
   Boolean: () => Pm,
-  Call: () => $z,
+  Call: () => Az,
   Capitalize: () => jz,
-  Codec: () => Am,
+  Codec: () => $m,
   Conditional: () => Zz,
   Constructor: () => no,
   ConstructorParameters: () => Yz,
@@ -12668,7 +12668,7 @@ ct(d, {
   IsThis: () => Qm,
   IsTuple: () => ge,
   IsUndefined: () => _r,
-  IsUnion: () => L,
+  IsUnion: () => F,
   IsUnknown: () => Tt,
   IsUnsafe: () => Cm,
   IsVoid: () => Xn,
@@ -12683,7 +12683,7 @@ ct(d, {
   Number: () => Yn,
   Object: () => X,
   Omit: () => v4,
-  Optional: () => AM,
+  Optional: () => $M,
   Parameter: () => Ta,
   Parameters: () => k4,
   Partial: () => E4,
@@ -12725,7 +12725,7 @@ var IS = p(() => {
   Qw();
   Jf();
   Yf();
-  Aa();
+  $a();
   tg();
   hl();
   rg();
@@ -12787,7 +12787,7 @@ var IS = p(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.35/node_modules/typebox/build/index.mjs
 var Vr = p(() => {
-  Aa();
+  $a();
   tS();
   jr();
   Pg();
@@ -12797,7 +12797,7 @@ var Vr = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/closed-object.ts
-function F(e) {
+function L(e) {
   let t = d.Object(e, { additionalProperties: !1 });
   return Object.defineProperty(t, Ure, { value: /* @__PURE__ */ Symbol("closedObject") }), t;
 }
@@ -12812,25 +12812,25 @@ var LG, FG, zG, jG, BG = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/primitives.ts
-var qG, Fre, zre, U, odt, idt, jre, GG, adt, KG, sdt, cdt, Kg, Bre, qre, Gre, Kre, Hre, Vre, udt, ja = p(() => {
+var qG, Fre, zre, U, idt, adt, jre, GG, sdt, KG, cdt, udt, Kg, Bre, qre, Gre, Kre, Hre, Vre, ldt, ja = p(() => {
   Vr();
   Tb();
   BG();
   Zo();
-  qG = /^[A-Z][A-Z0-9_]{0,127}$/, Fre = ["external_user", "inter_session", "internal_system"], zre = 512, U = d.String({ minLength: 1 }), odt = d.String({
+  qG = /^[A-Z][A-Z0-9_]{0,127}$/, Fre = ["external_user", "inter_session", "internal_system"], zre = 512, U = d.String({ minLength: 1 }), idt = d.String({
     minLength: 64,
     maxLength: 64,
     pattern: "^[a-fA-F0-9]{64}$"
-  }), idt = d.String({
+  }), adt = d.String({
     minLength: 1,
     maxLength: 128
   }), jre = 512, GG = d.String({
     minLength: 1,
     maxLength: jre
-  }), adt = d.String({
+  }), sdt = d.String({
     minLength: 1,
     maxLength: zre
-  }), KG = F({
+  }), KG = L({
     kind: d.String({ enum: [...Fre] }),
     originSessionId: d.Optional(d.String()),
     sourceSessionKey: d.Optional(d.String()),
@@ -12840,9 +12840,9 @@ var qG, Fre, zre, U, odt, idt, jre, GG, adt, KG, sdt, cdt, Kg, Bre, qre, Gre, Kr
     sourcePromptPrefix: d.Optional(d.String()),
     jobId: d.Optional(d.String()),
     runId: d.Optional(d.String())
-  }), sdt = d.Enum(_b), cdt = d.Enum(Eb), Kg = d.String({
+  }), cdt = d.Enum(_b), udt = d.Enum(Eb), Kg = d.String({
     pattern: FG.source
-  }), Bre = F({
+  }), Bre = L({
     source: d.Literal("env"),
     provider: Kg,
     id: d.String({ pattern: qG.source })
@@ -12857,15 +12857,15 @@ var qG, Fre, zre, U, odt, idt, jre, GG, adt, KG, sdt, cdt, Kg, Bre, qre, Gre, Kr
         ]
       }
     ]
-  }), Gre = F({
+  }), Gre = L({
     source: d.Literal("file"),
     provider: Kg,
     id: qre
-  }), Kre = F({
+  }), Kre = L({
     source: d.Literal("exec"),
     provider: Kg,
     id: d.String({ pattern: jG })
-  }), Hre = F({
+  }), Hre = L({
     source: d.Literal("store"),
     provider: Kg,
     id: d.String({ pattern: qG.source })
@@ -12874,43 +12874,43 @@ var qG, Fre, zre, U, odt, idt, jre, GG, adt, KG, sdt, cdt, Kg, Bre, qre, Gre, Kr
     Gre,
     Kre,
     Hre
-  ]), udt = d.Union([d.String(), Vre]);
+  ]), ldt = d.Union([d.String(), Vre]);
 });
 
 // openclaw/packages/gateway-protocol/src/schema/session-participant.ts
-var HG, VG, wS, SS, fdt, WG = p(() => {
+var HG, VG, wS, SS, gdt, WG = p(() => {
   Vr();
   Zo();
   ja();
   HG = 4, VG = 32, wS = d.Union([
-    F({ type: d.Literal("profile"), id: U }),
-    F({ type: d.Literal("agent"), id: U }),
-    F({
+    L({ type: d.Literal("profile"), id: U }),
+    L({ type: d.Literal("agent"), id: U }),
+    L({
       type: d.Literal("remote"),
       pluginId: U,
       domain: U,
       idKind: U,
       id: U
     }),
-    F({
+    L({
       type: d.Literal("observation"),
       pluginId: d.Union([U, d.Null()]),
       accountId: d.Union([U, d.Null()]),
       senderKind: d.Union([d.Literal("human"), d.Literal("bot"), d.Literal("unknown")]),
       id: U
     }),
-    F({
+    L({
       type: d.Literal("legacy"),
       actorType: d.String(),
       source: d.Union([d.String(), d.Null()]),
       id: d.String()
     })
-  ]), SS = F({
+  ]), SS = L({
     identity: wS,
     label: d.Optional(U),
     avatarUrl: d.Optional(U)
-  }), fdt = F({
-    identity: F({ type: d.Literal("profile"), id: U }),
+  }), gdt = L({
+    identity: L({ type: d.Literal("profile"), id: U }),
     label: d.Optional(U),
     avatarUrl: d.Optional(U),
     sessionCount: d.Integer({ minimum: 1 })
@@ -12932,14 +12932,14 @@ var Jo, Hg, ZG = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/punycode.js@2.3.1/node_modules/punycode.js/punycode.js
-var k9 = vR((Jdt, S9) => {
+var k9 = vR((Ydt, S9) => {
   "use strict";
   var woe = /^xn--/, Soe = /[^\0-\x7F]/, koe = /[\x2E\u3002\uFF0E\uFF61]/g, _oe = {
     overflow: "Overflow: input needs wider integers to process",
     "not-basic": "Illegal input >= 0x80 (not a basic code point)",
     "invalid-input": "Invalid input"
   }, OS = 35, So = Math.floor, DS = String.fromCharCode;
-  function $i(e) {
+  function Ai(e) {
     throw new RangeError(_oe[e]);
   }
   function Eoe(e, t) {
@@ -12979,21 +12979,21 @@ var k9 = vR((Jdt, S9) => {
     let t = [], n = e.length, o = 0, r = 128, i = 72, a = e.lastIndexOf("-");
     a < 0 && (a = 0);
     for (let s = 0; s < a; ++s)
-      e.charCodeAt(s) >= 128 && $i("not-basic"), t.push(e.charCodeAt(s));
+      e.charCodeAt(s) >= 128 && Ai("not-basic"), t.push(e.charCodeAt(s));
     for (let s = a > 0 ? a + 1 : 0; s < n; ) {
       let u = o;
       for (let m = 1, h = 36; ; h += 36) {
-        s >= n && $i("invalid-input");
+        s >= n && Ai("invalid-input");
         let b = Coe(e.charCodeAt(s++));
-        b >= 36 && $i("invalid-input"), b > So((2147483647 - o) / m) && $i("overflow"), o += b * m;
+        b >= 36 && Ai("invalid-input"), b > So((2147483647 - o) / m) && Ai("overflow"), o += b * m;
         let f = h <= i ? 1 : h >= i + 26 ? 26 : h - i;
         if (b < f)
           break;
         let y = 36 - f;
-        m > So(2147483647 / y) && $i("overflow"), m *= y;
+        m > So(2147483647 / y) && Ai("overflow"), m *= y;
       }
       let l = t.length + 1;
-      i = v9(o - u, l, u == 0), So(o / l) > 2147483647 - r && $i("overflow"), r += So(o / l), o %= l, t.splice(o++, 0, r);
+      i = v9(o - u, l, u == 0), So(o / l) > 2147483647 - r && Ai("overflow"), r += So(o / l), o %= l, t.splice(o++, 0, r);
     }
     return String.fromCodePoint(...t);
   }, w9 = function(e) {
@@ -13008,9 +13008,9 @@ var k9 = vR((Jdt, S9) => {
       for (let m of e)
         m >= o && m < u && (u = m);
       let l = s + 1;
-      u - o > So((2147483647 - r) / l) && $i("overflow"), r += (u - o) * l, o = u;
+      u - o > So((2147483647 - r) / l) && Ai("overflow"), r += (u - o) * l, o = u;
       for (let m of e)
-        if (m < o && ++r > 2147483647 && $i("overflow"), m === o) {
+        if (m < o && ++r > 2147483647 && Ai("overflow"), m === o) {
           let h = r;
           for (let b = 36; ; b += 36) {
             let f = b <= i ? 1 : b >= i + 26 ? 26 : b - i;
@@ -13030,11 +13030,11 @@ var k9 = vR((Jdt, S9) => {
     return b9(e, function(t) {
       return woe.test(t) ? I9(t.slice(4).toLowerCase()) : t;
     });
-  }, $oe = function(e) {
+  }, Aoe = function(e) {
     return b9(e, function(t) {
       return Soe.test(t) ? "xn--" + w9(t) : t;
     });
-  }, Aoe = {
+  }, $oe = {
     /**
      * A string representing the current Punycode.js version number.
      * @memberOf punycode
@@ -13054,10 +13054,10 @@ var k9 = vR((Jdt, S9) => {
     },
     decode: I9,
     encode: w9,
-    toASCII: $oe,
+    toASCII: Aoe,
     toUnicode: Roe
   };
-  S9.exports = Aoe;
+  S9.exports = $oe;
 });
 
 // openclaw/node_modules/.pnpm/ipaddr.js@2.5.0/node_modules/ipaddr.js/lib/ipaddr.js
@@ -13086,10 +13086,10 @@ var eK = vR((Q9, nh) => {
       for (k = y - x, w = ":"; k--; )
         w += "0:";
       return f = f.replace("::", w), f[0] === ":" && (f = f.slice(1)), f[f.length - 1] === ":" && (f = f.slice(0, -1)), y = (function() {
-        let C = f.split(":"), $ = [];
+        let C = f.split(":"), A = [];
         for (let D = 0; D < C.length; D++)
-          $.push(C[D].length > 4 ? NaN : parseInt(C[D], 16));
-        return $;
+          A.push(C[D].length > 4 ? NaN : parseInt(C[D], 16));
+        return A;
       })(), {
         parts: y,
         zoneId: S
@@ -13431,10 +13431,10 @@ var eK = vR((Q9, nh) => {
       }, f.prototype.toRFC5952String = function() {
         let y = /((^|:)(0(:|$)){2,})/g, x = "";
         this.zoneId && (x = `%${this.zoneId}`);
-        let v = this.toNormalizedString(), S = v.slice(0, v.length - x.length), w = 0, k = -1, C = -1, $;
-        for (; $ = y.exec(S); ) {
-          let D = ($[0].match(/0/g) || []).length;
-          D > C && (C = D, w = $.index, k = $[0].length);
+        let v = this.toNormalizedString(), S = v.slice(0, v.length - x.length), w = 0, k = -1, C = -1, A;
+        for (; A = y.exec(S); ) {
+          let D = (A[0].match(/0/g) || []).length;
+          D > C && (C = D, w = A.index, k = A[0].length);
         }
         return k < 0 ? S + x : `${S.substring(0, w)}::${S.substring(w + k)}${x}`;
       }, f.prototype.toString = function() {
@@ -13580,59 +13580,59 @@ var ub, rV, mR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/human-mentions.ts
-var nde, rde, iV, $o, fR, aV, sV, oV, ode, cV, ebt, ide, tbt, ade, nbt, rbt, uV, obt, ibt, lV = p(() => {
+var nde, rde, iV, Ao, fR, aV, sV, oV, ode, cV, tbt, ide, nbt, ade, rbt, obt, uV, ibt, abt, lV = p(() => {
   Vr();
   Zo();
   mR();
-  nde = 10, rde = 100, iV = 100, $o = d.String({ minLength: 1, maxLength: 256 }), fR = d.String({ minLength: 1, maxLength: 256 }), aV = d.String({ minLength: 1, maxLength: 512 }), sV = d.String({ minLength: 1, maxLength: 2048 }), oV = d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), ode = F({
-    profileId: $o,
+  nde = 10, rde = 100, iV = 100, Ao = d.String({ minLength: 1, maxLength: 256 }), fR = d.String({ minLength: 1, maxLength: 256 }), aV = d.String({ minLength: 1, maxLength: 512 }), sV = d.String({ minLength: 1, maxLength: 2048 }), oV = d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), ode = L({
+    profileId: Ao,
     start: d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
     end: d.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
   }), cV = d.Array(ode, {
     maxItems: nde
-  }), ebt = d.Union([
-    F({
+  }), tbt = d.Union([
+    L({
       sessionKey: aV,
-      agentId: d.Optional($o),
+      agentId: d.Optional(Ao),
       query: d.Optional(d.String({ maxLength: 128 }))
     }),
-    F({
-      agentId: $o,
+    L({
+      agentId: Ao,
       visibility: d.Optional(ub),
       query: d.Optional(d.String({ maxLength: 128 }))
     })
-  ]), ide = F({
-    profileId: $o,
+  ]), ide = L({
+    profileId: Ao,
     displayName: fR,
     avatarUrl: d.Optional(sV),
     online: d.Boolean()
-  }), tbt = F({
+  }), nbt = L({
     users: d.Array(ide, { maxItems: rde }),
     truncated: d.Boolean()
-  }), ade = F({
-    id: $o,
-    senderProfileId: $o,
+  }), ade = L({
+    id: Ao,
+    senderProfileId: Ao,
     senderLabel: fR,
     senderAvatarUrl: d.Optional(sV),
     sessionKey: aV,
-    agentId: $o,
+    agentId: Ao,
     sessionTitle: fR,
-    messageId: $o,
+    messageId: Ao,
     createdAt: oV,
     expiresAt: oV,
     excerpt: d.Optional(d.String({ maxLength: 280 }))
-  }), nbt = F({}), rbt = F({
-    ids: d.Array($o, {
+  }), rbt = L({}), obt = L({
+    ids: d.Array(Ao, {
       maxItems: iV,
       uniqueItems: !0
     })
   }), uV = {
-    gatewayInstanceId: $o,
+    gatewayInstanceId: Ao,
     revision: d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
-  }, obt = F({
+  }, ibt = L({
     ...uV,
     items: d.Array(ade, { maxItems: iV })
-  }), ibt = F(uV);
+  }), abt = L(uV);
 });
 
 // openclaw/packages/gateway-protocol/src/schema/session-classification.ts
@@ -13642,11 +13642,11 @@ var dV, pV, mV = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-activity-summary.ts
-var gR, pbt, mbt, fV = p(() => {
+var gR, mbt, fbt, fV = p(() => {
   Vr();
   Zo();
   ja();
-  gR = F({
+  gR = L({
     /** Caller-specific participation permission; operator.write is required separately. */
     canEnsure: d.Optional(d.Boolean()),
     text: d.Optional(d.String({ maxLength: 900 })),
@@ -13657,17 +13657,17 @@ var gR, pbt, mbt, fV = p(() => {
       d.Literal("updating"),
       d.Literal("unavailable")
     ])
-  }), pbt = F({
+  }), mbt = L({
     sessions: d.Array(
-      F({ key: U, agentId: d.Optional(U) }),
+      L({ key: U, agentId: d.Optional(U) }),
       {
         minItems: 1,
         maxItems: 20
       }
     )
-  }), mbt = F({
+  }), fbt = L({
     sessions: d.Array(
-      F({
+      L({
         key: U,
         agentId: U,
         activitySummary: gR
@@ -13683,7 +13683,7 @@ var lb, gV = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-communication.ts
-var Yc, hV, yV, xbt, bV = p(() => {
+var Yc, hV, yV, vbt, bV = p(() => {
   Vr();
   gV();
   Zo();
@@ -13691,30 +13691,30 @@ var Yc, hV, yV, xbt, bV = p(() => {
     d.Literal(lb[0]),
     d.Literal(lb[1]),
     d.Literal(lb[2])
-  ]), hV = F({
+  ]), hV = L({
     send: d.Optional(Yc),
     receive: d.Optional(Yc)
-  }), yV = F({
+  }), yV = L({
     send: Yc,
     receive: Yc
-  }), xbt = F({
+  }), vbt = L({
     send: d.Optional(d.Union([Yc, d.Null()])),
     receive: d.Optional(d.Union([Yc, d.Null()]))
   });
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-provider-review.ts
-var xV, kbt, vV = p(() => {
+var xV, _bt, vV = p(() => {
   Vr();
   Zo();
   ja();
-  xV = F({
+  xV = L({
     id: U,
     runId: U,
     explanation: d.Optional(d.String({ maxLength: 65536 })),
     continuationMessage: d.Optional(d.String({ maxLength: 1024 })),
     canContinue: d.Boolean()
-  }), kbt = F({
+  }), _bt = L({
     sessionKey: U,
     agentId: d.Optional(U),
     sessionId: U,
@@ -13724,7 +13724,7 @@ var xV, kbt, vV = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-row.ts
-var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
+var sde, hR, cde, ude, lde, yR, db, dde, pde, mde, fde, Nbt, IV = p(() => {
   Vr();
   Zo();
   ja();
@@ -13734,15 +13734,18 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
   bV();
   vV();
   mR();
-  hR = d.Union([
+  sde = L({
+    deviceId: U,
+    path: d.String({ minLength: 1, maxLength: 4096 })
+  }), hR = d.Union([
     d.Literal("read-only"),
     d.Literal("guarded"),
     d.Literal("workspace"),
     d.Literal("full")
-  ]), sde = F({
+  ]), cde = L({
     url: d.String({ minLength: 1, maxLength: 2048 }),
     ref: d.Optional(d.String({ minLength: 1, maxLength: 1024 }))
-  }), cde = d.Union([
+  }), ude = d.Union([
     d.Literal("queued"),
     d.Literal("running"),
     d.Literal("done"),
@@ -13750,20 +13753,20 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
     d.Literal("interrupted"),
     d.Literal("killed"),
     d.Literal("timeout")
-  ]), ude = d.Union([
+  ]), lde = d.Union([
     d.Literal("manual"),
     d.Literal("active-session-cap"),
     d.Literal("age-retention"),
     d.Literal("stale-dashboard"),
     d.Literal("restart-recovery")
-  ]), yR = F({
+  ]), yR = L({
     mcpServers: d.Optional(d.Record(d.String({ minLength: 1 }), d.Boolean())),
     mcpToolsDeny: d.Optional(
       d.Record(d.String({ minLength: 1 }), d.Array(U))
     ),
     skills: d.Optional(d.Record(d.String({ minLength: 1 }), d.Boolean())),
     webSearch: d.Optional(d.Boolean())
-  }), db = F({
+  }), db = L({
     type: d.Union([d.Literal("human"), d.Literal("agent"), d.Literal("system")]),
     id: d.Optional(U),
     label: d.Optional(U),
@@ -13771,18 +13774,18 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
     avatarUrl: d.Optional(U),
     /** Display identity is separate from the actor fields used by ownership policy. */
     identity: d.Optional(wS)
-  }), lde = F({
+  }), dde = L({
     actor: db,
     assignedBy: d.Optional(db),
     assignedAt: d.Optional(d.Number({ minimum: 0 }))
-  }), dde = F({
+  }), pde = L({
     groups: d.Array(
-      F({
+      L({
         groupId: U,
         createdAt: d.Number({ minimum: 0 }),
         children: d.Optional(
           d.Array(
-            F({
+            L({
               sessionKey: U,
               status: d.Union([
                 d.Literal("queued"),
@@ -13802,7 +13805,7 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       { maxItems: 5 }
     ),
     otherActiveGroups: d.Integer({ minimum: 0 })
-  }), pde = d.Object(
+  }), mde = d.Object(
     {
       key: d.String(),
       /** Fields outside the requested projection must not clear a client's full-row cache. */
@@ -13861,7 +13864,7 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       archived: d.Optional(d.Boolean()),
       archivedAt: d.Optional(d.Number()),
       archivedBy: d.Optional(db),
-      archiveReason: d.Optional(ude),
+      archiveReason: d.Optional(lde),
       pinned: d.Optional(d.Boolean()),
       sidebarRoot: d.Optional(d.Boolean()),
       pinnedAt: d.Optional(d.Number()),
@@ -13872,7 +13875,7 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       markedUnreadAt: d.Optional(d.Number()),
       lastActivityAt: d.Optional(d.Number()),
       lastInteractionAt: d.Optional(d.Number()),
-      status: d.Optional(cde),
+      status: d.Optional(ude),
       lastRunError: d.Optional(d.String()),
       providerReview: d.Optional(xV),
       /** Exact run that produced the latest terminal lifecycle projection. */
@@ -13894,7 +13897,8 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       ),
       swarmGroupId: d.Optional(d.String()),
       /** Requester-owned execution counts; never child content or parent synthesis status. */
-      swarm: d.Optional(dde),
+      swarm: d.Optional(pde),
+      deviceFolder: d.Optional(sde),
       worktree: d.Optional(
         d.Object({
           id: d.String(),
@@ -13904,8 +13908,8 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       ),
       repositoryWorkspaceId: d.Optional(U),
       repository: d.Optional(
-        F({
-          ...sde.properties,
+        L({
+          ...cde.properties,
           branch: U
         })
       ),
@@ -13941,7 +13945,7 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       /** Immutable presentation surface; independent of creation provenance. */
       createdSurface: d.Optional(d.Literal("plugin-dock")),
       createdActor: d.Optional(db),
-      owner: d.Optional(lde),
+      owner: d.Optional(dde),
       participants: d.Optional(
         d.Array(SS, { maxItems: HG })
       ),
@@ -13988,20 +13992,20 @@ var hR, sde, cde, ude, yR, db, lde, dde, pde, mde, Mbt, IV = p(() => {
       toolOverrides: d.Optional(yR)
     },
     { additionalProperties: !0 }
-  ), mde = F({
+  ), fde = L({
     key: U,
     sessionId: d.Optional(d.String()),
     agentId: d.Optional(U),
     revision: U,
     snapshotAt: d.Number()
-  }), Mbt = F({
-    ancestorSessions: d.Array(pde, { maxItems: 64 }),
-    ancestorSessionRefs: d.Optional(d.Array(mde, { maxItems: 64 }))
+  }), Nbt = L({
+    ancestorSessions: d.Array(mde, { maxItems: 64 }),
+    ancestorSessionRefs: d.Optional(d.Array(fde, { maxItems: 64 }))
   });
 });
 
 // openclaw/packages/gateway-protocol/src/schema/logs-chat.ts
-var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext, txt, vde, Ide, wde, Sde, kde, _de, nxt, rxt, oxt, qd, Ede, Tde, Cde, Rde, $de, Ade, Pde, Xc, Ode, Dde, ixt, SV = p(() => {
+var Wbt, Zbt, pb, Jbt, gde, hde, yde, bR, bde, xde, vde, Ybt, Xbt, Qbt, ext, txt, nxt, Ide, wde, Sde, kde, _de, Ede, rxt, oxt, ixt, qd, Tde, Cde, Rde, Ade, $de, Pde, Ode, Xc, Dde, Mde, axt, SV = p(() => {
   Le();
   Ji();
   Vr();
@@ -14010,11 +14014,11 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
   lV();
   ja();
   IV();
-  Vbt = F({
+  Wbt = L({
     cursor: d.Optional(d.Integer({ minimum: 0 })),
     limit: d.Optional(d.Integer({ minimum: 1, maximum: 5e3 })),
     maxBytes: d.Optional(d.Integer({ minimum: 1, maximum: 1e6 }))
-  }), Wbt = F({
+  }), Zbt = L({
     file: U,
     cursor: d.Integer({ minimum: 0 }),
     size: d.Integer({ minimum: 0 }),
@@ -14022,7 +14026,7 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     truncated: d.Optional(d.Boolean()),
     reset: d.Optional(d.Boolean()),
     skippedBytes: d.Optional(d.Integer({ minimum: 0 }))
-  }), pb = F({
+  }), pb = L({
     sessionKey: U,
     agentId: d.Optional(U),
     cursor: d.Optional(d.String()),
@@ -14041,9 +14045,9 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     sessionId: d.Optional(U),
     maxChars: d.Optional(d.Integer({ minimum: 1, maximum: 5e5 })),
     toolResultMaxChars: d.Optional(d.Integer({ minimum: 1, maximum: 5e5 }))
-  }), Zbt = d.Union([
+  }), Jbt = d.Union([
     pb,
-    F({
+    L({
       shortId: U,
       slugHint: d.Optional(U),
       agentId: U,
@@ -14051,9 +14055,9 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
       maxBytes: pb.properties.maxBytes,
       toolResultMaxChars: pb.properties.toolResultMaxChars
     })
-  ]), fde = F({
+  ]), gde = L({
     items: d.Array(
-      F({
+      L({
         id: U,
         runId: d.Optional(d.String({ minLength: 1, maxLength: 256 })),
         message: d.Unknown(),
@@ -14066,28 +14070,28 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     total: d.Integer({ minimum: 0 }),
     queuedCount: d.Optional(d.Integer({ minimum: 0 })),
     nextBefore: d.Optional(d.Integer({ minimum: 1 }))
-  }), gde = d.Array(
+  }), hde = d.Array(
     d.Union([
-      F({
+      L({
         runId: d.String({ minLength: 1, maxLength: 256 }),
         state: d.Literal("pending"),
         queued: d.Optional(d.Literal(!0)),
         cancelled: d.Optional(d.Literal(!0))
       }),
-      F({
+      L({
         runId: d.String({ minLength: 1, maxLength: 256 }),
         state: d.Literal("consumed"),
         consumedByEventId: U
       })
     ]),
     { maxItems: 50 }
-  ), hde = d.Array(
-    F({
+  ), yde = d.Array(
+    L({
       runId: d.String({ minLength: 1, maxLength: 256 }),
       consumedByEventId: U
     }),
     { maxItems: 50 }
-  ), bR = F({
+  ), bR = L({
     itemId: U,
     phase: d.Union([d.Literal("start"), d.Literal("update"), d.Literal("end")]),
     kind: d.String(),
@@ -14116,28 +14120,28 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     hideFromChannelProgress: d.Optional(d.Boolean()),
     approvalId: d.Optional(d.String()),
     approvalSlug: d.Optional(d.String())
-  }), yde = F({
+  }), bde = L({
     messageId: U,
     items: d.Array(bR)
-  }), bde = F({
+  }), xde = L({
     kind: d.Literal("delta"),
     messages: d.Array(d.Unknown()),
-    activity: d.Optional(d.Array(yde)),
+    activity: d.Optional(d.Array(bde)),
     deltaCursor: d.String(),
     sessionInfo: d.Unknown(),
     agentsList: d.Optional(d.Unknown()),
     inFlightRun: d.Optional(d.Unknown()),
     metadata: d.Optional(d.Unknown()),
-    pendingInputs: d.Optional(fde),
-    inputReceipts: d.Optional(gde),
-    inputConsumptions: d.Optional(hde)
-  }), xde = F({
+    pendingInputs: d.Optional(gde),
+    inputReceipts: d.Optional(hde),
+    inputConsumptions: d.Optional(yde)
+  }), vde = L({
     kind: d.Literal("reset")
-  }), Jbt = d.Union([
-    bde,
-    xde
-  ]), Ybt = Object.assign(
-    F({
+  }), Ybt = d.Union([
+    xde,
+    vde
+  ]), Xbt = Object.assign(
+    L({
       agentId: d.Optional(U),
       includeModels: d.Optional(
         d.Boolean({
@@ -14165,33 +14169,33 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
       )
     }),
     { not: { required: ["sessionKey", "authProfileId"] } }
-  ), Xbt = F({
+  ), Qbt = L({
     sessionKey: U,
     agentId: d.Optional(U),
     items: d.Array(
-      F({
+      L({
         id: d.String({ minLength: 1, maxLength: 64 }),
         name: d.String({ minLength: 1, maxLength: 200 }),
         input: d.String({ minLength: 1, maxLength: 4e3 })
       }),
       { minItems: 1, maxItems: 24 }
     )
-  }), Qbt = F({
+  }), ext = L({
     titles: d.Record(d.String(), d.String()),
     disabled: d.Optional(d.Boolean())
-  }), ext = F({
+  }), txt = L({
     sessionKey: U,
     agentId: d.Optional(U),
     sessionId: d.Optional(U),
     messageId: U,
     maxChars: d.Optional(d.Integer({ minimum: 1, maximum: 8e6 }))
-  }), txt = F({
+  }), nxt = L({
     ok: d.Boolean(),
     message: d.Optional(d.Unknown()),
     unavailableReason: d.Optional(
       d.Union([d.Literal("not_found"), d.Literal("oversized"), d.Literal("not_visible")])
     )
-  }), vde = d.Object(
+  }), Ide = d.Object(
     {
       type: d.Optional(d.String()),
       mimeType: d.Optional(d.String()),
@@ -14205,15 +14209,15 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
       height: d.Optional(d.Number())
     },
     { additionalProperties: !0 }
-  ), Ide = d.Array(vde), wde = d.Record(
+  ), wde = d.Array(Ide), Sde = d.Record(
     d.String({ minLength: 1, maxLength: 128 }),
     d.Unknown(),
     { maxProperties: 16 }
-  ), Sde = ["steer", "followup", "collect", "interrupt"], kde = F({
+  ), kde = ["steer", "followup", "collect", "interrupt"], _de = L({
     kind: d.Literal("session-goal-start"),
     version: d.Literal(1),
     issuedAtMs: d.Integer({ minimum: 0 })
-  }), _de = F({
+  }), Ede = L({
     page: d.String({ minLength: 1, maxLength: Jo.page }),
     title: d.Optional(d.String({ maxLength: Jo.title })),
     sessionKey: d.Optional(d.String({ maxLength: Jo.sessionKey })),
@@ -14236,14 +14240,14 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
         }
       )
     )
-  }), nxt = F({
+  }), rxt = L({
     sessionKey: GG,
     agentId: d.Optional(U),
     sessionId: d.Optional(U),
     message: d.String(),
     mentions: d.Optional(cV),
-    workContext: d.Optional(_de),
-    intent: d.Optional(kde),
+    workContext: d.Optional(Ede),
+    intent: d.Optional(_de),
     thinking: d.Optional(d.String()),
     fastMode: d.Optional(
       d.Union([d.Boolean(), d.Literal("auto"), d.Literal("ultrafast")])
@@ -14251,7 +14255,7 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     // One-turn override for auto fast-mode cutoff seconds.
     fastAutoOnSeconds: d.Optional(d.Integer({ minimum: 1 })),
     // One-turn override for active-run queue admission.
-    queueMode: d.Optional(d.String({ enum: [...Sde] })),
+    queueMode: d.Optional(d.String({ enum: [...kde] })),
     deliver: d.Optional(d.Boolean()),
     originatingChannel: d.Optional(d.String()),
     originatingTo: d.Optional(d.String()),
@@ -14260,8 +14264,8 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     // Transcript id of the message this send replies to; the Gateway hydrates
     // channel-agnostic reply context metadata from session history.
     replyToId: d.Optional(U),
-    attachments: d.Optional(Ide),
-    toolBindings: d.Optional(wde),
+    attachments: d.Optional(wde),
+    toolBindings: d.Optional(Sde),
     timeoutMs: d.Optional(d.Integer({ minimum: 0 })),
     systemInputProvenance: d.Optional(KG),
     systemProvenanceReceipt: d.Optional(d.String()),
@@ -14274,13 +14278,13 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     expectedPermissionMode: d.Optional(d.Union([hR, d.Null()])),
     expectedToolOverrides: d.Optional(d.Union([yR, d.Null()])),
     idempotencyKey: U
-  }), rxt = F({
+  }), oxt = L({
     sessionKey: U,
     agentId: d.Optional(U),
     runId: d.Optional(U),
     preserveSideRuns: d.Optional(d.Boolean()),
     discardPendingInput: d.Optional(d.Boolean())
-  }), oxt = F({
+  }), ixt = L({
     sessionKey: U,
     agentId: d.Optional(U),
     message: U,
@@ -14291,14 +14295,14 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     agentId: d.Optional(U),
     spawnedBy: d.Optional(U),
     seq: d.Integer({ minimum: 0 })
-  }, Ede = d.Union([
+  }, Tde = d.Union([
     d.Literal("refusal"),
     d.Literal("timeout"),
     d.Literal("rate_limit"),
     d.Literal("context_length"),
     d.Literal("state_contention"),
     d.Literal("unknown")
-  ]), Tde = d.Union([
+  ]), Cde = d.Union([
     d.Literal("waiting_for_state"),
     d.Literal("preparing_workspace"),
     d.Literal("naming_worktree"),
@@ -14308,12 +14312,12 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     d.Literal("preparing_context"),
     d.Literal("memory_flushing"),
     d.Literal("starting_model")
-  ]), Cde = F({
+  ]), Rde = L({
     ...qd,
     state: d.Literal("status"),
-    phase: Tde,
+    phase: Cde,
     retry: d.Optional(
-      F({
+      L({
         attempt: d.Integer({ minimum: 1, maximum: 10 }),
         maxAttempts: d.Integer({ minimum: 1, maximum: 10 }),
         reason: d.Union([
@@ -14326,29 +14330,29 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
         retryAt: d.Optional(d.Number({ minimum: 0 }))
       })
     )
-  }), Rde = F({
+  }), Ade = L({
     ...qd,
     state: d.Literal("delta"),
     message: d.Optional(d.Unknown()),
     deltaText: d.String(),
     replace: d.Optional(d.Boolean()),
     usage: d.Optional(d.Unknown())
-  }), $de = F({
+  }), $de = L({
     ...qd,
     state: d.Literal("final"),
     message: d.Optional(d.Unknown()),
     usage: d.Optional(d.Unknown()),
     stopReason: d.Optional(d.String()),
     yielded: d.Optional(d.Literal(!0))
-  }), Ade = F({
+  }), Pde = L({
     ...qd,
     state: d.Literal("aborted"),
     message: d.Optional(d.Unknown()),
     errorMessage: d.Optional(d.String()),
     stopReason: d.Optional(d.String())
-  }), Pde = 300, Xc = d.Optional(
-    d.String({ maxLength: Pde })
-  ), Ode = F({
+  }), Ode = 300, Xc = d.Optional(
+    d.String({ maxLength: Ode })
+  ), Dde = L({
     provider: Xc,
     model: Xc,
     failoverReason: Xc,
@@ -14356,21 +14360,21 @@ var Vbt, Wbt, pb, Zbt, fde, gde, hde, bR, yde, bde, xde, Jbt, Ybt, Xbt, Qbt, ext
     providerErrorType: Xc,
     httpStatus: d.Optional(d.Integer({ minimum: 100, maximum: 599 })),
     providerErrorMessagePreview: Xc
-  }), Dde = F({
+  }), Mde = L({
     ...qd,
     state: d.Literal("error"),
     message: d.Optional(d.Unknown()),
     errorMessage: d.Optional(d.String()),
-    errorKind: d.Optional(Ede),
-    errorDetail: d.Optional(Ode),
+    errorKind: d.Optional(Tde),
+    errorDetail: d.Optional(Dde),
     usage: d.Optional(d.Unknown()),
     stopReason: d.Optional(d.String())
-  }), ixt = d.Union([
-    Cde,
+  }), axt = d.Union([
     Rde,
-    $de,
     Ade,
-    Dde
+    $de,
+    Pde,
+    Mde
   ]);
 });
 
@@ -14470,7 +14474,7 @@ var dp = [
   "operator.read",
   "operator.talk.secrets",
   "operator.write"
-], Gge = new Set(dp), Kb = [
+], Kge = new Set(dp), Kb = [
   "operator.admin",
   "operator.approvals",
   "operator.pairing",
@@ -14478,30 +14482,30 @@ var dp = [
   "operator.read",
   "operator.talk.secrets",
   "operator.write"
-], Kge = new Set(
+], Hge = new Set(
   Kb
-), l$ = [
+), lA = [
   "operator.admin",
   ...dp
-], Hge = new Set(l$);
-var Vge = {
+], Vge = new Set(lA);
+var Wge = {
   // QR/setup-code bootstrap must hand off both tokens for native onboarding:
   // iOS/Android suppress the operator loop while bootstrap auth is active and
   // only start it after persisting this bounded operator token.
   roles: ["node", "operator"],
   scopes: [...dp]
-}, Wge = {
+}, Zge = {
   roles: ["operator"],
   scopes: [...Kb],
   purpose: "control-ui-owner"
-}, Zge = {
+}, Jge = {
   roles: ["node", "operator"],
-  scopes: [...l$],
+  scopes: [...lA],
   purpose: "mobile-full"
 };
 
 // openclaw/ui/src/i18n/locales/en-agents.ts
-var d$ = {
+var dA = {
   menuLabel: "Agent menu",
   agents: "Agents",
   search: "Find an agent\u2026",
@@ -14521,13 +14525,13 @@ var d$ = {
   getApps: "Get the apps",
   discord: "Discord community",
   viewChangelog: "View changelog"
-}, p$ = {
+}, pA = {
   label: "Agent",
   allAgents: "All agents"
-}, m$ = {
+}, mA = {
   pinToSwitcher: "Pin to switcher",
   unpinFromSwitcher: "Unpin from switcher"
-}, f$ = {
+}, fA = {
   title: "Identity",
   subtitle: "Name, emoji, and avatar shown in chats and the sidebar.",
   name: "Display name",
@@ -15137,8 +15141,8 @@ var au = {
 
 Delete without a snapshot?`
   },
-  agentChip: d$,
-  agentScope: p$,
+  agentChip: dA,
+  agentScope: pA,
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
@@ -15241,6 +15245,11 @@ Delete without a snapshot?`
     all: "All",
     snooze: "Snooze",
     wakeSession: "Wake session",
+    snoozeChooseTime: "Choose another time",
+    snoozeCustom: "Custom",
+    snoozeDateTime: "Date and time",
+    snoozeLocalTime: "Your local time ({zone})",
+    snoozeFutureRequired: "Choose a date and time in the future.",
     snoozeHour: "In 1 hour",
     snoozeThreeHours: "In 3 hours",
     snoozeEvening: "This evening",
@@ -15499,7 +15508,7 @@ Delete without a snapshot?`
     copyId: "Copy ID",
     default: "Default",
     setDefault: "Set Default",
-    ...m$,
+    ...mA,
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -15525,7 +15534,7 @@ Delete without a snapshot?`
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets."
     },
-    identity: f$,
+    identity: fA,
     overview: {
       title: "Overview",
       subtitle: "Workspace paths and identity metadata.",
@@ -17399,6 +17408,7 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       openParent: "Open parent session {title}",
       subagentsRunning: "Subagents \xB7 {count} running",
       layout: "Layout",
+      panels: "Panels",
       continueInTerminal: {
         action: "Continue in terminal\u2026",
         title: "Continue in terminal",
@@ -17630,6 +17640,10 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
         summary: "Turn interrupted by a gateway restart \u2014 asked the agent to resume and finish the response.",
         interrupted: "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled: "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue."
+      },
+      automationRecovery: {
+        label: "System \xB7 automation recovery",
+        summary: "An automation failed \u2014 asked the agent to investigate and continue if needed."
       },
       gatewayRestarted: {
         label: "System \xB7 gateway restarted"
@@ -18010,6 +18024,11 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       positionMarkerHint: "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail."
     },
     pendingInputs: {
+      agentUpdate: {
+        queued: "Agent update received \xB7 waiting for delivery.",
+        cancelled: "This agent update was cancelled before delivery.",
+        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry."
+      },
       waitingForWorkspaceSync: "Received \xB7 waiting for workspace sync",
       waitingForWorkerSetup: "Received \xB7 waiting for worker setup",
       resuming: "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
@@ -18110,7 +18129,6 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
         clear: "Clear session overrides"
       },
       contextUsage: {
-        label: "Context",
         title: "Context usage details",
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
@@ -18195,6 +18213,7 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       allowImage: "Allow image",
       attachedFile: "Attached file",
       audio: "Audio",
+      download: "Download",
       expand: "Open {filename} in the side panel",
       open: "Open",
       previewUnavailable: "Preview unavailable",
@@ -18220,6 +18239,7 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
     },
     voice: {
       asking: "Asking OpenClaw...",
+      replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
@@ -18242,16 +18262,22 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       neededOn: "OpenClaw needs access on {node} to continue this action.",
       openApp: "Grant access in the OpenClaw Mac app on that device: Settings \u2192 This Mac \u2192 Permissions. Then tell the agent to try again.",
       ready: "Access is available. You can ask the agent to try again.",
-      grant: "Grant {permissions}",
-      relaunch: "Relaunch OpenClaw",
+      following: "Then grant the remaining permissions: {permissions}.",
+      actions: {
+        "not-determined": "Grant {permissions}",
+        denied: "Open System Settings",
+        "restart-required": "Relaunch OpenClaw",
+        "stale-grant": "Open System Settings",
+        "disabled-in-openclaw": "Enable {permissions}"
+      },
       tryAgain: "Try again",
       retryMessage: "I granted {permissions}, try again.",
       states: {
         "not-determined": "Choose Grant to review the permission request.",
-        denied: "Choose Grant to open System Settings and allow access for OpenClaw.",
+        denied: "Open System Settings to allow access for OpenClaw.",
         "restart-required": "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
-        "stale-grant": "macOS may be using a stale permission grant. Choose Grant to review it in System Settings.",
-        "disabled-in-openclaw": "Choose Grant to review and enable this capability in OpenClaw."
+        "stale-grant": "macOS may be using a stale permission grant. Open System Settings to review it.",
+        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw."
       },
       capabilities: {
         notifications: "Notifications",
@@ -18827,7 +18853,7 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
 Gb();
 
 // openclaw/ui/src/i18n/locales/en-browser.ts
-var g$ = {
+var gA = {
   browser: {
     unavailable: "Browser control is unavailable for this connection. Reconnect with browser access.",
     navigationBlocked: "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
@@ -18877,12 +18903,12 @@ var g$ = {
       outro: "Please look at the marked area and tell me what you make of it."
     }
   }
-}, h$ = Object.assign(
+}, hA = Object.assign(
   () => {
-    let { errors: e, annotatePrompt: t, ...n } = g$.browser;
+    let { errors: e, annotatePrompt: t, ...n } = gA.browser;
     Object.assign(au.browser, n), Object.assign(au.browser.errors, e), Object.assign(au.browser.annotatePrompt, t);
   },
-  { catalog: g$ }
+  { catalog: gA }
 );
 
 // openclaw/ui/src/components/browser/browser-inspect-script.ts
@@ -18913,7 +18939,7 @@ function Hb(e, t = 128) {
   return typeof e == "string" && e.length > 0 && e.length <= t && e.trim() === e;
 }
 function Vb(e) {
-  let t = At(e);
+  let t = $t(e);
   if (!Hb(t?.targetId) || !Hb(t.profile))
     return;
   let n = { targetId: t.targetId, profile: t.profile };
@@ -18922,12 +18948,12 @@ function Vb(e) {
   if (t.target === "node" && Hb(t.node, 256))
     return { ...n, target: "node", node: t.node };
 }
-function y$(e) {
+function yA(e) {
   return JSON.stringify([e.target, e.node, e.profile, e.targetId]);
 }
 
 // openclaw/ui/src/components/browser/browser-client.ts
-h$();
+hA();
 
 // openclaw/ui/src/lib/chat/tool-cards.ts
 e0();
@@ -18936,13 +18962,13 @@ e0();
 function _Z(e) {
   return e instanceof URL ? e : URL.parse(e);
 }
-function b$(e) {
+function bA(e) {
   let t = _Z(e);
   return t?.protocol === "http:" || t?.protocol === "https:";
 }
 
 // openclaw/ui/src/lib/chat/tool-cards.ts
-Ar();
+$r();
 Le();
 pt();
 Ji();
@@ -18951,16 +18977,16 @@ Ji();
 Le();
 
 // openclaw/src/chat/canvas-render.ts
-Ar();
+$r();
 Po();
 Le();
 pt();
 
 // openclaw/src/shared/text/code-regions.ts
-Ar();
+$r();
 
 // openclaw/packages/markdown-core/src/reasoning-tag-parser.ts
-Ar();
+$r();
 var EZ = [
   "think",
   "thinking",
@@ -18976,7 +19002,7 @@ var EZ = [
   "mm:thinking",
   "mm:thought",
   "mm:reasoning"
-], pye = new Set(EZ);
+], mye = new Set(EZ);
 
 // openclaw/src/chat/canvas-render.ts
 function CZ(e) {
@@ -18997,18 +19023,18 @@ function CZ(e) {
 function RZ(e) {
   return typeof e == "number" && Number.isFinite(e) && e >= 160 ? Math.min(Math.trunc(e), 1200) : void 0;
 }
-function I$(e) {
+function IA(e) {
   return typeof e == "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(e);
 }
-function w$(e) {
+function wA(e) {
   if (!e || ze(e?.kind)?.trim().toLowerCase() !== "canvas")
     return;
-  let n = $t(e.presentation), o = $t(e.view), r = $t(e.source), i = CZ($t(e.mcpApp)), a = i?.viewId, u = ze(n?.target) ?? ze(e?.target) ?? "assistant_message";
+  let n = At(e.presentation), o = At(e.view), r = At(e.source), i = CZ(At(e.mcpApp)), a = i?.viewId, u = ze(n?.target) ?? ze(e?.target) ?? "assistant_message";
   if (u !== "assistant_message" && u !== "node_panel")
     return;
   let l = ze(n?.title) ?? ze(o?.title), m = RZ(
-    Ao(n?.preferred_height) ?? Ao(n?.preferredHeight) ?? Ao(o?.preferred_height) ?? Ao(o?.preferredHeight)
-  ), h = ze(n?.class_name) ?? ze(n?.className), b = ze(n?.style), f = ze(n?.sandbox), y = ze(o?.url) ?? ze(o?.entryUrl), x = ze(o?.id) ?? ze(o?.docId), v = ze(o?.boardWidgetName), S = I$(v) ? v : void 0, w = {
+    $o(n?.preferred_height) ?? $o(n?.preferredHeight) ?? $o(o?.preferred_height) ?? $o(o?.preferredHeight)
+  ), h = ze(n?.class_name) ?? ze(n?.className), b = ze(n?.style), f = ze(n?.sandbox), y = ze(o?.url) ?? ze(o?.entryUrl), x = ze(o?.id) ?? ze(o?.docId), v = ze(o?.boardWidgetName), S = IA(v) ? v : void 0, w = {
     kind: "canvas",
     surface: u,
     render: "url",
@@ -19030,38 +19056,38 @@ function w$(e) {
       ...y && S ? { boardWidgetName: S } : {}
     };
 }
-function S$(e) {
-  let t = $t(e);
-  return w$($t(t?.mcpAppPreview));
+function SA(e) {
+  let t = At(e);
+  return wA(At(t?.mcpAppPreview));
 }
-function k$(e) {
+function kA(e) {
   let t = e ? Zi(e) : void 0;
-  return w$(t);
+  return wA(t);
 }
 
 // openclaw/src/chat/tool-content.ts
 Pb();
 pt();
-var $Z = [
+var AZ = [
   "id",
   "tool_call_id",
   "toolCallId",
   "tool_use_id",
   "toolUseId"
 ];
-function _$(e) {
+function _A(e) {
   return typeof e == "string" ? e.toLowerCase() : "";
 }
 function Wb(e) {
-  let t = _$(e);
+  let t = _A(e);
   return t === "toolcall" || t === "tool_call" || t === "tooluse" || t === "tool_use";
 }
 function pp(e) {
-  let t = _$(e);
+  let t = _A(e);
   return t === "toolresult" || t === "tool_result";
 }
-function E$(e) {
-  for (let t of $Z) {
+function EA(e) {
+  for (let t of AZ) {
     let n = Xt(e[t]);
     if (n)
       return n;
@@ -19071,15 +19097,15 @@ function mp(e) {
   let t = e.isError ?? e.is_error;
   return typeof t == "boolean" ? t : void 0;
 }
-var AZ = /^tool not found\.?$/i, PZ = 2e4, OZ = /* @__PURE__ */ new Set(["error", "failed", "timeout"]);
+var $Z = /^tool not found\.?$/i, PZ = 2e4, OZ = /* @__PURE__ */ new Set(["error", "failed", "timeout"]);
 function DZ(e) {
   return typeof e == "string" && OZ.has(e.trim().toLowerCase());
 }
-function T$(e) {
+function TA(e) {
   let t = e?.trim();
   if (!t)
     return !1;
-  if (AZ.test(t))
+  if ($Z.test(t))
     return !0;
   if (t.length > PZ || !t.startsWith("{") || !t.endsWith("}"))
     return !1;
@@ -19107,7 +19133,7 @@ Le();
 pt();
 
 // openclaw/src/auto-reply/reply/strip-inbound-meta.ts
-Ar();
+$r();
 Le();
 
 // openclaw/src/shared/regexp.ts
@@ -19127,13 +19153,13 @@ var MZ = "Delivery: Final assistant text is not automatically delivered in this 
 var gp = "\u27E6openclaw:ctx\u27E7";
 
 // openclaw/src/auto-reply/reply/strip-inbound-meta.ts
-var Vye = `Context: ${gp}`, UZ = "Context:";
-var Wye = [
+var Wye = `Context: ${gp}`, UZ = "Context:";
+var Zye = [
   "[",
   gp,
   ...fp,
   UZ
-], Zye = new RegExp(
+], Jye = new RegExp(
   [gp, ...fp].map(ra).join("|"),
   "g"
 );
@@ -19149,17 +19175,17 @@ var LZ = {
     { id: "max" }
   ],
   defaultLevel: "high"
-}, tbe = {
+}, nbe = {
   ...LZ,
   defaultLevel: "medium"
 };
 
 // openclaw/packages/llm-core/src/types.ts
-var C$ = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", R$ = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", $$ = "OpenClaw runtime context:", A$ = "End OpenClaw runtime context.";
+var CA = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", RA = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", AA = "OpenClaw runtime context:", $A = "End OpenClaw runtime context.";
 
 // openclaw/packages/llm-core/src/utils/provider-refusal.ts
 I();
-var cbe = new TextEncoder();
+var ube = new TextEncoder();
 
 // openclaw/packages/llm-core/src/validation.ts
 wM();
@@ -19180,7 +19206,7 @@ jo();
 
 // openclaw/packages/llm-core/src/validation.ts
 jo();
-var Cct = 64 * 1024;
+var Rct = 64 * 1024;
 
 // openclaw/packages/agent-core/src/harness/messages.ts
 Po();
@@ -19190,9 +19216,9 @@ Le();
 Le();
 
 // openclaw/src/agents/internal-runtime-context.ts
-var Are = C$, Pre = R$;
+var $re = CA, Pre = RA;
 var UG = "This context is runtime-generated, not user-authored. Keep internal details private.";
-var aut = ["OpenClaw runtime context (internal):", UG, ""].join(`
+var sut = ["OpenClaw runtime context (internal):", UG, ""].join(`
 `) + `
 `;
 function Gg(e) {
@@ -19201,7 +19227,7 @@ function Gg(e) {
     pattern: new RegExp(`(?:^|\\r?\\n)[ \\t]*${ra(e)}[ \\t]*(?=\\r?\\n|$)`, "g")
   };
 }
-var sut = Gg(Are), cut = Gg(Pre), uut = Gg($$), lut = Gg(A$);
+var cut = Gg($re), uut = Gg(Pre), lut = Gg(AA), dut = Gg($A);
 var Ore = [
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
@@ -19213,7 +19239,7 @@ var Ore = [
   }).map((e) => e.split(/\s+/).map(ra).join("\\s+")).join("|")
 ), Mre = new RegExp(
   UG.split(/\s+/).map(ra).join("\\s+")
-), dut = new RegExp(
+), put = new RegExp(
   `^[ \\t]*(?:${Dre.source})\\s+${Mre.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm"
 );
@@ -19231,7 +19257,7 @@ Le();
 Ji();
 
 // openclaw/packages/markdown-core/src/image-spans.ts
-Ar();
+$r();
 
 // openclaw/node_modules/.pnpm/mdurl@2.1.0/node_modules/mdurl/index.mjs
 var kS = {};
@@ -19410,8 +19436,8 @@ Zg.prototype.parse = function(e, t) {
           for (let k = 0, C = S.length; k < C; k++)
             S.charCodeAt(k) > 127 ? w += "x" : w += S[k];
           if (!w.match(e9)) {
-            let k = y.slice(0, x), C = y.slice(x + 1), $ = S.match(roe);
-            $ && (k.push($[1]), C.unshift($[2])), C.length && (i = C.join(".") + i), this.hostname = k.join(".");
+            let k = y.slice(0, x), C = y.slice(x + 1), A = S.match(roe);
+            A && (k.push(A[1]), C.unshift(A[2])), C.length && (i = C.join(".") + i), this.hostname = k.join(".");
             break;
           }
         }
@@ -19501,8 +19527,8 @@ function i9(e, t, n, o, r, i) {
   }, h = n - o, b = n + r, f = new Int32Array(b);
   f.fill(-1, o, i), f.fill(-1, i + h, b);
   let y = new Int32Array(b), x = new Int32Array(b);
-  function v(Z, $e) {
-    let me = 0, ue = $e, Rt = $e + Z;
+  function v(Z, Ae) {
+    let me = 0, ue = Ae, Rt = Ae + Z;
     for (; ue < Rt; ) {
       let vn = Wr[e.charCodeAt(l++)];
       if (vn < 89)
@@ -19520,37 +19546,37 @@ function i9(e, t, n, o, r, i) {
   }
   v(o, 0), v(h, i);
   let S = new Int32Array(r * 2), w = 0, k = 0;
-  function C(Z, $e) {
+  function C(Z, Ae) {
     for (let me = 0; me < Z; me++) {
-      let ue = $e + me, Rt = m(), vn = m();
+      let ue = Ae + me, Rt = m(), vn = m();
       S[k * 2] = Rt, S[k * 2 + 1] = vn, k += 1, y[ue] = w;
       let dn = (f[Rt] < 0 ? x[Rt] : 1) + (f[vn] < 0 ? x[vn] : 1);
       x[ue] = dn, w += dn;
     }
   }
   C(r - i + o, i + h), C(i - o, o);
-  let $ = new Uint16Array(w), D = 0;
+  let A = new Uint16Array(w), D = 0;
   for (let Z = 0; Z < k; Z++)
-    for (let $e = 0; $e < 2; $e++) {
-      let me = S[Z * 2 + $e], ue = f[me];
+    for (let Ae = 0; Ae < 2; Ae++) {
+      let me = S[Z * 2 + Ae], ue = f[me];
       if (ue < 0) {
         let Rt = y[me], vn = Rt + x[me];
         for (; Rt < vn; )
-          $[D++] = $[Rt++];
+          A[D++] = A[Rt++];
       } else
-        $[D++] = ue;
+        A[D++] = ue;
     }
   let V = new Uint16Array(t), te = 0;
   for (; l < s; ) {
     let Z = Wr[e.charCodeAt(l++)];
     Z >= i && (Z = Z * 91 - u + Wr[e.charCodeAt(l++)]);
-    let $e = f[Z];
-    if ($e < 0) {
+    let Ae = f[Z];
+    if (Ae < 0) {
       let me = y[Z], ue = me + x[Z];
       for (; me < ue; )
-        V[te++] = $[me++];
+        V[te++] = A[me++];
     } else
-      V[te++] = $e;
+      V[te++] = Ae;
   }
   return V;
 }
@@ -19569,10 +19595,10 @@ var yn;
 (function(e) {
   e[e.AMP = 38] = "AMP", e[e.NUM = 35] = "NUM", e[e.SEMI = 59] = "SEMI", e[e.EQUALS = 61] = "EQUALS", e[e.ZERO = 48] = "ZERO", e[e.NINE = 57] = "NINE", e[e.LOWER_A = 97] = "LOWER_A", e[e.LOWER_X = 120] = "LOWER_X";
 })(yn || (yn = {}));
-var Jg = 32, u9 = 21, coe = 2097151, $S = 2047, l9 = 0;
+var Jg = 32, u9 = 21, coe = 2097151, AS = 2047, l9 = 0;
 function uoe(e) {
   let t = e >>> u9;
-  return t === $S ? l9 : t;
+  return t === AS ? l9 : t;
 }
 function d9(e) {
   return e - yn.ZERO >>> 0 <= 9;
@@ -19590,10 +19616,10 @@ var s9;
 (function(e) {
   e[e.EntityStart = 0] = "EntityStart", e[e.NumericStart = 1] = "NumericStart", e[e.NumericDecimal = 2] = "NumericDecimal", e[e.NumericHex = 3] = "NumericHex", e[e.NamedEntity = 4] = "NamedEntity";
 })(s9 || (s9 = {}));
-var AS;
+var $S;
 (function(e) {
   e[e.Legacy = 0] = "Legacy", e[e.Strict = 1] = "Strict", e[e.Attribute = 2] = "Attribute";
-})(AS || (AS = {}));
+})($S || ($S = {}));
 function poe(e, t, n, o) {
   let r = (t & Ht.BRANCH_LENGTH) >> 7, i = t & Ht.JUMP_TABLE;
   if (i) {
@@ -19646,7 +19672,7 @@ function moe(e, t, n) {
     return 0;
   o < n && e.charCodeAt(o) === yn.SEMI && (o += 1), r > 1114111 && (r = 1114112);
   let a = o - t;
-  return a >= $S && (l9 = a, a = $S), a << u9 | r;
+  return a >= AS && (l9 = a, a = AS), a << u9 | r;
 }
 function foe(e, t, n) {
   let o = a9, r = e.indexOf("&");
@@ -19662,8 +19688,8 @@ function foe(e, t, n) {
       f = 0, y = "";
       let x = b - l, v;
       if (x >>> 0 < m) {
-        let $ = o[1 + x];
-        v = $ === 0 ? -1 : m + $ & 65535;
+        let A = o[1 + x];
+        v = A === 0 ? -1 : m + A & 65535;
       } else
         v = -1;
       let S = 0, w = 0, k = v < 0 ? 0 : o[v], C = h + 1;
@@ -19679,10 +19705,10 @@ function foe(e, t, n) {
               break e;
             v += 1;
           } else {
-            let $e = e.charCodeAt(C) - te;
-            if ($e >>> 0 >= Z)
+            let Ae = e.charCodeAt(C) - te;
+            if (Ae >>> 0 >= Z)
               break e;
-            let me = o[v + 1 + $e];
+            let me = o[v + 1 + Ae];
             if (me === 0)
               break e;
             v = v + Z + me & 65535;
@@ -19695,38 +19721,38 @@ function foe(e, t, n) {
           if (e.charCodeAt(C) !== (k & Ht.JUMP_TABLE))
             break;
           C += 1;
-          let Z = te - 1, $e = v + 1, me = 0;
+          let Z = te - 1, Ae = v + 1, me = 0;
           for (; me + 1 < Z; me += 2) {
-            let ue = o[$e];
+            let ue = o[Ae];
             if (e.charCodeAt(C) !== (ue & 255) || (C += 1, e.charCodeAt(C) !== (ue >> 8 & 255)))
               break e;
-            C += 1, $e += 1;
+            C += 1, Ae += 1;
           }
           if (me < Z) {
-            if (e.charCodeAt(C) !== (o[$e] & 255))
+            if (e.charCodeAt(C) !== (o[Ae] & 255))
               break;
             C += 1;
           }
           v += 1 + (te >> 1), k = o[v];
           continue;
         }
-        let $ = k >>> 14, D = e.charCodeAt(C);
-        if ($ !== 0) {
+        let A = k >>> 14, D = e.charCodeAt(C);
+        if (A !== 0) {
           if (D === yn.SEMI) {
-            f = C - h + 1, y = $ === 1 ? String.fromCharCode(k & Ht.VALUE_MASK) : c9(o, v, $);
+            f = C - h + 1, y = A === 1 ? String.fromCharCode(k & Ht.VALUE_MASK) : c9(o, v, A);
             break;
           }
-          if (!t && (k & Ht.FLAG13) === 0 && (f = C - h, S = v, w = $), $ === 1)
+          if (!t && (k & Ht.FLAG13) === 0 && (f = C - h, S = v, w = A), A === 1)
             break;
         }
-        let V = poe(o, k, v + ($ || 1), D);
+        let V = poe(o, k, v + (A || 1), D);
         if (V < 0)
           break;
         v = V, k = o[v], C += 1;
       }
       if (y === "") {
-        let $ = k >>> 14;
-        $ !== 0 && !t && (k & Ht.FLAG13) === 0 && (f = C - h, S = v, w = $), f > 0 && (y = c9(o, S, w));
+        let A = k >>> 14;
+        A !== 0 && !t && (k & Ht.FLAG13) === 0 && (f = C - h, S = v, w = A), f > 0 && (y = c9(o, S, w));
       }
     } else
       f = 0, y = "";
@@ -20201,7 +20227,7 @@ var _9 = Object.defineProperty, U9 = (e, t) => {
   arrayReplaceAt: () => Ooe,
   asciiTrim: () => th,
   callable: () => L9,
-  escapeHtml: () => Ai,
+  escapeHtml: () => $i,
   escapeRE: () => qoe,
   fromCodePoint: () => Fl,
   isMdAsciiPunct: () => Bl,
@@ -20261,7 +20287,7 @@ var Loe = /[&<>"]/, Foe = /[&<>"]/g, zoe = {
 function joe(e) {
   return zoe[e];
 }
-function Ai(e) {
+function $i(e) {
   return Loe.test(e) ? e.replace(Foe, joe) : e;
 }
 var Boe = /[.?*+^$[\]\\(){}|-]/g;
@@ -20761,11 +20787,11 @@ var qa = class {
 }, ko = {};
 ko.code_inline = function(e, t, n, o, r) {
   let i = e[t];
-  return `<code${r.renderAttrs(i)}>${Ai(i.content)}</code>`;
+  return `<code${r.renderAttrs(i)}>${$i(i.content)}</code>`;
 };
 ko.code_block = function(e, t, n, o, r) {
   let i = e[t];
-  return `<pre${r.renderAttrs(i)}><code>${Ai(e[t].content)}</code></pre>
+  return `<pre${r.renderAttrs(i)}><code>${$i(e[t].content)}</code></pre>
 `;
 };
 ko.fence = function(e, t, n, o, r) {
@@ -20775,7 +20801,7 @@ ko.fence = function(e, t, n, o, r) {
     s = m[0], u = m.slice(2).join("");
   }
   let l;
-  if (n.highlight ? l = n.highlight(i.content, s, u) || Ai(i.content) : l = Ai(i.content), l.indexOf("<pre") === 0) return l + `
+  if (n.highlight ? l = n.highlight(i.content, s, u) || $i(i.content) : l = $i(i.content), l.indexOf("<pre") === 0) return l + `
 `;
   if (a) {
     let m = i.attrIndex("class"), h = i.attrs ? i.attrs.slice() : [];
@@ -20803,7 +20829,7 @@ ko.softbreak = function(e, t, n) {
 `;
 };
 ko.text = function(e, t) {
-  return Ai(e[t].content);
+  return $i(e[t].content);
 };
 ko.html_block = function(e, t) {
   return e[t].content;
@@ -20850,7 +20876,7 @@ var j9 = class {
   renderAttrs(e) {
     let t, n, o;
     if (!e.attrs) return "";
-    for (o = "", t = 0, n = e.attrs.length; t < n; t++) o += ` ${Ai(e.attrs[t][0])}="${Ai(String(e.attrs[t][1]))}"`;
+    for (o = "", t = 0, n = e.attrs.length; t < n; t++) o += ` ${$i(e.attrs[t][0])}="${$i(String(e.attrs[t][1]))}"`;
     return o;
   }
   /**
@@ -20987,8 +21013,8 @@ function iie(e) {
             k.attrs = [["href", v]], k.level = b++, k.markup = "linkify", k.info = "auto", h.push(k);
             let C = new e.Token("text", "", 0);
             C.content = S, C.level = b, h.push(C);
-            let $ = new e.Token("link_close", "a", -1);
-            $.level = --b, $.markup = "linkify", $.info = "auto", h.push($), f = m[y].lastIndex;
+            let A = new e.Token("link_close", "a", -1);
+            A.level = --b, A.markup = "linkify", A.info = "auto", h.push(A), f = m[y].lastIndex;
           }
           if (f < l.length) {
             let y = new e.Token("text", "", 0);
@@ -21096,8 +21122,8 @@ function hie(e, t) {
           S = e[n].content.charCodeAt(0);
           break;
         }
-      let w = Bl(v) || jl(v), k = Bl(S) || jl(S), C = zl(v), $ = zl(S);
-      if ($ ? f = !1 : k && (C || w || (f = !1)), C ? y = !1 : w && ($ || k || (y = !1)), S === 34 && b[0] === '"' && v >= 48 && v <= 57 && (y = f = !1), f && y && (f = w, y = k), !f && !y) {
+      let w = Bl(v) || jl(v), k = Bl(S) || jl(S), C = zl(v), A = zl(S);
+      if (A ? f = !1 : k && (C || w || (f = !1)), C ? y = !1 : w && (A || k || (y = !1)), S === 34 && b[0] === '"' && v >= 48 && v <= 57 && (y = f = !1), f && y && (f = w, y = k), !f && !y) {
         x && Xg(i, a, b.index, C9);
         continue;
       }
@@ -21237,7 +21263,7 @@ function NS(e, t) {
   let n = e.bMarks[t] + e.tShift[t], o = e.eMarks[t];
   return e.src.slice(n, o);
 }
-function $9(e) {
+function A9(e) {
   let t = [], n = e.length, o = 0, r = e.charCodeAt(o), i = !1, a = 0, s = "";
   for (; o < n; )
     r === 124 && (i ? (s += e.substring(a, o - 1), a = o) : (t.push(s + e.substring(a, o)), s = "", a = o + 1)), i = r === 92, o++, r = e.charCodeAt(o);
@@ -21260,16 +21286,16 @@ function Iie(e, t, n, o) {
   }
   let u = NS(e, t + 1), l = u.split("|"), m = [];
   for (let C = 0; C < l.length; C++) {
-    let $ = l[C].trim();
-    if (!$) {
+    let A = l[C].trim();
+    if (!A) {
       if (C === 0 || C === l.length - 1) continue;
       return !1;
     }
-    if (!/^:?-+:?$/.test($)) return !1;
-    $.charCodeAt($.length - 1) === 58 ? m.push($.charCodeAt(0) === 58 ? "center" : "right") : $.charCodeAt(0) === 58 ? m.push("left") : m.push("");
+    if (!/^:?-+:?$/.test(A)) return !1;
+    A.charCodeAt(A.length - 1) === 58 ? m.push(A.charCodeAt(0) === 58 ? "center" : "right") : A.charCodeAt(0) === 58 ? m.push("left") : m.push("");
   }
   if (u = NS(e, t).trim(), u.indexOf("|") === -1 || e.sCount[t] - e.blkIndent >= 4) return !1;
-  l = $9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop();
+  l = A9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop();
   let h = l.length;
   if (h === 0 || h !== m.length) return !1;
   if (o) return !0;
@@ -21282,8 +21308,8 @@ function Iie(e, t, n, o) {
   let S = e.push("tr_open", "tr", 1);
   S.map = [t, t + 1];
   for (let C = 0; C < l.length; C++) {
-    let $ = e.push("th_open", "th", 1);
-    m[C] && ($.attrs = [["style", `text-align:${m[C]}`]]);
+    let A = e.push("th_open", "th", 1);
+    m[C] && (A.attrs = [["style", `text-align:${m[C]}`]]);
     let D = e.push("inline", "", 0);
     D.content = l[C].trim(), D.children = [], e.push("th_close", "th", -1);
   }
@@ -21295,13 +21321,13 @@ function Iie(e, t, n, o) {
       C = !0;
       break;
     }
-    if (C || (u = NS(e, r).trim(), !u) || e.sCount[r] - e.blkIndent >= 4 || (l = $9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop(), k += h - l.length, k > vie)) break;
+    if (C || (u = NS(e, r).trim(), !u) || e.sCount[r] - e.blkIndent >= 4 || (l = A9(u), l.length && l[0] === "" && l.shift(), l.length && l[l.length - 1] === "" && l.pop(), k += h - l.length, k > vie)) break;
     if (r === t + 2) {
       let D = e.push("tbody_open", "tbody", 1);
       D.map = w = [t + 2, 0];
     }
-    let $ = e.push("tr_open", "tr", 1);
-    $.map = [r, r + 1];
+    let A = e.push("tr_open", "tr", 1);
+    A.map = [r, r + 1];
     for (let D = 0; D < h; D++) {
       let V = e.push("td_open", "td", 1);
       m[D] && (V.attrs = [["style", `text-align:${m[D]}`]]);
@@ -21365,21 +21391,21 @@ function kie(e, t, n, o) {
     let k = e.sCount[y] < e.blkIndent;
     if (r = e.bMarks[y] + e.tShift[y], i = e.eMarks[y], r >= i) break;
     if (e.src.charCodeAt(r++) === 62 && !k) {
-      let $ = e.sCount[y] + 1, D, V;
-      e.src.charCodeAt(r) === 32 ? (r++, $++, V = !1, D = !0) : e.src.charCodeAt(r) === 9 ? (D = !0, (e.bsCount[y] + $) % 4 === 3 ? (r++, $++, V = !1) : V = !0) : D = !1;
-      let te = $;
+      let A = e.sCount[y] + 1, D, V;
+      e.src.charCodeAt(r) === 32 ? (r++, A++, V = !1, D = !0) : e.src.charCodeAt(r) === 9 ? (D = !0, (e.bsCount[y] + A) % 4 === 3 ? (r++, A++, V = !1) : V = !0) : D = !1;
+      let te = A;
       for (s.push(e.bMarks[y]), e.bMarks[y] = r; r < i; ) {
         let Z = e.src.charCodeAt(r);
         if (st(Z)) Z === 9 ? te += 4 - (te + e.bsCount[y] + (V ? 1 : 0)) % 4 : te++;
         else break;
         r++;
       }
-      f = r >= i, u.push(e.bsCount[y]), e.bsCount[y] = e.sCount[y] + 1 + (D ? 1 : 0), l.push(e.sCount[y]), e.sCount[y] = te - $, m.push(e.tShift[y]), e.tShift[y] = r - e.bMarks[y];
+      f = r >= i, u.push(e.bsCount[y]), e.bsCount[y] = e.sCount[y] + 1 + (D ? 1 : 0), l.push(e.sCount[y]), e.sCount[y] = te - A, m.push(e.tShift[y]), e.tShift[y] = r - e.bMarks[y];
       continue;
     }
     if (f) break;
     let C = !1;
-    for (let $ = 0, D = h.length; $ < D; $++) if (h[$](e, y, n, !0)) {
+    for (let A = 0, D = h.length; A < D; A++) if (h[A](e, y, n, !0)) {
       C = !0;
       break;
     }
@@ -21418,7 +21444,7 @@ function _ie(e, t, n, o) {
   let u = e.push("hr", "hr", 0);
   return u.map = [t, e.line], u.markup = Array(s + 1).join(String.fromCharCode(a)), !0;
 }
-function A9(e, t) {
+function $9(e, t) {
   let n = e.eMarks[t], o = e.bMarks[t] + e.tShift[t], r = e.src.charCodeAt(o++);
   return r !== 42 && r !== 45 && r !== 43 || o < n && !st(e.src.charCodeAt(o)) ? -1 : o;
 }
@@ -21450,7 +21476,7 @@ function Tie(e, t, n, o) {
   let h, b, f;
   if ((f = P9(e, u)) >= 0) {
     if (h = !0, a = e.bMarks[u] + e.tShift[u], b = Number(e.src.slice(a, f - 1)), m && b !== 1) return !1;
-  } else if ((f = A9(e, u)) >= 0) h = !1;
+  } else if ((f = $9(e, u)) >= 0) h = !1;
   else return !1;
   if (m && e.skipSpaces(f) >= e.eMarks[u])
     return !1;
@@ -21462,22 +21488,22 @@ function Tie(e, t, n, o) {
   let S = !1, w = e.md.block.ruler.getRules("list"), k = e.parentType;
   for (e.parentType = "list"; u < n; ) {
     i = f, r = e.eMarks[u];
-    let C = e.sCount[u] + f - (e.bMarks[u] + e.tShift[u]), $ = C;
+    let C = e.sCount[u] + f - (e.bMarks[u] + e.tShift[u]), A = C;
     for (; i < r; ) {
       let dn = e.src.charCodeAt(i);
-      if (dn === 9) $ += 4 - ($ + e.bsCount[u]) % 4;
-      else if (dn === 32) $++;
+      if (dn === 9) A += 4 - (A + e.bsCount[u]) % 4;
+      else if (dn === 32) A++;
       else break;
       i++;
     }
     let D = i, V;
-    D >= r ? V = 1 : V = $ - C, V > 4 && (V = 1);
+    D >= r ? V = 1 : V = A - C, V > 4 && (V = 1);
     let te = C + V;
     s = e.push("list_item_open", "li", 1), s.markup = String.fromCharCode(y);
     let Z = [u, 0];
     s.map = Z, h && (s.info = e.src.slice(a, f - 1));
-    let $e = e.tight, me = e.tShift[u], ue = e.sCount[u], Rt = e.listIndent;
-    if (e.listIndent = e.blkIndent, e.blkIndent = te, e.tight = !0, e.tShift[u] = D - e.bMarks[u], e.sCount[u] = $, D >= r && e.isEmpty(u + 1) ? e.line = Math.min(e.line + 2, n) : e.md.block.tokenize(e, u, n), (!e.tight || S) && (l = !1), S = e.line - u > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = Rt, e.tShift[u] = me, e.sCount[u] = ue, e.tight = $e, s = e.push("list_item_close", "li", -1), s.markup = String.fromCharCode(y), u = e.line, Z[1] = u, u >= n || e.sCount[u] < e.blkIndent || e.sCount[u] - e.blkIndent >= 4) break;
+    let Ae = e.tight, me = e.tShift[u], ue = e.sCount[u], Rt = e.listIndent;
+    if (e.listIndent = e.blkIndent, e.blkIndent = te, e.tight = !0, e.tShift[u] = D - e.bMarks[u], e.sCount[u] = A, D >= r && e.isEmpty(u + 1) ? e.line = Math.min(e.line + 2, n) : e.md.block.tokenize(e, u, n), (!e.tight || S) && (l = !1), S = e.line - u > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = Rt, e.tShift[u] = me, e.sCount[u] = ue, e.tight = Ae, s = e.push("list_item_close", "li", -1), s.markup = String.fromCharCode(y), u = e.line, Z[1] = u, u >= n || e.sCount[u] < e.blkIndent || e.sCount[u] - e.blkIndent >= 4) break;
     let vn = !1;
     for (let dn = 0, MV = w.length; dn < MV; dn++) if (w[dn](e, u, n, !0)) {
       vn = !0;
@@ -21487,7 +21513,7 @@ function Tie(e, t, n, o) {
     if (h) {
       if (f = P9(e, u), f < 0) break;
       a = e.bMarks[u] + e.tShift[u];
-    } else if (f = A9(e, u), f < 0) break;
+    } else if (f = $9(e, u), f < 0) break;
     if (y !== e.src.charCodeAt(f - 1)) break;
   }
   return h ? s = e.push("ordered_list_close", "ol", -1) : s = e.push("bullet_list_close", "ul", -1), s.markup = String.fromCharCode(y), v[1] = u, e.line = u, e.parentType = k, l && Eie(e, x), !0;
@@ -21496,18 +21522,18 @@ function Cie(e, t, n, o) {
   let r = e.bMarks[t] + e.tShift[t], i = e.eMarks[t], a = t + 1;
   if (e.sCount[t] - e.blkIndent >= 4 || e.src.charCodeAt(r) !== 91) return !1;
   function s(C) {
-    let $ = e.lineMax;
-    if (C >= $ || e.isEmpty(C)) return null;
+    let A = e.lineMax;
+    if (C >= A || e.isEmpty(C)) return null;
     let D = !1;
     if (e.sCount[C] - e.blkIndent > 3 && (D = !0), e.sCount[C] < 0 && (D = !0), !D) {
-      let Z = e.md.block.ruler.getRules("reference"), $e = e.parentType;
+      let Z = e.md.block.ruler.getRules("reference"), Ae = e.parentType;
       e.parentType = "reference";
       let me = !1;
-      for (let ue = 0, Rt = Z.length; ue < Rt; ue++) if (Z[ue](e, C, $, !0)) {
+      for (let ue = 0, Rt = Z.length; ue < Rt; ue++) if (Z[ue](e, C, A, !0)) {
         me = !0;
         break;
       }
-      if (e.parentType = $e, me) return null;
+      if (e.parentType = Ae, me) return null;
     }
     let V = e.bMarks[C] + e.tShift[C], te = e.eMarks[C];
     return e.src.slice(V, te + 1);
@@ -21522,19 +21548,19 @@ function Cie(e, t, n, o) {
       l = r;
       break;
     } else if (C === 10) {
-      let $ = s(a);
-      $ !== null && (u += $, i = u.length, a++);
+      let A = s(a);
+      A !== null && (u += A, i = u.length, a++);
     } else if (C === 92 && (r++, r < i && u.charCodeAt(r) === 10)) {
-      let $ = s(a);
-      $ !== null && (u += $, i = u.length, a++);
+      let A = s(a);
+      A !== null && (u += A, i = u.length, a++);
     }
   }
   if (l < 0 || u.charCodeAt(l + 1) !== 58) return !1;
   for (r = l + 2; r < i; r++) {
     let C = u.charCodeAt(r);
     if (C === 10) {
-      let $ = s(a);
-      $ !== null && (u += $, i = u.length, a++);
+      let A = s(a);
+      A !== null && (u += A, i = u.length, a++);
     } else if (!st(C))
       break;
   }
@@ -21547,8 +21573,8 @@ function Cie(e, t, n, o) {
   for (; r < i; r++) {
     let C = u.charCodeAt(r);
     if (C === 10) {
-      let $ = s(a);
-      $ !== null && (u += $, i = u.length, a++);
+      let A = s(a);
+      A !== null && (u += A, i = u.length, a++);
     } else if (!st(C))
       break;
   }
@@ -21640,7 +21666,7 @@ var Rie = [
   "tr",
   "track",
   "ul"
-], H9 = `<[A-Za-z][A-Za-z0-9\\-]*(?:\\s+[a-zA-Z_:][a-zA-Z0-9:._-]*(?:\\s*=\\s*(?:[^"'=<>\`\\x00-\\x20]+|'[^']*'|"[^"]*"))?)*\\s*\\/?>`, V9 = "<\\/[A-Za-z][A-Za-z0-9\\-]*\\s*>", $ie = new RegExp(`^(?:${H9}|${V9}|<!---?>|<!--(?:[^-]|-[^-]|--[^>])*-->|<[?][\\s\\S]*?[?]>|<![A-Za-z][^>]*>|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>)`), Aie = new RegExp(`^(?:${H9}|${V9})`), Ba = [
+], H9 = `<[A-Za-z][A-Za-z0-9\\-]*(?:\\s+[a-zA-Z_:][a-zA-Z0-9:._-]*(?:\\s*=\\s*(?:[^"'=<>\`\\x00-\\x20]+|'[^']*'|"[^"]*"))?)*\\s*\\/?>`, V9 = "<\\/[A-Za-z][A-Za-z0-9\\-]*\\s*>", Aie = new RegExp(`^(?:${H9}|${V9}|<!---?>|<!--(?:[^-]|-[^-]|--[^>])*-->|<[?][\\s\\S]*?[?]>|<![A-Za-z][^>]*>|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>)`), $ie = new RegExp(`^(?:${H9}|${V9})`), Ba = [
   [
     /^<(script|pre|style|textarea)(?=(\s|>|$))/i,
     /<\/(script|pre|style|textarea)>/i,
@@ -21672,7 +21698,7 @@ var Rie = [
     !0
   ],
   [
-    new RegExp(`${Aie.source}\\s*$`),
+    new RegExp(`${$ie.source}\\s*$`),
     /^$/,
     !1
   ]
@@ -22272,7 +22298,7 @@ function rae(e, t) {
   if (e.src.charCodeAt(o) !== 60 || o + 2 >= n) return !1;
   let r = e.src.charCodeAt(o + 1);
   if (r !== 33 && r !== 63 && r !== 47 && !nae(r)) return !1;
-  let i = e.src.slice(o).match($ie);
+  let i = e.src.slice(o).match(Aie);
   if (!i) return !1;
   if (!t) {
     let a = e.push("html_inline", "", 0);
@@ -22838,21 +22864,21 @@ var pae = L9(_o);
 // openclaw/packages/net-policy/src/ip.ts
 pt();
 var tK = IR(eK(), 1);
-var fpt = [tK.default.IPv4.parse("198.18.0.0"), 15];
+var gpt = [tK.default.IPv4.parse("198.18.0.0"), 15];
 
 // openclaw/src/media/parse-output.ts
-Ar();
+$r();
 
 // openclaw/src/utils/directive-tags.ts
-Ar();
+$r();
 Rb();
 pt();
 
 // openclaw/src/shared/text/text-projection.ts
-Ar();
+$r();
 
 // openclaw/packages/tool-call-repair/src/grammar.ts
-var vpt = new TextEncoder();
+var Ipt = new TextEncoder();
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/external.js
 var an = {};
@@ -22883,7 +22909,7 @@ ct(an, {
   ZodCustomStringFormat: () => ss,
   ZodDate: () => Pd,
   ZodDefault: () => qC,
-  ZodDiscriminatedUnion: () => $C,
+  ZodDiscriminatedUnion: () => AC,
   ZodE164: () => tb,
   ZodEmail: () => zy,
   ZodEmoji: () => By,
@@ -22902,8 +22928,8 @@ ct(an, {
   ZodISODuration: () => qi,
   ZodISOTime: () => Bi,
   ZodInstanceOf: () => cR,
-  ZodIntersection: () => AC,
-  ZodIssueCode: () => Ale,
+  ZodIntersection: () => $C,
+  ZodIssueCode: () => $le,
   ZodJWT: () => nb,
   ZodKSUID: () => Wy,
   ZodLazy: () => nR,
@@ -22937,7 +22963,7 @@ ct(an, {
   ZodTuple: () => OC,
   ZodType: () => we,
   ZodULID: () => Hy,
-  ZodURL: () => Ad,
+  ZodURL: () => $d,
   ZodUUID: () => Ro,
   ZodUndefined: () => IC,
   ZodUnion: () => Md,
@@ -22959,9 +22985,9 @@ ct(an, {
   cidrv4: () => G3,
   cidrv6: () => K3,
   clone: () => Ge,
-  codec: () => A5,
+  codec: () => $5,
   coerce: () => dR,
-  compile: () => $E,
+  compile: () => AE,
   config: () => Lt,
   core: () => ti,
   creditCard: () => Z3,
@@ -23001,7 +23027,7 @@ ct(an, {
   hostname: () => Q3,
   httpUrl: () => O3,
   iban: () => J3,
-  includes: () => $c,
+  includes: () => Ac,
   input: () => X5,
   instanceof: () => z5,
   int: () => Uy,
@@ -23035,7 +23061,7 @@ ct(an, {
   minLength: () => ei,
   minSize: () => Co,
   multipleOf: () => Mi,
-  nan: () => $5,
+  nan: () => A5,
   nanoid: () => M3,
   nativeEnum: () => _5,
   negative: () => Ey,
@@ -23045,7 +23071,7 @@ ct(an, {
   nonpositive: () => Ty,
   normalize: () => Mc,
   null: () => SC,
-  nullable: () => $d,
+  nullable: () => Ad,
   nullish: () => C5,
   number: () => bC,
   object: () => h5,
@@ -23067,7 +23093,7 @@ ct(an, {
   record: () => MC,
   refine: () => aR,
   regex: () => Tc,
-  regexes: () => $r,
+  regexes: () => Ar,
   registry: () => ey,
   safeDecode: () => pC,
   safeDecodeAsync: () => fC,
@@ -23079,7 +23105,7 @@ ct(an, {
   setErrorMap: () => Ple,
   size: () => es,
   slugify: () => Fc,
-  startsWith: () => Ac,
+  startsWith: () => $c,
   strictObject: () => y5,
   string: () => Rd,
   stringFormat: () => X3,
@@ -23104,11 +23130,11 @@ ct(an, {
   unknown: () => os,
   uppercase: () => Rc,
   url: () => P3,
-  util: () => A,
+  util: () => $,
   uuid: () => C3,
   uuidv4: () => R3,
-  uuidv6: () => $3,
-  uuidv7: () => A3,
+  uuidv6: () => A3,
+  uuidv7: () => $3,
   validate: () => nd,
   validateAsync: () => rd,
   void: () => m5,
@@ -23128,7 +23154,7 @@ ct(ti, {
   $ZodBigInt: () => zh,
   $ZodBigIntFormat: () => j_,
   $ZodBoolean: () => md,
-  $ZodCIDRv4: () => A_,
+  $ZodCIDRv4: () => $_,
   $ZodCIDRv6: () => P_,
   $ZodCUID: () => x_,
   $ZodCUID2: () => v_,
@@ -23186,7 +23212,7 @@ ct(ti, {
   $ZodKSUID: () => S_,
   $ZodLazy: () => hd,
   $ZodLiteral: () => aE,
-  $ZodMAC: () => $_,
+  $ZodMAC: () => A_,
   $ZodMap: () => rE,
   $ZodNaN: () => hE,
   $ZodNanoID: () => b_,
@@ -23277,7 +23303,7 @@ ct(ti, {
   _gte: () => gr,
   _guid: () => iy,
   _iban: () => NE,
-  _includes: () => $c,
+  _includes: () => Ac,
   _int: () => zE,
   _int32: () => qE,
   _int64: () => ZE,
@@ -23340,7 +23366,7 @@ ct(ti, {
   _set: () => ale,
   _size: () => es,
   _slugify: () => Fc,
-  _startsWith: () => Ac,
+  _startsWith: () => $c,
   _string: () => PE,
   _stringFormat: () => rs,
   _stringbool: () => fT,
@@ -23372,7 +23398,7 @@ ct(ti, {
   base64urlCharset: () => pd,
   canParseURL: () => g_,
   clone: () => Ge,
-  compile: () => $E,
+  compile: () => AE,
   compileFn: () => ny,
   config: () => Lt,
   createStandardJSONSchemaMethod: () => zc,
@@ -23410,7 +23436,7 @@ ct(ti, {
   prettifyError: () => ak,
   process: () => He,
   processSchema: () => He,
-  regexes: () => $r,
+  regexes: () => Ar,
   registry: () => ey,
   safeDecode: () => sse,
   safeDecodeAsync: () => use,
@@ -23424,19 +23450,19 @@ ct(ti, {
   toJSONSchema: () => Oy,
   toZod: () => Kl,
   treeifyError: () => ik,
-  urlHostnameOk: () => Ah,
+  urlHostnameOk: () => $h,
   urlProtocolOk: () => Ph,
-  util: () => A,
+  util: () => $,
   validate: () => nd,
   validateAsync: () => rd,
-  validateURL: () => $h,
+  validateURL: () => Ah,
   version: () => u_,
   withParser: () => ty
 });
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/util.js
-var A = {};
-ct(A, {
+var $ = {};
+ct($, {
   BIGINT_FORMAT_RANGES: () => Jl,
   CONSTANT_CATCH: () => sh,
   Class: () => GS,
@@ -23484,7 +23510,7 @@ ct(A, {
   joinValues: () => T,
   jsonStringifyReplacer: () => fc,
   members: () => YS,
-  merge: () => Aae,
+  merge: () => $ae,
   mergeDefs: () => Zr,
   normalizeParams: () => N,
   nullish: () => rh,
@@ -23503,7 +23529,7 @@ ct(A, {
   randomString: () => Sae,
   rawShape: () => hc,
   required: () => Oae,
-  safeExtend: () => $ae,
+  safeExtend: () => Aae,
   shallowClone: () => Vl,
   slugify: () => HS,
   stringifyPrimitive: () => P,
@@ -23825,12 +23851,12 @@ function iK(e, t) {
   let n = {};
   return Ga(n, e, Reflect.ownKeys(Yo(e))), xae(n, t), n;
 }
-function $ae(e, t) {
+function Aae(e, t) {
   if (!Cr(t))
     throw new Error("Invalid input to safeExtend: expected a plain object");
   return Ge(e, Zr(e._zod.def, { shape: iK(e, t) }));
 }
-function Aae(e, t) {
+function $ae(e, t) {
   if (!t?._zod?.def)
     throw new Error("Invalid input to merge: expected an object schema. To merge a plain shape, use `.extend()`.");
   if (e._zod.def.checks?.length)
@@ -24372,8 +24398,8 @@ var rd = async (e, t, n) => {
 }, cse = /* @__PURE__ */ yh(or), bh = (e) => async (t, n, o) => Ic(e)(t, n, o), use = /* @__PURE__ */ bh(or);
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/regexes.js
-var $r = {};
-ct($r, {
+var Ar = {};
+ct(Ar, {
   anyString: () => Ok,
   base64: () => kk,
   base64url: () => _k,
@@ -24386,7 +24412,7 @@ ct($r, {
   cuid: () => ck,
   cuid2: () => uk,
   currencyCode: () => Rk,
-  date: () => $k,
+  date: () => Ak,
   datetime: () => Pk,
   domain: () => Tk,
   duration: () => gk,
@@ -24421,14 +24447,14 @@ ct($r, {
   sha256_base64: () => Tse,
   sha256_base64url: () => Cse,
   sha256_hex: () => Ese,
-  sha384_base64: () => $se,
-  sha384_base64url: () => Ase,
+  sha384_base64: () => Ase,
+  sha384_base64url: () => $se,
   sha384_hex: () => Rse,
   sha512_base64: () => Ose,
   sha512_base64url: () => Dse,
   sha512_hex: () => Pse,
   string: () => Dk,
-  time: () => Ak,
+  time: () => $k,
   ulid: () => lk,
   undefined: () => Lk,
   unicodeEmail: () => fK,
@@ -24454,12 +24480,12 @@ var xk = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-
 function xse(e) {
   return new RegExp(`^${e}$`);
 }
-var $k = /* @__PURE__ */ xse(gK);
+var Ak = /* @__PURE__ */ xse(gK);
 function sk(e) {
   let t = "(?:[01]\\d|2[0-3]):[0-5]\\d";
   return typeof e.precision == "number" ? e.precision === -1 ? `${t}` : e.precision === 0 ? `${t}:[0-5]\\d` : `${t}:[0-5]\\d\\.\\d{${e.precision}}` : e.seconds ? `${t}:[0-5]\\d(?:\\.\\d+)?` : `${t}(?::[0-5]\\d(?:\\.\\d+)?)?`;
 }
-function Ak(e) {
+function $k(e) {
   return new RegExp(`^${sk(e)}$`);
 }
 function Pk(e) {
@@ -24480,7 +24506,7 @@ function ad(e, t) {
 function sd(e) {
   return new RegExp(`^[A-Za-z0-9_-]{${e}}$`);
 }
-var vse = /^[0-9a-fA-F]{32}$/, Ise = /* @__PURE__ */ ad(22, "=="), wse = /* @__PURE__ */ sd(22), Sse = /^[0-9a-fA-F]{40}$/, kse = /* @__PURE__ */ ad(27, "="), _se = /* @__PURE__ */ sd(27), Ese = /^[0-9a-fA-F]{64}$/, Tse = /* @__PURE__ */ ad(43, "="), Cse = /* @__PURE__ */ sd(43), Rse = /^[0-9a-fA-F]{96}$/, $se = /* @__PURE__ */ ad(64, ""), Ase = /* @__PURE__ */ sd(64), Pse = /^[0-9a-fA-F]{128}$/, Ose = /* @__PURE__ */ ad(86, "=="), Dse = /* @__PURE__ */ sd(86);
+var vse = /^[0-9a-fA-F]{32}$/, Ise = /* @__PURE__ */ ad(22, "=="), wse = /* @__PURE__ */ sd(22), Sse = /^[0-9a-fA-F]{40}$/, kse = /* @__PURE__ */ ad(27, "="), _se = /* @__PURE__ */ sd(27), Ese = /^[0-9a-fA-F]{64}$/, Tse = /* @__PURE__ */ ad(43, "="), Cse = /* @__PURE__ */ sd(43), Rse = /^[0-9a-fA-F]{96}$/, Ase = /* @__PURE__ */ ad(64, ""), $se = /* @__PURE__ */ sd(64), Pse = /^[0-9a-fA-F]{128}$/, Ose = /* @__PURE__ */ ad(86, "=="), Dse = /* @__PURE__ */ sd(86);
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/checks.js
 var Qe = /* @__PURE__ */ E("$ZodCheck", (e, t) => {
@@ -25020,7 +25046,7 @@ function g_(e) {
     return !1;
   }
 }
-function $h(e, t) {
+function Ah(e, t) {
   return !("normalize" in t) && !("hostname" in t) && !("protocol" in t) ? g_(e) || cd : OK(e, t);
 }
 function OK(e, t) {
@@ -25041,7 +25067,7 @@ var Nse = /[\t\n\r]/g;
 function ud(e) {
   return e.replace(Nse, "");
 }
-function Ah(e, t) {
+function $h(e, t) {
   return t.lastIndex = 0, t.test(e.hostname);
 }
 function Ph(e, t) {
@@ -25050,7 +25076,7 @@ function Ph(e, t) {
 var h_ = /* @__PURE__ */ E("$ZodURL", (e, t) => {
   Ke.init(e, t), e._zod.check = (n) => {
     try {
-      let o = n.value.trim(), r = $h(o, t);
+      let o = n.value.trim(), r = Ah(o, t);
       if (r === f_) {
         n.issues.push({
           code: "invalid_format",
@@ -25076,7 +25102,7 @@ var h_ = /* @__PURE__ */ E("$ZodURL", (e, t) => {
         n.value = ud(o);
         return;
       }
-      t.hostname && !Ah(r, t.hostname) && n.issues.push({
+      t.hostname && !$h(r, t.hostname) && n.issues.push({
         code: "invalid_format",
         format: "url",
         note: "Invalid hostname",
@@ -25123,9 +25149,9 @@ var h_ = /* @__PURE__ */ E("$ZodURL", (e, t) => {
 }), k_ = /* @__PURE__ */ E("$ZodISODateTime", (e, t) => {
   t.pattern ?? (t.pattern = Pk(t)), Ke.init(e, t);
 }), __ = /* @__PURE__ */ E("$ZodISODate", (e, t) => {
-  t.pattern ?? (t.pattern = $k), Ke.init(e, t);
+  t.pattern ?? (t.pattern = Ak), Ke.init(e, t);
 }), E_ = /* @__PURE__ */ E("$ZodISOTime", (e, t) => {
-  t.pattern ?? (t.pattern = Ak(t)), Ke.init(e, t);
+  t.pattern ?? (t.pattern = $k(t)), Ke.init(e, t);
 }), T_ = /* @__PURE__ */ E("$ZodISODuration", (e, t) => {
   t.pattern ?? (t.pattern = gk), Ke.init(e, t);
 }), C_ = /* @__PURE__ */ E("$ZodIPv4", (e, t) => {
@@ -25144,9 +25170,9 @@ var R_ = /* @__PURE__ */ E("$ZodIPv6", (e, t) => {
       continue: !t.abort
     });
   };
-}), $_ = /* @__PURE__ */ E("$ZodMAC", (e, t) => {
+}), A_ = /* @__PURE__ */ E("$ZodMAC", (e, t) => {
   t.pattern ?? (t.pattern = Ik(t.delimiter)), Ke.init(e, t);
-}), A_ = /* @__PURE__ */ E("$ZodCIDRv4", (e, t) => {
+}), $_ = /* @__PURE__ */ E("$ZodCIDRv4", (e, t) => {
   t.pattern ?? (t.pattern = wk), Ke.init(e, t);
 });
 function Oh(e) {
@@ -25556,36 +25582,36 @@ var NK = /* @__PURE__ */ E("$ZodObject", (e, t) => {
       if (v === "__proto__")
         continue;
       let S = f[v], w = S._zod.optin, k = S._zod.optout, C = S._zod.run({ value: h[v], issues: [] }, m);
-      C instanceof Promise ? b.push(C.then(($) => Ch($, l, v, h, w, k))) : Ch(C, l, v, h, w, k);
+      C instanceof Promise ? b.push(C.then((A) => Ch(A, l, v, h, w, k))) : Ch(C, l, v, h, w, k);
     }
     return a ? MK(b, h, l, m, r.value, e, y === !0) : b.length ? Promise.all(b).then(() => l) : l;
   };
 }), Y_ = /* @__PURE__ */ E("$ZodObjectJIT", (e, t) => {
   NK.init(e, t);
   let n = e._zod.parse, o = gc(() => DK(t)), r = ln.memoizer, i = (f) => {
-    let y = o.value, x = y.symbolKeys, v = new Wa(["payload", "ctx"], { shape: f, inst: e, memo: r, syms: x }), S = ($) => `shape[${$}]._zod.run({ value: input[${$}], issues: [] }, ctx)`, w = ($, D) => `
-          let ${$}_ab = false;
-          for (let i = 0; i < ${$}.issues.length; i++) {
-            const iss = ${$}.issues[i];
+    let y = o.value, x = y.symbolKeys, v = new Wa(["payload", "ctx"], { shape: f, inst: e, memo: r, syms: x }), S = (A) => `shape[${A}]._zod.run({ value: input[${A}], issues: [] }, ctx)`, w = (A, D) => `
+          let ${A}_ab = false;
+          for (let i = 0; i < ${A}.issues.length; i++) {
+            const iss = ${A}.issues[i];
             iss.path = iss.path ? [${D}, ...iss.path] : [${D}];
             payload.issues.push(iss);
-            if (iss.continue !== true) ${$}_ab = true;
+            if (iss.continue !== true) ${A}_ab = true;
           }
-          if (${$}_ab && ctx && ctx.abortEarly) {
+          if (${A}_ab && ctx && ctx.abortEarly) {
             payload.value = newResult;
             return payload;
           }`;
     v.write("const input = payload.value;");
     let k = /* @__PURE__ */ Object.create(null), C = 0;
-    for (let $ of y.allKeys)
-      k[$] = `key_${C++}`;
+    for (let A of y.allKeys)
+      k[A] = `key_${C++}`;
     v.write(r ? "const newResult = memo.alloc(inst, payload, {}, ctx);" : "const newResult = {};");
-    for (let $ of y.allKeys) {
-      if ($ === "__proto__")
+    for (let A of y.allKeys) {
+      if (A === "__proto__")
         continue;
-      let D = k[$], V = typeof $ == "symbol" ? `syms[${x.indexOf($)}]` : jn($), te = `${V} in input`, Z = f[$], $e = Z?._zod?.optin, me = $e !== void 0, ue = Z?._zod?.optout === "optional";
+      let D = k[A], V = typeof A == "symbol" ? `syms[${x.indexOf(A)}]` : jn(A), te = `${V} in input`, Z = f[A], Ae = Z?._zod?.optin, me = Ae !== void 0, ue = Z?._zod?.optout === "optional";
       if (v.write(`const ${D} = ${S(V)};`), me && ue) {
-        let Rt = $e === "optional" ? `${D}_present` : `${D}.value !== undefined || ${D}_present`;
+        let Rt = Ae === "optional" ? `${D}_present` : `${D}.value !== undefined || ${D}_present`;
         v.write(`
         const ${D}_present = ${te};
         if (!${D}.issues.length || ${D}_present) {
@@ -25601,7 +25627,7 @@ var NK = /* @__PURE__ */ E("$ZodObject", (e, t) => {
       } else me ? (v.write(`
         if (${D}.issues.length) {${w(D, V)}
         }
-      `), $e === "defaulted" ? v.write(`newResult[${V}] = ${D}.value;`) : v.write(`
+      `), Ae === "defaulted" ? v.write(`newResult[${V}] = ${D}.value;`) : v.write(`
         if (${D}.value !== undefined || ${te}) {
           newResult[${V}] = ${D}.value;
         }
@@ -26313,10 +26339,10 @@ var yE = /* @__PURE__ */ E("$ZodPreprocess", (e, t) => {
     if (o.direction === "backward")
       return t.innerType._zod.run(n, o);
     let r = t.innerType._zod.run(n, o);
-    return r instanceof Promise ? r.then($K) : $K(r);
+    return r instanceof Promise ? r.then(AK) : AK(r);
   };
 });
-function $K(e) {
+function AK(e) {
   return e.memo || (e.value = Object.freeze(e.value)), e;
 }
 function Bse(e) {
@@ -26426,11 +26452,11 @@ var xE = /* @__PURE__ */ E("$ZodTemplateLiteral", (e, t) => {
   Qe.init(e, t), pe.init(e, t), e._zod.parse = (n, o) => n, e._zod.check = (n) => {
     let o = n.value, r = t.fn(o);
     if (r instanceof Promise)
-      return r.then((i) => AK(i, n, o, e));
-    AK(r, n, o, e);
+      return r.then((i) => $K(i, n, o, e));
+    $K(r, n, o, e);
   };
 });
-function AK(e, t, n, o) {
+function $K(e, t, n, o) {
   if (!e) {
     let r = {
       code: "custom",
@@ -26688,8 +26714,8 @@ ct(Id, {
   nn: () => TH,
   no: () => CH,
   ota: () => RH,
-  pl: () => AH,
-  ps: () => $H,
+  pl: () => $H,
+  ps: () => AH,
   pt: () => PH,
   ptBR: () => OH,
   ro: () => DH,
@@ -30491,7 +30517,7 @@ function TH() {
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/no.js
-var $ce = () => {
+var Ace = () => {
   let e = {
     string: { unit: "tegn", verb: "\xE5 ha" },
     file: { unit: "bytes", verb: "\xE5 ha" },
@@ -30577,12 +30603,12 @@ var $ce = () => {
 };
 function CH() {
   return {
-    localeError: $ce()
+    localeError: Ace()
   };
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/locales/ota.js
-var Ace = () => {
+var $ce = () => {
   let e = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
     file: { unit: "bayt", verb: "olmal\u0131d\u0131r" },
@@ -30669,7 +30695,7 @@ var Ace = () => {
 };
 function RH() {
   return {
-    localeError: Ace()
+    localeError: $ce()
   };
 }
 
@@ -30758,7 +30784,7 @@ var Pce = () => {
     }
   };
 };
-function $H() {
+function AH() {
   return {
     localeError: Pce()
   };
@@ -30849,7 +30875,7 @@ var Oce = () => {
     }
   };
 };
-function AH() {
+function $H() {
   return {
     localeError: Oce()
   };
@@ -32759,7 +32785,7 @@ function eue(e, t) {
     return t;
   }
 }
-function $E(e, t) {
+function AE(e, t) {
   try {
     let n = ny(e), o = ty(e, n);
     return o._zod.bag.validator = eue(e, n), o;
@@ -32844,7 +32870,7 @@ function nue(e, t) {
   let o = n;
   return o.issues.length === 0 ? o.value : qn;
 }
-function $n(e, t, n, o, r = !0) {
+function An(e, t, n, o, r = !0) {
   let i = e.content.length, a = t.constants.size, s = t.constantCounter, u = t.varCounter;
   try {
     return kt(e, t, n, o, r);
@@ -33039,7 +33065,7 @@ function due(e, t, n, o) {
   let r = n.shape;
   for (let i of Reflect.ownKeys(r)) {
     let a = typeof i == "symbol" ? ae(t, i) : jn(i), s = ee(t);
-    e.write(`const ${s} = ${o}[${a}];`), $n(e, t, r[i], s, !1);
+    e.write(`const ${s} = ${o}[${a}];`), An(e, t, r[i], s, !1);
   }
 }
 function pue(e, t, n, o) {
@@ -33058,7 +33084,7 @@ function mue(e, t, n, o, r) {
 function CE() {
   throw new rr();
 }
-function AE(e) {
+function $E(e) {
   this.issues.push(e);
 }
 function fue(e, t, n, o) {
@@ -33073,7 +33099,7 @@ function fue(e, t, n, o) {
     if (Qa(n._zod.check))
       throw new Jr("z.compile: async .superRefine() / check functions are not supported");
     let i = n._zod.check, s = Xa(t, (l) => {
-      let m = { value: l, issues: [], addIssue: AE };
+      let m = { value: l, issues: [], addIssue: $E };
       return i(m) instanceof Promise && CE(), m.issues.length === 0 ? m.value : qn;
     }), u = ee(t);
     return e.write(`const ${u} = ${s}(${o});`), e.write(`if (${u} === INVALID) return INVALID;`), u;
@@ -33138,9 +33164,9 @@ function a3(e, t, n, o, r = !0) {
   }
   let a = n;
   if (i === "url" || i === "httpurl" || a.normalize || a.hostname !== void 0 || a.protocol !== void 0) {
-    let l = ae(t, $h), m = ae(t, n), h = ee(t), b = ee(t);
+    let l = ae(t, Ah), m = ae(t, n), h = ee(t), b = ee(t);
     if (e.write(`const ${h} = ${o}.trim();`), e.write(`const ${b} = ${l}(${h}, ${m});`), e.write(`if (typeof ${b} === "number") return INVALID;`), a.hostname !== void 0) {
-      let x = ae(t, Ah);
+      let x = ae(t, $h);
       e.write(`if (!${x}(${b}, ${m}.hostname)) return INVALID;`);
     }
     if (a.protocol !== void 0) {
@@ -33241,10 +33267,10 @@ function kt(e, t, n, o, r = !0) {
       u = Tue(e, t, n, o, s);
       break;
     case "nullable":
-      u = $ue(e, t, n, o, s);
+      u = Aue(e, t, n, o, s);
       break;
     case "array":
-      u = Aue(e, t, n, o, s);
+      u = $ue(e, t, n, o, s);
       break;
     case "literal":
       u = Pue(e, t, n, o);
@@ -33364,18 +33390,18 @@ function Eue(e, t, n, o, r = !0) {
     throw new Re('object shape key "__proto__"');
   let f = /* @__PURE__ */ new Map();
   for (let w of l) {
-    let k = b[w], C = m(w), $ = ee(t);
-    if (e.write(`const ${$} = ${o}[${C}];`), k._zod.optin !== void 0) {
+    let k = b[w], C = m(w), A = ee(t);
+    if (e.write(`const ${A} = ${o}[${C}];`), k._zod.optin !== void 0) {
       let D = ee(t);
       e.write(`let ${D} = (() => {`), e.indented((V) => {
-        let te = $n(V, t, k, $);
+        let te = An(V, t, k, A);
         V.write(`return ${te};`);
       }), e.write("})();"), k._zod.optout === "optional" ? (e.write(`if (${D} === INVALID) {`), e.indented((V) => {
         V.write(`if (${C} in ${o}) return INVALID;`), V.write(`${D} = undefined;`);
       }), e.write("}")) : e.write(`if (${D} === INVALID) return INVALID;`), f.set(w, D);
     } else {
       Rue(k) && e.write(`if (!(${C} in ${o})) return INVALID;`);
-      let D = $n(e, t, k, $, r);
+      let D = An(e, t, k, A, r);
       D !== null && f.set(w, D);
     }
   }
@@ -33396,7 +33422,7 @@ function Eue(e, t, n, o, r = !0) {
       e.write(`for (const k in ${o}) {`), e.indented((k) => {
         k.write('if (k === "__proto__") continue;'), w && k.write(`if (${w}.has(k)) continue;`);
         let C = ee(t);
-        k.write(`const ${C} = ${o}[k];`), $n(k, t, y, C, !1);
+        k.write(`const ${C} = ${o}[k];`), An(k, t, y, C, !1);
       }), e.write("}");
     }
     return null;
@@ -33419,8 +33445,8 @@ function Eue(e, t, n, o, r = !0) {
       else {
         let C = ee(t);
         k.write(`const ${C} = ${o}[k];`);
-        let $ = $n(k, t, y, C);
-        k.write(`${v}[k] = ${$};`);
+        let A = An(k, t, y, C);
+        k.write(`${v}[k] = ${A};`);
       }
     }), e.write("}");
   }
@@ -33558,20 +33584,20 @@ function Ec(e) {
       return !0;
   }
 }
-function $ue(e, t, n, o, r = !0) {
+function Aue(e, t, n, o, r = !0) {
   let i = n._zod.def, a = r ? ee(t) : null;
   return a && e.write(`let ${a} = null;`), e.write(`if (${o} !== null) {`), e.indented((s) => {
     let u = kt(s, t, i.innerType, o, r);
     a && u !== null && s.write(`${a} = ${u};`);
   }), e.write("}"), a;
 }
-function Aue(e, t, n, o, r = !0) {
+function $ue(e, t, n, o, r = !0) {
   let i = n._zod.def;
   e.write(`if (!Array.isArray(${o})) return INVALID;`);
   let a = r ? ee(t) : null, s = ee(t), u = ee(t);
   return a && e.write(`const ${a} = new Array(${o}.length);`), e.write(`for (let ${s} = 0; ${s} < ${o}.length; ${s}++) {`), e.indented((l) => {
     l.write(`const ${u} = ${o}[${s}];`);
-    let m = $n(l, t, i.element, u, r);
+    let m = An(l, t, i.element, u, r);
     a && m !== null && l.write(`${a}[${s}] = ${m};`);
   }), e.write("}"), a;
 }
@@ -33653,7 +33679,7 @@ function Nue(e, t, n, o) {
         b.write(`if (${m} < ${o}.length) {`), b.indented((f) => {
           let y = ee(t);
           f.write(`const ${y} = ${o}[${m}];`);
-          let x = $n(f, t, h, y);
+          let x = An(f, t, h, y);
           f.write(`${l}[${m}] = ${x};`);
         }), b.write("} else {"), b.indented((f) => {
           if (RE(h)) {
@@ -33662,7 +33688,7 @@ function Nue(e, t, n, o) {
           }
           let y = ee(t), x = ee(t);
           f.write(`const ${y} = undefined;`), f.write(`const ${x} = (() => {`), f.indented((v) => {
-            let S = $n(v, t, h, y);
+            let S = An(v, t, h, y);
             v.write(`return ${S};`);
           }), f.write("})();"), f.write(`if (${x} === INVALID || ${x} === undefined) ${l}.length = ${m};`), f.write(`else ${l}[${m}] = ${x};`);
         }), b.write("}");
@@ -33670,7 +33696,7 @@ function Nue(e, t, n, o) {
     else {
       let b = ee(t);
       e.write(`const ${b} = ${o}[${m}];`);
-      let f = $n(e, t, h, b);
+      let f = An(e, t, h, b);
       e.write(`${l}[${m}] = ${f};`);
     }
   }
@@ -33678,7 +33704,7 @@ function Nue(e, t, n, o) {
     let m = ee(t), h = ee(t);
     e.write(`for (let ${m} = ${i.length}; ${m} < ${o}.length; ${m}++) {`), e.indented((b) => {
       b.write(`const ${h} = ${o}[${m}];`);
-      let f = $n(b, t, a, h);
+      let f = An(b, t, a, h);
       b.write(`${l}[${m}] = ${f};`);
     }), e.write("}");
   }
@@ -33762,7 +33788,7 @@ function Fue(e, t, n) {
 function zue(e, t, n, o) {
   let r = n._zod.def;
   t.definite = !1;
-  let i = $n(e, t, r.left, o), a = $n(e, t, r.right, o), s = ae(t, Sc), u = ee(t);
+  let i = An(e, t, r.left, o), a = An(e, t, r.right, o), s = ae(t, Sc), u = ee(t);
   return e.write(`const ${u} = ${s}(${i}, ${a});`), e.write(`if (!${u}.valid) return INVALID;`), `${u}.data`;
 }
 function jue(e, t, n, o) {
@@ -33782,7 +33808,7 @@ function jue(e, t, n, o) {
       f.push(v);
       let S = ae(t, x), w = kt(e, t, r.keyType, S), k = ee(t);
       e.write(`const ${k} = ${o}[${Bue(t, v)}];`);
-      let C = $n(e, t, r.valueType, k);
+      let C = An(e, t, r.valueType, k);
       e.write(`${a}[${w}] = ${C};`);
     }
     let y = ae(t, new Set(f));
@@ -33799,13 +33825,13 @@ function jue(e, t, n, o) {
       w.write(`let ${S} = ${x}(${s});`), w.write(`if (${S} === INVALID && typeof ${s} === "string" && ${v}.test(${s})) ${S} = ${x}(Number(${s}));`), f ? w.write(`if (${S} === INVALID) { ${a}[${s}] = ${o}[${s}]; continue; }`) : w.write(`if (${S} === INVALID) return INVALID;`), w.write(`if (${S} === "__proto__") continue;`);
       let k = ee(t);
       w.write(`const ${k} = ${o}[${s}];`);
-      let C = $n(w, t, r.valueType, k);
+      let C = An(w, t, r.valueType, k);
       w.write(`${a}[${S}] = ${C};`);
     }), a;
   }
   return r3(e, t, o, s, (f) => {
     f.write(`const ${u} = ${o}[${s}];`);
-    let y = $n(f, t, r.valueType, u);
+    let y = An(f, t, r.valueType, u);
     f.write(`${a}[${s}] = ${y};`);
   }, "return INVALID;"), a;
 }
@@ -33866,7 +33892,7 @@ function Wue(e, t, n, o) {
     if (Qa(r.transform))
       throw new Jr("z.compile: async transforms in pipes are not supported");
     let a = r.transform, u = Xa(t, (m) => {
-      let h = { value: m, issues: [], addIssue: AE }, b = a(m, h);
+      let h = { value: m, issues: [], addIssue: $E }, b = a(m, h);
       return b instanceof Promise ? qn : h.issues.length === 0 ? b : qn;
     }), l = ee(t);
     return e.write(`const ${l} = ${u}(${i});`), e.write(`if (${l} === INVALID) return INVALID;`), kt(e, t, r.out, l);
@@ -33900,7 +33926,7 @@ function Yue(e, t, n, o) {
     throw new Re("catch with a callback (only a constant catch value compiles)", !1);
   let i = ee(t);
   e.write(`let ${i} = (() => {`), e.indented((l) => {
-    let m = $n(l, t, r.innerType, o);
+    let m = An(l, t, r.innerType, o);
     l.write(`return ${m};`);
   }), e.write("})();");
   let a = ae(t, r.innerType), s = Xa(t, r.catchValue), u = ae(t, Jue);
@@ -33914,7 +33940,7 @@ function Xue(e, t, n, o) {
     if (Qa(r.transform))
       throw new Jr("z.compile: async transforms are not supported");
     let i = r.transform, s = Xa(t, (l) => {
-      let m = { value: l, issues: [], addIssue: AE }, h = i(l, m);
+      let m = { value: l, issues: [], addIssue: $E }, h = i(l, m);
       return h instanceof Promise ? qn : m.issues.length === 0 ? h : qn;
     }), u = ee(t);
     return e.write(`const ${u} = ${s}(${o});`), e.write(`if (${u} === INVALID) return INVALID;`), u;
@@ -34545,7 +34571,7 @@ function Rc(e) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function $c(e, t) {
+function Ac(e, t) {
   return new n_({
     check: "string_format",
     format: "includes",
@@ -34554,7 +34580,7 @@ function $c(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function Ac(e, t) {
+function $c(e, t) {
   return new r_({
     check: "string_format",
     format: "starts_with",
@@ -35387,9 +35413,9 @@ var kle = {
   n.not = {};
 }, CT = (e, t, n, o) => {
 }, RT = (e, t, n, o) => {
-}, $T = (e, t, n, o) => {
-  rn(e, t, n, o, "Date cannot be represented in JSON Schema");
 }, AT = (e, t, n, o) => {
+  rn(e, t, n, o, "Date cannot be represented in JSON Schema");
+}, $T = (e, t, n, o) => {
   let r = e._zod.def, i = mc(r.entries);
   if (i.length === 0) {
     n.not = {};
@@ -35473,7 +35499,7 @@ var qT = (e, t, n, o) => {
     ...o,
     path: [...o.path, "additionalProperties"]
   })) : t.io === "output" && (r.additionalProperties = !1);
-}, Ay = (e, t, n, o) => {
+}, $y = (e, t, n, o) => {
   let r = e._zod.def, i = r.inclusive === !1, a = r.options.map((s, u) => He(s, t, {
     ...o,
     path: [...o.path, i ? "oneOf" : "anyOf", u]
@@ -35655,7 +35681,7 @@ var JT = (e, t, n, o) => {
   He(r, t, o);
   let i = t.seen.get(e);
   i.ref = r;
-}, $y = {
+}, Ay = {
   string: xT,
   number: vT,
   boolean: IT,
@@ -35667,8 +35693,8 @@ var JT = (e, t, n, o) => {
   never: TT,
   any: CT,
   unknown: RT,
-  date: $T,
-  enum: AT,
+  date: AT,
+  enum: $T,
   literal: PT,
   nan: OT,
   template_literal: DT,
@@ -35681,7 +35707,7 @@ var JT = (e, t, n, o) => {
   set: jT,
   array: BT,
   object: qT,
-  union: Ay,
+  union: $y,
   intersection: GT,
   tuple: KT,
   record: HT,
@@ -35698,7 +35724,7 @@ var JT = (e, t, n, o) => {
 };
 function Oy(e, t) {
   if ("_idmap" in e) {
-    let o = e, r = Ui({ ...t, processors: $y }), i = {};
+    let o = e, r = Ui({ ...t, processors: Ay }), i = {};
     for (let u of o._idmap.entries()) {
       let [l, m] = u;
       He(m, r);
@@ -35721,7 +35747,7 @@ function Oy(e, t) {
     }
     return { schemas: a };
   }
-  let n = Ui({ ...t, processors: $y });
+  let n = Ui({ ...t, processors: Ay });
   return He(e, n), Li(n, e), Fi(n, e);
 }
 
@@ -35762,7 +35788,7 @@ var Dy = class {
   constructor(t) {
     let n = t?.target ?? "draft-2020-12";
     n === "draft-4" && (n = "draft-04"), n === "draft-7" && (n = "draft-07"), this.ctx = Ui({
-      processors: $y,
+      processors: Ay,
       target: n,
       ...t?.metadata && { metadata: t.metadata },
       ...t?.unrepresentable && { unrepresentable: t.unrepresentable },
@@ -35812,7 +35838,7 @@ ct(Jc, {
   ZodCustomStringFormat: () => ss,
   ZodDate: () => Pd,
   ZodDefault: () => qC,
-  ZodDiscriminatedUnion: () => $C,
+  ZodDiscriminatedUnion: () => AC,
   ZodE164: () => tb,
   ZodEmail: () => zy,
   ZodEmoji: () => By,
@@ -35829,7 +35855,7 @@ ct(Jc, {
   ZodISODuration: () => qi,
   ZodISOTime: () => Bi,
   ZodInstanceOf: () => cR,
-  ZodIntersection: () => AC,
+  ZodIntersection: () => $C,
   ZodJWT: () => nb,
   ZodKSUID: () => Wy,
   ZodLazy: () => nR,
@@ -35862,7 +35888,7 @@ ct(Jc, {
   ZodTuple: () => OC,
   ZodType: () => we,
   ZodULID: () => Hy,
-  ZodURL: () => Ad,
+  ZodURL: () => $d,
   ZodUUID: () => Ro,
   ZodUndefined: () => IC,
   ZodUnion: () => Md,
@@ -35883,7 +35909,7 @@ ct(Jc, {
   check: () => N5,
   cidrv4: () => G3,
   cidrv6: () => K3,
-  codec: () => A5,
+  codec: () => $5,
   creditCard: () => Z3,
   cuid: () => N3,
   cuid2: () => U3,
@@ -35926,13 +35952,13 @@ ct(Jc, {
   mac: () => B3,
   map: () => S5,
   meta: () => F5,
-  nan: () => $5,
+  nan: () => A5,
   nanoid: () => M3,
   nativeEnum: () => _5,
   never: () => ob,
   nonoptional: () => VC,
   null: () => SC,
-  nullable: () => $d,
+  nullable: () => Ad,
   nullish: () => C5,
   number: () => bC,
   object: () => h5,
@@ -35965,8 +35991,8 @@ ct(Jc, {
   url: () => P3,
   uuid: () => C3,
   uuidv4: () => R3,
-  uuidv6: () => $3,
-  uuidv7: () => A3,
+  uuidv6: () => A3,
+  uuidv7: () => $3,
   void: () => m5,
   xid: () => F3,
   xor: () => x5
@@ -35978,7 +36004,7 @@ ct(My, {
   endsWith: () => Pc,
   gt: () => To,
   gte: () => gr,
-  includes: () => $c,
+  includes: () => Ac,
   length: () => ns,
   lowercase: () => Cc,
   lt: () => Eo,
@@ -36000,7 +36026,7 @@ ct(My, {
   regex: () => Tc,
   size: () => es,
   slugify: () => Fc,
-  startsWith: () => Ac,
+  startsWith: () => $c,
   toLowerCase: () => Uc,
   toUpperCase: () => Lc,
   trim: () => Nc,
@@ -36044,16 +36070,16 @@ var _3 = (e, t) => {
 var rC = /* @__PURE__ */ bc(ir), oC = /* @__PURE__ */ xc(ir), iC = /* @__PURE__ */ vc(ir), aC = /* @__PURE__ */ Ic(ir), sC = /* @__PURE__ */ dh(ir), cC = /* @__PURE__ */ ph(ir), uC = /* @__PURE__ */ mh(ir), lC = /* @__PURE__ */ fh(ir), dC = /* @__PURE__ */ gh(ir), pC = /* @__PURE__ */ hh(ir), mC = /* @__PURE__ */ yh(ir), fC = /* @__PURE__ */ bh(ir);
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/schemas.js
-function $le() {
+function Ale() {
   ln.localeError || Lt(Jh());
 }
 function as() {
   ln.memoizer || Lt({ memoizer: xd() });
 }
-var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t, e.type = t.type, e), {
+var we = /* @__PURE__ */ E("ZodType", (e, t) => (Ale(), pe.init(e, t), e.def = t, e.type = t.type, e), {
   check(...e) {
     let t = this.def;
-    return this.clone(A.mergeDefs(t, {
+    return this.clone($.mergeDefs(t, {
       checks: [
         ...t.checks ?? [],
         ...e.map((n) => typeof n == "function" ? { _zod: { check: n, def: { check: "custom" }, onattach: [] } } : n)
@@ -36088,10 +36114,10 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
     return jC(this);
   },
   nullable() {
-    return $d(this);
+    return Ad(this);
   },
   nullish() {
-    return is($d(this));
+    return is(Ad(this));
   },
   nonoptional(e) {
     return VC(this, e);
@@ -36144,7 +36170,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
   },
   // Overrides core's `~standard` to add `jsonSchema`. Must stay a prototype entry: redefining it per instance demotes instances to dictionary mode.
   get "~standard"() {
-    return A.hide(this, "~standard", {
+    return $.hide(this, "~standard", {
       ...Rh(this),
       jsonSchema: {
         input: zc(this, "input"),
@@ -36153,7 +36179,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
     });
   },
   set "~standard"(e) {
-    A.own(this, "~standard", e);
+    $.own(this, "~standard", e);
   },
   parse: function e(t, n) {
     return rC(this, t, n, { callee: e });
@@ -36172,7 +36198,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
     return this?.safeParseAsync;
   },
   set spa(e) {
-    A.own(this, "spa", e);
+    $.own(this, "spa", e);
   },
   validate(e, t) {
     return nd(this, e, t);
@@ -36220,7 +36246,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
   (e, t) => {
     Za.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => xT(e, n, o, r);
   },
-  /* @__PURE__ */ A.derived({
+  /* @__PURE__ */ $.derived({
     format: (e) => on(e).format ?? null,
     minLength: (e) => on(e).minimum ?? null,
     maxLength: (e) => on(e).maximum ?? null
@@ -36229,10 +36255,10 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
       return this.check(Tc(...e));
     },
     includes(...e) {
-      return this.check($c(...e));
+      return this.check(Ac(...e));
     },
     startsWith(...e) {
-      return this.check(Ac(...e));
+      return this.check($c(...e));
     },
     endsWith(...e) {
       return this.check(Pc(...e));
@@ -36278,7 +36304,7 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => ($le(), pe.init(e, t), e.def = t
     return this.check(oy(zy, e));
   },
   url(e) {
-    return this.check(wd(Ad, e));
+    return this.check(wd($d, e));
   },
   jwt(e) {
     return this.check(ky(nb, e));
@@ -36387,23 +36413,23 @@ function C3(e) {
 function R3(e) {
   return sy(Ro, e);
 }
-function $3(e) {
+function A3(e) {
   return cy(Ro, e);
 }
-function A3(e) {
+function $3(e) {
   return uy(Ro, e);
 }
-var Ad = /* @__PURE__ */ E("ZodURL", (e, t) => {
+var $d = /* @__PURE__ */ E("ZodURL", (e, t) => {
   h_.init(e, t), Je.init(e, t);
 });
 function P3(e) {
-  return wd(Ad, e);
+  return wd($d, e);
 }
 function O3(e) {
-  return wd(Ad, {
+  return wd($d, {
     protocol: od,
     hostname: Tk,
-    ...A.normalizeParams(e)
+    ...$.normalizeParams(e)
   });
 }
 var By = /* @__PURE__ */ E("ZodEmoji", (e, t) => {
@@ -36455,7 +36481,7 @@ function j3(e) {
   return yy(Zy, e);
 }
 var gC = /* @__PURE__ */ E("ZodMAC", (e, t) => {
-  $_.init(e, t), Je.init(e, t);
+  A_.init(e, t), Je.init(e, t);
 });
 function B3(e) {
   return DE(gC, e);
@@ -36467,7 +36493,7 @@ function q3(e) {
   return by(Jy, e);
 }
 var Yy = /* @__PURE__ */ E("ZodCIDRv4", (e, t) => {
-  A_.init(e, t), Je.init(e, t);
+  $_.init(e, t), Je.init(e, t);
 });
 function G3(e) {
   return xy(Yy, e);
@@ -36530,7 +36556,7 @@ function t5(e) {
   return rs(ss, "currency_code", Rk, e);
 }
 function n5(e, t) {
-  let n = t?.enc ?? "hex", o = `${e}_${n}`, r = $r[o];
+  let n = t?.enc ?? "hex", o = `${e}_${n}`, r = Ar[o];
   if (!r)
     throw new Error(`Unrecognized hash format: ${o}`);
   return rs(ss, o, r, t);
@@ -36540,7 +36566,7 @@ var Hc = /* @__PURE__ */ E(
   (e, t) => {
     Fh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => vT(e, n, o, r), e.isFinite = !0;
   },
-  /* @__PURE__ */ A.derived({
+  /* @__PURE__ */ $.derived({
     minValue: (e) => {
       let { minimum: t, exclusiveMinimum: n } = on(e);
       return Math.max(t ?? Number.NEGATIVE_INFINITY, n ?? Number.NEGATIVE_INFINITY);
@@ -36634,7 +36660,7 @@ var Wc = /* @__PURE__ */ E(
   (e, t) => {
     zh.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => wT(e, n, o, r);
   },
-  /* @__PURE__ */ A.derived({
+  /* @__PURE__ */ $.derived({
     minValue: (e) => on(e).minimum ?? null,
     maxValue: (e) => on(e).maximum ?? null,
     format: (e) => on(e).format ?? null
@@ -36731,9 +36757,9 @@ function m5(e) {
 var Pd = /* @__PURE__ */ E(
   "ZodDate",
   (e, t) => {
-    Z_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => $T(e, n, o, r), e.min = (n, o) => e.check(gr(n, o)), e.max = (n, o) => e.check(fr(n, o));
+    Z_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => AT(e, n, o, r), e.min = (n, o) => e.check(gr(n, o)), e.max = (n, o) => e.check(fr(n, o));
   },
-  /* @__PURE__ */ A.derived({
+  /* @__PURE__ */ $.derived({
     minDate: (e) => {
       let { minimum: t } = on(e);
       return t ? new Date(t) : null;
@@ -36774,56 +36800,56 @@ function g5(e) {
   return ib(Object.keys(t));
 }
 var Dd = /* @__PURE__ */ E("ZodObject", (e, t) => {
-  as(), Y_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => qT(e, n, o, r), A.installLazyProp(e, "shape", (n) => n._zod.def.shape, !1);
+  as(), Y_.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => qT(e, n, o, r), $.installLazyProp(e, "shape", (n) => n._zod.def.shape, !1);
 }, {
   keyof() {
     return ib(Object.keys(this._zod.def.shape));
   },
   catchall(e) {
-    return this.clone(A.mergeDefs(this._zod.def, { catchall: e }));
+    return this.clone($.mergeDefs(this._zod.def, { catchall: e }));
   },
   passthrough() {
-    return this.clone(A.mergeDefs(this._zod.def, { catchall: os() }));
+    return this.clone($.mergeDefs(this._zod.def, { catchall: os() }));
   },
   loose() {
-    return this.clone(A.mergeDefs(this._zod.def, { catchall: os() }));
+    return this.clone($.mergeDefs(this._zod.def, { catchall: os() }));
   },
   strict() {
-    return this.clone(A.mergeDefs(this._zod.def, { catchall: ob() }));
+    return this.clone($.mergeDefs(this._zod.def, { catchall: ob() }));
   },
   strip() {
-    return this.clone(A.mergeDefs(this._zod.def, { catchall: void 0 }));
+    return this.clone($.mergeDefs(this._zod.def, { catchall: void 0 }));
   },
   extend(e) {
-    return A.extend(this, e);
+    return $.extend(this, e);
   },
   safeExtend(e) {
-    return A.safeExtend(this, e);
+    return $.safeExtend(this, e);
   },
   merge(e) {
-    return A.merge(this, e);
+    return $.merge(this, e);
   },
   pick(e) {
-    return A.pick(this, e);
+    return $.pick(this, e);
   },
   omit(e) {
-    return A.omit(this, e);
+    return $.omit(this, e);
   },
   partial(...e) {
-    return A.partial(Nd, this, e[0]);
+    return $.partial(Nd, this, e[0]);
   },
   exactPartial(...e) {
-    return A.partial(sb, this, e[0], "exactPartial");
+    return $.partial(sb, this, e[0], "exactPartial");
   },
   required(...e) {
-    return A.required(cb, this, e[0]);
+    return $.required(cb, this, e[0]);
   }
 });
 function h5(e, t) {
   let n = {
     type: "object",
     shape: e ?? {},
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   };
   return new Dd(n);
 }
@@ -36832,7 +36858,7 @@ function y5(e, t) {
     type: "object",
     shape: e,
     catchall: ob(),
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 function b5(e, t) {
@@ -36840,46 +36866,46 @@ function b5(e, t) {
     type: "object",
     shape: e,
     catchall: os(),
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var Md = /* @__PURE__ */ E("ZodUnion", (e, t) => {
-  fd.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => Ay(e, n, o, r), e.options = t.options;
+  fd.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => $y(e, n, o, r), e.options = t.options;
 });
 function Zc(e, t) {
   return new Md({
     type: "union",
     options: e,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var RC = /* @__PURE__ */ E("ZodXor", (e, t) => {
-  Md.init(e, t), X_.init(e, t), e._zod.processJSONSchema = (n, o, r) => Ay(e, n, o, r), e.options = t.options;
+  Md.init(e, t), X_.init(e, t), e._zod.processJSONSchema = (n, o, r) => $y(e, n, o, r), e.options = t.options;
 });
 function x5(e, t) {
   return new RC({
     type: "union",
     options: e,
     inclusive: !1,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
-var $C = /* @__PURE__ */ E("ZodDiscriminatedUnion", (e, t) => {
+var AC = /* @__PURE__ */ E("ZodDiscriminatedUnion", (e, t) => {
   Md.init(e, t), eE.init(e, t);
 });
 function v5(e, t, n) {
-  return new $C({
+  return new AC({
     type: "union",
     options: t,
     discriminator: e,
-    ...A.normalizeParams(n)
+    ...$.normalizeParams(n)
   });
 }
-var AC = /* @__PURE__ */ E("ZodIntersection", (e, t) => {
+var $C = /* @__PURE__ */ E("ZodIntersection", (e, t) => {
   tE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => GT(e, n, o, r);
 });
 function PC(e, t) {
-  return new AC({
+  return new $C({
     type: "intersection",
     left: e,
     right: t
@@ -36910,7 +36936,7 @@ function DC(e, t, n) {
     type: "tuple",
     items: e,
     rest: i,
-    ...A.normalizeParams(r)
+    ...$.normalizeParams(r)
   });
 }
 var qc = /* @__PURE__ */ E("ZodRecord", (e, t) => {
@@ -36921,12 +36947,12 @@ function MC(e, t, n) {
     type: "record",
     keyType: Rd(),
     valueType: e,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   }) : new qc({
     type: "record",
     keyType: e,
     valueType: t,
-    ...A.normalizeParams(n)
+    ...$.normalizeParams(n)
   });
 }
 function I5(e, t, n) {
@@ -36934,7 +36960,7 @@ function I5(e, t, n) {
     type: "record",
     keyType: e,
     valueType: t,
-    ...A.normalizeParams(n),
+    ...$.normalizeParams(n),
     partial: !0
   });
 }
@@ -36944,7 +36970,7 @@ function w5(e, t, n) {
     keyType: e,
     valueType: t,
     mode: "loose",
-    ...A.normalizeParams(n)
+    ...$.normalizeParams(n)
   });
 }
 var NC = /* @__PURE__ */ E("ZodMap", (e, t) => {
@@ -36955,7 +36981,7 @@ function S5(e, t, n) {
     type: "map",
     keyType: e,
     valueType: t,
-    ...A.normalizeParams(n)
+    ...$.normalizeParams(n)
   });
 }
 var UC = /* @__PURE__ */ E("ZodSet", (e, t) => {
@@ -36965,11 +36991,11 @@ function k5(e, t) {
   return new UC({
     type: "set",
     valueType: e,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var Gc = /* @__PURE__ */ E("ZodEnum", (e, t) => {
-  iE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (o, r, i) => AT(e, o, r, i), e.enum = t.entries, e.options = [...e._zod.values];
+  iE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (o, r, i) => $T(e, o, r, i), e.enum = t.entries, e.options = [...e._zod.values];
   let n = new Set(Object.keys(t.entries));
   e.extract = (o, r) => {
     let i = {};
@@ -36981,7 +37007,7 @@ var Gc = /* @__PURE__ */ E("ZodEnum", (e, t) => {
     return new Gc({
       ...t,
       checks: [],
-      ...A.normalizeParams(r),
+      ...$.normalizeParams(r),
       entries: i
     });
   }, e.exclude = (o, r) => {
@@ -36994,7 +37020,7 @@ var Gc = /* @__PURE__ */ E("ZodEnum", (e, t) => {
     return new Gc({
       ...t,
       checks: [],
-      ...A.normalizeParams(r),
+      ...$.normalizeParams(r),
       entries: i
     });
   };
@@ -37004,14 +37030,14 @@ function ib(e, t) {
   return new Gc({
     type: "enum",
     entries: n,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 function _5(e, t) {
   return new Gc({
     type: "enum",
     entries: e,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var LC = /* @__PURE__ */ E("ZodLiteral", (e, t) => {
@@ -37027,7 +37053,7 @@ function E5(e, t) {
   return new LC({
     type: "literal",
     values: Array.isArray(e) ? e : [e],
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var FC = /* @__PURE__ */ E("ZodFile", (e, t) => {
@@ -37042,10 +37068,10 @@ var zC = /* @__PURE__ */ E("ZodTransform", (e, t) => {
       throw new Di(e.constructor.name);
     n.addIssue = (i) => {
       if (typeof i == "string")
-        n.issues.push(A.issue(i, n.value, t));
+        n.issues.push($.issue(i, n.value, t));
       else {
         let a = i;
-        a.fatal && (a.continue = !1), a.code ?? (a.code = "custom"), "input" in a || (a.input = n.value), a.inst ?? (a.inst = e), n.issues.push(A.issue(a));
+        a.fatal && (a.continue = !1), a.code ?? (a.code = "custom"), "input" in a || (a.input = n.value), a.inst ?? (a.inst = e), n.issues.push($.issue(a));
       }
     };
     let r = t.transform(n.value, n);
@@ -37079,14 +37105,14 @@ function jC(e) {
 var BC = /* @__PURE__ */ E("ZodNullable", (e, t) => {
   lE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => VT(e, n, o, r), e.unwrap = () => e._zod.def.innerType;
 });
-function $d(e) {
+function Ad(e) {
   return new BC({
     type: "nullable",
     innerType: e
   });
 }
 function C5(e) {
-  return is($d(e));
+  return is(Ad(e));
 }
 var qC = /* @__PURE__ */ E("ZodDefault", (e, t) => {
   dE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => JT(e, n, o, r), e.unwrap = () => e._zod.def.innerType, e.removeDefault = e.unwrap;
@@ -37096,7 +37122,7 @@ function GC(e, t) {
     type: "default",
     innerType: e,
     get defaultValue() {
-      return typeof t == "function" ? t() : A.shallowClone(t);
+      return typeof t == "function" ? t() : $.shallowClone(t);
     }
   });
 }
@@ -37108,7 +37134,7 @@ function HC(e, t) {
     type: "prefault",
     innerType: e,
     get defaultValue() {
-      return typeof t == "function" ? t() : A.shallowClone(t);
+      return typeof t == "function" ? t() : $.shallowClone(t);
     }
   });
 }
@@ -37119,7 +37145,7 @@ function VC(e, t) {
   return new cb({
     type: "nonoptional",
     innerType: e,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var WC = /* @__PURE__ */ E("ZodSuccess", (e, t) => {
@@ -37138,13 +37164,13 @@ function JC(e, t) {
   return new ZC({
     type: "catch",
     innerType: e,
-    catchValue: typeof t == "function" ? t : A.constantCatch(t)
+    catchValue: typeof t == "function" ? t : $.constantCatch(t)
   });
 }
 var YC = /* @__PURE__ */ E("ZodNaN", (e, t) => {
   hE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => OT(e, n, o, r);
 });
-function $5(e) {
+function A5(e) {
   return aT(YC, e);
 }
 var Ud = /* @__PURE__ */ E("ZodPipe", (e, t) => {
@@ -37161,7 +37187,7 @@ function Ly(e, t) {
 var Ld = /* @__PURE__ */ E("ZodCodec", (e, t) => {
   Ud.init(e, t), gd.init(e, t);
 });
-function A5(e, t, n) {
+function $5(e, t, n) {
   return new Ld({
     type: "pipe",
     in: e,
@@ -37198,7 +37224,7 @@ function O5(e, t) {
   return new tR({
     type: "template_literal",
     parts: e,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
 }
 var nR = /* @__PURE__ */ E("ZodLazy", (e, t) => {
@@ -37261,7 +37287,7 @@ function z5(e, t = {}) {
     check: "custom",
     fn: (o) => o instanceof e,
     abort: !0,
-    ...A.normalizeParams(t)
+    ...$.normalizeParams(t)
   });
   return n._zod.bag.Class = e, n._zod.check = (o) => {
     o.value instanceof e || o.issues.push({
@@ -37291,7 +37317,7 @@ function q5(e, t) {
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/compat.js
-var Ale = {
+var $le = {
   invalid_type: "invalid_type",
   too_big: "too_big",
   too_small: "too_small",
@@ -37703,7 +37729,7 @@ function V5(e, t) {
               return;
             let k = [];
             for (let C of Object.keys(w.value))
-              x.includes(C) || v.some(($) => $.test(C)) || k.push(C);
+              x.includes(C) || v.some((A) => A.test(C)) || k.push(C);
             k.length && w.issues.push({
               code: "unrecognized_keys",
               keys: k,
@@ -38011,7 +38037,7 @@ var eV = {
   iconUrl: an.string().url().max(2048).optional(),
   installed: an.boolean(),
   official: an.literal(!0)
-}, tV = an.string().max(256).regex(/^@[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i), Xht = an.discriminatedUnion("kind", [
+}, tV = an.string().max(256).regex(/^@[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i), Qht = an.discriminatedUnion("kind", [
   an.object({
     ...eV,
     kind: an.literal("plugin"),
@@ -38044,7 +38070,7 @@ pt();
 
 // openclaw/ui/src/lib/chat/message-normalizer.ts
 function pR(e) {
-  return pp($t(e)?.role);
+  return pp(At(e)?.role);
 }
 
 // openclaw/ui/src/lib/chat/tool-call-diff.ts
@@ -38070,7 +38096,7 @@ Le();
 function us(e, t) {
   return t.map((n) => [n, e]);
 }
-var xxt = new Map([
+var vxt = new Map([
   // A launched subagent is a worker, not one more operation of the launcher.
   ...us("subagents", ["sessions_spawn"]),
   ...us("commands", ["exec", "bash", "shell", "run_command", "run_terminal_cmd"]),
@@ -38101,18 +38127,18 @@ var xxt = new Map([
 
 // openclaw/ui/src/lib/chat/tool-call-grouping.ts
 function kV(e) {
-  let t = $t(e)?.activity;
+  let t = At(e)?.activity;
   return Array.isArray(t) ? t.filter(
     (n) => Ml.Check(bR, n)
   ) : [];
 }
 
 // openclaw/ui/src/lib/chat/tool-cards.ts
-function Mde(e) {
-  return ze(e.messageId) ?? ze(At(e.__openclaw)?.id);
+function Nde(e) {
+  return ze(e.messageId) ?? ze($t(e.__openclaw)?.id);
 }
 function _V(e) {
-  let t = At(At(e)?.__openclaw), n = At(t?.toolOutput);
+  let t = $t($t(e)?.__openclaw), n = $t(t?.toolOutput);
   return (n?.source === "provider-response" || n?.source === "execution") && n.modelInput === "unverified" ? {
     source: n.source,
     modelInput: n.modelInput,
@@ -38120,16 +38146,16 @@ function _V(e) {
     ...n.captureTruncated === !0 ? { captureTruncated: !0 } : {}
   } : void 0;
 }
-function Nde(e) {
+function Ude(e) {
   return Array.isArray(e) ? e.filter((t) => Gi(t) !== null) : [];
 }
-function Ude(e) {
+function Lde(e) {
   if (typeof e != "string")
     return e;
   let t = e.trim();
-  return t.startsWith("{") || t.startsWith("[") ? Ab(t) ?? e : e;
+  return t.startsWith("{") || t.startsWith("[") ? $b(t) ?? e : e;
 }
-function Lde(e) {
+function Fde(e) {
   if (typeof e.text == "string")
     return e.text;
   if (typeof e.content == "string")
@@ -38144,29 +38170,29 @@ function Lde(e) {
 `);
   }
 }
-function Fde(...e) {
+function zde(...e) {
   for (let t of e) {
     let n = Gi(t), o = n?.exitCode ?? n?.exit_code;
     if (typeof o == "number" && Number.isInteger(o))
       return o;
   }
 }
-function $V(e) {
+function AV(e) {
   if (e.activity)
     return e.activity.status === "skipped";
   let t = Gi(e.details);
   return (e.live !== !0 || e.completed === !0) && t?.status === "skipped" && t.deniedReason === "steering";
 }
 function EV(e) {
-  if ($V(e))
+  if (AV(e))
     return !1;
   if (e.activity)
     return e.activity.status === "failed";
   let t = e.live !== !0 || e.completed === !0;
-  return e.isError ?? (t && T$(e.outputText));
+  return e.isError ?? (t && TA(e.outputText));
 }
-function AV(e, t) {
-  if ($V(e))
+function $V(e, t) {
+  if (AV(e))
     return "skipped";
   if (e.toolOutput?.outcome === "unknown")
     return EV(e) ? "failed" : "unknown";
@@ -38176,21 +38202,21 @@ function AV(e, t) {
   }
   return EV(e) ? "failed" : t === !0 && e.live === !0 && e.completed !== !0 ? "running" : e.completed === !0 || e.live !== !0 && e.outputText !== void 0 ? "succeeded" : "unknown";
 }
-function zde(e) {
-  let t = k$(e);
+function jde(e) {
+  let t = kA(e);
   return t?.surface === "assistant_message" ? { ...t, surface: "assistant_message" } : void 0;
 }
-function jde(e, t, n) {
-  let o = S$(e), r = o?.surface === "assistant_message" ? { ...o, surface: "assistant_message" } : zde(t);
+function Bde(e, t, n) {
+  let o = SA(e), r = o?.surface === "assistant_message" ? { ...o, surface: "assistant_message" } : jde(t);
   if (r)
     return { preview: { ...r, surface: "assistant_message" } };
-  let i = At(At(e)?.browserTab), a = Vb(i);
+  let i = $t($t(e)?.browserTab), a = Vb(i);
   if (n !== "browser" || !i || !a)
     return {};
   let s = typeof i.url == "string" ? ds(i.url, 2048) : "";
   return {
     browserTab: a,
-    preview: b$(s) ? {
+    preview: bA(s) ? {
       kind: "browser-tab",
       ...a,
       url: s,
@@ -38199,12 +38225,12 @@ function jde(e, t, n) {
   };
 }
 function TV(e, t) {
-  return E$(e) ?? Xt(e.callId) ?? Xt(t.toolCallId) ?? Xt(t.tool_call_id) ?? Xt(t.toolUseId) ?? Xt(t.tool_use_id);
+  return EA(e) ?? Xt(e.callId) ?? Xt(t.toolCallId) ?? Xt(t.tool_call_id) ?? Xt(t.toolUseId) ?? Xt(t.tool_use_id);
 }
 function xR(e, t) {
   return Xt(e.name) ?? Xt(t.toolName) ?? Xt(t.tool_name) ?? "tool";
 }
-function Bde(e) {
+function qde(e) {
   if (e != null) {
     if (typeof e == "string")
       return e;
@@ -38215,13 +38241,13 @@ function Bde(e) {
     }
   }
 }
-var qde = 0;
-function Gde(e) {
+var Gde = 0;
+function Kde(e) {
   return Wb(e.type) || typeof e.name == "string" && (e.arguments != null || e.args != null || e.input != null);
 }
 function CV(e) {
-  let t = e, n = typeof t.role == "string" ? t.role.toLowerCase() : "", o = pR(e) || n === "tool" || n === "function" || typeof t.toolName == "string" || typeof t.tool_name == "string", r = Nde(t.content), i = mp(t), a = t.__openclawToolStreamLive === !0, s = nV(t.__openclawToolStreamDiffStat), u = [], l = /* @__PURE__ */ new WeakSet(), m = Mde(t), h = wb(t)?.runId ?? ze(t.runId), b = (x, v, S = !1) => {
-    let w = Lde(x), k = x.details ?? t.details, C = At(x.__openclaw), $ = mp(x) ?? i, D = Fde(
+  let t = e, n = typeof t.role == "string" ? t.role.toLowerCase() : "", o = pR(e) || n === "tool" || n === "function" || typeof t.toolName == "string" || typeof t.tool_name == "string", r = Ude(t.content), i = mp(t), a = t.__openclawToolStreamLive === !0, s = nV(t.__openclawToolStreamDiffStat), u = [], l = /* @__PURE__ */ new WeakSet(), m = Nde(t), h = wb(t)?.runId ?? ze(t.runId), b = (x, v, S = !1) => {
+    let w = Fde(x), k = x.details ?? t.details, C = $t(x.__openclaw), A = mp(x) ?? i, D = zde(
       x,
       k,
       w ? Zi(w.trim()) : void 0,
@@ -38230,32 +38256,32 @@ function CV(e) {
     return {
       outputText: w,
       resultMessageId: !S && C && Object.hasOwn(C, "id") ? ze(C.id) : m,
-      outputTruncated: (C && Object.hasOwn(C, "truncated") ? C : At(t.__openclaw))?.truncated === !0,
+      outputTruncated: (C && Object.hasOwn(C, "truncated") ? C : $t(t.__openclaw))?.truncated === !0,
       toolOutput: _V(x) ?? _V(t),
       ...k !== void 0 ? { details: k } : {},
-      ...$ !== void 0 ? { isError: $ } : {},
+      ...A !== void 0 ? { isError: A } : {},
       ...D !== void 0 ? { exitCode: D } : {},
-      ...jde(k, w, v)
+      ...Bde(k, w, v)
     };
   };
   for (let x = 0; x < r.length; x++) {
-    let v = r[x] ?? {}, S = Gde(v);
+    let v = r[x] ?? {}, S = Kde(v);
     if (!S && !pp(v.type))
       continue;
-    let w = ze(v.runId) ?? h, k = ze(v.parentToolCallId), C = TV(v, t), $ = xR(v, t), D = {
-      id: C ?? `${$}:${x}`,
+    let w = ze(v.runId) ?? h, k = ze(v.parentToolCallId), C = TV(v, t), A = xR(v, t), D = {
+      id: C ?? `${A}:${x}`,
       ...C ? { callId: C } : {},
       ...w ? { runId: w } : {},
       ...k ? { parentToolCallId: k } : {},
-      name: $,
+      name: A,
       messageId: m
     }, V = v.details ?? t.details;
     if (S) {
-      let ue = Ude(v.arguments ?? v.args ?? v.input);
+      let ue = Lde(v.arguments ?? v.args ?? v.input);
       u.push({
         ...D,
         args: ue,
-        inputText: Bde(ue),
+        inputText: qde(ue),
         ...V !== void 0 ? { details: V } : {},
         ...a ? {
           live: !0,
@@ -38268,9 +38294,9 @@ function CV(e) {
     let te = u.find((ue) => ue.id === D.id) ?? u.find(
       (ue) => (
         // Same-name fallback belongs to legacy blocks missing an explicit identity.
-        (!C || !ue.callId) && ue.name === $ && ue.outputText === void 0 && !l.has(ue)
+        (!C || !ue.callId) && ue.name === A && ue.outputText === void 0 && !l.has(ue)
       )
-    ), Z = o ? xR({}, t) : void 0, $e = Z && Z !== "browser" ? Z : te?.name ?? Z ?? $, me = b(v, $e);
+    ), Z = o ? xR({}, t) : void 0, Ae = Z && Z !== "browser" ? Z : te?.name ?? Z ?? A, me = b(v, Ae);
     if (te) {
       l.add(te), te.callId ??= C, te.runId ??= w, te.parentToolCallId ??= k, a || (te.completed = !0), Object.assign(te, me, {
         preview: me.preview,
@@ -38301,7 +38327,7 @@ function CV(e) {
   ), y;
   for (let [x, v] of u.entries()) {
     let S = v.callId ? f.get(v.callId) : void 0;
-    S && (v.activity = S), !(!v.browserTab || v.callId || v.messageId) && (y ??= ++qde, v.previewRevision = `${y}:${x}`);
+    S && (v.activity = S), !(!v.browserTab || v.callId || v.messageId) && (y ??= ++Gde, v.previewRevision = `${y}:${x}`);
   }
   return u;
 }
@@ -38317,7 +38343,7 @@ function PV(e) {
 }
 
 // openclaw/ui/src/lib/chat/browser-tab-preview.ts
-function Kde(e) {
+function Hde(e) {
   return e.callId ?? e.messageId ?? e.previewRevision;
 }
 var OV = /* @__PURE__ */ new WeakMap();
@@ -38330,9 +38356,9 @@ function DV(e, t) {
     for (let i of r)
       if (ar(i))
         for (let a of PV(i)) {
-          let s = Kde(a);
-          if (a.browserTab && s && AV(a, !1) === "succeeded") {
-            let u = y$(a.browserTab);
+          let s = Hde(a);
+          if (a.browserTab && s && $V(a, !1) === "succeeded") {
+            let u = yA(a.browserTab);
             o.delete(u), o.set(u, { tab: a.browserTab, revision: s });
           }
         }
@@ -38340,11 +38366,11 @@ function DV(e, t) {
 }
 
 // octogee/app/openclaw-browser/resources.ts
-function Xxt(e, t) {
+function Qxt(e, t) {
   return [...DV(e, []).values()].filter((o) => o.tab.target === "host" && o.tab.profile === t).at(-1) ?? null;
 }
 export {
-  Xxt as latestNativeBrowserTab
+  Qxt as latestNativeBrowserTab
 };
 /*! Bundled license information:
 
