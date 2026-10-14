@@ -1,5 +1,21 @@
 import { randomUUID } from 'node:crypto';
 
+export async function withBuildPin(sha, request, run, { canRelease = () => true } = {}) {
+  const object = encodeURIComponent(`main-pins/${sha}/${randomUUID()}.json`);
+  console.log(`Local main pin: gs://octogee-ci-state/${decodeURIComponent(object)}`);
+  const upload = `https://storage.googleapis.com/upload/storage/v1/b/octogee-ci-state/o?uploadType=media&name=${object}&ifGenerationMatch=0`;
+  const created = await request(upload, { method: 'POST', body: JSON.stringify({ sourceSha: sha, createdAt: Date.now() }) });
+  if (created.status !== 200) throw new Error(`Build pin create failed: ${created.status} ${await created.text()}`);
+  const { generation } = await created.json();
+  const release = async () => {
+    if (canRelease()) {
+      const result = await request(`https://storage.googleapis.com/storage/v1/b/octogee-ci-state/o/${object}?ifGenerationMatch=${generation}`, { method: 'DELETE' });
+      if (result.status !== 204) throw new Error(`Build pin release failed: ${result.status}`);
+    } else console.error(`Build pin retained: ${decodeURIComponent(object)}; verify every submitted child is terminal before operator recovery`);
+  };
+  return Promise.resolve().then(run).then(async value => { await release(); return value; }, async error => { await release(); throw error; });
+}
+
 export async function withBuildLock(sha, request, run, { now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), canRelease = () => true } = {}) {
   const object = encodeURIComponent(`main/${sha}.json`);
   const url = `https://storage.googleapis.com/storage/v1/b/octogee-ci-state/o/${object}`;

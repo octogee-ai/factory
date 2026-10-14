@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainBuild, trackSubmission } from './main-build.mjs';
-import { withBuildLock } from './build-lock.mjs';
+import { withBuildLock, withBuildPin } from './build-lock.mjs';
 import { publishSourceArchive } from './source-archive.mjs';
 import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../.github/actions/openclaw-base-key/base-key.mjs';
 
@@ -47,7 +47,7 @@ const request = (url, options = {}) => fetch(url, { ...options, headers: { Autho
 const activeBuilds = new Set();
 const manifest = () => lookup(`${repository}/release-digest-manifest:${sha}`);
 async function submit(config, substitutions, ignoreFile) {
-  const substitutionArgs = Object.entries(substitutions).map(([key, value]) => `${key}=${value}`).join(',');
+  const substitutionArgs = Object.entries({ ...substitutions, _CI_PARENT_BUILD: process.env.BUILD_ID ?? 'standalone' }).map(([key, value]) => `${key}=${value}`).join(',');
   const id = trackSubmission(() => run('gcloud', ['builds', 'submit', '--async', `--config=${config}`, `--substitutions=${substitutionArgs}`, `--project=${project}`, `--region=${region}`, `--service-account=${serviceAccount}`, '--gcs-source-staging-dir=gs://octogee-ci-source/builds', '--format=value(id)', '--quiet', ...(ignoreFile ? [`--ignore-file=${ignoreFile}`] : [])]), activeBuilds);
   try {
     await execute('bash', ['scripts/lib/wait-for-cloud-build.sh', id, `--project=${project}`, `--region=${region}`, `--label=${config}`]);
@@ -113,7 +113,11 @@ async function platform() {
 try {
   const digest = await mainBuild({ sourceSha: sha, checkoutSha: run('git', ['rev-parse', 'HEAD']), branch: process.env.CI_BRANCH ?? run('git', ['branch', '--show-current']), clean: run('git', ['status', '--porcelain', '--untracked-files=no']) === '', force, desktop }, {
     lookup: manifest,
-    lock: task => withBuildLock(sha, request, task, { canRelease: () => activeBuilds.size === 0 }),
+    lock: task => {
+      const options = { canRelease: () => activeBuilds.size === 0 };
+      const locked = () => withBuildLock(sha, request, task, options);
+      return process.env.BUILD_ID ? locked() : withBuildPin(sha, request, locked, options);
+    },
     images: async () => {
       run('git', ['merge-base', '--is-ancestor', sha, 'origin/main']);
       env.SOURCE_ARCHIVE_ARTIFACT = JSON.stringify(await publishSourceArchive(sha));
