@@ -910,6 +910,29 @@ export async function cloneProjectRepo(
   );
 }
 
+function gitDiffPaths(raw: string): string[] {
+  return raw.split("\0").filter((_part, index) => index % 2 === 1);
+}
+
+function stageAlreadyCommittedProjectEdits(run: (args: string[]) => string | null): string[] | null {
+  const unstaged = run(["diff", "--raw", "-z", "--no-renames"]);
+  const staged = run(["diff", "--cached", "--raw", "-z", "--no-renames"]);
+  if (unstaged === null || staged === null) return null;
+  const stagedPaths = new Set(gitDiffPaths(staged));
+  const committedPaths: string[] = [];
+  for (const filePath of gitDiffPaths(unstaged)) {
+    if (stagedPaths.has(filePath)) continue;
+    const upstreamDifference = run([
+      "--literal-pathspecs", "diff", "--raw", "-z", "--no-renames", "@{upstream}", "--", filePath,
+    ]);
+    if (upstreamDifference === null) return null;
+    if (upstreamDifference === "") committedPaths.push(filePath);
+  }
+  if (committedPaths.length > 0
+    && run(["--literal-pathspecs", "add", "--update", "--", ...committedPaths]) === null) return null;
+  return committedPaths;
+}
+
 function refreshProjectCheckout(
   slug: string,
   projectSlug: string,
@@ -935,7 +958,13 @@ function refreshProjectCheckout(
     const remoteMain = run(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"]);
     if (remoteMain === null) return false;
     if (!remoteMain) return true;
+    const committedPaths = stageAlreadyCommittedProjectEdits(run);
+    if (committedPaths === null) return false;
     if (run(["merge", "--ff-only", "--no-edit", "@{upstream}"]) === null) {
+      if (committedPaths.length > 0
+        && run(["--literal-pathspecs", "restore", "--staged", "--source=HEAD", "--", ...committedPaths]) === null) {
+        throw new Error(`[git] Cannot restore ${slug}/${projectSlug} index after refused refresh`);
+      }
       log(`⚠ [git] Cannot refresh ${slug}/${projectSlug} without overwriting local project work`);
       return false;
     }

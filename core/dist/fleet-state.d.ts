@@ -41,6 +41,11 @@ export declare function builderActivationRecoveryTargetMatches(params: {
 }): boolean;
 export declare function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
 export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps, params: WorkspaceMigrationPreparationParams): Promise<void>;
+export declare function clearRetiredBuilderActivationPreparation(deps: FleetStateDeps, params: {
+    uid: string;
+    targetGatewayId: string;
+    retirementOperationId: string;
+}): Promise<boolean>;
 export interface FleetStateDocRef {
     set: (data: Record<string, unknown>, options?: {
         merge?: boolean;

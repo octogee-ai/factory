@@ -73,6 +73,7 @@ import {
   readSharedGatewayPoolConfig,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
+  clearRetiredBuilderActivationPreparation,
   commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
   type FleetStateFirestore,
@@ -4051,6 +4052,12 @@ async function deleteRetiredDisposableGatewayFirestore(
     return false;
   }
   if (verdict !== "delete") return false;
+  const preparationCleared = await clearRetiredBuilderActivationPreparation({
+    db: input.db as unknown as FleetStateFirestore,
+    serverTimestamp: () => FieldValue.serverTimestamp(),
+    deleteField: () => FieldValue.delete(),
+  }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, retirementOperationId: operationId });
+  if (preparationCleared) input.log(`[placement-policy] cleared failed preparation for retired target ${request.gatewayId}`);
   await Promise.all([
     input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-recover-${request.gatewayId}`).delete(),
     input.db

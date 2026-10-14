@@ -205,7 +205,7 @@ async function workspaceMigrationRecovery(
 }
 
 function preparationAssignmentMatches(
-  params: WorkspaceMigrationPreparationParams,
+  params: Pick<WorkspaceMigrationPreparationParams, "uid" | "sourceGatewayId" | "sourceEpoch">,
   snapshot: Awaited<ReturnType<FleetStateTxn["get"]>>,
 ): boolean {
   const source = recordOrEmpty(snapshot.data());
@@ -255,7 +255,7 @@ export async function clearWorkspaceMigrationPreparation(
       input.uid === params.uid, input.fromGatewayId === params.sourceGatewayId,
       typeof input.toGatewayId === "string", input.toGatewayId !== params.sourceGatewayId,
       await preparationSourceMatches(deps, txn, params, sourceSnapshot),
-      preparationRollbackConfirmed(operation),
+      preparationStepsMatch(operation, "done"),
     ].every(Boolean);
     if (!exact) throw new Error("workspace preparation cleanup authority changed");
     const target = await txn.get(assignmentRef(deps.db, String(input.toGatewayId), params.uid));
@@ -264,14 +264,69 @@ export async function clearWorkspaceMigrationPreparation(
   });
 }
 
-function preparationRollbackConfirmed(operation: Record<string, unknown>): boolean {
+export async function clearRetiredBuilderActivationPreparation(
+  deps: FleetStateDeps,
+  params: { uid: string; targetGatewayId: string; retirementOperationId: string },
+): Promise<boolean> {
+  const operationId = `builder-activate-${params.targetGatewayId}`;
+  return deps.db.runTransaction(async (txn) => {
+    const userRef = deps.db.collection("users").doc(params.uid);
+    const [userSnapshot, operationSnapshot, targetRootSnapshot, retirementSnapshot, targetAssignment] = await Promise.all([
+      txn.get(userRef),
+      txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId)),
+      txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.targetGatewayId)),
+      txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(params.retirementOperationId)),
+      txn.get(assignmentRef(deps.db, params.targetGatewayId, params.uid)),
+    ]);
+    const user = userSnapshot.data();
+    const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+    const marker = readWorkspaceMigrationMarker(openclaw);
+    if (marker?.operationId !== operationId) return false;
+    assertRestoreUnfenced(user);
+    const operation = recordOrEmpty(operationSnapshot.data());
+    const input = recordOrEmpty(operation.input);
+    if (typeof input.fromGatewayId !== "string" || input.fromGatewayId === "") throw new Error("retired activation preparation source is missing");
+    const sourceGatewayId = input.fromGatewayId;
+    const [sourceAssignment, sourceRoot] = await Promise.all([
+      txn.get(assignmentRef(deps.db, sourceGatewayId, params.uid)),
+      txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(sourceGatewayId)),
+    ]);
+    const lease = recordOrEmpty(openclaw.activationLease);
+    const sourceEpoch = typeof lease.sourceAssignmentEpoch === "number" ? lease.sourceAssignmentEpoch : NaN;
+    const targetRoot = targetRootSnapshot.data();
+    const retirement = recordOrEmpty(retirementSnapshot.data());
+    const handoff = recordOrEmpty(operation.schedulerHandoff);
+    const exact = [
+      marker.state === "preparing", marker.phase === "preparing",
+      operation.status === "failed", operation.customerMigrationV2 === undefined,
+      operation.schedulerHandoffReleased === true,
+      preparationStepsMatch(operation, "failed"),
+      input.uid === params.uid, input.toGatewayId === params.targetGatewayId,
+      openclaw.gatewayId === sourceGatewayId,
+      handoff.uid === params.uid, handoff.fromGatewayId === sourceGatewayId, handoff.toGatewayId === params.targetGatewayId,
+      preparationAssignmentMatches({ uid: params.uid, sourceGatewayId, sourceEpoch }, sourceAssignment),
+      projectGatewayDesiredRootForGateway(sourceRoot.data(), sourceGatewayId)?.gatewayClass === "shared",
+      !targetAssignment.exists,
+      builderActivationRecoveryTargetMatches({ operationId, input, openclaw, sourceEpoch, targetRoot }),
+      projectGatewayDesiredRootForGateway(targetRoot, params.targetGatewayId)?.desiredStatus === "retired",
+      recordOrEmpty(targetRoot?.retirementClaim).operationId === params.retirementOperationId,
+      retirement.kind === "retire-gateway", retirement.status === "succeeded",
+      recordOrEmpty(retirement.input).gatewayId === params.targetGatewayId,
+    ].every(Boolean);
+    if (!exact) throw new Error("retired activation preparation cleanup authority changed");
+    clearWorkspaceMigrationMarker(txn, deps, params.uid);
+    return true;
+  });
+}
+
+function preparationStepsMatch(operation: Record<string, unknown>, unmountStatus: "done" | "failed"): boolean {
   if (operation.kind !== MIGRATE_CUSTOMER_OPERATION_KIND ||
       !["running", "failed"].includes(String(operation.status)) ||
       operation.cutoverCommittedAt !== undefined || !Array.isArray(operation.steps)) return false;
   const expected: Record<string, string> = {
     "keys-sync-state": "done",
     "pre-sync-state": "failed",
-    "rollback:unmount-target": "done",
+    "rollback:unmount-target": unmountStatus,
   };
   return operation.steps.length === Object.keys(expected).length &&
     operation.steps.every((value) => {

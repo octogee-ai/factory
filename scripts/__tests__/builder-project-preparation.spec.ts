@@ -25,7 +25,8 @@ beforeEach(() => {
   fs.mkdirSync(seed, { recursive: true }); fs.mkdirSync(origin);
   git(origin, ["init", "--bare", "-b", "main"]); git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "Test"]); git(seed, ["config", "user.email", "test@octogee.test"]);
-  fs.writeFileSync(path.join(seed, "README.md"), "seed\n"); git(seed, ["add", "."]); git(seed, ["commit", "-m", "seed"]);
+  fs.writeFileSync(path.join(seed, "README.md"), "seed\n");
+  fs.writeFileSync(path.join(seed, "IDENTITY.md"), "old identity\n"); git(seed, ["add", "."]); git(seed, ["commit", "-m", "seed"]);
   git(seed, ["remote", "add", "origin", origin]); git(seed, ["push", "origin", "main"]);
   const metadata = `${paths.root}/git-metadata/${slug}/projects/${project}.git`;
   fs.mkdirSync(path.dirname(metadata), { recursive: true }); fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -61,6 +62,38 @@ function wiring() {
 }
 
 describe("configured Builder preparation of retained canonical projects", () => {
+  it.each(["unstaged", "staged", "conflicting"])("preserves transferred work while absorbing an identity already committed upstream (%s)", async state => {
+    const originalHead = git(dir, ["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(seed, "IDENTITY.md"), "saved identity\n");
+    fs.writeFileSync(path.join(seed, "lifecycle-proof.txt"), "committed project continuity\n");
+    if (state === "conflicting") fs.writeFileSync(path.join(seed, "README.md"), "new remote text\n");
+    git(seed, ["add", "."]); git(seed, ["commit", "-m", "saved identity"]); git(seed, ["push", "origin", "main"]);
+    if (state === "staged") {
+      fs.writeFileSync(path.join(dir, "IDENTITY.md"), "keep staged identity\n");
+      git(dir, ["add", "IDENTITY.md"]);
+    }
+    const originalIndex = git(dir, ["rev-parse", ":IDENTITY.md"]);
+    fs.writeFileSync(path.join(dir, "IDENTITY.md"), "saved identity\n");
+    fs.writeFileSync(path.join(dir, "README.md"), "keep local edit\n");
+    fs.writeFileSync(path.join(dir, "local-only.md"), "keep untracked work\n");
+    const { gate, request } = wiring();
+
+    if (state === "unstaged") {
+      await expect(gate.prepareSurgeTarget(request)).resolves.toBeUndefined();
+      expect(git(dir, ["rev-parse", "HEAD"])).toBe(git(seed, ["rev-parse", "HEAD"]));
+      expect(git(dir, ["rev-parse", ":IDENTITY.md"])).toBe(git(seed, ["rev-parse", "HEAD:IDENTITY.md"]));
+      expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("");
+      expect(fs.readFileSync(path.join(dir, "lifecycle-proof.txt"), "utf8")).toBe("committed project continuity\n");
+    } else {
+      await expect(gate.prepareSurgeTarget(request)).rejects.toThrow("pending repositories: demo");
+      expect(git(dir, ["rev-parse", "HEAD"])).toBe(originalHead);
+      expect(git(dir, ["rev-parse", ":IDENTITY.md"])).toBe(originalIndex);
+    }
+    expect(fs.readFileSync(path.join(dir, "IDENTITY.md"), "utf8")).toBe("saved identity\n");
+    expect(fs.readFileSync(path.join(dir, "README.md"), "utf8")).toBe("keep local edit\n");
+    expect(fs.readFileSync(path.join(dir, "local-only.md"), "utf8")).toBe("keep untracked work\n");
+  });
+
   it.each([false, true])("refreshes the cached project before preparation completes (conflicting local work=%s)", async conflict => {
     const originalHead = git(dir, ["rev-parse", "HEAD"]);
     fs.writeFileSync(path.join(seed, "lifecycle-proof.txt"), "committed project continuity\n");
