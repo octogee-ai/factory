@@ -405,6 +405,44 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
   });
 
+  it('releases the captured provisioning owner without completing it or changing its preparing migration custody', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h, 25);
+    const owner = h.store['users/other'].provisioning.openclaw;
+    owner.status = 'provisioning'; owner.migration.startedAt = 1_791_942_726_854;
+    const before = structuredClone(h.store);
+    await expect(queued.release()).resolves.toEqual({ released: 1 });
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(queued.scheduler).not.toHaveBeenCalled();
+    expect(h.store['users/other']).toEqual(before['users/other']);
+    expect(h.store['gateways/shared-1/assignments/other']).toEqual(before['gateways/shared-1/assignments/other']);
+    expect(h.store['gateways/shared-2/assignments/other']).toBeUndefined();
+    expect(h.store['glmOperations/queued'].attemptHistory).toEqual(before['glmOperations/queued'].attemptHistory);
+    expect(h.store['glmOperations/return']).toEqual(before['glmOperations/return']);
+    expect(h.store['users/u']).toEqual(before['users/u']);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+  });
+
+  it.each(['unknown', 'error', undefined])('denies an unrecognized lifecycle owner status %j', async status => {
+    const h = harness(); const queued = blockedPreTransportMigration(h, 25);
+    h.store['users/other'].provisioning.openclaw.status = status;
+    const before = structuredClone(h.store);
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    expect(h.store).toEqual(before);
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 4_000 });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it('does not release a provisioning owner whose preparing marker belongs to another operation', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h, 25);
+    Object.assign(h.store['users/other'].provisioning.openclaw, { status: 'provisioning',
+      migration: { state: 'preparing', phase: 'preparing', operationId: 'another-move', startedAt: 1_791_942_726_854 } });
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 4_000 });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
   it.each([
     'expected exactly one ready pod for transport=shared-1; found 1',
     'expected exactly one ready pod for transport=shared-1; found -1',

@@ -61,7 +61,7 @@ function sourceOwnerMatches(row: DocumentData, id: string, owner: DocumentData |
   const openclaw = owner?.provisioning?.openclaw, marker = readWorkspaceMigrationMarker(openclaw);
   return !customerRuntimeMutationFenced(owner) && openclaw?.gatewayId === row.input.fromGatewayId &&
     openclaw.nativeSharedContextRestore === undefined &&
-    openclaw.status === 'complete' && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
+    ['complete', 'provisioning'].includes(openclaw.status) && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
 }
 
 function sourceAssignmentMatches(row: DocumentData, id: string, assignment: DocumentData | undefined): boolean {
