@@ -31,6 +31,35 @@ it('requires preserved live cluster resources to agree with the reviewed securit
   expect(() => verifyBootstrapResources([{ ...desired, rules: [{ resources: ['nodes'], verbs: ['get', 'list'] }] }], [live])).toThrow('bootstrap required');
 });
 
+it.each([undefined, false])('accepts the serialized PriorityClass globalDefault of %s as false', globalDefault => {
+  const desired = { kind: 'PriorityClass', metadata: { name: 'capacity' }, value: -1000, globalDefault: false, preemptionPolicy: 'PreemptLowerPriority' };
+  const live = { kind: desired.kind, value: desired.value, preemptionPolicy: desired.preemptionPolicy, ...(globalDefault === undefined ? {} : { globalDefault }), metadata: { ...desired.metadata, annotations: { 'helm.sh/resource-policy': 'keep' } } };
+  expect(() => verifyBootstrapResources([desired], [live])).not.toThrow();
+});
+
+it.each([
+  { globalDefault: true },
+  { globalDefault: null },
+  { value: 0 },
+  { preemptionPolicy: 'Never' },
+])('rejects PriorityClass drift in %j', changed => {
+  const desired = { kind: 'PriorityClass', metadata: { name: 'capacity' }, value: -1000, globalDefault: false, preemptionPolicy: 'PreemptLowerPriority' };
+  const live = { ...desired, ...changed, metadata: { ...desired.metadata, annotations: { 'helm.sh/resource-policy': 'keep' } } };
+  expect(() => verifyBootstrapResources([desired], [live])).toThrow('bootstrap required');
+});
+
+it('requires an explicitly enabled PriorityClass globalDefault to be present', () => {
+  const desired = { kind: 'PriorityClass', metadata: { name: 'capacity' }, value: -1000, globalDefault: true };
+  const live = { kind: desired.kind, value: desired.value, metadata: { ...desired.metadata, annotations: { 'helm.sh/resource-policy': 'keep' } } };
+  expect(() => verifyBootstrapResources([desired], [live])).toThrow('bootstrap required');
+});
+
+it('does not default missing false fields on other resource kinds', () => {
+  const desired = { kind: 'StorageClass', metadata: { name: 'storage' }, allowVolumeExpansion: false };
+  const live = { kind: desired.kind, metadata: { ...desired.metadata, annotations: { 'helm.sh/resource-policy': 'keep' } } };
+  expect(() => verifyBootstrapResources([desired], [live])).toThrow('bootstrap required');
+});
+
 it('preserves effective values and literal template data through the namespace-only Helm chart', () => {
   const directory = mkdtempSync(join(tmpdir(), 'namespace-chart-'));
   try {

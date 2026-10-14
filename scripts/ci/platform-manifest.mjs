@@ -52,8 +52,9 @@ function containsExpected(expected, actual) {
 export function verifyBootstrapResources(expected, actual) {
   for (const resource of expected) {
     const live = actual.find(value => value.kind === resource.kind && value.metadata.name === resource.metadata.name && value.metadata.namespace === resource.metadata.namespace);
+    const normalizedLive = live?.kind === 'PriorityClass' && live.globalDefault === undefined ? { ...live, globalDefault: false } : live;
     const fields = Object.fromEntries(Object.entries(resource).filter(([key]) => !['apiVersion', 'kind', 'metadata'].includes(key)));
-    if (!live || live.metadata.annotations?.['helm.sh/resource-policy'] !== 'keep' || !containsExpected(fields, live) || !containsExpected(resource.metadata.labels ?? {}, live.metadata.labels ?? {})) {
+    if (!live || live.metadata.annotations?.['helm.sh/resource-policy'] !== 'keep' || !containsExpected(fields, normalizedLive) || !containsExpected(resource.metadata.labels ?? {}, live.metadata.labels ?? {})) {
       throw new Error(`Operator bootstrap required for ${resource.kind}/${resource.metadata.name}`);
     }
   }
