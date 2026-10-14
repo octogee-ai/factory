@@ -293,6 +293,37 @@ describe("migration activation manifest", () => {
     );
   });
 
+  it.each(["builder", "shared"] as const)("keeps %s account endpoint ownership through imported activation", async (gatewayClass) => {
+    const source = manifest();
+    source.mattermostAccount.baseUrl = "https://source-coach.example";
+    source.projectAgents = ["orbit", "scout"].map((projectId) => ({
+      agentId: `octogee-alice-proj-${projectId}-coach`, accountId: `alice-proj-${projectId}`,
+      agent: { id: `octogee-alice-proj-${projectId}-coach` },
+      mattermostAccount: { botToken: `${projectId}-pat`, ...(projectId === "orbit" ? { baseUrl: "${MM_URL}" } : {}) },
+      bindings: [{ agentId: `octogee-alice-proj-${projectId}-coach`, match: { channel: "mattermost", accountId: `alice-proj-${projectId}` } }],
+    }));
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({ hash: "h1", config: {
+        agents: { entries: {} }, bindings: [],
+        channels: { mattermost: { accounts: {
+          default: { baseUrl: "${MM_URL}" },
+          "alice-coach": { baseUrl: "https://owner-coach.example" },
+          "alice-proj-orbit": { baseUrl: "https://owner-orbit.example" },
+        } } },
+      } })),
+      configPatch,
+    };
+
+    await applyOpenClawActivationManifest(source, { rpc: rpc as never, log: vi.fn(), gatewayClass });
+
+    const patch = configPatch.mock.calls[0]![0] as Record<string, any>;
+    const accounts = patch.channels.mattermost.accounts;
+    expect(accounts["alice-coach"].baseUrl).toBe(gatewayClass === "builder" ? "https://owner-coach.example" : "${MM_URL}");
+    expect(accounts["alice-proj-orbit"].baseUrl).toBe(gatewayClass === "builder" ? "https://owner-orbit.example" : "${MM_URL}");
+    expect(accounts["alice-proj-scout"].baseUrl).toBe("${MM_URL}");
+  });
+
   it("patches agent, account, and bindings without keeping stale entries for the same agent", async () => {
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",
@@ -1011,9 +1042,9 @@ describe("migration activation manifest", () => {
     ]);
     expect(patch.channels.mattermost.accounts).toEqual({
       "alice-proj-old": null,
-      "alice-coach": projectManifest.mattermostAccount,
-      "alice-proj-orbit": projectManifest.projectAgents[0]!.mattermostAccount,
-      "alice-proj-scout": projectManifest.projectAgents[1]!.mattermostAccount,
+      "alice-coach": { ...projectManifest.mattermostAccount, baseUrl: "${MM_URL}" },
+      "alice-proj-orbit": { ...projectManifest.projectAgents[0]!.mattermostAccount, baseUrl: "${MM_URL}" },
+      "alice-proj-scout": { ...projectManifest.projectAgents[1]!.mattermostAccount, baseUrl: "${MM_URL}" },
     });
   });
 

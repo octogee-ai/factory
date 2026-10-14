@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { mattermostAccountEndpointsForTarget } from "@octogee/shared/types/openclaw-mattermost-accounts";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
@@ -573,9 +574,9 @@ export async function applyOpenClawActivationManifest(
                   manifest.slug,
                   activationAgents.map((entry) => entry.accountId),
                 ),
-                ...Object.fromEntries(
+                ...mattermostAccountEndpointsForTarget(current, Object.fromEntries(
                   activationAgents.map((entry) => [entry.accountId, entry.mattermostAccount]),
-                ),
+                ), opts.gatewayClass !== "builder"),
               },
             },
           },

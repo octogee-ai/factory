@@ -198,7 +198,11 @@ describe("system_config restore", () => {
       ["commit", "-m", "initial system_config openclaw template"],
     );
     const tracked = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8");
-    expect(tracked).toContain("${MM_URL}");
+    const mattermost = JSON.parse(tracked).channels.mattermost;
+    expect(mattermost.accounts).toEqual({});
+    expect(mattermost).not.toHaveProperty("baseUrl");
+    expect(mattermost.interactions.callbackBaseUrl).toBe("${MM_INTERACTIONS_CALLBACK_BASE_URL}");
+    expect(tracked).not.toContain("http://mm");
     expect(tracked).not.toContain("Mac");
     expect(tracked).not.toContain("botToken");
     expect(JSON.parse(fs.readFileSync(path.join(repoDir, ".octogee.json"), "utf-8"))).toEqual({
@@ -895,7 +899,9 @@ describe("system_config restore", () => {
     });
     expect(gitExec).not.toHaveBeenCalledWith(repoDir, ["add", "openclaw.json", ".octogee.json", ".gitignore"]);
     const tracked = fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf-8");
-    expect(tracked).toContain("${MM_URL}");
+    const mattermost = JSON.parse(tracked).channels.mattermost;
+    expect(mattermost.accounts).toEqual({});
+    expect(mattermost).not.toHaveProperty("baseUrl");
     expect(tracked).not.toContain("http://mm2");
   });
 
@@ -1426,14 +1432,55 @@ describe("system_config restore", () => {
 
     expect(result).toMatchObject({ restored: true, configPath: systemConfigPath(openclawDir) });
     const tracked = fs.readFileSync(systemConfigPath(openclawDir), "utf-8");
-    expect(JSON.parse(tracked).channels.mattermost.accounts).toEqual({
+    const mattermost = JSON.parse(tracked).channels.mattermost;
+    expect(mattermost.accounts).toEqual({
       "acme-coach": {
+        baseUrl: "${MM_URL}",
         botToken: { source: "file", provider: "octogee-mattermost", id: "/acme-coach" },
         dmPolicy: "disabled",
       },
     });
+    expect(mattermost).not.toHaveProperty("baseUrl");
+    expect(tracked).not.toContain("http://mm");
     expect(tracked).not.toContain("must-not-enter-git");
     expect(fs.existsSync(path.join(openclawDir, "openclaw.json"))).toBe(false);
+  });
+
+  it("restores Builder account endpoints and secret references without resolving owner placeholders", async () => {
+    const accounts = {
+      "acme-coach": {
+        baseUrl: "${OWNER_MM_URL}",
+        botToken: { source: "file", provider: "octogee-mattermost", id: "/acme-coach" },
+      },
+      "acme-proj-orbit": {
+        baseUrl: "https://owner-project.example",
+        botToken: { source: "file", provider: "octogee-mattermost", id: "/acme-proj-orbit" },
+      },
+    };
+    writeJson(path.join(repoDir, "openclaw.json"), {
+      agents: { list: [{ id: "octogee-acme-coach" }, { id: "octogee-acme-proj-orbit-coach" }] },
+      channels: { mattermost: { accounts } },
+    });
+
+    await restoreSystemConfigForSlug("acme", {
+      openclawDir, templatePath,
+      env: {
+        GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-xs-12345678", GATEWAY_BUILDER_SLUG: "acme",
+        API_PUBLIC_URL: "https://api-test.octogee.com",
+        MM_URL: "http://runtime-mattermost", OWNER_MM_URL: "https://runtime-owner.example",
+        MM_BOT_TOKEN: "must-not-enter-git",
+      },
+      log: () => {},
+    });
+
+    const tracked = fs.readFileSync(systemConfigPath(openclawDir), "utf8");
+    const mattermost = JSON.parse(tracked).channels.mattermost;
+    for (const [accountId, account] of Object.entries(accounts)) {
+      expect(mattermost.accounts[accountId]).toEqual({ ...account, dmPolicy: "disabled" });
+    }
+    expect(tracked).not.toContain("http://runtime-mattermost");
+    expect(tracked).not.toContain("https://runtime-owner.example");
+    expect(tracked).not.toContain("must-not-enter-git");
   });
 
   it("preStop sync commits and pushes only dirty system_config openclaw.json", () => {

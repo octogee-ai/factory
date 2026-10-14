@@ -577,7 +577,7 @@ function forceCustomerMattermostProjection(config) {
   config.channels ??= {};
   config.channels.mattermost ??= {};
   const mattermost = config.channels.mattermost;
-  mattermost.baseUrl = "${MM_URL}";
+  delete mattermost.baseUrl;
   mattermost.network = { dangerouslyAllowPrivateNetwork: true };
   mattermost.interactions = {
     callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",

@@ -40,6 +40,7 @@ import {
 } from "../../shared/types/workspace-migration.js";
 import { catalogEntryForModelRef } from "../../shared/types/agent-models.js";
 import { projectCheckoutEnabled, projectRepoSourceFromDoc } from "../../shared/types/project.js";
+import { mattermostAccountEndpointsForTarget } from "../../shared/types/openclaw-mattermost-accounts.js";
 import {
   applyConfigPatch,
   customerAgentRosterPatch,
@@ -1056,10 +1057,12 @@ async function applyAddCustomerConfigPatch(
           ),
           channels: {
             mattermost: {
-              accounts: mountMattermostAccountsPatch(current, snapshot.slug, evictionSlugs, {
-                [accountId]: accountEntry,
-                ...projectAccounts,
-              }),
+              accounts: mountMattermostAccountsPatch(current, snapshot.slug, evictionSlugs,
+                mattermostAccountEndpointsForTarget(current, {
+                  [accountId]: accountEntry,
+                  ...projectAccounts,
+                }, !ctx.isBuilderGateway()),
+              ),
             },
           },
         };

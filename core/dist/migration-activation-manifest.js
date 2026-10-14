@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { mattermostAccountEndpointsForTarget } from "@octogee/shared/types/openclaw-mattermost-accounts";
 import { applyConfigPatch, customerAgentRosterPatch, customerConfigAgentRosterReplacePaths, filterOutCustomerBindings, orderBuilderGatewayRoster, replaceCustomerAgentsInFullAgentList, staleProjectAgentAccountNulls, upsertAgentInFullAgentList, } from "./apply-config-patch.js";
 import { rebindPlatformEmbeddingRefs } from "./platform-embedding-refs.js";
 import { reconcileBuilderAgentEntry, reconcileCustomerAgentEntry, } from "./system-config-invariants.js";
@@ -386,7 +387,7 @@ export async function applyOpenClawActivationManifest(manifest, opts) {
                     mattermost: {
                         accounts: {
                             ...staleProjectAgentAccountNulls(current, manifest.slug, activationAgents.map((entry) => entry.accountId)),
-                            ...Object.fromEntries(activationAgents.map((entry) => [entry.accountId, entry.mattermostAccount])),
+                            ...mattermostAccountEndpointsForTarget(current, Object.fromEntries(activationAgents.map((entry) => [entry.accountId, entry.mattermostAccount])), opts.gatewayClass !== "builder"),
                         },
                     },
                 },

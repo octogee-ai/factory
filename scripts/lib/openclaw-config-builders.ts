@@ -1,5 +1,6 @@
 import type { ProjectAgentIdentity } from "../../shared/types/project.js";
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
+import { PLATFORM_MATTERMOST_BASE_URL } from "../../shared/types/openclaw-mattermost-accounts.js";
 import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
 import { applyComputerBrowserAgentPolicy } from "./openclaw-computer-browser.js";
 import {
@@ -271,6 +272,7 @@ export interface MattermostAccountInput {
 }
 
 export interface MattermostAccountEntry {
+  baseUrl: string;
   botToken: MattermostAccountSecretRef;
   dmPolicy?: "allowlist" | "disabled";
   allowFrom?: string[];
@@ -301,6 +303,7 @@ export function buildMattermostAccounts(
     }
     const accountId = `${c.slug}-coach`;
     accounts[accountId] = {
+      baseUrl: PLATFORM_MATTERMOST_BASE_URL,
       botToken: mattermostAccountSecretRef(accountId),
       dmPolicy: "disabled",
       allowFrom: [ownerMmUserId],
@@ -550,6 +553,7 @@ export function buildProjectAgentAccounts(
     if (!active.has(p.projectId) || !p.token) continue;
     const accountId = `${slug}-proj-${p.projectId}`;
     accounts[accountId] = {
+      baseUrl: PLATFORM_MATTERMOST_BASE_URL,
       botToken: mattermostAccountSecretRef(accountId),
       allowFrom: [ownerMmUserId],
       dmPolicy: "disabled",

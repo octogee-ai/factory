@@ -421,6 +421,26 @@ describe("fetchCoachTokens", () => {
 });
 
 describe("buildMattermostAccounts", () => {
+  it("gives accounts mounted after empty-account Doctor normalization their own endpoint", () => {
+    const mattermost: { baseUrl?: string; accounts: Record<string, unknown> } = {
+      accounts: { default: { baseUrl: "${MM_URL}" } },
+    };
+    Object.assign(mattermost.accounts,
+      buildMattermostAccounts(
+        [{ uid: "uid-a", slug: "chris", customerMmUserId: CHRIS_MM_ID }],
+        new Map([["uid-a", "tok-chris"]]),
+      ),
+      buildProjectAgentAccounts("chris", [
+        { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
+      ], CHRIS_MM_ID),
+    );
+
+    expect(mattermost).not.toHaveProperty("baseUrl");
+    for (const accountId of ["chris-coach", "chris-proj-orbit"]) {
+      expect(mattermost.accounts[accountId]).toHaveProperty("baseUrl", "${MM_URL}");
+    }
+  });
+
   it("emits NO entries on empty input — no admin, no placeholders", () => {
     const accounts = buildMattermostAccounts([], new Map());
     expect(accounts).toEqual({});
@@ -446,6 +466,7 @@ describe("buildMattermostAccounts", () => {
       ]),
     );
     expect(accounts["chris-coach"]).toEqual({
+      baseUrl: "${MM_URL}",
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
       dmPolicy: "disabled",
       allowFrom: [CHRIS_MM_ID],
@@ -454,6 +475,7 @@ describe("buildMattermostAccounts", () => {
       commands: { native: false },
     });
     expect(accounts["sam-coach"]).toEqual({
+      baseUrl: "${MM_URL}",
       botToken: { source: "file", provider: "octogee-mattermost", id: "/sam-coach" },
       dmPolicy: "disabled",
       allowFrom: [SAM_MM_ID],
@@ -472,6 +494,7 @@ describe("buildMattermostAccounts", () => {
       new Map([["uid-a", "tok-chris"]]),
     );
     expect(accounts["chris-coach"]).toMatchObject({
+      baseUrl: "${MM_URL}",
       botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-coach" },
       groupPolicy: "open",
     });
@@ -752,6 +775,7 @@ describe("buildProjectAgentAccounts", () => {
 
     expect(accounts).toEqual({
       "chris-proj-orbit": {
+        baseUrl: "${MM_URL}",
         botToken: { source: "file", provider: "octogee-mattermost", id: "/chris-proj-orbit" },
         allowFrom: [CHRIS_MM_ID],
         dmPolicy: "disabled",

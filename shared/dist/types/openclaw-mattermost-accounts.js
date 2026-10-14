@@ -1,8 +1,28 @@
 import { mattermostAccountIdForAgentId, parseAgentId } from "./identity.js";
+export const PLATFORM_MATTERMOST_BASE_URL = "${MM_URL}";
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
-const PLATFORM_OWNED_CONNECTION_KEYS = ["baseUrl", "network", "interactions", "callbackBaseUrl"];
+const PLATFORM_OWNED_CONNECTION_KEYS = ["network", "interactions", "callbackBaseUrl"];
 function objectValue(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+export function mattermostAccountEndpointsForTarget(current, accounts, platformOwned) {
+    const channels = objectValue(objectValue(current)?.channels);
+    const mattermost = objectValue(channels?.mattermost);
+    const currentAccounts = objectValue(mattermost?.accounts);
+    return Object.fromEntries(Object.entries(accounts).map(([accountId, rawAccount]) => {
+        const account = objectValue(rawAccount);
+        if (!account)
+            return [accountId, rawAccount];
+        let baseUrl = PLATFORM_MATTERMOST_BASE_URL;
+        if (!platformOwned) {
+            const existing = objectValue(currentAccounts?.[accountId]);
+            if (existing && Object.prototype.hasOwnProperty.call(existing, "baseUrl"))
+                baseUrl = existing.baseUrl;
+            else if (Object.prototype.hasOwnProperty.call(account, "baseUrl"))
+                baseUrl = account.baseUrl;
+        }
+        return [accountId, { ...account, baseUrl }];
+    }));
 }
 export function managedMattermostAccounts(config) {
     const result = new Map();
@@ -71,6 +91,7 @@ export function platformAgentMattermostAccountsProjected(config, accounts, platf
         return managed.has(accountId)
             && account !== null
             && secretRefMatches(account.botToken, accountId)
+            && account.baseUrl === PLATFORM_MATTERMOST_BASE_URL
             && platformAgentAccountPolicySatisfied(account, true)
             && PLATFORM_OWNED_CONNECTION_KEYS.every((key) => !Object.prototype.hasOwnProperty.call(account, key));
     });
@@ -89,6 +110,7 @@ export function projectPlatformAgentMattermostAccounts(config, accounts, platfor
             continue;
         }
         account.botToken = mattermostAccountSecretRef(accountId);
+        account.baseUrl = PLATFORM_MATTERMOST_BASE_URL;
         enforcePlatformAgentAccountPolicy(account, true);
         for (const key of PLATFORM_OWNED_CONNECTION_KEYS)
             delete account[key];

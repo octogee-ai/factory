@@ -79,7 +79,7 @@ describe("configuredBuilderWorkspacePatch", () => {
 describe("configuredBuilderProjectAgentPatch", () => {
   it.each(["list", "entries"] as const)("binds new sessions of a ready project without replacing its account or existing routes (%s)", (representation) => {
     const current = currentConfig(representation, desired.projectAgentEntries);
-    const customAccount = { botToken: "owner-managed-token", allowFrom: ["custom-owner"], groupPolicy: "allowlist" };
+    const customAccount = { baseUrl: "https://builder-mattermost.example", botToken: "owner-managed-token", allowFrom: ["custom-owner"], groupPolicy: "allowlist" };
     current.channels.mattermost.accounts = { ...current.channels.mattermost.accounts, "alice-proj-launch": customAccount };
     const projectRoutes = buildCustomerBindings([{ slug, channels, agentProjects: new Set([projectId]) }]).filter(binding => binding.agentId === agentId);
     current.bindings = [...current.bindings, ...projectRoutes];
@@ -263,7 +263,7 @@ describe("configuredBuilderProjectAgentPatch", () => {
 
   it("preserves already-ready project credentials and routing customized by the owner", () => {
     const customized = { id: agentId, workspace: "/owner/project", model: "owner-model" };
-    const customAccount = { botToken: "owner-managed-token", allowFrom: ["custom-owner"], groupPolicy: "allowlist" };
+    const customAccount = { baseUrl: "https://builder-mattermost.example", botToken: "owner-managed-token", allowFrom: ["custom-owner"], groupPolicy: "allowlist" };
     const customBinding = { agentId: "owner-agent", match: { channel: "mattermost", accountId: "alice-proj-launch", peer: { kind: "group", id: "launch-channel" } } };
     const current = currentConfig("entries", [customized]);
     const config = {

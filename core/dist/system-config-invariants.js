@@ -369,7 +369,7 @@ export function platformInvariantTable(context) {
             },
         },
         { kind: "exact", path: "channels.mattermost.enabled", value: true },
-        { kind: "exact", path: "channels.mattermost.baseUrl", value: "${MM_URL}" },
+        { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT },
         { kind: "exact", path: "channels.mattermost.network.dangerouslyAllowPrivateNetwork", value: true },
         {
             kind: "exact",

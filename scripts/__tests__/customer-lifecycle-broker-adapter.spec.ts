@@ -2309,6 +2309,40 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["builder", "shared"])("keeps %s account endpoint ownership through a full remount", async (gatewayClass) => {
+    vi.stubEnv("GATEWAY_CLASS", gatewayClass);
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", gatewayClass === "builder" ? "alice" : "");
+    const snapshot = aliceSnapshot({ projectAgents: [
+      { projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "orbit-pat", status: "ready" },
+      { projectId: "scout", enabled: true, mmUserId: "bot-scout", token: "scout-pat", status: "ready" },
+    ] });
+    const config = {
+      agents: { entries: keyedRoster(["octogee-alice-coach", "octogee-alice-proj-orbit-coach", "octogee-alice-proj-scout-coach"]) },
+      channels: { mattermost: { accounts: {
+        default: { baseUrl: "${MM_URL}" },
+        "alice-coach": { baseUrl: "https://owner-coach.example" },
+        "alice-proj-orbit": { baseUrl: "https://owner-orbit.example" },
+      } } },
+    };
+    let patch: Record<string, any> | undefined;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch(config) as Record<string, any>;
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc(rosterRpc(config)), log: vi.fn(),
+      isBuilderGateway: () => gatewayClass === "builder",
+    });
+
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" });
+
+    const accounts = patch!.channels.mattermost.accounts;
+    expect(accounts["alice-coach"].baseUrl).toBe(gatewayClass === "builder" ? "https://owner-coach.example" : "${MM_URL}");
+    expect(accounts["alice-proj-orbit"].baseUrl).toBe(gatewayClass === "builder" ? "https://owner-orbit.example" : "${MM_URL}");
+    expect(accounts["alice-proj-scout"].baseUrl).toBe("${MM_URL}");
+  });
+
   it("retains a ready project agent when restoring a seeded migration snapshot", async () => {
     const projectId = "octogee-alice-proj-orbit-coach";
     const snapshot = aliceSnapshot({

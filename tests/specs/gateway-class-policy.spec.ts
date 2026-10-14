@@ -383,7 +383,6 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       workshop: { autonomous: { mode: "off" } },
     });
     expect(out.channels.mattermost).toMatchObject({
-      baseUrl: "${MM_URL}",
       network: { dangerouslyAllowPrivateNetwork: true },
       interactions: {
         callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
@@ -405,7 +404,9 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       },
     });
     expect(out.channels.mattermost.accounts).not.toHaveProperty("mike-coach");
-    expect(out.channels.mattermost.accounts["alice-coach"]).not.toHaveProperty("baseUrl");
+    expect(out.channels.mattermost).not.toHaveProperty("baseUrl");
+    expect(out.channels.mattermost.accounts["alice-coach"]).toHaveProperty("baseUrl", "${MM_URL}");
+    expect(out.channels.mattermost.accounts["alice-proj-garden"]).toHaveProperty("baseUrl", "${MM_URL}");
     expect(out.channels.mattermost.accounts["alice-proj-garden"]).not.toHaveProperty("network");
     expect(out.plugins.entries["octogee-connector-tools"]).toEqual({
       enabled: true,
@@ -433,6 +434,34 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       enabled: true,
       config: { heartbeatMs: 5000 },
     });
+  });
+
+  it("keeps empty Shared accounts free of a global endpoint for Doctor to move into a default account", () => {
+    const out = runPolicy("shared", {
+      channels: { mattermost: { baseUrl: "${MM_URL}", accounts: {} } },
+    });
+
+    expect(out.channels.mattermost).not.toHaveProperty("baseUrl");
+    expect(out.channels.mattermost.accounts).toEqual({});
+  });
+
+  it("gives Shared accounts mounted after Doctor normalization their own canonical endpoint", () => {
+    const config = {
+      agents: { list: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-orbit-coach" }] },
+      channels: { mattermost: { accounts: {
+        default: { baseUrl: "${MM_URL}" },
+        "alice-coach": { botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-coach" } },
+        "alice-proj-orbit": { botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-proj-orbit" } },
+      } } },
+    };
+
+    const out = runPolicy("shared", config);
+
+    expect(out.channels.mattermost).not.toHaveProperty("baseUrl");
+    expect(out.channels.mattermost.accounts).not.toHaveProperty("default");
+    for (const accountId of ["alice-coach", "alice-proj-orbit"]) {
+      expect(out.channels.mattermost.accounts[accountId]).toHaveProperty("baseUrl", "${MM_URL}");
+    }
   });
 
   it("disables platform-agent DMs on shared and Builder gateways alike", () => {
@@ -529,6 +558,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       .accounts as Record<string, Record<string, unknown>>;
     expect(boot.channels.mattermost.accounts).toEqual(invariantAccounts);
     expect(invariantAccounts["alice-coach"].allowFrom).toEqual(gatewayClass === "builder" ? [owner] : undefined);
+    expect(invariantAccounts["alice-coach"].baseUrl).toBe(gatewayClass === "builder" ? "http://mm" : "${MM_URL}");
+    if (gatewayClass === "shared") {
+      expect(boot.channels.mattermost).not.toHaveProperty("baseUrl");
+      expect((invariant.channels as Record<string, unknown>).mattermost).not.toHaveProperty("baseUrl");
+    }
   });
 
   it("shared class retains the durable disabled Codex invariant", () => {

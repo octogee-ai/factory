@@ -377,7 +377,6 @@ describe("system config platform invariants", () => {
       },
       channels: {
         mattermost: {
-          baseUrl: "${MM_URL}",
           network: { dangerouslyAllowPrivateNetwork: true },
           interactions: {
             callbackBaseUrl: "${MM_INTERACTIONS_CALLBACK_BASE_URL}",
@@ -611,7 +610,9 @@ describe("system config platform invariants", () => {
     const accounts = (((config.channels as Record<string, unknown>).mattermost as Record<string, unknown>)
       .accounts as Record<string, unknown>);
     expect(accounts).not.toHaveProperty("mike-coach");
-    expect(accounts["alice-coach"]).not.toHaveProperty("baseUrl");
+    expect(accounts["alice-coach"]).toHaveProperty("baseUrl", "${MM_URL}");
+    expect(accounts["alice-proj-garden"]).toHaveProperty("baseUrl", "${MM_URL}");
+    expect((config.channels as Record<string, unknown>).mattermost).not.toHaveProperty("baseUrl");
     expect(accounts["alice-proj-garden"]).not.toHaveProperty("network");
     expect(accounts["alice-proj-garden"]).not.toHaveProperty("interactions");
     expect(config).toMatchObject({
@@ -845,6 +846,34 @@ describe("system config platform invariants", () => {
     expect((config.gateway as Record<string, unknown>).port).toBe(9000);
     expect(platformInvariantViolations(config, builder)).toEqual(["gateway.port"]);
   });
+
+  it.each([undefined, "https://attacker.example", "${MM_URL}"])(
+    "projects a Shared account endpoint to the canonical template (%s)", (baseUrl) => {
+      const accountId = "alice-coach";
+      const account = {
+        botToken: { source: "file", provider: "octogee-mattermost", id: `/${accountId}` },
+        dmPolicy: "disabled",
+        ...(baseUrl === undefined ? {} : { baseUrl }),
+      };
+      const config: Record<string, unknown> = {
+        agents: { list: [{ id: "octogee-alice-coach" }] },
+        channels: { mattermost: { accounts: { [accountId]: account } } },
+      };
+      reconcilePlatformInvariants(config, barn);
+      if (baseUrl === undefined) delete account.baseUrl;
+      else account.baseUrl = baseUrl;
+
+      expect(platformInvariantViolations(config, barn)).toEqual(
+        baseUrl === "${MM_URL}" ? [] : ["channels.mattermost.accounts"],
+      );
+      expect(reconcilePlatformProjections(config, barn).changedPaths).toEqual(
+        baseUrl === "${MM_URL}" ? [] : ["channels.mattermost.accounts"],
+      );
+      expect(account.baseUrl).toBe("${MM_URL}");
+      expect(platformInvariantViolations(config, barn)).toEqual([]);
+      expect(reconcilePlatformProjections(config, barn).changedPaths).toEqual([]);
+    },
+  );
 
   it("disables platform-agent Mattermost DMs on shared and Builder gateways alike", () => {
     const accountId = "alice-coach";
