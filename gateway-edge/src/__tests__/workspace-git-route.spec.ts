@@ -109,6 +109,22 @@ describe("gateway-local workspace git authorization", () => {
     expect(h.gitStatus).toHaveBeenCalledWith("/customers/alice/projects/orbit");
   });
 
+  it.each(["status", "diff", "log", "branches"])("answers 503 CUSTOMER_DIR_MISSING for /git/%s when an authorized workspace is not mounted", async (name) => {
+    h.authorize.mockResolvedValueOnce(grant({ projectSlug: null, githubToken: null }));
+    h.resolveCustomerDir.mockResolvedValueOnce(null);
+    const res = await request(app())
+      .get(`/api/g/bender/workspace/git/${name}?slug=alice`)
+      .set("authorization", BEARER);
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      error: "Working tree temporarily unavailable; retry in a few seconds.",
+      code: "CUSTOMER_DIR_MISSING",
+    });
+    expect(h.resolveCustomerDir).toHaveBeenCalledWith(expect.any(String), "alice");
+    expect(h.gitStatus).not.toHaveBeenCalled();
+  });
+
   it("passes broker refusals through with their status and body", async () => {
     h.authorize.mockResolvedValueOnce({ kind: "unauthenticated" });
     expect((await request(app()).get("/api/g/bender/workspace/git/status?slug=alice").set("authorization", BEARER)).status).toBe(401);
