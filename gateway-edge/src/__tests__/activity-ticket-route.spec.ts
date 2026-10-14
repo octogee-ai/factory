@@ -6,20 +6,34 @@ vi.mock('../middleware/auth.js', () => ({ requireAuth: (req: { uid: string }, _r
 vi.mock('../lib/activity-conversation.js', () => ({ resolveActivityConversation: h.authorize }));
 vi.mock('../lib/gateway-ticket.js', () => ({ mintTicket: h.mint }));
 const { default: router } = await import('../routes/openclaw.js');
-const scope = { gatewayId: 'shared-123456789abc', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}` };
+const threadRootPostId = 'r'.repeat(26);
+const scope = { gatewayId: 'shared-123456789abc', ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` };
 function app() { const a = express(); a.use(express.json()); a.use('/api/openclaw', router); return a; }
 beforeEach(() => { h.authorize.mockReset().mockResolvedValue(scope); h.mint.mockReset().mockResolvedValue({ ticket: 'ticket' }); });
 describe('native Activity tickets', () => {
+  it('does not mint a conversation ticket without an explicitly selected existing thread', async () => {
+    expect((await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId })).status).toBe(400);
+    expect(h.authorize).not.toHaveBeenCalled(); expect(h.mint).not.toHaveBeenCalled();
+  });
+  it('mints the exact verified selected thread rather than its base room', async () => {
+    const threadRootPostId = 'r'.repeat(26);
+    const selected = scope;
+    h.authorize.mockResolvedValue(selected);
+    const result = await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId, threadRootPostId });
+    expect(result.status).toBe(200); expect(result.body.sessionKey).toBe(selected.sessionKey);
+    expect(h.authorize).toHaveBeenCalledWith(expect.objectContaining({ channelId: scope.channelId, threadRootPostId }));
+    expect(h.mint.mock.calls[0][0].payload).toMatchObject({ threadRootPostId, sessionKey: selected.sessionKey });
+  });
   it('mints the exact server-derived channel scope without activation or control grants', async () => {
-    const result = await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId });
+    const result = await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId, threadRootPostId });
     expect(result.status).toBe(200); expect(result.body).toMatchObject({ gatewayId: scope.gatewayId, sessionKey: scope.sessionKey, wsTicket: 'ticket' });
-    expect(h.mint).toHaveBeenCalledWith({ uid: 'member', gatewayId: scope.gatewayId, purpose: 'openclaw-ws', payload: { ownerUid: scope.ownerUid, channelId: scope.channelId, expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey } });
+    expect(h.mint).toHaveBeenCalledWith({ uid: 'member', gatewayId: scope.gatewayId, purpose: 'openclaw-ws', payload: { ownerUid: scope.ownerUid, channelId: scope.channelId, threadRootPostId, expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey } });
     expect(result.headers['cache-control']).toBe('no-store');
   });
   it.each([{ channelId: 'bad' }, { channelId: scope.channelId, expectedAgentId: 'other' }, { channelId: scope.channelId, sessionKey: 'forged' }])('rejects client-assigned authority %j', async body => {
     expect((await request(app()).post('/api/openclaw/ticket').send(body)).status).toBe(400); expect(h.mint).not.toHaveBeenCalled();
   });
   it('does not mint for a removed member', async () => {
-    h.authorize.mockResolvedValue(null); expect((await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId })).status).toBe(403); expect(h.mint).not.toHaveBeenCalled();
+    h.authorize.mockResolvedValue(null); expect((await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId, threadRootPostId })).status).toBe(403); expect(h.mint).not.toHaveBeenCalled();
   });
 });

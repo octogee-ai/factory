@@ -122,6 +122,7 @@ function app(opts: {
   a.post("/internal/openclaw-control/tool-conversation", enforcement, handler);
   a.post("/internal/voice/conversation", enforcement, handler);
   a.post("/internal/voice/turn", enforcement, handler);
+  a.post("/internal/voice/archive", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/mattermost/channels", enforcement, handler);
   a.post("/internal/openclaw/notifications/final-reply", enforcement, handler);
@@ -808,6 +809,14 @@ const STILL_ON_SHARED = {
       expect(ownedGateway.status, route).toBe(200);
       expect(foreignGateway.status, route).toBe(403);
     }
+  });
+
+  it("delegates opaque voice archive custody only to a gateway tenant for route-local authorization", async () => {
+    const body = { voiceGrant: "g".repeat(43), sessionId: "native", entries: [{ transcriptId: "voice:native:1", role: "user", text: "Hello" }], truncated: false };
+    expect((await request(app({ boundTenant: BENDER })).post("/internal/voice/archive").send(body)).status).toBe(200);
+    expect((await request(app({})).post("/internal/voice/archive").send(body)).status).toBe(403);
+    expect((await request(app({ boundTenant: { kind: "platform", actor: "cron" } })).post("/internal/voice/archive").send(body)).status).toBe(403);
+    expect((await request(app({ boundTenant: BENDER })).post("/internal/voice/archive").send({ ...body, gatewayId: "other" })).status).toBe(403);
   });
 
   it("lets preview authorization evaluate a member whose own agent is on another gateway", async () => {

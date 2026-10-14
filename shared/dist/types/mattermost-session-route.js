@@ -1,4 +1,14 @@
 import { parseAgentId } from './identity.js';
+export function isMattermostPostId(value) {
+    return typeof value === 'string' && /^[a-z0-9]{26}$/u.test(value);
+}
+export function isMattermostThreadSelection(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const body = value;
+    return Object.keys(body).every(key => key === 'channelId' || key === 'threadRootPostId') &&
+        isMattermostPostId(body.channelId) && isMattermostPostId(body.threadRootPostId);
+}
 const MATTERMOST_ID_RE = /^[a-z0-9]{26}$/u;
 export function parseMattermostSessionRoute(sessionKey) {
     if (typeof sessionKey !== 'string')
@@ -26,7 +36,6 @@ export function parseMattermostSessionRoute(sessionKey) {
 export function parseThreadedMattermostSessionRoute(sessionKey) {
     const route = parseMattermostSessionRoute(sessionKey);
     if (!route ||
-        (route.peerKind !== 'group' && route.peerKind !== 'direct') ||
         !MATTERMOST_ID_RE.test(route.primaryChannelId) ||
         !route.threadRootPostId ||
         !MATTERMOST_ID_RE.test(route.threadRootPostId) ||
@@ -39,6 +48,10 @@ export function parseThreadedMattermostSessionRoute(sessionKey) {
         primaryChannelId: route.primaryChannelId,
         threadRootPostId: route.threadRootPostId,
     };
+}
+export function parseThreadedChannelMattermostSessionRoute(sessionKey) {
+    const route = parseThreadedMattermostSessionRoute(sessionKey);
+    return route && route.peerKind !== 'direct' ? { ...route, peerKind: route.peerKind } : null;
 }
 export function parseChannelScopedMattermostSessionRoute(sessionKey) {
     const route = parseMattermostSessionRoute(sessionKey);

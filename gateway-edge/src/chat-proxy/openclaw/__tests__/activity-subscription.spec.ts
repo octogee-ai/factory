@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attachActivitySubscription } from '../activity-subscription.js';
 const rpc = vi.hoisted(() => ({ call: vi.fn(), dispose: vi.fn() }));
 vi.mock('../bridge-upstream-rpc.js', () => ({ attachUpstreamRpcClient: () => rpc }));
-const scope = { gatewayId: 'shared-123456789abc', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${'c'.repeat(26)}` };
+const threadRootPostId = 'r'.repeat(26);
+const scope = { gatewayId: 'shared-123456789abc', ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` };
 function setup() {
   vi.useFakeTimers();
   rpc.call.mockReset().mockResolvedValue({ ok: true, result: { subscribed: true } });
@@ -22,7 +23,7 @@ describe('native Activity subscriptions', () => {
     ]);
     expect(JSON.parse(h.client.send.mock.calls[0][0])).toEqual({ type: 'event', event: 'activity.ready', payload: { sessionKey: scope.sessionKey } });
     h.stop(); expect(rpc.dispose).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(30_000); expect(h.broker.getActivityConversation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30_000); expect(h.broker.getActivityConversation).toHaveBeenCalledExactlyOnceWith('member', scope.channelId, threadRootPostId);
   });
   it('closes after membership revocation or a changed native scope', async () => {
     const h = setup(); h.broker.getActivityConversation.mockResolvedValueOnce(null as never);

@@ -23,7 +23,8 @@ export function attachActivitySubscription(input: {
     checking = true;
     void (async () => {
       if (!broker.getActivityConversation) throw new Error('Activity authorization unavailable');
-      const current = await broker.getActivityConversation(uid, scope.channelId);
+      if (!scope.threadRootPostId) throw new Error('Activity requires a selected thread');
+      const current = await broker.getActivityConversation(uid, scope.channelId, scope.threadRootPostId);
       if (!current || Object.keys(scope).some(key => current[key as keyof ActivityConversation] !== scope[key as keyof ActivityConversation])) close(1008, 'activity-access-changed');
     })().catch(error => {
       warn('[activity] access check failed', { gatewayId: scope.gatewayId, error: error instanceof Error ? error.message : String(error) });
@@ -32,6 +33,11 @@ export function attachActivitySubscription(input: {
   }, 30_000);
   timer.unref();
   void (async () => {
+    if (!scope.threadRootPostId || !broker.getActivityConversation) throw new Error('Activity requires selected thread authorization');
+    const current = await broker.getActivityConversation(uid, scope.channelId, scope.threadRootPostId);
+    if (!current || Object.keys(scope).some(key => current[key as keyof ActivityConversation] !== scope[key as keyof ActivityConversation])) {
+      close(1008, 'activity-access-changed'); return;
+    }
     for (const [method, params] of [
       ['sessions.messages.subscribe', { key: scope.sessionKey, agentId: scope.expectedAgentId }],
       ['sessions.subscribe', {}],

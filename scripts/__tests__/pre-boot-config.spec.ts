@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
+import { buildMattermostAccounts } from "../lib/openclaw-config-builders.js";
 import {
   applyAnthropicBaseUrlPatch,
   applyOpenClawBeta5CompatibilityPatch,
@@ -260,6 +261,53 @@ describe("shared Mattermost routing safety", () => {
 });
 
 describe("pre-boot config persistence", () => {
+  it.each(["shared", "builder"])("materializes an existing Mattermost account without retired room scope on %s gateways", (gatewayClass) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preboot-thread-scope-"));
+    const configPath = path.join(dir, "openclaw.json");
+    const account = {
+      ...buildMattermostAccounts(
+        [{ uid: "existing", slug: "existing", customerMmUserId: "u".repeat(26) }],
+        new Map([["existing", "coach-token"]]),
+      )["existing-coach"],
+      replyToMode: "first",
+      replyToModeByChatType: { direct: "off" },
+      streaming: { mode: "off", preview: { toolProgress: false } },
+    };
+    const channelPolicy = {
+      replyToMode: "off",
+      replyToModeByChatType: { group: "first" },
+      streaming: { mode: "partial", preview: { toolProgress: false } },
+      requireMention: true,
+      commands: { native: false },
+    };
+    try {
+      writeConfigAtomically(configPath, {
+        agents: { list: [{ id: "octogee-existing-coach" }] },
+        channels: { mattermost: {
+          ...channelPolicy,
+          threadSessionScope: "channel",
+          accounts: { "existing-coach": { ...account, threadSessionScope: "channel" } },
+        } },
+      });
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const log = vi.fn();
+
+      expect(applyPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(true);
+      writeConfigAtomically(configPath, config);
+
+      const materialized = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(materialized.channels.mattermost).not.toHaveProperty("threadSessionScope");
+      expect(materialized.channels.mattermost).toMatchObject(channelPolicy);
+      expect(materialized.channels.mattermost.accounts["existing-coach"]).toEqual(account);
+      expect(log).toHaveBeenCalledWith("removed unsupported channels.mattermost.threadSessionScope");
+      expect(log).toHaveBeenCalledWith("removed unsupported channels.mattermost.accounts.existing-coach.threadSessionScope");
+      expect(applyPreBootPatches(materialized, { GATEWAY_CLASS: gatewayClass }, vi.fn())).toBe(false);
+      expect(fs.readdirSync(dir)).toEqual(["openclaw.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("atomically replaces the config without leaving a partial file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preboot-config-"));
     const configPath = path.join(dir, "openclaw.json");
@@ -433,20 +481,20 @@ describe("applyPreBootPatches — MM env sync", () => {
 });
 
 describe("applyPreBootPatches — Mattermost runtime", () => {
-  it.each([undefined, "steer", "collect", "followup"])("queues Mattermost turns separately from other channel policy (%s)", (mattermostMode) => {
+  it.each([undefined, "steer", "collect", "followup", "interrupt"])("uses native Mattermost steering without changing other channel policy (%s)", (mattermostMode) => {
     const config: any = {
-      channels: { mattermost: { threadSessionScope: "channel", replyToMode: "all", streaming: { mode: "block", preview: { toolProgress: true } }, commands: { native: false } } },
+      channels: { mattermost: { replyToMode: "all", streaming: { mode: "block", preview: { toolProgress: true } }, commands: { native: false } } },
       messages: { queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
     };
-    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "followup");
-    expect(config.messages.queue).toEqual({ mode: "steer", debounceMs: 250, byChannel: { slack: "collect", mattermost: "followup" } });
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "steer");
+    expect(config.messages.queue).toEqual({ mode: "steer", debounceMs: 250, byChannel: { slack: "collect", mattermost: "steer" } });
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
   });
 
-  it("creates the Mattermost followup queue for an existing channel without message settings", () => {
-    const config: any = { channels: { mattermost: { threadSessionScope: "channel", commands: { native: false } } } };
+  it("selects native Mattermost steering for an existing channel without message settings", () => {
+    const config: any = { channels: { mattermost: { commands: { native: false } } } };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(true);
-    expect(config.messages).toEqual({ queue: { byChannel: { mattermost: "followup" } } });
+    expect(config.messages).toEqual({ queue: { byChannel: { mattermost: "steer" } } });
   });
 
   it("leaves native reply and streaming preferences untouched", () => {
@@ -456,7 +504,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     };
     applyPreBootPatches(config, {});
     expect(config.channels.mattermost).toMatchObject({ replyToMode: "off", streaming: { mode: "partial" } });
-    expect(config.channels.mattermost.threadSessionScope).toBe("channel");
+    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.agents.defaults.verboseDefault).toBe("off");
   });
@@ -467,7 +515,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost.replyToMode).toBe("all");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.channels.mattermost.streaming).toEqual({ mode: "block", preview: { toolProgress: true } });
-    expect(config.channels.mattermost.threadSessionScope).toBe("channel");
+    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
   });
 
   it("defaults inherited replies while preserving account and chat-type choices, idempotently", () => {
@@ -518,12 +566,11 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     } } };
     const log = vi.fn();
     expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
-    for (const field of ["agentActivity", "threadDirectMessages"]) {
+    for (const field of ["agentActivity", "threadDirectMessages", "threadSessionScope"]) {
       expect(config.channels.mattermost).not.toHaveProperty(field);
       expect(config.channels.mattermost.accounts.coach).not.toHaveProperty(field);
     }
-    expect(config.channels.mattermost.threadSessionScope).toBe("channel");
-    expect(config.channels.mattermost.accounts.coach).toMatchObject({ threadSessionScope: "channel", replyToMode: "first", botToken: token });
+    expect(config.channels.mattermost.accounts.coach).toMatchObject({ replyToMode: "first", botToken: token });
     expect(log).toHaveBeenCalled();
     expect(applyMattermostPreBootPatches(config, {}, log)).toBe(false);
   });
@@ -969,10 +1016,9 @@ describe("applyPreBootPatches — memory search embeddings", () => {
 describe("applyMattermostPreBootPatches — non-object preservation", () => {
   it("does not replace existing non-object account or commands values", () => {
     const config: any = {
-      messages: { queue: { byChannel: { mattermost: "followup" } } },
+      messages: { queue: { byChannel: { mattermost: "steer" } } },
       channels: {
         mattermost: {
-          threadSessionScope: "channel",
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           baseUrl: "${MM_URL}",
@@ -980,7 +1026,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           commands: "legacy-commands",
           accounts: {
             default: "legacy-default",
-            coach: { threadSessionScope: "channel", commands: "legacy-account-commands" },
+            coach: { commands: "legacy-account-commands" },
           },
         },
       },
@@ -1039,7 +1085,7 @@ describe("applyPreBootPatches — plugin config", () => {
 describe("applyPreBootPatches — no-change reporting", () => {
   it("returns false when nothing in the config needs touching", () => {
     const config: any = {
-      messages: { queue: { byChannel: { mattermost: "followup" } } },
+      messages: { queue: { byChannel: { mattermost: "steer" } } },
       agents: {
         defaults: {
           models: Object.fromEntries(modelCatalogForProvider("anthropic").map(({ id }) => [id, {}])),
@@ -1053,7 +1099,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
         mattermost: {
           chatmode: "onmessage",
           requireMention: false,
-          threadSessionScope: "channel",
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           actions: { reactions: true },
@@ -1070,7 +1115,6 @@ describe("applyPreBootPatches — no-change reporting", () => {
           commands: { native: false },
           accounts: {
             "ceckert-coach": {
-              threadSessionScope: "channel",
               botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" },
               commands: { native: false },
             },

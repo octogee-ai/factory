@@ -170,7 +170,7 @@
   "messages": {
     "queue": {
       "byChannel": {
-        "mattermost": "followup"
+        "mattermost": "steer"
       }
     },
     "ackReactionScope": "group-mentions",
@@ -188,7 +188,6 @@
   },
   "channels": {
     "mattermost": {
-      "threadSessionScope": "channel",
       "replyToMode": "all",
       "streaming": {
         "mode": "block",

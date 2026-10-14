@@ -1,11 +1,28 @@
 # OpenClaw current build
 
 Octogee uses a released OpenClaw tag or an explicitly selected main snapshot,
-plus the smallest overlay required by its consumers. `current.json` selects
+plus the smallest overlay justified by demonstrated product gaps. `current.json` selects
 two write-once GCS artifacts. Build main resolves their generations and produces
 an immutable, digest-addressed image family. Building never deploys TEST or PROD.
 
 ## Refresh a tag or selected main snapshot
+
+Reassess the overlay on every recut. Use the selected upstream's unpatched
+Control UI/Dashboard as the functional reference, comparing the same agent,
+identity, permissions and provider configuration. Prefer native behavior,
+configuration and public plugin APIs; adapt Octogee consumers before extending
+OpenClaw core. An existing consumer's dependency on a fork-only API is not proof
+that the patch is needed.
+
+For each retained patch, the assessment below must answer: what concrete
+failure or approved incremental behavior remains after trying the native path;
+why it belongs here rather than in an Octogee adapter; and what removes it.
+Distinguish reproduced upstream bugs from optional product features and obsolete
+integration assumptions. Features we previously built are not automatically
+retained. Record upstream contribution status separately from that decision.
+Adopt OpenClaw's canonical schemas and migration owners rather than maintaining
+an Octogee schema fork. Keep these decisions and consumer adaptations in the
+canonical recut, not a parallel runtime update path.
 
 1. Fetch upstream in a clean OpenClaw checkout (`origin`: `openclaw/openclaw`,
    `ceckert`: the fork). For a tag, record the annotated tag object and peeled
@@ -14,8 +31,8 @@ an immutable, digest-addressed image family. Building never deploys TEST or PROD
    run URL and skipped jobs. A newer tip is not automatically a better candidate.
    An operator may instead select a newer main for independent qualification;
    record that exception and its CI limitations explicitly.
-2. Lock that full SHA before starting. Rebase the prior overlay onto it, checking
-   each changed boundary. Do not chase a moving tip during the build. Drop
+2. Lock that full SHA before starting. Rebase only the justified overlay onto it,
+   checking each changed boundary. Do not chase a moving tip during the build. Drop
    adopted behavior, unused capabilities and optimizations that change upstream
    correctness. Use native owners when files or APIs move.
 3. Test affected behavior, with a failing control for new bugs; run applicable
@@ -123,136 +140,160 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`5d5407ae973addb2174301fb17808382ef0a97a1`](https://github.com/openclaw/openclaw/commit/5d5407ae973addb2174301fb17808382ef0a97a1),
-frozen for the October 12 recut. The operator approved independent local
-qualification rather than waiting for full upstream CI to recover. OpenClaw
-validation stays local; no full-upstream, fork-CI or iOS-green claim is made.
-Exact overlay source is `cf903690a3b353de156f2af39759bc78ddbfebeb` on
-`ceckert/openclaw:codex/test-agent-schema-admission`.
-Package version `2026.10.2` identifies a main snapshot, not a released tag.
+[`0f13444e2a6b60348b146c95bdd8c7146f758aa3`](https://github.com/openclaw/openclaw/commit/0f13444e2a6b60348b146c95bdd8c7146f758aa3),
+frozen for the October 13 native-first recut. Exact native source is
+`860b241f3e39838c97d8556b284b4ceb3110f5b9`, branch
+`codex/openclaw-controlled-main-oct13`. Package `2026.10.2` is a main
+snapshot, not a released tag. OpenClaw validation stays local; no full upstream,
+fork-CI or iOS-green claim is made.
 
-This source adds one correction to the qualified October 12 overlay. A schema
-admission receipt keeps its process-local identity across worker structured
-clones, so adopting the same proof cannot veto a legitimate schema refresh.
-The guard still rejects a superseded, revoked proof. The production usage-refresh
-regression reproduced TEST's exact exception before the fix; all 71 focused
-cache/usage checks and affected type/lint checks pass. Fork CI reports inherited
-architecture, unrelated test-lint and restart-test setup failures; it is not
-aggregate green. The reported paths are unchanged from the qualified predecessor.
-This correction neither changes database versions nor repairs live stores.
+`current.json` selects the write-once pair `openclaw-fork-94300a20.tgz` and
+`openclaw-mattermost-5a3a7073.tgz`. Their exact published generations were
+downloaded and compared byte-for-byte with the qualified local archives.
+The native branch was pushed normally and its full head read back; no hosted
+OpenClaw CI was triggered.
 
-Shared-state schema 21, agent schema 26 and protocol 4 follow the selected
-native contracts; there is no fork schema 22. Native admission and backups remain authoritative;
-packaging neither repairs nor resets live stores. The compiled gateway objects
-and committed native UI provenance must use this same clean, built source.
-Deployment requires the successful immutable Build main family, TEST first
-and actual fleet/service validation before the same build reaches PROD.
+Shared-state schema **22**, agent schema **26** and protocol **4** are the
+selected upstream contracts. Canonical DDL, versions, migration ownership and
+database admission remain native. Do not preserve the old October 12 no-22
+restriction or create an Octogee schema dialect.
 
-### Patch assessment
+### What was removed
 
-The overlay is ported onto the current native startup phases, prepared-model
-runtime, channel lifetime, approval completion, session-member reader and Talk
-relay owners. Native owners replace obsolete interfaces and duplicated
-authority shims; adopted upstream fixes and retired Workshop code stay removed.
-The main snapshot's worker-computer takeover transport remains unchanged.
+Native Talk now owns consultation, interruption and cancellation. The fork's
+channel-consult ingress, `talk_voice` verbatim playback-wait narration and
+speech-only cancellation behavior are removed. Octogee's API archives received
+finalized speech after a native call, without another model call or live
+Mattermost ingress. Native playback lifecycle acknowledgments remain.
 
-The prior fork used shared version 21 for its private cron fences before
-upstream assigned that version to canonical cron predicate columns. Full
-Doctor recognizes only that complete prior layout, takes its normal verified
-backup, and applies upstream's exact predicate-column derivation without
-changing the version marker or canonical JSON. Partial or ambiguous layouts
-refuse repair. The retained handoff journal/fences are one lazily initialized
-feature fragment, not another global schema version. Ordinary runtime readers
-do not repair this layout. Agent 25 → 26 uses the unchanged native migration.
+Mattermost uses native per-thread memory and native steering configuration.
+The fork's room-wide `threadSessionScope` and routing implementation are gone.
+Talk and Activity retain a selected existing root across replies and tool views;
+they never infer the room or latest thread. Browser and Terminal keep verified
+conversation custody; Computer and theme controls need no conversation-history
+or audience grant.
 
-| Retained contract | Consumer / condition for removal |
+The fork's Browser take-control/give-back, manual pause and stale-input protocol
+are removed. Native browser controls and upstream worker-computer behavior stay
+native. Obsolete run-completion claims, hook-isolation machinery and fork
+database-admission/startup owners are also removed where upstream supplies the
+contract. No new manager replaces them.
+
+Using the same runtime-only filter against each selected upstream, the overlay
+fell from 198 to 165 changed files and from 6,136 to 5,172 added lines. This
+excludes tests, docs and generated output and compares the prior qualified
+`121c7fd` line, not the entire Octogee adapter or compiled bundle.
+
+### Remaining gaps and removal conditions
+
+These are distinct bug fixes, integration boundaries and approved features, not
+a blanket claim that native OpenClaw is missing voice, browser or thread support.
+
+| Retained boundary | Concrete gap without it; condition for removal |
 | --- | --- |
-| Current SQLite maintenance admission context | Lazy loading must not restore an expired task over fresh cleanup authority. Maintenance uses the existing non-creating worker facts channel and preserves native closure, reader and writer checks. Remove when the selected upstream has equivalent lifetime handling. |
-| Startup/reload settlement, typed supersession retry and queued SQLite authority | Builder admission; retain FIFO, live revocation and single-open behavior until native owners provide equivalent contracts. |
-| Committed reload debt across superseding catalog/config work | Customer mounts/config writes; preserve successor-owned service work without repeating completed replacement. |
-| Tenant-bound requester/reviewer and execution-time authority | Computer/connector approvals; native roles alone do not bind an action to a live VM/run. |
-| Explicit and channel-derived sharing with exact native channel dispatch | Membership synchronization; channel sync cannot revoke explicit owner grants, and empty native membership is authoritative. |
-| Durable per-agent cron handoff | Shared/Builder migration; preserve exact identity, partial transfer, scratch, abort and host-bound grants. |
-| Session-bound Talk consults and live voice grants | Authenticated session identity and cancellation through native run/relay owners. |
-| Final-reply observation and late observer lookup | Terminal provider settlement, not progress or run-completion authority. |
-| Per-owner Browser observations and VNC credential refresh | Visible desktop; another agent cannot unlock stale input. |
-| Channel-scoped Mattermost context, transcript labels and authorized hosted UI | Threaded multi-human rooms and member-authorized native panels. |
-| Predecessor catalog closure lifetime and request-free account startup | Distinct gaps tracked by #158986 and #159396; catalog publication alone does not remove them. |
-| Named-account removal custody and canonical identity | #167431 plus coordinated repairs; stop only the removed account, join pending startup, retain cleanup ownership on timeout, and fail closed on ambiguous dotted paths. |
-| Queued node-token/metadata authority | Pairing/presence publication; replacement and revocation must invalidate authority before dispatch. |
-| Deleted-agent maintenance discovery | Doctor must hold every journaled deleted identity, including restored files and unfinished deletion, while preserving runtime admission and cleanup selection. |
+| Requester, reviewer and execution-time authority | A native approval role alone does not bind another member's action to the current tenant/requester/run. The exact upstream control accepted an unauthorized other-UID review; the retained boundary rejects it. Remove when native public contracts carry and enforce the same current authority across tool and Codex execution. |
+| Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing exposes equivalent independent grant sources. |
+| Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
+| Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
+| Maintenance, reload and catalog lifetimes | Queued or superseded work must not borrow expired authority, lose committed reload debt, or close a catalog still owned by an earlier reader. Retain only the reproduced lifetime/settlement gaps while preserving native FIFO, cancellation and database owners; drop each when the selected upstream passes its boundary control. |
+| Channel account removal and deleted-agent discovery | Removing one account must join its startup/cleanup without stopping siblings; Doctor must discover journaled deleted identities and restored files. Keep these scoped owner repairs until native removal and maintenance discovery preserve those cases. |
+| Plugin instance through final delivery | Finalization must use the originating plugin instance and receiver, not a replacement ID lookup; AbortSignal and other data retain identity. Remove when native delivery custody covers that finalization boundary. |
+| Final-reply observation | Octogee's delivery/archive consumers need the actual terminal provider reply, not progress text or an invented run-completion claim. Keep the narrow observer contract until an equivalent native public event is available. |
+| Tenant-brokered native voice transport | Native OpenAI audio and consultation work, but direct provider connections would put credentials and billing outside the central API. The approved typed transport seam changes only the authenticated connection; native Talk owns media and cancellation. Remove the seam when a native public transport hook covers this broker without private imports. |
+| Hosted identity and desktop boundaries | Tenant-authenticated avatars, participant attribution, VNC credential refresh and current computer requester authority must survive hosted access. These are scoped hosting/security integrations, not a second browser or computer controller; remove individual patches when native public owners cover their demonstrated boundary. |
 
-Public channel dispatch from
-[#163685](https://github.com/openclaw/openclaw/pull/163685)
-retains the original plugin instance through provider finalization, then
-releases custody. Scoped bindings preserve class/private callback receivers;
-noncallable data such as AbortSignal keeps its original identity. No plugin-ID
-replacement lookup or global fallback is added. Open PRs are local adoptions,
-not upstream merge claims; their current-main qualification is separate from
-this frozen recut.
+Contribution status is separate from retention. Existing upstream proposals are
+not claimed merged merely because their behavior is adopted locally. No new
+upstream PR or external OpenClaw CI is part of this recut. Optional tenant
+features are not relabeled as upstream bug fixes.
 
-Octogee keeps the landed React model picker/tool icons (#4366) and read-only,
-tenant-filtered React Automations (#4368). The unused native picker and
-Automations islands are removed. Browser, Computer, workbench layout, themes
-and tool display retain their native adapters and consumer contracts. Remaining
-Lit islands still share one module graph; hosting is not redesigned. Solid
-pages are not revived as retired Lit controllers.
+The old fork's shared-21 cron layout is recognized only as a complete known
+layout. Normal native Doctor takes verified backups, derives canonical predicate
+columns where needed, imports retained cron custody and performs upstream's
+21→22 migration. Partial or ambiguous custody refuses conversion. Agent 26 stays
+native; no agent-version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-Behavioral evidence, exact commands and final artifacts belong in the recut PR.
-Required boundary assertions and budgets remain intact. In particular, the
-HTTP cancellation fixture awaits actual agent-command entry after attaching its
-abort listener, observes real HTTP/SSE and cleanup custody, releases held work
-in `finally`, and joins root settlement. The MCP fixture observes actual
-process cleanup rather than forcing an old process-exit assumption. The update
-campaign fixture awaits the native handoff and joins unfinished requests.
+The full pinned-package-manager native build passed with exact source build-info
+and all 155 public SDK gate subpaths. Maintained sequential packers, native root
+archive integrity, the matched isolated npm install and actual arm64/amd64
+full-plugin installer gates passed. The full arm64 Gateway recipe passed its
+type, native-module, extension, runtime-dependency and runtime-image gates.
+Dirty local images have `BUILD_SHA=unknown`; they are not immutable Build main
+release digests or full amd64 Builder-runtime-image qualification.
 
-The Hobby admission follow-up fixes the reproduced TEST failure where a healthy
-SQLite session store was rejected after its worker waited five seconds for the
-parent commit decision. The worker and parent now share a finite ten-second
-monotonic deadline; expired, cancelled and stale authority still rolls back,
-and an accepted commit keeps write custody until native settlement. Existing
-absolute deadlines remain binding. This changes admission coordination, not
-SQLite durability or snapshot policy. The port retains the current
-database-admission and caller-cancellation owners. Prior overlay proof is not
-qualification for this combined candidate. Native/Hobby live acceptance
-remains separately owned by the recovery effort until it explicitly releases
-rollout authority.
+Genuine synthetic stores were authored through the exact published
+`cf903690` predecessor, not by downgrading candidate DDL. Actual installed
+candidate Doctor and unmodified image boot owners upgraded both closed copies:
+shared 21→22, agents 26, canonical rows/JSON/rowids, sessions, transcripts,
+retained plugin data, jobs, scratch and fences preserved. Thirteen operations
+and seven fences imported to native KV; the >1 MiB snapshot reconstructed
+exactly. Native backup groups completed and passed. A second pre-spawn inspection
+skipped Doctor and left database bytes unchanged. The failed-boot claim was
+synthetic; no candidate Gateway or live/source-Doctor acknowledgment was made.
+Original native-valid fixture workspaces are outside the Octogee portable
+Builder root; that refusal is retained, not passed off as consumer config proof.
+Cursor/ACP stores are empty in this predecessor, so populated migration coverage
+is not claimed.
 
-The SQLite dialect guard intentionally reports design dependencies **24 → 25**.
-Chris approved retaining this scoped dependency without weakening the guard or
-changing storage schema. Its owner is
-`src/cron/store/migration.kernel.ts: retiredMigrations`, called by
-`executeCronMigrationInWorker` within one synchronous state-write transaction.
-SQLite insertion order restores the most recent prior retirement fence after
-resume/abort; opaque operation IDs are not chronological keys. A future backend
-must represent creation order explicitly and preserve chronological custody
-replay, retained host-bound jobs/scratch/grants, retired fences across repeated
-resume/abort, and rejection of stale unfencing. Removing ordering or sorting by
-operation ID is not equivalent.
+Fresh Shared and VM-Builder configs were materialized through the current
+policy, roster, account, pre-boot and catalog writers on Linux tmpfs as node
+UID 1000. All six native validate→Doctor→validate commands exited 0. Structural
+defaults, per-agent models/tools/browser policy and native steer queues stayed
+unchanged. Builder's literal Mattermost config comparison changed because
+Doctor made the owner sender list explicit; 144 installed-native before/after
+decisions preserve normal multi-human admission and control-command authority.
+The original false literal comparison and later fixture-export failures are
+retained. Fresh installed checks keep that literal change visible and verify
+the actual ingress decisions separately, without claiming a full state export
+or relabeling the original harness as green.
 
-No native guard, baseline or lint rule is relaxed to conceal inherited findings.
-There is no aggregate `pnpm check` success claim.
+Full offline Doctor is not a semantic no-op. It changes metadata, plugin indexes,
+model maps, skills and wizard defaults. Builder's implicit native global model
+also causes genuine Codex plugin enablement; Shared's explicit Codex disable
+remains respected. Configured coach/project models do not change. Shared's
+global unavailable-model fallback and failed model-specific tool-schema
+inspection do not establish provider readiness. Standalone Doctor skips agent
+catalog discovery; its config-only registry cannot resolve the authored
+`platform-openrouter` rows. Installed-native disk and captured-source registries
+resolve all four Shared agents' selected models before and after Doctor, with
+the exact broker transport. Native preparation preserves those authored
+`models.json` rows in merge mode. This is metadata-resolution proof, not
+credential, inference or live-readiness acceptance; no duplicate global provider
+registration was added to silence the warning.
 
-Native Control UI build-size warnings remain advisory and their budgets are
-unchanged. Local synthetic UI captures/tests are not authenticated TEST proof.
-Full Doctor is not claimed to be a semantic no-op: healthy boots skip it while
-bounded native recovery remains for failed boots and older/manual Builders.
-Installed qualification must use Shared and VM-Builder configs from the
-maintained policy, roster, account, pre-boot and per-agent catalog writers;
-no fixture-only default-key translation may make an invalid producer pass.
-Use the image's runtime UID and Linux-backed fixture storage. Record Doctor's
-metadata and unavailable-provider model repairs separately from config validity
-and preservation of configured per-agent model, tool and browser policy.
-Account deletion fragments use native merge-patch semantics, not persisted
-null configuration. The mixed-store upgrade proof must originate with the
-exact predecessor package and run the actual installed candidate's backup,
-Doctor and pre-spawn reinspection. Synthetic config/schema evidence is not
-provider or desktop acceptance.
-Prior startup samples did not show faster startup and are not fresh evidence
-for this source. Installed-image qualification and live rollout acceptance must
-use the new exact artifacts, not October 8 proof images or an empty gateway.
+The earlier candidate's offline Doctor warning, `SQLite facts require their
+retained admission`, exposed a retained-patch regression. An actual scheduler
+and admission control failed its first checkpoint there and passed on the
+selected unpatched upstream. Ordinary maintenance now keeps native bootstrap
+root context instead of capturing a completed opening operation; the separately
+needed noncreating worker-lifetime relay remains. The owning regression and
+worker/WAL siblings pass, and fresh installed Shared/Builder Doctor runs no
+longer emit that warning. Original failures are preserved. This does not prove
+every long-running WAL outcome. Healthy boots retain bounded native inspection
+and do not run full Doctor; actual runtime acceptance remains required.
+
+All six generated native provenance/license records select this source.
+Browser and Computer retain native HTMLElement bridges and React
+mount/update/destroy contracts, with one shared graph for remaining Lit islands.
+The landed React model picker/tool icons and read-only tenant-filtered
+Automations remain. Focused consumers, app and sidecar production builds pass.
+Inspected local Chrome before/after frames cover empty Browser/Computer panels
+at desktop/narrow widths in light/dark themes, not connected capability, full
+layout parity or authenticated TEST acceptance.
+
+The original isolated review found one P2: a missing permanent-retirement fence
+could escape import validation. It was independently reproduced and repaired;
+actual Doctor and owning cron persistence controls pass. The original report
+is not described as scoped-clean. Required guards, assertion/mock/timeout
+budgets and inherited line-cap limits are not weakened. Advisory size/CSS,
+TypeScript experimental and native dependency warnings remain visible.
+There is no aggregate `pnpm check`, paid-response or faster-startup claim.
+
+Only a successful immutable main build and coordinated TEST rollout can qualify
+live service behavior. Recovery retains sole Fleet/acceptance ownership until
+explicit handoff; local qualification is not a competing rollout.
 
 ### Base-image inputs
 
@@ -269,7 +310,7 @@ builder uses the pinned Rust 1.99.0 image and the source's toolchain selector.
 The selected OpenClaw snapshot pins pnpm 12.9.0,
 Codex plugin dependency 0.160.0 and matched CUA package 0.33.4.
 
-The base retains the existing immutable Node 26.10.0 image, which satisfies
+The base retains the existing immutable Node 26.11.1 image, which satisfies
 the selected OpenClaw engine requirement. This recut does not refresh unrelated
 CLI or operating-system pins, and October 8 image results are not fresh runtime
 qualification for the new OpenClaw/CUA pair.
@@ -299,15 +340,23 @@ by the exact immutable Build main family and TEST/PROD validation.
 
 ### Mattermost session and delivery policy
 
-Templates and pre-boot set `threadSessionScope: "channel"` for Mattermost accounts.
-Templates default room replies to threads with native `replyToMode: "all"`;
-pre-boot fills this default only when unset. Explicit channel/account reply modes,
-per-chat-type overrides, and streaming preferences remain intact. Native direct
-messages stay unthreaded unless explicitly configured otherwise. This restores shared
-context across a room's threads without restoring answer-commit observation,
-Activity publication, or transcript reconstruction. Sessions and tool history
-remain in native OpenClaw SQLite state. Existing thread sessions are not deleted
-or merged by this change.
+Live voice belongs to native Talk; Mattermost archival must not gate microphone
+input, spoken replies or agent consultation. Archive a compact record of finalized
+user and agent speech after the call, without another model call, preserving
+participant attribution and the authorized target.
+An archive is not a new human turn and must not replay work into the agent.
+Do not retain real-time channel-consult handoff or verbatim playback-wait
+narration solely for archival. Preserve native playback acknowledgments and
+the distinction between ending media and explicitly cancelling agent work.
+
+Mattermost uses native per-thread memory. Templates default room replies to threads
+with native `replyToMode: "all"`; pre-boot fills this default only when unset and
+removes the retired `threadSessionScope` key from channel and account configuration.
+Explicit channel/account reply modes, per-chat-type overrides, and streaming
+preferences remain intact. Native direct messages stay unthreaded unless explicitly
+configured otherwise. Reply destination and session identity remain distinct native
+contracts. Sessions and tool history remain in native OpenClaw SQLite state; existing
+thread sessions are not deleted, merged or reconstructed by this change.
 
 Mattermost defaults to `streaming.mode: "block"` with
 `streaming.preview.toolProgress: true`: completed text and tool-activity blocks
@@ -320,10 +369,12 @@ Accounts without a `streaming` override inherit the channel preferences. An expl
 `channels.mattermost.accounts.<accountId>.streaming` object remains untouched and
 replaces the channel's streaming object under native OpenClaw account resolution.
 
-Octogee sets the native `messages.queue.byChannel.mattermost` policy to `followup`.
-This keeps an overlapping second message queued with its own reply destination;
-the native default `steer` can instead redirect the running answer into its first
-thread. Other channel queue settings are preserved.
+Octogee selects native `messages.queue.byChannel.mattermost: "steer"` in both
+gateway templates and pre-boot configuration. Replies retain their selected
+thread; native OpenClaw owns active-run steering, idle admission and refusal
+behavior. Different threads keep separate session identities. Other channel
+queue settings and native per-session override precedence remain unchanged.
+This is native configuration, not a fork steering implementation.
 
 Human posts retain Octogee's submission ID in namespaced Mattermost properties,
 bound to the posting user. Mattermost clears `pending_post_id` in later REST reads;

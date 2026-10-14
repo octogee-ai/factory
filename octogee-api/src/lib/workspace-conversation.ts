@@ -5,11 +5,15 @@ import { isCanonicalWorkspaceMembership, workspacePermissionsEnabled } from "@oc
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { isValidGatewayId, resolveGatewayClass } from "@octogee/shared/types/glm";
 import type { DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
+import { ChannelSessionMattermostError } from '../../../gateway-edge/src/lib/channel-session-model-control.js';
 
 export interface WorkspaceConversationDeps {
   db: Firestore;
   authorize?: typeof import("../../../gateway-edge/src/lib/channel-session-authorization.js").authorizeChannelCredentials;
   readChannel?: (token: string, channelId: string) => Promise<unknown>;
+  readPost?: (token: string, postId: string) => Promise<unknown>;
+  readMember?: (token: string, channelId: string, memberId: string) => Promise<unknown>;
   createPost?: (token: string, body: Record<string, unknown>) => Promise<unknown>;
 }
 export interface WorkspaceConversationScopeClaim { uid: string; workspaceSlug: string; ownerUid: string; gatewayId?: string }
@@ -58,7 +62,18 @@ async function mattermostClient(token: string) {
 async function readMattermostChannel(token: string, id: string): Promise<unknown> {
   return (await mattermostClient(token)).getJson(["channels", id]);
 }
-export async function resolveWorkspaceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; gatewayId?: string }) {
+async function hasWorkspaceChannelAgent(deps: WorkspaceConversationDeps, token: string, channelId: string, agentMmUserId: string): Promise<boolean> {
+  let member: Record<string, unknown> | null;
+  try {
+    member = record(await (deps.readMember ?? (async (credential, id, memberId) => (await mattermostClient(credential)).getJson(['channels', id, 'members', memberId])))(token, channelId, agentMmUserId));
+  } catch (error) {
+    if (error instanceof ChannelSessionMattermostError && [403, 404].includes(error.status ?? 0)) return false;
+    throw error;
+  }
+  return member !== null && member.channel_id === channelId && member.user_id === agentMmUserId;
+}
+async function resolveWorkspaceChannel(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; gatewayId?: string }) {
+  if (!isMattermostPostId(claim.channelId)) return null;
   const authorize = deps.authorize ?? (await import("../../../gateway-edge/src/lib/channel-session-authorization.js")).authorizeChannelCredentials;
   const access = await authorize(claim.uid, claim.channelId, undefined, { workspaceConversation: true });
   if (!access || access.forbidden || access.target.projectId) return null;
@@ -68,10 +83,34 @@ export async function resolveWorkspaceConversation(deps: WorkspaceConversationDe
   if (!scope) return null;
   const channel = record(await (deps.readChannel ?? readMattermostChannel)(access.token, claim.channelId));
   if (!channel || channel.id !== claim.channelId || !["O", "P"].includes(String(channel.type)) || channel.delete_at !== 0) return null;
+  if (!await hasWorkspaceChannelAgent(deps, access.token, claim.channelId, access.target.agentMmUserId)) return null;
+  return { scope, access, channel };
+}
+export async function resolveWorkspaceToolControl(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; gatewayId?: string }) {
+  const resolved = await resolveWorkspaceChannel(deps, claim);
+  if (!resolved) return null;
+  const { scope, access } = resolved;
+  return { scope, context: { uid: claim.uid, gatewayId: scope.gatewayId, workspaceSlug: access.target.workspaceSlug, channelId: claim.channelId, callerMmUserId: access.callerMmUserId } };
+}
+export async function resolveWorkspaceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; threadRootPostId: string; gatewayId?: string }) {
+  if (!isMattermostPostId(claim.threadRootPostId)) return null;
+  const resolved = await resolveWorkspaceChannel(deps, claim);
+  if (!resolved) return null;
+  const { scope, access, channel } = resolved;
+  const { workspaceSlug, agentId } = access.target;
+  let post: Record<string, unknown> | null;
+  try {
+    post = record(await (deps.readPost ?? (async (token, postId) => (await mattermostClient(token)).getJson(['posts', postId])))(access.token, claim.threadRootPostId));
+  } catch (error) {
+    if (error instanceof ChannelSessionMattermostError && [403, 404].includes(error.status ?? 0)) return null;
+    throw error;
+  }
+  if (!post || post.id !== claim.threadRootPostId || post.channel_id !== claim.channelId || post.root_id !== '' || post.delete_at !== 0) return null;
   const peerKind = channel.type === "P" ? "group" : "channel";
-  return { scope, token: access.token, context: {
+  return { scope, token: access.token, agentMmUserId: access.target.agentMmUserId, context: {
     uid: claim.uid, gatewayId: scope.gatewayId, workspaceSlug, channelId: claim.channelId, agentId,
-    sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}`,
+    threadRootPostId: claim.threadRootPostId,
+    sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}:thread:${claim.threadRootPostId}`,
     callerMmUserId: access.callerMmUserId,
   } };
 }

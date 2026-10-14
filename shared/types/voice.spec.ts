@@ -16,7 +16,7 @@ describe("parseTalkClientMessage", () => {
     type: "session.start",
     protocol: TALK_PROTOCOL_VERSION,
     mode: "converse",
-    channelId: "chan1",
+    channelId: "c".repeat(26), threadRootPostId: "r".repeat(26),
   };
 
   it("accepts a well-formed session.start and drops unknown fields", () => {
@@ -27,7 +27,7 @@ describe("parseTalkClientMessage", () => {
       type: "session.start",
       protocol: 1,
       mode: "converse",
-      channelId: "chan1",
+      channelId: "c".repeat(26), threadRootPostId: "r".repeat(26),
         settings: { speed: 0.9 },
       client: { platform: "ios" },
     });

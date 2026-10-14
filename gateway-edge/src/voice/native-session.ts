@@ -4,6 +4,7 @@ import { isResponseFrame } from '@octogee/shared/types/openclaw-wire-core';
 import { parseTalkClientMessage, resolveTalkSettings, TALK_PROTOCOL_VERSION, TALK_OUTPUT_SAMPLE_RATE, type ResolvedTalkSettings, type TalkClientMessage, type TalkServerEvent } from '@octogee/shared/types/voice';
 import { openNativeUserSocket, type NativeUserSocket } from '../openclaw-control/native-user-client.js';
 import { attachUpstreamRpcClient, type UpstreamRpcClient } from '../chat-proxy/openclaw/bridge-upstream-rpc.js';
+import { VOICE_ARCHIVE_ENTRIES_MAX, VOICE_ARCHIVE_ENTRY_TEXT_MAX, VOICE_ARCHIVE_TEXT_MAX, VOICE_ARCHIVE_TRANSCRIPT_ID_MAX, type VoiceArchiveEntry } from '@octogee/core/voice-conversation';
 
 interface NativeTalkOptions {
   provider?: 'octogee' | 'octogee-openai';
@@ -14,6 +15,7 @@ interface NativeTalkOptions {
   send: (event: TalkServerEvent) => void;
   sendAudio: (audio: Buffer) => void;
   reauthorize: () => Promise<unknown>;
+  bindSession: (sessionId: string) => Promise<{ sessionId: string; sessionKey: string; expiresAt: number }>;
   onClose?: () => void;
   log: (message: string, fields?: Record<string, unknown>) => void;
   open?: typeof openNativeUserSocket;
@@ -84,9 +86,16 @@ export class NativeTalkSession {
   private readonly marks = new Set<string>();
   private audioInFlight = 0;
   private readonly earlyEvents: Record<string, unknown>[] = [];
+  private readonly archiveEntries: VoiceArchiveEntry[] = [];
+  private readonly archivedTranscripts = new Set<string>();
+  private archiveChars = 0;
+  private archiveTruncated = false;
   constructor(private readonly options: NativeTalkOptions) {}
 
   get boundNativeSessionId(): string | undefined { return this.nativeId; }
+  get archive(): { entries: VoiceArchiveEntry[]; truncated: boolean } {
+    return { entries: this.archiveEntries.map(entry => ({ ...entry })), truncated: this.archiveTruncated };
+  }
   private safeError(error: unknown): string {
     return (error instanceof Error ? error.message : String(error)).replaceAll(this.options.voiceGrant, '[redacted]');
   }
@@ -141,6 +150,7 @@ export class NativeTalkSession {
   }
   private receiveTranscript(event: Record<string, unknown>): void {
     if (typeof event.text !== 'string') return;
+    if (event.final) this.recordFinalSpeech(event);
     if (event.role === 'user') {
       this.options.send({ type: event.final ? 'transcript.final' : 'transcript.delta', turnId: this.outputTurn, text: event.text, ...(event.final ? { reason: 'endpoint' as const } : {}) } as TalkServerEvent);
       if (event.final) this.state('thinking');
@@ -148,6 +158,25 @@ export class NativeTalkSession {
       this.reply = event.textMode === 'snapshot' ? event.text : this.reply + event.text;
       this.options.send({ type: 'reply.final', turnId: this.outputTurn, text: this.reply });
     }
+  }
+  private recordFinalSpeech(event: Record<string, unknown>): void {
+    const { text, transcriptId, role } = event;
+    if (typeof text !== 'string' || !text.trim() || (role !== 'user' && role !== 'assistant')) return;
+    if (typeof transcriptId !== 'string' || transcriptId.length > VOICE_ARCHIVE_TRANSCRIPT_ID_MAX || !/^[A-Za-z0-9:_-]+$/u.test(transcriptId)) {
+      this.archiveTruncated = true;
+      this.options.log('native voice archive omitted speech without a valid transcript identity');
+      return;
+    }
+    if (this.archivedTranscripts.has(transcriptId)) return;
+    const available = Math.min(VOICE_ARCHIVE_ENTRY_TEXT_MAX, VOICE_ARCHIVE_TEXT_MAX - this.archiveChars);
+    if (this.archiveEntries.length >= VOICE_ARCHIVE_ENTRIES_MAX || available <= 0) { this.archiveTruncated = true; return; }
+    let compact = text.slice(0, available);
+    if (/[\uD800-\uDBFF]$/u.test(compact)) compact = compact.slice(0, -1);
+    this.archiveTruncated ||= compact.length !== text.length;
+    if (!compact.trim()) return;
+    this.archivedTranscripts.add(transcriptId);
+    this.archiveEntries.push({ transcriptId, role, text: compact });
+    this.archiveChars += compact.length;
   }
   private receiveAudio(event: Record<string, unknown>): void {
     if (typeof event.audioBase64 !== 'string') return;
@@ -239,7 +268,7 @@ export class NativeTalkSession {
   }
   private async bindCreatedSession(sessionId: string): Promise<void> {
     try {
-      const bound = await this.call('octogee.voice.bind', { voiceGrant: this.options.voiceGrant, sessionId });
+      const bound = await this.options.bindSession(sessionId);
       if (bound.sessionId !== sessionId || bound.sessionKey !== this.options.conversation.sessionKey ||
         typeof bound.expiresAt !== 'number' || !Number.isFinite(bound.expiresAt) ||
         bound.expiresAt <= Date.now() || bound.expiresAt > this.options.voiceGrantExpiresAt) {
@@ -256,7 +285,6 @@ export class NativeTalkSession {
     this.options.send({ type: 'agent.interrupting', requestId });
     try {
       await this.options.reauthorize();
-      await this.call('talk.session.cancelOutput', { sessionId: this.nativeId, reason: 'speech-only' });
       const result = await this.call('talk.session.steer', { sessionId: this.nativeId, sessionKey: this.options.conversation.sessionKey, text: 'Stop', mode: 'cancel' });
       if (result.reason === 'no_active_run' && wasAwaitingRun) throw new Error('The native agent has not confirmed an active run yet. Try interrupting again.');
       if (result.sessionKey !== this.options.conversation.sessionKey || (!result.aborted && result.reason !== 'no_active_run')) throw new Error(typeof result.message === 'string' ? result.message : 'Native agent did not confirm interruption');
@@ -284,7 +312,7 @@ export class NativeTalkSession {
       case 'listen.start': this.listening = true; this.state('listening'); break;
       case 'listen.stop': this.listening = false; this.state('idle'); break;
       case 'turn.commit': this.listening = false; this.state('idle'); break;
-      case 'speak.cancel': await this.call('talk.session.cancelOutput', { sessionId: this.nativeId, reason: 'speech-only' }); break;
+      case 'speak.cancel': await this.options.reauthorize(); await this.call('talk.session.cancelOutput', { sessionId: this.nativeId, reason: 'output-cancelled' }); break;
       case 'agent.interrupt': await this.interruptAgent(message.requestId); break;
       case 'playback.mark':
         if (this.marks.delete(message.name)) await this.call('talk.session.acknowledgeMark', { sessionId: this.nativeId, markName: message.name });

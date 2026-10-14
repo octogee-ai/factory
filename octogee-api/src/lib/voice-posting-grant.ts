@@ -1,13 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Timestamp, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
-import { VOICE_TURN_POST_KIND, voiceTurnMessage, type VoiceConversation, type VoiceGrantBinding, type VoiceGrantEndRequest, type VoiceGrantRequest, type VoiceTurnPost, type VoiceTurnRequest } from '@octogee/core/voice-conversation';
+import { VOICE_ARCHIVE_POST_KIND, VOICE_TURN_POST_KIND, voiceTurnMessage, type VoiceArchiveRequest, type VoiceConversation, type VoiceGrantBinding, type VoiceGrantEndRequest, type VoiceGrantRequest, type VoiceTurnPost, type VoiceTurnRequest } from '@octogee/core/voice-conversation';
 import { resolveWorkspaceConversation, type WorkspaceConversationDeps } from './workspace-conversation.js';
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 
 const PURPOSE = 'voice.turn.post';
 const GRANT_TTL_MS = 30 * 60_000;
 const MAX_TURNS = 256;
 const MATTERMOST_ID = /^[a-z0-9]{26}$/u;
-interface GrantIdentity { uid: string; gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; agentId: string; sessionKey: string }
+interface GrantIdentity { uid: string; gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; threadRootPostId: string; agentId: string; sessionKey: string }
 type TurnReceipt = { digest: string; state: 'pending' | 'failed' } | { digest: string; state: 'posted'; post: VoiceTurnPost };
 interface GrantDocument extends GrantIdentity {
   purpose: typeof PURPOSE;
@@ -18,6 +19,7 @@ interface GrantDocument extends GrantIdentity {
   sessionId: string | null;
   callerMmUserId: string | null;
   turns: Record<string, TurnReceipt>;
+  archive?: TurnReceipt;
 }
 export class VoicePostingGrantError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); this.name = 'VoicePostingGrantError'; }
@@ -31,8 +33,8 @@ function boundedId(value: unknown): value is string {
 }
 function validIdentity(body: Partial<GrantIdentity>): boolean {
   return [body.uid, body.gatewayId, body.ownerUid].every(boundedId) && typeof body.workspaceSlug === 'string' && /^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) &&
-    typeof body.channelId === 'string' && MATTERMOST_ID.test(body.channelId) && body.agentId === `octogee-${body.workspaceSlug}-coach` &&
-    ['channel', 'group'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${body.channelId}`);
+    typeof body.channelId === 'string' && MATTERMOST_ID.test(body.channelId) && isMattermostPostId(body.threadRootPostId) && body.agentId === `octogee-${body.workspaceSlug}-coach` &&
+    ['channel', 'group'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${body.channelId}:thread:${body.threadRootPostId}`);
 }
 function grantHash(voiceGrant: string): string {
   if (!/^[A-Za-z0-9_-]{43}$/u.test(voiceGrant)) deny();
@@ -68,7 +70,7 @@ function activeGrant(value: unknown, gatewayId: string): GrantDocument {
 function matchesResolved(grant: GrantDocument, resolved: NonNullable<Awaited<ReturnType<typeof resolveWorkspaceConversation>>>): boolean {
   const { context, scope } = resolved;
   return grant.uid === context.uid && grant.gatewayId === context.gatewayId && grant.workspaceSlug === context.workspaceSlug &&
-    grant.ownerUid === scope.ownerUid && grant.channelId === context.channelId && grant.agentId === context.agentId && grant.sessionKey === context.sessionKey &&
+    grant.ownerUid === scope.ownerUid && grant.channelId === context.channelId && grant.threadRootPostId === context.threadRootPostId && grant.agentId === context.agentId && grant.sessionKey === context.sessionKey &&
     (grant.callerMmUserId === null || grant.callerMmUserId === context.callerMmUserId);
 }
 async function authorizeGrant(deps: WorkspaceConversationDeps, grant: GrantDocument) {
@@ -131,15 +133,15 @@ async function finishTurn(deps: WorkspaceConversationDeps, gatewayId: string, re
     tx.update(ref, { turns: { ...grant.turns, [request.turnId]: receipt } });
   });
 }
-async function createTurnPost(deps: WorkspaceConversationDeps, token: string, context: { channelId: string; callerMmUserId: string }, request: VoiceTurnRequest): Promise<VoiceTurnPost> {
+async function createTurnPost(deps: WorkspaceConversationDeps, token: string, context: { channelId: string; threadRootPostId: string; callerMmUserId: string }, request: VoiceTurnRequest): Promise<VoiceTurnPost> {
   const createPost = deps.createPost ?? (async (credential, body) => {
     const { createChannelSessionMattermostClient } = await import('../../../gateway-edge/src/lib/channel-session-model-control.js');
     return createChannelSessionMattermostClient({ baseUrl: process.env.MM_INTERNAL_URL ?? '', token: credential }).postJson(['posts'], body);
   });
   const props = { octogee: { kind: VOICE_TURN_POST_KIND, turnId: request.turnId }, ...(request.ingressToken === undefined ? {} : { openclaw_consult_ingress: request.ingressToken }) };
-  const post = record(await createPost(token, { channel_id: context.channelId, message: voiceTurnMessage(request.text), props }));
-  if (!post || typeof post.id !== 'string' || !MATTERMOST_ID.test(post.id) || post.channel_id !== context.channelId || post.user_id !== context.callerMmUserId) throw new VoicePostingGrantError(502, 'voice_turn_unverified');
-  return { postId: post.id, channelId: context.channelId, userId: context.callerMmUserId };
+  const post = record(await createPost(token, { channel_id: context.channelId, root_id: context.threadRootPostId, message: voiceTurnMessage(request.text), props }));
+  if (!post || typeof post.id !== 'string' || !MATTERMOST_ID.test(post.id) || post.channel_id !== context.channelId || post.root_id !== context.threadRootPostId || post.user_id !== context.callerMmUserId) throw new VoicePostingGrantError(502, 'voice_turn_unverified');
+  return { postId: post.id, channelId: context.channelId, threadRootPostId: context.threadRootPostId, userId: context.callerMmUserId };
 }
 export async function postWorkspaceVoiceTurn(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceTurnRequest): Promise<VoiceTurnPost> {
   const initial = activeGrant((await grantRef(deps.db, request.voiceGrant).get()).data(), gatewayId);
@@ -147,14 +149,118 @@ export async function postWorkspaceVoiceTurn(deps: WorkspaceConversationDeps, ga
   const resolved = await authorizeGrant(deps, initial);
   const digest = turnDigest(request);
   const replay = await reserveTurn(deps, gatewayId, request, resolved, digest);
-  if (replay) return replay;
   let post: VoiceTurnPost;
-  try { post = await createTurnPost(deps, resolved.token, resolved.context, request); }
+  try {
+    let createPost = deps.createPost;
+    if (!createPost) {
+      const { createChannelSessionMattermostClient } = await import('../../../gateway-edge/src/lib/channel-session-model-control.js');
+      createPost = (credential, body) => createChannelSessionMattermostClient({ baseUrl: process.env.MM_INTERNAL_URL ?? '', token: credential }).postJson(['posts'], body);
+    }
+    const fresh = await authorizeGrant(deps, initial);
+    const current = activeGrant((await grantRef(deps.db, request.voiceGrant).get()).data(), gatewayId);
+    if (current.sessionId !== request.sessionId || !matchesResolved(current, fresh)) deny();
+    if (replay) {
+      if (replay.channelId !== current.channelId || replay.threadRootPostId !== current.threadRootPostId || replay.userId !== current.callerMmUserId) deny();
+      return replay;
+    }
+    post = await createTurnPost({ ...deps, createPost }, fresh.token, fresh.context, request);
+  }
   catch (error) {
-    await finishTurn(deps, gatewayId, request, { digest, state: 'failed' });
+    if (!replay) await finishTurn(deps, gatewayId, request, { digest, state: 'failed' });
     if (error instanceof VoicePostingGrantError) throw error;
     throw new VoicePostingGrantError(502, 'voice_turn_failed');
   }
   await finishTurn(deps, gatewayId, request, { digest, state: 'posted', post });
+  return post;
+}
+
+function archiveDigest(request: VoiceArchiveRequest): string {
+  return createHash('sha256').update(JSON.stringify([request.entries.map(entry => [entry.transcriptId, entry.role, entry.text]), request.truncated])).digest('hex');
+}
+function replayArchive(receipt: TurnReceipt, digest: string): VoiceTurnPost {
+  if (receipt.digest !== digest) throw new VoicePostingGrantError(409, 'voice_archive_conflict');
+  if (receipt.state === 'posted') return receipt.post;
+  if (receipt.state === 'failed') throw new VoicePostingGrantError(502, 'voice_archive_failed');
+  throw new VoicePostingGrantError(409, 'voice_archive_pending');
+}
+function archiveMessage(request: VoiceArchiveRequest, participantMmUserId: string): string {
+  const lines = [
+    'Voice call record',
+    `Participant: ${participantMmUserId}`,
+    'Received finalized speech before close; not proof of playback or later task completion.',
+    '',
+    ...request.entries.map(entry => `${entry.role === 'user' ? 'Participant' : 'Coach'}: ${entry.text.trim().replace(/\s+/gu, ' ').replaceAll('@', '＠')}`),
+  ];
+  const notice = '\n[Record truncated.]';
+  const text = lines.join('\n');
+  const maxChars = 16000;
+  if (text.length <= maxChars - notice.length) return text + (request.truncated ? notice : '');
+  const prefix = text.slice(0, maxChars - notice.length);
+  return prefix.replace(/[\uD800-\uDBFF]$/u, '') + notice;
+}
+async function reserveArchive(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveWorkspaceConversation>>>, digest: string) {
+  const ref = grantRef(deps.db, request.voiceGrant);
+  return deps.db.runTransaction(async tx => {
+    const grant = activeGrant((await tx.get(ref)).data(), gatewayId);
+    if (grant.sessionId !== request.sessionId || !matchesResolved(grant, resolved)) deny();
+    if (grant.archive) return replayArchive(grant.archive, digest);
+    tx.update(ref, { archive: { state: 'pending', digest } });
+    return null;
+  });
+}
+async function finishArchive(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest, receipt: TurnReceipt): Promise<void> {
+  const ref = grantRef(deps.db, request.voiceGrant);
+  await deps.db.runTransaction(async tx => {
+    const grant = parseGrant((await tx.get(ref)).data(), gatewayId);
+    if (!grant.archive || grant.archive.digest !== receipt.digest || grant.archive.state !== 'pending') throw new Error('Voice archive reservation changed before delivery settled');
+    tx.update(ref, { archive: receipt });
+  });
+}
+async function workspaceCoachCredential(deps: WorkspaceConversationDeps, ownerUid: string) {
+  const secret = record((await deps.db.doc(`users/${ownerUid}/secrets/coachMattermost`).get()).data());
+  if (!secret || typeof secret.personalToken !== 'string' || !secret.personalToken.trim() ||
+    typeof secret.coachMmUserId !== 'string' || !MATTERMOST_ID.test(secret.coachMmUserId)) deny();
+  return { coachMmUserId: secret.coachMmUserId, coachToken: secret.personalToken };
+}
+function verifiedArchivePost(value: unknown, current: GrantDocument, coachMmUserId: string): VoiceTurnPost {
+  const posted = record(value);
+  if (!posted || typeof posted.id !== 'string' || !MATTERMOST_ID.test(posted.id) || posted.channel_id !== current.channelId || posted.root_id !== current.threadRootPostId || posted.user_id !== coachMmUserId) throw new VoicePostingGrantError(502, 'voice_archive_unverified');
+  return { postId: posted.id, channelId: current.channelId, threadRootPostId: current.threadRootPostId, userId: coachMmUserId };
+}
+export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest): Promise<VoiceTurnPost> {
+  const ref = grantRef(deps.db, request.voiceGrant);
+  const initial = activeGrant((await ref.get()).data(), gatewayId);
+  if (initial.sessionId !== request.sessionId || initial.callerMmUserId === null) deny();
+  const resolved = await authorizeGrant(deps, initial);
+  const { coachMmUserId, coachToken } = await workspaceCoachCredential(deps, initial.ownerUid);
+  let createPost = deps.createPost;
+  if (!createPost) {
+    const { createChannelSessionMattermostClient } = await import('../../../gateway-edge/src/lib/channel-session-model-control.js');
+    const client = createChannelSessionMattermostClient({ baseUrl: process.env.MM_INTERNAL_URL ?? '', token: coachToken });
+    createPost = (_credential, body) => client.postJson(['posts'], body);
+  }
+  const digest = archiveDigest(request);
+  const replay = await reserveArchive(deps, gatewayId, request, resolved, digest);
+  let post: VoiceTurnPost;
+  try {
+    const fresh = await authorizeGrant(deps, initial);
+    const current = activeGrant((await ref.get()).data(), gatewayId);
+    if (current.sessionId !== request.sessionId || !matchesResolved(current, fresh) || fresh.agentMmUserId !== coachMmUserId) deny();
+    if (replay) {
+      if (replay.channelId !== current.channelId || replay.threadRootPostId !== current.threadRootPostId || replay.userId !== coachMmUserId) deny();
+      return replay;
+    }
+    post = verifiedArchivePost(await createPost(coachToken, {
+      channel_id: current.channelId,
+      root_id: current.threadRootPostId,
+      message: archiveMessage(request, fresh.context.callerMmUserId),
+      props: { octogee: { kind: VOICE_ARCHIVE_POST_KIND, sessionId: request.sessionId, participantMmUserId: fresh.context.callerMmUserId, truncated: request.truncated } },
+    }), current, coachMmUserId);
+  } catch (error) {
+    if (!replay) await finishArchive(deps, gatewayId, request, { digest, state: 'failed' });
+    if (error instanceof VoicePostingGrantError) throw error;
+    throw new VoicePostingGrantError(502, 'voice_archive_failed');
+  }
+  await finishArchive(deps, gatewayId, request, { digest, state: 'posted', post });
   return post;
 }

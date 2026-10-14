@@ -17,7 +17,9 @@ import { NativeTalkSession } from "./native-session.js";
 
 const TICKET = "0f0e0d0c-0b0a-4908-8706-050403020100";
 const GRANT = "g".repeat(43);
-const SESSION_KEY = "agent:mom-coach:mattermost:channel:chan1";
+const CHANNEL = 'c'.repeat(26);
+const threadRootPostId = 'r'.repeat(26);
+const SESSION_KEY = `agent:mom-coach:mattermost:channel:${CHANNEL}:thread:${threadRootPostId}`;
 const POST_ID = "p".repeat(26);
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -92,12 +94,12 @@ async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
     runtimeBroker: {
       redeemOpenClawWs: vi.fn(async () => ({
         kind: "redeemed" as const,
-        redeemed: { uid: "uid-mom", gatewayId: "gw-mom", gatewayUrl: "http://unused", expectedAgentId: "mom-coach", voiceGrant: GRANT, voiceGrantExpiresAt: grantExpiresAt, voiceConversation: { ownerUid: "uid-owner", workspaceSlug: "mom", channelId: "chan1", sessionKey: SESSION_KEY } },
+        redeemed: { uid: "uid-mom", gatewayId: "gw-mom", gatewayUrl: "http://unused", expectedAgentId: "mom-coach", voiceGrant: GRANT, voiceGrantExpiresAt: grantExpiresAt, voiceConversation: { ownerUid: "uid-owner", workspaceSlug: "mom", channelId: CHANNEL, threadRootPostId, sessionKey: SESSION_KEY } },
       })),
     },
     eventSourceForAgent: events.source,
-    resolveConversation: vi.fn(async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: false })),
-    bindGrant: vi.fn(async ({ sessionId }) => ({ ...await deps.resolveConversation!({ uid: "uid-mom", gatewayId: "gw-mom", channelId: "chan1", expectedAgentId: "mom-coach" }), sessionId, expiresAt: grantExpiresAt })),
+    resolveConversation: vi.fn(async ({ uid, gatewayId, channelId, threadRootPostId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: false })),
+    bindGrant: vi.fn(async ({ sessionId }) => ({ ...await deps.resolveConversation!({ uid: "uid-mom", gatewayId: "gw-mom", channelId: CHANNEL, threadRootPostId, expectedAgentId: "mom-coach" }), sessionId, expiresAt: grantExpiresAt })),
     endGrant: vi.fn(async () => ({ revoked: true as const })),
     isAgentReady: () => true,
     upgradeGate: null,
@@ -112,7 +114,7 @@ async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
     }) as unknown as typeof fetch,
     postTurn: vi.fn(async (turn) => {
       posts.push({ ...turn });
-      return { postId: POST_ID, channelId: "chan1", userId: "b".repeat(26) };
+      return { postId: POST_ID, channelId: CHANNEL, threadRootPostId, userId: "b".repeat(26) };
     }),
     createRelayClient: () => relay.client,
     ...overrides,
@@ -143,6 +145,22 @@ async function firstEventThenClose(ws: WebSocket): Promise<{ event: TalkServerEv
   return { event: JSON.parse(raw.toString()) as TalkServerEvent, code };
 }
 
+function captureVoiceExpiry() {
+  const schedule = globalThis.setTimeout;
+  const expiry: { callback: () => void; scheduledAt: number; delay: number } = {
+    callback: () => { throw new Error('Voice expiry was not scheduled'); }, scheduledAt: 0, delay: 0,
+  };
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
+    if (typeof callback === 'function' && typeof timeout === 'number' && timeout > 30_000 && timeout <= 60_000) {
+      expiry.callback = callback;
+      expiry.scheduledAt = Date.now();
+      expiry.delay = timeout;
+    }
+    return schedule(callback, timeout, ...args);
+  }) as typeof setTimeout);
+  return expiry;
+}
+
 describe("voice ws route", () => {
   it('protects handshakes and idle calls through a migration longer than the takeover lease', async () => {
     let now = 0;
@@ -170,7 +188,7 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, 'open');
     const ready = once(ws, 'message');
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
     const event = JSON.parse(String((await ready)[0]));
     expect(event.type).toBe('session.ready');
     expect(deps.bindGrant).toHaveBeenCalledWith(expect.objectContaining({ voiceGrant: GRANT, sessionId: event.sessionId }));
@@ -178,6 +196,82 @@ describe("voice ws route", () => {
     ws.close(); await once(ws, 'close');
     await waitFor(() => (deps.endGrant as ReturnType<typeof vi.fn>).mock.calls.length === 1);
     expect(deps.endGrant).toHaveBeenCalledWith(expect.objectContaining({ voiceGrant: GRANT }));
+  });
+  it.each(['posted', 'rejected', 'wrong-channel'])('settles the %s after-call archive before grant revocation without gating live speech', async outcome => {
+    const nativeWs = Object.assign(new EventEmitter(), { close: vi.fn() });
+    const rpc = { call: vi.fn(async () => ({ ok: true, result: { sessionId: 'native', relaySessionId: 'native' } })), dispose: vi.fn() };
+    let nativeSession: NativeTalkSession | undefined;
+    let finishArchive!: (value: Awaited<ReturnType<NonNullable<VoiceWsRouteDeps['archiveCall']>>>) => void;
+    let rejectArchive!: (error: Error) => void;
+    const archiveCall = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<VoiceWsRouteDeps['archiveCall']>>>>((resolve, reject) => { finishArchive = resolve; rejectArchive = reject; }));
+    const log = vi.fn();
+    const { base, deps, posts } = await serverWith({ nativeVoiceEnabled: true, archiveCall, log,
+      createNativeSession: options => nativeSession = new NativeTalkSession({ ...options, open: vi.fn().mockResolvedValue({ ws: nativeWs, scopes: new Set(['operator.talk']) }), attachRpc: () => rpc as any }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+    });
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open');
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
+    await waitFor(() => nativeSession?.boundNativeSessionId === 'native');
+    const event = (payload: object) => nativeWs.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', ...payload } })));
+    event({ type: 'transcript', role: 'user', text: 'Find my glasses', final: true, transcriptId: 'voice:native:1' });
+    event({ type: 'transcript', role: 'assistant', text: 'Checking', final: false });
+    event({ type: 'transcript', role: 'assistant', text: 'On the kitchen table', final: true, transcriptId: 'voice:native:2' });
+    expect(archiveCall).not.toHaveBeenCalled(); expect(posts).toEqual([]);
+    const closed = once(ws, 'close');
+    ws.send(JSON.stringify({ type: 'session.end' })); await closed;
+    expect(archiveCall).toHaveBeenCalledExactlyOnceWith({ voiceGrant: GRANT, sessionId: 'native', entries: [
+      { transcriptId: 'voice:native:1', role: 'user', text: 'Find my glasses' },
+      { transcriptId: 'voice:native:2', role: 'assistant', text: 'On the kitchen table' },
+    ], truncated: false, fetchImpl: deps.fetchImpl });
+    expect(deps.endGrant).not.toHaveBeenCalled();
+    expect(nativeWs.close.mock.invocationCallOrder[0]).toBeLessThan(archiveCall.mock.invocationCallOrder[0]);
+    if (outcome === 'rejected') rejectArchive(new Error(`Archive denied: ${GRANT}`));
+    else finishArchive({ postId: POST_ID, channelId: outcome === 'wrong-channel' ? 'foreign' : CHANNEL, threadRootPostId, userId: 'a'.repeat(26) });
+    await waitFor(() => (deps.endGrant as ReturnType<typeof vi.fn>).mock.calls.length === 1);
+    if (outcome === 'posted') expect(log).toHaveBeenCalledWith('voice archive posted', expect.objectContaining({ postId: POST_ID }));
+    else expect(log).toHaveBeenCalledWith('voice archive failed', expect.anything());
+    expect(JSON.stringify(log.mock.calls)).not.toContain(GRANT);
+    expect(nativeWs.close).toHaveBeenCalledOnce();
+    expect(rpc.call).not.toHaveBeenCalledWith('talk.session.close', expect.anything());
+  });
+  it('closes a timed-out native call with an active grant for its bounded final archive', async () => {
+    const expiry = captureVoiceExpiry();
+    const nativeWs = Object.assign(new EventEmitter(), { close: vi.fn() });
+    const rpc = { call: vi.fn(async () => ({ ok: true, result: { sessionId: 'native', relaySessionId: 'native' } })), dispose: vi.fn() };
+    let nativeSession: NativeTalkSession | undefined;
+    let grantExpiresAt = 0;
+    const archiveTimes: number[] = [];
+    const archiveCall = vi.fn(async () => {
+      archiveTimes.push(Date.now());
+      if (Date.now() >= grantExpiresAt) throw new Error('voice_grant_forbidden');
+      return { postId: POST_ID, channelId: CHANNEL, threadRootPostId, userId: 'a'.repeat(26) };
+    });
+    const log = vi.fn();
+    const { base, deps } = await serverWith({ nativeVoiceEnabled: true, archiveCall, log,
+      createNativeSession: options => nativeSession = new NativeTalkSession({ ...options, open: vi.fn().mockResolvedValue({ ws: nativeWs, scopes: new Set(['operator.talk']) }), attachRpc: () => rpc as any }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+    });
+    const ticket = await deps.runtimeBroker.redeemOpenClawWs(TICKET, 'voice-ws');
+    if (ticket.kind !== 'redeemed' || typeof ticket.redeemed.voiceGrantExpiresAt !== 'number') throw new Error('fixture');
+    grantExpiresAt = ticket.redeemed.voiceGrantExpiresAt;
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open');
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
+    await waitFor(() => nativeSession?.boundNativeSessionId === 'native');
+    nativeWs.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: {
+      relaySessionId: 'native', type: 'transcript', role: 'user', text: 'Keep this record', final: true, transcriptId: 'voice:native:1',
+    } })));
+    vi.spyOn(Date, 'now').mockReturnValue(expiry.scheduledAt + expiry.delay + 1);
+    const closed = once(ws, 'close');
+    expiry.callback();
+    await closed;
+    await waitFor(() => (deps.endGrant as ReturnType<typeof vi.fn>).mock.calls.length === 1);
+    expect(archiveCall).toHaveBeenCalledOnce();
+    expect(archiveTimes[0] + 5_000).toBeLessThan(grantExpiresAt);
+    expect(log).toHaveBeenCalledWith('voice archive posted', expect.objectContaining({ postId: POST_ID }));
+    expect(log).not.toHaveBeenCalledWith('voice archive failed', expect.anything());
+    expect(nativeWs.close).toHaveBeenCalledOnce();
+    expect(deps.endGrant).toHaveBeenCalledOnce();
+    expect(archiveCall.mock.invocationCallOrder[0]).toBeLessThan((deps.endGrant as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]);
   });
   it('does not expose readiness or audio while legacy grant binding is pending, including a late bind after close', async () => {
     let resolveBind!: (binding: Awaited<ReturnType<NonNullable<VoiceWsRouteDeps['bindGrant']>>>) => void;
@@ -187,13 +281,13 @@ describe("voice ws route", () => {
     const messages: string[] = [];
     ws.on('message', data => messages.push(data.toString()));
     await once(ws, 'open');
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => bindGrant.mock.calls.length === 1);
     ws.send(JSON.stringify({ type: 'listen.start' })); ws.send(Buffer.alloc(2));
     expect(relay.stts).toHaveLength(0);
     expect(messages.some(message => message.includes('session.ready'))).toBe(false);
     ws.close(); await once(ws, 'close');
-    resolveBind({ ...await deps.resolveConversation!({ uid: 'uid-mom', gatewayId: 'gw-mom', channelId: 'chan1' }), sessionId: 'late', expiresAt: Date.now() + 30_000 });
+    resolveBind({ ...await deps.resolveConversation!({ uid: 'uid-mom', gatewayId: 'gw-mom', channelId: CHANNEL, threadRootPostId }), sessionId: 'late', expiresAt: Date.now() + 30_000 });
     await waitFor(() => (deps.endGrant as ReturnType<typeof vi.fn>).mock.calls.length === 1);
     expect(messages.some(message => message.includes('session.ready'))).toBe(false);
   });
@@ -203,7 +297,7 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, 'open');
     const closed = firstEventThenClose(ws);
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
     expect((await closed).event).toMatchObject({ type: 'error', recoverable: false });
     expect(deps.endGrant).toHaveBeenCalledOnce();
     expect(JSON.stringify(log.mock.calls)).not.toContain(GRANT);
@@ -214,13 +308,17 @@ describe("voice ws route", () => {
     await firstEventThenClose(ws);
     expect(deps.endGrant).toHaveBeenCalledOnce();
   });
-  it('expires an idle socket at the grant deadline without waiting for channel startup', async () => {
-    const { base, deps } = await serverWith();
+  it('keeps the original Shared grant deadline without waiting for channel startup', async () => {
+    const expiry = captureVoiceExpiry();
+    const { base, deps } = await serverWith({ nativeVoiceEnabled: false });
     const original = await deps.runtimeBroker.redeemOpenClawWs(TICKET, 'voice-ws');
-    if (original.kind !== 'redeemed') throw new Error('fixture');
-    (deps.runtimeBroker.redeemOpenClawWs as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...original, redeemed: { ...original.redeemed, voiceGrantExpiresAt: Date.now() + 100 } });
+    if (original.kind !== 'redeemed' || typeof original.redeemed.voiceGrantExpiresAt !== 'number') throw new Error('fixture');
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
-    const result = await firstEventThenClose(ws);
+    await once(ws, 'open');
+    expect(expiry.scheduledAt + expiry.delay).toBeGreaterThanOrEqual(original.redeemed.voiceGrantExpiresAt);
+    const closed = firstEventThenClose(ws);
+    expiry.callback();
+    const result = await closed;
     expect(result.event).toMatchObject({ type: 'error', recoverable: false, message: expect.stringContaining('expired') });
     expect(deps.endGrant).toHaveBeenCalledOnce();
   });
@@ -230,9 +328,9 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, 'open');
     const event = firstEventThenClose(ws);
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
     expect((await event).event).toMatchObject({ type: 'error', recoverable: false });
-    expect(deps.resolveConversation).toHaveBeenCalledWith(expect.objectContaining({ uid: 'uid-mom', gatewayId: 'gw-mom', channelId: 'chan1', expectedAgentId: 'mom-coach' }));
+    expect(deps.resolveConversation).toHaveBeenCalledWith(expect.objectContaining({ uid: 'uid-mom', gatewayId: 'gw-mom', channelId: CHANNEL, threadRootPostId, expectedAgentId: 'mom-coach' }));
     expect(posts).toEqual([]);
   });
 
@@ -241,7 +339,7 @@ describe("voice ws route", () => {
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, "open");
     const event = firstEventThenClose(ws);
-    ws.send(JSON.stringify({ type: "session.start", protocol: 1, mode: "converse", channelId: "different" }));
+    ws.send(JSON.stringify({ type: "session.start", protocol: 1, mode: "converse", channelId: 'd'.repeat(26), threadRootPostId }));
     expect((await event).event).toMatchObject({ type: "error", recoverable: false });
     expect(deps.resolveConversation).not.toHaveBeenCalled();
   });
@@ -258,11 +356,11 @@ describe("voice ws route", () => {
       (this as any).options.send({ type: 'session.ready', engines: { stt: 'openai:gpt-live-1', tts: 'openai:gpt-live-1' } });
     });
     const { base, relayStatus } = await serverWith({ nativeVoiceEnabled: true, createVad,
-      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
     });
     relayStatus.nativeOpenAi = true; relayStatus.configured = false;
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open'); const ready = once(ws, 'message');
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
     expect(JSON.parse(String((await ready)[0]))).toMatchObject({ type: 'session.ready', engines: { stt: 'openai:gpt-live-1' } });
     expect(handleText).toHaveBeenCalledOnce(); expect(createVad).not.toHaveBeenCalled(); ws.close(); await once(ws, 'close');
   });
@@ -274,14 +372,14 @@ describe("voice ws route", () => {
     const log = vi.fn(); const createVad = vi.fn(async () => ({ process: async () => 0, reset: () => undefined }));
     const { base, deps, relayStatus } = await serverWith({ nativeVoiceEnabled: true, createVad, log,
       createNativeSession: options => new NativeTalkSession({ ...options, open: vi.fn().mockResolvedValue({ ws: nativeWs, scopes: new Set(['operator.talk']) }), attachRpc: () => rpc as any }),
-      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: SESSION_KEY, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
     });
     relayStatus.nativeOpenAi = true;
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open');
     const ready = once(ws, 'message');
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1', settings: { voice: 'cedar' } }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId, settings: { voice: 'cedar' } }));
     if (failure === 'event') {
-      await waitFor(() => rpc.call.mock.calls.length === 2);
+      await waitFor(() => (deps.bindGrant as ReturnType<typeof vi.fn>).mock.calls.length === 1);
       nativeWs.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', type: 'error', message: 'OpenAI unavailable' } })));
     }
     const event = JSON.parse(String((await ready)[0]));
@@ -304,7 +402,7 @@ describe("voice ws route", () => {
     const { base, relayStatus } = await serverWith({ nativeVoiceEnabled: false, createNativeSession }); relayStatus.nativeOpenAi = true;
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`); await once(ws, 'open');
     const ready = once(ws, 'message');
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1', settings: { voice: 'cedar' } }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId, settings: { voice: 'cedar' } }));
     expect(JSON.parse(String((await ready)[0]))).toMatchObject({ type: 'session.ready', input: { sampleRate: 16000 }, settings: { voice: '' } });
     expect(createNativeSession).not.toHaveBeenCalled(); ws.close(); await once(ws, 'close');
   });
@@ -312,11 +410,11 @@ describe("voice ws route", () => {
   it('revokes the grant when native Talk closes without another browser message', async () => {
     const handleText = vi.spyOn(NativeTalkSession.prototype, 'handleText').mockResolvedValue();
     const { base, deps } = await serverWith({ nativeVoiceEnabled: true,
-      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
     });
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, 'open');
-    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'chan1' }));
+    ws.send(JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => handleText.mock.calls.length === 1);
     (handleText.mock.contexts[0] as NativeTalkSession).close();
     try {
@@ -330,11 +428,11 @@ describe("voice ws route", () => {
     const createVad = vi.fn(async () => ({ process: async () => 0, reset: () => undefined }));
     let allowed = true;
     const { base } = await serverWith({ nativeVoiceEnabled: true, createVad, conversationCheckMs: 5,
-      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: allowed }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: allowed }),
     });
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, "open");
-    ws.send(JSON.stringify({ type: "session.start", protocol: 1, mode: "converse", channelId: "chan1" }));
+    ws.send(JSON.stringify({ type: "session.start", protocol: 1, mode: "converse", channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => handleText.mock.calls.length === 1);
     const closed = Promise.race([
       once(ws, "close").then(([, reason]) => String(reason)),
@@ -351,12 +449,12 @@ describe("voice ws route", () => {
     const { base } = await serverWith({ nativeVoiceEnabled: true, conversationCheckMs: 5,
       resolveConversation: async ({ uid, gatewayId, channelId }) => {
         if (!member) throw new Error("Workspace or channel membership removed");
-        return { uid, gatewayId, channelId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: true };
+        return { uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: true };
       },
     });
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, "open");
-    ws.send(JSON.stringify({ type: "session.start", protocol: 1, mode: "converse", channelId: "chan1" }));
+    ws.send(JSON.stringify({ type: "session.start", protocol: 1, mode: "converse", channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => handleText.mock.calls.length === 1);
     const closed = once(ws, "close");
     member = false;
@@ -429,7 +527,7 @@ describe("voice ws route", () => {
       if (!isBinary) events.push(JSON.parse(data.toString()) as TalkServerEvent);
     });
     await once(ws, "open");
-    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1" }));
+    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => events.some((event) => event.type === "session.ready"));
     ready = false;
     const [code, reason] = (await once(ws, "close")) as [number, Buffer];
@@ -452,7 +550,7 @@ describe("voice ws route", () => {
       if (!isBinary) events.push(JSON.parse(data.toString()) as TalkServerEvent);
     });
     await once(ws, "open");
-    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1" }));
+    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => events.some((e) => e.type === "session.ready"));
     ws.send(JSON.stringify({ type: "listen.start" }));
     await waitFor(() => relay.stts.length === 1);
@@ -473,7 +571,7 @@ describe("voice ws route", () => {
       if (!isBinary) nextEvents.push(JSON.parse(data.toString()) as TalkServerEvent);
     });
     await once(next, "open");
-    next.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1" }));
+    next.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => nextEvents.some((e) => e.type === "session.ready"));
     next.close();
   });
@@ -488,7 +586,7 @@ describe("voice ws route", () => {
       else events.push(JSON.parse(data.toString()) as TalkServerEvent);
     });
     await once(ws, "open");
-    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: "chan1" }));
+    ws.send(JSON.stringify({ type: "session.start", protocol: TALK_PROTOCOL_VERSION, mode: "converse", channelId: CHANNEL, threadRootPostId }));
     await waitFor(() => events.some((e) => e.type === "session.ready"));
     expect(events[0]).toMatchObject({ type: "session.ready", engines: { stt: "fake-stt", tts: "fake-tts" }, capabilities: { speed: false } });
 
@@ -508,7 +606,7 @@ describe("voice ws route", () => {
     expect(posts[0]).not.toHaveProperty("gatewayId");
     expect(posts[0]).not.toHaveProperty("channelId");
     expect(JSON.stringify(posts[0])).not.toContain("mmToken");
-    const session = "agent:mom-coach:mattermost:channel:chan1";
+    const session = SESSION_KEY;
     const agentEvent = (runId: string, stream: string, data: Record<string, unknown>) =>
       source.emit("mom-coach", { kind: "agent", runId, stream, ts: Date.now(), sessionKey: session, data });
     agentEvent("run-typed", "lifecycle", { phase: "start" });

@@ -68,6 +68,7 @@ describe('parseChannelScopedMattermostSessionRoute', () => {
 describe('parseThreadedMattermostSessionRoute', () => {
   it.each([
     ['group', CHANNEL_ID],
+    ['channel', CHANNEL_ID],
     ['direct', OWNER_USER_ID],
   ] as const)('parses a canonical threaded %s route', (peerKind, primaryChannelId) => {
     expect(
@@ -91,7 +92,6 @@ describe('parseThreadedMattermostSessionRoute', () => {
   });
 
   it.each([
-    `agent:octogee-alice-coach:mattermost:channel:${CHANNEL_ID}:thread:${ROOT_POST_ID}`,
     `agent:octogee-alice-coach:mattermost:group:${CHANNEL_ID}`,
     `agent:coach:mattermost:group:${CHANNEL_ID}:thread:${ROOT_POST_ID}`,
     `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(25)}:thread:${ROOT_POST_ID}`,

@@ -120,7 +120,7 @@ it("returns gatewayId from users/{uid}.provisioning.openclaw.gatewayId when set"
     const res = await request(buildApp())
       .post("/api/openclaw/ticket")
       .set("Authorization", `Bearer ${token}`)
-      .send({ anticipate: true });
+      .send({});
 
     expect(res.status).toBe(200);
     expect(res.body.gatewayId).toBe("default");

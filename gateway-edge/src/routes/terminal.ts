@@ -20,6 +20,7 @@ import {
 import { WorkspaceNativeAccessError } from "../lib/workspace-native-access.js";
 import { TerminalConversationScope, type TerminalConversation } from "./terminal-conversation.js";
 import { openNativeUserSocket } from "../openclaw-control/native-user-client.js";
+import { isMattermostThreadSelection } from '@octogee/shared/types/mattermost-session-route';
 
 export interface TerminalSession {
   conversation?: TerminalConversation;
@@ -44,7 +45,7 @@ export interface TerminalRouterDeps {
   available: boolean;
   resolveAccess(input: { gatewayId: string; authorization: string | undefined }): Promise<NativeAdminAccessOutcome>;
   tickets: WsTicketStore<TerminalSession>;
-  resolveConversation?(input: { uid: string; gatewayId: string; channelId: string }): Promise<TerminalConversation>;
+  resolveConversation?(input: { uid: string; gatewayId: string; channelId: string; threadRootPostId: string }): Promise<TerminalConversation>;
 }
 
 type TerminalRequest = Request & { terminalAccess?: NativeAdminAccess };
@@ -93,12 +94,12 @@ export function createTerminalRouter(deps: TerminalRouterDeps): Router {
 
   router.post("/ticket", async (req: TerminalRequest, res) => {
     try {
-    const channelId = req.body?.channelId;
-    if (req.body && (Object.keys(req.body).some(key => key !== "channelId") || (channelId !== undefined && (typeof channelId !== "string" || !/^[a-z0-9]{26}$/u.test(channelId))))) { res.status(400).json({ error: "invalid_conversation" }); return; }
-    if (channelId && !deps.resolveConversation) { res.status(503).json({ error: "conversation_unavailable" }); return; }
+    if (!isMattermostThreadSelection(req.body)) { res.status(400).json({ error: "invalid_conversation" }); return; }
+    const { channelId, threadRootPostId } = req.body;
+    if (!deps.resolveConversation) { res.status(503).json({ error: "conversation_unavailable" }); return; }
     const { gatewayId, workspaceSlug } = req.terminalAccess!;
     const authorization = req.headers.authorization;
-    const conversation = channelId ? await deps.resolveConversation!({ uid: req.uid!, gatewayId, channelId }) : undefined;
+    const conversation = await deps.resolveConversation({ uid: req.uid!, gatewayId, channelId, threadRootPostId });
     const { ticket, expiresAt } = deps.tickets.issue({
       uid: req.uid!,
       gatewayId,
@@ -109,7 +110,7 @@ export function createTerminalRouter(deps: TerminalRouterDeps): Router {
         if (current.kind !== "allowed" || current.gatewayId !== gatewayId || current.workspaceSlug !== workspaceSlug) return false;
         if (!conversation) return true;
         try {
-          const next = await deps.resolveConversation!({ uid: req.uid!, gatewayId, channelId });
+          const next = await deps.resolveConversation!({ uid: req.uid!, gatewayId, channelId, threadRootPostId });
           return next.agentId === conversation.agentId && next.sessionKey === conversation.sessionKey;
         } catch (error) {
           if (error instanceof WorkspaceNativeAccessError && error.status < 500) return false;

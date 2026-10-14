@@ -6,6 +6,7 @@
 // TALK_INPUT_SAMPLE_RATE from the client, synthesized speech at
 // TALK_OUTPUT_SAMPLE_RATE from the engine. Event names mirror OpenClaw's
 // `talk.event` vocabulary so a later gateway-relay convergence is a rename.
+import { isMattermostThreadSelection } from './mattermost-session-route.js';
 export const VOICE_TALK_FLAG = "release-voice-talk";
 export const TALK_PROTOCOL_VERSION = 1;
 export const TALK_INPUT_SAMPLE_RATE = 16_000;
@@ -88,7 +89,7 @@ function parseSessionStart(value) {
         return null;
     if (!TALK_MODES.includes(value.mode))
         return null;
-    if (!nonEmptyString(value.channelId) || "mmToken" in value)
+    if (!isMattermostThreadSelection({ channelId: value.channelId, threadRootPostId: value.threadRootPostId }) || "mmToken" in value)
         return null;
     const settings = value.settings === undefined ? undefined : parseTalkSettings(value.settings);
     if (value.settings !== undefined && settings === null)
@@ -99,6 +100,7 @@ function parseSessionStart(value) {
         protocol: TALK_PROTOCOL_VERSION,
         mode: value.mode,
         channelId: value.channelId,
+        threadRootPostId: value.threadRootPostId,
         ...(settings ? { settings } : {}),
         ...(client ? { client } : {}),
     };

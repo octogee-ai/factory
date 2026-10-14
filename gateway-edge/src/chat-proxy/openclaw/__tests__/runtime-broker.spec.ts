@@ -11,6 +11,7 @@ import {
   ActivityReceiptLeaseError,
 } from "../activity-write-receipts.js";
 
+const threadRootPostId = 'r'.repeat(26);
 function brokerWithRedeemStatus(
   status: number,
   body: Record<string, unknown>,
@@ -30,14 +31,14 @@ function brokerWithRedeemStatus(
 
 describe("redeemOpenClawWs outcome", () => {
   it('preserves only the validated native Activity scope', async () => {
-    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}` };
+    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` };
     const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-bob-coach', activityConversation: { ...activityConversation, unexpected: 'discard' } });
     expect(await broker.redeemOpenClawWs('ticket')).toMatchObject({ kind: 'redeemed', redeemed: { activityConversation } });
-    const result = await brokerWithRedeemStatus(200, activityConversation).getActivityConversation?.('member', activityConversation.channelId);
+    const result = await brokerWithRedeemStatus(200, activityConversation).getActivityConversation?.('member', activityConversation.channelId, threadRootPostId);
     expect(result).toEqual(activityConversation);
   });
   it.each([{ gatewayId: 'foreign' }, { expectedAgentId: 'other' }, { sessionKey: 'agent:octogee-bob-coach:main' }])('rejects mismatched native Activity scope %j', async patch => {
-    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}`, ...patch };
+    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}`, ...patch };
     const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-bob-coach', activityConversation });
     await expect(broker.redeemOpenClawWs('ticket')).rejects.toThrow('malformed Activity conversation');
   });
@@ -61,7 +62,7 @@ describe("redeemOpenClawWs outcome", () => {
   });
 
   it("preserves authoritative workspace voice scope for gateway admission and channel startup", async () => {
-    const voiceConversation = { ownerUid: "owner", workspaceSlug: "alice", channelId: "c".repeat(26), sessionKey: `agent:octogee-alice-coach:mattermost:group:${"c".repeat(26)}` };
+    const voiceConversation = { ownerUid: "owner", workspaceSlug: "alice", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-alice-coach:mattermost:group:${"c".repeat(26)}:thread:${threadRootPostId}` };
     const voiceGrant = "g".repeat(43);
     const voiceGrantExpiresAt = Date.now() + 60_000;
     const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation, voiceGrant, voiceGrantExpiresAt });
@@ -78,13 +79,13 @@ describe("redeemOpenClawWs outcome", () => {
     { voiceGrant: 'g'.repeat(43), voiceGrantExpiresAt: 'later' },
   ])('refuses missing or malformed voice grant custody: %j', async custody => {
     const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-alice-coach',
-      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), sessionKey: `agent:octogee-alice-coach:mattermost:group:${'c'.repeat(26)}` }, ...custody });
+      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), threadRootPostId, sessionKey: `agent:octogee-alice-coach:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` }, ...custody });
     await expect(broker.redeemOpenClawWs('ticket', 'voice-ws')).rejects.toThrow('malformed redeem response');
   });
   it('rejects a voice ticket with a different canonical native session', async () => {
     const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-alice-coach',
       voiceGrant: 'g'.repeat(43), voiceGrantExpiresAt: Date.now() + 60_000,
-      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), sessionKey: 'agent:other:main' } });
+      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), threadRootPostId, sessionKey: 'agent:other:main' } });
     await expect(broker.redeemOpenClawWs('ticket', 'voice-ws')).rejects.toThrow('malformed redeem response');
   });
 

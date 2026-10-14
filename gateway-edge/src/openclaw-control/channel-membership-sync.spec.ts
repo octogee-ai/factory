@@ -20,6 +20,20 @@ const member = { identityId: "member", addedBy: "service" };
 const base = { profileId: "member", serviceProfileId: "service" };
 
 describe("Mattermost native session membership projection", () => {
+  it('preserves selected thread audiences when their exact current room is authorized', async () => {
+    const threaded = `${key('a')}:thread:${'r'.repeat(26)}`;
+    const { rpc, call } = gateway({ keys: [threaded], members: { [threaded]: [member] } });
+    await synchronizeChannelMemberships({ ...base, rpc, authorized: [{ key: key('a') }] });
+    expect(call.mock.calls.filter(([method]) => method === 'session.members.listEvidence')).toHaveLength(0);
+    expect(call.mock.calls.filter(([method]) => method === 'sessions.channel.sync').map(([,params]) => params.member)).toEqual([true]);
+  });
+  it('revokes only source-owned exact thread memberships for a removed room', async () => {
+    const selected = `${key('a')}:thread:${'r'.repeat(26)}`;
+    const explicit = `${key('a')}:thread:${'s'.repeat(26)}`;
+    const { rpc, call } = gateway({ keys: [selected, explicit], members: { [selected]: [member], [explicit]: [{ ...member, addedBy: 'owner' }] } });
+    await synchronizeChannelMemberships({ ...base, rpc, authorized: [] });
+    expect(call.mock.calls.filter(([method]) => method === 'sessions.channel.sync')).toEqual([['sessions.channel.sync', { agentId: 'octogee-alice-coach', channel: 'mattermost', peerKind: 'group', peerId: 'a'.repeat(26), threadRootPostId: 'r'.repeat(26), profileId: 'member', member: false }]]);
+  });
   it("revokes removed channel membership before granting a newly joined channel", async () => {
     const { rpc, call } = gateway({ keys: [key("a")], members: { [key("a")]: [member] } });
     await synchronizeChannelMemberships({ ...base, rpc, authorized: [{ key: key("b"), displayName: "Project" }] });

@@ -5,8 +5,9 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { createOpenClawRuntimeBrokerRoutes } from './openclaw-runtime-broker.js';
 const authorize = vi.hoisted(() => vi.fn());
 vi.mock('../../../gateway-edge/src/lib/activity-conversation.js', () => ({ resolveActivityConversation: authorize }));
+const threadRootPostId = 'r'.repeat(26);
 const gatewayId = 'b-alice';
-const scope = { gatewayId, ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}` };
+const scope = { gatewayId, ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` };
 function harness(payloadPatch: Record<string, unknown> = {}, ownerGateway = gatewayId) {
   const { gatewayId: _, ...payload } = scope;
   const ticket = { uid: 'member', gatewayId, purpose: 'openclaw-ws', expiresAt: Date.now() + 30_000, payload: { ...payload, ...payloadPatch } };
@@ -23,7 +24,7 @@ function harness(payloadPatch: Record<string, unknown> = {}, ownerGateway = gate
   const app = express(); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: 'gateway', gatewayId, ownerUid: 'owner' }; next(); });
   app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ db }));
-  return { deleted, set, post: () => request(app).post('/internal/openclaw/ws/redeem').send({ ticketId: 'ticket', purpose: 'openclaw-ws' }), access: () => request(app).post('/internal/openclaw/activity/conversation-access').send({ uid: 'member', channelId: scope.channelId }) };
+  return { deleted, set, post: () => request(app).post('/internal/openclaw/ws/redeem').send({ ticketId: 'ticket', purpose: 'openclaw-ws' }), access: () => request(app).post('/internal/openclaw/activity/conversation-access').send({ uid: 'member', channelId: scope.channelId, threadRootPostId }) };
 }
 beforeEach(() => authorize.mockReset().mockResolvedValue(scope));
 describe('channel-scoped native Activity authority', () => {
@@ -32,7 +33,7 @@ describe('channel-scoped native Activity authority', () => {
     expect(result.status).toBe(200); expect(result.body).toMatchObject({ uid: 'member', expectedAgentId: scope.expectedAgentId, activityConversation: scope });
     expect(result.body.voiceGrant).toBeUndefined(); expect(h.set).not.toHaveBeenCalled(); expect(h.deleted).toHaveBeenCalledOnce();
     expect((await h.post()).status).toBe(401);
-    expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ uid: 'member', channelId: scope.channelId }));
+    expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ uid: 'member', channelId: scope.channelId, threadRootPostId }));
   });
   it.each([{ ownerUid: 'foreign' }, { expectedAgentId: 'other' }, { sessionKey: 'forged' }, { channelId: 'bad' }, { extra: true }])('refuses forged persisted scope %j', async patch => {
     const h = harness(patch); expect((await h.post()).status).toBe(403); expect(h.deleted).not.toHaveBeenCalled();

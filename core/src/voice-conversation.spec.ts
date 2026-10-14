@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('./internal-fetch.js', () => ({ internalFetch: h.fetch }));
-import { VoiceConversationConfigurationError, bindVoiceGrant, endVoiceGrant, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest, postVoiceTurn, resolveVoiceConversation, voiceTurnMessage } from './voice-conversation.js';
+import { VoiceConversationConfigurationError, archiveVoiceCall, bindVoiceGrant, endVoiceGrant, isVoiceArchiveRequest, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest, postVoiceTurn, resolveVoiceConversation, voiceTurnMessage } from './voice-conversation.js';
 const channelId = 'a'.repeat(26);
+const threadRootPostId = 'r'.repeat(26);
 const env = { OPENCLAW_RUNTIME_BROKER_URL: 'http://octogee-api:3001' };
-const args = { uid: 'u', gatewayId: 'b-alice', channelId, expectedAgentId: 'octogee-alice-coach', env };
-const answer = { uid: 'u', gatewayId: 'b-alice', channelId, workspaceSlug: 'alice', agentId: args.expectedAgentId, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${channelId}`, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true };
+const args = { uid: 'u', gatewayId: 'b-alice', channelId, threadRootPostId, expectedAgentId: 'octogee-alice-coach', env };
+const answer = { uid: 'u', gatewayId: 'b-alice', channelId, threadRootPostId, workspaceSlug: 'alice', agentId: args.expectedAgentId, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${channelId}:thread:${threadRootPostId}`, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true };
 function brokerCall(index = 0) {
   const [url, init, options] = h.fetch.mock.calls[index] as [string, RequestInit, Record<string, unknown>];
   const parsed = new URL(url);
@@ -15,7 +16,7 @@ describe('voice conversation broker', () => {
   it('uses projected service authentication and returns the canonical server context', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));
     await expect(resolveVoiceConversation(args)).resolves.toEqual(answer);
-    expect(brokerCall()).toMatchObject({ origin: env.OPENCLAW_RUNTIME_BROKER_URL, path: '/internal/voice/conversation', body: { uid: 'u', gatewayId: 'b-alice', channelId }, redirect: 'error', options: { requireProjectedToken: true } });
+    expect(brokerCall()).toMatchObject({ origin: env.OPENCLAW_RUNTIME_BROKER_URL, path: '/internal/voice/conversation', body: { uid: 'u', gatewayId: 'b-alice', channelId, threadRootPostId }, redirect: 'error', options: { requireProjectedToken: true } });
   });
   it('uses an explicitly configured broker and token path without edge-only environment variables', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));
@@ -43,7 +44,7 @@ describe('voice conversation broker', () => {
 });
 describe('server-posted voice turns', () => {
   const turn = { voiceGrant: 'g'.repeat(43), sessionId: 'native-session', turnId: 'turn-1', text: 'Open the news', env };
-  const posted = { postId: 'p'.repeat(26), channelId, userId: 'b'.repeat(26) };
+  const posted = { postId: 'p'.repeat(26), channelId, threadRootPostId, userId: 'b'.repeat(26) };
   it('asks the broker to post the turn and returns the verified post identity', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(posted)));
     await expect(postVoiceTurn({ ...turn, ingressToken: 'native-token', turnId: 'turn-1' })).resolves.toEqual(posted);
@@ -110,5 +111,49 @@ describe('voice posting grant client', () => {
   it.each([409, 429, 502])('preserves posting failure status %s', async status => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response('{}', { status }));
     await expect(postVoiceTurn({ ...grant, turnId: 'turn', text: 'Hello' })).rejects.toMatchObject({ status });
+  });
+});
+
+describe('closed-call speech archive client', () => {
+  const archive = { voiceGrant: 'g'.repeat(43), sessionId: 'native-session', entries: [
+    { transcriptId: 'voice:native:1', role: 'user' as const, text: 'Open the news' },
+    { transcriptId: 'voice:native:2', role: 'assistant' as const, text: 'Here are the headlines.' },
+  ], truncated: false };
+  it('uses the archive broker with projected service authentication and returns only the post receipt', async () => {
+    const posted = { postId: 'p'.repeat(26), channelId, threadRootPostId, userId: 'c'.repeat(26) };
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify({ ...posted, mmToken: 'private' })));
+    await expect(archiveVoiceCall({ ...archive, env })).resolves.toEqual(posted);
+    expect(brokerCall()).toMatchObject({ path: '/internal/voice/archive', body: archive, options: { requireProjectedToken: true } });
+  });
+  it.each([{ postId: 'short' }, { channelId: null }, { userId: 'short' }])('rejects an unverified archive receipt %j', async patch => {
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify({ postId: 'p'.repeat(26), channelId, threadRootPostId, userId: 'c'.repeat(26), ...patch })));
+    await expect(archiveVoiceCall({ ...archive, env })).rejects.toThrow('invalid post');
+  });
+  it.each([403, 409, 502])('preserves explicit archive denial, pending and failure status %s', async status => {
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response('{}', { status }));
+    await expect(archiveVoiceCall({ ...archive, env })).rejects.toMatchObject({ status });
+  });
+  it('refuses malformed speech before forwarding authority', async () => {
+    h.fetch.mockReset();
+    await expect(archiveVoiceCall({ ...archive, entries: [], env })).rejects.toThrow('malformed');
+    expect(h.fetch).not.toHaveBeenCalled();
+  });
+  it.each([
+    { voiceGrant: 'short' }, { sessionId: 'bad/id' }, { uid: 'forged' }, { truncated: 'yes' },
+    { entries: [] }, { entries: Array.from({ length: 129 }, (_, index) => ({ transcriptId: String(index), role: 'user', text: 'Hi' })) },
+    { entries: [{ transcriptId: 'bad id', role: 'user', text: 'Hi' }] },
+    { entries: [{ transcriptId: 'x'.repeat(257), role: 'user', text: 'Hi' }] },
+    { entries: [{ transcriptId: 'one', role: 'system', text: 'Hi' }] },
+    { entries: [{ transcriptId: 'one', role: 'user', text: '  ' }] },
+    { entries: [{ transcriptId: 'one', role: 'user', text: 'x'.repeat(2001) }] },
+    { entries: [{ transcriptId: 'one', role: 'user', text: 'Hi', final: true }] },
+    { entries: [{ transcriptId: 'one', role: 'user', text: 'Hi' }, { transcriptId: 'one', role: 'assistant', text: 'Hello' }] },
+    { entries: Array.from({ length: 7 }, (_, index) => ({ transcriptId: String(index), role: 'user', text: 'x'.repeat(2000) })) },
+  ])('rejects noncanonical or oversized archive shape %j', patch => {
+    expect(isVoiceArchiveRequest({ ...archive, ...patch })).toBe(false);
+  });
+  it('accepts exact count, identity, per-entry and total boundaries', () => {
+    expect(isVoiceArchiveRequest({ ...archive, entries: Array.from({ length: 128 }, (_, index) => ({ transcriptId: `voice:native:${index}`, role: 'user', text: 'Hi' })) })).toBe(true);
+    expect(isVoiceArchiveRequest({ ...archive, entries: Array.from({ length: 6 }, (_, index) => ({ transcriptId: index === 0 ? 'x'.repeat(256) : String(index), role: 'assistant', text: 'x'.repeat(2000) })), truncated: true })).toBe(true);
   });
 });

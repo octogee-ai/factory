@@ -4,19 +4,29 @@ import { NativeTalkSession } from './native-session.js';
 import type { openNativeUserSocket } from '../openclaw-control/native-user-client.js';
 const grant = 'g'.repeat(43);
 const expiresAt = Date.now() + 60_000;
-const key = `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(26)}`;
+const threadRootPostId = 'r'.repeat(26);
+const key = `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(26)}:thread:${threadRootPostId}`;
 function setup(options: Partial<ConstructorParameters<typeof NativeTalkSession>[0]> = {}) {
   const ws = Object.assign(new EventEmitter(), { close: vi.fn() });
-  const rpc = { call: vi.fn<(method: string, params: Record<string, unknown>) => Promise<{ ok: true; result: Record<string, unknown> }>>().mockImplementation(async (method: string) => ({ ok: true, result: method === 'talk.session.create' ? { sessionId: 'native', relaySessionId: 'native' } : method === 'octogee.voice.bind' ? { sessionId: 'native', sessionKey: key, expiresAt } : { ok: true } })), dispose: vi.fn() };
+  const rpc = { call: vi.fn<(method: string, params: Record<string, unknown>) => Promise<{ ok: true; result: Record<string, unknown> }>>().mockImplementation(async (method: string) => ({ ok: true, result: method === 'talk.session.create' ? { sessionId: 'native', relaySessionId: 'native' } : { ok: true } })), dispose: vi.fn() };
   const send = vi.fn(); const audio = vi.fn(); const reauthorize = vi.fn<() => Promise<void>>().mockResolvedValue();
+  const bindSession = vi.fn<ConstructorParameters<typeof NativeTalkSession>[0]['bindSession']>().mockResolvedValue({ sessionId: 'native', sessionKey: key, expiresAt });
   const log = vi.fn();
   const open = vi.fn<typeof openNativeUserSocket>().mockResolvedValue({ ws, scopes: new Set(['operator.talk']) } as any);
-  const session = new NativeTalkSession({ voiceGrant: grant, voiceGrantExpiresAt: expiresAt, conversation: { uid: 'u', gatewayId: 'b-alice', sessionKey: key, agentId: 'octogee-alice-coach' }, send, sendAudio: audio, open, attachRpc: () => rpc as any, reauthorize, log, ...options });
+  const session = new NativeTalkSession({ voiceGrant: grant, voiceGrantExpiresAt: expiresAt, conversation: { uid: 'u', gatewayId: 'b-alice', sessionKey: key, agentId: 'octogee-alice-coach' }, send, sendAudio: audio, open, attachRpc: () => rpc as any, reauthorize, bindSession, log, ...options });
   const event = (payload: object) => ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', ...payload } })));
-  return { session, ws, rpc, send, audio, event, reauthorize, log, open };
+  return { session, ws, rpc, send, audio, event, reauthorize, bindSession, log, open };
 }
-const start = JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'a'.repeat(26) });
+const start = JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'a'.repeat(26), threadRootPostId });
 describe('native Talk transport', () => {
+  it('binds the exact created session through the central owner without a fork-only native RPC', async () => {
+    const h = setup();
+    await h.session.handleText(start);
+    expect(h.bindSession).toHaveBeenCalledExactlyOnceWith('native');
+    expect(h.rpc.call.mock.calls.map(([method]) => method)).toEqual(['talk.session.create']);
+    expect(h.rpc.call.mock.invocationCallOrder[0]).toBeLessThan(h.bindSession.mock.invocationCallOrder[0]);
+    h.session.close();
+  });
   it('selects OpenAI Live with the same canonical coach and reports its duplex engine', async () => {
     const h = setup({ provider: 'octogee-openai' });
     await h.session.handleText(start); h.event({ type: 'ready' });
@@ -72,8 +82,9 @@ describe('native Talk transport', () => {
     const onUnavailable = vi.fn(); const h = setup({ provider: 'octogee-openai', onUnavailable });
     h.rpc.call.mockImplementation(async method => {
       if (method === 'talk.session.create') { h.event({ type: 'error', message: 'OpenAI unavailable' }); return { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } }; }
-      throw new Error('Grant rejected');
+      return { ok: true, result: {} };
     });
+    h.bindSession.mockRejectedValueOnce(new Error('Grant rejected'));
     await expect(h.session.handleText(start)).rejects.toThrow('grant binding');
     expect(onUnavailable).not.toHaveBeenCalled();
   });
@@ -105,20 +116,17 @@ describe('native Talk transport', () => {
   });
   it('withholds readiness and audio until the exact native session grant is acknowledged', async () => {
     const h = setup();
-    let bound!: (value: { ok: true; result: Record<string, unknown> }) => void;
-    h.rpc.call.mockImplementation(async method => {
-      if (method === 'talk.session.create') return { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } };
-      return new Promise(resolve => { bound = resolve; });
-    });
+    let bound!: (value: Awaited<ReturnType<typeof h.bindSession>>) => void;
+    h.bindSession.mockReturnValueOnce(new Promise(resolve => { bound = resolve; }));
     const opening = h.session.handleText(start);
-    await vi.waitFor(() => expect(h.rpc.call).toHaveBeenCalledWith('octogee.voice.bind', { voiceGrant: grant, sessionId: 'native' }));
+    await vi.waitFor(() => expect(h.bindSession).toHaveBeenCalledExactlyOnceWith('native'));
     h.event({ type: 'ready' });
     h.event({ type: 'audio', audioBase64: 'AQI=' });
     h.session.handleAudio(Buffer.alloc(2));
     expect(h.send).not.toHaveBeenCalled();
     expect(h.audio).not.toHaveBeenCalled();
     expect(h.rpc.call).not.toHaveBeenCalledWith('talk.session.appendAudio', expect.anything());
-    bound({ ok: true, result: { sessionId: 'native', sessionKey: key, expiresAt } });
+    bound({ sessionId: 'native', sessionKey: key, expiresAt });
     await opening;
     expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session.ready' }));
     expect(h.audio).toHaveBeenCalledOnce();
@@ -127,16 +135,14 @@ describe('native Talk transport', () => {
   });
   it.each(['error', 'close'])('discards startup readiness and audio queued after native %s during grant binding', async type => {
     const h = setup();
-    let bound!: (value: { ok: true; result: Record<string, unknown> }) => void;
-    h.rpc.call.mockImplementation(async method => method === 'talk.session.create'
-      ? { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } }
-      : new Promise(resolve => { bound = resolve; }));
+    let bound!: (value: Awaited<ReturnType<typeof h.bindSession>>) => void;
+    h.bindSession.mockReturnValueOnce(new Promise(resolve => { bound = resolve; }));
     const opening = h.session.handleText(start);
-    await vi.waitFor(() => expect(h.rpc.call).toHaveBeenCalledWith('octogee.voice.bind', { voiceGrant: grant, sessionId: 'native' }));
+    await vi.waitFor(() => expect(h.bindSession).toHaveBeenCalledExactlyOnceWith('native'));
     h.event({ type, message: 'Native startup failed' });
     h.event({ type: 'ready' });
     h.event({ type: 'audio', audioBase64: 'AQI=' });
-    bound({ ok: true, result: { sessionId: 'native', sessionKey: key, expiresAt } });
+    bound({ sessionId: 'native', sessionKey: key, expiresAt });
     await opening;
     expect(h.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'error', recoverable: false }));
     expect(h.audio).not.toHaveBeenCalled();
@@ -150,35 +156,31 @@ describe('native Talk transport', () => {
     { sessionId: 'native', sessionKey: key, expiresAt: expiresAt + 1 },
   ])('rejects an invalid native grant binding %j without publishing readiness', async binding => {
     const h = setup();
-    h.rpc.call.mockImplementation(async method => {
+    h.rpc.call.mockImplementation(async () => {
       h.event({ type: 'ready' });
-      return { ok: true, result: method === 'talk.session.create' ? { sessionId: 'native', relaySessionId: 'native' } : binding };
+      return { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } };
     });
+    h.bindSession.mockResolvedValueOnce(binding);
     await expect(h.session.handleText(start)).rejects.toThrow('grant binding');
     expect(h.session.currentState).toBe('closed');
     expect(h.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'session.ready' }));
   });
   it('does not publish readiness for a late successful grant binding after close', async () => {
     const h = setup();
-    let bound!: (value: { ok: true; result: Record<string, unknown> }) => void;
-    h.rpc.call.mockImplementation(async method => method === 'talk.session.create'
-      ? { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } }
-      : new Promise(resolve => { bound = resolve; }));
+    let bound!: (value: Awaited<ReturnType<typeof h.bindSession>>) => void;
+    h.bindSession.mockReturnValueOnce(new Promise(resolve => { bound = resolve; }));
     const opening = h.session.handleText(start);
-    await vi.waitFor(() => expect(h.rpc.call).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(h.bindSession).toHaveBeenCalledOnce());
     h.event({ type: 'ready' });
     h.session.close();
-    bound({ ok: true, result: { sessionId: 'native', sessionKey: key, expiresAt } });
+    bound({ sessionId: 'native', sessionKey: key, expiresAt });
     await opening;
     expect(h.send).not.toHaveBeenCalled();
     expect(h.session.currentState).toBe('closed');
   });
   it('does not expose a grant when native binding rejects with sensitive details', async () => {
     const h = setup();
-    h.rpc.call.mockImplementation(async method => {
-      if (method === 'talk.session.create') return { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } };
-      throw new Error(`Rejected secret ${grant}`);
-    });
+    h.bindSession.mockRejectedValueOnce(new Error(`Rejected secret ${grant}`));
     await expect(h.session.handleText(start)).rejects.toThrow('grant binding');
     expect(h.session.currentState).toBe('closed');
     expect(h.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'error', recoverable: false }));
@@ -191,7 +193,8 @@ describe('native Talk transport', () => {
     const opening = h.session.handleText(start);
     await expect(h.session.handleText(start)).rejects.toThrow('already started');
     authorize(); await opening;
-    expect(h.rpc.call).toHaveBeenCalledTimes(2);
+    expect(h.rpc.call).toHaveBeenCalledOnce();
+    expect(h.bindSession).toHaveBeenCalledOnce();
     h.session.close();
   });
   it('reports native standard endpointing when an older saved patient setting is supplied', async () => {
@@ -210,6 +213,37 @@ describe('native Talk transport', () => {
     h.ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'other', type: 'audio', audioBase64: 'AQI=' } }))); expect(h.audio).toHaveBeenCalledTimes(1);
     h.session.close();
   });
+  it('records only finalized speech from the bound native call, deduplicated by native transcript ID', async () => {
+    const h = setup(); await h.session.handleText(start); h.event({ type: 'ready' });
+    h.event({ type: 'transcript', role: 'assistant', text: 'Provisional text', final: false });
+    h.event({ type: 'transcript', role: 'user', text: 'Find my glasses', final: true, transcriptId: 'voice:native:1' });
+    h.event({ type: 'transcript', role: 'user', text: 'Find my glasses', final: true, transcriptId: 'voice:native:1' });
+    h.event({ type: 'transcript', role: 'assistant', text: 'On the kitchen table', final: true, textMode: 'snapshot', transcriptId: 'voice:native:2' });
+    h.ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'other', type: 'transcript', role: 'assistant', text: 'Another caller', final: true, transcriptId: 'voice:other:1' } })));
+    h.session.close();
+    h.event({ type: 'transcript', role: 'assistant', text: 'After detach', final: true, transcriptId: 'voice:native:3' });
+    expect(h.session.archive).toEqual({ entries: [
+      { transcriptId: 'voice:native:1', role: 'user', text: 'Find my glasses' },
+      { transcriptId: 'voice:native:2', role: 'assistant', text: 'On the kitchen table' },
+    ], truncated: false });
+  });
+  it('keeps microphone input flowing while a spoken reply is playing', async () => {
+    const h = setup(); await h.session.handleText(start); h.event({ type: 'ready' });
+    await h.session.handleText(JSON.stringify({ type: 'listen.start' }));
+    h.event({ type: 'audio', audioBase64: 'AQI=' });
+    expect(h.session.currentState).toBe('speaking');
+    h.session.handleAudio(Buffer.from([3, 4]));
+    expect(h.rpc.call).toHaveBeenCalledWith('talk.session.appendAudio', { sessionId: 'native', audioBase64: 'AwQ=' });
+    h.session.close();
+  });
+  it('bounds the compact speech record and visibly marks omitted or clipped speech', async () => {
+    const h = setup(); await h.session.handleText(start);
+    for (let index = 0; index < 10; index++) h.event({ type: 'transcript', role: 'user', text: 'x'.repeat(2500), final: true, transcriptId: `voice:native:${index}` });
+    expect(h.session.archive.entries).toHaveLength(6);
+    expect(h.session.archive.entries.map(entry => entry.text.length)).toEqual([2000, 2000, 2000, 2000, 2000, 2000]);
+    expect(h.session.archive.truncated).toBe(true);
+    h.session.close();
+  });
   it('acknowledges only marks issued on the current native connection', async () => {
     const h = setup(); await h.session.handleText(start); h.event({ type: "ready" });
     await h.session.handleText(JSON.stringify({ type: 'playback.mark', name: 'forged' }));
@@ -217,13 +251,14 @@ describe('native Talk transport', () => {
     h.event({ type: 'mark', markName: 'm1' }); await h.session.handleText(JSON.stringify({ type: 'playback.mark', name: 'm1' }));
     expect(h.rpc.call).toHaveBeenCalledWith('talk.session.acknowledgeMark', { sessionId: 'native', markName: 'm1' }); h.session.close();
   });
-  it('uses exact native Talk run cancellation separately from speech-only cancellation', async () => {
+  it('uses exact native Talk run cancellation without a preliminary output cancel', async () => {
     const h = setup(); await h.session.handleText(start); h.event({ type: "ready" });
     await h.session.handleText(JSON.stringify({ type: 'speak.cancel' }));
-    expect(h.rpc.call).toHaveBeenCalledWith('talk.session.cancelOutput', { sessionId: 'native', reason: 'speech-only' });
+    expect(h.rpc.call).toHaveBeenCalledWith('talk.session.cancelOutput', { sessionId: 'native', reason: 'output-cancelled' });
     h.rpc.call.mockImplementation(async (method) => ({ ok: true, result: method === 'talk.session.steer' ? { ok: true, aborted: true, sessionKey: key } : { ok: true } }));
     await h.session.handleText(JSON.stringify({ type: 'agent.interrupt', requestId: 'r1' }));
-    expect(h.rpc.call).toHaveBeenNthCalledWith(4, 'talk.session.cancelOutput', { sessionId: 'native', reason: 'speech-only' });
+    expect(h.rpc.call.mock.calls.filter(([method]) => method === 'talk.session.cancelOutput')).toHaveLength(1);
+    expect(h.rpc.call).toHaveBeenNthCalledWith(3, 'talk.session.steer', { sessionId: 'native', sessionKey: key, text: 'Stop', mode: 'cancel' });
     expect(h.rpc.call).toHaveBeenCalledWith('talk.session.steer', { sessionId: 'native', sessionKey: key, text: 'Stop', mode: 'cancel' });
     expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent.interrupted', status: 'aborted', requestId: 'r1' })); h.session.close();
   });

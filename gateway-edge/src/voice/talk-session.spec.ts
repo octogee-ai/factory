@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TalkServerEvent } from "@octogee/shared/types/voice";
+import type { TalkClientMessage, TalkServerEvent } from "@octogee/shared/types/voice";
 import { TALK_PROTOCOL_VERSION } from "@octogee/shared/types/voice";
 import type { BrainReplyHandlers } from "./brain.js";
 import type { SttStream, SttStreamEvents, TtsRequest } from "@octogee/core/voice-relay-client";
 import { TalkSession } from "./talk-session.js";
 import { VAD_FRAME_SAMPLES } from "./silero-vad.js";
+
+const CHANNEL_ID = "c".repeat(26);
+const THREAD_ROOT_POST_ID = "r".repeat(26);
 
 class FakeStt implements SttStream {
   audio: Buffer[] = [];
@@ -116,9 +119,10 @@ function setup(opts: { handsFreeMs?: number; mode?: "converse" | "dictate"; spee
       type: "session.start",
       protocol: TALK_PROTOCOL_VERSION,
       mode: opts.mode ?? "converse",
-      channelId: "chan1",
+      channelId: CHANNEL_ID,
+      threadRootPostId: THREAD_ROOT_POST_ID,
       settings: { handsFreeMs: opts.handsFreeMs ?? 0, speed: 0.9 },
-    }),
+    } satisfies TalkClientMessage),
   );
   return { session, events, audio, relay, brain, vad, createBrain };
 }
@@ -222,7 +226,7 @@ describe("TalkSession", () => {
     expect(events.find((e) => e.type === "transcript.delta")).toMatchObject({ text: "What's the wea" });
     expect(events.find((e) => e.type === "transcript.final")).toMatchObject({ text: "What's the weather today?", reason: "endpoint" });
     expect(brain.asks).toHaveLength(1);
-    expect(brain.last).toMatchObject({ channelId: "chan1", text: "What's the weather today?" });
+    expect(brain.last).toMatchObject({ channelId: CHANNEL_ID, text: "What's the weather today?" });
 
     brain.last.handlers.onDelta("It's sunny and 72 degrees. ");
     await settle(40);

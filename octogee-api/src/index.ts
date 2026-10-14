@@ -378,9 +378,9 @@ function clusterRouteOverrides(
     sharingRoutes: createSharingRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
-    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveConversation: async (uid, channelId) => {
-      const result = await resolveWorkspaceConversation({ db }, { uid, channelId });
-      return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, sessionKey: result.context.sessionKey } : null;
+    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveConversation: async (uid, channelId, threadRootPostId) => {
+      const result = await resolveWorkspaceConversation({ db }, { uid, channelId, threadRootPostId });
+      return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId, sessionKey: result.context.sessionKey } : null;
     } }),
     productivityApprovalRoutes: express.Router()
       .use(requireAuth)

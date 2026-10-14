@@ -32,6 +32,9 @@ import { WS_TICKET_TTL_MS, createWsTicketStore } from "../lib/ws-ticket-store.js
 
 const OWNER = "uid-owner";
 const GATEWAY = "b-x";
+const channelId = "a".repeat(26);
+const threadRootPostId = "r".repeat(26);
+const selected = { channelId, threadRootPostId };
 
 const ACCESS: Record<string, NativeAdminAccessOutcome> = {
   owner: { kind: "allowed", gatewayId: GATEWAY, workspaceSlug: "alice", canControl: true },
@@ -49,6 +52,7 @@ function appFor(overrides: Partial<TerminalRouterDeps> = {}) {
       localGatewayId: () => GATEWAY,
       available: true,
       resolveAccess,
+      resolveConversation: async () => ({ agentId: 'coach', sessionKey: `agent:coach:mattermost:group:${channelId}:thread:${threadRootPostId}` }),
       tickets: createWsTicketStore<TerminalSession>(),
       ...overrides,
     }),
@@ -87,14 +91,14 @@ describe("terminal locality route — ticket boundary", () => {
   });
 
   it("answers 404 terminal_unavailable when the path names another gateway than this pod", async () => {
-    const res = await request(appFor()).post("/api/g/b-other/terminal/ticket").set(as("owner"));
+    const res = await request(appFor()).post("/api/g/b-other/terminal/ticket").set(as("owner")).send(selected);
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "terminal_unavailable" });
     expect(resolveAccess).not.toHaveBeenCalled();
   });
 
   it("answers 404 terminal_unavailable on a gateway without a per-user Builder identity", async () => {
-    const res = await request(appFor({ available: false })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner"));
+    const res = await request(appFor({ available: false })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send(selected);
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "terminal_unavailable" });
     expect(resolveAccess).not.toHaveBeenCalled();
@@ -102,21 +106,27 @@ describe("terminal locality route — ticket boundary", () => {
 
   it("answers 404 terminal_unavailable when the broker knows no owned gateway", async () => {
     resolveAccess.mockResolvedValue({ kind: "not_found" });
-    const res = await request(appFor()).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner"));
+    const res = await request(appFor()).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send(selected);
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "terminal_unavailable" });
   });
 
   it("answers 503 access_unavailable when the broker cannot answer", async () => {
     resolveAccess.mockRejectedValue(new Error("broker down"));
-    const res = await request(appFor()).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner"));
+    const res = await request(appFor()).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send(selected);
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ error: "access_unavailable" });
   });
 
+  it("refuses a terminal ticket without a selected thread", async () => {
+    const tickets = createWsTicketStore<TerminalSession>();
+    const issue = vi.spyOn(tickets, "issue");
+    const result = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId });
+    expect(result.status).toBe(400); expect(issue).not.toHaveBeenCalled();
+  });
   it("mints a one-time ticket bound to the caller and this gateway", async () => {
     const tickets = createWsTicketStore<TerminalSession>();
-    const res = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner"));
+    const res = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send(selected);
     expect(res.status).toBe(200);
     expect(res.headers["cache-control"]).toBe("no-store");
     expect(res.body).toMatchObject({ expiresInMs: WS_TICKET_TTL_MS });
@@ -131,9 +141,9 @@ describe("terminal locality route — ticket boundary", () => {
     const tickets = createWsTicketStore<TerminalSession>();
     const resolveConversation = vi.fn().mockResolvedValue({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
     const channelId = "a".repeat(26);
-    const res = await request(appFor({ tickets, resolveConversation })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId });
+    const res = await request(appFor({ tickets, resolveConversation })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId, threadRootPostId });
     expect(res.status).toBe(200);
-    expect(resolveConversation).toHaveBeenCalledWith({ uid: OWNER, gatewayId: GATEWAY, channelId });
+    expect(resolveConversation).toHaveBeenCalledWith({ uid: OWNER, gatewayId: GATEWAY, channelId, threadRootPostId });
     const session = tickets.redeem(res.body.ticket)!;
     expect(session.conversation).toEqual({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
     expect(await session.reauthorize()).toBe(true);
@@ -155,7 +165,7 @@ describe("terminal locality route — ticket boundary", () => {
     ["changed workspace", { ...ACCESS.owner, workspaceSlug: "other" }],
   ] as const)("revalidates a ticket against %s using the original bearer", async (_change, current) => {
     const tickets = createWsTicketStore<TerminalSession>();
-    const res = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner"));
+    const res = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send(selected);
     const session = tickets.redeem(res.body.ticket)!;
     resolveAccess.mockResolvedValue(current);
     await expect(session.reauthorize()).resolves.toBe(false);

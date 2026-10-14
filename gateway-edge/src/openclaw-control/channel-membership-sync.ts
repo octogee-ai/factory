@@ -1,4 +1,4 @@
-import { parseChannelScopedMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
+import { parseChannelScopedMattermostSessionRoute, parseThreadedChannelMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
 
 export interface ChannelMembershipRpc {
   call<T>(method: string, params: Record<string, unknown>): Promise<
@@ -36,16 +36,24 @@ export class ChannelMembershipSyncError extends Error {
   }
 }
 
+function channelCreationSource(via: string | undefined): ChannelSyncDiagnostics['creationSource'] {
+  if (via === "channel" || via === "talk" || via === "operator") return via;
+  return via === undefined ? "missing" : "other";
+}
+
 export async function synchronizeChannelMembership(
   rpc: ChannelMembershipRpc,
-  route: NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>>,
+  route: NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>> | NonNullable<ReturnType<typeof parseThreadedChannelMattermostSessionRoute>>,
   profileId: string,
   member: boolean,
   displayName?: unknown,
 ): Promise<void> {
+  const threadSuffix = 'threadRootPostId' in route ? `:thread:${route.threadRootPostId}` : '';
+  const sessionKey = `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}${threadSuffix}`;
   const result = await rpc.call("sessions.channel.sync", {
     agentId: route.agentId, channel: "mattermost", peerKind: route.peerKind,
     peerId: route.primaryChannelId, profileId, member,
+    ...('threadRootPostId' in route ? { threadRootPostId: route.threadRootPostId } : {}),
     ...(typeof displayName === "string" ? { displayName } : {}),
   });
   if (result.ok) return;
@@ -55,16 +63,14 @@ export async function synchronizeChannelMembership(
   try {
     const metadata = await rpc.call<{ session: { key?: string; createdVia?: string; incognito?: boolean; visibility?: string;
       origin?: { provider?: string; chatType?: string; nativeChannelId?: string } } | null }>("sessions.describe", {
-      key: `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}`,
+      key: sessionKey,
       agentId: route.agentId, includeDerivedTitles: false, includeLastMessage: false,
     });
     const session = metadata.ok ? metadata.result?.session : null;
-    if (session?.key === `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}`) {
+    if (session?.key === sessionKey) {
       diagnostics.metadataAvailable = true;
       diagnostics.channelCreated = session.createdVia === "channel";
-      const via = session.createdVia;
-      if (via === "channel" || via === "talk" || via === "operator") diagnostics.creationSource = via;
-      else diagnostics.creationSource = via === undefined ? "missing" : "other";
+      diagnostics.creationSource = channelCreationSource(session.createdVia);
       diagnostics.incognito = session.incognito === true;
       diagnostics.draft = session.visibility === "draft";
       if (session.origin) diagnostics.matchingOrigin = session.origin.provider === "mattermost" &&
@@ -94,10 +100,12 @@ export async function synchronizeChannelMemberships(input: {
   if (!Array.isArray(native.sessions) || native.hasMore === true) {
     throw new Error("Native channel membership directory is incomplete");
   }
-  const removals: ReturnType<typeof parseChannelScopedMattermostSessionRoute>[] = [];
+  const removals: Array<NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>> | NonNullable<ReturnType<typeof parseThreadedChannelMattermostSessionRoute>>> = [];
   for (const row of native.sessions) {
-    const route = parseChannelScopedMattermostSessionRoute(row.key);
-    if (!route || desired.has(row.key)) continue;
+    const route = parseChannelScopedMattermostSessionRoute(row.key) ?? parseThreadedChannelMattermostSessionRoute(row.key);
+    if (!route) continue;
+    const channelKey = `agent:${route.agentId}:mattermost:${route.peerKind}:${route.primaryChannelId}`;
+    if (desired.has(channelKey)) continue;
     const evidence = await request<{ members: { identityId: string; addedBy?: string }[] }>(rpc,
       "session.members.listEvidence", { sessionKey: row.key, agentId: route.agentId });
     if (!Array.isArray(evidence.members)) throw new Error("Invalid native channel membership evidence");

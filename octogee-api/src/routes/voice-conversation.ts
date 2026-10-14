@@ -1,13 +1,15 @@
 import { Router, type Request } from 'express';
 import { isValidGatewayId } from '@octogee/shared/types/glm';
-import { isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest } from '@octogee/core/voice-conversation';
-import { bindWorkspaceVoiceGrant, endWorkspaceVoiceGrant, postWorkspaceVoiceTurn, VoicePostingGrantError } from '../lib/voice-posting-grant.js';
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
+import { isVoiceArchiveRequest, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest } from '@octogee/core/voice-conversation';
+import { archiveWorkspaceVoiceCall, bindWorkspaceVoiceGrant, endWorkspaceVoiceGrant, postWorkspaceVoiceTurn, VoicePostingGrantError } from '../lib/voice-posting-grant.js';
 import { resolveWorkspaceConversation, type WorkspaceConversationDeps } from '../lib/workspace-conversation.js';
 
 interface VoiceConversationRequest {
   gatewayId: string;
   uid: string;
   channelId: string;
+  threadRootPostId: string;
 }
 
 function boundToGateway(req: Request, gatewayId: unknown): gatewayId is string {
@@ -17,8 +19,8 @@ function boundToGateway(req: Request, gatewayId: unknown): gatewayId is string {
 function isVoiceConversationRequest(req: Request, body: VoiceConversationRequest): boolean {
   return boundToGateway(req, body.gatewayId) &&
     typeof body.uid === 'string' && Boolean(body.uid) && body.uid.length <= 128 && !body.uid.includes('/') &&
-    typeof body.channelId === 'string' && /^[a-z0-9]{26}$/u.test(body.channelId) &&
-    Object.keys(body).every(key => ['gatewayId', 'uid', 'channelId'].includes(key));
+    isMattermostPostId(body.channelId) && isMattermostPostId(body.threadRootPostId) &&
+    Object.keys(body).every(key => ['gatewayId', 'uid', 'channelId', 'threadRootPostId'].includes(key));
 }
 
 function mountGrantOperation<T>(router: Router, deps: WorkspaceConversationDeps, path: string,
@@ -55,5 +57,6 @@ export function createVoiceConversationRoutes(deps: WorkspaceConversationDeps): 
   mountGrantOperation(router, deps, '/bind', isVoiceGrantRequest, bindWorkspaceVoiceGrant);
   mountGrantOperation(router, deps, '/end', isVoiceGrantEndRequest, endWorkspaceVoiceGrant);
   mountGrantOperation(router, deps, '/turn', isVoiceTurnRequest, postWorkspaceVoiceTurn);
+  mountGrantOperation(router, deps, '/archive', isVoiceArchiveRequest, archiveWorkspaceVoiceCall);
   return router;
 }

@@ -16,13 +16,15 @@ import { createToolSurface } from '../routes/tool-surface.js';
 import { applyGatewayPrefixStripInPlace } from '../chat-proxy/gateway-prefix.js';
 import type { NativeAdminAccessOutcome } from '../lib/native-admin-access.js';
 const channelId = 'a'.repeat(26);
+const threadRootPostId = 'r'.repeat(26);
 const desktopPublicKey = Buffer.alloc(32, 1).toString('base64url');
 const desktopNodeId = createHash('sha256').update(Buffer.from(desktopPublicKey, 'base64url')).digest('hex');
-const context = { uid: 'owner', gatewayId: 'b-alice', workspaceSlug: 'alice', channelId, agentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${channelId}`, callerMmUserId: 'u'.repeat(26) };
+const context = { uid: 'owner', gatewayId: 'b-alice', workspaceSlug: 'alice', channelId, threadRootPostId, agentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${channelId}:thread:${threadRootPostId}`, callerMmUserId: 'u'.repeat(26) };
 describe('hosted native Browser surface', () => {
   let app: express.Express; let server: http.Server; let native: WebSocketServer; let base: string; let desktopIdentityRoot: string;
   let scopes: Set<string>; const clients: WebSocket[] = []; const received: Array<Record<string, any>> = []; const history: unknown[] = [];
   const resolveAccess = vi.fn<() => Promise<NativeAdminAccessOutcome>>();
+  const resolveControl = vi.fn(async () => ({ uid: context.uid, gatewayId: context.gatewayId, workspaceSlug: context.workspaceSlug, channelId, callerMmUserId: context.callerMmUserId }));
   const resolveConversation = vi.fn(async () => context);
   const fetchImpl = vi.fn(async () => new Response('image-data', { headers: { 'content-type': 'image/png' } }));
   beforeEach(async () => {
@@ -31,7 +33,7 @@ describe('hosted native Browser surface', () => {
     const desktopIdentityPath = join(desktopIdentityRoot, 'identity.json');
     await writeFile(desktopIdentityPath, JSON.stringify({ deviceId: desktopNodeId, publicKey: desktopPublicKey }));
     resolveAccess.mockReset().mockResolvedValue({ kind: 'allowed', gatewayId: 'b-alice', workspaceSlug: 'alice', canControl: true });
-    resolveConversation.mockClear(); fetchImpl.mockClear();
+    resolveConversation.mockClear(); resolveControl.mockClear(); fetchImpl.mockClear();
     native = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>(resolve => native.once('listening', resolve));
     native.on('connection', (socket, req) => {
@@ -56,7 +58,7 @@ describe('hosted native Browser surface', () => {
       });
     });
     const nativeBase = `http://127.0.0.1:${(native.address() as AddressInfo).port}`;
-    const surface = createToolSurface({ env: { GATEWAY_ID: 'b-alice', GATEWAY_CLASS: 'builder', OPENCLAW_CONTROL_IDENTITY: 'per-user', OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: desktopIdentityPath, OPENCLAW_GATEWAY_URL: nativeBase, API_PUBLIC_URL: 'https://api.example' }, resolveAccess, resolveConversation, fetchImpl, authorizationIntervalMs: 25, log: vi.fn(), openUpstream: async () => {
+    const surface = createToolSurface({ env: { GATEWAY_ID: 'b-alice', GATEWAY_CLASS: 'builder', OPENCLAW_CONTROL_IDENTITY: 'per-user', OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: desktopIdentityPath, OPENCLAW_GATEWAY_URL: nativeBase, API_PUBLIC_URL: 'https://api.example' }, resolveAccess, resolveConversation, resolveControl, fetchImpl, authorizationIntervalMs: 25, log: vi.fn(), openUpstream: async () => {
       const ws = new WebSocket(nativeBase.replace('http:', 'ws:')); await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); }); return { ws, scopes };
     } });
     app = express(); app.use(express.json()); app.use('/api/g/:gatewayId/tools', surface.router);
@@ -71,9 +73,9 @@ describe('hosted native Browser surface', () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(desktopIdentityRoot, { recursive: true, force: true });
   });
-  const ticket = (body: unknown = { channelId, surface: 'browser' }) => request(app).post('/api/g/b-alice/tools/ticket').set('Authorization', 'Bearer owner').send(body);
+  const ticket = (body: unknown = { channelId, threadRootPostId, surface: 'browser' }) => request(app).post('/api/g/b-alice/tools/ticket').set('Authorization', 'Bearer owner').send(body);
   async function connect(surface: 'browser' | 'computer' | 'themes' = 'browser') {
-    const minted = await ticket({channelId, surface}); expect(minted.status).toBe(200);
+    const minted = await ticket({channelId, surface, ...(surface === 'browser' ? { threadRootPostId } : {})}); expect(minted.status).toBe(200);
     const ws = new WebSocket(`${base}/api/g/b-alice/tools/ws/${minted.body.ticket}`, { headers: { origin: 'https://app.example' } }); clients.push(ws);
     const frames: Array<Record<string, any>> = []; ws.on('message', raw => frames.push(JSON.parse(raw.toString())));
     const closed = new Promise<number>(resolve => ws.once('close', resolve));
@@ -89,6 +91,22 @@ describe('hosted native Browser surface', () => {
     expect((await request(app).post('/api/g/b-alice/tools/ticket').send({ channelId })).status).toBe(401);
     expect((await ticket({ channelId, surface: 'browser', sessionKey: 'foreign' })).status).toBe(400);
     resolveAccess.mockResolvedValue({ kind: 'forbidden' }); expect((await ticket()).status).toBe(403); expect(resolveConversation).not.toHaveBeenCalled();
+  });
+  it('never mints a Browser base-room or unbound conversation ticket', async () => {
+    expect((await ticket({ channelId, surface: 'browser' })).status).toBe(400);
+    expect((await ticket({ channelId, surface: 'browser', threadRootPostId: 'bad' })).status).toBe(400);
+    expect(resolveConversation).not.toHaveBeenCalled();
+  });
+  it.each(['computer', 'themes'] as const)('keeps %s controls unbound and denies all conversation methods', async surface => {
+    const connection = await connect(surface);
+    expect(connection.frames[0].payload).not.toHaveProperty('sessionKey');
+    expect(resolveConversation).not.toHaveBeenCalled();
+    expect(received.some(frame => ['chat.history', 'sessions.messages.subscribe'].includes(frame.method))).toBe(false);
+    for (const method of ['chat.history', 'sessions.messages.subscribe', 'talk.session.steer']) {
+      connection.ws.send(JSON.stringify({ type: 'req', id: method, method, params: { sessionKey: context.sessionKey } }));
+      await vi.waitFor(() => expect(connection.frames.find(frame => frame.id === method)?.ok).toBe(false));
+    }
+    expect((await ticket({ channelId, surface, threadRootPostId })).status).toBe(400);
   });
   it('preserves one native connection and forces the configured host profile', async () => {
     const connection = await connect(); expect(connection.frames[0].payload).toMatchObject({ sessionKey: context.sessionKey, profile: 'computer', canControl: true });

@@ -12,12 +12,13 @@ import { createVoiceRelayClient, type VoiceRelayClient } from "@octogee/core/voi
 import type { SpeechProbabilityModel } from "./silero-vad.js";
 import { NativeTalkSession } from "./native-session.js";
 import { TalkSession } from "./talk-session.js";
-import { bindVoiceGrant, endVoiceGrant, postVoiceTurn, resolveVoiceConversation, type VoiceConversation, type VoiceGrantBinding } from "@octogee/core/voice-conversation";
+import { archiveVoiceCall, bindVoiceGrant, endVoiceGrant, postVoiceTurn, resolveVoiceConversation, type VoiceConversation, type VoiceGrantBinding } from "@octogee/core/voice-conversation";
 import { interruptNativeVoiceRun } from "./native-control.js";
 
 export const VOICE_WS_PATH_RE = /\/api\/voice\/ws\/([a-f0-9-]{36})$/;
 const MAX_CLIENT_AUDIO_FRAME_BYTES = 64 * 1024;
 const MAX_CLIENT_TEXT_FRAME_BYTES = 16 * 1024;
+const VOICE_ARCHIVE_HEADROOM_MS = 10_000;
 
 export const VOICE_NOT_CONFIGURED_MESSAGE = "Voice is not set up on this server yet.";
 export const VOICE_RELAY_UNAVAILABLE_MESSAGE = "The voice service is not reachable right now.";
@@ -39,6 +40,7 @@ export interface VoiceWsRouteDeps {
   fetchImpl?: typeof fetch;
   resolveConversation?: typeof resolveVoiceConversation;
   postTurn?: typeof postVoiceTurn;
+  archiveCall?: typeof archiveVoiceCall;
   bindGrant?: typeof bindVoiceGrant;
   endGrant?: typeof endVoiceGrant;
   conversationCheckMs?: number;
@@ -59,7 +61,9 @@ function hasVoiceService(status: RelayStatus, useOpenAiVoice: boolean): boolean 
   return useOpenAiVoice || Boolean(status.configured && status.engines);
 }
 
-function originalVoiceFrame(raw: string, message: ReturnType<typeof parseTalkClientMessage>, session: TalkSession | NativeTalkSession | null, openAiConfigured: boolean): string {
+type VoiceClientSession = TalkSession | NativeTalkSession | null;
+
+function originalVoiceFrame(raw: string, message: ReturnType<typeof parseTalkClientMessage>, session: VoiceClientSession, openAiConfigured: boolean): string {
   if (!(session instanceof TalkSession) || !openAiConfigured) return raw;
   if (message?.type !== 'session.start' && message?.type !== 'settings.update') return raw;
   return JSON.stringify({ ...message, settings: { ...message.settings, voice: '' } });
@@ -69,7 +73,7 @@ interface RedeemedVoiceTicket {
   uid: string;
   gatewayId: string;
   expectedAgentId: string;
-  voiceConversation: { ownerUid: string; workspaceSlug: string; channelId: string; sessionKey: string };
+  voiceConversation: { ownerUid: string; workspaceSlug: string; channelId: string; threadRootPostId: string; sessionKey: string };
   voiceGrant: string;
   voiceGrantExpiresAt: number;
 }
@@ -91,7 +95,7 @@ function grantRevoker(deps: VoiceWsRouteDeps, ticket: RedeemedVoiceTicket, log: 
 function assertConversationScope(conversation: VoiceConversation, ticket: RedeemedVoiceTicket): void {
   const scope = ticket.voiceConversation;
   if (conversation.uid !== ticket.uid || conversation.gatewayId !== ticket.gatewayId || conversation.agentId !== ticket.expectedAgentId ||
-    conversation.channelId !== scope.channelId || conversation.workspaceSlug !== scope.workspaceSlug || conversation.sessionKey !== scope.sessionKey) {
+    conversation.channelId !== scope.channelId || conversation.threadRootPostId !== scope.threadRootPostId || conversation.workspaceSlug !== scope.workspaceSlug || conversation.sessionKey !== scope.sessionKey) {
     throw new Error('Voice conversation does not match its grant');
   }
 }
@@ -311,14 +315,37 @@ interface VoiceClientContext {
   releaseAdmission?: () => void;
 }
 
+async function settleVoiceArchive(
+  session: VoiceClientSession,
+  { deps, redeemed, revokeGrant }: Pick<VoiceClientContext, 'deps' | 'redeemed' | 'revokeGrant'>,
+  log: VoiceClientContext['log'],
+): Promise<void> {
+  try {
+    if (session instanceof NativeTalkSession && session.boundNativeSessionId) {
+      const archive = session.archive;
+      if (archive.entries.length) {
+        const post = await (deps.archiveCall ?? archiveVoiceCall)({ voiceGrant: redeemed.voiceGrant, sessionId: session.boundNativeSessionId, ...archive, ...grantOptions(deps) });
+        if (post.channelId !== redeemed.voiceConversation.channelId || post.threadRootPostId !== redeemed.voiceConversation.threadRootPostId) throw new Error('Voice archive returned a different conversation');
+        log('voice archive posted', { postId: post.postId });
+      }
+    }
+  } catch (error) {
+    log('voice archive failed', { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    await revokeGrant();
+  }
+}
+
+function sendVoiceEvent(client: WebSocket, event: TalkServerEvent): void {
+  if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(event));
+}
+
 function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant, releaseAdmission }: VoiceClientContext): void {
   active.inc();
   const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
   const relay = deps.createRelayClient?.(redeemed.gatewayId)
     ?? createVoiceRelayClient({ baseUrl: deps.relayBaseUrl, gatewayId: redeemed.gatewayId, fetchImpl: deps.fetchImpl });
-  const send = (event: TalkServerEvent) => {
-    if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(event));
-  };
+  const send = (event: TalkServerEvent) => sendVoiceEvent(client, event);
   const sessionLog = (message: string, fields?: Record<string, unknown>) =>
     log(message, { uid: redeemed.uid, gatewayId: redeemed.gatewayId, ...Object.fromEntries(Object.entries(fields ?? {}).map(([key, value]) => [key, typeof value === "string" ? value.replaceAll(redeemed.voiceGrant, "[redacted]") : value])) });
   let conversation: VoiceConversation | null = null;
@@ -331,7 +358,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     const sessionId = session instanceof NativeTalkSession ? session.boundNativeSessionId : session?.sessionId;
     const current = sessionId
       ? await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId, ...grantOptions(deps) })
-      : await resolveConversation({ uid: redeemed.uid, gatewayId: redeemed.gatewayId, channelId: redeemed.voiceConversation.channelId, expectedAgentId: redeemed.expectedAgentId });
+      : await resolveConversation({ uid: redeemed.uid, gatewayId: redeemed.gatewayId, channelId: redeemed.voiceConversation.channelId, threadRootPostId: redeemed.voiceConversation.threadRootPostId, expectedAgentId: redeemed.expectedAgentId });
     assertConversationScope(current, redeemed);
     if (sessionId) assertGrantBinding(current as VoiceGrantBinding, redeemed, sessionId);
     if (current.sessionKey !== conversation.sessionKey || current.agentId !== conversation.agentId || current.callerMmUserId !== conversation.callerMmUserId) throw new Error("Voice conversation changed");
@@ -339,7 +366,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     return current;
   };
   const sessionCapabilities = { ...capabilities, interrupt: false };
-  let session: TalkSession | NativeTalkSession | null = null;
+  let session: VoiceClientSession = null;
   const createLegacySession = (sessionId?: string) => new TalkSession({
     ...(sessionId ? { sessionId } : {}),
     send,
@@ -354,7 +381,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
           const current = await reauthorize();
           if (!session || input.channelId !== current.channelId) throw new Error("Voice turn is outside its bound conversation");
           const post = await (deps.postTurn ?? postVoiceTurn)({ voiceGrant: redeemed.voiceGrant, sessionId: session.sessionId, text: input.text, turnId: input.turnId, ...grantOptions(deps) });
-          if (post.channelId !== current.channelId || post.userId !== current.callerMmUserId) throw new Error("Voice post does not match its authorized sender");
+          if (post.channelId !== current.channelId || post.threadRootPostId !== current.threadRootPostId || post.userId !== current.callerMmUserId) throw new Error("Voice post does not match its authorized sender or thread");
           return { id: post.postId };
         } },
         events,
@@ -384,7 +411,6 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     if (agentReadinessTimer) clearInterval(agentReadinessTimer);
     if (conversationTimer) clearInterval(conversationTimer);
     clearTimeout(expiryTimer);
-    void revokeGrant();
     active.dec();
     releaseAdmission?.();
     session?.close();
@@ -393,12 +419,13 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     } catch {
       /* already closed */
     }
+    void settleVoiceArchive(session, { deps, redeemed, revokeGrant }, sessionLog);
     log("voice ws session closed", { uid: redeemed.uid, sessionId: session?.sessionId, reason });
   };
   const expiryTimer = setTimeout(() => {
     send({ type: "error", code: "internal", message: "This voice session expired. Start voice again.", recoverable: false });
     teardown("grant-expired");
-  }, Math.max(0, redeemed.voiceGrantExpiresAt - Date.now()));
+  }, Math.max(0, redeemed.voiceGrantExpiresAt - Date.now() - (nativeVoiceEnabled ? VOICE_ARCHIVE_HEADROOM_MS : 0)));
   expiryTimer.unref?.();
   agentReadinessTimer = setInterval(() => {
     if (deps.isAgentReady(redeemed.expectedAgentId)) return;
@@ -444,18 +471,23 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     });
   };
 
-  const bindConversation = async (channelId: string): Promise<boolean> => {
+  const bindConversation = async (channelId: string, threadRootPostId: string): Promise<boolean> => {
     bindingStarted = true;
     try {
-      if (channelId !== redeemed.voiceConversation.channelId) throw new Error("Voice ticket channel does not match session startup");
-      const resolved = await resolveConversation({ uid: redeemed.uid, gatewayId: redeemed.gatewayId, channelId, expectedAgentId: redeemed.expectedAgentId });
+      if (channelId !== redeemed.voiceConversation.channelId || threadRootPostId !== redeemed.voiceConversation.threadRootPostId) throw new Error("Voice ticket thread does not match session startup");
+      const resolved = await resolveConversation({ uid: redeemed.uid, gatewayId: redeemed.gatewayId, channelId, threadRootPostId, expectedAgentId: redeemed.expectedAgentId });
       assertConversationScope(resolved, redeemed);
       if (closed) return false;
       conversation = resolved;
       sessionCapabilities.interrupt = resolved.nativeInterrupt;
       if (nativeVoiceEnabled) {
         if (!resolved.nativeInterrupt) throw new Error("Native voice requires current native conversation authority");
-        session = (deps.createNativeSession ?? (options => new NativeTalkSession(options)))({ provider: useOpenAiVoice ? 'octogee-openai' : 'octogee', ...(useOpenAiVoice && legacyAvailable ? { onUnavailable: fallbackToOriginal } : {}), voiceGrant: redeemed.voiceGrant, voiceGrantExpiresAt: redeemed.voiceGrantExpiresAt, conversation: resolved, onClose: () => teardown('native-session-closed'), send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
+        session = (deps.createNativeSession ?? (options => new NativeTalkSession(options)))({ provider: useOpenAiVoice ? 'octogee-openai' : 'octogee', ...(useOpenAiVoice && legacyAvailable ? { onUnavailable: fallbackToOriginal } : {}), voiceGrant: redeemed.voiceGrant, voiceGrantExpiresAt: redeemed.voiceGrantExpiresAt, conversation: resolved, bindSession: async sessionId => {
+          const bound = await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId, ...grantOptions(deps) });
+          assertGrantBinding(bound, redeemed, sessionId);
+          if (!bound.nativeInterrupt || bound.callerMmUserId !== resolved.callerMmUserId) throw new Error('Native voice conversation changed');
+          return bound;
+        }, onClose: () => teardown('native-session-closed'), send, sendAudio: pcm => { if (client.readyState === WebSocket.OPEN) client.send(pcm, { binary: true }); }, reauthorize, log: sessionLog });
       } else {
         session = createLegacySession();
         const bound = await (deps.bindGrant ?? bindVoiceGrant)({ voiceGrant: redeemed.voiceGrant, sessionId: session.sessionId, ...grantOptions(deps) });
@@ -495,7 +527,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     const message = parseTalkClientMessage(raw);
     if (message?.type === "session.start" && !bindingStarted) {
       startupRaw = raw;
-      if (!await bindConversation(message.channelId)) return;
+      if (!await bindConversation(message.channelId, message.threadRootPostId)) return;
     } else if (!admitted) {
       if (message?.type === "session.end") teardown("session-ended");
       else send({ type: "error", code: "session_not_started", message: "Voice is still connecting.", recoverable: true });

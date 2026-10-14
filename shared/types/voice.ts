@@ -6,6 +6,7 @@
 // TALK_INPUT_SAMPLE_RATE from the client, synthesized speech at
 // TALK_OUTPUT_SAMPLE_RATE from the engine. Event names mirror OpenClaw's
 // `talk.event` vocabulary so a later gateway-relay convergence is a rename.
+import { isMattermostThreadSelection } from './mattermost-session-route.js';
 
 export const VOICE_TALK_FLAG = "release-voice-talk" as const;
 
@@ -77,6 +78,7 @@ export type TalkClientMessage =
       protocol: typeof TALK_PROTOCOL_VERSION;
       mode: TalkMode;
       channelId: string;
+      threadRootPostId: string;
       settings?: TalkSettings;
       client?: { platform?: string; userAgent?: string };
     }
@@ -203,7 +205,7 @@ const BARE_CONTROL_TYPES = new Set(["listen.start", "listen.stop", "turn.commit"
 function parseSessionStart(value: Record<string, unknown>): TalkClientMessage | null {
   if (value.protocol !== TALK_PROTOCOL_VERSION) return null;
   if (!TALK_MODES.includes(value.mode as TalkMode)) return null;
-  if (!nonEmptyString(value.channelId) || "mmToken" in value) return null;
+  if (!isMattermostThreadSelection({ channelId: value.channelId, threadRootPostId: value.threadRootPostId }) || "mmToken" in value) return null;
   const settings = value.settings === undefined ? undefined : parseTalkSettings(value.settings);
   if (value.settings !== undefined && settings === null) return null;
   const client = parseClientInfo(value.client);
@@ -211,7 +213,8 @@ function parseSessionStart(value: Record<string, unknown>): TalkClientMessage | 
     type: "session.start",
     protocol: TALK_PROTOCOL_VERSION,
     mode: value.mode as TalkMode,
-    channelId: value.channelId,
+    channelId: value.channelId as string,
+    threadRootPostId: value.threadRootPostId as string,
     ...(settings ? { settings } : {}),
     ...(client ? { client } : {}),
   };

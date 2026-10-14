@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
 import { resolveActivityConversation } from "../lib/activity-conversation.js";
+import { isMattermostThreadSelection } from '@octogee/shared/types/mattermost-session-route';
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
@@ -66,11 +67,11 @@ async function requestRuntimeDemand(input: {
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
-    if (req.body?.channelId !== undefined) {
-      if (typeof req.body.channelId !== 'string' || !/^[a-z0-9]{26}$/u.test(req.body.channelId) || Object.keys(req.body).some(key => key !== 'channelId')) {
+    if (req.body && Object.keys(req.body).length) {
+      if (!isMattermostThreadSelection(req.body)) {
         res.status(400).json({ error: 'invalid_activity_channel' }); return;
       }
-      const scope = await resolveActivityConversation({ db, uid, channelId: req.body.channelId });
+      const scope = await resolveActivityConversation({ db, uid, ...req.body });
       if (!scope) { res.status(403).json({ error: 'activity_channel_forbidden' }); return; }
       const { gatewayId, ...payload } = scope;
       const ticket = await mintTicket({ uid, gatewayId, purpose: 'openclaw-ws', payload });

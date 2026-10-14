@@ -12,6 +12,7 @@ import {
   type TalkVoiceCatalog,
 } from "@octogee/shared/types/voice";
 import { requireAuth } from "../middleware/auth.js";
+import { isMattermostThreadSelection } from '@octogee/shared/types/mattermost-session-route';
 import { logger } from "../middleware/logging.js";
 import {
   HourlyMintQuotaExceededError,
@@ -30,7 +31,7 @@ export interface VoiceCatalogPort {
 export interface VoiceRoutesDeps {
   featurePolicy?: FeaturePolicy;
   catalog?: VoiceCatalogPort;
-  resolveConversation?: (uid: string, channelId: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; sessionKey: string } | null>;
+  resolveConversation?: (uid: string, channelId: string, threadRootPostId: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; threadRootPostId: string; sessionKey: string } | null>;
 }
 
 const VOICE_PREVIEW_NAME_MAX = 60;
@@ -99,12 +100,13 @@ export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation 
     try {
       const uid = req.uid!;
       const body = req.body ?? {};
-      if (typeof body.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(body.channelId) || Object.keys(body).some(key => key !== "channelId")) {
+      if (!isMattermostThreadSelection(body)) {
         res.status(400).json({ error: "invalid_voice_conversation" }); return;
       }
       if (!resolveConversation) { res.status(503).json({ error: "voice_conversation_unavailable" }); return; }
-      const scope = await resolveConversation(uid, body.channelId);
+      const scope = await resolveConversation(uid, body.channelId, body.threadRootPostId);
       if (!scope) { res.status(403).json({ error: "voice_conversation_forbidden" }); return; }
+      if (scope.channelId !== body.channelId || scope.threadRootPostId !== body.threadRootPostId) throw new Error('Voice conversation resolver returned a different selection');
       const { gatewayId, ...payload } = scope;
       const ticket = await mintTicket({ uid, gatewayId, purpose: TALK_TICKET_PURPOSE, payload });
       const proxyUrl = process.env.API_PUBLIC_URL || "";

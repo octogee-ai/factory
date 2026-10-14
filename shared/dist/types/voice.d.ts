@@ -47,6 +47,7 @@ export type TalkClientMessage = {
     protocol: typeof TALK_PROTOCOL_VERSION;
     mode: TalkMode;
     channelId: string;
+    threadRootPostId: string;
     settings?: TalkSettings;
     client?: {
         platform?: string;

@@ -7,7 +7,8 @@ import { openClawProxyIdentityHeaders, openClawProxyOrigin } from '@octogee/shar
 import { requireAuthenticatedUid } from '../middleware/auth.js';
 import { logger } from '../middleware/logging.js';
 import { resolveNativeAdminAccess } from '../lib/native-admin-access.js';
-import { resolveToolConversationForUid, type ToolConversation } from '../lib/tool-conversation.js';
+import { resolveToolConversationForUid, resolveToolControlForUid, type ToolConversation, type ToolControl } from '../lib/tool-conversation.js';
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { WorkspaceNativeAccessError } from '../lib/workspace-native-access.js';
 import { createWsTicketStore, wsTicketFromPath } from '../lib/ws-ticket-store.js';
 import { authorizeSession, monitorSessionAuthorization } from '../lib/ws-session-authorization.js';
@@ -25,7 +26,7 @@ import { browserRpc, NativeBrowserError } from './browser-rpc.js';
 interface ToolSession {
   surface: 'browser' | 'computer' | 'themes';
   canControl: boolean;
-  context: ToolConversation;
+  context: ToolConversation | (ToolControl & { sessionKey?: never; agentId?: never; threadRootPostId?: never });
   reauthorize(): Promise<boolean>;
 }
 interface LiveToolSession extends ToolSession {
@@ -40,6 +41,7 @@ interface ToolSurfaceOptions {
   env?: NodeJS.ProcessEnv;
   resolveAccess?: typeof resolveNativeAdminAccess;
   resolveConversation?: typeof resolveToolConversationForUid;
+  resolveControl?: typeof resolveToolControlForUid;
   openUpstream?: typeof openNativeUserSocket;
   fetchImpl?: typeof fetch;
   log?: (message: string, meta?: Record<string, unknown>) => void;
@@ -70,6 +72,7 @@ function toolRequest(data: string, binary: boolean, pending: Set<string>): ToolR
   return frame as unknown as ToolRequest;
 }
 async function requestBrowser(frame: ToolRequest, owner: ToolRequests): Promise<unknown> {
+  if (owner.live.surface !== 'browser' || !owner.live.context.sessionKey) throw new Error('Browser conversation unavailable');
   const params = browserRequestParams(frame.params, owner.profile!, { sessionKey: owner.live.context.sessionKey, referencedTabs: owner.browserReferences });
   const result = await owner.rpc.call('browser.request', params, params.path === '/download' ? 155000 : 35000);
   const payload = browserRecord(result);
@@ -158,11 +161,13 @@ function serveToolRequests(browser: WebSocket, owner: ToolRequests, send: (frame
     }).finally(() => pending.delete(frame.id));
   });
 }
-function ticketClaim(req: Request): { channelId: string; surface: ToolSession['surface'] } | null {
+function ticketClaim(req: Request): { channelId: string; surface: ToolSession['surface']; threadRootPostId?: string } | null {
   const channelId = req.body?.channelId;
   const surface = req.body?.surface;
-  if (typeof channelId !== 'string' || !/^[a-z0-9]{26}$/u.test(channelId) || !['browser', 'computer', 'themes'].includes(surface) || Object.keys(req.body).some(key => !['channelId', 'surface'].includes(key))) return null;
-  return { channelId, surface };
+  const threadRootPostId = req.body?.threadRootPostId;
+  if (!isMattermostPostId(channelId) || !['browser', 'computer', 'themes'].includes(surface) || Object.keys(req.body).some(key => !['channelId', 'surface', 'threadRootPostId'].includes(key))) return null;
+  if (surface === 'browser') return isMattermostPostId(threadRootPostId) ? { channelId, surface, threadRootPostId } : null;
+  return threadRootPostId === undefined ? { channelId, surface } : null;
 }
 function accessDeniedStatus(kind: string): number {
   if (kind === 'unauthenticated') return 401;
@@ -197,6 +202,7 @@ async function nativeBrowserProfile(rpc: ReturnType<typeof browserRpc>): Promise
   return status.profile;
 }
 async function subscribeBrowserResources(rpc: ReturnType<typeof browserRpc>, session: ToolSession, profile: string, rememberTab: (resource: NativeBrowserTab) => void): Promise<NativeBrowserTab | null> {
+  if (session.surface !== 'browser' || !session.context.sessionKey) throw new Error('Browser conversation unavailable');
   const subscribed = browserRecord(await rpc.call('sessions.messages.subscribe', { key: session.context.sessionKey, agentId: session.context.agentId }));
   if (subscribed?.subscribed !== true || subscribed.key !== session.context.sessionKey) throw new Error('Native session resource subscription unavailable');
   const history = browserRecord(await rpc.call('chat.history', { sessionKey: session.context.sessionKey, agentId: session.context.agentId, limit: 50, maxBytes: 262144 }));
@@ -208,10 +214,23 @@ async function subscribeBrowserResources(rpc: ReturnType<typeof browserRpc>, ses
   return latestNativeBrowserTab(history.messages, profile);
 }
 
+function toolReadyPayload(session: ToolSession, resources: {
+  browserTab: NativeBrowserTab | null;
+  profile?: string;
+  environments?: Array<Record<string, unknown>>;
+  desktopNodeId?: string;
+}) {
+  const { browserTab, profile, environments, desktopNodeId } = resources;
+  return { sessionKey: session.context.sessionKey, userId: session.context.uid, canControl: session.canControl,
+    ...(browserTab ? { browserTab } : {}), ...(profile ? { profile } : {}),
+    ...(environments ? { environments, desktopSource: `node:${desktopNodeId}` } : {}) };
+}
+
 export function createToolSurface(options: ToolSurfaceOptions = {}) {
   const env = options.env ?? process.env;
   const resolveAccess = options.resolveAccess ?? resolveNativeAdminAccess;
   const resolveConversation = options.resolveConversation ?? resolveToolConversationForUid;
+  const resolveControl = options.resolveControl ?? resolveToolControlForUid;
   const openUpstream = options.openUpstream ?? openNativeUserSocket;
   const log = options.log ?? ((message, meta) => logger.warn(message, meta));
   const tickets = createWsTicketStore<ToolSession>();
@@ -240,18 +259,19 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
       if (!terminalAvailable(env) || typeof gatewayId !== 'string' || gatewayId !== env.GATEWAY_ID) { res.status(404).json({ error: 'tool_unavailable' }); return; }
       const claim = ticketClaim(req);
       if (!claim) { res.status(400).json({ error: 'invalid_conversation' }); return; }
-      const { channelId, surface } = claim;
+      const { channelId, surface, threadRootPostId } = claim;
       const authorization = req.headers.authorization;
       const access = await resolveAccess({ gatewayId, authorization, env });
       if (access.kind !== 'allowed') { res.status(accessDeniedStatus(access.kind)).json({ error: 'tool_unavailable' }); return; }
-      const context = await resolveConversation({ uid: req.uid!, gatewayId, channelId, env });
+      const resolve = () => surface === 'browser' ? resolveConversation({ uid: req.uid!, gatewayId, channelId, threadRootPostId: threadRootPostId!, env }) : resolveControl({ uid: req.uid!, gatewayId, channelId, env });
+      const context = await resolve();
       if (context.workspaceSlug !== access.workspaceSlug) { res.status(403).json({ error: 'forbidden' }); return; }
       const ticket = tickets.issue({ context, surface, canControl: access.canControl, reauthorize: async () => {
         const current = await resolveAccess({ gatewayId, authorization, env });
         if (current.kind !== 'allowed' || current.workspaceSlug !== context.workspaceSlug || current.canControl !== access.canControl) return false;
         try {
-          const next = await resolveConversation({ uid: context.uid, gatewayId, channelId, env });
-          return next.agentId === context.agentId && next.sessionKey === context.sessionKey;
+          const next = await resolve();
+          return next.workspaceSlug === context.workspaceSlug && ('sessionKey' in next ? 'sessionKey' in context && next.sessionKey === context.sessionKey : !('sessionKey' in context));
         } catch (error) {
           if (error instanceof WorkspaceNativeAccessError && error.status < 500) return false;
           throw error;
@@ -302,7 +322,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
     };
     browser.on('close', () => close()); browser.on('error', () => close(1011, 'Tool socket failed'));
     try {
-      const native = await openUpstream(session.context.uid, session.context.gatewayId, env, { caps: session.surface === 'browser' ? ['session-scoped-events'] : [] }); upstream = native.ws;
+      const native = await openUpstream(session.context.uid, session.context.gatewayId, env, { caps: session.surface === 'browser' ? ['session-scoped-events'] : [], ...(session.surface === 'browser' ? { channelSessionKey: session.context.sessionKey } : {}) }); upstream = native.ws;
       if (!live.active) { upstream.close(); return; }
       if (!native.scopes.has('operator.admin')) { close(1008, 'Tool access changed'); return; }
       upstream.on('close', () => close(1011, 'Native Tool disconnected')); upstream.on('error', () => close(1011, 'Native Tool failed'));
@@ -348,8 +368,8 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
       onNativeEvent = frame => {
         if (session.surface === 'themes' && ['plugins.changed', 'users.prefs.changed'].includes(String(frame.event))) {
           send({ type: 'event', event: frame.event, payload: frame.payload });
-        } else if (profile) {
-          const resource = nativeBrowserResource(frame, session.context, profile);
+        } else if (profile && session.context.sessionKey && session.context.agentId) {
+          const resource = nativeBrowserResource(frame, { sessionKey: session.context.sessionKey, agentId: session.context.agentId }, profile);
           if (resource) { rememberTab(resource); browserTab = resource; send({ type: 'event', event: 'tools.browser-tab', payload: resource }); }
         }
       };
@@ -358,7 +378,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
         browserTab ??= historicalTab;
       }
       serveToolRequests(browser, { live, rpc, profile, browserReferences, desktopNodeId: () => desktopNodeId, readEnvironment, mintStream, registerMedia, retireGrant }, send, close);
-      send({ type: 'event', event: 'tools.ready', payload: { sessionKey: session.context.sessionKey, userId: session.context.uid, canControl: session.canControl, ...(browserTab ? { browserTab } : {}), ...(profile ? { profile } : {}), ...(environments ? { environments, desktopSource: `node:${desktopNodeId}` } : {}) } });
+      send({ type: 'event', event: 'tools.ready', payload: toolReadyPayload(session, { browserTab, profile, environments, desktopNodeId }) });
     } catch (error) { log('Tool upstream failed', { error: error instanceof Error ? error.message : String(error) }); close(1011, 'Tool unavailable'); }
   }
 
