@@ -140,11 +140,9 @@ export async function deployTestFleetBuilder(db: Firestore, gateway: Pick<TestFl
   if (!snapshot.exists && !current) await rethrowMutationError(db, gateway.gatewayId, new InvalidGatewayRootError(gateway.gatewayId));
   if (!current || current.gatewayClass !== "builder") throw new Error(`${gateway.gatewayId} is no longer a non-retired Builder`);
   if (!matchesTestPlatformRelease(parsePlatformReleaseRecord(platform.data()), payload, manifest.sourceSha)) throw new Error("platform release was superseded before Builder deployment");
-  const actor = `test-fleet:${process.env.GITHUB_ACTOR ?? "operator"}`;
-  const runUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
-    ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : null;
+  const actor = process.env.RELEASE_ACTOR ?? "operator:test-fleet";
   try { return await runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-    actor, forced: false, what: "deploy TEST build to Builder gateway", why: runUrl ? `Complete TEST fleet deployment ${runUrl}` : "operator requested complete TEST fleet deployment",
+    actor, forced: false, what: "deploy TEST build to Builder gateway", why: process.env.RELEASE_REASON ?? "operator requested complete TEST fleet deployment",
     target: { gatewayId: current.gatewayId, environment: "test" },
     preActionStatus: { desiredStatus: current.desiredStatus, desiredRelease: current.desiredRelease, latestRelease: current.latestRelease },
     mutation: { kind: "deploy-gateway-build", gatewayId: current.gatewayId, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest },

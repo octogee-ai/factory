@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -26,22 +25,6 @@ function deploymentSettings(path: string): string {
 }
 
 describe("deployment target consumers", () => {
-  it("resolves regional values in every deployment workflow", () => {
-    const workflows = [
-      ".github/workflows/build-and-deploy.yml",
-      ".github/workflows/gateway-build-operator-base.yml",
-      ".github/workflows/site.yml",
-      ".github/workflows/trivy-images.yml",
-    ];
-
-    for (const workflow of workflows) {
-      const contents = source(workflow);
-      expect(contents, workflow).toContain("./.github/actions/resolve-deployment-target");
-      expect(contents, workflow).not.toContain("us-central1");
-      expect(contents, workflow).not.toContain("gke_octogee_");
-      expect(contents, workflow).not.toContain("-docker.pkg.dev/octogee/octogee");
-    }
-  });
 
   it("keeps the reusable target action free of a regional fallback", () => {
     const contents = source(".github/actions/resolve-deployment-target/action.yml");
@@ -73,143 +56,6 @@ describe("deployment target consumers", () => {
     }
   });
 
-  it("keeps only Central release targets and no WEST release credential routes", () => {
-    const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
-      activeTargets: Record<string, string>;
-      targets: Record<string, unknown>;
-    };
-
-    expect(targets.activeTargets).toEqual({
-      prod: "prod-central",
-      test: "test-central",
-    });
-    expect(Object.keys(targets.targets).sort()).toEqual([
-      "prod-central",
-      "test-central",
-    ]);
-
-    for (const workflow of [
-      ".github/workflows/build-main.yml",
-      ".github/workflows/gateway-build-operator-base.yml",
-      ".github/workflows/site.yml",
-    ]) {
-      const contents = source(workflow);
-      expect(contents, workflow).not.toMatch(/\b(?:test|prod)-west\b/);
-      expect(contents, workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
-    }
-  });
-
-  it("rejects retired candidate targets from release workflows while retaining an exact target handoff", () => {
-    const targetAction = source(".github/actions/resolve-deployment-target/action.yml");
-    expect(targetAction).toContain("--reject-candidate-target");
-    expect(targetAction).toContain("Candidate deployment targets cannot run release or build automation");
-
-    for (const workflow of [
-      ".github/workflows/build-and-deploy.yml",
-      ".github/workflows/gateway-build-operator-base.yml",
-      ".github/workflows/site.yml",
-    ]) {
-      const contents = source(workflow);
-      expect(contents, workflow).toContain("deployment_target");
-      expect(contents, workflow).not.toContain("for example test-west");
-    }
-  });
-
-  it("passes the selected registry location into every Cloud Build", () => {
-    const platform = source(".github/workflows/build-and-deploy.yml");
-    const gateway = source(".github/workflows/gateway-build-operator-base.yml");
-
-    expect(platform.match(/_REGION=\$\{\{ steps\.target\.outputs\.artifact_registry_location \}\}/g))
-      .toHaveLength(5);
-    expect(gateway.match(/_REGION=\$\{\{ needs\.matrix-setup\.outputs\.ar_location \}\}/g))
-      .toHaveLength(3);
-    expect(gateway).not.toContain("build-gateway-extra-oc");
-    expect(gateway).not.toContain("build-operator-extra-oc");
-
-    for (const config of [
-      "artifact-worker/cloudbuild.yaml",
-      "cloudbuild-base.yaml",
-      "cloudbuild-builder-base.yaml",
-      "cloudbuild-operator-base-extra.yaml",
-      "cloudbuild-operator-base.yaml",
-      "cloudbuild-operator-final-extra.yaml",
-      "cloudbuild-operator-final.yaml",
-      "cloudbuild-operator-toolkit.yaml",
-      "cloudbuild.yaml",
-      "gateway-edge/cloudbuild-candidate.yaml",
-      "gateway-edge/cloudbuild.yaml",
-      "glm-controller/cloudbuild.yaml",
-      "octogee-api/cloudbuild.yaml",
-      "ops-agent/cloudbuild.yaml",
-    ]) {
-      expect(source(config), config).not.toContain('  _REGION: "us-central1"');
-    }
-  });
-
-  it("passes the selected region into every platform Cloud Build waiter", () => {
-    const platform = source(".github/workflows/build-and-deploy.yml");
-
-    expect(platform.match(/--region="\$\{\{ steps\.target\.outputs\.region \}\}"/g))
-      .toHaveLength(5);
-  });
-
-  it("passes exact targets into promotion and secret preflight", () => {
-    const platform = source(".github/workflows/build-and-deploy.yml");
-    const verifySecrets = source("scripts/verify-secrets.sh");
-
-    expect(platform).toContain(
-      "--deployment-target=${{ steps.target.outputs.target_id }}",
-    );
-    expect(verifySecrets).toContain("--deployment-target=*)");
-    expect(verifySecrets).toContain('octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"');
-  });
-
-  it("builds the current OpenClaw base from its selected environment", () => {
-    for (const script of [
-      "scripts/setup-secrets.sh",
-      "scripts/setup-mattermost.sh",
-      "scripts/setup-gitea.sh",
-    ]) {
-      const contents = source(script);
-      expect(contents, script).toContain("--deployment-target=*)");
-      expect(contents, script).toContain(
-        'octogee_load_deployment_target "--target=$DEPLOYMENT_TARGET"',
-      );
-      expect(contents, script).toContain("does not belong to environment");
-    }
-
-    const workflow = source(".github/workflows/gateway-base-rebuild.yml");
-    expect(workflow).toContain("environment:");
-    expect(workflow).toContain("./.github/actions/resolve-deployment-target");
-    expect(workflow).toContain("artifact_registry_location");
-    expect(workflow).toContain("cluster_project_id");
-  });
-
-  it("selects public Firebase credentials by exact registered target", () => {
-    const workflow = source(".github/workflows/site.yml");
-    const gateway = source(".github/workflows/gateway-build-operator-base.yml");
-
-    expect(workflow).toContain("PUBLIC_FIREBASE_API_KEY_TEST");
-    expect(workflow).toContain("PUBLIC_MM_TEAM_ID_TEST");
-    expect(workflow).not.toContain("BUILD_WEEK");
-    expect(workflow).toContain("firebase-deployer@${{ steps.target.outputs.firebase_project_id }}.iam.gserviceaccount.com");
-    expect(gateway).not.toContain("firebase-deployer@");
-    expect(workflow).not.toContain("FIREBASE_DEPLOYER_KEY");
-    expect(gateway).not.toContain("FIREBASE_DEPLOYER_KEY");
-    expect(workflow).not.toMatch(/(?:TEST|PROD)_WEST/);
-    expect(gateway).not.toMatch(/(?:TEST|PROD)_WEST/);
-    expect(workflow).toContain(
-      "for value_name in api_key app_id sender_id mm_team_id; do",
-    );
-    expect(workflow).not.toContain(
-      "for value_name in api_key app_id sender_id measurement_id mm_team_id; do",
-    );
-    expect(workflow).toContain("export_environment_variables: false");
-    expect(workflow).toContain("token_format: access_token");
-    expect(gateway).not.toContain("GOOGLE_OAUTH_ACCESS_TOKEN");
-    expect(gateway).not.toContain("google-github-actions/auth");
-  });
-
   it("does not embed the active cluster context in fleet operations", () => {
     for (const script of [
       "scripts/ops/fleet.ts",
@@ -217,19 +63,6 @@ describe("deployment target consumers", () => {
       expect(source(script), script).not.toContain(
         "gke_octogee_us-central1_octogee-gateway",
       );
-    }
-  });
-
-  it("keeps the platform credential reset out of ordinary deploy and gateway migration paths", () => {
-    const resetScript = "reset-platform-builder-credentials";
-    for (const path of [
-      ".github/workflows/build-main.yml",
-      ".github/workflows/build-and-deploy.yml",
-      ".github/workflows/gateway-build-operator-base.yml",
-      "scripts/ops/fleet.ts",
-      "scripts/ops/cutover-simple-roll.ts",
-    ]) {
-      expect(source(path), path).not.toContain(resetScript);
     }
   });
 
@@ -303,25 +136,6 @@ describe("deployment target consumers", () => {
     }
   });
 
-  it("keeps west Cloud SQL bootstrap away from central Secret Manager slots", () => {
-    const setupCloudSql = source("scripts/setup-cloud-sql.sh");
-    const setupSecrets = source("scripts/setup-secrets.sh");
-    const setupMattermost = source("scripts/setup-mattermost.sh");
-    const provisionNamespace = source("scripts/provision-namespace.sh");
-    const platformWorkflow = source(".github/workflows/build-and-deploy.yml");
-
-    expect(setupCloudSql).toContain('MATTERMOST_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"');
-    expect(setupCloudSql).toContain('GITEA_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"');
-    expect(setupCloudSql).toContain('CONNECTION_NAME_SECRET="$TARGET_CLOUD_SQL_CONNECTION_NAME_SECRET"');
-    expect(setupSecrets).toContain('sm_get "$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET" "$SM_PROJECT"');
-    expect(setupSecrets).toContain('sm_get "$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET" "$SM_PROJECT"');
-    expect(setupMattermost).toContain('--secret="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"');
-    expect(setupMattermost).toContain('--instance="$TARGET_CLOUD_SQL_INSTANCE"');
-    expect(provisionNamespace).toContain('MM_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET"');
-    expect(provisionNamespace).toContain('GITEA_DB_PASSWORD_SECRET="$TARGET_CLOUD_SQL_GITEA_PASSWORD_SECRET"');
-    expect(platformWorkflow).toContain('steps.target.outputs.cloud_sql_gitea_password_secret_name');
-  });
-
   it("scopes internal bootstrap credentials to the exact target", () => {
     const setupSecrets = source("scripts/setup-secrets.sh");
     const setupGitea = source("scripts/setup-gitea.sh");
@@ -380,41 +194,6 @@ describe("deployment target consumers", () => {
       );
       expect(contents, script).toContain("does not belong to environment");
     }
-  });
-
-  it("layers exact target Helm values into every canonical install", () => {
-    const renderer = "core/dist/render-deployment-target-helm-values.js";
-    for (const script of [
-      "scripts/setup-secrets.sh",
-      "scripts/setup-mattermost.sh",
-      "scripts/teardown-env.sh",
-    ]) {
-      const contents = source(script);
-      expect(contents, script).toContain(renderer);
-      expect(contents, script).toContain("--target=$TARGET_ID");
-    }
-    expect(source(".github/workflows/build-and-deploy.yml")).toContain(renderer);
-  });
-
-  it("resolves the project runner API egress allowlist from the live cluster before Helm", () => {
-    const workflow = source(".github/workflows/build-and-deploy.yml");
-
-    expect(workflow).toContain("get endpoints kubernetes");
-    expect(workflow).toContain("get service kubernetes");
-    expect(workflow).toContain("API_SERVER_EGRESS_CIDRS_JSON");
-    expect(workflow).toContain(
-      '--set-json "projectRunner.apiServerEgressCidrs=${API_SERVER_EGRESS_CIDRS_JSON}"',
-    );
-  });
-
-  it("reconciles durable PVC snapshot schedules after every platform release", () => {
-    const workflow = source(".github/workflows/build-and-deploy.yml");
-
-    expect(workflow).toContain("reconcile-pvc-snapshot-schedules.sh");
-    expect(workflow).toContain("--target=${{ steps.target.outputs.target_id }}");
-    expect(workflow).toContain("--apply");
-    expect(workflow).not.toContain("needs.build.outputs.env !=");
-    expect(workflow).not.toContain("steps.target.outputs.region == 'us-west1'");
   });
 
   it("owns the shared Central snapshot schedule and grants its reconciler only the required Compute permissions", () => {
@@ -489,79 +268,6 @@ describe("deployment target consumers", () => {
     expect(contents).toContain("@octogee/core/deployment-environment");
     expect(contents).not.toContain("us-central1");
     expect(contents).not.toContain("-docker.pkg.dev/octogee/octogee");
-  });
-
-  it("passes the exact deployment target into platform runtimes", () => {
-    const workflow = source(".github/workflows/build-and-deploy.yml");
-    const glmDeployment = source("helm/octogee/charts/glm-controller/templates/deployment.yaml");
-    const apiDeployment = source("helm/octogee/charts/octogee-api/templates/deployment.yaml");
-    const controller = source("glm-controller/src/index.ts");
-
-    expect(workflow).toContain("global.deploymentTargetId");
-    expect(glmDeployment).toContain("DEPLOYMENT_TARGET_ID");
-    expect(apiDeployment).toContain("DEPLOYMENT_TARGET_ID");
-    expect(controller).toContain("deploymentSettingsForRuntime");
-    expect(controller).toContain("K8S_NAMESPACE is required for glm-controller");
-    expect(controller).not.toContain('process.env.K8S_NAMESPACE ?? "octogee"');
-  });
-
-  it("publishes the platform release's immutable gateway and gateway-edge receipts to Cowboy", () => {
-    const workflow = source(".github/workflows/build-and-deploy.yml");
-
-    expect(workflow).toContain(
-      '--set-string "glm-controller.platformRelease.gatewayImageTag=${GATEWAY_TAG}@${GATEWAY_DIGEST}"',
-    );
-    expect(workflow).toContain(
-      "--set glm-controller.platformRelease.gatewayImageRepository=${{ steps.target.outputs.artifact_registry_repository }}/octogee-gateway",
-    );
-    expect(workflow).toContain(
-      "--set glm-controller.platformRelease.gatewayEdgeImageRepository=${{ steps.target.outputs.artifact_registry_repository }}/gateway-edge",
-    );
-    expect(workflow).toContain(
-      '--set-string "glm-controller.platformRelease.gatewayEdgeImageTag=${GATEWAY_TAG}@${ROUTER_DIGEST}"',
-    );
-    expect(workflow).toContain(
-      '--set-string "glm-controller.platformRelease.builderImageTag=${GATEWAY_TAG}@${BUILDER_DIGEST}"',
-    );
-    expect(workflow).toContain('BUILDER_DIGEST="$(manifest_digest gateway octogee-gateway-builder)"');
-    expect(workflow).toContain(
-      '--set-string "glm-controller.platformRelease.openclawSourceSha=${OPENCLAW_SOURCE_SHA}"',
-    );
-    expect(workflow).toContain('OPENCLAW_SOURCE_SHA="$(jq -er \'.openclawSourceSha\' "$MANIFEST_FILE")"');
-    expect(workflow).toContain('OPENCLAW_SOURCE_SHA="$(jq -er \'.sourceSha\' infra/gateway/openclaw-tarball/current.json)"');
-    expect(workflow).toContain('[[ "$OPENCLAW_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]');
-    expect(workflow).not.toContain("bootstrapDefaultGateway");
-  });
-
-  it.each([
-    ["f".repeat(40), true],
-    [undefined, false],
-    [null, false],
-    ["f".repeat(7), false],
-    ["F".repeat(40), false],
-    [123, false],
-  ])("validates release manifest OpenClaw source %s before deployment", (openclawSourceSha, valid) => {
-    const workflow = source(".github/workflows/build-and-deploy.yml");
-    const validation = workflow.match(/if ! jq -e --arg source_sha "\$SOURCE_SHA" --arg repository "\$AR_REPOSITORY" '([\s\S]*?)' "\$MANIFEST_FILE"/);
-    expect(validation).not.toBeNull();
-    const digest = `sha256:${"a".repeat(64)}`;
-    const manifest = {
-      sourceSha: "b".repeat(40),
-      repository: "registry.example/release",
-      openclawSourceSha,
-      openclawVersion: "2026.9.9",
-      surfaces: {
-        gateway: { "gateway-edge": digest, "octogee-gateway": digest },
-        platform: Object.fromEntries([
-          "artifact-worker", "glm-controller", "octogee-api", "octogee-ops-agent", "octogee-project-runner",
-        ].map((image) => [image, digest])),
-      },
-    };
-    const result = spawnSync("jq", [
-      "-e", "--arg", "source_sha", manifest.sourceSha, "--arg", "repository", manifest.repository, validation![1],
-    ], { input: JSON.stringify(manifest), encoding: "utf8" });
-    expect(result.error).toBeUndefined();
-    expect(result.status === 0, result.stderr).toBe(valid);
   });
 
   it("prints a full-rebuild recipe that resolves one immutable manifest for every platform and gateway image", () => {

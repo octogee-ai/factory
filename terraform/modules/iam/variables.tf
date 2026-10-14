@@ -8,6 +8,10 @@ variable "environment" {
   type        = string
 }
 
+variable "region" {
+  type = string
+}
+
 variable "namespace" {
   description = "Kubernetes namespace for Workload Identity binding"
   type        = string

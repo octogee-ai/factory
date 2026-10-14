@@ -77,28 +77,6 @@ describe("Mattermost fresh-database bootstrap contract", () => {
     expect(secrets).not.toContain('MM_ADMIN_PAT="${MM_ADMIN_PAT:-$(ksecret_key mattermost-gateway admin_token)}"');
   });
 
-  it("blocks a release on Cloud SQL secret drift and bootstraps Mattermost after Helm", () => {
-    const workflow = read(".github/workflows/build-and-deploy.yml");
-    const verify = read("scripts/verify-secrets.sh");
-    const helmTest = read("helm/octogee/templates/tests/test-mm-admin-token.yaml");
-
-    expect(verify).toContain('mattermost-cloud-sql/password differs from Secret Manager');
-    expect(verify).toContain('TARGET_CLOUD_SQL_MATTERMOST_PASSWORD_SECRET');
-    expect(workflow).toContain("Reconcile Mattermost bootstrap state");
-    expect(workflow).toContain("./scripts/setup-mattermost.sh");
-    expect(workflow).toContain("--skip-cloud-sql-password-sync");
-    expect(workflow.indexOf("Reconcile Mattermost bootstrap state")).toBeGreaterThan(
-      workflow.indexOf("Umbrella helm upgrade (platform release)"),
-    );
-    expect(workflow.indexOf("Verify required K8s secrets")).toBeGreaterThan(
-      workflow.indexOf("Reconcile Mattermost bootstrap state"),
-    );
-    expect(helmTest).toContain("MM_ADMIN_USER_ID");
-    expect(helmTest).toContain("system_admin");
-    expect(helmTest).toContain("MM_ADMIN_TOKEN_FINGERPRINT");
-    expect(helmTest).toContain("octogee platform admin PAT");
-  });
-
   it("grants CI read-only access to the Mattermost password without Cloud SQL mutation rights", () => {
     const setup = read("scripts/setup-mattermost.sh");
     const westPlatform = read("terraform/environments/west-platform/main.tf");

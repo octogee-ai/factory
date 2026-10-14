@@ -291,7 +291,6 @@ import {
 import {
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
-import { reconcileImagePins } from "./reconcile-image-pins.js";
 import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import {
   deleteAuthUserTolerantOfMissing,
@@ -435,7 +434,6 @@ const GATEWAY_VALUES_FILE = (function () {
   if (explicit) return explicit;
   return `${GATEWAY_CHART}/${ENVIRONMENT_SETTINGS.gatewayValuesFile}`;
 })();
-const PIN_ENV = ENVIRONMENT_SETTINGS.pinEnvironment;
 const COMPUTER_ENVIRONMENT = NAMESPACE.endsWith("-test") ? "test" : "prod";
 
 const FLEET_CONTROLLER_PORT = process.env.FLEET_CONTROLLER_PORT ?? "3003";
@@ -512,11 +510,6 @@ interface ControllerDeps {
   modelKeySourceIssuer?: GatewayModelKeySourceIssuer;
   modelKeySecretEnsurer?: GatewayModelKeySecretEnsurer;
   restartGatewayDeployment?: (revisionId: string) => Promise<void>;
-  reconcileImagePins?: (
-    env: string,
-    instances: ReadonlyArray<{ imageRepository: string; imageTag: string }>,
-    log: (msg: string) => void,
-  ) => Promise<void>;
   handlers: OperationHandlers;
   log: (msg: string) => void;
   syncFleetIngress?: (
@@ -922,65 +915,6 @@ async function readDurableServingFleetGateways(db: Firestore): Promise<FleetGate
   return state.gateways
     .filter((gateway) => gateway.desiredStatus !== "retired")
     .map((gateway) => ({ gatewayId: gateway.gatewayId }));
-}
-
-async function readDurableReleaseArtifacts(
-  db: Firestore,
-  state: DurableRuntimeState,
-): Promise<Array<{ imageRepository: string; imageTag: string }>> {
-  const artifacts: Array<{ imageRepository: string; imageTag: string }> = [];
-  for (const gateway of state.gateways) {
-    if (gateway.desiredStatus === "retired") continue;
-    const releases = new Set([gateway.desiredRelease]);
-    if (gateway.liveRelease != null) releases.add(gateway.liveRelease);
-    for (const release of releases) {
-      const artifact = await readGatewayArtifact(db, gateway.gatewayId, release);
-      if (!artifact) {
-        throw new Error(
-          `gateway ${gateway.gatewayId} release ${release} has no valid release artifact`,
-        );
-      }
-      artifacts.push({
-        imageRepository: artifact.imageRepository,
-        imageTag: artifact.imageTag,
-      });
-      if (artifact.profileImages?.builder) {
-        artifacts.push(artifact.profileImages.builder);
-      }
-      if (!artifact.gatewayEdgeImage) {
-        throw new Error(
-          `gateway ${gateway.gatewayId} release ${release} is missing its immutable gateway-edge image reference`,
-        );
-      }
-      const gatewayEdgeImage = artifact.gatewayEdgeImage;
-      artifacts.push({
-        imageRepository: gatewayEdgeImage.imageRepository,
-        imageTag: gatewayEdgeImage.imageTag,
-      });
-    }
-  }
-  return artifacts;
-}
-
-async function syncDurableImagePins(
-  deps: ControllerDeps,
-  state: DurableRuntimeState,
-): Promise<void> {
-  if (!deps.reconcileImagePins) return;
-  let artifacts: Array<{ imageRepository: string; imageTag: string }>;
-  try {
-    artifacts = await readDurableReleaseArtifacts(deps.db, state);
-  } catch (err) {
-    deps.log(
-      `[image-pins] ⚠ preserved existing pins: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return;
-  }
-  try {
-    await deps.reconcileImagePins(PIN_ENV, artifacts, deps.log);
-  } catch (err) {
-    deps.log(`[image-pins] ⚠ reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
 }
 
 async function syncDurableRuntimeDependencies(
@@ -1493,7 +1427,6 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
     assertDurableRuntimeState(state);
     return state;
   });
-  await runReconcilePhase(deps, "image-pins", () => syncDurableImagePins(deps, runtime));
   await runReconcilePhase(deps, "runtime-dependencies", () =>
     syncDurableRuntimeDependencies(
       deps,
@@ -2463,7 +2396,7 @@ function startControllerBackgroundTasks({
   });
   const homeServices = BUILDER_VM_SPEC ? createBuilderHomeServices(db, log) : undefined;
   const prepareBuilderHome = homeServices ? createBuilderHomeMigrator({
-    db, now: Date.now, subnetwork: BUILDER_VM_SPEC!.subnetwork, nativeZones: BUILDER_VM_SPEC!.zones, log,
+    db, environment: COMPUTER_ENVIRONMENT, now: Date.now, subnetwork: BUILDER_VM_SPEC!.subnetwork, nativeZones: BUILDER_VM_SPEC!.zones, log,
     ...homeServices.provider, copy: homeServices.copy,
   }) : undefined;
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
@@ -2810,7 +2743,6 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     modelKeySourceIssuer,
     modelKeySecretEnsurer,
     restartGatewayDeployment: createGatewayDeploymentRestarter(db,runKubectl, log),
-    reconcileImagePins,
     handlers,
     log,
     syncFleetIngress: syncEdgeIngressForGateways,

@@ -70,7 +70,7 @@ async function replaceContents(filesystem: HomeFs, source: string, target: strin
   const preserved = paths.entries;
   const metadata = await restorationDirectory(source);
   const existing = await restorationDirectory(target);
-  const owner = homeOwner ?? metadata ?? existing;
+  const owner = homeOwner ?? existing ?? metadata;
   const entries = metadata ? await readdir(source) : [];
   const protectedEntries = preserved.map((path) => path.split("/")[0]);
   await mkdir(target, { recursive: true });

@@ -11,7 +11,9 @@ updated: 2026-07-28
 # Testing
 
 ```bash
-npm test          # per-package; CI runs them in parallel (no root aggregator)
+npm test          # package tests
+npm run ci:check -- --plan  # canonical affected-check plan
+npm run ci:docker          # same Linux checks as Cloud Build, including on Mac Studio
 npm run typecheck # tsc --noEmit per package
 ```
 

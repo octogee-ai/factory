@@ -64,13 +64,12 @@ describe("TEST fleet operator release mutation", () => {
     mocks.append.mockRejectedValue(new InvalidGatewayRootError("b-paused"));
     await expect(deployTestFleetBuilder(db, { gatewayId: "b-paused" }, manifest, payload)).rejects.toBeInstanceOf(succeeded ? TestFleetDeploymentDeferredError : InvalidGatewayRootError);
   });
-  it("retains the CI run URL in the ordinary operations journal reason", async () => {
-    vi.stubEnv("GITHUB_SERVER_URL", "https://github.com");
-    vi.stubEnv("GITHUB_REPOSITORY", "octogee/octogee");
-    vi.stubEnv("GITHUB_RUN_ID", "123");
+  it("retains the explicit operator identity and reason in the operations journal", async () => {
+    vi.stubEnv("RELEASE_ACTOR", "operator:chris");
+    vi.stubEnv("RELEASE_REASON", "Ship TEST from Cloud Build 123");
     const { db } = database();
     await deployTestFleetBuilder(db, { gatewayId: "b-paused" }, manifest, payload);
-    expect(mocks.mutate).toHaveBeenCalledWith(db, expect.objectContaining({ why: "Complete TEST fleet deployment https://github.com/octogee/octogee/actions/runs/123" }));
+    expect(mocks.mutate).toHaveBeenCalledWith(db, expect.objectContaining({ actor: "operator:chris", why: "Ship TEST from Cloud Build 123" }));
   });
   it("revalidates Builder class before writing an audit or release", async () => {
     const { db } = database("shared");

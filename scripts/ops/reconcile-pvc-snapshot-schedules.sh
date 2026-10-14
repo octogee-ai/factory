@@ -224,7 +224,8 @@ for pvc_name in "${PVC_NAMES[@]}"; do
 done
 
 RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+GIT_COMMIT="${SOURCE_SHA:-$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
+[[ "$GIT_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo 'Snapshot schedule receipt requires a full source SHA' >&2; exit 1; }
 jq -n \
   --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg gitCommit "${GIT_COMMIT}" \

@@ -12,7 +12,6 @@ function requiredEnv(name: string): string {
 
 const environment = requiredEnv("RELEASE_ENVIRONMENT");
 if (environment !== "test" && environment !== "prod") throw new Error(`release-desktop-image: unknown environment ${environment}`);
-const runUrl = `${requiredEnv("GITHUB_SERVER_URL")}/${requiredEnv("GITHUB_REPOSITORY")}/actions/runs/${requiredEnv("GITHUB_RUN_ID")}`;
 
 initializeApp({ credential: applicationDefault(), projectId: deploymentEnvironmentSettings(environment).firebaseProjectId });
 
@@ -21,8 +20,9 @@ await runDesktopImagePublication({
   sourceSha: requiredEnv("SOURCE_SHA"),
   apply: true,
   skipMissing: true,
-  actor: `github-actions:${requiredEnv("GITHUB_ACTOR")}`,
-  why: `Deploy platform build ${runUrl}`,
+  controllerPool: true,
+  actor: requiredEnv("RELEASE_ACTOR"),
+  why: requiredEnv("RELEASE_REASON"),
   db: getFirestore(),
-  auth: new GoogleAuth({ keyFilename: requiredEnv("DESKTOP_IMAGE_COMPUTE_CREDENTIALS"), scopes: ["https://www.googleapis.com/auth/cloud-platform"] }),
+  auth: new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] }),
 });

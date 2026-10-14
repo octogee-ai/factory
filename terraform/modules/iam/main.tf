@@ -114,11 +114,12 @@ resource "google_project_iam_member" "api_secretmanager_admin" {
   member  = "serviceAccount:${google_service_account.api.email}"
 }
 
-# ── Firebase Admin (for CF + Firestore) ─────────────────────────────────────
-resource "google_project_iam_member" "firebase_admin" {
-  project = var.project_id
-  role    = "roles/firebase.admin"
-  member  = "serviceAccount:${google_service_account.api.email}"
+# ── Firebase product access ────────────────────────────────────────────────
+resource "google_project_iam_member" "api_firebase" {
+  for_each = toset(["roles/datastore.user", "roles/firebaseauth.admin", "roles/firebasehosting.admin", "roles/firebase.viewer"])
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.api.email}"
 }
 
 # ── Firebase Storage object I/O ─────────────────────────────────────────────
@@ -184,10 +185,11 @@ resource "google_service_account_iam_member" "glm_controller_workload_identity" 
 
 # Firestore (glmGateways / gateways docs) + Firebase Hosting (customer site
 # teardown) — the access Cowboy exercised via the shared GSA.
-resource "google_project_iam_member" "glm_controller_firebase_admin" {
-  project = var.project_id
-  role    = "roles/firebase.admin"
-  member  = "serviceAccount:${google_service_account.glm_controller.email}"
+resource "google_project_iam_member" "glm_controller_firebase" {
+  for_each = toset(["roles/datastore.user", "roles/firebaseauth.admin", "roles/firebasehosting.admin", "roles/firebase.viewer"])
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.glm_controller.email}"
 }
 
 # Secret Manager admin: Cowboy creates + sets IAM on + (on decommission)
@@ -281,10 +283,26 @@ resource "google_project_iam_member" "functions_eventarc_service_agent" {
   member  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
 }
 
-resource "google_project_iam_member" "functions_cloudbuild_builder" {
+resource "google_project_iam_member" "functions_build_logs" {
   project = var.project_id
-  role    = "roles/cloudbuild.builds.builder"
+  role    = "roles/logging.logWriter"
   member  = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+resource "google_artifact_registry_repository_iam_member" "functions_build_images" {
+  project    = var.project_id
+  location   = var.region
+  repository = "gcf-artifacts"
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+}
+resource "google_storage_bucket_iam_member" "functions_build_sources" {
+  for_each = toset([
+    "gcf-v2-sources-${data.google_project.this.number}-${var.region}",
+    "gcf-v2-uploads-${data.google_project.this.number}.${var.region}.cloudfunctions.appspot.com",
+  ])
+  bucket = each.value
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
 
 # ── Service Account: firebase-deployer (CI `firebase deploy`) ────────────────

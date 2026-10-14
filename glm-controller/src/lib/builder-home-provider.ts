@@ -225,7 +225,7 @@ class BuilderHomeProvider {
     return claim;
   }
   copyStorageClass(input: HomeCopyInput): string {
-    return `octogee-home-${this.deps.namespace}-${input.targetZone}`;
+    return `octogee-home-${this.deps.namespace}${this.deps.environment === "test" ? "-tagged" : ""}-${input.targetZone}`;
   }
   async readClusterTarget(input: HomeCopyInput): Promise<CopyHomeDisk | null> {
     const claim = await this.copyClaim(input);

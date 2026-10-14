@@ -181,11 +181,17 @@ launch_browser
 while true; do
   child_status=0
   exited_pid=""
-  wait -n -p exited_pid "${children[@]}" ${browser_pid:+"$browser_pid"} || child_status=$?
-  if [[ -z "${exited_pid:-}" && -n "$browser_pid" ]] && ! kill -0 "$browser_pid" 2>/dev/null; then
-    exited_pid="$browser_pid"
+  for pid in "${children[@]}" ${browser_pid:+"$browser_pid"}; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      exited_pid="$pid"
+      wait "$pid" || child_status=$?
+      break
+    fi
+  done
+  if [[ -z "$exited_pid" ]]; then
+    sleep 0.1
+    continue
   fi
-  [[ -n "${exited_pid:-}" ]] || continue
   if [[ "$exited_pid" == "$browser_pid" ]]; then
     browser_pid=""
     if (( restart_browser )); then

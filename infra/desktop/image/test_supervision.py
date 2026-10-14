@@ -70,7 +70,7 @@ sys.exit(int((root / ('exit-' + name)).read_text()))
         if signal_after_exit:
             marker = '    idle_browser\n    continue\n'
             assert marker in source
-            source = source.replace(marker, f'    if [[ ! -e "$HOME/raced" ]]; then touch "$HOME/raced"; rm -f "$HOME/exit-{BROWSER}"; kill -USR1 $$; fi\n' + marker, 1)
+            source = source.replace(marker, f'    idle_browser\n    if [[ ! -e "$HOME/raced" ]]; then touch "$HOME/raced"; rm -f "$HOME/exit-{BROWSER}"; kill -USR1 $$; sleep 0.1; fi\n    continue\n', 1)
         script.write_text(source)
         self.log = (self.root / 'output').open('w+')
         self.addCleanup(self.log.close)

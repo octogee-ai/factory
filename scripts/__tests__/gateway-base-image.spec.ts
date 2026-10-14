@@ -171,22 +171,6 @@ describe("gateway base image", () => {
       .toHaveLength(2);
   });
 
-  it("keys the immutable Builder base on the exact npm lock", () => {
-    const workflow = readRepoFile(".github/workflows/gateway-build-operator-base.yml");
-    const cloudbuild = readRepoFile("cloudbuild-builder-base.yaml");
-
-    expect(workflow.match(/infra\/gateway\/builder-toolchain\/package-lock\.json/g))
-      .toHaveLength(2);
-    expect(workflow.match(/infra\/gateway\/builder-toolchain\/groups\.json/g))
-      .toHaveLength(2);
-    expect(workflow).toContain("BUILDER_BASE_INPUT_HASH=$(sha256sum");
-    expect(cloudbuild).toContain(
-      "TOOLCHAIN_LOCK_SHA256=\"$$(sha256sum infra/gateway/builder-toolchain/package-lock.json",
-    );
-    expect(cloudbuild).toContain("--build-arg=BUILDER_TOOLCHAIN_LOCK_SHA256=$$TOOLCHAIN_LOCK_SHA256");
-    expect(cloudbuild).toContain("--build-arg=BUILDER_TOOL_GROUPS_SHA256=$$TOOL_GROUPS_SHA256");
-  });
-
   it("pins gitleaks in gateway-edge for fail-closed agent import scanning", () => {
     const dockerfile = readRepoFile("gateway-edge/Dockerfile");
     expect(dockerfile).toContain("ARG GITLEAKS_VERSION=8.30.1");

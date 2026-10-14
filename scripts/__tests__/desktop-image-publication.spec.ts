@@ -8,6 +8,14 @@ function cloud(): DesktopPublicationDeps {
     resolveFamily: vi.fn().mockResolvedValue('octogee-computer-previous'), staleWarmPool: vi.fn().mockResolvedValue([]), retirePool: vi.fn().mockResolvedValue(['spare']),
   };
 }
+it('publishes the family with no VM observation or mutation when Cowboy owns the pool', async () => {
+  const deps = cloud();
+  await expect(planDesktopPublication(artifact, 'test', deps, true)).resolves.toMatchObject({ staleWarmPool: [], unchanged: false });
+  await expect(publishDesktopArtifact(artifact, 'test', deps, true)).resolves.toEqual({ project: 'octogee-test', image: artifact.name, retiring: [] });
+  expect(deps.staleWarmPool).not.toHaveBeenCalled();
+  expect(deps.retirePool).not.toHaveBeenCalled();
+  expect(deps.setFamily).toHaveBeenCalledWith('octogee-test', artifact.name);
+});
 it('publishes an accepted TEST image without rebuilding or copying it', async () => {
   const deps = cloud();
   expect(await publishDesktopArtifact(artifact, 'test', deps)).toEqual({ project: 'octogee-test', image: artifact.name, retiring: ['spare'] });

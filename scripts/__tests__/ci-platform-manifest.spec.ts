@@ -1,0 +1,59 @@
+import { expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseAllDocuments } from 'yaml';
+import { extractPlatformValues, manifestYaml, splitPlatformManifest, valuesTemplate, verifyBootstrapResources, writeNamespaceChart } from '../ci/platform-manifest.mjs';
+
+it('keeps only environment-owned namespace objects in the release chart', () => {
+  const resources = [
+    { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'image' }, data: { image: 'reviewed' } },
+    { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'runner', namespace: 'octogee-test-project-runs' } },
+    { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name: 'observer' }, rules: [] },
+    { apiVersion: 'admissionregistration.k8s.io/v1', kind: 'ValidatingAdmissionPolicy', metadata: { name: 'fixed' }, spec: { failurePolicy: 'Fail' } },
+    { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'octogee-test-project-runs' } },
+  ];
+  const result = splitPlatformManifest(manifestYaml(resources), 'octogee-test');
+  expect(result.release.map(resource => resource.kind)).toEqual(['ConfigMap', 'Deployment']);
+  expect(result.release.map(resource => resource.metadata.namespace)).toEqual(['octogee-test', 'octogee-test-project-runs']);
+  expect(result.bootstrap.map(resource => resource.kind)).toEqual(['ClusterRole', 'ValidatingAdmissionPolicy', 'Namespace']);
+});
+it.each(['octogee', 'default', 'kube-system'])('rejects a TEST release object in %s', namespace => {
+  expect(() => splitPlatformManifest(manifestYaml([{ kind: 'Secret', metadata: { name: 'other', namespace } }]), 'octogee-test')).toThrow('cannot manage');
+});
+it('requires preserved live cluster resources to agree with the reviewed security definition', () => {
+  const desired = { kind: 'ClusterRole', metadata: { name: 'reader' }, rules: [{ resources: ['nodes'], verbs: ['get'] }] };
+  const live = { ...desired, metadata: { ...desired.metadata, annotations: { 'helm.sh/resource-policy': 'keep' } } };
+  expect(() => verifyBootstrapResources([desired], [live])).not.toThrow();
+  expect(() => verifyBootstrapResources([desired], [])).toThrow('bootstrap required');
+  expect(() => verifyBootstrapResources([desired], [desired])).toThrow('bootstrap required');
+  expect(() => verifyBootstrapResources([{ ...desired, rules: [{ resources: ['nodes'], verbs: ['get', 'list'] }] }], [live])).toThrow('bootstrap required');
+});
+
+it('preserves effective values and literal template data through the namespace-only Helm chart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'namespace-chart-'));
+  try {
+    const source = join(directory, 'source');
+    mkdirSync(join(source, 'templates'), { recursive: true });
+    writeFileSync(join(source, 'Chart.yaml'), 'apiVersion: v2\nname: octogee\nversion: 1.2.3\n');
+    writeFileSync(join(source, 'values.yaml'), 'settings:\n  retained: original\n  overridden: original\n');
+    writeFileSync(join(source, 'templates/values.yaml'), valuesTemplate);
+    writeFileSync(join(source, 'templates/resources.yaml'), 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: config\ndata:\n  literal: {{ "{{ mustStayLiteral }}" | quote }}\n---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: check\n  annotations:\n    helm.sh/hook: test\nspec:\n  containers: []\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: fixed-security\nrules: []\n');
+    const captured = extractPlatformValues(execFileSync('helm', ['template', 'octogee', source, '--namespace', 'octogee-test', '--set', 'settings.overridden=new'], { encoding: 'utf8' }));
+    const resources = splitPlatformManifest(captured.manifest, 'octogee-test');
+    const output = join(directory, 'release');
+    writeNamespaceChart(output, { apiVersion: 'v2', name: 'octogee', version: '1.2.3' }, resources.release, captured.values);
+    const rendered = execFileSync('helm', ['template', 'octogee', output, '--namespace', 'octogee-test'], { encoding: 'utf8' });
+    const documents = parseAllDocuments(rendered).map(document => document.toJSON());
+    expect(documents.map(document => document.kind)).toEqual(['ConfigMap', 'Pod']);
+    expect(documents[0].data.literal).toBe('{{ mustStayLiteral }}');
+    expect(documents[1].metadata.annotations['helm.sh/hook']).toBe('test');
+    expect(readFileSync(join(output, 'values.yaml'), 'utf8')).toContain('retained: original');
+    expect(captured.values.settings).toEqual({ retained: 'original', overridden: 'new' });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it('fails closed if effective values were omitted from rendering', () => {
+  expect(() => extractPlatformValues('kind: ConfigMap\nmetadata:\n  name: config\n')).toThrow('capture its effective');
+});

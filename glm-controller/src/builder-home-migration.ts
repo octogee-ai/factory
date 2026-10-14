@@ -45,6 +45,7 @@ export interface BuilderHomeOwner extends Record<string, unknown>, TierResolvabl
 }
 export interface BuilderHomeMigrationDeps {
   db: Firestore;
+  environment: "test" | "prod";
   now: () => number;
   subnetwork: string;
   nativeZones: readonly string[];
@@ -124,7 +125,7 @@ class HomeMigration {
   private async start(source: BuilderHomeLocation): Promise<BuilderHomeMigration> {
     await this.deps.verifyStopped(this.request.uid, source);
     const key = [this.request.uid, source.disk.id, this.request.leaseId, this.request.generation, this.request.entitlementTier].join(":");
-    const id = `home-copy-${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
+    const id = `home-copy-${this.deps.environment}-${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
     const state: BuilderHomeMigration = { id, tier: this.request.entitlementTier, source, startedAt: this.deps.now(), phase: "copying", attempt: 1, copy: {
       operationId: id, ownerUid: this.request.uid, source: source.disk, sourceLayout: source.layout,
       targetZone: await this.targetZone(source), targetFilesystem: this.policy.runtime === "cluster" ? "ext4" : "btrfs",

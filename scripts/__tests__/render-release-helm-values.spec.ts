@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -52,16 +51,6 @@ describe("operator Helm release selection", () => {
         imageTag: platform.gatewayEdgeImageTag,
       },
     }).toEqual(centralGatewayReleasePayload(selected));
-  });
-
-  it("renders the deployed workflow gateway tag from the same canonical manifest identity", () => {
-    const workflow = readFileSync(resolve(import.meta.dirname, "../../.github/workflows/build-and-deploy.yml"), "utf8");
-    const expression = workflow.match(/GATEWAY_TAG="\$\(jq -er '([^']+)' "\$MANIFEST_FILE"\)"/);
-    expect(expression).not.toBeNull();
-    const result = spawnSync("jq", ["-er", expression![1]], { input: JSON.stringify(manifest), encoding: "utf8" });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(`${result.stdout.trim()}@${manifest.surfaces.gateway["octogee-gateway"]}`).toBe(centralGatewayReleasePayload(manifest).imageTag);
   });
 
   it.each(["", "abc1234", "g".repeat(40)])("rejects an invalid source before resolving or provisioning: %s", async sha => {

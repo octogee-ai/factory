@@ -32,7 +32,7 @@ function createHarness() {
     `#!/usr/bin/env bash
 set -euo pipefail
 case "$1" in
-  console) printf '%s\\n' "$OCTOGEE_TEST_CONSOLE_OUTPUT" ;;
+  console) cat >/dev/null; printf '%s\\n' "$OCTOGEE_TEST_CONSOLE_OUTPUT" ;;
   state) printf '%s\\n' "$OCTOGEE_TEST_STATE_ADDRESSES" ;;
   import) printf 'terraform %s\\n' "$*" >>"$OCTOGEE_TEST_LOG" ;;
   *) exit 1 ;;

@@ -989,7 +989,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   it("refuses fleet mutation while a stray (non-runtime) glmGateways doc exists", async () => {
     const callbacks: SnapshotCallbacks = {};
     const log = vi.fn();
-    const reconcileImagePins = vi.fn(async () => {});
     const syncFleetIngress = vi.fn(async () => {});
     const stop = startReconciler({
       db: makeDb({
@@ -1007,7 +1006,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }),
       helm: {} as never,
       handlers: {} as never,
-      reconcileImagePins,
       syncFleetIngress,
       log,
     });
@@ -1015,7 +1013,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     await runTick(callbacks);
     stop();
 
-    expect(reconcileImagePins).not.toHaveBeenCalled();
     expect(syncFleetIngress).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("stray glmGateway document(s): default-r2 (revision doc; run scripts/ops/cutover-simple-roll.ts)"),
@@ -1025,7 +1022,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
   it("names deletion, not the cutover script, for a vm-only stray that no durable root owns", async () => {
     const callbacks: SnapshotCallbacks = {};
     const log = vi.fn();
-    const reconcileImagePins = vi.fn(async () => {});
     const syncFleetIngress = vi.fn(async () => {});
     const stop = startReconciler({
       db: makeDb({
@@ -1037,7 +1033,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }),
       helm: {} as never,
       handlers: {} as never,
-      reconcileImagePins,
       syncFleetIngress,
       log,
     });
@@ -1045,7 +1040,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     await runTick(callbacks);
     stop();
 
-    expect(reconcileImagePins).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("stray glmGateway document(s): jefe-s-3e8d49e8 (not a runtime doc of a durable gateway, fields: vm; delete glmGateways/jefe-s-3e8d49e8)"),
     );
@@ -1073,215 +1067,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     expect(syncFleetIngress).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("invalid durable root document(s): legacy"),
-    );
-  });
-
-  it("pins desired+live release artifacts with the recorded gateway-edge sidecar", async () => {
-    const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
-    const log = vi.fn();
-    const stop = startReconciler({
-      db: makeDb({
-        roots: { default: durableRoot({ desiredRelease: 3, liveRelease: 2, latestRelease: 3 }) },
-        runtimes: { default: servingRuntime() },
-        releases: {
-          default: {
-            2: releaseArtifact("default", 2, "abc1234"),
-            3: releaseArtifact("default", 3, "def5678"),
-          },
-        },
-        callbacks,
-      }),
-      helm: {} as never,
-      handlers: {} as never,
-      reconcileImagePins,
-      log,
-    });
-
-    await runTick(callbacks);
-    stop();
-
-    expect(reconcileImagePins.mock.calls).toHaveLength(1);
-    const [, artifacts] = reconcileImagePins.mock.calls[0] as [
-      string,
-      Array<{ imageRepository: string; imageTag: string }>,
-    ];
-    const tags = artifacts.map((a) => `${a.imageRepository.split("/").at(-1)}:${a.imageTag}`).sort();
-    expect(tags).toEqual([
-      "gateway-edge:abc1234",
-      "gateway-edge:def5678",
-      "octogee-gateway:abc1234",
-      "octogee-gateway:def5678",
-    ]);
-  });
-
-  it("pins both gateway profiles for a Builder release", async () => {
-    const gatewayId = "builder-alice";
-    const gatewayTag = `abc1234@sha256:${"a".repeat(64)}`;
-    const builderTag = `abc1234@sha256:${"b".repeat(64)}`;
-    const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
-    const log = vi.fn();
-    const builderRoot = durableRoot({
-      gatewayId,
-      profile: "builder",
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      sizingTier: "xs",
-      serviceAccountName: "octogee-gw-builder-alice",
-      serviceAccount: { create: false },
-      builderAccess: {
-        controlUiEnabled: false,
-        controlUiEnabled: false,
-      },
-      ownerUid: "uid-alice",
-      builderSlug: "alice",
-      allocation: {
-        kind: "disposable-builder",
-        schemaVersion: 1,
-        leaseId: "lease-one",
-        generation: 1,
-        claimedByUid: "uid-alice",
-      },
-    });
-    const stop = startReconciler({
-      db: makeDb({
-        roots: {
-          [gatewayId]: { ...builderRoot, liveRelease: 2 },
-        },
-        runtimes: {
-          [gatewayId]: servingRuntime({ gatewayId }),
-        },
-        releases: {
-          [gatewayId]: {
-            2: releaseArtifact(gatewayId, 2, gatewayTag, {
-              profileImages: {
-                builder: {
-                  imageRepository:
-                    "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
-                  imageTag: builderTag,
-                },
-              },
-            }),
-          },
-        },
-        callbacks,
-      }),
-      helm: {} as never,
-      handlers: {} as never,
-      reconcileImagePins,
-      log,
-    });
-
-    await runTick(callbacks);
-    stop();
-
-    const [, artifacts] = reconcileImagePins.mock.calls[0] as [
-      string,
-      Array<{ imageRepository: string; imageTag: string }>,
-    ];
-    expect(artifacts).toEqual(expect.arrayContaining([
-      {
-        imageRepository:
-          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
-        imageTag: builderTag,
-      },
-      {
-        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: gatewayTag,
-      },
-    ]));
-  });
-
-  it("pins the Builder profile referenced by an otherwise all-standard release", async () => {
-    const gatewayTag = `abc1234@sha256:${"a".repeat(64)}`;
-    const builderTag = `abc1234@sha256:${"b".repeat(64)}`;
-    const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
-    const stop = startReconciler({
-      db: makeDb({
-        roots: { default: durableRoot() },
-        runtimes: { default: servingRuntime() },
-        releases: {
-          default: {
-            2: releaseArtifact("default", 2, gatewayTag, {
-              profileImages: {
-                builder: {
-                  imageRepository:
-                    "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
-                  imageTag: builderTag,
-                },
-              },
-            }),
-          },
-        },
-        callbacks,
-      }),
-      helm: {} as never,
-      handlers: {} as never,
-      reconcileImagePins,
-      log: vi.fn(),
-    });
-
-    await runTick(callbacks);
-    stop();
-
-    const [, artifacts] = reconcileImagePins.mock.calls[0] as [
-      string,
-      Array<{ imageRepository: string; imageTag: string }>,
-    ];
-    expect(artifacts).toEqual(expect.arrayContaining([
-      {
-        imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-        imageTag: gatewayTag,
-      },
-      {
-        imageRepository:
-          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
-        imageTag: builderTag,
-      },
-    ]));
-  });
-
-  it("pins the gateway-edge artifact alongside the gateway image", async () => {
-    const digestTag = `8c356bb-oc2026.7.1@sha256:${"a".repeat(64)}`;
-    const edgeTag = `8c356bb-oc2026.7.1@sha256:${"d".repeat(64)}`;
-    const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
-    const stop = startReconciler({
-      db: makeDb({
-        roots: { default: durableRoot({ desiredRelease: 2, liveRelease: 2 }) },
-        runtimes: { default: servingRuntime() },
-        releases: {
-          default: {
-            2: releaseArtifact("default", 2, digestTag, {
-              gatewayEdgeImage: {
-                imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway-edge",
-                imageTag: edgeTag,
-              },
-            }),
-          },
-        },
-        callbacks,
-      }),
-      helm: {} as never,
-      handlers: {} as never,
-      reconcileImagePins,
-      log: vi.fn(),
-    });
-
-    await runTick(callbacks);
-    stop();
-
-    const [, artifacts] = reconcileImagePins.mock.calls[0] as [
-      string,
-      Array<{ imageRepository: string; imageTag: string }>,
-    ];
-    expect(artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ imageTag: digestTag }),
-        expect.objectContaining({ imageTag: edgeTag }),
-      ]),
     );
   });
 
@@ -1374,7 +1159,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
 
   it("limits runtime changes to targeted gateway convergence", async () => {
     const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
     const syncFleetIngress = vi.fn(async () => {});
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
@@ -1386,7 +1170,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }),
       helm: {} as never,
       handlers: {} as never,
-      reconcileImagePins,
       syncFleetIngress,
       convergeGateways,
       log: vi.fn(),
@@ -1405,7 +1188,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }],
     });
     await vi.advanceTimersByTimeAsync(1_000);
-    reconcileImagePins.mockClear();
     syncFleetIngress.mockClear();
     convergeGateways.mockClear();
 
@@ -1419,13 +1201,11 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     stop();
 
     expect(convergeGateways).toHaveBeenCalledWith(["default"]);
-    expect(reconcileImagePins).not.toHaveBeenCalled();
     expect(syncFleetIngress).not.toHaveBeenCalled();
   });
 
   it("does not reconcile the fleet when a root doc only records a reconcile error", async () => {
     const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
       db: makeDb({
@@ -1436,7 +1216,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }),
       helm: {} as never,
       handlers: {} as never,
-      reconcileImagePins,
       convergeGateways,
       log: vi.fn(),
     });
@@ -1448,7 +1227,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }],
     });
     await vi.advanceTimersByTimeAsync(1_000);
-    reconcileImagePins.mockClear();
     convergeGateways.mockClear();
 
     callbacks.roots?.({
@@ -1465,13 +1243,11 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     await vi.advanceTimersByTimeAsync(1_000);
     stop();
 
-    expect(reconcileImagePins).not.toHaveBeenCalled();
     expect(convergeGateways).not.toHaveBeenCalled();
   });
 
   it("runs a full safety reconciliation only after the configured interval", async () => {
     const callbacks: SnapshotCallbacks = {};
-    const reconcileImagePins = vi.fn(async () => {});
     const convergeGateways = vi.fn(async () => {});
     const stop = startReconciler({
       db: makeDb({
@@ -1482,22 +1258,20 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
       }),
       helm: {} as never,
       handlers: {} as never,
-      reconcileImagePins,
       convergeGateways,
       reconcileSafetyRefreshMs: 5_000,
       log: vi.fn(),
     });
 
     await runTick(callbacks);
-    reconcileImagePins.mockClear();
     convergeGateways.mockClear();
     await vi.advanceTimersByTimeAsync(3_999);
-    expect(reconcileImagePins).not.toHaveBeenCalled();
+    expect(convergeGateways).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1_001);
     stop();
 
-    expect(reconcileImagePins).toHaveBeenCalledTimes(1);
+    expect(convergeGateways).toHaveBeenCalledTimes(1);
     expect(convergeGateways).toHaveBeenCalledWith(undefined);
   });
 
@@ -1522,7 +1296,6 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
 
     for (const phase of [
       "durable-state",
-      "image-pins",
       "runtime-dependencies",
       "convergence",
       "fleet-ingress",

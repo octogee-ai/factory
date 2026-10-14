@@ -1,6 +1,3 @@
-// Single source of truth for which repo paths map to which CI test jobs.
-// Consumed by resolve.ts, the local runner, and (Phase 2) Cloud Build gating.
-
 // Job-key registry: the literal lives once here, referenced everywhere else.
 export const JOBS = {
   gatewayEdge: "gateway-edge",
@@ -375,7 +372,7 @@ export const GLOBAL_EXACT: ReadonlySet<string> = new Set([
   "tsconfig.base.json",
   ".github/workflows/test.yml",
 ]);
-export const GLOBAL_PREFIX: readonly string[] = ["shared/", "scripts/lib/scope/"];
+export const GLOBAL_PREFIX: readonly string[] = ["shared/", "scripts/lib/scope/", "scripts/lib/ci-", "scripts/ops/ci-", "scripts/ci/", "ci/"];
 
 // Inert → run nothing: docs and root-level markdown only. A *.md under a package
 // dir (e.g. site content) still falls to that package, never inert.

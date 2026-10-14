@@ -5,6 +5,7 @@ import { createCentralReleaseAuthority } from '@octogee/core/artifact-registry';
 import { deploymentEnvironmentSettings } from '@octogee/core/deployment-environment';
 import type { Firestore } from 'firebase-admin/firestore';
 import { validateDesktopImage, assertDesktopImageIdentity } from '../../.github/actions/release-digest-manifest/desktop-image.mjs';
+import { resolveDesktopRelease } from './desktop-image-release.mjs';
 
 export interface DesktopCloudImage {
   id: string; name: string; status: string; sourceImageId?: string; labels?: Record<string, string>;
@@ -30,17 +31,17 @@ function assertDestinationCopy(copy: DesktopCloudImage | null, artifact: ReturnT
   if (copy?.status !== 'READY' || copy.sourceImageId !== artifact.id || copy.labels?.source !== artifact.sourceSha) throw new Error('destination is not a copy of the tested desktop image');
 }
 
-export async function planDesktopPublication(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps): Promise<DesktopPublicationPlan> {
+export async function planDesktopPublication(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps, controllerPool = false): Promise<DesktopPublicationPlan> {
   const artifact = validateDesktopImage(value);
   assertDesktopImageIdentity(artifact, await deps.getImage(artifact.project, artifact.name));
   const project = desktopImageProject(environment);
   const familyImage = await deps.resolveFamily(project);
   if (familyImage === artifact.name && project !== artifact.project) assertDestinationCopy(await deps.getImage(project, artifact.name), artifact);
-  const staleWarmPool = await deps.staleWarmPool(environment, project, artifact.name);
+  const staleWarmPool = controllerPool ? [] : await deps.staleWarmPool(environment, project, artifact.name);
   return { project, image: artifact.name, familyImage, staleWarmPool, unchanged: familyImage === artifact.name && staleWarmPool.length === 0 };
 }
 
-export async function publishDesktopArtifact(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps) {
+export async function publishDesktopArtifact(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps, controllerPool = false) {
   const artifact = validateDesktopImage(value);
   assertDesktopImageIdentity(artifact, await deps.getImage(artifact.project, artifact.name));
   const targetProject = desktopImageProject(environment);
@@ -53,7 +54,7 @@ export async function publishDesktopArtifact(value: unknown, environment: 'test'
     assertDestinationCopy(copy, artifact);
   }
   if (await deps.resolveFamily(targetProject) !== artifact.name) await deps.setFamily(targetProject, artifact.name);
-  const retiring = await deps.retirePool(environment, targetProject, artifact.name);
+  const retiring = controllerPool ? [] : await deps.retirePool(environment, targetProject, artifact.name);
   return { project: targetProject, image: artifact.name, retiring };
 }
 
@@ -210,7 +211,7 @@ function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps
 }
 
 export async function runDesktopImagePublication(input: {
-  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; skipMissing?: boolean;
+  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; skipMissing?: boolean; controllerPool?: boolean;
 }) {
   if (!/^[a-f0-9]{40}$/.test(input.sourceSha)) throw new Error('desktop-image publish requires --sha=<full-main-sha>');
   const auth = input.auth ?? new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
@@ -225,25 +226,31 @@ export async function runDesktopImagePublication(input: {
       },
     },
   ).resolveManifest(input.sourceSha);
-  if (manifest.desktopImage === undefined && input.skipMissing) {
+  const desktop = await resolveDesktopRelease({ manifest, digest: manifest.manifestDigest }, async (url, options) => {
+    const token = await auth.getAccessToken();
+    if (!token) throw new Error('desktop image: Google auth returned no access token');
+    return fetch(url, { ...options, headers: { ...options?.headers, Authorization: `Bearer ${token}` } });
+  });
+  if (!desktop && input.skipMissing) {
     console.log(`desktop image: build ${manifest.sourceSha} has no desktop image; skipping publication`);
     return;
   }
   const cloud = createDesktopPublicationCloud(auth);
-  const publication = await planDesktopPublication(manifest.desktopImage, input.environment, cloud);
-  const plan = { environment: input.environment, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest, desktopImage: manifest.desktopImage, publication };
+  if (!desktop) throw new Error(`Build ${manifest.sourceSha} has no accepted desktop image`);
+  const publication = await planDesktopPublication(desktop.desktopImage, input.environment, cloud, input.controllerPool);
+  const plan = { environment: input.environment, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest, desktopManifestDigest: desktop.digest, desktopImage: desktop.desktopImage, publication, warmPoolAuthority: input.controllerPool ? 'controller' : 'operator' };
   console.log(JSON.stringify(plan, null, 2));
   if (!input.apply) return;
   if (publication.unchanged) {
-    console.log(`desktop image: ${publication.project} family already serves ${publication.image} and no warm spare is stale; nothing to publish`);
+    console.log(`desktop image: ${publication.project} family already serves ${publication.image}; ${input.controllerPool ? 'Cowboy owns warm-pool convergence' : 'no warm spare is stale'}`);
     return;
   }
   await runWithOperationAuditIntent(input.db, {
     actor: input.actor, forced: false, what: 'Publish desktop image', why: input.why,
     target: { environment: input.environment }, preActionStatus: plan,
-    mutation: { action: 'publish-desktop-image', retireUnassignedWarmPool: true },
+    mutation: { action: 'publish-desktop-image', retireUnassignedWarmPool: !input.controllerPool },
     idempotencyKey: `desktop-image:${input.environment}:${manifest.manifestDigest}:${randomUUID()}`,
   }, { claimId: randomUUID() }, async () => {
-    console.log(JSON.stringify(await publishDesktopArtifact(manifest.desktopImage, input.environment, cloud)));
+    console.log(JSON.stringify(await publishDesktopArtifact(desktop.desktopImage, input.environment, cloud, input.controllerPool)));
   });
 }

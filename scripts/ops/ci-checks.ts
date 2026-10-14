@@ -1,0 +1,44 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { delimiter, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { checkPlan, executeChecks, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
+
+const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const args = process.argv.slice(2);
+const value = (name: string) => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+const group = value("group") ?? "all";
+if (!["all", "tests", "quality"].includes(group)) throw new Error("--group must be all, tests, or quality");
+const git = (...argv: string[]) => execFileSync("/usr/bin/git", argv, { cwd: root, encoding: "utf8" }).trim();
+const head = git("rev-parse", "--verify", `${value("head") ?? "HEAD"}^{commit}`);
+const base = git("rev-parse", "--verify", `${value("base") ?? "origin/main"}^{commit}`);
+const fork = git("merge-base", base, head);
+const paths = args.includes("--all") ? ["package-lock.json", "ci/"] : git("diff", "--name-only", fork, head).split("\n").filter(Boolean);
+if (!value("head")) paths.push(...git("diff", "--name-only", "HEAD").split("\n").filter(Boolean), ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean));
+const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package"), value("lane")).filter(job => !value("check") || job.name === value("check"));
+if (value("check") && !jobs.length) throw new Error(`Check ${value("check")} is not in scope`);
+if (args.includes("--plan")) {
+  console.log(JSON.stringify(jobs, null, 2));
+} else {
+  const prepare = dependencyInstaller();
+  await executeChecks(jobs, async (job: CheckJob) => {
+    console.log(`\n== ${job.name} ==`);
+    const nodeBin = process.env[`CI_NODE_${job.nodeVersion}_BIN`] ?? `/opt/node${job.nodeVersion}/bin`;
+    const path = existsSync(nodeBin) ? `${nodeBin}${delimiter}${process.env.PATH}` : process.env.PATH;
+    const env = { ...process.env, PATH: path, CI: "true", CI_BASE_SHA: base, CI_HEAD_SHA: head, CI_REPO_ROOT: root, CI_INCLUDE_WORKING_TREE: String(!value("head")) };
+    const run = (command: string, directory = root) => execFileSync("/bin/bash", ["-euc", command], { cwd: directory, env, stdio: "inherit" });
+    run(`node -e 'if (Number(process.versions.node.split(".")[0]) !== ${job.nodeVersion}) throw new Error("CI requires Node ${job.nodeVersion}; set CI_NODE_${job.nodeVersion}_BIN or use ci:docker")'`);
+    if (job.matchGatewayImageNpm) {
+      const npmVersion = readFileSync(resolve(root, "infra/gateway/Dockerfile.base"), "utf8").match(/^ARG NPM_VERSION=([\d.]+)$/m)?.[1];
+      if (!npmVersion) throw new Error("Gateway npm version is missing");
+      run(`npm install --prefix /tmp/octogee-ci-npm-${job.nodeVersion} npm@${npmVersion} --ignore-scripts --no-audit --no-fund`);
+      env.PATH = `/tmp/octogee-ci-npm-${job.nodeVersion}/node_modules/.bin${delimiter}${path}`;
+    }
+    prepare(job, directory => run("npm ci --no-audit --no-fund", resolve(root, directory)));
+    for (const command of job.commands) {
+      const script = command === "npm test" ? JSON.parse(readFileSync(resolve(root, job.directory, "package.json"), "utf8")).scripts?.test : "";
+      const options = vitestOptions(script, process.env.CI_EMULATED === "true");
+      run(command + options, resolve(root, job.directory));
+    }
+  });
+}
