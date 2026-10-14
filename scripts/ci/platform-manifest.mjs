@@ -26,6 +26,17 @@ export function splitPlatformManifest(input, namespace, kinds = clusterKinds) {
 }
 export function manifestYaml(resources) { return resources.map(resource => stringify(resource)).join('---\n'); }
 
+export function bootstrapReleaseParameters(release, namespace) {
+  return release.filter(value => /^(octogee-native-context-worker|octogee-project-runner)-(image|parameters)$/.test(value.metadata.name)).map(value => ({
+    ...value,
+    metadata: {
+      ...value.metadata,
+      labels: { ...value.metadata.labels, 'app.kubernetes.io/managed-by': 'Helm' },
+      annotations: { ...value.metadata.annotations, 'meta.helm.sh/release-name': 'octogee', 'meta.helm.sh/release-namespace': namespace },
+    },
+  }));
+}
+
 export const valuesTemplate = 'apiVersion: octogee.internal/v1\nkind: EffectiveValues\nmetadata:\n  name: octogee-ci-values\nvalues: {{ .Values | toJson }}\n';
 export function extractPlatformValues(input) {
   const documents = parseAllDocuments(input).map(document => {

@@ -4,7 +4,27 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseAllDocuments } from 'yaml';
-import { extractPlatformValues, manifestYaml, splitPlatformManifest, valuesTemplate, verifyBootstrapResources, writeNamespaceChart } from '../ci/platform-manifest.mjs';
+import { bootstrapReleaseParameters, extractPlatformValues, manifestYaml, splitPlatformManifest, valuesTemplate, verifyBootstrapResources, writeNamespaceChart } from '../ci/platform-manifest.mjs';
+
+it.each(['octogee-test', 'octogee'])('gives bootstrapped admission parameters to the %s Helm release', namespace => {
+  const parameters = ['octogee-native-context-worker', 'octogee-project-runner'].flatMap(name => [
+    { kind: 'ConfigMap', metadata: { name: `${name}-image`, namespace }, data: { image: 'image@sha256:reviewed' } },
+    { kind: 'Role', metadata: { name: `${name}-parameters`, namespace, labels: { existing: 'retained' } }, rules: [{ resources: ['configmaps'], verbs: ['get'] }] },
+    { kind: 'RoleBinding', metadata: { name: `${name}-parameters`, namespace, annotations: { existing: 'retained' } }, roleRef: { kind: 'Role', name: `${name}-parameters` }, subjects: [{ kind: 'ServiceAccount', name: 'controller', namespace }] },
+  ]);
+  const unrelated = [{ kind: 'Role', metadata: { name: 'octogee-platform-release', namespace } }, { kind: 'Deployment', metadata: { name: 'octogee-api', namespace } }];
+  const source = [...parameters, ...unrelated];
+  const original = structuredClone(source);
+  expect(bootstrapReleaseParameters(source, namespace)).toEqual(parameters.map(resource => ({
+    ...resource,
+    metadata: {
+      ...resource.metadata,
+      labels: { ...resource.metadata.labels, 'app.kubernetes.io/managed-by': 'Helm' },
+      annotations: { ...resource.metadata.annotations, 'meta.helm.sh/release-name': 'octogee', 'meta.helm.sh/release-namespace': namespace },
+    },
+  })));
+  expect(source).toEqual(original);
+});
 
 it('keeps only environment-owned namespace objects in the release chart', () => {
   const resources = [
