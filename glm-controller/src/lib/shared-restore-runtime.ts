@@ -1,8 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
-import { FieldValue, type DocumentData, type Firestore, type Transaction } from 'firebase-admin/firestore';
+import { FieldValue, type DocumentData, type Firestore, type Transaction, type QuerySnapshot } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
 import type { OperationContext } from '../operation-router.js';
 import type { KubectlSubprocess } from '../fleet-ingress.js';
+import { queuedSharedMigrationOwnsSource } from './queued-shared-migration.js';
 
 type RecordValue = DocumentData;
 interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue; supersede?: RecordValue }
@@ -121,8 +122,22 @@ async function authority(deps: Deps, tx: Transaction, op: Operation, input: Reco
     const state = customerState(row.data());
     if (row.id !== uid && (Object.hasOwn(state, 'restoreFence') || Object.hasOwn(state, 'sourceTransferFence'))) throw new Error('another customer runtime outcome is unresolved');
   }
-  if (active.docs.some(row => competingMigration(row.id, row.data(), input.operationId, gatewayId))) throw new Error('another migration is active on the restore target');
+  await assertNoCompetingMigrations(deps, tx, active, { operationId: input.operationId, gatewayId });
   return data;
+}
+
+async function assertNoCompetingMigrations(deps: Deps, tx: Transaction, active: QuerySnapshot,
+  scope: { operationId: string; gatewayId: string }): Promise<void> {
+  for (const row of active.docs) {
+    const move = row.data();
+    if (!competingMigration(row.id, move, scope.operationId, scope.gatewayId)) continue;
+    if (move.input?.fromGatewayId !== scope.gatewayId || move.schedulerHandoffReleased !== true ||
+        !Number.isSafeInteger(move.schedulerHandoffReleasedAt) || move.schedulerHandoffReleasedAt <= 0 ||
+        !await queuedSharedMigrationOwnsSource(deps.db, tx, move, row.id) ||
+        move.schedulerHandoffReleasedAt < move.attemptHistory.at(-1).completedAt) {
+      throw new Error('another migration is active on the restore target');
+    }
+  }
 }
 function pristineQueuedMigration(row: RecordValue): boolean {
   const untouched = ['firstStartedAt', 'lastProgressAt', 'lastResumedAt', 'nextAttemptAt', 'error', 'rolledBack', 'output',

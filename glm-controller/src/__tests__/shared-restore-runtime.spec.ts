@@ -1,6 +1,6 @@
 import { enqueuePlacementMigration, continuousPlacementMigrationOperationId } from '../placement-policy-reconciler.js';
 import { createRestartGatewayHandler } from '../handlers/restart-gateway.js';
-import { buildOperationCompletionUpdate, MAX_OPERATION_ATTEMPTS, classifyOperationFailure } from '../operation-retry.js';
+import { buildOperationCompletionUpdate, MAX_OPERATION_ATTEMPTS, MAX_OPERATION_ATTEMPT_HISTORY, classifyOperationFailure } from '../operation-retry.js';
 import { readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
 import { recoverSharedSourceRuntime } from "../lib/shared-source-runtime.js";
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,8 @@ import { acknowledgeCustomerRestore, beginCustomerRestore, setWorkspaceMigration
 import type { Operation } from '@octogee/shared/types/glm';
 import { recoverSharedRestoreRuntime } from '../lib/shared-restore-runtime.js';
 import { processOperation } from '../index.js';
+import { releaseAbandonedSchedulerHandoffs } from '../scheduler-handoff-release.js';
+import { createRsyncMigrationTransfer } from '../lib/migration-rsync-transfer.js';
 
 const sha = 'a'.repeat(40);
 const images = { gateway: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:aaaaaaa@sha256:${'b'.repeat(64)}`,
@@ -31,10 +33,11 @@ function harness() {
     doc: (id: string) => ref(`${path}/${id}`), collection: (name: string) => ref(`${path}/${name}`),
     where: (key: string, comparator: string, match: unknown) => ref(path, [...filters, { key, comparator, match }]) });
   const snapshot = (target: any): any => {
-    if (target.path.split('/').length % 2 === 0) return { exists: !!store[target.path], data: () => store[target.path] };
+    const updateTime = (row: any) => { const version = JSON.stringify(row); return { version, isEqual: (other: any) => version === other?.version }; };
+    if (target.path.split('/').length % 2 === 0) return { exists: !!store[target.path], data: () => store[target.path], updateTime: updateTime(store[target.path]) };
     return { docs: Object.entries(store).filter(([path, row]) => path.startsWith(`${target.path}/`) && !path.slice(target.path.length + 1).includes('/') &&
       target.filters.every((filter: any) => filter.comparator === 'in' ? filter.match.includes(value(row, filter.key)) : value(row, filter.key) === filter.match))
-      .map(([path, row]) => ({ id: path.split('/').at(-1), data: () => row })) };
+      .map(([path, row]) => ({ id: path.split('/').at(-1), ref: ref(path), updateTime: updateTime(row), data: () => row })) };
   };
   const db = { doc: ref, collection: ref, runTransaction: async (body: any) => {
     const writes: (() => void)[] = [];
@@ -318,6 +321,284 @@ describe('journaled Shared restore runtime recovery', () => {
       { db: h.deps.db, handlers: { 'migrate-customer': handler }, log } as never);
     return { run, handler, log };
   }
+
+  function blockedPreTransportMigration(h: ReturnType<typeof harness>, attempts = 13) {
+    const queued = queuedMigration(h);
+    const row = h.store['glmOperations/queued'];
+    const error = 'expected exactly one ready pod for transport=shared-1; found 0';
+    row.input = { uid: 'other', builderSlug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' };
+    Object.assign(row, { attempts, firstStartedAt: 1_100, lastProgressAt: 1_200 + attempts * 100, nextAttemptAt: 481_200 + attempts * 100,
+      error: `attempt ${attempts} failed (transient): ${error} — retrying in 480s`, output: { stateMigration: { strategy: 'migrate-state' } },
+      schedulerHandoff: { uid: 'other', slug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', migrationId: `mig-queued:scheduler:${attempts}` },
+      schedulerHandoffReleased: false, attemptHistory: Array.from({ length: attempts }, (_, index) => ({
+        attempt: index + 1, startedAt: 1_100 + index * 100, completedAt: 1_200 + index * 100,
+        error, classification: 'transient', steps: [{ name: 'keys-sync-state', status: 'failed', error }],
+      })).slice(-MAX_OPERATION_ATTEMPT_HISTORY) });
+    h.store['users/other'] = { provisioning: { openclaw: { status: 'complete', gatewayId: 'shared-1',
+      migration: { operationId: 'queued', phase: 'preparing', state: 'preparing', startedAt: 1_100 } } } };
+    h.store['gateways/shared-1/assignments/other'] = { uid: 'other', slug: 'bob', gatewayId: 'shared-1', state: 'serving', epoch: 0, updatedByOperationId: null };
+    const scheduler = vi.fn(async () => { throw new Error('no scheduler RPC is safe while the source is unavailable'); });
+    const release = () => releaseAbandonedSchedulerHandoffs({ db: h.deps.db, scheduler,
+      gatewayExists: vi.fn(async () => false), log: vi.fn(), now: () => Math.max(3_000, 1_300 + attempts * 100) });
+    return { ...queued, release, scheduler, row };
+  }
+
+  it('releases a proven pre-transport retry through its owner before admitting same-pod restore recovery', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    const before = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.store).toEqual(before);
+    await expect(queued.release()).resolves.toEqual({ released: 1 });
+    expect(queued.scheduler).not.toHaveBeenCalled();
+    expect(queued.row).toEqual({ ...before['glmOperations/queued'], schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    const released = structuredClone(queued.row);
+    const kubectl = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async args => {
+      if (args.includes('patch')) {
+        await queued.run();
+        expect(queued.handler).not.toHaveBeenCalled();
+        expect(queued.row).toEqual(released);
+      }
+      return kubectl(args);
+    });
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+    expect(queued.row).toEqual(released);
+    expect(h.store['users/other']).toEqual(before['users/other']);
+    expect(h.store['gateways/shared-1/assignments/other']).toEqual(before['gateways/shared-1/assignments/other']);
+    expect(h.store['glmOperations/return']).toEqual(before['glmOperations/return']);
+    expect(h.store['users/u']).toEqual(before['users/u']);
+  });
+
+  it.each([1, 5, 282])('recovers a repeated Shared placement with serving epoch %s and a prior operation owner', async epoch => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    Object.assign(h.store['gateways/shared-1/assignments/other'], { epoch, updatedByOperationId: 'completed-prior-shared-move' });
+    const assignment = structuredClone(h.store['gateways/shared-1/assignments/other']);
+    await expect(queued.release()).resolves.toEqual({ released: 1 });
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(queued.scheduler).not.toHaveBeenCalled();
+    expect(h.store['gateways/shared-1/assignments/other']).toEqual(assignment);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+  });
+
+  it.each([21, 37])('recovers after attempt %s with the complete retained contiguous suffix ending at its current handoff', async attempts => {
+    const h = harness(); const queued = blockedPreTransportMigration(h, attempts);
+    const history = structuredClone(queued.row.attemptHistory);
+    expect(history).toHaveLength(MAX_OPERATION_ATTEMPT_HISTORY); expect(history[0].attempt).toBe(attempts - MAX_OPERATION_ATTEMPT_HISTORY + 1);
+    await expect(queued.release()).resolves.toEqual({ released: 1 });
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(queued.scheduler).not.toHaveBeenCalled(); expect(queued.row.attemptHistory).toEqual(history);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+  });
+
+  it('recovers a retained two-pod selector failure followed by the current zero-pod failure', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    const prior = queued.row.attemptHistory[0];
+    prior.error = prior.steps[0].error = 'expected exactly one ready pod for transport=shared-1; found 2';
+    const before = structuredClone(h.store);
+    await expect(queued.release()).resolves.toEqual({ released: 1 });
+    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
+    expect(queued.scheduler).not.toHaveBeenCalled();
+    expect(queued.row.attemptHistory).toEqual(before['glmOperations/queued'].attemptHistory);
+    expect(h.store['users/other']).toEqual(before['users/other']);
+    expect(h.store['gateways/shared-1/assignments/other']).toEqual(before['gateways/shared-1/assignments/other']);
+    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
+  });
+
+  it.each([
+    'expected exactly one ready pod for transport=shared-1; found 1',
+    'expected exactly one ready pod for transport=shared-1; found -1',
+    'expected exactly one ready pod for transport=shared-1; found 2.5',
+    'expected exactly one ready pod for transport=shared-1; found 02',
+    'expected exactly one ready pod for transport=shared-1; found 1e1',
+    'expected exactly one ready pod for transport=shared-1; found unknown',
+    'expected exactly one ready pod for transport=shared-1; found 2; socket closed',
+    'expected exactly one ready pod for transport=shared-2; found 2',
+    'expected exactly one running pod for transport=shared-1; found 2',
+    'socket closed before connect response',
+  ])('denies prior keys failures outside the exact same-source pod-selector contract: %s', async error => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    const prior = queued.row.attemptHistory[0]; prior.error = prior.steps[0].error = error;
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    const before = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.store).toEqual(before); expect(queued.scheduler).not.toHaveBeenCalled();
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it('requires the latest selector failure to remain zero even after a known earlier two-pod failure', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    for (const attempt of queued.row.attemptHistory) {
+      attempt.error = attempt.steps[0].error = 'expected exactly one ready pod for transport=shared-1; found 2';
+    }
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it.each([0, 2])('fails actual source pod selection at cardinality %s before gateway RPC or guest execution', async count => {
+    let task: any;
+    const ref = { get: async () => ({ exists: task !== undefined, data: () => task }),
+      set: async (patch: any) => { task = { ...task, ...patch }; } };
+    const db = { collection: () => ({ doc: () => ref }), runTransaction: async (fn: any) => fn({
+      get: (target: any) => target.get(), set: (target: any, value: any) => target.set(value),
+    }) };
+    const fetch = vi.fn(async () => { throw new Error('gateway RPC must not run before source selection'); });
+    const resolveGatewayUrl = vi.fn(() => { throw new Error('gateway control URL must not be used before source selection'); });
+    const runCommand = vi.fn(async (command: string, args: string[]) => {
+      expect(command).toBe('kubectl'); expect(args.slice(0, 4)).toEqual(['-n', 'octogee-test', 'get', 'pods']);
+      const source = args[args.indexOf('-l') + 1].endsWith('gateway-instance=shared-1');
+      return { code: 0, stderr: '', stdout: JSON.stringify({ items: Array.from({ length: source ? count : 1 }, (_, index) => ({
+        metadata: { name: `pod-${index}` }, status: { phase: 'Running', podIP: `10.0.0.${index + 1}`, conditions: [{ type: 'Ready', status: 'True' }] },
+      })) }) };
+    });
+    const transfer = createRsyncMigrationTransfer({ db: db as never, namespace: 'octogee-test',
+      privateKey: 'unused-before-gateway-rpc', fleetControllerPort: '3003', fetch, resolveGatewayUrl, runCommand });
+    await expect(transfer({ migrationId: 'mig-queued', slug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', mode: 'keys' }))
+      .rejects.toMatchObject({ message: `expected exactly one ready pod for transport=shared-1; found ${count}`, retryable: true });
+    expect(fetch).not.toHaveBeenCalled(); expect(resolveGatewayUrl).not.toHaveBeenCalled(); expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(task).toMatchObject({ status: 'failed', error: `expected exactly one ready pod for transport=shared-1; found ${count}` });
+  });
+
+  it.each(['short-suffix', 'gap', 'duplicate', 'unknown-attempt', 'wrong-latest', 'stale-handoff', 'retained-hold', 'unknown-steps'])('denies capped history with %s', async change => {
+    const h = harness(); const queued = blockedPreTransportMigration(h, 37);
+    const history = queued.row.attemptHistory;
+    if (change === 'short-suffix') history.shift();
+    if (change === 'gap') history[4].attempt += 1;
+    if (change === 'duplicate') history[4].attempt = history[3].attempt;
+    if (change === 'unknown-attempt') delete history[4].attempt;
+    if (change === 'wrong-latest') history.at(-1).attempt -= 1;
+    if (change === 'stale-handoff') queued.row.schedulerHandoff.migrationId = 'mig-queued:scheduler:36';
+    if (change === 'retained-hold') history[0].steps.push({ name: 'quiesce-source', status: 'done' });
+    if (change === 'unknown-steps') delete history.at(-1).steps;
+    const before = structuredClone(h.store);
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    expect(h.store).toEqual(before); expect(queued.scheduler).not.toHaveBeenCalled();
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 5_000 });
+    const released = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.store).toEqual(released);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it.each([-1, 1.5, '2', undefined, Number.NaN])('denies a noncanonical source epoch %j', async epoch => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    h.store['gateways/shared-1/assignments/other'].epoch = epoch;
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it('denies a source assignment already owned by the current attempted migration', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    h.store['gateways/shared-1/assignments/other'].updatedByOperationId = 'queued';
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it.each([
+    ['startedAt', 2_600], ['status', 'running'], ['completedAt', 2_600], ['steps', [{ name: 'keys-sync-state', status: 'running' }]],
+    ['attempts', 14], ['attemptHistory', undefined], ['attemptHistory', []], ['resumeCount', 1], ['lastResumedAt', 2_500],
+    ['customerMigrationV2', {}], ['sourceTransferExecution', {}], ['schedulerHandoffLost', true], ['cutoverCommittedAt', 2_000],
+    ['restoreAttempt', {}], ['cancellationRequestedAt', 2_000], ['rolledBack', false], ['output', { configCleanup: {} }],
+    ['input.toGatewayId', 'builder-other'], ['input.sourceTransferMode', 'retained-pod'],
+    ['input.recoverSourceOnly', true], ['schedulerHandoff.migrationId', 'mig-queued:scheduler:12'], ['schedulerHandoff.uid', 'foreign'],
+    ['schedulerHandoff.slug', 'foreign'], ['schedulerHandoff.fromGatewayId', 'shared-foreign'], ['schedulerHandoff.toGatewayId', 'shared-foreign'],
+    ['schedulerHandoff.stageAfterCutover', true], ['schedulerHandoff.stagedAt', 2_000], ['schedulerHandoff.sourceRecovery', {}],
+    ['attemptHistory.0.steps', [{ name: 'quiesce-source', status: 'done' }]], ['attemptHistory.12.classification', 'terminal'],
+    ['attemptHistory.12.steps.0.status', 'running'], ['attemptHistory.12.steps.0.error', 'socket closed before connect response'],
+    ['attemptHistory.12.error', 'expected exactly one ready pod for transport=shared-2; found 0'],
+  ])('keeps attempted or ambiguous queued work fenced at %s=%j', async (path, value) => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    const parts = (path as string).split('.');
+    const target = parts.slice(0, -1).reduce((row, key) => row[key], queued.row);
+    target[parts.at(-1)!] = value;
+    const before = structuredClone(h.store);
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    expect(h.store).toEqual(before); expect(queued.scheduler).not.toHaveBeenCalled();
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    const released = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.store).toEqual(released);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it.each(['owner', 'marker', 'phase', 'restore-fence', 'transfer-fence', 'native-custody', 'source-missing', 'source-uid', 'source-slug',
+    'source-gateway', 'source-state', 'source-epoch', 'source-operation', 'target-assignment'])('refuses pre-transport release and recovery after %s changes', async change => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    const owner = h.store['users/other'].provisioning.openclaw;
+    const source = h.store['gateways/shared-1/assignments/other'];
+    if (change === 'owner') owner.gatewayId = 'shared-2';
+    if (change === 'marker') owner.migration.operationId = 'foreign';
+    if (change === 'phase') owner.migration.phase = 'transferring';
+    if (change === 'restore-fence') owner.restoreFence = {};
+    if (change === 'transfer-fence') owner.sourceTransferFence = { sourceGatewayId: 'shared-1' };
+    if (change === 'native-custody') owner.nativeSharedContextRestore = {};
+    if (change === 'source-missing') delete h.store['gateways/shared-1/assignments/other'];
+    if (change === 'source-uid') source.uid = 'foreign';
+    if (change === 'source-slug') source.slug = 'foreign';
+    if (change === 'source-gateway') source.gatewayId = 'shared-2';
+    if (change === 'source-state') source.state = 'quiescing';
+    if (change === 'source-epoch') source.epoch = -1;
+    if (change === 'source-operation') source.updatedByOperationId = {};
+    if (change === 'target-assignment') h.store['gateways/shared-2/assignments/other'] = { ...source, gatewayId: 'shared-2' };
+    const before = structuredClone(h.store);
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    expect(h.store).toEqual(before); expect(queued.scheduler).not.toHaveBeenCalled();
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    const released = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(released);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it('does not release a migration claimed after the scheduler sweep snapshot', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    const db = h.deps.db, transaction = db.runTransaction.bind(db);
+    vi.spyOn(db, 'runTransaction').mockImplementationOnce(async fn => {
+      queued.row.status = 'running'; queued.row.startedAt = 2_700;
+      return transaction(fn);
+    });
+    await expect(queued.release()).resolves.toEqual({ released: 0 });
+    expect(queued.row.schedulerHandoffReleased).toBe(false); expect(queued.scheduler).not.toHaveBeenCalled();
+  });
+
+  it('denies a released retry that claims before runtime recovery reserves the pod', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    await expect(queued.release()).resolves.toEqual({ released: 1 });
+    queued.row.status = 'running'; queued.row.startedAt = 2_700;
+    const before = structuredClone(h.store);
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.store).toEqual(before);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it('does not admit an attempted inbound migration as a released source dependency', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    queued.row.input.fromGatewayId = 'shared-foreign'; queued.row.input.toGatewayId = 'shared-1';
+    Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+
+  it('continues releasing a failed held migration through the native scheduler', async () => {
+    const h = harness(); const queued = blockedPreTransportMigration(h);
+    queued.row.status = 'failed';
+    queued.row.steps = [{ name: 'quiesce-source', status: 'done' }, { name: 'final-sync-state', status: 'failed' }];
+    const scheduler = vi.fn(async () => ({ agentIds: [] }));
+    await expect(releaseAbandonedSchedulerHandoffs({ db: h.deps.db, scheduler,
+      gatewayExists: async () => true, log: vi.fn(), now: () => 3_000 })).resolves.toEqual({ released: 1 });
+    expect(scheduler.mock.calls).toEqual([
+      ['shared-2', { migrationId: 'mig-queued:scheduler:13', slug: 'bob', phase: 'abort' }],
+      ['shared-1', { migrationId: 'mig-queued:scheduler:13', slug: 'bob', phase: 'resume' }],
+    ]);
+    expect(queued.row).toMatchObject({ status: 'failed', schedulerHandoffReleased: true });
+  });
 
   it.each(['implicit', 'zero'])('recovers ahead of unclaimed queued migrations with %s attempts while the real claim path retains the restart fence', async count => {
     const { h, next, deps, intent } = await failedRecovery();

@@ -3,6 +3,7 @@ import { GLM_OPERATIONS_COLLECTION, type SchedulerHandoffState } from "@octogee/
 import type { SchedulerMigrationRequestBody } from "@octogee/shared/types/fleet-controller";
 import { builderActivationSourceRecoveryPending } from "./legacy-migration-recovery.js";
 import type { Operation } from "@octogee/shared/types/glm";
+import { queuedSharedMigrationOwnsSource } from './lib/queued-shared-migration.js';
 
 export interface SchedulerHandoffReleaseDeps {
   db: Firestore;
@@ -94,49 +95,64 @@ function sourceRecoveryOwns(operation: DocumentData, id: string): boolean {
     operation.input?.recoverSourceOnly === true && typeof operation.cutoverCommittedAt !== "number";
 }
 
+async function releaseUnclaimedPreTransportHandoff(deps: SchedulerHandoffReleaseDeps, doc: QueryDocumentSnapshot): Promise<boolean> {
+  return deps.db.runTransaction(async tx => {
+    const current = await tx.get(doc.ref);
+    if (!current.exists || !current.updateTime?.isEqual(doc.updateTime)) return false;
+    const row = current.data()!;
+    if (row.schedulerHandoffReleased !== false || !await queuedSharedMigrationOwnsSource(deps.db, tx, row, doc.id)) return false;
+    tx.update(doc.ref, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: deps.now() });
+    return true;
+  });
+}
+
 export async function releaseAbandonedSchedulerHandoffs(
   deps: SchedulerHandoffReleaseDeps,
 ): Promise<{ released: number }> {
   const pending = await deps.db
     .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "==", "failed")
+    .where("status", "in", ["failed", "pending"])
     .where("schedulerHandoffReleased", "==", false)
     .get();
   let released = 0;
   for (const doc of pending.docs) {
-    const operation = doc.data();
-    if (sourceRecoveryOwns(operation, doc.id)) continue;
-    const handoff = operation.schedulerHandoff;
-    if (!isHandoff(handoff)) {
-      deps.log(`[scheduler-handoff-release] ⚠ ${doc.id} has no valid scheduler handoff; leaving it pending`);
-      continue;
-    }
-    const progress = handoffProgress(operation);
-    if (progress === "cut-over") {
-      const queued = await retryCommittedHandoff(deps, doc);
-      deps.log(`[scheduler-handoff-release] ${doc.id} committed handoff ${queued ? "queued for claimed recovery" : "changed authority; recovery withheld"}`);
-      continue;
-    }
-    try {
-      if (progress !== "never-held") await rollBackHandoff(deps, handoff, progress);
-    } catch (error) {
-      deps.log(
-        `[scheduler-handoff-release] ⚠ ${doc.id} ${handoff.migrationId} not released; source stays closed until the next pass: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-      );
-      continue;
-    }
-    if (!await acknowledgeCurrentHandoff(deps, doc)) {
-      deps.log(`[scheduler-handoff-release] ${doc.id} changed during rollback release; acknowledgment withheld`);
-      continue;
-    }
-    deps.log(
-      `[scheduler-handoff-release] released (${progress}) ${handoff.migrationId} slug=${handoff.slug} ` +
-        `source=${handoff.fromGatewayId} target=${handoff.toGatewayId} op=${doc.id}`,
-    );
-    released += 1;
+    if (doc.data().status === 'pending') {
+      if (!await releaseUnclaimedPreTransportHandoff(deps, doc)) continue;
+      deps.log(`[scheduler-handoff-release] released pre-transport retry ${doc.id}; source ownership unchanged`);
+      released += 1;
+    } else if (await releaseFailedHandoff(deps, doc)) released += 1;
   }
   return { released };
+}
+
+async function releaseFailedHandoff(deps: SchedulerHandoffReleaseDeps, doc: QueryDocumentSnapshot): Promise<boolean> {
+  const operation = doc.data();
+  if (sourceRecoveryOwns(operation, doc.id)) return false;
+  const handoff = operation.schedulerHandoff;
+  if (!isHandoff(handoff)) {
+    deps.log(`[scheduler-handoff-release] ⚠ ${doc.id} has no valid scheduler handoff; leaving it pending`);
+    return false;
+  }
+  const progress = handoffProgress(operation);
+  if (progress === 'cut-over') {
+    const queued = await retryCommittedHandoff(deps, doc);
+    deps.log(`[scheduler-handoff-release] ${doc.id} committed handoff ${queued ? 'queued for claimed recovery' : 'changed authority; recovery withheld'}`);
+    return false;
+  }
+  try {
+    if (progress !== 'never-held') await rollBackHandoff(deps, handoff, progress);
+  } catch (error) {
+    deps.log(`[scheduler-handoff-release] ⚠ ${doc.id} ${handoff.migrationId} not released; source stays closed until the next pass: ` +
+      `${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  if (!await acknowledgeCurrentHandoff(deps, doc)) {
+    deps.log(`[scheduler-handoff-release] ${doc.id} changed during rollback release; acknowledgment withheld`);
+    return false;
+  }
+  deps.log(`[scheduler-handoff-release] released (${progress}) ${handoff.migrationId} slug=${handoff.slug} ` +
+    `source=${handoff.fromGatewayId} target=${handoff.toGatewayId} op=${doc.id}`);
+  return true;
 }
 
 export function startSchedulerHandoffRelease(
