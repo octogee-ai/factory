@@ -58,7 +58,7 @@ const paul = { id: "en_paul_neutral", name: "Paul - Neutral", language: "en_us",
 const jane = { id: "gb_jane_confident", name: "Jane - Confident", language: "en_gb", gender: "female" };
 
 beforeEach(() => {
-  h.resolveConversation.mockReset().mockResolvedValue({ gatewayId: "gw-workspace", workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}:thread:${threadRootPostId}` });
+  h.resolveConversation.mockReset().mockResolvedValue({ gatewayId: "gw-workspace", workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}` });
   h.mintTicket.mockReset().mockResolvedValue({ ticket: "t-1", uid: "uid-parent", gatewayId: "gw-mom", purpose: "voice-ws" });
   h.evaluate.mockReset().mockResolvedValue({ state: "enabled", value: true });
   catalog.list.mockReset().mockResolvedValue({ configured: true, default: paul, voices: [paul, jane] });
@@ -73,7 +73,7 @@ describe("POST /api/voice/ticket", () => {
   });
   it('carries the exact server-verified selected thread in the voice ticket', async () => {
     const channelId = 'c'.repeat(26); const threadRootPostId = 'r'.repeat(26);
-    const sessionKey = `agent:octogee-workspace-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`;
+    const sessionKey = `agent:octogee-workspace-coach:mattermost:channel:${channelId}`;
     h.resolveConversation.mockResolvedValue({ gatewayId: 'gw-workspace', workspaceSlug: 'workspace', ownerUid: 'uid-owner', channelId, threadRootPostId, sessionKey });
     expect((await request(app()).post('/api/voice/ticket').send({ channelId, threadRootPostId })).status).toBe(200);
     expect(h.resolveConversation).toHaveBeenCalledWith('uid-parent', channelId, threadRootPostId);
@@ -83,7 +83,7 @@ describe("POST /api/voice/ticket", () => {
     const res = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26), threadRootPostId });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ wsTicket: "t-1", proxyUrl: "https://api-test.octogee.com", gatewayId: "gw-workspace" });
-    expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-workspace", purpose: "voice-ws", payload: { workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}:thread:${threadRootPostId}` } });
+    expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-workspace", purpose: "voice-ws", payload: { workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}` } });
     expect(h.resolveConversation).toHaveBeenCalledWith("uid-parent", "c".repeat(26), threadRootPostId);
     expect(h.evaluate).toHaveBeenCalledWith(
       "release-voice-talk",

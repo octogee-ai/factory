@@ -142,17 +142,20 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream is operator-selected main
 [`9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8`](https://github.com/openclaw/openclaw/commit/9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8),
 frozen for the October 14 native-first recut. Exact native source is
-`4bc64daa9b66440da1df0c78e434812bda681586`, branch
-`codex/openclaw-controlled-main-oct14`. Package `2026.10.3` is a main
+`e705f633da911436f6d4429a3f5c923b020bddea`, branch
+`codex/restore-mattermost-channel-memory`. Package `2026.10.3` is a main
 snapshot, not a released tag. OpenClaw validation stays local; no full upstream,
 fork-CI or iOS-green claim is made.
 
-`current.json` selects `openclaw-fork-0cbb167c.tgz` (generation
-`1791994927723077`) and `openclaw-mattermost-711a7dfb.tgz` (generation
-`1791994881545700`). Both were published with generation-match zero, downloaded
+`current.json` selects `openclaw-fork-6956add2.tgz` (generation
+`1792022816653887`) and `openclaw-mattermost-ae66f3ab.tgz` (generation
+`1792022760504592`). Both were published with generation-match zero, downloaded
 at those exact generations and compared byte-for-byte and by complete SHA256.
 The native branch was pushed normally and its full head read back; all sixteen
 native push workflows are main-only. No hosted OpenClaw CI is dispatched.
+
+Root SHA256: `6956add286e8ae7dd07aea17b76a94d387a0981f2802dd6c4f9bdc0d5b2fabf2`.
+Mattermost SHA256: `ae66f3ab298330d355c43ff6d4c87bfe2d0a129fd3f117c9b3c908d69fb10bcb`.
 
 Shared-state schema **22**, agent schema **26** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
@@ -167,12 +170,19 @@ speech-only cancellation behavior are removed. Octogee's API archives received
 finalized speech after a native call, without another model call or live
 Mattermost ingress. Native playback lifecycle acknowledgments remain.
 
-Mattermost uses native per-thread memory and native steering configuration.
-The fork's room-wide `threadSessionScope` and routing implementation are gone.
+Mattermost selects opt-in channel-wide memory through `threadSessionScope: "channel"`
+and native steering configuration. The channel plugin uses native session-routing
+contracts; it does not own a second history store or steering implementation.
 Talk and Activity retain a selected existing root across replies and tool views;
-they never infer the room or latest thread. Browser and Terminal keep verified
+the root controls delivery and archival, not session memory. They never infer the
+latest thread. Browser and Terminal keep verified
 conversation custody; Computer and theme controls need no conversation-history
 or audience grant.
+
+Room live Activity is explicitly channel-wide, matching the shared native
+session. Selecting a reply root does not filter that feed; native events lack
+immutable per-turn root attribution. Chat replies and recorded run details retain
+their original roots. Direct-message session behavior is unchanged.
 
 The fork's Browser take-control/give-back, manual pause and stale-input protocol
 are removed. Native browser controls and upstream worker-computer behavior stay
@@ -185,12 +195,6 @@ storage-engine interfaces, removes obsolete admission-capture scaffolding and
 redundant cron schema probes, and keeps cron reads inside the native worker
 transaction. The approved offline legacy import is not a new runtime schema.
 
-Using the same runtime-only filter against each selected upstream, this pass
-reduces 165 changed files and 5,172 added lines to 163 files and 5,070 added
-lines. The cumulative comparison with the qualified `121c7fd` line is 198→163
-files and 6,136→5,070 added lines. This excludes tests, docs and generated
-output, not the entire Octogee adapter or compiled bundle.
-
 ### Remaining gaps and removal conditions
 
 These are distinct bug fixes, integration boundaries and approved features, not
@@ -198,6 +202,7 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 
 | Retained boundary | Concrete gap without it; condition for removal |
 | --- | --- |
+| Channel-wide Mattermost memory | Native default thread sessions do not share agent memory across a room's threads. The operator-selected channel scope keeps one existing native session per channel while independently authorizing reply/archive roots. Keep it until native channel configuration covers this product behavior; do not merge or delete older thread histories. |
 | Requester, reviewer and execution-time authority | A native approval role alone does not bind another member's action to the current tenant/requester/run. The exact upstream control accepted an unauthorized other-UID review; the retained boundary rejects it. Remove when native public contracts carry and enforce the same current authority across tool and Codex execution. |
 | Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing exposes equivalent independent grant sources. |
 | Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
@@ -222,14 +227,22 @@ native; no agent-version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-The full pinned-package-manager native build passed in 29m18.2s with exact
+The full pinned-package-manager native build passed in 30m22.1s with exact
 source build-info and all 155 public SDK subpaths. Maintained sequential
 packers, native root archive integrity, the matched isolated npm install and
 actual arm64/amd64 full-plugin installer gates passed. These local installer
 images are not immutable Build main release digests or complete Builder
 runtime-image qualification. No desktop OS image change is included.
 
-One fresh synthetic store was authored through native RPCs in the exact
+The channel-memory follow-up also materialized Shared and Builder configs through
+73 verified production inputs from the committed policy, account, roster and
+pre-boot owners. Both passed installed-native config validation with channel scope
+on the channel and generated accounts, retaining configured policies. The checks
+used UID 1000, a network-disabled read-only container and fresh Linux tmpfs; they
+did not run Doctor, start a Gateway or call providers.
+
+The preceding `4bc64daa` recut's focused storage proof is retained: one fresh
+synthetic store was authored through native RPCs in the exact
 published `cf903690` predecessor, with networking and job execution disabled,
 then shut down normally. Candidate Doctor upgraded only a closed Linux copy:
 shared 21→22, four agents at 26, canonical rows/JSON/rowids, sessions,
@@ -243,7 +256,7 @@ refusal controls are preserved. This proves the focused data upgrade, not a
 candidate Gateway boot, live acknowledgment, running receipts, populated
 ACP/Cursor migration or provider readiness.
 
-Config compatibility uses current Shared and VM-Builder policy, roster,
+That recut's full Doctor config compatibility used Shared and VM-Builder policy, roster,
 account, native merge-patch, pre-boot, final gateway-class and catalog writers.
 The final class-policy writer must be included, and merge-patch deletion
 sentinels must pass through the native merge owner rather than be written as
@@ -277,14 +290,18 @@ All six generated native provenance/license records select this source.
 Browser and Computer retain native HTMLElement bridges and React
 mount/update/destroy contracts, with one shared graph for remaining Lit islands.
 The landed React model picker/tool icons and read-only tenant-filtered
-Automations remain. All 176 focused consumer cases across nineteen files and
-both app/sidecar production builds passed. Earlier synthetic Chrome frames are
+Automations remain. This follow-up passed 76 focused app cases across eight files,
+11 native UI contract/coexistence/embedding cases, 35 artifact/license/CUA cases,
+five affected package typechecks and both app/sidecar production builds. All 66
+focused artifact/base-image/provenance/pin cases passed on the adopted tuple.
+Earlier synthetic Chrome frames are
 prior evidence, not this cut's connected capability, layout parity or TEST
 acceptance.
 
 The prior cut's independently repaired permanent-retirement-fence finding is
-retained, not relabeled clean. Fresh full-overlay and owner-delta isolated
-reviews reported no actionable P0–P2 findings. Focused behavioral/type checks
+retained, not relabeled clean. Fresh native and authored Octogee follow-up source
+reviews reported no actionable P0–P2 findings. Generated outputs use their maintained
+generator, provenance/pin and consumer gates. Focused behavioral/type checks
 and the changed-source line-cap ratchet passed. The inherited env-read budget
 failure is also present on unpatched upstream (455 against 454); native
 `agent-tools.ts` exceeds its cap at 718 counted lines, while this cut is 712.
@@ -350,14 +367,17 @@ Do not retain real-time channel-consult handoff or verbatim playback-wait
 narration solely for archival. Preserve native playback acknowledgments and
 the distinction between ending media and explicitly cancelling agent work.
 
-Mattermost uses native per-thread memory. Templates default room replies to threads
-with native `replyToMode: "all"`; pre-boot fills this default only when unset and
-removes the retired `threadSessionScope` key from channel and account configuration.
+Mattermost uses channel-wide memory. Templates default room replies to threads
+with native `replyToMode: "all"`; pre-boot fills this reply default only when unset
+and selects `threadSessionScope: "channel"` for the channel and every generated account.
 Explicit channel/account reply modes, per-chat-type overrides, and streaming
 preferences remain intact. Native direct messages stay unthreaded unless explicitly
 configured otherwise. Reply destination and session identity remain distinct native
 contracts. Sessions and tool history remain in native OpenClaw SQLite state; existing
-thread sessions are not deleted, merged or reconstructed by this change.
+thread sessions are not deleted, merged or reconstructed by this change. A retained
+base channel session resumes as-is; reset and compaction apply to that channel's
+session, not one selected reply root. Different channels and account-bound agents
+remain separate.
 
 Mattermost defaults to `streaming.mode: "block"` with
 `streaming.preview.toolProgress: true`: completed text and tool-activity blocks
@@ -373,7 +393,7 @@ replaces the channel's streaming object under native OpenClaw account resolution
 Octogee selects native `messages.queue.byChannel.mattermost: "steer"` in both
 gateway templates and pre-boot configuration. Replies retain their selected
 thread; native OpenClaw owns active-run steering, idle admission and refusal
-behavior. Different threads keep separate session identities. Other channel
+behavior. Threads in one channel share its session identity. Other channel
 queue settings and native per-session override precedence remain unchanged.
 This is native configuration, not a fork steering implementation.
 

@@ -19,7 +19,7 @@ const TICKET = "0f0e0d0c-0b0a-4908-8706-050403020100";
 const GRANT = "g".repeat(43);
 const CHANNEL = 'c'.repeat(26);
 const threadRootPostId = 'r'.repeat(26);
-const SESSION_KEY = `agent:mom-coach:mattermost:channel:${CHANNEL}:thread:${threadRootPostId}`;
+const SESSION_KEY = `agent:mom-coach:mattermost:channel:${CHANNEL}`;
 const POST_ID = "p".repeat(26);
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -98,7 +98,7 @@ async function serverWith(overrides: Partial<VoiceWsRouteDeps> = {}) {
       })),
     },
     eventSourceForAgent: events.source,
-    resolveConversation: vi.fn(async ({ uid, gatewayId, channelId, threadRootPostId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: false })),
+    resolveConversation: vi.fn(async ({ uid, gatewayId, channelId, threadRootPostId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: false })),
     bindGrant: vi.fn(async ({ sessionId }) => ({ ...await deps.resolveConversation!({ uid: "uid-mom", gatewayId: "gw-mom", channelId: CHANNEL, threadRootPostId, expectedAgentId: "mom-coach" }), sessionId, expiresAt: grantExpiresAt })),
     endGrant: vi.fn(async () => ({ revoked: true as const })),
     isAgentReady: () => true,
@@ -410,7 +410,7 @@ describe("voice ws route", () => {
   it('revokes the grant when native Talk closes without another browser message', async () => {
     const handleText = vi.spyOn(NativeTalkSession.prototype, 'handleText').mockResolvedValue();
     const { base, deps } = await serverWith({ nativeVoiceEnabled: true,
-      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: 'mom', agentId: 'mom-coach', sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: 'b'.repeat(26), nativeInterrupt: true }),
     });
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, 'open');
@@ -428,7 +428,7 @@ describe("voice ws route", () => {
     const createVad = vi.fn(async () => ({ process: async () => 0, reset: () => undefined }));
     let allowed = true;
     const { base } = await serverWith({ nativeVoiceEnabled: true, createVad, conversationCheckMs: 5,
-      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: allowed }),
+      resolveConversation: async ({ uid, gatewayId, channelId }) => ({ uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: allowed }),
     });
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
     await once(ws, "open");
@@ -449,7 +449,7 @@ describe("voice ws route", () => {
     const { base } = await serverWith({ nativeVoiceEnabled: true, conversationCheckMs: 5,
       resolveConversation: async ({ uid, gatewayId, channelId }) => {
         if (!member) throw new Error("Workspace or channel membership removed");
-        return { uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}:thread:${threadRootPostId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: true };
+        return { uid, gatewayId, channelId, threadRootPostId, workspaceSlug: "mom", agentId: "mom-coach", sessionKey: `agent:mom-coach:mattermost:channel:${channelId}`, callerMmUserId: "b".repeat(26), nativeInterrupt: true };
       },
     });
     const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);

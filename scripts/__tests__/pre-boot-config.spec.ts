@@ -261,7 +261,7 @@ describe("shared Mattermost routing safety", () => {
 });
 
 describe("pre-boot config persistence", () => {
-  it.each(["shared", "builder"])("materializes an existing Mattermost account without retired room scope on %s gateways", (gatewayClass) => {
+  it.each(["shared", "builder"])("materializes shared channel memory without changing reply placement on %s gateways", (gatewayClass) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preboot-thread-scope-"));
     const configPath = path.join(dir, "openclaw.json");
     const account = {
@@ -296,11 +296,10 @@ describe("pre-boot config persistence", () => {
       writeConfigAtomically(configPath, config);
 
       const materialized = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      expect(materialized.channels.mattermost).not.toHaveProperty("threadSessionScope");
+      expect(materialized.channels.mattermost.threadSessionScope).toBe("channel");
       expect(materialized.channels.mattermost).toMatchObject(channelPolicy);
       expect(materialized.channels.mattermost.accounts["existing-coach"]).toEqual(account);
-      expect(log).toHaveBeenCalledWith("removed unsupported channels.mattermost.threadSessionScope");
-      expect(log).toHaveBeenCalledWith("removed unsupported channels.mattermost.accounts.existing-coach.threadSessionScope");
+      expect(materialized.channels.mattermost.accounts["existing-coach"].threadSessionScope).toBe("channel");
       expect(applyPreBootPatches(materialized, { GATEWAY_CLASS: gatewayClass }, vi.fn())).toBe(false);
       expect(fs.readdirSync(dir)).toEqual(["openclaw.json"]);
     } finally {
@@ -483,7 +482,7 @@ describe("applyPreBootPatches — MM env sync", () => {
 describe("applyPreBootPatches — Mattermost runtime", () => {
   it.each([undefined, "steer", "collect", "followup", "interrupt"])("uses native Mattermost steering without changing other channel policy (%s)", (mattermostMode) => {
     const config: any = {
-      channels: { mattermost: { replyToMode: "all", streaming: { mode: "block", preview: { toolProgress: true } }, commands: { native: false } } },
+      channels: { mattermost: { replyToMode: "all", threadSessionScope: "channel", streaming: { mode: "block", preview: { toolProgress: true } }, commands: { native: false } } },
       messages: { queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
     };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "steer");
@@ -504,7 +503,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     };
     applyPreBootPatches(config, {});
     expect(config.channels.mattermost).toMatchObject({ replyToMode: "off", streaming: { mode: "partial" } });
-    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
+    expect(config.channels.mattermost.threadSessionScope).toBe("channel");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.agents.defaults.verboseDefault).toBe("off");
   });
@@ -515,7 +514,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost.replyToMode).toBe("all");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
     expect(config.channels.mattermost.streaming).toEqual({ mode: "block", preview: { toolProgress: true } });
-    expect(config.channels.mattermost).not.toHaveProperty("threadSessionScope");
+    expect(config.channels.mattermost.threadSessionScope).toBe("channel");
   });
 
   it("defaults inherited replies while preserving account and chat-type choices, idempotently", () => {
@@ -566,11 +565,11 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     } } };
     const log = vi.fn();
     expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
-    for (const field of ["agentActivity", "threadDirectMessages", "threadSessionScope"]) {
+    for (const field of ["agentActivity", "threadDirectMessages"]) {
       expect(config.channels.mattermost).not.toHaveProperty(field);
       expect(config.channels.mattermost.accounts.coach).not.toHaveProperty(field);
     }
-    expect(config.channels.mattermost.accounts.coach).toMatchObject({ replyToMode: "first", botToken: token });
+    expect(config.channels.mattermost.accounts.coach).toMatchObject({ replyToMode: "first", botToken: token, threadSessionScope: "channel" });
     expect(log).toHaveBeenCalled();
     expect(applyMattermostPreBootPatches(config, {}, log)).toBe(false);
   });
@@ -1024,9 +1023,10 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           baseUrl: "${MM_URL}",
           streaming: { mode: "block", preview: { toolProgress: true } },
           commands: "legacy-commands",
+          threadSessionScope: "channel",
           accounts: {
             default: "legacy-default",
-            coach: { commands: "legacy-account-commands" },
+            coach: { commands: "legacy-account-commands", threadSessionScope: "channel" },
           },
         },
       },
@@ -1098,6 +1098,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
       channels: {
         mattermost: {
           chatmode: "onmessage",
+          threadSessionScope: "channel",
           requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
@@ -1115,6 +1116,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           commands: { native: false },
           accounts: {
             "ceckert-coach": {
+              threadSessionScope: "channel",
               botToken: { source: "file", provider: "octogee-mattermost", id: "/ceckert-coach" },
               commands: { native: false },
             },

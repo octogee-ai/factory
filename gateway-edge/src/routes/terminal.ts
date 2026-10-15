@@ -32,7 +32,7 @@ export interface TerminalSession {
 
 export function openTerminalUserSocket(session: TerminalSession, open = openNativeUserSocket): Promise<TerminalUpstream> {
   return open(session.uid, session.gatewayId, process.env, {
-    ...(session.conversation ? { channelSessionKey: session.conversation.sessionKey } : {}),
+    ...(session.conversation ? { channelSessionKey: session.conversation.sessionKey, threadRootPostId: session.conversation.threadRootPostId } : {}),
   });
 }
 

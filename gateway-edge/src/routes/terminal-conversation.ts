@@ -1,4 +1,4 @@
-export interface TerminalConversation { agentId: string; sessionKey: string }
+export interface TerminalConversation { agentId: string; sessionKey: string; threadRootPostId: string }
 
 export class TerminalConversationScope {
   private readonly pending = new Map<string, string>();

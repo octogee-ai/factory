@@ -924,7 +924,7 @@ async function redeemVoiceIdentity(db: Firestore, tx: Transaction, payload: Reco
     typeof payload.channelId !== "string" || !MATTERMOST_ID_RE.test(payload.channelId) ||
     !isMattermostPostId(payload.threadRootPostId) || typeof payload.workspaceSlug !== "string" || typeof payload.ownerUid !== "string") return null;
   const { workspaceSlug, ownerUid, channelId, threadRootPostId, sessionKey } = payload;
-  if (typeof sessionKey !== "string" || !["channel", "group"].some(kind => sessionKey === `agent:octogee-${workspaceSlug}-coach:mattermost:${kind}:${channelId}:thread:${threadRootPostId}`)) return null;
+  if (typeof sessionKey !== "string" || !["channel", "group"].some(kind => sessionKey === `agent:octogee-${workspaceSlug}-coach:mattermost:${kind}:${channelId}`)) return null;
   const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid });
   if (!scope) return null;
   const live = await resolveWorkspaceConversation({ db }, { uid, gatewayId, channelId, threadRootPostId });

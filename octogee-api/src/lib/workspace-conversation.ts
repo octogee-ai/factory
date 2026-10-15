@@ -110,7 +110,7 @@ export async function resolveWorkspaceConversation(deps: WorkspaceConversationDe
   return { scope, token: access.token, agentMmUserId: access.target.agentMmUserId, context: {
     uid: claim.uid, gatewayId: scope.gatewayId, workspaceSlug, channelId: claim.channelId, agentId,
     threadRootPostId: claim.threadRootPostId,
-    sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}:thread:${claim.threadRootPostId}`,
+    sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}`,
     callerMmUserId: access.callerMmUserId,
   } };
 }

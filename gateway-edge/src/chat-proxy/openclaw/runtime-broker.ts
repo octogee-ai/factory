@@ -2,7 +2,7 @@ import { ReplyBindingDeniedError, type NativeFinalReply } from "@octogee/core/na
 import { internalFetch } from "../../lib/internal-fetch.js";
 import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type { ActivityConversation } from '../../lib/activity-conversation.js';
-import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
+import { isMattermostPostId, parseMattermostSessionRoute } from '@octogee/shared/types/mattermost-session-route';
 import type {
   AgentIdentity,
   AuthorizedConversationTarget,
@@ -27,16 +27,18 @@ function voiceRedeemScope(body: Record<string, unknown> | null, expectedAgentId:
   if (!scope || typeof scope.ownerUid !== "string" || !scope.ownerUid || scope.ownerUid.length > 128 || scope.ownerUid.includes("/") ||
     typeof scope.workspaceSlug !== "string" || !/^[a-z0-9-]{1,64}$/u.test(scope.workspaceSlug) ||
     typeof scope.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(scope.channelId) || !isMattermostPostId(scope.threadRootPostId) || expectedAgentId !== `octogee-${scope.workspaceSlug}-coach` ||
-    !["channel", "group"].some(kind => scope.sessionKey === `agent:${expectedAgentId}:mattermost:${kind}:${scope.channelId}:thread:${scope.threadRootPostId}`)) {
+    !["channel", "group"].some(kind => scope.sessionKey === `agent:${expectedAgentId}:mattermost:${kind}:${scope.channelId}`)) {
     throw new OpenClawRuntimeBrokerError(502, "malformed redeem response");
   }
   return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId, threadRootPostId: scope.threadRootPostId, sessionKey: scope.sessionKey as string };
 }
 
-function activitySessionMatches(sessionKey: string, agentId: string, threadRootPostId: string): boolean {
-  const prefix = `agent:${agentId}:mattermost:`;
-  const route = /^(?:direct|group|channel):[a-z0-9]{26}:thread:([a-z0-9]{26})$/u.exec(sessionKey.slice(prefix.length));
-  return sessionKey.startsWith(prefix) && route?.[1] === threadRootPostId;
+function activitySessionMatches(sessionKey: string, agentId: string, channelId: string, threadRootPostId: string): boolean {
+  const route = parseMattermostSessionRoute(sessionKey);
+  if (!route || route.agentId !== agentId || !isMattermostPostId(route.primaryChannelId)) return false;
+  return route.peerKind === 'direct'
+    ? route.threadRootPostId === threadRootPostId
+    : route.primaryChannelId === channelId && route.threadRootPostId === undefined;
 }
 
 function parseActivityConversation(value: unknown, gatewayId: string, expectedAgentId?: string): ActivityConversation {
@@ -45,7 +47,7 @@ function parseActivityConversation(value: unknown, gatewayId: string, expectedAg
     typeof scope.channelId !== 'string' || !/^[a-z0-9]{26}$/u.test(scope.channelId) || !isMattermostPostId(scope.threadRootPostId) ||
     typeof scope.expectedAgentId !== 'string' || !/^octogee-[a-z0-9-]+$/u.test(scope.expectedAgentId) ||
     (expectedAgentId !== undefined && scope.expectedAgentId !== expectedAgentId) ||
-    typeof scope.sessionKey !== 'string' || !activitySessionMatches(scope.sessionKey, scope.expectedAgentId, scope.threadRootPostId)) {
+    typeof scope.sessionKey !== 'string' || !activitySessionMatches(scope.sessionKey, scope.expectedAgentId, scope.channelId, scope.threadRootPostId)) {
     throw new OpenClawRuntimeBrokerError(502, 'malformed Activity conversation');
   }
   return { gatewayId, ownerUid: scope.ownerUid, channelId: scope.channelId, threadRootPostId: scope.threadRootPostId, expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey };

@@ -20,7 +20,7 @@ function validConversationIdentity(body: Partial<ToolConversation>, args: { uid:
     typeof body.workspaceSlug === 'string' && /^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) &&
     body.agentId === `octogee-${body.workspaceSlug}-coach` &&
     (args.expectedAgentId === undefined || body.agentId === args.expectedAgentId) &&
-    body.threadRootPostId === args.threadRootPostId && ['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}:thread:${args.threadRootPostId}`);
+    body.threadRootPostId === args.threadRootPostId && ['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}`);
 }
 
 export async function resolveToolConversationForUid(args: {

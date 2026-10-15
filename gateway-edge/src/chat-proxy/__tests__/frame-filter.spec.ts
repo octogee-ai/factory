@@ -13,6 +13,20 @@ const ctx = { expectedAgentId: EXPECTED };
 describe('read-only native Activity scope', () => {
   const sessionKey = `agent:${EXPECTED}:mattermost:group:${'c'.repeat(26)}`;
   const scope = { ...ctx, sessionKey };
+  it.each(['agent', 'session.tool', 'session.message'])('admits channel-wide %s events independently of mutable reply-root metadata', event => {
+    const threadRootPostId = 'r'.repeat(26);
+    const selectedThreadScope = { ...scope, threadRootPostId };
+    const raw = eventFrame(event, {
+      sessionKey, runId: 'sibling-thread-run', seq: 1, ts: 1000, stream: 'tool',
+      origin: { provider: 'mattermost', threadId: threadRootPostId },
+      deliveryContext: { channel: 'mattermost', threadId: threadRootPostId },
+      lastThreadId: threadRootPostId,
+      data: { phase: 'start', name: 'read', toolCallId: 'sibling-call' },
+      message: { role: 'assistant', timestamp: 1000, content: 'Sibling thread answer', __openclaw: { runId: 'sibling-thread-run', id: 'message', seq: 1 } },
+    });
+    expect(shouldForwardFrame(raw, selectedThreadScope)).toEqual({ forward: true, reason: 'matched-identity' });
+    expect(sanitizeActivityFrame(raw)).not.toContain(threadRootPostId);
+  });
   it.each(['text', 'input_text', 'output_text'])('projects native public %s blocks', type => {
     const raw = eventFrame('session.message', { sessionKey, message: { role: 'assistant', timestamp: 1000,
       content: [{ type, text: 'The public answer' }], text: 'Not the selected answer' } });

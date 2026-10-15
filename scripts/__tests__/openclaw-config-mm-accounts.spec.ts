@@ -471,6 +471,7 @@ describe("buildMattermostAccounts", () => {
       dmPolicy: "disabled",
       allowFrom: [CHRIS_MM_ID],
       groupPolicy: "open",
+      threadSessionScope: "channel",
       groups: null,
       commands: { native: false },
     });
@@ -480,6 +481,7 @@ describe("buildMattermostAccounts", () => {
       dmPolicy: "disabled",
       allowFrom: [SAM_MM_ID],
       groupPolicy: "open",
+      threadSessionScope: "channel",
       groups: null,
       commands: { native: false },
     });
@@ -780,6 +782,7 @@ describe("buildProjectAgentAccounts", () => {
         allowFrom: [CHRIS_MM_ID],
         dmPolicy: "disabled",
         groupPolicy: "open",
+        threadSessionScope: "channel",
         commands: { native: false },
       },
     });

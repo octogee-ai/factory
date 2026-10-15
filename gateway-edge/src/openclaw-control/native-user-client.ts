@@ -2,7 +2,7 @@ import { assertWorkspaceIdentityReady } from "@octogee/core/openclaw-workspace-b
 import { deriveDeviceIdentity } from "@octogee/shared/types/device-identity";
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, openClawDeviceSubject, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
 import { WebSocket } from "ws";
-import { parseThreadedChannelMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
+import { isMattermostPostId, parseChannelScopedMattermostSessionRoute } from "@octogee/shared/types/mattermost-session-route";
 import { resolveToolConversationForUid } from '../lib/tool-conversation.js';
 import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
 import { openProxyIdentitySocket, podClientAddress, profileFor, type OpenClawProfileListItem } from "./proxy-identity.js";
@@ -14,7 +14,7 @@ export interface NativeUserSocket { ws: WebSocket; scopes: Set<string> }
 async function synchronizeConnectedChannelMembership(input: {
   ws: WebSocket;
   uid: string;
-  channel: NonNullable<ReturnType<typeof parseThreadedChannelMattermostSessionRoute>>;
+  channel: NonNullable<ReturnType<typeof parseChannelScopedMattermostSessionRoute>>;
   url: URL;
   headers: Record<string, string>;
   reauthorize(): Promise<void>;
@@ -36,14 +36,14 @@ async function synchronizeConnectedChannelMembership(input: {
   }
 }
 
-export async function openNativeUserSocket(uid: string, gatewayId: string, env: NodeJS.ProcessEnv = process.env, options: { caps?: readonly string[]; channelSessionKey?: string } = {}): Promise<NativeUserSocket> {
+export async function openNativeUserSocket(uid: string, gatewayId: string, env: NodeJS.ProcessEnv = process.env, options: { caps?: readonly string[]; channelSessionKey?: string; threadRootPostId?: string } = {}): Promise<NativeUserSocket> {
   if (env.OPENCLAW_CONTROL_IDENTITY !== "per-user" || env.GATEWAY_CLASS !== "builder" || env.GATEWAY_ID !== gatewayId) {
     throw new Error("Native workspace permissions require the local per-user Builder gateway");
   }
-  const channel = options.channelSessionKey === undefined ? null : parseThreadedChannelMattermostSessionRoute(options.channelSessionKey);
-  if (options.channelSessionKey !== undefined && !channel) throw new Error("Invalid native channel identity");
+  const channel = options.channelSessionKey === undefined ? null : parseChannelScopedMattermostSessionRoute(options.channelSessionKey);
+  if (options.channelSessionKey !== undefined && (!channel || !isMattermostPostId(options.threadRootPostId))) throw new Error("Invalid native channel identity");
   const reauthorize = async () => { if (channel) {
-    const current = await resolveToolConversationForUid({ uid, gatewayId, channelId: channel.primaryChannelId, threadRootPostId: channel.threadRootPostId, expectedAgentId: channel.agentId, env });
+    const current = await resolveToolConversationForUid({ uid, gatewayId, channelId: channel.primaryChannelId, threadRootPostId: options.threadRootPostId!, expectedAgentId: channel.agentId, env });
     if (current.sessionKey !== options.channelSessionKey) throw new Error('Native conversation authority changed');
   } };
   await reauthorize();

@@ -5,7 +5,7 @@ import { resolveToolConversationForUid, resolveToolControlForUid } from './tool-
 const channelId = 'a'.repeat(26);
 const threadRootPostId = 'r'.repeat(26);
 const args = { uid: 'u', gatewayId: 'b-alice', channelId, threadRootPostId, expectedAgentId: 'octogee-alice-coach', env: { OPENCLAW_RUNTIME_BROKER_URL: 'http://octogee-api:3001' } };
-const answer = { uid: 'u', gatewayId: 'b-alice', channelId, threadRootPostId, workspaceSlug: 'alice', agentId: args.expectedAgentId, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${channelId}:thread:${threadRootPostId}`, callerMmUserId: 'b'.repeat(26) };
+const answer = { uid: 'u', gatewayId: 'b-alice', channelId, threadRootPostId, workspaceSlug: 'alice', agentId: args.expectedAgentId, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${channelId}`, callerMmUserId: 'b'.repeat(26) };
 describe('tool conversation broker', () => {
   it('cannot turn an unbound Computer/theme control context into session custody', async () => {
     h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));

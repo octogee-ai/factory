@@ -133,7 +133,7 @@ function validateConversationIdentity(body: Partial<VoiceConversation>, args: { 
     typeof body.workspaceSlug !== 'string' || !/^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) ||
     !isMattermostPostId(args.threadRootPostId) || body.threadRootPostId !== args.threadRootPostId || body.agentId !== `octogee-${body.workspaceSlug}-coach` ||
     (args.expectedAgentId !== undefined && body.agentId !== args.expectedAgentId) ||
-    !['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}:thread:${args.threadRootPostId}`)) {
+    !['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}`)) {
     throw new Error('Voice conversation broker returned an invalid context');
   }
 }

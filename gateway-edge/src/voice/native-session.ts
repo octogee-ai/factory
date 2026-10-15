@@ -11,7 +11,7 @@ interface NativeTalkOptions {
   onUnavailable?: (sessionId: string, reason: string) => void;
   voiceGrant: string;
   voiceGrantExpiresAt: number;
-  conversation: { uid: string; gatewayId: string; agentId: string; sessionKey: string };
+  conversation: { uid: string; gatewayId: string; agentId: string; sessionKey: string; threadRootPostId: string };
   send: (event: TalkServerEvent) => void;
   sendAudio: (audio: Buffer) => void;
   reauthorize: () => Promise<unknown>;
@@ -230,7 +230,7 @@ export class NativeTalkSession {
     } else this.fail(new Error(reason));
   }
   private async connectNative(): Promise<boolean> {
-    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'], channelSessionKey: this.options.conversation.sessionKey });
+    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'], channelSessionKey: this.options.conversation.sessionKey, threadRootPostId: this.options.conversation.threadRootPostId });
     if (this.isClosed()) { connection.ws.close(); return false; }
     this.connection = connection;
     this.rpc = (this.options.attachRpc ?? attachUpstreamRpcClient)(connection.ws, { timeoutMs: 15000 });

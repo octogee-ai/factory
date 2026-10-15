@@ -104,11 +104,16 @@ function applyMattermostAccountSessionPolicy(
   logFn: (msg: string) => void,
 ): boolean {
   let changed = false;
-  for (const key of ["agentActivity", "threadDirectMessages", "threadSessionScope"]) {
+  for (const key of ["agentActivity", "threadDirectMessages"]) {
     if (!Object.hasOwn(account, key)) continue;
     delete account[key];
     changed = true;
     logFn(`removed unsupported ${configPath}.${key}`);
+  }
+  if (account.threadSessionScope !== "channel") {
+    account.threadSessionScope = "channel";
+    changed = true;
+    logFn(`set ${configPath}.threadSessionScope=channel`);
   }
   return changed;
 }

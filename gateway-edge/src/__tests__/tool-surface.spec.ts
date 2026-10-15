@@ -19,7 +19,7 @@ const channelId = 'a'.repeat(26);
 const threadRootPostId = 'r'.repeat(26);
 const desktopPublicKey = Buffer.alloc(32, 1).toString('base64url');
 const desktopNodeId = createHash('sha256').update(Buffer.from(desktopPublicKey, 'base64url')).digest('hex');
-const context = { uid: 'owner', gatewayId: 'b-alice', workspaceSlug: 'alice', channelId, threadRootPostId, agentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${channelId}:thread:${threadRootPostId}`, callerMmUserId: 'u'.repeat(26) };
+const context = { uid: 'owner', gatewayId: 'b-alice', workspaceSlug: 'alice', channelId, threadRootPostId, agentId: 'octogee-alice-coach', sessionKey: `agent:octogee-alice-coach:mattermost:group:${channelId}`, callerMmUserId: 'u'.repeat(26) };
 describe('hosted native Browser surface', () => {
   let app: express.Express; let server: http.Server; let native: WebSocketServer; let base: string; let desktopIdentityRoot: string;
   let scopes: Set<string>; const clients: WebSocket[] = []; const received: Array<Record<string, any>> = []; const history: unknown[] = [];

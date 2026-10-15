@@ -72,7 +72,7 @@ export async function resolveActivityConversation(input: ActivityConversationInp
   const kinds: Record<string, string> = { D: 'direct', P: 'group', O: 'channel' };
   const kind = kinds[String(channel.type)];
   const peer = kind === 'direct' ? access.callerMmUserId : input.channelId;
-  const threadSuffix = threadRootPostId === undefined ? '' : `:thread:${threadRootPostId}`;
+  const threadSuffix = kind === 'direct' && threadRootPostId !== undefined ? `:thread:${threadRootPostId}` : '';
   return {
     gatewayId, ownerUid: target.ownerUid, channelId: input.channelId, expectedAgentId: target.agentId,
     ...(threadRootPostId === undefined ? {} : { threadRootPostId }),

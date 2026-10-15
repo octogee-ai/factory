@@ -7,7 +7,7 @@ const authorize = vi.hoisted(() => vi.fn());
 vi.mock('../../../gateway-edge/src/lib/activity-conversation.js', () => ({ resolveActivityConversation: authorize }));
 const threadRootPostId = 'r'.repeat(26);
 const gatewayId = 'b-alice';
-const scope = { gatewayId, ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` };
+const scope = { gatewayId, ownerUid: 'owner', channelId: 'c'.repeat(26), threadRootPostId, expectedAgentId: 'octogee-alice-proj-web', sessionKey: `agent:octogee-alice-proj-web:mattermost:group:${'c'.repeat(26)}` };
 function harness(payloadPatch: Record<string, unknown> = {}, ownerGateway = gatewayId) {
   const { gatewayId: _, ...payload } = scope;
   const ticket = { uid: 'member', gatewayId, purpose: 'openclaw-ws', expiresAt: Date.now() + 30_000, payload: { ...payload, ...payloadPatch } };

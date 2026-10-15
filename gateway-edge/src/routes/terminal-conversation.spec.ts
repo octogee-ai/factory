@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalConversationScope } from './terminal-conversation.js';
 import { openTerminalUserSocket } from './terminal.js';
-const binding = { agentId: 'coach', sessionKey: 'agent:coach:mattermost:group:channel' };
+const binding = { agentId: 'coach', sessionKey: 'agent:coach:mattermost:group:channel', threadRootPostId: 'r'.repeat(26) };
 const req = (id: string, method: string, params = {}) => JSON.stringify({ type: 'req', id, method, params });
 const res = (id: string, payload: unknown) => JSON.stringify({ type: 'res', id, ok: true, payload });
 describe('conversation-owned native terminals', () => {
@@ -10,11 +10,11 @@ describe('conversation-owned native terminals', () => {
     const session = { uid: 'builder', gatewayId: 'builder-gateway', workspaceSlug: 'builder', conversation: binding, reauthorize: async () => true };
     await openTerminalUserSocket(session, open);
     expect(open.mock.calls[0].slice(0, 2)).toEqual(['builder', 'builder-gateway']);
-    expect(open.mock.calls[0][3]).toEqual({ channelSessionKey: binding.sessionKey });
+    expect(open.mock.calls[0][3]).toEqual({ channelSessionKey: binding.sessionKey, threadRootPostId: binding.threadRootPostId });
   });
   it('injects canonical session ownership and refuses client-selected ownership', () => {
     const scope = new TerminalConversationScope(binding);
-    expect(JSON.parse(scope.request(req('1', 'terminal.open', { cols: 80, rows: 24 }))!)).toMatchObject({ params: { ...binding, cols: 80, rows: 24 } });
+    expect(JSON.parse(scope.request(req('1', 'terminal.open', { cols: 80, rows: 24 }))!)).toMatchObject({ params: { agentId: binding.agentId, sessionKey: binding.sessionKey, cols: 80, rows: 24 } });
     expect(scope.request(req('2', 'terminal.open', { agentId: 'other', cols: 80, rows: 24 }))).toBeNull();
   });
   it('projects the resolved workspace conversation onto the native terminal schema', () => {

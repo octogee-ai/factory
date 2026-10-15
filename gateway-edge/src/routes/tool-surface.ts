@@ -322,7 +322,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
     };
     browser.on('close', () => close()); browser.on('error', () => close(1011, 'Tool socket failed'));
     try {
-      const native = await openUpstream(session.context.uid, session.context.gatewayId, env, { caps: session.surface === 'browser' ? ['session-scoped-events'] : [], ...(session.surface === 'browser' ? { channelSessionKey: session.context.sessionKey } : {}) }); upstream = native.ws;
+      const native = await openUpstream(session.context.uid, session.context.gatewayId, env, { caps: session.surface === 'browser' ? ['session-scoped-events'] : [], ...(session.surface === 'browser' ? { channelSessionKey: session.context.sessionKey, threadRootPostId: session.context.threadRootPostId } : {}) }); upstream = native.ws;
       if (!live.active) { upstream.close(); return; }
       if (!native.scopes.has('operator.admin')) { close(1008, 'Tool access changed'); return; }
       upstream.on('close', () => close(1011, 'Native Tool disconnected')); upstream.on('error', () => close(1011, 'Native Tool failed'));

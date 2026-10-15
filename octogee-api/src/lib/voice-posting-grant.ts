@@ -34,7 +34,7 @@ function boundedId(value: unknown): value is string {
 function validIdentity(body: Partial<GrantIdentity>): boolean {
   return [body.uid, body.gatewayId, body.ownerUid].every(boundedId) && typeof body.workspaceSlug === 'string' && /^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) &&
     typeof body.channelId === 'string' && MATTERMOST_ID.test(body.channelId) && isMattermostPostId(body.threadRootPostId) && body.agentId === `octogee-${body.workspaceSlug}-coach` &&
-    ['channel', 'group'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${body.channelId}:thread:${body.threadRootPostId}`);
+    ['channel', 'group'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${body.channelId}`);
 }
 function grantHash(voiceGrant: string): string {
   if (!/^[A-Za-z0-9_-]{43}$/u.test(voiceGrant)) deny();

@@ -19,6 +19,20 @@ function fixture(type = 'P') {
   return { db, authorize, client, target };
 }
 describe('native Activity conversation', () => {
+  it('shares channel memory across selected roots while retaining the authorized display root', async () => {
+    const f = fixture();
+    const read = f.client.getJson.getMockImplementation()!;
+    f.client.getJson.mockImplementation(path => path[0] === 'posts'
+      ? Promise.resolve({ id: path[1], channel_id: channelId, root_id: '', delete_at: 0 })
+      : read(path));
+    const first = await resolveActivityConversation({ ...f, uid, channelId, threadRootPostId });
+    const second = await resolveActivityConversation({ ...f, uid, channelId, threadRootPostId: 's'.repeat(26) });
+    expect([first?.sessionKey, second?.sessionKey]).toEqual([
+      `agent:${f.target.agentId}:mattermost:group:${channelId}`,
+      `agent:${f.target.agentId}:mattermost:group:${channelId}`,
+    ]);
+    expect([first?.threadRootPostId, second?.threadRootPostId]).toEqual([threadRootPostId, 's'.repeat(26)]);
+  });
   it.each([['O', 'channel', channelId], ['P', 'group', channelId], ['D', 'direct', 'u'.repeat(26)]])('uses the native %s conversation key', async (type, kind, peer) => {
     const f = fixture(type);
     expect((await resolveActivityConversation({ ...f, uid, channelId }))?.sessionKey).toBe(`agent:${f.target.agentId}:mattermost:${kind}:${peer}`);
@@ -35,7 +49,7 @@ describe('native Activity conversation', () => {
     const f = fixture(type);
     expect(await resolveActivityConversation({ ...f, uid, channelId, threadRootPostId })).toEqual({
       gatewayId, ownerUid: 'owner', channelId, expectedAgentId: f.target.agentId, threadRootPostId,
-      sessionKey: `agent:${f.target.agentId}:mattermost:${kind}:${peer}:thread:${threadRootPostId}`,
+      sessionKey: `agent:${f.target.agentId}:mattermost:${kind}:${peer}${kind === 'direct' ? `:thread:${threadRootPostId}` : ''}`,
     });
     expect(f.client.getJson).toHaveBeenCalledWith(['posts', threadRootPostId]);
   });

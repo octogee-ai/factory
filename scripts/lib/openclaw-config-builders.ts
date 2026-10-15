@@ -277,6 +277,7 @@ export interface MattermostAccountEntry {
   dmPolicy?: "allowlist" | "disabled";
   allowFrom?: string[];
   groupPolicy?: "open" | "allowlist" | "disabled";
+  threadSessionScope: "channel";
   groups?: Record<string, { requireMention?: boolean }> | null;
 
   commands?: {
@@ -308,6 +309,7 @@ export function buildMattermostAccounts(
       dmPolicy: "disabled",
       allowFrom: [ownerMmUserId],
       groupPolicy: "open",
+      threadSessionScope: "channel",
       groups: null,
       commands: { native: false },
     };
@@ -558,6 +560,7 @@ export function buildProjectAgentAccounts(
       allowFrom: [ownerMmUserId],
       dmPolicy: "disabled",
       groupPolicy: "open",
+      threadSessionScope: "channel",
       commands: { native: false },
     };
   }
