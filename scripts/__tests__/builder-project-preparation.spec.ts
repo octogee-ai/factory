@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
+import { ADD_CUSTOMER_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import type { CustomerLifecycleAdapter, ProjectCloneOptions } from "../lib/customer-lifecycle.js";
 
 const paths = vi.hoisted(() => ({ root: `/tmp/octogee-builder-project-preparation-${process.pid}` }));
@@ -39,7 +41,8 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(paths.root, { recursive: true, force: true }); });
 
-function wiring() {
+function wiring(failGitCommand?: string) {
+  const gitCalls: string[][] = [];
   const snapshot = { uid: "uid-alice", slug, gatewayId: "alice-builder", status: "complete",
     projectCheckoutScope: "workspace-and-projects", projects: [{ projectSlug: project, giteaRepoName: project, provisioningState: "active" }] };
   const adapter = {
@@ -47,6 +50,8 @@ function wiring() {
     listProjectsNeedingClone: vi.fn(async () => customerRepositoryHasCanonicalRemote(dir) && projectCheckoutMatchesSource(slug, project, project) ? [] : snapshot.projects),
     cloneProjectRepo: async (_slug: string, _project: string, repo: string, opts?: ProjectCloneOptions) => cloneProjectRepo(slug, project, repo, {
       ...opts, gitExec: (cwd, args) => {
+        gitCalls.push(args);
+        if (args[0] === failGitCommand) return null;
         try { return git(cwd, args[0] === "fetch" ? ["fetch", "--no-tags", origin, "+refs/heads/*:refs/remotes/origin/*"] : args); }
         catch { return null; }
       },
@@ -54,14 +59,133 @@ function wiring() {
   } as unknown as CustomerLifecycleAdapter;
   const request = { migrationId: "activation-test", slug, targetPodUid: "target-pod" };
   const processGate = { status: async () => ({ version: 1, podUid: request.targetPodUid, role: "target", mode: "held", phase: "held", ...request }) };
-  return { adapter, request, gate: createBuilderSurgeGateWiring({ adapter, processGate: processGate as never,
+  return { adapter, request, gitCalls, gate: createBuilderSurgeGateWiring({ adapter, processGate: processGate as never,
     surgeReadiness: {} as never, waitForGatewayReady: async () => undefined, log: vi.fn(), openclawDir: paths.root,
     provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     attachConfiguredBuilderBeforeOpenClaw: async () => slug,
   }) };
 }
 
+function holdProjectLease() {
+  const gitDir = path.join(paths.root, "git-source-switch-locks", slug, `${project}.git`);
+  fs.mkdirSync(gitDir, { recursive: true });
+  const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: dir, gitDir });
+  if (!lease) throw new Error("isolated project lease fixture is unexpectedly busy");
+  return lease;
+}
+
 describe("configured Builder preparation of retained canonical projects", () => {
+  it("waits for an active project writer before attempting the refresh once", async () => {
+    const lease = holdProjectLease();
+    const { gate, request, gitCalls } = wiring();
+    let released = false;
+    let gitRanWhileHeld = false;
+    const timer = setTimeout(() => {
+      gitRanWhileHeld = gitCalls.length > 0;
+      lease.release();
+      released = true;
+    }, 40);
+    try {
+      await expect(gate.prepareSurgeTarget(request)).resolves.toBeUndefined();
+      expect(released).toBe(true);
+      expect(gitRanWhileHeld).toBe(false);
+      expect(gitCalls.filter(args => args[0] === "fetch")).toHaveLength(1);
+      const next = holdProjectLease();
+      next.release();
+    } finally {
+      clearTimeout(timer);
+      if (!released) lease.release();
+    }
+  });
+
+  it("stops waiting at the customer preparation deadline while preserving an active writer's lease", async () => {
+    const lease = holdProjectLease();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const { gate, request, gitCalls } = wiring();
+    let settled = false;
+    let failure: unknown;
+    const preparation = gate.prepareSurgeTarget(request)
+      .catch(error => { failure = error; })
+      .finally(() => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(ADD_CUSTOMER_DEADLINE_MS - 1);
+      expect(settled).toBe(false);
+      expect(gitCalls).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await preparation;
+      expect(failure).toMatchObject({ message: expect.stringContaining("pending repositories: demo") });
+      expect(settled).toBe(true);
+      expect(gitCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      lease.release();
+    }
+  });
+
+  it("does not acquire a released lease when the final wait wakes after the preparation deadline", async () => {
+    const lease = holdProjectLease();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const now = vi.spyOn(performance, "now");
+    const { gate, request, gitCalls } = wiring();
+    let released = false;
+    let settled = false;
+    let failure: unknown;
+    const preparation = gate.prepareSurgeTarget(request)
+      .catch(error => { failure = error; })
+      .finally(() => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(ADD_CUSTOMER_DEADLINE_MS - 100);
+      expect(settled).toBe(false);
+      expect(gitCalls).toHaveLength(0);
+      now.mockReturnValue(ADD_CUSTOMER_DEADLINE_MS + 1);
+      lease.release();
+      released = true;
+      await vi.advanceTimersByTimeAsync(100);
+      await preparation;
+      expect(failure).toMatchObject({ message: expect.stringContaining("pending repositories: demo") });
+      expect(gitCalls).toHaveLength(0);
+    } finally {
+      if (!released) lease.release();
+      await vi.runAllTimersAsync();
+      await preparation;
+      now.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a busy refresh when the owning finish-import request aborts", async () => {
+    const lease = holdProjectLease();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const controller = new AbortController();
+    const { gate, request, gitCalls } = wiring();
+    let settled = false;
+    let failure: unknown;
+    const preparation = gate.prepareSurgeTarget(request, controller.signal)
+      .catch(error => { failure = error; })
+      .finally(() => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(new Error("finish import cancelled"));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(true);
+      expect(failure).toMatchObject({ message: "finish import cancelled" });
+      expect(gitCalls).toHaveLength(0);
+    } finally {
+      await vi.runAllTimersAsync();
+      await preparation;
+      vi.useRealTimers();
+      lease.release();
+    }
+  });
+
+  it("does not retry a Git failure after acquiring the project lease", async () => {
+    const { gate, request, gitCalls } = wiring("fetch");
+    await expect(gate.prepareSurgeTarget(request)).rejects.toThrow("pending repositories: demo");
+    expect(gitCalls.filter(args => args[0] === "fetch")).toHaveLength(1);
+    const next = holdProjectLease();
+    next.release();
+  });
+
   it.each(["unstaged", "staged", "conflicting"])("preserves transferred work while absorbing an identity already committed upstream (%s)", async state => {
     const originalHead = git(dir, ["rev-parse", "HEAD"]);
     fs.writeFileSync(path.join(seed, "IDENTITY.md"), "saved identity\n");

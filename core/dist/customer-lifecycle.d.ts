@@ -49,6 +49,8 @@ export interface ProjectCloneTarget {
 export interface ProjectCloneOptions {
     repoSource?: ProjectRepoSource | null;
     refreshRemote?: boolean;
+    refreshLeaseDeadlineMs?: number;
+    signal?: AbortSignal;
 }
 export interface CustomerContext {
     uid: string;
@@ -278,7 +280,9 @@ export interface AddCustomerOptions {
 }
 export declare function addCustomerToGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: AddCustomerOptions): Promise<AddCustomerResult>;
 export declare function restoreCustomerRuntimeFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, opts?: AddCustomerOptions): Promise<RestoreCustomerRuntimeResult>;
-export declare function cloneProjectsFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot): Promise<{
+export declare function cloneProjectsFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, options?: {
+    signal?: AbortSignal;
+}): Promise<{
     steps: AddCustomerStep[];
     pending: string[];
 }>;

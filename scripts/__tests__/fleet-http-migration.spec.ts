@@ -1202,7 +1202,7 @@ describe("createRestoreHandler", () => {
         }),
       );
       expect(adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-      expect(adapter.cloneProjectRepo).toHaveBeenCalledWith("chris", "demo", "chris-demo", { refreshRemote: true });
+      expect(adapter.cloneProjectRepo).toHaveBeenCalledWith("chris", "demo", "chris-demo", expect.objectContaining({ refreshRemote: true }));
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledTimes(1);
       expect(adapter.markCustomerMigratingIn).toHaveBeenCalledWith("chris");
       expect(pauseSystemConfigWatch).toHaveBeenCalledOnce();
@@ -4753,7 +4753,7 @@ describe("prepared migration staging", () => {
     const finished = mkResponse();
     await createFinishRsyncImportHandler(deps)(mkRequest(finish, { signature: signForPod(migrationId, JSON.stringify(finish)) }), finished.res, vi.fn());
     expect(finished.getStatus()).toBe(200);
-    expect(prepareSurgeTarget).toHaveBeenCalledWith({ migrationId, slug: "chris", targetPodUid: "builder-prepared-pod" });
+    expect(prepareSurgeTarget).toHaveBeenCalledWith({ migrationId, slug: "chris", targetPodUid: "builder-prepared-pod" }, expect.any(AbortSignal));
     expect(releaseSurgeReadiness).not.toHaveBeenCalled();
     const finalStage = await prepare("final");
     expect(finalStage).toBe(stageDir);

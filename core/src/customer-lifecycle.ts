@@ -64,6 +64,8 @@ export interface ProjectCloneTarget {
 export interface ProjectCloneOptions {
   repoSource?: ProjectRepoSource | null;
   refreshRemote?: boolean;
+  refreshLeaseDeadlineMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface CustomerContext {
@@ -556,7 +558,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(
 
   markStep("project-clones");
   const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
-    ? await cloneProjectsFromSnapshot(adapter, snapshot)
+    ? await cloneProjectsFromSnapshot(adapter, snapshot, { signal })
     : { steps: [], pending: [] };
   steps.push(...projectClones.steps);
   throwIfAborted(signal, uid);
@@ -627,10 +629,17 @@ function hasProjectCloneSource(target: ProjectCloneTarget): boolean {
 export async function cloneProjectsFromSnapshot(
   adapter: CustomerLifecycleAdapter,
   snapshot: UserSnapshot,
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ steps: AddCustomerStep[]; pending: string[] }> {
   const steps: AddCustomerStep[] = [];
   const pending: string[] = [];
+  const refreshOptions: ProjectCloneOptions = {
+    refreshRemote: true,
+    refreshLeaseDeadlineMs: performance.now() + ADD_CUSTOMER_DEADLINE_MS,
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
   for (const project of snapshot.projects ?? []) {
+    options.signal?.throwIfAborted();
     if (project.provisioningState !== undefined && project.provisioningState !== "active") continue;
     if (!projectCheckoutEnabled(project.checkoutEnabled)) {
       adapter.log(
@@ -652,11 +661,13 @@ export async function cloneProjectsFromSnapshot(
         project.giteaRepoName,
         githubRepoSourceOf(project)
           ? projectCloneOptions(project)
-          : { refreshRemote: true },
+          : refreshOptions,
       );
+      options.signal?.throwIfAborted();
       if (cloned) steps.push("project-clone");
       else pending.push(project.projectSlug);
     } catch (error) {
+      options.signal?.throwIfAborted();
       pending.push(project.projectSlug);
       adapter.log(
         `[restore:${snapshot.slug}/${project.projectSlug}] ⚠ project clone failed (non-fatal): ${String(error)}`,

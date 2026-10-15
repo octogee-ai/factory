@@ -16,6 +16,7 @@ import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 import { acquireWorkspaceMutationLeaseSync } from "@octogee/core/workspace-mutation-lease";
 import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
+import { ADD_CUSTOMER_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 
 export function errMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -854,6 +855,8 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 export interface CloneProjectRepoOptions {
   repoSource?: ProjectRepoSource | null;
   refreshRemote?: boolean;
+  refreshLeaseDeadlineMs?: number;
+  signal?: AbortSignal;
   githubToken?: string | null;
   gitExec?: GitRunner;
   prepareRepository?: typeof setRepoSshCommand;
@@ -933,24 +936,49 @@ function stageAlreadyCommittedProjectEdits(run: (args: string[]) => string | nul
   return committedPaths;
 }
 
-function refreshProjectCheckout(
+async function acquireProjectRefreshLease(
   slug: string,
   projectSlug: string,
   dest: string,
   opts: CloneProjectRepoOptions,
-): boolean {
-  if (!opts.refreshRemote) return true;
-  const lease = acquireProjectSourceSwitchLease(
+): Promise<ReturnType<typeof acquireWorkspaceMutationLeaseSync>> {
+  const acquire = () => acquireProjectSourceSwitchLease(
     opts.acquireMutationLease ?? acquireWorkspaceMutationLeaseSync,
     dest,
     slug,
     projectSlug,
   );
+  const deadline = opts.refreshLeaseDeadlineMs ?? performance.now() + ADD_CUSTOMER_DEADLINE_MS;
+  opts.signal?.throwIfAborted();
+  let lease = acquire();
+  while (!lease) {
+    opts.signal?.throwIfAborted();
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) {
+      return null;
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(100, remainingMs)));
+    opts.signal?.throwIfAborted();
+    if (performance.now() >= deadline) return null;
+    lease = acquire();
+  }
+  return lease;
+}
+
+async function refreshProjectCheckout(
+  slug: string,
+  projectSlug: string,
+  dest: string,
+  opts: CloneProjectRepoOptions,
+): Promise<boolean> {
+  if (!opts.refreshRemote) return true;
+  const lease = await acquireProjectRefreshLease(slug, projectSlug, dest, opts);
   if (!lease) {
-    log(`⚠ [git] Cannot refresh ${slug}/${projectSlug} — project mutation lease is unavailable`);
+    log(`⚠ [git] Cannot refresh ${slug}/${projectSlug} — project mutation lease is unavailable at the preparation deadline`);
     return false;
   }
   try {
+    opts.signal?.throwIfAborted();
     const run = (args: string[]) => (opts.gitExec ?? gitExec)(
       dest, args, customerSshKeyPath(slug), opts.githubToken,
     );

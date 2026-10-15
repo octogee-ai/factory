@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   addCustomerToGateway,
   cloneMissingProjects,
+  cloneProjectsFromSnapshot,
   ConcurrentMountError,
   _resetInFlightUidsForTests,
   _inFlightUidsHasForTests,
@@ -2336,6 +2337,38 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     expect(await adapter.readGiteaCustomerPubKeys("test")).toEqual(["ssh-pubkey"]);
   });
 
+  it("shares one preparation deadline and request signal across snapshot project refreshes", async () => {
+    const state = makeState(snap({ status: "complete", projects: [
+      { projectSlug: "first", giteaRepoName: "first" },
+      { projectSlug: "second", giteaRepoName: "second" },
+    ] }), emptyDisk());
+    const adapter = makeAdapter(state);
+    const controller = new AbortController();
+    await cloneProjectsFromSnapshot(adapter, state.user!, { signal: controller.signal });
+    const [first, second] = state.cloneProjectCalls;
+    expect(first.opts?.refreshLeaseDeadlineMs).toEqual(expect.any(Number));
+    expect(second.opts?.refreshLeaseDeadlineMs).toBe(first.opts?.refreshLeaseDeadlineMs);
+    expect(first.opts?.signal).toBe(controller.signal);
+    expect(second.opts?.signal).toBe(controller.signal);
+  });
+
+  it("does not start the next snapshot project after its owning request aborts", async () => {
+    const state = makeState(snap({ status: "complete", projects: [
+      { projectSlug: "first", giteaRepoName: "first" },
+      { projectSlug: "second", giteaRepoName: "second" },
+    ] }), emptyDisk());
+    const adapter = makeAdapter(state);
+    const controller = new AbortController();
+    const clone = vi.fn(async () => {
+      controller.abort(new Error("finish import cancelled"));
+      return false;
+    });
+    adapter.cloneProjectRepo = clone;
+    await expect(cloneProjectsFromSnapshot(adapter, state.user!, { signal: controller.signal }))
+      .rejects.toThrow("finish import cancelled");
+    expect(clone).toHaveBeenCalledOnce();
+  });
+
   it("requires Gitea project checkouts to refresh during runtime restoration", async () => {
     const state = makeState(snap({
       status: "complete",
@@ -2347,7 +2380,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
 
     await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
 
-    expect(clone).toHaveBeenCalledWith(state.user!.slug, "proofproj", "proofproj", { refreshRemote: true });
+    expect(clone).toHaveBeenCalledWith(state.user!.slug, "proofproj", "proofproj", expect.objectContaining({ refreshRemote: true }));
   });
 
   it("does not publish a restored mount when an active project runtime is missing", async () => {
@@ -2462,7 +2495,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
 
     expect(state.cloneProjectCalls).toEqual([
       { projectSlug: "gh", giteaRepoName: null, opts: { repoSource: GITHUB_REPO_SOURCE } },
-      { projectSlug: "camp", giteaRepoName: "test-camp", opts: { refreshRemote: true } },
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: expect.objectContaining({ refreshRemote: true }) },
     ]);
     expect(result.steps.filter((s) => s === "project-clone")).toHaveLength(2);
   });
@@ -2488,7 +2521,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
 
     expect(state.cloneProjectCalls).toEqual([
-      { projectSlug: "camp", giteaRepoName: "test-camp", opts: { refreshRemote: true } },
+      { projectSlug: "camp", giteaRepoName: "test-camp", opts: expect.objectContaining({ refreshRemote: true }) },
     ]);
     expect(state.logs.find((l) => l.includes("test/gh"))).toMatch(/turned off by its owner/);
   });

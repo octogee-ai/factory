@@ -2131,7 +2131,7 @@ function registerMigrationRoutes(
 }
 
 interface BuilderSurgeGateWiring {
-  prepareSurgeTarget: (input: BuilderSurgeTargetRequest) => Promise<void>;
+  prepareSurgeTarget: (input: BuilderSurgeTargetRequest, signal?: AbortSignal) => Promise<void>;
   reserveSurgeTarget: (input: { migrationId: string; slug: string }) => Promise<void>;
   unreserveSurgeTarget: (input: {
     migrationId: string;
@@ -2396,6 +2396,7 @@ async function builderPreparationFingerprint(adapter: CustomerLifecycleAdapter, 
 
 async function prepareConfiguredBuilderTarget(input: {
   request: BuilderSurgeTargetRequest;
+  signal?: AbortSignal;
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   attachConfigured: ConfiguredBuilderAttach;
@@ -2406,6 +2407,7 @@ async function prepareConfiguredBuilderTarget(input: {
   projectBlobHydrator?: ProjectBlobHydrator;
 }): Promise<PreparedBuilderTarget> {
   const { request, adapter, processGate, attachConfigured, log, provisioning } = input;
+  input.signal?.throwIfAborted();
   if (!processGate || !reservedTargetOpenClawHeld(await processGate.status(), request)) {
     throw new Error("Builder preparation requires its reserved OpenClaw process to remain held");
   }
@@ -2415,7 +2417,7 @@ async function prepareConfiguredBuilderTarget(input: {
   await runProvisioningWork({ provisioning, work: async (onWorkSettled) => {
     const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
     if (attachedSlug !== request.slug) throw new Error("Builder preparation attached the wrong customer");
-    const checkouts = await cloneProjectsFromSnapshot(adapter, prepared.snapshot);
+    const checkouts = await cloneProjectsFromSnapshot(adapter, prepared.snapshot, { signal: input.signal });
     if (checkouts.pending.length > 0) throw new Error(`Builder preparation has pending repositories: ${checkouts.pending.join(", ")}`);
   } });
   const lockSha256 = process.env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim();
@@ -2567,8 +2569,8 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     }
   };
   return {
-    async prepareSurgeTarget(request) {
-      preparedTarget = await prepareConfiguredBuilderTarget({ request, adapter, processGate, attachConfigured,
+    async prepareSurgeTarget(request, signal) {
+      preparedTarget = await prepareConfiguredBuilderTarget({ request, signal, adapter, processGate, attachConfigured,
         log, provisioning, waitForActiveProvisioningDrain, openclawDir, projectBlobHydrator: input.projectBlobHydrator });
     },
     async reserveSurgeTarget({ migrationId, slug }) {

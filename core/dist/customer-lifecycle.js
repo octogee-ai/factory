@@ -124,7 +124,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     throwIfAborted(signal, uid);
     markStep("project-clones");
     const projectClones = rehydratesProjectCheckouts(adapter, snapshot)
-        ? await cloneProjectsFromSnapshot(adapter, snapshot)
+        ? await cloneProjectsFromSnapshot(adapter, snapshot, { signal })
         : { steps: [], pending: [] };
     steps.push(...projectClones.steps);
     throwIfAborted(signal, uid);
@@ -179,10 +179,16 @@ function projectCloneSourceLabel(target) {
 function hasProjectCloneSource(target) {
     return githubRepoSourceOf(target) !== null || Boolean(target.giteaRepoName);
 }
-export async function cloneProjectsFromSnapshot(adapter, snapshot) {
+export async function cloneProjectsFromSnapshot(adapter, snapshot, options = {}) {
     const steps = [];
     const pending = [];
+    const refreshOptions = {
+        refreshRemote: true,
+        refreshLeaseDeadlineMs: performance.now() + ADD_CUSTOMER_DEADLINE_MS,
+        ...(options.signal ? { signal: options.signal } : {}),
+    };
     for (const project of snapshot.projects ?? []) {
+        options.signal?.throwIfAborted();
         if (project.provisioningState !== undefined && project.provisioningState !== "active")
             continue;
         if (!projectCheckoutEnabled(project.checkoutEnabled)) {
@@ -197,13 +203,15 @@ export async function cloneProjectsFromSnapshot(adapter, snapshot) {
         try {
             const cloned = await adapter.cloneProjectRepo(snapshot.slug, project.projectSlug, project.giteaRepoName, githubRepoSourceOf(project)
                 ? projectCloneOptions(project)
-                : { refreshRemote: true });
+                : refreshOptions);
+            options.signal?.throwIfAborted();
             if (cloned)
                 steps.push("project-clone");
             else
                 pending.push(project.projectSlug);
         }
         catch (error) {
+            options.signal?.throwIfAborted();
             pending.push(project.projectSlug);
             adapter.log(`[restore:${snapshot.slug}/${project.projectSlug}] ⚠ project clone failed (non-fatal): ${String(error)}`);
         }

@@ -158,7 +158,7 @@ flushLocalState?: (input: {
   reason: string;
   expectedSystemConfigCommit?: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
-prepareSurgeTarget?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<void>;
+prepareSurgeTarget?: (input: { migrationId: string; slug: string; targetPodUid: string }, signal?: AbortSignal) => Promise<void>;
 releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
 reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
 surgeTargetOpenClawHeld?: (input: {
@@ -2137,6 +2137,7 @@ async function finishTargetPreparation(
   session: RSyncImportSession,
   body: FinishRsyncImportRequestBody,
   configTransferMode: MigrationConfigTransferMode,
+  signal: AbortSignal,
 ): Promise<void> {
   const sourceEntries = (await listRelativeEntries(session.stageDir)).filter(entry =>
     entry.startsWith(`customers/${body.slug}/`) || entry.startsWith(`${GIT_METADATA_DIR}/${body.slug}/`));
@@ -2144,7 +2145,7 @@ async function finishTargetPreparation(
   const activation = configuredBuilderActivationRequest(deps, body, "pre", configTransferMode);
   if (!activation) return;
   if (!deps.prepareSurgeTarget) throw new Error("Builder target preparation is unavailable");
-  await deps.prepareSurgeTarget(activation);
+  await deps.prepareSurgeTarget(activation, signal);
 }
 
 function validateSharedRestoreCertificate(session: RSyncImportSession, body: FinishRsyncImportRequestBody, res: Response): boolean {
@@ -2359,7 +2360,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       await markSharedRestoreInstalled(deps, body, session.importDir);
       const stagedAt = Date.now();
       if (mode === "pre") {
-        await finishTargetPreparation(deps, session, body, configTransferMode);
+        await finishTargetPreparation(deps, session, body, configTransferMode, controller.signal);
         preserveStage = true;
       }
       const verificationPending = mode === "final"
