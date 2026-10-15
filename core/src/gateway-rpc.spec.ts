@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type AddressInfo, type Server } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -174,6 +175,59 @@ const nonce = crypto.randomBytes(12).toString("hex");
   };
 }
 
+async function startPhasedGateway(delays: { upgrade: number; challenge: number; connect: number }) {
+  const http = createHttpServer();
+  const wss = new WebSocketServer({ noServer: true });
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const sockets = new Set<import("node:net").Socket>();
+  const methods: string[] = [];
+  let markClosed: () => void;
+  const closed = new Promise<void>((resolve) => { markClosed = resolve; });
+  const later = (ms: number, callback: () => void) => {
+    const timer = setTimeout(() => { timers.delete(timer); callback(); }, ms);
+    timers.add(timer);
+  };
+  http.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => { sockets.delete(socket); markClosed(); });
+  });
+  http.on("upgrade", (request, socket, head) => {
+    later(delays.upgrade, () => {
+      if (!socket.destroyed) wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws));
+    });
+  });
+  wss.on("connection", (ws) => {
+    later(delays.challenge, () => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "phase-nonce" } }));
+    });
+    ws.on("message", (data) => {
+      const frame = JSON.parse(data.toString()) as { id: string; method: string };
+      methods.push(frame.method);
+      later(frame.method === "connect" ? delays.connect : 0, () => {
+        if (ws.readyState !== ws.OPEN) return;
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { config: {}, hash: "persisted-P", configRevisionHash: "resolved-R", appliedConfigHash: "resolved-R" } }));
+      });
+    });
+  });
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  return {
+    url: `ws://127.0.0.1:${(http.address() as AddressInfo).port}`,
+    methods,
+    closed,
+    close: async () => {
+      for (const timer of timers) clearTimeout(timer);
+      for (const ws of wss.clients) ws.terminate();
+      for (const socket of sockets) socket.destroy();
+      await Promise.all([
+        new Promise<void>((resolve) => wss.close(() => resolve())),
+        new Promise<void>((resolve) => http.close(() => resolve())),
+      ]);
+    },
+  };
+}
+
 describe("gateway-rpc", () => {
   let server: MockServerHandle;
   let client: GatewayRpcClient;
@@ -195,7 +249,78 @@ describe("gateway-rpc", () => {
   });
 
   describe("configPatch", () => {
+    function serveRevision(hash: string, applied: () => string | null = () => "resolved-R") {
+      server.setHandler("config.get", () => ({
+        ok: true,
+        payload: { config: {}, hash, configRevisionHash: "resolved-R", appliedConfigHash: applied() },
+      }));
+    }
+
+    it.each([
+      { delays: { upgrade: 500, challenge: 0, connect: 0 }, stage: "ws-open", methods: [] },
+      { delays: { upgrade: 100, challenge: 300, connect: 0 }, stage: "challenge", methods: [] },
+      { delays: { upgrade: 100, challenge: 100, connect: 200 }, stage: "connect", methods: ["connect"] },
+    ])("shares the patch deadline across delayed connection phases and closes during $stage", async ({ delays, stage, methods }) => {
+      const phased = await startPhasedGateway(delays);
+      const traces: ConnectTrace[] = [];
+      const bounded = createGatewayRpc({
+        url: phased.url, token: "test-token", identity: makeTestIdentity(),
+        connectTimeoutMs: 500, callTimeoutMs: 300, onConnectTrace: (trace) => traces.push(trace),
+      });
+      try {
+        await expect(bounded.configPatchAndWaitForChange({}, "base-hash")).rejects.toBeInstanceOf(OpenclawWireError);
+        expect(traces).toEqual([expect.objectContaining({ success: false, stage })]);
+        expect(traces[0].totalMs).toBeLessThan(380);
+        await phased.closed;
+        expect(phased.methods).toEqual(methods);
+      } finally {
+        await bounded.close();
+        await phased.close();
+      }
+    });
+
+    it("keeps per-phase connection limits for callers without an overall deadline", async () => {
+      const phased = await startPhasedGateway({ upgrade: 100, challenge: 100, connect: 200 });
+      const traces: ConnectTrace[] = [];
+      const ordinary = createGatewayRpc({
+        url: phased.url, token: "test-token", identity: makeTestIdentity(),
+        connectTimeoutMs: 500, callTimeoutMs: 300, onConnectTrace: (trace) => traces.push(trace),
+      });
+      try {
+        await expect(ordinary.configGet()).resolves.toMatchObject({ hash: "persisted-P" });
+        expect(traces).toEqual([expect.objectContaining({ success: true, stage: "done" })]);
+        expect(phased.methods).toEqual(["connect", "config.get"]);
+        await phased.closed;
+      } finally {
+        await ordinary.close();
+        await phased.close();
+      }
+    });
+
+    it("confirms the accepted persisted revision is applied without config.changed", async () => {
+      server.setHandler("config.patch", () => ({
+        ok: true,
+        payload: { ok: true, hash: "persisted-P", path: "/fake/openclaw.json" },
+      }));
+      server.setHandler("config.get", () => ({
+        ok: true,
+        payload: {
+          config: {},
+          hash: "persisted-P",
+          configRevisionHash: "resolved-R",
+          appliedConfigHash: "resolved-R",
+        },
+      }));
+
+      await expect(
+        client.configPatchAndWaitForChange({ bindings: [] }, "base-hash"),
+      ).resolves.toMatchObject({ hash: "persisted-P" });
+      expect(server.callCount("config.patch")).toBe(1);
+      expect(server.callCount("config.get")).toBe(1);
+    });
+
     it("authenticates the config-change connection with the configured token", async () => {
+      serveRevision("authenticated-hash");
       let captured: any = null;
       server.setConnectHandler((params) => {
         captured = params;
@@ -228,12 +353,15 @@ describe("gateway-rpc", () => {
       expect(captured?.auth).toEqual({ token: "test-token" });
     });
 
-    it("waits for the matching persisted-candidate config.changed before resolving", async () => {
+    it("uses a matching config.changed to check the authoritative applied revision", async () => {
       const events: string[] = [];
+      let applied = false;
+      serveRevision("accepted-hash", () => applied ? "resolved-R" : null);
       server.setHandler("config.patch", (_params, ws) => {
         events.push("patch-response");
         setTimeout(() => {
           events.push("config-changed");
+          applied = true;
           ws.send(JSON.stringify({
             type: "event",
             event: "config.changed",
@@ -252,6 +380,7 @@ describe("gateway-rpc", () => {
     });
 
     it("captures config.changed that arrives before the patch response", async () => {
+      serveRevision("early-hash");
       server.setHandler("config.patch", (_params, ws) => {
         ws.send(JSON.stringify({
           type: "event",
@@ -271,6 +400,8 @@ describe("gateway-rpc", () => {
 
     it("ignores unrelated config.changed events while waiting for its persisted hash", async () => {
       const accepted: string[] = [];
+      let applied = false;
+      serveRevision("our-hash", () => applied ? "resolved-R" : null);
       server.setHandler("config.patch", (_params, ws) => {
         ws.send(JSON.stringify({
           type: "event",
@@ -279,6 +410,7 @@ describe("gateway-rpc", () => {
         }));
         setTimeout(() => {
           accepted.push("ours");
+          applied = true;
           ws.send(JSON.stringify({
             type: "event",
             event: "config.changed",
@@ -294,6 +426,82 @@ describe("gateway-rpc", () => {
       await client.configPatchAndWaitForChange({ bindings: [] }, "base-hash");
 
       expect(accepted).toEqual(["ours"]);
+    });
+
+    it("observes delayed application without a config.changed event", async () => {
+      client = createGatewayRpc({ url: server.url, token: "test-token", identity: makeTestIdentity(), callTimeoutMs: 1_500 });
+      let reads = 0;
+      serveRevision("persisted-P", () => ++reads === 1 ? null : "resolved-R");
+      server.setHandler("config.patch", () => ({ ok: true, payload: { ok: true, hash: "persisted-P" } }));
+
+      await expect(client.configPatchAndWaitForChange({}, "base-hash")).resolves.toMatchObject({ hash: "persisted-P" });
+      expect(reads).toBe(2);
+      expect(server.callCount("config.patch")).toBe(1);
+    });
+
+    it.each(["base-hash", "newer-persisted-hash"])("rejects another persisted revision even when its runtime is applied: %s", async (hash) => {
+      serveRevision(hash);
+      server.setHandler("config.patch", () => ({ ok: true, payload: { ok: true, hash: "persisted-P" } }));
+
+      await expect(client.configPatchAndWaitForChange({}, "base-hash")).rejects.toMatchObject({ code: "hash-mismatch" });
+    });
+
+    it.each([null, "older-resolved-revision"])("does not accept a matching event with an unapplied revision: %s", async (applied) => {
+      serveRevision("persisted-P", () => applied);
+      server.setHandler("config.patch", (_params, ws) => {
+        ws.send(JSON.stringify({ type: "event", event: "config.changed", payload: { hash: "persisted-P" } }));
+        return { ok: true, payload: { ok: true, hash: "persisted-P" } };
+      });
+
+      await expect(client.configPatchAndWaitForChange({}, "base-hash")).rejects.toMatchObject({ code: "timeout" });
+    });
+
+    it.each([
+      { configRevisionHash: "", appliedConfigHash: "" },
+      { configRevisionHash: null, appliedConfigHash: null },
+      { configRevisionHash: "resolved-R", appliedConfigHash: "" },
+    ])("rejects invalid authoritative revision metadata: %j", async (revision) => {
+      server.setHandler("config.patch", () => ({ ok: true, payload: { ok: true, hash: "persisted-P" } }));
+      server.setHandler("config.get", () => ({ ok: true, payload: { hash: "persisted-P", ...revision } }));
+
+      await expect(client.configPatchAndWaitForChange({}, "base-hash")).rejects.toMatchObject({ code: "invalid-response" });
+    });
+
+    it("rejects an authoritative read error without writing again", async () => {
+      server.setHandler("config.patch", () => ({ ok: true, payload: { ok: true, hash: "persisted-P" } }));
+      server.setHandler("config.get", () => ({ ok: false, error: { code: "UNAVAILABLE", message: "revision unavailable" } }));
+
+      await expect(client.configPatchAndWaitForChange({}, "base-hash")).rejects.toMatchObject({ code: "rpc-error", message: "revision unavailable" });
+      expect(server.callCount("config.patch")).toBe(1);
+    });
+
+    it("rejects a connection close while the accepted revision remains unapplied", async () => {
+      server.setHandler("config.patch", () => ({ ok: true, payload: { ok: true, hash: "persisted-P" } }));
+      server.setHandler("config.get", (_params, ws) => {
+        setImmediate(() => ws.close());
+        return { ok: true, payload: { hash: "persisted-P", configRevisionHash: "resolved-R", appliedConfigHash: null } };
+      });
+
+      await expect(client.configPatchAndWaitForChange({}, "base-hash")).rejects.toMatchObject({ code: "connect-failed" });
+    });
+
+    it("does not accept application after the original overall request budget", async () => {
+      const startedAt = Date.now();
+      const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+      server.setHandler("config.patch", () => {
+        now.mockReturnValue(startedAt + 400);
+        return { ok: true, payload: { ok: true, hash: "persisted-P" } };
+      });
+      server.setHandler("config.get", () => {
+        now.mockReturnValue(startedAt + 501);
+        return { ok: true, payload: { hash: "persisted-P", configRevisionHash: "resolved-R", appliedConfigHash: "resolved-R" } };
+      });
+
+      try {
+        await expect(client.configPatchAndWaitForChange({}, "base-hash")).rejects.toMatchObject({ code: "timeout" });
+      } finally {
+        now.mockRestore();
+      }
     });
 
     it("returns a no-op patch without waiting for an acceptance event", async () => {

@@ -103,7 +103,7 @@ function configChangedHash(data) {
     const hash = parsed.payload?.hash;
     return typeof hash === "string" && hash.length > 0 ? hash : null;
 }
-function trackConfigChange(ws) {
+function trackConfigRevisionWakeups(ws) {
     const changedHashes = new Set();
     const waiters = new Map();
     const onMessage = (data) => {
@@ -118,38 +118,64 @@ function trackConfigChange(ws) {
     ws.on("message", onMessage);
     return {
         waitFor(hash, timeoutMs) {
-            if (changedHashes.has(hash))
+            if (ws.readyState !== WebSocket.OPEN) {
+                return Promise.reject(new OpenclawWireError("connect-failed", "socket closed before config revision was applied"));
+            }
+            if (changedHashes.delete(hash))
                 return Promise.resolve();
             return new Promise((resolve, reject) => {
                 const timer = setTimeout(() => {
                     cleanup();
-                    reject(new OpenclawWireError("timeout", `config.changed for persisted hash ${hash} timed out after ${timeoutMs}ms`));
+                    resolve();
                 }, timeoutMs);
                 const onClose = () => {
                     cleanup();
-                    reject(new OpenclawWireError("connect-failed", `socket closed before config.changed published hash ${hash}`));
+                    reject(new OpenclawWireError("connect-failed", "socket closed before config revision was applied"));
                 };
-                const accepted = () => {
+                const wake = () => {
                     cleanup();
+                    changedHashes.delete(hash);
                     resolve();
                 };
                 function cleanup() {
                     clearTimeout(timer);
                     ws.removeListener("close", onClose);
-                    waiters.get(hash)?.delete(accepted);
+                    waiters.get(hash)?.delete(wake);
                 }
                 const hashWaiters = waiters.get(hash) ?? new Set();
-                hashWaiters.add(accepted);
+                hashWaiters.add(wake);
                 waiters.set(hash, hashWaiters);
                 ws.on("close", onClose);
-                if (changedHashes.has(hash))
-                    accepted();
+                if (changedHashes.delete(hash))
+                    wake();
             });
         },
         close() {
             ws.removeListener("message", onMessage);
             waiters.clear();
         },
+    };
+}
+function parseConfigGetResult(payload) {
+    const snap = payload;
+    if (!snap || typeof snap !== "object") {
+        throw new OpenclawWireError(INVALID_RESPONSE, "config.get returned non-object payload");
+    }
+    if (typeof snap.hash !== "string" || snap.hash.length === 0) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `hash`");
+    }
+    if (typeof snap.configRevisionHash !== "string" || snap.configRevisionHash.length === 0) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `configRevisionHash`");
+    }
+    if (snap.appliedConfigHash !== null &&
+        (typeof snap.appliedConfigHash !== "string" || snap.appliedConfigHash.length === 0)) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload has invalid `appliedConfigHash`");
+    }
+    return {
+        config: snap.config,
+        hash: snap.hash,
+        configRevisionHash: snap.configRevisionHash,
+        appliedConfigHash: snap.appliedConfigHash,
     };
 }
 async function writeConfig(call, method, config, baseHash, replacePaths) {
@@ -247,31 +273,49 @@ function createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSamp
     };
 }
 async function patchConfigAndWaitForChange(connection, patch, baseHash, replacePaths) {
+    const deadline = Date.now() + connection.callTimeoutMs;
+    const remainingMs = () => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+            throw new OpenclawWireError("timeout", `config.patch applied revision timed out after ${connection.callTimeoutMs}ms`);
+        }
+        return remaining;
+    };
     const ws = await openAndConnect({
         url: connection.url,
         ...connection.auth,
         connectTimeoutMs: connection.connectTimeoutMs,
+        deadlineAtMs: deadline,
         identity: connection.identity,
         scopes: connection.scopes,
         onConnectTrace: connection.onConnectTrace,
     });
-    const change = trackConfigChange(ws);
+    const change = trackConfigRevisionWakeups(ws);
     const connectedCall = async (method, params) => await sendWsRequest({
         ws,
         id: randomUUID(),
         method,
         params,
-        timeoutMs: connection.callTimeoutMs,
+        timeoutMs: remainingMs(),
     });
     try {
         const result = await writeConfig(connectedCall, "config.patch", patch, baseHash, replacePaths);
+        remainingMs();
         if (result.noop === true)
             return result;
-        if (!result.hash) {
-            throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `hash` required for config.changed correlation");
+        if (typeof result.hash !== "string" || result.hash.length === 0) {
+            throw new OpenclawWireError(INVALID_RESPONSE, "config.patch payload missing `hash` required for applied revision confirmation");
         }
-        await change.waitFor(result.hash, connection.callTimeoutMs);
-        return result;
+        while (true) {
+            const current = parseConfigGetResult(await connectedCall("config.get", {}));
+            remainingMs();
+            if (current.hash !== result.hash) {
+                throw new OpenclawWireError("hash-mismatch", "config changed before confirming the accepted revision was applied; rebuild the patch");
+            }
+            if (current.appliedConfigHash === current.configRevisionHash)
+                return result;
+            await change.waitFor(result.hash, Math.min(1_000, remainingMs()));
+        }
     }
     finally {
         change.close();
@@ -495,27 +539,7 @@ export function createGatewayRpc(opts = {}) {
     });
     return {
         async configGet() {
-            const payload = await call("config.get", {});
-            const snap = payload;
-            if (!snap || typeof snap !== "object") {
-                throw new OpenclawWireError(INVALID_RESPONSE, "config.get returned non-object payload");
-            }
-            if (typeof snap.hash !== "string" || snap.hash.length === 0) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `hash`");
-            }
-            if (typeof snap.configRevisionHash !== "string" || snap.configRevisionHash.length === 0) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload missing `configRevisionHash`");
-            }
-            if (snap.appliedConfigHash !== null &&
-                (typeof snap.appliedConfigHash !== "string" || snap.appliedConfigHash.length === 0)) {
-                throw new OpenclawWireError(INVALID_RESPONSE, "config.get payload has invalid `appliedConfigHash`");
-            }
-            return {
-                config: snap.config,
-                hash: snap.hash,
-                configRevisionHash: snap.configRevisionHash,
-                appliedConfigHash: snap.appliedConfigHash,
-            };
+            return parseConfigGetResult(await call("config.get", {}));
         },
         async configApply(config, baseHash) {
             return await writeConfig(call, "config.apply", config, baseHash);
@@ -757,13 +781,22 @@ async function openAndConnect(params) {
         : new WebSocket(params.url);
     ws.on("error", () => { });
     const nonceTracker = startConnectChallengeTracker(ws);
+    const phaseTimeoutMs = () => {
+        if (params.deadlineAtMs === undefined)
+            return params.connectTimeoutMs;
+        const remaining = params.deadlineAtMs - Date.now();
+        if (remaining <= 0) {
+            throw new OpenclawWireError("timeout", "gateway connection deadline exceeded");
+        }
+        return Math.min(params.connectTimeoutMs, remaining);
+    };
     try {
         const wsOpenStart = Date.now();
-        await waitForWsOpen(ws, params.connectTimeoutMs);
+        await waitForWsOpen(ws, phaseTimeoutMs());
         wsOpenMs = Date.now() - wsOpenStart;
         stage = "challenge";
         const challengeStart = Date.now();
-        const nonce = await nonceTracker.wait(params.connectTimeoutMs);
+        const nonce = await nonceTracker.wait(phaseTimeoutMs());
         challengeMs = Date.now() - challengeStart;
         stage = "connect";
         const connectStart = Date.now();
@@ -774,10 +807,11 @@ async function openAndConnect(params) {
             params: params.proxyIdentity
                 ? proxyIdentityConnectParams()
                 : deviceConnectParams(params, nonce),
-            timeoutMs: params.connectTimeoutMs,
+            timeoutMs: phaseTimeoutMs(),
             mapConnectErrors: true,
         });
         connectMs = Date.now() - connectStart;
+        phaseTimeoutMs();
         emitTrace(true);
     }
     catch (err) {
