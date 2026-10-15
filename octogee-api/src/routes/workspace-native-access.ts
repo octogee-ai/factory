@@ -3,7 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
 import { isCanonicalWorkspaceMembership, workspacePermissionsEnabled } from "@octogee/core/gateway-principal-access";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
-import { resolveWorkspaceConversation, resolveWorkspaceToolControl, type WorkspaceConversationDeps } from "../lib/workspace-conversation.js";
+import { resolveWorkspaceConversation, resolveWorkspaceToolChannel, resolveWorkspaceToolControl, type WorkspaceConversationDeps } from "../lib/workspace-conversation.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { principalAccess, workspaceScopeFor, type DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
 
@@ -46,7 +46,7 @@ export function createWorkspaceNativeAccessRoutes({ db }: { db: Firestore }): Ro
   return router;
 }
 
-type ToolConversationClaim = { gatewayId: string; uid: string; channelId: string } & ({ purpose: 'conversation'; threadRootPostId: string } | { purpose: 'control' });
+type ToolConversationClaim = { gatewayId: string; uid: string; channelId: string } & ({ purpose: 'conversation'; threadRootPostId: string } | { purpose: 'control' | 'channel-tools' });
 function isToolConversationUid(uid: unknown): uid is string {
   return typeof uid === "string" && !!uid && uid.length <= 128 && !uid.includes("/");
 }
@@ -56,12 +56,15 @@ function toolConversationClaim(req: Request): ToolConversationClaim | null {
   if (!isToolConversationUid(uid)) return null;
   if (typeof channelId !== "string" || !/^[a-z0-9]{26}$/u.test(channelId)) return null;
   if (Object.keys(req.body).some(key => !["gatewayId", "uid", "channelId", "purpose", "threadRootPostId"].includes(key))) return null;
-  if (purpose === 'control' && threadRootPostId === undefined) return { gatewayId, uid, channelId, purpose };
+  if ((purpose === 'control' || purpose === 'channel-tools') && threadRootPostId === undefined) return { gatewayId, uid, channelId, purpose };
   if (purpose === 'conversation' && isMattermostPostId(threadRootPostId)) return { gatewayId, uid, channelId, purpose, threadRootPostId };
   return null;
 }
 async function toolConversation(deps: WorkspaceConversationDeps, claim: ToolConversationClaim) {
-  const resolved = claim.purpose === 'conversation' ? await resolveWorkspaceConversation(deps, claim) : await resolveWorkspaceToolControl(deps, claim);
+  let resolved;
+  if (claim.purpose === 'conversation') resolved = await resolveWorkspaceConversation(deps, claim);
+  else if (claim.purpose === 'channel-tools') resolved = await resolveWorkspaceToolChannel(deps, claim);
+  else resolved = await resolveWorkspaceToolControl(deps, claim);
   return resolved?.scope.nativeAccess ? resolved.context : null;
 }
 export function createToolConversationRoutes(deps: WorkspaceConversationDeps): Router {

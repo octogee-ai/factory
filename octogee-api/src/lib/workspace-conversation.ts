@@ -92,12 +92,22 @@ export async function resolveWorkspaceToolControl(deps: WorkspaceConversationDep
   const { scope, access } = resolved;
   return { scope, context: { uid: claim.uid, gatewayId: scope.gatewayId, workspaceSlug: access.target.workspaceSlug, channelId: claim.channelId, callerMmUserId: access.callerMmUserId } };
 }
+function channelToolContext(resolved: NonNullable<Awaited<ReturnType<typeof resolveWorkspaceChannel>>>, claim: { uid: string; channelId: string }) {
+  const { scope, access, channel } = resolved;
+  const { workspaceSlug, agentId } = access.target;
+  const peerKind = channel.type === "P" ? "group" : "channel";
+  return { uid: claim.uid, gatewayId: scope.gatewayId, workspaceSlug, channelId: claim.channelId, agentId,
+    sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}`, callerMmUserId: access.callerMmUserId };
+}
+export async function resolveWorkspaceToolChannel(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; gatewayId?: string }) {
+  const resolved = await resolveWorkspaceChannel(deps, claim);
+  return resolved ? { scope: resolved.scope, context: channelToolContext(resolved, claim) } : null;
+}
 export async function resolveWorkspaceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; threadRootPostId: string; gatewayId?: string }) {
   if (!isMattermostPostId(claim.threadRootPostId)) return null;
   const resolved = await resolveWorkspaceChannel(deps, claim);
   if (!resolved) return null;
-  const { scope, access, channel } = resolved;
-  const { workspaceSlug, agentId } = access.target;
+  const { scope, access } = resolved;
   let post: Record<string, unknown> | null;
   try {
     post = record(await (deps.readPost ?? (async (token, postId) => (await mattermostClient(token)).getJson(['posts', postId])))(access.token, claim.threadRootPostId));
@@ -106,11 +116,8 @@ export async function resolveWorkspaceConversation(deps: WorkspaceConversationDe
     throw error;
   }
   if (!post || post.id !== claim.threadRootPostId || post.channel_id !== claim.channelId || post.root_id !== '' || post.delete_at !== 0) return null;
-  const peerKind = channel.type === "P" ? "group" : "channel";
   return { scope, token: access.token, agentMmUserId: access.target.agentMmUserId, context: {
-    uid: claim.uid, gatewayId: scope.gatewayId, workspaceSlug, channelId: claim.channelId, agentId,
+    ...channelToolContext(resolved, claim),
     threadRootPostId: claim.threadRootPostId,
-    sessionKey: `agent:${agentId}:mattermost:${peerKind}:${claim.channelId}`,
-    callerMmUserId: access.callerMmUserId,
   } };
 }

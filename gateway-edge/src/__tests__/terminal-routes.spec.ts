@@ -34,7 +34,7 @@ const OWNER = "uid-owner";
 const GATEWAY = "b-x";
 const channelId = "a".repeat(26);
 const threadRootPostId = "r".repeat(26);
-const selected = { channelId, threadRootPostId };
+const selected = { channelId };
 
 const ACCESS: Record<string, NativeAdminAccessOutcome> = {
   owner: { kind: "allowed", gatewayId: GATEWAY, workspaceSlug: "alice", canControl: true },
@@ -52,7 +52,7 @@ function appFor(overrides: Partial<TerminalRouterDeps> = {}) {
       localGatewayId: () => GATEWAY,
       available: true,
       resolveAccess,
-      resolveConversation: async () => ({ agentId: 'coach', sessionKey: `agent:coach:mattermost:group:${channelId}:thread:${threadRootPostId}` }),
+      resolveChannel: async () => ({ agentId: 'coach', sessionKey: `agent:coach:mattermost:group:${channelId}` }),
       tickets: createWsTicketStore<TerminalSession>(),
       ...overrides,
     }),
@@ -118,11 +118,16 @@ describe("terminal locality route — ticket boundary", () => {
     expect(res.body).toEqual({ error: "access_unavailable" });
   });
 
-  it("refuses a terminal ticket without a selected thread", async () => {
+  it("opens a channel-bound terminal ticket without a selected thread", async () => {
     const tickets = createWsTicketStore<TerminalSession>();
     const issue = vi.spyOn(tickets, "issue");
     const result = await request(appFor({ tickets })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId });
-    expect(result.status).toBe(400); expect(issue).not.toHaveBeenCalled();
+    expect(result.status).toBe(200); expect(issue).toHaveBeenCalledOnce();
+    expect(tickets.redeem(result.body.ticket)?.conversation).toEqual({ agentId: 'coach', sessionKey: `agent:coach:mattermost:group:${channelId}` });
+  });
+  it("refuses a client-supplied reply root on a workspace terminal ticket", async () => {
+    const result = await request(appFor()).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId, threadRootPostId });
+    expect(result.status).toBe(400);
   });
   it("mints a one-time ticket bound to the caller and this gateway", async () => {
     const tickets = createWsTicketStore<TerminalSession>();
@@ -139,15 +144,15 @@ describe("terminal locality route — ticket boundary", () => {
 
   it("binds a channel ticket to the server conversation and rechecks that identity", async () => {
     const tickets = createWsTicketStore<TerminalSession>();
-    const resolveConversation = vi.fn().mockResolvedValue({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
+    const resolveChannel = vi.fn().mockResolvedValue({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
     const channelId = "a".repeat(26);
-    const res = await request(appFor({ tickets, resolveConversation })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId, threadRootPostId });
+    const res = await request(appFor({ tickets, resolveChannel })).post(`/api/g/${GATEWAY}/terminal/ticket`).set(as("owner")).send({ channelId });
     expect(res.status).toBe(200);
-    expect(resolveConversation).toHaveBeenCalledWith({ uid: OWNER, gatewayId: GATEWAY, channelId, threadRootPostId });
+    expect(resolveChannel).toHaveBeenCalledWith({ uid: OWNER, gatewayId: GATEWAY, channelId });
     const session = tickets.redeem(res.body.ticket)!;
     expect(session.conversation).toEqual({ agentId: "coach", sessionKey: "agent:coach:mattermost:group:channel" });
     expect(await session.reauthorize()).toBe(true);
-    resolveConversation.mockResolvedValue({ agentId: "coach", sessionKey: "foreign" });
+    resolveChannel.mockResolvedValue({ agentId: "coach", sessionKey: "foreign" });
     expect(await session.reauthorize()).toBe(false);
   });
 

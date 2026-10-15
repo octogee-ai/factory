@@ -7,7 +7,7 @@ import { openClawProxyIdentityHeaders, openClawProxyOrigin } from '@octogee/shar
 import { requireAuthenticatedUid } from '../middleware/auth.js';
 import { logger } from '../middleware/logging.js';
 import { resolveNativeAdminAccess } from '../lib/native-admin-access.js';
-import { resolveToolConversationForUid, resolveToolControlForUid, type ToolConversation, type ToolControl } from '../lib/tool-conversation.js';
+import { resolveToolChannelForUid, resolveToolControlForUid, type ToolChannel, type ToolControl } from '../lib/tool-conversation.js';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { WorkspaceNativeAccessError } from '../lib/workspace-native-access.js';
 import { createWsTicketStore, wsTicketFromPath } from '../lib/ws-ticket-store.js';
@@ -26,7 +26,7 @@ import { browserRpc, NativeBrowserError } from './browser-rpc.js';
 interface ToolSession {
   surface: 'browser' | 'computer' | 'themes';
   canControl: boolean;
-  context: ToolConversation | (ToolControl & { sessionKey?: never; agentId?: never; threadRootPostId?: never });
+  context: ToolChannel | (ToolControl & { sessionKey?: never; agentId?: never });
   reauthorize(): Promise<boolean>;
 }
 interface LiveToolSession extends ToolSession {
@@ -40,7 +40,7 @@ interface StreamGrant { live: LiveToolSession; path: string; publicPath: string;
 interface ToolSurfaceOptions {
   env?: NodeJS.ProcessEnv;
   resolveAccess?: typeof resolveNativeAdminAccess;
-  resolveConversation?: typeof resolveToolConversationForUid;
+  resolveChannel?: typeof resolveToolChannelForUid;
   resolveControl?: typeof resolveToolControlForUid;
   openUpstream?: typeof openNativeUserSocket;
   fetchImpl?: typeof fetch;
@@ -161,13 +161,11 @@ function serveToolRequests(browser: WebSocket, owner: ToolRequests, send: (frame
     }).finally(() => pending.delete(frame.id));
   });
 }
-function ticketClaim(req: Request): { channelId: string; surface: ToolSession['surface']; threadRootPostId?: string } | null {
+function ticketClaim(req: Request): { channelId: string; surface: ToolSession['surface'] } | null {
   const channelId = req.body?.channelId;
   const surface = req.body?.surface;
-  const threadRootPostId = req.body?.threadRootPostId;
-  if (!isMattermostPostId(channelId) || !['browser', 'computer', 'themes'].includes(surface) || Object.keys(req.body).some(key => !['channelId', 'surface', 'threadRootPostId'].includes(key))) return null;
-  if (surface === 'browser') return isMattermostPostId(threadRootPostId) ? { channelId, surface, threadRootPostId } : null;
-  return threadRootPostId === undefined ? { channelId, surface } : null;
+  if (!isMattermostPostId(channelId) || !['browser', 'computer', 'themes'].includes(surface) || Object.keys(req.body).some(key => !['channelId', 'surface'].includes(key))) return null;
+  return { channelId, surface };
 }
 function accessDeniedStatus(kind: string): number {
   if (kind === 'unauthenticated') return 401;
@@ -229,7 +227,7 @@ function toolReadyPayload(session: ToolSession, resources: {
 export function createToolSurface(options: ToolSurfaceOptions = {}) {
   const env = options.env ?? process.env;
   const resolveAccess = options.resolveAccess ?? resolveNativeAdminAccess;
-  const resolveConversation = options.resolveConversation ?? resolveToolConversationForUid;
+  const resolveChannel = options.resolveChannel ?? resolveToolChannelForUid;
   const resolveControl = options.resolveControl ?? resolveToolControlForUid;
   const openUpstream = options.openUpstream ?? openNativeUserSocket;
   const log = options.log ?? ((message, meta) => logger.warn(message, meta));
@@ -259,11 +257,11 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
       if (!terminalAvailable(env) || typeof gatewayId !== 'string' || gatewayId !== env.GATEWAY_ID) { res.status(404).json({ error: 'tool_unavailable' }); return; }
       const claim = ticketClaim(req);
       if (!claim) { res.status(400).json({ error: 'invalid_conversation' }); return; }
-      const { channelId, surface, threadRootPostId } = claim;
+      const { channelId, surface } = claim;
       const authorization = req.headers.authorization;
       const access = await resolveAccess({ gatewayId, authorization, env });
       if (access.kind !== 'allowed') { res.status(accessDeniedStatus(access.kind)).json({ error: 'tool_unavailable' }); return; }
-      const resolve = () => surface === 'browser' ? resolveConversation({ uid: req.uid!, gatewayId, channelId, threadRootPostId: threadRootPostId!, env }) : resolveControl({ uid: req.uid!, gatewayId, channelId, env });
+      const resolve = () => surface === 'browser' ? resolveChannel({ uid: req.uid!, gatewayId, channelId, env }) : resolveControl({ uid: req.uid!, gatewayId, channelId, env });
       const context = await resolve();
       if (context.workspaceSlug !== access.workspaceSlug) { res.status(403).json({ error: 'forbidden' }); return; }
       const ticket = tickets.issue({ context, surface, canControl: access.canControl, reauthorize: async () => {
@@ -322,7 +320,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
     };
     browser.on('close', () => close()); browser.on('error', () => close(1011, 'Tool socket failed'));
     try {
-      const native = await openUpstream(session.context.uid, session.context.gatewayId, env, { caps: session.surface === 'browser' ? ['session-scoped-events'] : [], ...(session.surface === 'browser' ? { channelSessionKey: session.context.sessionKey, threadRootPostId: session.context.threadRootPostId } : {}) }); upstream = native.ws;
+      const native = await openUpstream(session.context.uid, session.context.gatewayId, env, { caps: session.surface === 'browser' ? ['session-scoped-events'] : [], ...(session.surface === 'browser' ? { channelSessionKey: session.context.sessionKey } : {}) }); upstream = native.ws;
       if (!live.active) { upstream.close(); return; }
       if (!native.scopes.has('operator.admin')) { close(1008, 'Tool access changed'); return; }
       upstream.on('close', () => close(1011, 'Native Tool disconnected')); upstream.on('error', () => close(1011, 'Native Tool failed'));

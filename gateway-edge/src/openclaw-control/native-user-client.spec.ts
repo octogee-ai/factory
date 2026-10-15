@@ -8,14 +8,15 @@ import { WebSocketServer } from "ws";
 import { OPENCLAW_FULL_OPERATOR_SCOPES, OPENCLAW_EDGE_SERVICE_IDENTITY } from "@octogee/shared/types/openclaw-proxy-identity";
 import { openNativeUserClient, openNativeUserSocket } from "./native-user-client.js";
 
-const authority = vi.hoisted(() => vi.fn());
-vi.mock('../lib/tool-conversation.js', () => ({ resolveToolConversationForUid: authority }));
+const { authority, channelAuthority } = vi.hoisted(() => ({ authority: vi.fn(), channelAuthority: vi.fn() }));
+vi.mock('../lib/tool-conversation.js', () => ({ resolveToolConversationForUid: authority, resolveToolChannelForUid: channelAuthority }));
 const root = 'r'.repeat(26);
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map(close => close())); });
 
 async function gateway() {
   authority.mockReset().mockImplementation(async args => ({ ...args, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${args.channelId}` }));
+  channelAuthority.mockReset().mockImplementation(async args => ({ ...args, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${args.channelId}` }));
   const server = http.createServer();
   const wss = new WebSocketServer({ server });
   const state = {
@@ -81,6 +82,27 @@ async function gateway() {
 }
 
 describe("native user RPC identity", () => {
+  it("prepares the authorized channel without selecting or creating a reply thread", async () => {
+    const { state, env } = await gateway();
+    const channelId = 'a'.repeat(26);
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${channelId}`;
+    const native = await openNativeUserSocket('alice', 'b-alice', env, { channelSessionKey });
+    expect(authority).not.toHaveBeenCalled();
+    expect(channelAuthority).toHaveBeenCalledTimes(2);
+    expect(channelAuthority).toHaveBeenLastCalledWith({ uid: 'alice', gatewayId: 'b-alice', channelId, expectedAgentId: 'octogee-alice-coach', env });
+    expect(state.calls.map(call => call.method)).toEqual(['users.list', 'sessions.channel.sync']);
+    expect(state.calls[1].params).toEqual({ agentId: 'octogee-alice-coach', channel: 'mattermost', peerKind: 'group', peerId: channelId, profileId: 'native-alice', member: true });
+    native.ws.close();
+  });
+  it("rechecks root-free channel authority after profile work and closes both sockets on revocation", async () => {
+    const { state, env } = await gateway();
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(26)}`;
+    channelAuthority.mockResolvedValueOnce({ sessionKey: channelSessionKey }).mockRejectedValueOnce(new Error('Channel access revoked'));
+    await expect(openNativeUserSocket('alice', 'b-alice', env, { channelSessionKey })).rejects.toThrow('Channel access revoked');
+    expect(authority).not.toHaveBeenCalled();
+    expect(state.calls.map(call => call.method)).toEqual(['users.list']);
+    await vi.waitFor(() => expect(state.closed).toEqual(expect.arrayContaining(['alice', OPENCLAW_EDGE_SERVICE_IDENTITY])));
+  });
   it("waits for native profile acquisition beyond five seconds before accepting effective scopes", async () => {
     const { state, env } = await gateway();
     state.connectDelayMs = 6_000;
@@ -167,6 +189,15 @@ describe("native user RPC identity", () => {
     const { state, env } = await gateway();
     await expect(openNativeUserSocket("alice", "b-alice", env, { channelSessionKey, threadRootPostId: root })).rejects.toThrow("channel identity");
     expect(state.connects).toEqual([]);
+  });
+  it.each([
+    { threadRootPostId: root },
+    { channelSessionKey: `agent:octogee-alice-coach:mattermost:group:${'a'.repeat(26)}`, threadRootPostId: 'bad' },
+  ])('rejects an unbound or malformed reply-root claim %j', async options => {
+    const { state, env } = await gateway();
+    await expect(openNativeUserSocket('alice', 'b-alice', env, options)).rejects.toThrow('channel identity');
+    expect(state.connects).toEqual([]);
+    expect(channelAuthority).not.toHaveBeenCalled();
   });
 
   it("rechecks the selected thread after profile work before granting its audience", async () => {

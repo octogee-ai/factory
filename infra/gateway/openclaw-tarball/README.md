@@ -179,9 +179,10 @@ and native steering configuration. The channel plugin uses native session-routin
 contracts; it does not own a second history store or steering implementation.
 Talk and Activity retain a selected existing root across replies and tool views;
 the root controls delivery and archival, not session memory. They never infer the
-latest thread. Browser and Terminal keep verified
-conversation custody; Computer and theme controls need no conversation-history
-or audience grant.
+latest thread. Browser and Terminal open directly on the authorized workspace
+channel's native session without selecting or creating a reply thread. Channel
+membership, workspace entitlement, native roles and resource ownership remain
+required; Computer and theme controls need no conversation-history or audience grant.
 
 Room live Activity is explicitly channel-wide, matching the shared native
 session. Selecting a reply root does not filter that feed; native events lack

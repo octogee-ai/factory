@@ -83,7 +83,7 @@ import { createPasskeyLinkHost } from "./webauthn/link-host.js";
 import { createWebAuthnCdpProxy } from "./webauthn/cdp-proxy.js";
 import { createComputerSessionsRouter } from "./routes/computer-sessions.js";
 import { applyCookiesOverCdp, type CdpCookie } from "./lib/cdp-cookies.js";
-import { resolveToolConversationForUid } from "./lib/tool-conversation.js";
+import { resolveToolChannelForUid } from "./lib/tool-conversation.js";
 import { isAllowedWsOrigin } from "./chat-proxy/openclaw/ws-origin.js";
 import { createWorkspaceRolesRouter } from "./routes/workspace-roles.js";
 import { resolveNativeAdminAccess } from "./lib/native-admin-access.js";
@@ -315,7 +315,7 @@ function mountSidecarLocalitySurface(app: Express, options: {
     available: terminalAvailable(process.env),
     resolveAccess: resolveNativeAdminAccess,
     tickets: terminalTickets,
-    resolveConversation: resolveToolConversationForUid,
+    resolveChannel: resolveToolChannelForUid,
   }));
   mountApi(app, "/tools", toolSurface.router);
   mountApi(app, "/computer", computerEgressRoutes.router);

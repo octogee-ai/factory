@@ -15,12 +15,13 @@ export interface ToolConversation {
 }
 
 export type ToolControl = Pick<ToolConversation, 'uid' | 'gatewayId' | 'workspaceSlug' | 'channelId' | 'callerMmUserId'>;
-function validConversationIdentity(body: Partial<ToolConversation>, args: { uid: string; gatewayId: string; channelId: string; threadRootPostId: string; expectedAgentId?: string }): boolean {
+export type ToolChannel = Omit<ToolConversation, 'threadRootPostId'>;
+function validChannelIdentity(body: Partial<ToolConversation>, args: { uid: string; gatewayId: string; channelId: string; expectedAgentId?: string }): boolean {
   return body.uid === args.uid && body.gatewayId === args.gatewayId && body.channelId === args.channelId &&
     typeof body.workspaceSlug === 'string' && /^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) &&
     body.agentId === `octogee-${body.workspaceSlug}-coach` &&
     (args.expectedAgentId === undefined || body.agentId === args.expectedAgentId) &&
-    body.threadRootPostId === args.threadRootPostId && ['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}`);
+    ['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}`);
 }
 
 export async function resolveToolConversationForUid(args: {
@@ -38,11 +39,24 @@ export async function resolveToolConversationForUid(args: {
   }, { fetchImpl: args.fetchImpl, requireProjectedToken: true, timeoutMs: 5000 });
   if (!response.ok) throw new WorkspaceNativeAccessError([401, 403, 404].includes(response.status) ? response.status : 503, 'Tool conversation unavailable');
   const body = await response.json() as Partial<ToolConversation>;
-  if (!validConversationIdentity(body, args) || typeof body.callerMmUserId !== 'string' || !/^[a-z0-9]{26}$/u.test(body.callerMmUserId)) {
+  if (!validChannelIdentity(body, args) || body.threadRootPostId !== args.threadRootPostId || !isMattermostPostId(body.callerMmUserId)) {
     throw new Error('Tool conversation broker returned an invalid context');
   }
   const { uid, gatewayId, workspaceSlug, channelId, threadRootPostId, agentId, sessionKey, callerMmUserId } = body as ToolConversation;
   return { uid, gatewayId, workspaceSlug, channelId, threadRootPostId, agentId, sessionKey, callerMmUserId };
+}
+export async function resolveToolChannelForUid(args: { uid: string; gatewayId: string; channelId: string; expectedAgentId?: string; env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch }): Promise<ToolChannel> {
+  const env = args.env ?? process.env;
+  if (!isMattermostPostId(args.channelId) || !env.OPENCLAW_RUNTIME_BROKER_URL) throw new WorkspaceNativeAccessError(403, 'Tool channel unavailable');
+  const response = await internalFetch(`${trustedBrokerBaseUrl(env.OPENCLAW_RUNTIME_BROKER_URL, env)}/internal/openclaw-control/tool-conversation`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'error',
+    body: JSON.stringify({ uid: args.uid, gatewayId: args.gatewayId, channelId: args.channelId, purpose: 'channel-tools' }),
+  }, { fetchImpl: args.fetchImpl, requireProjectedToken: true, timeoutMs: 5000 });
+  if (!response.ok) throw new WorkspaceNativeAccessError([401, 403, 404].includes(response.status) ? response.status : 503, 'Tool channel unavailable');
+  const body = await response.json() as Partial<ToolConversation>;
+  if (!validChannelIdentity(body, args) || body.threadRootPostId !== undefined || !isMattermostPostId(body.callerMmUserId)) throw new Error('Tool channel broker returned an invalid context');
+  const { uid, gatewayId, workspaceSlug, channelId, agentId, sessionKey, callerMmUserId } = body as ToolChannel;
+  return { uid, gatewayId, workspaceSlug, channelId, agentId, sessionKey, callerMmUserId };
 }
 export async function resolveToolControlForUid(args: { uid: string; gatewayId: string; channelId: string; env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch }): Promise<ToolControl> {
   const env = args.env ?? process.env;
