@@ -4636,6 +4636,54 @@ describe("scheduler migration signed endpoint", () => {
 });
 
 describe("prepared migration staging", () => {
+  it.each([false, true])("acknowledges keys completion only after releasing the import session (disconnect=%s)", async disconnected => {
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "keys-finish-cleanup-"));
+    migrationTempRoots.push(importDir);
+    let releaseCleanup!: () => void;
+    const cleanupHeld = new Promise<void>(resolve => { releaseCleanup = resolve; });
+    const closeTransport = vi.fn(async () => undefined)
+      .mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(async () => cleanupHeld);
+    const deps = mkDeps({
+      adapter: mkAdapter({ prepareKeyImportDir: vi.fn(async () => importDir), prepareImportDir: vi.fn(async () => importDir) }),
+      waitForRsyncReady: vi.fn(async () => undefined),
+      openMigrationTlsEndpoint: vi.fn(async () => ({ certificatePem: TARGET_CERTIFICATE_PEM, close: closeTransport })),
+    });
+    const migrationId = "keys-finish-cleanup";
+    const prepare = { migrationId, slug: "chris", mode: "keys", rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "d".repeat(64) };
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    const prepared = mkResponse();
+    const prepareHandler = createPrepareRsyncImportHandler(deps);
+    await prepareHandler(mkRequest(prepare, { signature: signForPod(migrationId, JSON.stringify(prepare)) }), prepared.res, vi.fn());
+    expect(prepared.getStatus()).toBe(200);
+    spawnMock.mockImplementation(() => mkFakeChild({ exitCode: 0 }));
+    const finish = { migrationId, slug: "chris", mode: "keys", rpcPhase: "finish-rsync-import" };
+    const next = { ...prepare, mode: "final" };
+    const finished = mkResponse(), nextPrepared = mkResponse();
+    const send = finished.res.json.bind(finished.res);
+    let nextPreparation: Promise<unknown> | undefined;
+    vi.spyOn(finished.res, "json").mockImplementation(payload => {
+      const response = send(payload);
+      if (payload.imported === true) nextPreparation = Promise.resolve(prepareHandler(mkRequest(next, { signature: signForPod(migrationId, JSON.stringify(next)) }), nextPrepared.res, vi.fn()));
+      return response;
+    });
+    const finishing = createFinishRsyncImportHandler(deps)(mkRequest(finish, { signature: signForPod(migrationId, JSON.stringify(finish)) }), finished.res, vi.fn());
+    try {
+      await vi.waitFor(() => expect(closeTransport).toHaveBeenCalledTimes(2));
+      expect(finished.getBody()).toBeUndefined();
+      expect(nextPreparation).toBeUndefined();
+      if (disconnected) finished.res.emit("close");
+    } finally {
+      releaseCleanup();
+      await finishing;
+      await nextPreparation;
+      const abort = { migrationId, slug: "chris", mode: "final", rpcPhase: "abort-rsync-import" };
+      await createAbortRsyncImportHandler(deps)(mkRequest(abort, { signature: signForPod(migrationId, JSON.stringify(abort)) }), mkResponse().res, vi.fn());
+    }
+    expect(finished.getStatus()).toBe(disconnected ? 499 : 200);
+    expect(nextPrepared.getStatus()).toBe(disconnected ? undefined : 200);
+  });
+
   it("finishes a Shared import before ownership moves and removes source-deleted projects", async () => {
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-prepared-import-"));
     migrationTempRoots.push(importDir);

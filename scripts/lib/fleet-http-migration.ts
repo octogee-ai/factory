@@ -2335,6 +2335,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       log,
     );
     let preserveStage = false;
+    let sessionReleased = false;
     try {
       const startedAt = Date.now();
       await stopRsyncTransfer(session);
@@ -2375,6 +2376,10 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       const activatedAt = Date.now();
       const response = completedImportResponse(body, verificationPending, sharedAgentContext);
       await writeSharedAgentContextRestoreReceipt({ stateDir: session.importDir, gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body, response });
+      await stopRsyncSession(session, preserveStage);
+      sessionReleased = true;
+      finishingRsyncImports.delete(key);
+      controller.signal.throwIfAborted();
       log(
         `${verificationPending ? "🟡" : "🟢"} [migration-rsync] finish-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} ${verificationPending ? "verification-pending" : "done"}` +
         ` stageMs=${stagedAt - startedAt} activateMs=${activatedAt - stagedAt}` +
@@ -2388,7 +2393,9 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       respondImportFailure(res, controller.signal, err);
     } finally {
       detach();
-      try { await stopRsyncSession(session, preserveStage); } finally { finishingRsyncImports.delete(key); }
+      if (!sessionReleased) {
+        try { await stopRsyncSession(session, preserveStage); } finally { finishingRsyncImports.delete(key); }
+      }
     }
   });
 }
