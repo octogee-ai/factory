@@ -8,6 +8,7 @@ import { discardUnusableAgentStores } from "../lib/unusable-agent-store.js";
 import { AGENTS_DIR } from "../lib/config.js";
 import {
   materializeBrokerProfilesForAgents,
+  applyOpenClawSecretsPlan,
   openAiCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
 } from "../lib/agent-model-token-materializer.js";
@@ -769,6 +770,7 @@ async function main(): Promise<void> {
   if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
     const sweep = await materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
       logFn: log,
+      secretsApply: { apply: (plan) => applyOpenClawSecretsPlan(plan, { log }) },
       ...platformBrokerCatalogOpts(process.env),
     });
     if (sweep.materialized > 0) {

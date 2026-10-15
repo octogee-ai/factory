@@ -1092,6 +1092,24 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("brokerProfilesMaterialize", () => {
+    it("submits only canonical agent identifiers to the owning Gateway", async () => {
+      const params = { agentIds: ["octogee-alice-coach"] };
+      server.setHandler("octogee.brokerProfiles.materialize", value => {
+        expect(value).toEqual(params);
+        return { ok: true, payload: { ok: true } };
+      });
+      await expect(client.brokerProfilesMaterialize(params)).resolves.toEqual({ ok: true });
+      expect(server.callCount("octogee.brokerProfiles.materialize")).toBe(1);
+    });
+
+    it.each([null, {}, { ok: false }, { ok: "true" }])("rejects an unacknowledged profile write: %j", async payload => {
+      server.setHandler("octogee.brokerProfiles.materialize", () => ({ ok: true, payload }));
+      await expect(client.brokerProfilesMaterialize({ agentIds: ["octogee-alice-coach"] }))
+        .rejects.toMatchObject({ code: "invalid-response" });
+    });
+  });
+
   describe("secretsReload", () => {
     it("calls the `secrets.reload` method with empty params and returns the payload", async () => {
       let captured: unknown = "not-called";

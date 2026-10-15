@@ -240,6 +240,10 @@ spec:
               value: {{ .Values.env.logLevel | default "info" | quote }}
             - name: HOME
               value: "/home/node"
+            - name: OPENCLAW_DIR
+              value: "/home/node/.openclaw"
+            - name: OPENCLAW_CONFIG_PATH
+              value: {{ if eq $gatewayClass "shared" }}"/home/node/.openclaw/openclaw.json"{{ else }}"/home/node/.openclaw/system_config/openclaw.json"{{ end }}
             {{- if $builderControlUiEnabled }}
             - name: OPENCLAW_DASHBOARD_BRIDGE_REQUIRED
               value: "true"

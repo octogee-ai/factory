@@ -101,6 +101,20 @@ function gatewayImageLabel(dep: string): string {
 }
 
 describe("helm/octogee-gateway/ — single-instance rendering", () => {
+  it.each([
+    ["shared", "/home/node/.openclaw/openclaw.json"],
+    ["builder", "/home/node/.openclaw/system_config/openclaw.json"],
+  ])("declares the active %s config for direct gateway exec operations", (gatewayClass, configPath) => {
+    const deployment = findDoc(helmTemplate("octogee-gw-config", {
+      gatewayId: "config", gatewayClass,
+    }), "Deployment", "octogee-gateway-config") ?? "";
+    const pod = parseDocument(deployment).toJS().spec.template.spec;
+    const gateway = pod.containers.find((container: { name: string }) => container.name === "gateway");
+    const env = Object.fromEntries(gateway.env.map((entry: { name: string; value?: string }) => [entry.name, entry.value]));
+    expect(env.OPENCLAW_DIR).toBe("/home/node/.openclaw");
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(configPath);
+  });
+
   it("does not configure an Artifact Registry URL in Builder pods", () => {
     const values = (file: string): { env?: { builderNpmProxyRegistry?: string } } =>
       parseDocument(fs.readFileSync(path.join(CHART_PATH, file), "utf8")).toJS();

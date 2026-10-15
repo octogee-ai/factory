@@ -222,6 +222,11 @@ export interface GatewayRpcClient {
     channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
     channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
     secretsReload(): Promise<SecretsReloadResult>;
+    brokerProfilesMaterialize(params: {
+        agentIds: string[];
+    }): Promise<{
+        ok: true;
+    }>;
     degradedSecretsStatus?(): Promise<DegradedSecretOwner[]>;
     gatewayRestartRequest(params: {
         reason: string;

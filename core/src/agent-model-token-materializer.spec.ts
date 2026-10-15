@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createGatewayRpc } from "./gateway-rpc.js";
 import { readAuthProfileStore, writeAuthProfileStore } from "./auth-profile-sqlite.js";
 import { OpenClawSecretsApplyError, type OpenClawSecretsPlan } from "./openclaw-secrets-apply.js";
 import {
@@ -29,11 +30,14 @@ import {
   seedOpenClawAgentDbForId,
 } from "./fixtures/openclaw-agent-db.js";
 
+const liveGateway = vi.hoisted(() => ({
+  brokerProfilesMaterialize: vi.fn(async (_params: { agentIds: string[] }) => ({ ok: true as const })),
+  close: vi.fn(async () => undefined),
+}));
+vi.mock("./gateway-rpc.js", () => ({ createGatewayRpc: vi.fn(() => liveGateway) }));
+
 const ALL_SURFACES = { openRouter: true, openAi: true };
 
-/** Stands in for `openclaw secrets apply` — the provisioner's only writer of the
- *  auth-profile store. Records every plan and mirrors it into the store so the
- *  idempotency read sees what openclaw would have persisted. */
 function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
   const plans: unknown[] = [];
   const apply = vi.fn(async (plan: OpenClawSecretsPlan) => {
@@ -56,6 +60,33 @@ function fakeSecretsApply(agentsDir: string, opts: { fail?: boolean } = {}) {
   });
   return { plans, secretsApply: { apply }, apply };
 }
+
+describe("hot broker profile materialization", () => {
+  it("uses the running Gateway owner when the offline CLI cannot acquire its database", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-hot-broker-profile-"));
+    const previousPath = process.env.PATH;
+    try {
+      const agentsDir = path.join(root, "agents");
+      const agentId = "octogee-alice-coach";
+      seedOpenClawAgentDbForId(agentsDir, agentId);
+      const cliMarker = path.join(root, "offline-cli-used");
+      fs.writeFileSync(path.join(root, "openclaw"), `#!${process.execPath}\nconst fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(cliMarker)}, "called"); process.stdout.write(JSON.stringify({ok:false,error:{message:"OpenClaw state database is busy; a running Gateway owns it"}})); process.exitCode=1;\n`, { mode: 0o700 });
+      process.env.PATH = `${root}${path.delimiter}${previousPath ?? ""}`;
+      liveGateway.brokerProfilesMaterialize.mockClear();
+      liveGateway.close.mockClear();
+      const result = await materializeBrokerProfilesForAgents([agentId], { agentsDir });
+      expect(result.deferred).toEqual([]);
+      expect(liveGateway.brokerProfilesMaterialize).toHaveBeenCalledExactlyOnceWith({ agentIds: [agentId] });
+      expect(liveGateway.close).toHaveBeenCalledOnce();
+      expect(createGatewayRpc).toHaveBeenCalledWith({ allowLegacyGatewayTokenFallback: true });
+      expect(fs.existsSync(cliMarker)).toBe(false);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("platform broker profile targets", () => {
   it("addresses one api_key target per configured surface, each on its own broker-token ref", () => {

@@ -37,6 +37,12 @@ function parseSecretsReloadPayload(payload) {
     }
     return p;
 }
+function parseBrokerProfileMaterializationPayload(payload) {
+    if (!payload || typeof payload !== "object" || payload.ok !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "broker profile materialization was not acknowledged");
+    }
+    return { ok: true };
+}
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
 const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
 const AGENT_DELETION_PENDING_MESSAGE = /^agent "([^"]*)" deletion cleanup is still pending$/;
@@ -598,6 +604,7 @@ export function createGatewayRpc(opts = {}) {
         async secretsReload() {
             return parseSecretsReloadPayload(await call("secrets.reload", {}));
         },
+        brokerProfilesMaterialize: async (params) => parseBrokerProfileMaterializationPayload(await call("octogee.brokerProfiles.materialize", params)),
         async degradedSecretsStatus() {
             return parseDegradedSecretOwners(await call("status", { includeChannelSummary: false }));
         },

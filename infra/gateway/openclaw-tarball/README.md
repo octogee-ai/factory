@@ -142,20 +142,24 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream is operator-selected main
 [`9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8`](https://github.com/openclaw/openclaw/commit/9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8),
 frozen for the October 14 native-first recut. Exact native source is
-`e705f633da911436f6d4429a3f5c923b020bddea`, branch
-`codex/restore-mattermost-channel-memory`. Package `2026.10.3` is a main
+`deee9d25874812b247cfe93423598a53fa8168a3`, branch
+`codex/fix-channel-session-provenance-oct14`, with parent
+`e705f633da911436f6d4429a3f5c923b020bddea`. Package `2026.10.3` is a main
 snapshot, not a released tag. OpenClaw validation stays local; no full upstream,
 fork-CI or iOS-green claim is made.
 
-`current.json` selects `openclaw-fork-6956add2.tgz` (generation
-`1792022816653887`) and `openclaw-mattermost-ae66f3ab.tgz` (generation
-`1792022760504592`). Both were published with generation-match zero, downloaded
-at those exact generations and compared byte-for-byte and by complete SHA256.
-The native branch was pushed normally and its full head read back; all sixteen
-native push workflows are main-only. No hosted OpenClaw CI is dispatched.
+`current.json` selects `openclaw-fork-2f84fc7c.tgz` (generation
+`1792036342875717`) and `openclaw-mattermost-ae66f3ab.tgz` (generation
+`1792022760504592`). The root was published with generation-match zero. Both exact
+generations were downloaded and compared byte-for-byte and by complete SHA256
+with the freshly qualified archives. The native branch was pushed normally and
+its full head read back. All sixteen native push workflows are main-only;
+no hosted OpenClaw CI was dispatched.
 
-Root SHA256: `6956add286e8ae7dd07aea17b76a94d387a0981f2802dd6c4f9bdc0d5b2fabf2`.
+Root SHA256: `2f84fc7ceda4396ad6c45df9858f6a0124dceaa2d2f91e3496f2f3b97d3b37ef`.
 Mattermost SHA256: `ae66f3ab298330d355c43ff6d4c87bfe2d0a129fd3f117c9b3c908d69fb10bcb`.
+The freshly packed Mattermost archive is byte-identical to the prior qualified
+artifact, so its existing immutable generation `1792022760504592` is reused.
 
 Shared-state schema **22**, agent schema **26** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
@@ -183,6 +187,13 @@ Room live Activity is explicitly channel-wide, matching the shared native
 session. Selecting a reply root does not filter that feed; native events lack
 immutable per-turn root attribution. Chat replies and recorded run details retain
 their original roots. Direct-message session behavior is unchanged.
+
+Channel membership synchronization treats a base channel session's delivery root
+as reply metadata, not a different memory or audience. Ordinary inbound replies
+can change that root without blocking an idempotent grant or derived-member
+revocation. Explicit thread-session requests still require matching root
+provenance; canonical agent, channel, provider, kind and current authority checks
+remain unchanged.
 
 The fork's Browser take-control/give-back, manual pause and stale-input protocol
 are removed. Native browser controls and upstream worker-computer behavior stay
@@ -227,12 +238,30 @@ native; no agent-version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-The full pinned-package-manager native build passed in 30m22.1s with exact
+The preceding `e705f633` pinned-package-manager native build passed in 30m22.1s with exact
 source build-info and all 155 public SDK subpaths. Maintained sequential
 packers, native root archive integrity, the matched isolated npm install and
 actual arm64/amd64 full-plugin installer gates passed. These local installer
 images are not immutable Build main release digests or complete Builder
 runtime-image qualification. No desktop OS image change is included.
+
+The `deee9d25` provenance repair reproduced two failures through the
+actual channel synchronization handler and native inbound metadata writer.
+Both cases and all 24 handler tests passed after the repair. Core types, the
+owning gateway-method test type graph, targeted lint, formatting, line caps,
+SQLite dialect/worker ratchets and assertion safety passed. The optional wider
+consumer-type sweep was stopped after the owning graph passed; it is not claimed
+complete. A fresh isolated two-file review found no actionable P0–P2 issues.
+The full native build passed in 25m29.9s (26m40.4s wrapper wall time, including
+the normal artifact-lock wait), with exact `deee9d25` build-info and all 155 SDK
+subpaths. Sequential maintained packers, strict Voice/Activity SDK gates, native
+root archive integrity and the isolated matched install passed. Both actual
+arm64 and amd64 full-plugin installer targets passed source-match, registry,
+driver-artifact and native-hook gates. These local installer images are not an
+immutable Build main family or full Builder runtime-image proof. The 58 local
+artifact/pin cases and five island contract/coexistence cases passed; no generated
+JavaScript or CSS runtime bytes changed. Actual fresh Terminal, Browser and
+Activity acceptance remains in TEST.
 
 The channel-memory follow-up also materialized Shared and Builder configs through
 73 verified production inputs from the committed policy, account, roster and

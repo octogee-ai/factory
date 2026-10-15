@@ -125,6 +125,13 @@ function parseSecretsReloadPayload(payload: unknown): SecretsReloadResult {
   return p as SecretsReloadResult;
 }
 
+function parseBrokerProfileMaterializationPayload(payload: unknown): { ok: true } {
+  if (!payload || typeof payload !== "object" || (payload as { ok?: unknown }).ok !== true) {
+    throw new OpenclawWireError(INVALID_RESPONSE, "broker profile materialization was not acknowledged");
+  }
+  return { ok: true };
+}
+
 export interface GatewayRestartRequestResult {
   ok: true;
   status: "scheduled" | "deferred" | "coalesced";
@@ -327,6 +334,7 @@ export interface GatewayRpcClient {
   channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
   channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
+  brokerProfilesMaterialize(params: { agentIds: string[] }): Promise<{ ok: true }>;
   degradedSecretsStatus?(): Promise<DegradedSecretOwner[]>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
   sessionsList(params: { agentId: string; includeGlobal?: boolean; includeUnknown?: boolean; archived?: "all"; offset?: number }): Promise<GatewaySessionsListResult>;
@@ -1055,6 +1063,9 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     async secretsReload() {
       return parseSecretsReloadPayload(await call("secrets.reload", {}));
     },
+
+    brokerProfilesMaterialize: async (params) =>
+      parseBrokerProfileMaterializationPayload(await call("octogee.brokerProfiles.materialize", params)),
 
     async degradedSecretsStatus() {
       return parseDegradedSecretOwners(await call("status", { includeChannelSummary: false }));

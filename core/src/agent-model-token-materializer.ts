@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 
 import { readAuthProfileStore } from "./auth-profile-sqlite.js";
 import { AGENTS_DIR } from "./config.js";
+import { createGatewayRpc } from "./gateway-rpc.js";
 import {
   OpenClawSecretsApplyError,
   applyOpenClawSecretsPlan,
@@ -14,7 +15,7 @@ import {
 import { modelCatalogForProvider, type ModelInputModality } from "@octogee/shared/types/model-catalog";
 import { parseAgentId } from "@octogee/shared/types/identity";
 
-export { OpenClawSecretsApplyError } from "./openclaw-secrets-apply.js";
+export { OpenClawSecretsApplyError, applyOpenClawSecretsPlan } from "./openclaw-secrets-apply.js";
 
 // The per-agent broker-token anthropic profile for shared (multi-tenant) pods.
 // Each customer-agent's anthropic:default resolves to its OWN owner-scoped broker
@@ -300,8 +301,6 @@ export function platformBrokerProfileTargets(
   );
 }
 
-/** The store is read-only to us — openclaw's `secrets apply` is the only writer.
- *  Reading it keeps the sweep from spawning the CLI once everything has settled. */
 export function missingPlatformBrokerProfileTargets(
   agentDir: string,
   agentId: string,
@@ -540,6 +539,16 @@ async function applySecretsTargets(
 ): Promise<void> {
   await applyOpenClawSecretsPlan(buildOpenClawSecretsPlan(targets), {
     ...opts.secretsApply,
+    apply: opts.secretsApply?.apply ?? (async (plan) => {
+      const rpc = createGatewayRpc({ allowLegacyGatewayTokenFallback: true });
+      try {
+        await rpc.brokerProfilesMaterialize({ agentIds: [...new Set(plan.targets.map((target) => target.agentId))] });
+      } catch (error) {
+        throw new OpenClawSecretsApplyError(error instanceof Error ? error.message : String(error), null);
+      } finally {
+        await rpc.close();
+      }
+    }),
     log: opts.secretsApply?.log ?? opts.logFn,
   });
 }

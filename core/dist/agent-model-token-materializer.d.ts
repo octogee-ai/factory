@@ -1,6 +1,6 @@
 import { type ApplyOpenClawSecretsPlanOptions, type AuthProfileApiKeyTarget } from "./openclaw-secrets-apply.js";
 import { type ModelInputModality } from "@octogee/shared/types/model-catalog";
-export { OpenClawSecretsApplyError } from "./openclaw-secrets-apply.js";
+export { OpenClawSecretsApplyError, applyOpenClawSecretsPlan } from "./openclaw-secrets-apply.js";
 export declare const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 export declare const OPENROUTER_BROKER_PROFILE_ID = "platform-openrouter:default";
 export declare const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
@@ -89,8 +89,6 @@ export interface PlatformBrokerProfileSurfaces {
     openAi: boolean;
 }
 export declare function platformBrokerProfileTargets(agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
-/** The store is read-only to us — openclaw's `secrets apply` is the only writer.
- *  Reading it keeps the sweep from spawning the CLI once everything has settled. */
 export declare function missingPlatformBrokerProfileTargets(agentDir: string, agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
 export declare function upsertOpenRouterBrokerModel(agentDir: string, input: OpenRouterBrokerModelInput): boolean;
 export declare function upsertOpenRouterBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
