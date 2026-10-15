@@ -1,15 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
-import { FieldValue, type Firestore, type Transaction } from 'firebase-admin/firestore';
+import { type Firestore, type Transaction } from 'firebase-admin/firestore';
+import { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
+export { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
 import { assertGatewayRuntimeMutationUnfenced } from '@octogee/core/gateway-retirement-claim';
 import { findActiveGatewayMigration, type FleetOperationLockRef } from '@octogee/core/fleet-operation-lock';
 import { runNormalFleetMutation, type NormalFleetMutationDb } from '@octogee/core/normal-fleet-mutation';
 import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
-export interface RuntimeRestartFence {
-  attemptId:string; auditId:string; gatewayId:string; kind:'process'|'deployment'; startedAt:number; phase:'reserved'|'dispatched'|'acknowledged';
-  target?:Record<string,unknown>; acknowledgement?:Record<string,unknown>;
-}
 export async function assertMigrationRestartUnfenced(db:Firestore,transaction:Transaction,input:Record<string,unknown>):Promise<void> {
   const ids=[input.fromGatewayId,input.toGatewayId].filter((id):id is string=>typeof id==='string');
   const roots=await Promise.all(ids.map(id=>transaction.get(db.collection("gateways").doc(id))));
@@ -25,13 +22,6 @@ export async function acquireRuntimeRestart(db:Firestore,fence:RuntimeRestartFen
     const operations=[...running.docs,...pending.docs].map(doc=>({id:doc.id,...doc.data()} as FleetOperationLockRef));
     if(findActiveGatewayMigration(fence.gatewayId,operations))throw new Error('gateway migration is pending during restart admission');
     transaction.update(rootRef,{runtimeRestartFence:fence});
-  });
-}
-export async function updateRuntimeRestart(db:Firestore,current:RuntimeRestartFence,next:RuntimeRestartFence|null):Promise<void> {
-  await db.runTransaction(async transaction=>{
-    const ref=db.doc(`gateways/${current.gatewayId}`);const root=await transaction.get(ref);
-    if(!isDeepStrictEqual(root.data()?.runtimeRestartFence,current))throw new Error('gateway runtime restart fence changed');
-    transaction.update(ref,{runtimeRestartFence:next??FieldValue.delete()});
   });
 }
 export async function coordinateRuntimeRestart(

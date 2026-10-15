@@ -776,6 +776,22 @@ describe("fleet force gateway restart", () => {
     }
   });
 
+  it("accepts an explicit forced restart resolution without dispatching another restart", () => {
+    expect(resolveFleetGatewayRestart(parseFleetArgs([
+      "--env=test", "gw", "restart", "canary", "--resolve-force=audit-completed-force", "--apply",
+    ]))).toEqual({ gatewayId: "canary", force: false, apply: true, resolveForceAuditId: "audit-completed-force" });
+    expect(() => resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "restart", "canary", "--resolve-force=audit-completed-force",
+    ]))).toThrow("resolution bypasses the Admin API");
+  });
+
+  it.each([
+    ["--resolve-force"], ["--resolve-force="], ["--resolve-force=../audit"],
+    ["--resolve-force=audit-1", "--force"],
+  ])("rejects invalid restart resolution flags %s", (...flags) => {
+    expect(() => resolveFleetGatewayRestart(parseFleetArgs(["--env=test", "gw", "restart", "canary", ...flags]))).toThrow();
+  });
+
   it("requires exactly one fresh pod with a durable UID for a forced restart", () => {
     expect(parseForceRestartPodList(JSON.stringify({
       items: [{ metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-1" } }],

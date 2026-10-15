@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    "./gateway-runtime-restart": {
+      "types": "./dist/gateway-runtime-restart.d.ts",
+      "default": "./dist/gateway-runtime-restart.js"
+    },
     "./git-metadata": {
       "types": "./dist/git-metadata.d.ts",
       "default": "./dist/git-metadata.js"

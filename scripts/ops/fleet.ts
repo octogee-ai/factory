@@ -53,6 +53,7 @@ import {
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
 import { addCustomerAssignmentRefusal } from "../lib/fleet-add-customer.js";
 import { runFleetLogsCommand } from "../lib/fleet-logs-command.js";
+import { resolveForcedGatewayRestart } from "./fleet-resolve-forced-restart.js";
 
 const COLOR_ENABLED =
   process.stdout.isTTY === true &&
@@ -268,13 +269,14 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "gw restart",
     summary: "Restart through the Admin API, or force-delete an exact Builder pod.",
-    args: "<gw-id> [--force] [--idempotency-key=<key>] [--apply]",
+    args: "<gw-id> [--force | --resolve-force=<audit-id>] [--idempotency-key=<key>] [--apply]",
     description:
-      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. --force requires an authoritative Builder gateway; Shared gateways are rejected. With --force --apply, it journals a break-glass operation, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting; Cowboy keeps reconciling the gateway throughout, so the deployment recreates the pod on its own. Dry-run by default.",
+      "Normally uses POST /api/admin/gateways/:id/restart so the operations journal matches the Admin UI. --force requires an authoritative Builder gateway; Shared gateways are rejected. With --force --apply, it journals a break-glass operation, selects exactly one fresh gateway pod, verifies its UID again, and deletes only that pod without waiting; Cowboy keeps reconciling the gateway throughout, so the deployment recreates the pod on its own. --resolve-force=<completed-audit-id> observes that exact replacement and journals resolution of its matching failed process restart fence, without restarting. Requires unchanged release images, native health and no active custody. Dry-run by default.",
     examples: [
       "fleet --env=test gw restart canary",
       "fleet --env=test gw restart canary --apply",
       "fleet --env=test gw restart canary --force --apply",
+      "fleet --env=test gw restart canary --resolve-force=audit-completed-force --apply",
     ],
     writes: true,
   },
@@ -442,6 +444,7 @@ const VALUE_FLAGS = new Set([
   "owner-uid",
   "builder-slug",
   "idempotency-key",
+  "resolve-force",
   "sha",
   "container",
   "level",
@@ -544,6 +547,7 @@ export interface FleetGatewayRestart {
   force: boolean;
   apply: boolean;
   idempotencyKey?: string;
+  resolveForceAuditId?: string;
 }
 
 export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayRestart {
@@ -554,7 +558,7 @@ export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayR
   ) {
     throw new Error("gw restart requires exactly <gw-id> and no extra positional arguments");
   }
-  const allowedFlags = new Set(["force", "apply", "idempotency-key"]);
+  const allowedFlags = new Set(["force", "apply", "idempotency-key", "resolve-force"]);
   for (const name of Object.keys(args.flags)) {
     if (!allowedFlags.has(name)) {
       throw new Error(`gw restart does not accept --${name}`);
@@ -567,6 +571,11 @@ export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayR
     throw new Error("gw restart --apply must be a bare flag");
   }
   const idempotency = args.flags["idempotency-key"];
+  const resolveForceAuditId = args.flags["resolve-force"];
+  if (resolveForceAuditId !== undefined && (typeof resolveForceAuditId !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(resolveForceAuditId))) {
+    throw new Error("gw restart --resolve-force requires an exact audit ID");
+  }
+  if (resolveForceAuditId !== undefined && args.flags.force) throw new Error("gw restart --resolve-force cannot be combined with --force");
   if (
     idempotency !== undefined &&
     (typeof idempotency !== "string" || idempotency.length === 0)
@@ -577,6 +586,7 @@ export function resolveFleetGatewayRestart(args: ParsedFleetArgs): FleetGatewayR
     gatewayId: requiredGatewayId(args, "gw restart"),
     force: args.flags.force === true,
     apply: args.flags.apply === true,
+    ...(typeof resolveForceAuditId === "string" ? { resolveForceAuditId } : {}),
     ...(typeof idempotency === "string" ? { idempotencyKey: idempotency } : {}),
   };
 }
@@ -685,6 +695,7 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
     }
     case "restart": {
       const restart = resolveFleetGatewayRestart(args);
+      if (restart.resolveForceAuditId) throw new Error("gw restart resolution bypasses the Admin API");
       if (restart.force) {
         throw new Error("gw restart --force bypasses the Admin API");
       }
@@ -739,7 +750,7 @@ export interface FleetKubectlResult {
   error?: Error;
 }
 
-export type FleetKubectlRunner = (args: string[], input?: string) => FleetKubectlResult;
+export type FleetKubectlRunner = (args: string[], input?: string, timeoutMs?: number) => FleetKubectlResult;
 
 export type ForcedGatewayRestartMutationRunner = <T>(
   input: NormalFleetMutationInput<T>,
@@ -1551,6 +1562,16 @@ async function runFleetGatewayMutation(apply: boolean): Promise<void> {
 
 async function runFleetGatewayRestart(): Promise<void> {
   const restart = resolveFleetGatewayRestart(args);
+  if (restart.resolveForceAuditId) {
+    const result = await resolveForcedGatewayRestart({
+      db, gatewayId: restart.gatewayId, forceAuditId: restart.resolveForceAuditId,
+      kubeContext: KUBE_CONTEXT, namespace: KUBE_NS, runKubectl: localFleetKubectl,
+      apply: restart.apply,
+      ...(restart.idempotencyKey ? { idempotencyKey: restart.idempotencyKey } : {}),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
   if (!restart.force) return runFleetGatewayMutation(restart.apply);
   assertBuilderForceRestart((await db.collection(GATEWAYS_COLLECTION).doc(restart.gatewayId).get()).data());
   console.log(bold(`GW FORCE RESTART ${restart.gatewayId.toUpperCase()}`));
