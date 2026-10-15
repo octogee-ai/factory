@@ -140,33 +140,39 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8`](https://github.com/openclaw/openclaw/commit/9f83c05ea3a4ed4c1dd555e692da462f9b2cf7c8),
-frozen for the October 14 native-first recut. Exact native source is
-`deee9d25874812b247cfe93423598a53fa8168a3`, branch
-`codex/fix-channel-session-provenance-oct14`, with parent
-`e705f633da911436f6d4429a3f5c923b020bddea`. Package `2026.10.3` is a main
-snapshot, not a released tag. OpenClaw validation stays local; no full upstream,
-fork-CI or iOS-green claim is made.
+[`c8260d933e58a84ded513f929391b7bb990665c4`](https://github.com/openclaw/openclaw/commit/c8260d933e58a84ded513f929391b7bb990665c4),
+frozen for the October 15 native-first recut to include merged #158986. Exact
+native source is `fc8389a65e4466795af327998acdb331389c619c`, branch
+`codex/openclaw-main-recut-oct15-c826`, with parents that selected upstream and
+retained predecessor `deee9d25874812b247cfe93423598a53fa8168a3`. Package
+`2026.10.3` is a main snapshot, not a released tag. This is the operator-selected
+independent local qualification lane, not a claim that moving main or the full
+upstream CI matrix passed. No external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-2f84fc7c.tgz` (generation
-`1792036342875717`) and `openclaw-mattermost-ae66f3ab.tgz` (generation
-`1792022760504592`). The root was published with generation-match zero. Both exact
+`current.json` selects `openclaw-fork-8d37b40f.tgz` (generation
+`1792084837147155`) and `openclaw-mattermost-6d57a924.tgz` (generation
+`1792084840584694`). Both were published with generation-match zero. Both exact
 generations were downloaded and compared byte-for-byte and by complete SHA256
-with the freshly qualified archives. The native branch was pushed normally and
-its full head read back. All sixteen native push workflows are main-only;
-no hosted OpenClaw CI was dispatched.
+with the qualified archives. The native branch was pushed normally to
+`ceckert/openclaw` and its full head read back; upstream was never pushed.
+All sixteen native push workflows are main-only; the published codex branch
+has zero hosted runs.
 
-Root SHA256: `2f84fc7ceda4396ad6c45df9858f6a0124dceaa2d2f91e3496f2f3b97d3b37ef`.
-Mattermost SHA256: `ae66f3ab298330d355c43ff6d4c87bfe2d0a129fd3f117c9b3c908d69fb10bcb`.
-The freshly packed Mattermost archive is byte-identical to the prior qualified
-artifact, so its existing immutable generation `1792022760504592` is reused.
+Root SHA256: `8d37b40f5185881d34bb6af54e71e7ae3e197f37bd932abe9f5730a2660b1667`.
+Mattermost SHA256: `6d57a924cf3c78757b97f546dae72e484d3cc639e8f35479041afd1e38d32ea0`.
 
-Shared-state schema **22**, agent schema **26** and protocol **4** are the
+Shared-state schema **24**, agent schema **27** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
 database admission remain native. Do not preserve the old October 12 no-22
 restriction or create an Octogee schema dialect.
 
 ### What was removed
+
+This cut adopts upstream catalog retention/retirement (#158986), startup model
+publication retry (#172632) and WAL ownership (#172414), removing their duplicate
+fork owners and the unused prepared catalog seed. Redundant worker qualification
+tests, an unused absolute commit-deadline customization and requester/receipt
+validation already supplied upstream are also removed. Earlier reductions remain:
 
 Native Talk now owns consultation, interruption and cancellation. The fork's
 channel-consult ingress, `talk_voice` verbatim playback-wait narration and
@@ -219,7 +225,8 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 | Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing exposes equivalent independent grant sources. |
 | Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
 | Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
-| Maintenance, reload and catalog lifetimes | Queued or superseded work must not borrow expired authority, lose committed reload debt, or close a catalog still owned by an earlier reader. Retain only the reproduced lifetime/settlement gaps while preserving native FIFO, cancellation and database owners; drop each when the selected upstream passes its boundary control. |
+| Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. Retain only reproduced lifetime/settlement gaps while preserving native FIFO, cancellation and database owners; upstream now owns catalog retention/retirement and startup publication retry. Drop each remaining hunk when the selected upstream passes its boundary control. |
+| Queued Mattermost channel identity | A drained follow-up must keep its originating nativeChannelId instead of inferring the current reply destination. Upstream #163685 remains a separate contribution; remove this carry only once the selected upstream includes it and the queued-turn controls pass. |
 | Channel account removal and deleted-agent discovery | Removing one account must join its startup/cleanup without stopping siblings; Doctor must discover journaled deleted identities and restored files. Keep these scoped owner repairs until native removal and maintenance discovery preserve those cases. |
 | Plugin instance through final delivery | Finalization must use the originating plugin instance and receiver, not a replacement ID lookup; AbortSignal and other data retain identity. Remove when native delivery custody covers that finalization boundary. |
 | Final-reply observation | Octogee's delivery/archive consumers need the actual terminal provider reply, not progress text or an invented run-completion claim. Keep the narrow observer contract until an equivalent native public event is available. |
@@ -234,114 +241,78 @@ features are not relabeled as upstream bug fixes.
 The old fork's shared-21 cron layout is recognized only as a complete known
 layout. Normal native Doctor takes verified backups, derives canonical predicate
 columns where needed, imports retained cron custody and performs upstream's
-21→22 migration. Partial or ambiguous custody refuses conversion. Agent 26 stays
-native; no agent-version bump is invented to force Doctor.
+canonical migration through 24. Partial or ambiguous custody refuses conversion.
+Known legacy cron custody tables select the full native repair/import owner rather
+than the bounded20→24 fast path. Agent26→27 uses the unchanged upstream FIFO
+outbox migration; no version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-The preceding `e705f633` pinned-package-manager native build passed in 30m22.1s with exact
-source build-info and all 155 public SDK subpaths. Maintained sequential
-packers, native root archive integrity, the matched isolated npm install and
-actual arm64/amd64 full-plugin installer gates passed. These local installer
-images are not immutable Build main release digests or complete Builder
-runtime-image qualification. No desktop OS image change is included.
+The exact `fc8389a6` native build passed with repository-pinned pnpm 12.10.1
+in 4m26.2s (268.55s wrapper wall time), with matching build-info. Maintained
+sequential packers, strict Voice/Activity SDK gates and native root archive
+integrity passed. Both actual Linux arm64 and amd64 full-plugin installer
+targets passed registry refresh, source-match, bundled trust, driver-artifact
+and native-hook checks. Normal native launch settled package lifecycle; there
+was no install-script allowlist or marker bypass. These local installer images
+are not immutable Build main family digests or full Builder runtime/desktop proof.
 
-The `deee9d25` provenance repair reproduced two failures through the
-actual channel synchronization handler and native inbound metadata writer.
-Both cases and all 24 handler tests passed after the repair. Core types, the
-owning gateway-method test type graph, targeted lint, formatting, line caps,
-SQLite dialect/worker ratchets and assertion safety passed. The optional wider
-consumer-type sweep was stopped after the owning graph passed; it is not claimed
-complete. A fresh isolated two-file review found no actionable P0–P2 issues.
-The full native build passed in 25m29.9s (26m40.4s wrapper wall time, including
-the normal artifact-lock wait), with exact `deee9d25` build-info and all 155 SDK
-subpaths. Sequential maintained packers, strict Voice/Activity SDK gates, native
-root archive integrity and the isolated matched install passed. Both actual
-arm64 and amd64 full-plugin installer targets passed source-match, registry,
-driver-artifact and native-hook gates. These local installer images are not an
-immutable Build main family or full Builder runtime-image proof. The 58 local
-artifact/pin cases and five island contract/coexistence cases passed; no generated
-JavaScript or CSS runtime bytes changed. Actual fresh Terminal, Browser and
-Activity acceptance remains in TEST.
+The isolated account-supported source review completed four passes and reported
+one P2 about cleanup after a failed account stop. The retained admitted stop owner
+already preserves the original configuration/account across that retry. Restoring
+the exact upstream regression proved that path; all 96 lifecycle tests passed.
+The finding is rejected with that evidence, not relabeled a clean original review.
+Core/UI/extension types, focused lint/format, owning behavior graphs, the changed
+source line-cap ratchet and storage dialect/worker checks passed. No guard was
+weakened and no aggregate `pnpm check` or full upstream/fork/iOS CI is claimed.
 
-The channel-memory follow-up also materialized Shared and Builder configs through
-73 verified production inputs from the committed policy, account, roster and
-pre-boot owners. Both passed installed-native config validation with channel scope
-on the channel and generated accounts, retaining configured policies. The checks
-used UID 1000, a network-disabled read-only container and fresh Linux tmpfs; they
-did not run Doctor, start a Gateway or call providers.
+A fresh synthetic store authored through the exact installed published
+`deee9d25` predecessor was upgraded on a closed Linux copy through the actual
+installed candidate's Doctor. Canonical shared22→24 and agent26→27 passed.
+Authored sessions, transcript events, raw JSON/BLOB values, plugin state and the
+disabled cron specimen remained exact. A labeled cold-SQL outbox specimen used
+sparse rowids40/91 opposing key/timestamp order; native27 retained them as
+enqueue_sequence40/91 with unchanged payload and attempt metadata. Native full
+22/26 backups and the completed backup group were verified; the sealed original's
+complete file hashes remained unchanged.
 
-The preceding `4bc64daa` recut's focused storage proof is retained: one fresh
-synthetic store was authored through native RPCs in the exact
-published `cf903690` predecessor, with networking and job execution disabled,
-then shut down normally. Candidate Doctor upgraded only a closed Linux copy:
-shared 21→22, four agents at 26, canonical rows/JSON/rowids, sessions,
-transcripts, jobs and scratch preserved. Three held/exported/retired operations
-and their fences imported to native KV in original order; snapshot bytes
-reconstructed exactly. The five native SQLite backups preserve original
-schema and data; the sealed original's nonvolatile file hashes remain unchanged.
-Full Git state capture was unavailable in the read-only home (`EROFS`), not
-claimed successful. Empty-WAL/volatile-SHM inventory and earlier seed-config
-refusal controls are preserved. This proves the focused data upgrade, not a
-candidate Gateway boot, live acknowledgment, running receipts, populated
-ACP/Cursor migration or provider readiness.
+The fixture's failed controls are preserved. Its setup order now matches the
+maintained native installer; normal offline close is allowed only for a zero-byte
+WAL and must not change the database hash. No sidecars or schema markers were
+deleted or rewritten. Schema observation follows the native optional content
+marker contract; the SDK assertion targets the authored job rather than rejecting
+Doctor's already-existing heartbeat. These were source-proven fixture corrections,
+not product repairs or weakened authored-data assertions. This proof ran without
+networking, Gateway boots or providers; it does not prove actual outbox dispatch,
+runtime drain, populated scratch, live acknowledgment or TEST acceptance.
 
-That recut's full Doctor config compatibility used Shared and VM-Builder policy, roster,
-account, native merge-patch, pre-boot, final gateway-class and catalog writers.
-The final class-policy writer must be included, and merge-patch deletion
-sentinels must pass through the native merge owner rather than be written as
-literal config. The initial fixture-composition refusal is retained; it is not
-a product regression or a reason to add a runtime compatibility patch.
+Shared and Builder configurations were independently materialized through 73
+verified production inputs from exact Octogee `ec9be511` policy, roster, account,
+pre-boot, class-policy and broker-catalog owners. Both passed installed-native
+config validation as UID1000 in fresh Linux tmpfs with a read-only image and
+network disabled. Configured model/tool/browser policy, channel memory, credentials
+references and authored catalogs stayed exact. This installer-only image lacks
+the Octogee custom extensions: ten Shared and twelve Builder plugin IDs generate
+visible missing-plugin warnings. No Doctor, Gateway or provider was run in this
+config check; custom-plugin and live readiness remain TEST work.
 
-Both class configs passed native validate→Doctor→validate as UID 1000 with the
-actual resolver bundle and image ownership/mode. Shared's protected policy and
-catalog assertions passed. Builder's literal equality assertion failed because
-canonical Doctor added owner `groupAllowFrom` to two accounts; that failure is
-preserved. Eight installed-native before/after ingress cases retain ordinary
-group admission and owner-only control commands. No policy is reapplied after
-Doctor to manufacture equivalence.
+All six generated UI/resource provenance and license records select this exact
+source. Browser and Computer retain the current native HTMLElement bridges and
+React mount/update/destroy contracts, with one shared native module graph. The
+upstream input change report was reviewed. The landed React model picker/tool
+icons and read-only tenant-filtered Automations stay. The regenerated consumers
+passed 183 tests across 19 files, the generator/license owners passed 16 tests across
+two files, and app production types passed. All 218 focused artifact, base,
+publication, provenance and pin checks passed across seven files on the adopted
+tuple. Synthetic/component tests do not prove
+connected capability, layout parity or TEST acceptance.
 
-This installer-only check lacks Octogee extensions: Doctor removes ten Shared
-and twelve Builder unavailable plugins, and disables 32 unavailable skills.
-It proves schema acceptance and scoped configured policy, not complete plugin
-preservation or readiness. Actual custom-plugin acceptance remains in TEST.
-
-Full offline Doctor is not a semantic no-op. Metadata, model defaults, plugin
-indexes, skills and wizard settings may change. Unavailable model/auth and
-model-specific tool-schema warnings are not provider-readiness proof; no
-duplicate provider registration is added to silence them. Configured per-agent
-policy and authored broker catalogs are checked separately from those defaults.
-
-The earlier retained-admission maintenance repair remains covered by owning
-regressions. Healthy boots keep native bounded inspection; full Doctor is not
-added to their hot path. Actual long-running/runtime behavior belongs in TEST.
-
-All six generated native provenance/license records select this source.
-Browser and Computer retain native HTMLElement bridges and React
-mount/update/destroy contracts, with one shared graph for remaining Lit islands.
-The landed React model picker/tool icons and read-only tenant-filtered
-Automations remain. This follow-up passed 76 focused app cases across eight files,
-11 native UI contract/coexistence/embedding cases, 35 artifact/license/CUA cases,
-five affected package typechecks and both app/sidecar production builds. All 66
-focused artifact/base-image/provenance/pin cases passed on the adopted tuple.
-Earlier synthetic Chrome frames are
-prior evidence, not this cut's connected capability, layout parity or TEST
-acceptance.
-
-The prior cut's independently repaired permanent-retirement-fence finding is
-retained, not relabeled clean. Fresh native and authored Octogee follow-up source
-reviews reported no actionable P0–P2 findings. Generated outputs use their maintained
-generator, provenance/pin and consumer gates. Focused behavioral/type checks
-and the changed-source line-cap ratchet passed. The inherited env-read budget
-failure is also present on unpatched upstream (455 against 454); native
-`agent-tools.ts` exceeds its cap at 718 counted lines, while this cut is 712.
-No guard or budget is weakened. Size/CSS, experimental TypeScript, deprecated
-SDK and dependency warnings remain visible. There is no aggregate
-`pnpm check`, paid-response, Doctor no-op or faster-startup claim.
-
-Only a successful immutable main build and coordinated TEST rollout can qualify
-live service behavior. Recovery retains sole Fleet/acceptance ownership until
-explicit handoff; local qualification is not a competing rollout.
+Full offline Doctor can change configuration and is not a semantic no-op.
+Provider/model, SDK deprecation, TypeScript, size and CSS warnings remain visible;
+there is no paid-response or faster-startup claim. Earlier live and upgrade
+results are prior evidence, not acceptance for this source. Recovery retains the
+active TEST/Fleet/fixture lane; only a separately successful immutable main build
+and single-owner coordinated rollout can qualify this recut live.
 
 ### Base-image inputs
 
@@ -355,8 +326,8 @@ documented checksum for the unversioned download does not match this versioned o
 GitHub CLI 2.102.0, Helm 4.3.0, yq 4.54.1, Terraform 1.16.5, Builder Firebase
 CLI 15.32.1, npm 12.2.0 and fd 10.5.0 stay unchanged. The native CUA driver
 builder uses the pinned Rust 1.99.0 image and the source's toolchain selector.
-The selected OpenClaw snapshot pins pnpm 12.9.0,
-Codex plugin dependency 0.160.0 and matched CUA package 0.33.4.
+The selected OpenClaw snapshot pins pnpm 12.10.1,
+Codex plugin dependency 0.160.1 and matched CUA package 0.34.0.
 
 The base retains the existing immutable Node 26.11.1 image, which satisfies
 the selected OpenClaw engine requirement. This recut does not refresh unrelated
@@ -380,7 +351,7 @@ the same image-build instruction. Reopening an inherited Docker-layer SQLite
 database changes its birth time during copy-up and trips native admission.
 Native guards and live state remain unchanged.
 
-CUA uses the matched 0.33.4 JavaScript/native package and the narrow Linux
+CUA uses the matched 0.34.0 JavaScript/native package and the narrow Linux
 desktop-discovery source patch below. The published modifier fix is adopted;
 the old modifier-only fork is no longer an input.
 No desktop OS image change is included. Environment rollout is separately gated
@@ -439,18 +410,18 @@ preservation remain removed. No replacement admin RPC is needed.
 ## Native CUA desktop-discovery preservation
 
 `Dockerfile.base` builds the Linux SDK from the official
-[CUA 0.33.4 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.33.4),
-exact source `ba0033a661101669c60ce05f1fe5753bf8bad748`, with
+[CUA 0.34.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.34.0),
+exact source `b0968e1b12834e485dda68789541a3cc57664a9f`, with
 `cua-desktop-discovery.patch`. The published modifier fix is already present,
 so the older modifier-only fork is not used. Rust and the other CLI/tool pins
 remain unchanged.
 
 The sparse checkout also includes `libs/cua/Cargo.toml` and
-`libs/cua/crates/cua-telemetry`, the 0.33.4 driver's existing path dependency.
+`libs/cua/crates/cua-telemetry`, the 0.34.0 driver's existing path dependency.
 The source revision, Cargo lockfile, dependency features and test gates remain
 unchanged; the recipe does not fetch the rest of the CUA workspace.
 
-The 0.33.4 `GetAccessibilityTreeTool` still discovers only X11 windows. The
+The 0.34.0 `GetAccessibilityTreeTool` still discovers only X11 windows. The
 patch keeps discovery on the native Wayland/X11 dispatcher, excludes
 off-screen windows and known dead owners, remembers observed Wayland origins,
 and emits the existing canonical window record (including bounds, app name,
@@ -467,7 +438,7 @@ new source/library pair must include the Linux crate tests, both required image
 architectures, dynamic loading and the installed driver artifact check; old
 0.28.2 build results do not qualify this pair.
 
-The installer requires matching 0.33.4 installed JavaScript bindings, native
+The installer requires matching 0.34.0 installed JavaScript bindings, native
 package, plugin dependency and patch metadata, the exact official source/tag,
 and a patch digest. It first validates the original SDK against OpenClaw's
 native artifact manifest, then replaces only that architecture's SDK digest in
@@ -482,11 +453,16 @@ Wayland/visible/live/origin/canonical-record boundaries and passes matched
 artifact and desktop qualification. A version bump or modifier fix alone does
 not meet that removal condition.
 
+The small upstream discovery correction is draft [CUA #5286](https://github.com/trycua/cua/pull/5286).
+Its headless Linux tests passed; real Wayland qualification and the author's CLA
+remain separate. Its newer upstream base does not qualify or replace this pinned
+0.34.0 package/library pair. Both local architecture installers passed here.
+
 ## Vendored computer-use skills
 
 `infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
-0.33.4 skill pack
-([`ba0033a6`](https://github.com/trycua/cua/tree/ba0033a661101669c60ce05f1fe5753bf8bad748/libs/cua-driver/rust/Skills/cua-driver))
+0.34.0 skill pack
+([`b0968e1b`](https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust/Skills/cua-driver))
 and the `cua-omarchy` companion from Omarchy
 [PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
 `provenance.json` records each repository, commit, and the SHA-256 of every

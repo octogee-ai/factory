@@ -1,7 +1,7 @@
 ---
 name: cua-driver
-description: Operate native applications on this Builder computer's Omarchy desktop through the `computer` tool, which Cua Driver 0.33.4 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
-version: 0.33.4
+description: Operate native applications on this Builder computer's Omarchy desktop through the `computer` tool, which Cua Driver 0.34.0 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
+version: 0.34.0
 metadata:
   openclaw:
     requires:

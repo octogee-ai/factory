@@ -58,7 +58,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
 
 FROM rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS cua-driver-builder
 
-ARG CUA_SOURCE_SHA=ba0033a661101669c60ce05f1fe5753bf8bad748
+ARG CUA_SOURCE_SHA=b0968e1b12834e485dda68789541a3cc57664a9f
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git pkg-config libx11-dev libxi-dev libxtst-dev \
       libxkbcommon-dev libssl-dev libwayland-dev libxdo-dev libgtk-3-dev \
@@ -79,7 +79,7 @@ RUN cargo test --locked -p platform-linux --lib wayland::tests --features portal
     && cargo build --locked --release -p cua-driver-sdk --features portal-input \
     && mkdir /out \
     && install -m 755 target/release/libcua_driver_sdk.so /out/ \
-    && printf '{"version":"0.33.4","sourceCommit":"%s","sourceTag":"cua-driver-rs-v0.33.4","repository":"https://github.com/trycua/cua","desktopDiscoveryPatchSha256":"%s"}\n' "$CUA_SOURCE_SHA" "$(sha256sum /tmp/cua-desktop-discovery.patch | cut -d' ' -f1)" > /out/octogee-patch.json
+    && printf '{"version":"0.34.0","sourceCommit":"%s","sourceTag":"cua-driver-rs-v0.34.0","repository":"https://github.com/trycua/cua","desktopDiscoveryPatchSha256":"%s"}\n' "$CUA_SOURCE_SHA" "$(sha256sum /tmp/cua-desktop-discovery.patch | cut -d' ' -f1)" > /out/octogee-patch.json
 
 FROM gateway-core-system AS openclaw-installer
 
