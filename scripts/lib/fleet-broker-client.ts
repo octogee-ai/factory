@@ -2,6 +2,7 @@ import { setTimeout as pause } from "node:timers/promises";
 import { MIGRATION_IMPORT_FINISH_TIMEOUT_MS } from "@octogee/shared/types/fleet-controller";
 import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
+  FleetBrokerAssignmentRosterEntry,
   FleetBrokerBlobSignedUrl,
   FleetBrokerNativeSharedContextDownload,
   FleetBrokerNativeSharedContextCheckpointRequest,
@@ -18,6 +19,7 @@ import type {
   FleetBrokerUsageData,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
+import { isAssignmentState } from "../../shared/types/gateway-releases.js";
 import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
 import { gatewayCredentialHeaders as defaultGatewayCredentialHeaders } from "@octogee/core/internal-fetch";
@@ -117,6 +119,7 @@ export interface FleetBrokerClient {
   sharedContextCheckpoint(request: FleetBrokerNativeSharedContextCheckpointRequest, signal?: AbortSignal): Promise<FleetBrokerNativeSharedContextDownload>;
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
+  assignmentRoster(): Promise<FleetBrokerAssignmentRosterEntry[]>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
   npmRegistryCredentials(slug: string): Promise<FleetBrokerNpmRegistryCredentials>;
   uidForSlug(slug: string): Promise<string | null>;
@@ -294,6 +297,22 @@ async function sharedContextCheckpointDownload(gatewayId: string, request: Fleet
       }
 }
 
+function assignmentRosterFromResponse(data: unknown): FleetBrokerAssignmentRosterEntry[] {
+  const assignments = (data as { assignments?: unknown } | null)?.assignments;
+  if (!Array.isArray(assignments)) throw new Error("fleet-broker invalid assignment roster");
+  const seen = new Set<string>();
+  return assignments.map((value: unknown) => {
+    const row = value as Partial<FleetBrokerAssignmentRosterEntry> | null;
+    if (!row || typeof row.uid !== "string" || !row.uid || seen.has(row.uid) ||
+        !isAssignmentState(row.state) || typeof row.epoch !== "number" ||
+        !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
+      throw new Error("fleet-broker invalid assignment roster");
+    }
+    seen.add(row.uid);
+    return { uid: row.uid, state: row.state, epoch: row.epoch };
+  });
+}
+
 export function createFleetBrokerClient(
   gatewayId: string,
   revisionId = gatewayId,
@@ -315,6 +334,13 @@ export function createFleetBrokerClient(
         await gatewayCredentialHeaders(),
       );
       return data.users;
+    },
+    async assignmentRoster() {
+      return assignmentRosterFromResponse(await postJson<unknown>(
+        "/internal/fleet/assignment-roster",
+        { gatewayId, revisionId },
+        await gatewayCredentialHeaders(),
+      ));
     },
     async configuredBuilderBootstrap(slug) {
       const data = await postJson<{ bootstrap: FleetBrokerConfiguredBuilderBootstrap }>(

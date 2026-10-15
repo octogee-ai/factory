@@ -196,6 +196,7 @@ export function cloneRetryReady(
 }
 
 export interface CustomerEnsureRetryInput {
+  ensureAllowed: boolean;
   cloneRetry: CloneRetryState | undefined;
   desiredFingerprint: string | undefined;
   now: number;
@@ -204,7 +205,7 @@ export interface CustomerEnsureRetryInput {
 }
 
 export function customerEnsureRetryReady(input: CustomerEnsureRetryInput): boolean {
-  return permanentConfigPatchRetryReady(
+  return input.ensureAllowed && permanentConfigPatchRetryReady(
     input.permanentConfigPatchRetry,
     input.desiredEnsureFingerprint,
   ) && cloneRetryReady(input.cloneRetry, input.desiredFingerprint, input.now);
@@ -377,6 +378,7 @@ export interface StartFleetOptions {
    *  level-triggered path a project-agent toggle rides — and orders the mount pool so
    *  first-time builders mount ahead of movers. Takes precedence over readDesiredSlugs. */
   readDesiredCustomers?: () => Promise<Map<string, DesiredCustomer>>;
+  readEnsureAdmission?: (uid: string) => Promise<boolean>;
   /** Trusted-side mounted mirror writer used when the pod has no Firestore. */
   stampMounted?: (uid: string, mounted: boolean) => Promise<void>;
   readUserSnapshotForRuntimeReset?: (
@@ -1545,7 +1547,9 @@ function createDesiredRosterReader(input: {
   opts: StartFleetOptions;
   customerSource: StartFleetOptions["readDesiredCustomers"];
   desiredFingerprints: Map<string, string>;
+  desiredUids: Map<string, string>;
   desiredLanes: Map<string, MountLane>;
+  ensureAllowed: Map<string, boolean>;
   setEnsureFingerprint: (fingerprint: string) => void;
 }): (() => Promise<string[]>) | null {
   const customerSource = input.customerSource;
@@ -1553,10 +1557,14 @@ function createDesiredRosterReader(input: {
     return async () => {
       const next = await customerSource();
       input.desiredFingerprints.clear();
+      input.desiredUids.clear();
       input.desiredLanes.clear();
+      input.ensureAllowed.clear();
       for (const [slug, customer] of next) {
         input.desiredFingerprints.set(slug, customer.fingerprint);
+        input.desiredUids.set(slug, customer.uid);
         input.desiredLanes.set(slug, customer.lane);
+        input.ensureAllowed.set(slug, customer.ensureAllowed);
       }
       input.setEnsureFingerprint(desiredEnsureLaneFingerprint(input.desiredFingerprints));
       return [...next.keys()];
@@ -1649,9 +1657,12 @@ function startMaybeReconcileLoop(params: {
   // (when openclawDir is known) so a container restart with the emptyDir intact does not
   // re-ensure an unchanged fleet; a MISSING entry is stale by definition — see
   // applied-fingerprint-store.ts.
-  const customerSource = opts.readDesiredCustomers;
+  const { readDesiredCustomers: customerSource, readEnsureAdmission } = opts;
+  if (customerSource && !readEnsureAdmission) throw new Error("customer roster requires canonical ensure admission");
+  const desiredUids = new Map<string, string>();
   const desiredFp = new Map<string, string>();
   const desiredLanes = new Map<string, MountLane>();
+  const ensureAllowed = new Map<string, boolean>();
   const appliedFpFile =
     customerSource && opts.openclawDir
       ? path.join(opts.openclawDir, "applied-fingerprints.json")
@@ -1691,7 +1702,9 @@ function startMaybeReconcileLoop(params: {
   const readDesired = createDesiredRosterReader({
     opts,
     customerSource,
+    desiredUids,
     desiredLanes,
+    ensureAllowed,
     desiredFingerprints: desiredFp,
     setEnsureFingerprint: (fingerprint) => {
       desiredEnsureFingerprint = fingerprint;
@@ -1729,12 +1742,20 @@ function startMaybeReconcileLoop(params: {
     ...(canReconcile ? { canReconcile } : {}),
     readDesired,
     shouldEnsureSlug: (slug) => customerEnsureRetryReady({
+      ensureAllowed: customerSource ? ensureAllowed.get(slug) === true : true,
       cloneRetry: cloneRetry.get(slug),
       desiredFingerprint: desiredFp.get(slug),
       now: Date.now(),
       permanentConfigPatchRetry,
       desiredEnsureFingerprint,
     }),
+    ...(customerSource && readEnsureAdmission ? {
+      canEnsureSlug: async (slug: string) => {
+        const uid = desiredUids.get(slug);
+        if (!uid) throw new Error(`missing desired customer UID for ${slug}`);
+        return readEnsureAdmission(uid);
+      },
+    } : {}),
     shouldDeferRemainingMounts: isPermanentConfigPatchFailure,
     onPendingEvictionCancelled: cancelPendingEviction,
     ensureSlug: async (

@@ -199,6 +199,16 @@ async function nativeBrowserProfile(rpc: ReturnType<typeof browserRpc>): Promise
   if (typeof status?.profile !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(status.profile)) throw new Error('Native Browser profile unavailable');
   return status.profile;
 }
+function browserTabIsCurrent(value: unknown, targetId: string): boolean {
+  const current = browserRecord(value);
+  if (typeof current?.running !== 'boolean' || !Array.isArray(current.tabs)) throw new Error('Native Browser tab list unavailable');
+  const tabs = current.tabs.map(value => {
+    const tab = browserRecord(value);
+    if (typeof tab?.targetId !== 'string' || !tab.targetId) throw new Error('Native Browser tab list unavailable');
+    return tab;
+  });
+  return current.running && tabs.some(tab => tab.targetId === targetId || tab.tabId === targetId);
+}
 async function subscribeBrowserResources(rpc: ReturnType<typeof browserRpc>, session: ToolSession, profile: string, rememberTab: (resource: NativeBrowserTab) => void): Promise<NativeBrowserTab | null> {
   if (session.surface !== 'browser' || !session.context.sessionKey) throw new Error('Browser conversation unavailable');
   const subscribed = browserRecord(await rpc.call('sessions.messages.subscribe', { key: session.context.sessionKey, agentId: session.context.agentId }));
@@ -209,7 +219,13 @@ async function subscribeBrowserResources(rpc: ReturnType<typeof browserRpc>, ses
     const resource = latestNativeBrowserTab([message], profile);
     if (resource) rememberTab(resource);
   }
-  return latestNativeBrowserTab(history.messages, profile);
+  const historicalTab = latestNativeBrowserTab(history.messages, profile);
+  if (!historicalTab) return null;
+  const current = await rpc.call('browser.request', {
+    method: 'GET', path: '/tabs', target: 'host', query: { profile },
+    tabScope: { sessionKey: session.context.sessionKey, referencedTabs: [historicalTab.tab] },
+  });
+  return browserTabIsCurrent(current, historicalTab.tab.targetId) ? historicalTab : null;
 }
 
 function toolReadyPayload(session: ToolSession, resources: {

@@ -2,10 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { FleetBrokerAssignmentRosterEntry, FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
+import type { DesiredCustomer } from "../lib/snapshot-fingerprint.js";
+import { customerEnsureRetryReady } from "../lib/fleet-provisioner.js";
+import { reconcileFleet, _resetReconcileInFlightForTests } from "../lib/reconcile-loop.js";
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import {
   createAssignedCustomerReader,
+  readCustomerEnsureAdmission,
   createFleetFlushSystemConfigSync,
   createFleetControllerRequestedFlush,
   createFleetSystemConfigVerifyFlush,
@@ -68,14 +73,193 @@ describe("fleet-controller entrypoint config", () => {
     const assignedUsers = vi.fn(async () => [snapshot]);
     const seed = vi.fn();
 
-    const read = createAssignedCustomerReader({ assignedUsers }, seed);
+    const assignmentRoster = vi.fn(async () => [{ uid: "u1", state: "serving" as const, epoch: 1 }]);
+    const read = createAssignedCustomerReader({ assignedUsers, assignmentRoster }, seed);
     const customers = await read();
 
     expect([...customers.keys()]).toEqual(["alice"]);
     expect(customers.get("alice")?.fingerprint).toMatch(/^[0-9a-f]{16}$/);
     expect(customers.get("alice")?.lane).toBe("create");
+    expect(customers.get("alice")?.ensureAllowed).toBe(true);
     expect(seed).toHaveBeenCalledWith(snapshot);
     expect(assignedUsers).toHaveBeenCalledWith({ completeOnly: false });
+  });
+
+  it.each(["serving", "migrating", "quiescing"] as const)(
+    "keeps a %s customer desired and admits ensures only outside source quiescence",
+    async (state) => {
+      const snapshot = {
+        uid: "u1", slug: "alice", status: "provisioning", channels: [],
+        projectAgents: [], projects: [],
+      } as never;
+      const read = createAssignedCustomerReader({
+        assignedUsers: async () => [snapshot],
+        assignmentRoster: async () => [{ uid: "u1", state, epoch: 7 }],
+      }, vi.fn());
+
+      expect([...(await read())]).toEqual([["alice", expect.objectContaining({
+        lane: "create", ensureAllowed: state !== "quiescing",
+      })]]);
+    },
+  );
+
+  it("does not admit incoming or restore-held roster entries without returned user snapshots", async () => {
+    const snapshot = { uid: "u1", slug: "alice", channels: [] } as never;
+    const seed = vi.fn();
+    const read = createAssignedCustomerReader({
+      assignedUsers: async () => [snapshot],
+      assignmentRoster: async () => [
+        { uid: "u1", state: "serving", epoch: 7 },
+        { uid: "incoming", state: "migrating", epoch: 2 },
+        { uid: "restore-held", state: "serving", epoch: 9 },
+      ],
+    }, seed);
+
+    expect([...(await read()).keys()]).toEqual(["alice"]);
+    expect(seed).toHaveBeenCalledExactlyOnceWith(snapshot);
+  });
+
+  it("rejects a straddled assignment read before seeding any returned snapshot", async () => {
+    const seed = vi.fn();
+    const read = createAssignedCustomerReader({
+      assignedUsers: async () => [
+        { uid: "u1", slug: "alice", channels: [] } as never,
+        { uid: "u2", slug: "bob", channels: [] } as never,
+      ],
+      assignmentRoster: async () => [{ uid: "u1", state: "serving", epoch: 7 }],
+    }, seed);
+
+    await expect(read()).rejects.toThrow("missing canonical assignment for u2");
+    expect(seed).not.toHaveBeenCalled();
+  });
+
+  it("holds changed source content while quiescing, preserves a failed read, and removes only after cutover", async () => {
+    _resetReconcileInFlightForTests();
+    let users = [{ uid: "u1", slug: "alice", status: "complete", channels: [] }] as unknown as FleetBrokerUserSnapshot[];
+    let assignments: FleetBrokerAssignmentRosterEntry[] = [
+      { uid: "u1", state: "quiescing", epoch: 7 },
+      { uid: "incoming", state: "migrating", epoch: 8 },
+      { uid: "restore-held", state: "serving", epoch: 3 },
+    ];
+    const seed = vi.fn();
+    const read = createAssignedCustomerReader({
+      assignedUsers: async () => users,
+      assignmentRoster: async () => assignments,
+    }, seed);
+    let desired = new Map<string, DesiredCustomer>();
+    const ensured = vi.fn(async () => "mounted" as const);
+    const evicted = vi.fn(async () => "drained" as const);
+    const deps = {
+      gatewayId: "shared-1",
+      getMountObserved: () => ["alice"],
+      getEvictObserved: () => ["alice"],
+      getContentStale: () => ["alice"],
+      readDesired: async () => {
+        desired = await read();
+        return [...desired.keys()];
+      },
+      shouldEnsureSlug: (slug: string) => customerEnsureRetryReady({
+        ensureAllowed: desired.get(slug)?.ensureAllowed === true,
+        cloneRetry: undefined,
+        desiredFingerprint: desired.get(slug)?.fingerprint,
+        now: 0,
+        permanentConfigPatchRetry: undefined,
+        desiredEnsureFingerprint: undefined,
+      }),
+      ensureSlug: ensured,
+      unmountSlug: evicted,
+      log: vi.fn(),
+    };
+    try {
+      await reconcileFleet(deps);
+      const oldFingerprint = desired.get("alice")!.fingerprint;
+      users = [{ ...users[0], channels: [{ scope: "project", kind: "general", channelId: "new-empty-channel", projectId: "new-task" }] }];
+      await reconcileFleet(deps);
+      expect(desired.get("alice")!.fingerprint).not.toBe(oldFingerprint);
+      expect([...desired.keys()]).toEqual(["alice"]);
+      expect(ensured).not.toHaveBeenCalled();
+      expect(evicted).not.toHaveBeenCalled();
+
+      const priorDesired = desired;
+      seed.mockClear();
+      assignments = assignments.filter((assignment) => assignment.uid !== "u1");
+      await expect(reconcileFleet(deps)).rejects.toThrow("missing canonical assignment for u1");
+      expect(desired).toBe(priorDesired);
+      expect(seed).not.toHaveBeenCalled();
+      expect(evicted).not.toHaveBeenCalled();
+
+      assignments = [{ uid: "u1", state: "serving", epoch: 7 }];
+      await reconcileFleet(deps);
+      expect(ensured).toHaveBeenCalledOnce();
+      expect(evicted).not.toHaveBeenCalled();
+
+      users = [];
+      assignments = [];
+      await reconcileFleet(deps);
+      expect(evicted).toHaveBeenCalledExactlyOnceWith("alice", ["alice"]);
+    } finally {
+      _resetReconcileInFlightForTests();
+    }
+  });
+
+  it("does not rebuild full assigned-user snapshots for each selected cold mount", async () => {
+    _resetReconcileInFlightForTests();
+    const users = ["alice", "bob", "cara"].map((slug, index) => ({
+      uid: `u${index}`, slug, status: "complete", channels: [],
+    })) as unknown as FleetBrokerUserSnapshot[];
+    const assignedUsers = vi.fn(async () => users);
+    const assignmentRoster = vi.fn(async () => users.map(({ uid }) => ({ uid, state: "serving" as const, epoch: 1 })));
+    const read = createAssignedCustomerReader({ assignedUsers, assignmentRoster }, vi.fn());
+    let desired = new Map<string, DesiredCustomer>();
+    const admittedUids: string[] = [];
+    const canEnsureSlug = vi.fn(async (slug: string) => {
+      const uid = desired.get(slug)!.uid;
+      admittedUids.push(uid);
+      return readCustomerEnsureAdmission({ assignmentRoster }, uid);
+    });
+    const ensured = vi.fn(async () => "mounted" as const);
+    try {
+      await reconcileFleet({
+        gatewayId: "shared-1",
+        getMountObserved: () => [],
+        getEvictObserved: () => [],
+        readDesired: async () => {
+          desired = await read();
+          return [...desired.keys()];
+        },
+        canEnsureSlug,
+        ensureSlug: ensured,
+        unmountSlug: vi.fn(async () => "noop" as const),
+        log: vi.fn(),
+      });
+      expect(ensured.mock.calls).toHaveLength(3);
+      expect(assignedUsers).toHaveBeenCalledOnce();
+      expect(canEnsureSlug).toHaveBeenCalledTimes(3);
+      expect(admittedUids.sort()).toEqual(["u0", "u1", "u2"]);
+      expect(assignmentRoster).toHaveBeenCalledTimes(4);
+    } finally {
+      _resetReconcileInFlightForTests();
+    }
+  });
+
+  it.each(["serving", "migrating", "quiescing"] as const)(
+    "reads current %s admission by validated customer UID without admitting unrelated roster rows",
+    async (state) => {
+      const assignmentRoster = vi.fn(async () => [
+        { uid: "incoming", state: "migrating" as const, epoch: 8 },
+        { uid: "owner-uid", state, epoch: 7 },
+        { uid: "restore-held", state: "serving" as const, epoch: 3 },
+      ]);
+      await expect(readCustomerEnsureAdmission({ assignmentRoster }, "owner-uid"))
+        .resolves.toBe(state !== "quiescing");
+      expect(assignmentRoster).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects missing queued admission without using another customer's serving state", async () => {
+    await expect(readCustomerEnsureAdmission({
+      assignmentRoster: async () => [{ uid: "another-owner", state: "serving", epoch: 7 }],
+    }, "owner-uid")).rejects.toThrow("missing canonical assignment for owner-uid");
   });
 
   it("normalizes local gateways and trims dedicated builder slugs", () => {

@@ -35,6 +35,7 @@ export interface ReconcileLoopDeps {
     currentEvictionBatch: () => readonly string[],
   ) => Promise<EnsureOutcome>;
   shouldEnsureSlug?: (slug: string) => boolean;
+  canEnsureSlug?: (slug: string) => Promise<boolean>;
   shouldDeferRemainingMounts?: (error: unknown) => boolean;
   unmountSlug: (slug: string, evictionBatch: readonly string[]) => Promise<UnmountOutcome>;
   onPendingEvictionCancelled?: (slug: string) => void;
@@ -201,6 +202,8 @@ function logReconcilePlan(deps: ReconcileLoopDeps, plan: ReconcilePlan): void {
 async function runMountJob({ slug, deps, batch }: MountJob): Promise<void> {
   if (batch.deferred || !(await reconciliationAllowed(deps))) return;
   try {
+    if (deps.canEnsureSlug && !(await deps.canEnsureSlug(slug))) return;
+    if (!(deps.shouldEnsureSlug?.(slug) ?? true)) return;
     const outcome = await deps.ensureSlug(
       slug,
       batch.plan.currentPendingEvictions(),

@@ -55,6 +55,42 @@ describe("fleet broker system config status", () => {
     );
   });
 
+  it("reads canonical assignment admission with the current gateway credential and revision", async () => {
+    const assignments = [{ uid: "uid-alice", state: "quiescing", epoch: 7 }];
+    vi.mocked(internalFetch).mockResolvedValueOnce(Response.json({ assignments }));
+    const client = createFleetBrokerClient("shared-1", "shared-1", {
+      gatewayCredentialHeaders: async () => ({ [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt" }),
+    });
+
+    await expect(client.assignmentRoster()).resolves.toEqual(assignments);
+    expect(internalFetch).toHaveBeenCalledWith(
+      "http://broker/internal/fleet/assignment-roster",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ [GATEWAY_CREDENTIAL_TOKEN_HEADER]: "credential-jwt" }),
+        body: JSON.stringify({ gatewayId: "shared-1", revisionId: "shared-1" }),
+      }),
+    );
+  });
+
+  it.each([
+    null,
+    {},
+    { assignments: null },
+    { assignments: [{ uid: "", state: "serving", epoch: 1 }] },
+    { assignments: [{ uid: "u1", state: "unknown", epoch: 1 }] },
+    { assignments: [{ uid: "u1", state: "serving", epoch: -1 }] },
+    { assignments: [{ uid: "u1", state: "serving", epoch: 1.5 }] },
+    { assignments: [{ uid: "u1", state: "serving", epoch: 1 }, { uid: "u1", state: "quiescing", epoch: 2 }] },
+  ])("rejects malformed canonical assignment admission: %j", async (body) => {
+    vi.mocked(internalFetch).mockResolvedValueOnce(Response.json(body));
+
+    await expect(createFleetBrokerClient("shared-1", "shared-1", {
+      gatewayCredentialHeaders: async () => ({}),
+    }).assignmentRoster())
+      .rejects.toThrow("invalid assignment roster");
+  });
+
   it("requests the narrow configured-builder bootstrap against the immutable revision", async () => {
     const bootstrap = {
       uid: "uid-alice",

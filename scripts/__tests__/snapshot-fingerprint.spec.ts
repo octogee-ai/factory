@@ -354,7 +354,10 @@ describe("desiredCustomers", () => {
     const seed = vi.fn();
     const users = [snap(), snap({ uid: "u2", slug: "bob" })];
 
-    const map = desiredCustomers(users, seed);
+    const map = desiredCustomers(users, [
+      { uid: "u1", state: "serving", epoch: 1 },
+      { uid: "u2", state: "serving", epoch: 1 },
+    ], seed);
 
     expect([...map.keys()].sort()).toEqual(["alice", "bob"]);
     expect(map.get("alice")?.fingerprint).toBe(snapshotConfigFingerprint(users[0]));
@@ -366,7 +369,7 @@ describe("desiredCustomers", () => {
   });
 
   it("tolerates an absent seeder (operator-style callers without a cache)", () => {
-    const map = desiredCustomers([snap()]);
+    const map = desiredCustomers([snap()], [{ uid: "u1", state: "serving", epoch: 1 }]);
     expect(map.size).toBe(1);
   });
 
@@ -375,6 +378,10 @@ describe("desiredCustomers", () => {
       snap({ status: "complete" }),
       snap({ uid: "u2", slug: "bob", status: "provisioning" }),
       snap({ uid: "u3", slug: "cara", status: "" }),
+    ], [
+      { uid: "u1", state: "serving", epoch: 1 },
+      { uid: "u2", state: "serving", epoch: 1 },
+      { uid: "u3", state: "migrating", epoch: 1 },
     ]);
     expect(map.get("alice")?.lane).toBe("move");
     expect(map.get("bob")?.lane).toBe("create");

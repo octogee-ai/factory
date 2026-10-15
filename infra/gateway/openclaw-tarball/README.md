@@ -142,27 +142,28 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream is operator-selected main
 [`c8260d933e58a84ded513f929391b7bb990665c4`](https://github.com/openclaw/openclaw/commit/c8260d933e58a84ded513f929391b7bb990665c4),
 frozen for the October 15 native-first recut to include merged #158986. Exact
-native source is `ffcedc872c5539bfad05dfb0682c9c749fe24150`, branch
-`codex/openclaw-startup-stale-owner-oct15`, with predecessor
-`fc8389a65e4466795af327998acdb331389c619c`. It carries the exact three-file
+native source is `28177e858ad2299f3c0727ab14094579554bf270`, branch
+`codex/retire-memory-shadow-custody`, with predecessor
+`ffcedc872c5539bfad05dfb0682c9c749fe24150`. It retains the exact three-file
 production correction from [upstream #173366](https://github.com/openclaw/openclaw/pull/173366)
 at `0ccdb4da7dd01ea1f76a515834fbc84255d5a676`, plus a Gateway-startup/admission
-regression. The selected base does not include that correction. No broader
-upstream advance is included. Package
+regression. It also retires memory reindex shadow admission after its owned
+SQLite workers close, before unlinking the shadow. TEST return cleanup reproduced
+a retained creation descriptor; the real descriptor regression fails before this
+fix and preserves the canonical database with it. The selected base does not
+include these corrections. No broader upstream advance is included. Package
 `2026.10.3` is a main snapshot, not a released tag. This is the operator-selected
 independent local qualification lane, not a claim that moving main or the full
 upstream CI matrix passed. No external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-09af9f0b.tgz` (published generation
-`1792094319840887`) and the unchanged
-`openclaw-mattermost-6d57a924.tgz` (published generation `1792084840584694`).
-Both published generations have been downloaded, byte-compared with the qualified
-archives and verified against their complete SHA256 hashes below.
-The newly packed Mattermost archive is byte-identical to that published input.
-Validation stays local; no hosted OpenClaw/fork/iOS validation is dispatched.
+`current.json` selects `openclaw-fork-10e2b8fa.tgz` (generation
+`1792102983758489`) and `openclaw-mattermost-1bcc5864.tgz` (generation
+`1792102995527387`), packed sequentially from this exact clean build. Both
+write-once published generations were downloaded and verified against the
+qualified archives, complete SHA256 hashes and byte counts.
 
-Root SHA256: `09af9f0b47fc9fd75959ae0ce1aef839a61010127169195302fd5f90875230b2`.
-Mattermost SHA256: `6d57a924cf3c78757b97f546dae72e484d3cc639e8f35479041afd1e38d32ea0`.
+Root SHA256: `10e2b8fa01d6795a02e1cf76e11e37bc0b0f1b4d28af1332590656bc78d2ac8d`.
+Mattermost SHA256: `1bcc5864c3f57e3b57e783c255c766037f72ebf481f547e799c6881053cfcb65`.
 
 Shared-state schema **24**, agent schema **27** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
@@ -251,6 +252,22 @@ than the bounded20→24 fast path. Agent26→27 uses the unchanged upstream FIFO
 outbox migration; no version bump is invented to force Doctor.
 
 ### Local qualification and limits
+
+The `28177e85` shadow cleanup correction passes 28 focused owner/reindex/admission
+checks after its real file-descriptor regression fails on the predecessor. Source
+and test types, focused lint/format, full native build, strict Voice/Activity SDK
+checks, sequential packers and archive integrity pass. Canonical database
+admission and the Octogee held-file guard remain unchanged.
+
+Fresh matched-package installs of `28177e85` in the existing qualified Linux
+arm64 and amd64 installer images pass registry refresh, Codex/Parallel source
+matching, three native-hook imports, CUA artifact validation, the publication
+import and installed SQLite SDK retirement control. Runtime checks follow an
+actual network disconnect as UID1000. The SDK control is not an installed memory
+owner test, full Gateway boot or desktop proof; corrected-family TEST return
+and activation cleanup remain required. Hosted assets regenerate deterministically
+from the same source; only chunk references and provenance differ from the
+predecessor's runtime content.
 
 The `ffcedc87` correction fails its real startup/admission regression on frozen
 `fc8389a6` and passes with the exact upstream production delta. The regression

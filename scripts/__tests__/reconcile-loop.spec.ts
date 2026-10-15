@@ -314,6 +314,55 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(started.sort()).toEqual(["in-flight", "poisoned"]);
   });
 
+  it("rechecks queued work against current quiescing admission without evicting its roster member", async () => {
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    let quiescing = false;
+    const d = mkDeps({
+      maxConcurrent: 1,
+      ...observed(["source"]),
+      getContentStale: () => ["source"],
+      readDesired: async () => ["first", "source"],
+      canEnsureSlug: async (slug) => slug !== "source" || !quiescing,
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        if (slug === "first") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+        return "mounted";
+      },
+    });
+
+    const tick = reconcileFleet(d);
+    await firstStarted.promise;
+    quiescing = true;
+    releaseFirst.resolve();
+    await tick;
+
+    expect(d.ensured).toEqual(["first"]);
+    expect(d.evicted).toEqual([]);
+  });
+
+  it("surfaces a failed admission refresh without ensuring or evicting from the failed read", async () => {
+    const failure = new Error("missing canonical assignment for uid-alice");
+    const onEnsureError = vi.fn();
+    const d = mkDeps({
+      ...observed(["alice"]),
+      getContentStale: () => ["alice"],
+      readDesired: async () => ["alice"],
+      canEnsureSlug: vi.fn().mockRejectedValueOnce(failure),
+      onEnsureError,
+    });
+
+    await reconcileFleet(d);
+
+    expect(d.ensured).toEqual([]);
+    expect(d.evicted).toEqual([]);
+    expect(onEnsureError).toHaveBeenCalledExactlyOnceWith("alice", failure.message, failure);
+    expect(d.logs).toContainEqual(expect.stringContaining(failure.message));
+  });
+
   it("continues evicting while the ensure lane is held", async () => {
     const d = mkDeps({
       ...observed(["stale"]),
@@ -746,7 +795,7 @@ describe("startReconcileLoop", () => {
       expect(peak).toBe(1);
 
       aGate.resolve(); // let "a" finish; tick 1's worker proceeds to "b" serially
-      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(0);
       expect(peak).toBe(1);
       expect(ensured).toContain("b");
 

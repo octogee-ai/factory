@@ -23,12 +23,14 @@ const context = { uid: 'owner', gatewayId: 'b-alice', workspaceSlug: 'alice', ch
 describe('hosted native Browser surface', () => {
   let app: express.Express; let server: http.Server; let native: WebSocketServer; let base: string; let desktopIdentityRoot: string;
   let scopes: Set<string>; const clients: WebSocket[] = []; const received: Array<Record<string, any>> = []; const history: unknown[] = [];
+  let browserTabs: unknown; let failBrowserTabs: boolean; let holdBrowserTabs: boolean;
   const resolveAccess = vi.fn<() => Promise<NativeAdminAccessOutcome>>();
   const resolveControl = vi.fn(async () => ({ uid: context.uid, gatewayId: context.gatewayId, workspaceSlug: context.workspaceSlug, channelId, callerMmUserId: context.callerMmUserId }));
   const resolveChannel = vi.fn(async () => context);
   const fetchImpl = vi.fn(async () => new Response('image-data', { headers: { 'content-type': 'image/png' } }));
   beforeEach(async () => {
     scopes = new Set(['operator.admin']); received.length = 0; history.length = 0;
+    browserTabs = { running: true, tabs: [] }; failBrowserTabs = false; holdBrowserTabs = false;
     desktopIdentityRoot = await mkdtemp(join(tmpdir(), 'tool-surface-desktop-'));
     const desktopIdentityPath = join(desktopIdentityRoot, 'identity.json');
     await writeFile(desktopIdentityPath, JSON.stringify({ deviceId: desktopNodeId, publicKey: desktopPublicKey }));
@@ -42,6 +44,7 @@ describe('hosted native Browser surface', () => {
       socket.on('message', raw => {
         const frame = JSON.parse(raw.toString()); received.push(frame);
         const path = frame.params.path;
+        if (path === '/tabs' && holdBrowserTabs) return;
         const payload = frame.method === 'sessions.messages.subscribe' ? { subscribed: true, key: context.sessionKey }
           : frame.method === 'chat.history' ? { messages: history }
           : frame.method === 'themes.list' ? { themes: [] }
@@ -51,10 +54,12 @@ describe('hosted native Browser surface', () => {
           : frame.method === 'desktop.observe' ? { transport: 'rfb', wsPath: '/desktop/observe?token=desktop-native', control: frame.params.control, audio: { wsPath: '/desktop/audio?token=audio-native', encoding: 'pcm-s16le', sampleRate: 48000, channels: 2 } }
           : frame.method === 'desktop.release' ? { released: true }
           : path === '/' ? { profile: 'computer', enabled: true }
+          : path === '/tabs' ? browserTabs
           : path === '/screenshot' ? { path: '/tmp/native-shot.png', targetId: 't1' }
           : path === '/screencast' ? { token: 'native-token', wsPath: '/browser/screencast?token=native-token', targetId: 't1' }
           : { tabs: [] };
-        socket.send(JSON.stringify({ type: 'res', id: frame.id, ok: true, payload }));
+        const failed = path === '/tabs' && failBrowserTabs;
+        socket.send(JSON.stringify({ type: 'res', id: frame.id, ok: !failed, ...(failed ? { error: { code: 'UNAVAILABLE', message: 'Tabs unavailable' } } : { payload }) }));
       });
     });
     const nativeBase = `http://127.0.0.1:${(native.address() as AddressInfo).port}`;
@@ -136,6 +141,58 @@ describe('hosted native Browser surface', () => {
     }
     expect(received).toHaveLength(count);
   });
+  it.each([
+    { name: 'replaced browser', running: true, tabs: [{ targetId: 'new-tab' }], available: false },
+    { name: 'stopped browser', running: false, tabs: [], available: false },
+    { name: 'current raw target', running: true, tabs: [{ targetId: 'historical-tab' }], available: true },
+    { name: 'current stable alias', running: true, tabs: [{ targetId: 'current-target', tabId: 'historical-tab' }], available: true },
+  ])('validates a historical Browser selection against a $name', async ({ running, tabs, available }) => {
+    const tab = { target: 'host', profile: 'computer', targetId: 'historical-tab' };
+    history.push({ role: 'toolResult', toolName: 'browser', toolCallId: 'prior-call',
+      content: [{ type: 'text', text: 'ok' }], details: { browserTab: tab } });
+    browserTabs = { running, tabs };
+
+    const connection = await connect();
+
+    if (available) expect(connection.frames[0].payload.browserTab).toEqual({ tab, revision: 'prior-call' });
+    else expect(connection.frames[0].payload).not.toHaveProperty('browserTab');
+    expect(received.filter(frame => frame.method === 'browser.request' && frame.params.path === '/tabs'))
+      .toEqual([expect.objectContaining({ params: { method: 'GET', path: '/tabs', target: 'host',
+        query: { profile: 'computer' }, tabScope: { sessionKey: context.sessionKey, referencedTabs: [tab] } } })]);
+    expect(received.filter(frame => frame.method === 'browser.request' && frame.params.method !== 'GET')).toEqual([]);
+  });
+
+  it.each(['failed', 'malformed', 'malformed-tab'])('surfaces a %s native tab observation instead of treating it as an absent historical tab', async failure => {
+    history.push({ role: 'toolResult', toolName: 'browser', toolCallId: 'prior-call',
+      content: [{ type: 'text', text: 'ok' }], details: { browserTab: { target: 'host', profile: 'computer', targetId: 'historical-tab' } } });
+    failBrowserTabs = failure === 'failed';
+    browserTabs = failure === 'malformed-tab' ? { running: true, tabs: [{ tabId: 'historical-tab' }] } : { running: true };
+    const minted = await ticket();
+    const ws = new WebSocket(`${base}/api/g/b-alice/tools/ws/${minted.body.ticket}`, { headers: { origin: 'https://app.example' } }); clients.push(ws);
+    const frames: unknown[] = []; ws.on('message', raw => frames.push(JSON.parse(raw.toString())));
+    const closed = new Promise<number>(resolve => ws.once('close', resolve));
+
+    expect(await closed).toBe(1011);
+    expect(frames).toEqual([]);
+  });
+
+  it('closes the existing native connection when the Browser disconnects during historical tab observation', async () => {
+    history.push({ role: 'toolResult', toolName: 'browser', toolCallId: 'prior-call',
+      content: [{ type: 'text', text: 'ok' }], details: { browserTab: { target: 'host', profile: 'computer', targetId: 'historical-tab' } } });
+    holdBrowserTabs = true;
+    const minted = await ticket();
+    const ws = new WebSocket(`${base}/api/g/b-alice/tools/ws/${minted.body.ticket}`, { headers: { origin: 'https://app.example' } }); clients.push(ws);
+    const frames: unknown[] = []; ws.on('message', raw => frames.push(JSON.parse(raw.toString())));
+    const closed = new Promise<number>(resolve => ws.once('close', resolve));
+    await vi.waitFor(() => expect(received.filter(frame => frame.method === 'browser.request' && frame.params.path === '/tabs')).toHaveLength(1));
+
+    ws.close();
+    await closed;
+
+    await vi.waitFor(() => expect(native.clients.size).toBe(0));
+    expect(frames).toEqual([]);
+  });
+
   it('admits reference hints only from this native session history and scoped live resources', async () => {
     const tab = { target: 'host', profile: 'computer', targetId: 't1' };
     const message = { role: 'toolResult', toolName: 'browser', toolCallId: 'call', content: [{ type: 'text', text: 'ok' }], details: { browserTab: tab } };

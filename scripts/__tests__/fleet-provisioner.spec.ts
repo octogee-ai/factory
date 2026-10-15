@@ -487,8 +487,20 @@ describe("cloneRetryReady — holds a stranded slug off the hot path between att
 describe("customerEnsureRetryReady", () => {
   const pendingClone = { attempts: 1, nextAt: 5_000, fingerprint: "fp1" };
 
+  it("does not retry a quiescing source even when a new channel changes its fingerprint", () => {
+    expect(customerEnsureRetryReady({
+      ensureAllowed: false,
+      cloneRetry: pendingClone,
+      desiredFingerprint: "new-empty-channel",
+      now: 1_001,
+      permanentConfigPatchRetry: undefined,
+      desiredEnsureFingerprint: "new-fleet-fingerprint",
+    })).toBe(false);
+  });
+
   it("holds a cold or unmounted customer until its project-clone backoff expires", () => {
     expect(customerEnsureRetryReady({
+      ensureAllowed: true,
       cloneRetry: pendingClone,
       desiredFingerprint: "fp1",
       now: 4_999,
@@ -499,6 +511,7 @@ describe("customerEnsureRetryReady", () => {
 
   it("bypasses clone backoff immediately when the desired customer fingerprint changes", () => {
     expect(customerEnsureRetryReady({
+      ensureAllowed: true,
       cloneRetry: pendingClone,
       desiredFingerprint: "fp2",
       now: 1_001,
@@ -509,6 +522,7 @@ describe("customerEnsureRetryReady", () => {
 
   it("still holds the ensure lane for an unchanged permanent config-patch failure", () => {
     expect(customerEnsureRetryReady({
+      ensureAllowed: true,
       cloneRetry: undefined,
       desiredFingerprint: "fp1",
       now: 5_000,
@@ -714,7 +728,7 @@ function configuredBuilderLifecycleAdapter(input: {
 describe("configured Builder surge release", () => {
   it("matches normal self-release against the authoritative desired roster", async () => {
     const readDesiredCustomers = vi.fn(async () => new Map([
-      ["ceckert-test", { fingerprint: "fingerprint", lane: "move" as const }],
+      ["ceckert-test", { uid: "uid-builder", fingerprint: "fingerprint", lane: "move" as const, ensureAllowed: true }],
     ]));
     const matches = createConfiguredBuilderAssignmentMatcher({
       readDesiredCustomers,
@@ -2638,7 +2652,7 @@ describe("createVerifyAttachPending", () => {
   it("reads the assignment from the content-convergence roster when one is wired", async () => {
     const pending = createVerifyAttachPending({
       provision: true,
-      opts: { gatewayId: "shared-1", readDesiredCustomers: async () => new Map([["alice", { fingerprint: "fp-1", lane: "move" as const }]]) },
+      opts: { gatewayId: "shared-1", readDesiredCustomers: async () => new Map([["alice", { uid: "uid-alice", fingerprint: "fp-1", lane: "move" as const, ensureAllowed: true }]]) },
     });
 
     expect(await pending?.("alice")).toBe(true);

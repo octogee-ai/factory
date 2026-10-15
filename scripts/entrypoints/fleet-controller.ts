@@ -211,13 +211,25 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
 }
 
 export function createAssignedCustomerReader(
-  brokerClient: Pick<FleetBrokerClient, "assignedUsers">,
-  seedSnapshot: Parameters<typeof desiredCustomers>[1],
+  brokerClient: Pick<FleetBrokerClient, "assignedUsers" | "assignmentRoster">,
+  seedSnapshot: Parameters<typeof desiredCustomers>[2],
 ): () => Promise<Map<string, DesiredCustomer>> {
   return async () => {
-    const users = await brokerClient.assignedUsers({ completeOnly: false });
-    return desiredCustomers(users, seedSnapshot);
+    const [users, assignments] = await Promise.all([
+      brokerClient.assignedUsers({ completeOnly: false }),
+      brokerClient.assignmentRoster(),
+    ]);
+    return desiredCustomers(users, assignments, seedSnapshot);
   };
+}
+
+export async function readCustomerEnsureAdmission(
+  brokerClient: Pick<FleetBrokerClient, "assignmentRoster">,
+  uid: string,
+): Promise<boolean> {
+  const assignment = (await brokerClient.assignmentRoster()).find((row) => row.uid === uid);
+  if (!assignment) throw new Error(`missing canonical assignment for ${uid}`);
+  return assignment.state !== "quiescing";
 }
 
 export function createSystemConfigMutationGatedRpc(
@@ -317,6 +329,7 @@ async function main(): Promise<void> {
       brokerClient,
       adapter.seedUserSnapshotForMigration,
     ),
+    readEnsureAdmission: (uid) => readCustomerEnsureAdmission(brokerClient, uid),
     stampMounted: (uid, mounted) => brokerClient.setMounted(uid, mounted),
     readUserSnapshotForRuntimeReset: (uid) => brokerClient.userSnapshot(uid),
     acknowledgeRuntimeReset: (uid, operationId, generation) =>

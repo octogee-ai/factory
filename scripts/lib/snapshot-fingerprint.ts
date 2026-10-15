@@ -1,4 +1,5 @@
 import type {
+  FleetBrokerAssignmentRosterEntry,
   FleetBrokerProjectRestore,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
@@ -63,20 +64,31 @@ function fnv1a64Hex(input: string): string {
 // drift-triggered ensure would re-apply the boot-time state while the bookkeeping records
 // the new fingerprint as applied.
 export interface DesiredCustomer {
+  uid: string;
   fingerprint: string;
   lane: MountLane;
+  ensureAllowed: boolean;
 }
 
 export function desiredCustomers(
   users: readonly FleetBrokerUserSnapshot[],
+  assignments: readonly FleetBrokerAssignmentRosterEntry[],
   seedSnapshot?: (snapshot: FleetBrokerUserSnapshot) => void,
 ): Map<string, DesiredCustomer> {
+  const byUid = new Map(assignments.map((entry) => [entry.uid, entry]));
+  const joined = users.map((user) => {
+    const assignment = byUid.get(user.uid);
+    if (!assignment) throw new Error(`missing canonical assignment for ${user.uid}`);
+    return { user, assignment };
+  });
   const map = new Map<string, DesiredCustomer>();
-  for (const user of users) {
+  for (const { user, assignment } of joined) {
     seedSnapshot?.(user);
     map.set(user.slug, {
+      uid: user.uid,
       fingerprint: snapshotConfigFingerprint(user),
       lane: user.status === "complete" ? "move" : "create",
+      ensureAllowed: assignment.state !== "quiescing",
     });
   }
   return map;
