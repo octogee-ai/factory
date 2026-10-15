@@ -142,23 +142,26 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream is operator-selected main
 [`c8260d933e58a84ded513f929391b7bb990665c4`](https://github.com/openclaw/openclaw/commit/c8260d933e58a84ded513f929391b7bb990665c4),
 frozen for the October 15 native-first recut to include merged #158986. Exact
-native source is `fc8389a65e4466795af327998acdb331389c619c`, branch
-`codex/openclaw-main-recut-oct15-c826`, with parents that selected upstream and
-retained predecessor `deee9d25874812b247cfe93423598a53fa8168a3`. Package
+native source is `ffcedc872c5539bfad05dfb0682c9c749fe24150`, branch
+`codex/openclaw-startup-stale-owner-oct15`, with predecessor
+`fc8389a65e4466795af327998acdb331389c619c`. It carries the exact three-file
+production correction from [upstream #173366](https://github.com/openclaw/openclaw/pull/173366)
+at `0ccdb4da7dd01ea1f76a515834fbc84255d5a676`, plus a Gateway-startup/admission
+regression. The selected base does not include that correction. No broader
+upstream advance is included. Package
 `2026.10.3` is a main snapshot, not a released tag. This is the operator-selected
 independent local qualification lane, not a claim that moving main or the full
 upstream CI matrix passed. No external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-8d37b40f.tgz` (generation
-`1792084837147155`) and `openclaw-mattermost-6d57a924.tgz` (generation
-`1792084840584694`). Both were published with generation-match zero. Both exact
-generations were downloaded and compared byte-for-byte and by complete SHA256
-with the qualified archives. The native branch was pushed normally to
-`ceckert/openclaw` and its full head read back; upstream was never pushed.
-All sixteen native push workflows are main-only; the published codex branch
-has zero hosted runs.
+`current.json` selects `openclaw-fork-09af9f0b.tgz` (published generation
+`1792094319840887`) and the unchanged
+`openclaw-mattermost-6d57a924.tgz` (published generation `1792084840584694`).
+Both published generations have been downloaded, byte-compared with the qualified
+archives and verified against their complete SHA256 hashes below.
+The newly packed Mattermost archive is byte-identical to that published input.
+Validation stays local; no hosted OpenClaw/fork/iOS validation is dispatched.
 
-Root SHA256: `8d37b40f5185881d34bb6af54e71e7ae3e197f37bd932abe9f5730a2660b1667`.
+Root SHA256: `09af9f0b47fc9fd75959ae0ce1aef839a61010127169195302fd5f90875230b2`.
 Mattermost SHA256: `6d57a924cf3c78757b97f546dae72e484d3cc639e8f35479041afd1e38d32ea0`.
 
 Shared-state schema **24**, agent schema **27** and protocol **4** are the
@@ -226,6 +229,7 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 | Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
 | Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
 | Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. Retain only reproduced lifetime/settlement gaps while preserving native FIFO, cancellation and database owners; upstream now owns catalog retention/retirement and startup publication retry. Drop each remaining hunk when the selected upstream passes its boundary control. |
+| Startup model-publication handoff | Agent admission can replace initial model preparation and abort whole Gateway startup with a typed publication-superseded error despite a valid successor. The exact upstream #173366 correction registers the successor before cancellation and lets startup join it under its existing deadline. Remove this carry when the selected upstream contains the correction and the real startup/admission regression passes. |
 | Queued Mattermost channel identity | A drained follow-up must keep its originating nativeChannelId instead of inferring the current reply destination. Upstream #163685 remains a separate contribution; remove this carry only once the selected upstream includes it and the queued-turn controls pass. |
 | Channel account removal and deleted-agent discovery | Removing one account must join its startup/cleanup without stopping siblings; Doctor must discover journaled deleted identities and restored files. Keep these scoped owner repairs until native removal and maintenance discovery preserve those cases. |
 | Plugin instance through final delivery | Finalization must use the originating plugin instance and receiver, not a replacement ID lookup; AbortSignal and other data retain identity. Remove when native delivery custody covers that finalization boundary. |
@@ -248,7 +252,21 @@ outbox migration; no version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-The exact `fc8389a6` native build passed with repository-pinned pnpm 12.10.1
+The `ffcedc87` correction fails its real startup/admission regression on frozen
+`fc8389a6` and passes with the exact upstream production delta. The regression
+and 32 adjacent owner/auth controls pass, alongside core and test-graph types,
+focused lint/format, the full native build, strict Voice/Activity SDK checks,
+sequential packers and archive integrity. Fresh matched-package installs in the
+existing qualified arm64 and amd64 images pass registry refresh, Codex/Parallel
+source matching, three native-hook imports, CUA artifact validation and the
+changed publication-owner import. Runtime checks run as UID1000 after networking
+is disconnected. Four npm12 script skips and the optional fs-safe native-binding
+warning remain visible; no allowlist or lifecycle-marker bypass was used.
+No new image, full Gateway boot, desktop or live startup recovery is claimed.
+The existing startup deadline/degraded semantics remain unchanged; the original
+TEST startup failure and timing failures still require corrected-family acceptance.
+
+The predecessor `fc8389a6` native build passed with repository-pinned pnpm 12.10.1
 in 4m26.2s (268.55s wrapper wall time), with matching build-info. Maintained
 sequential packers, strict Voice/Activity SDK gates and native root archive
 integrity passed. Both actual Linux arm64 and amd64 full-plugin installer
