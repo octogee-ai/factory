@@ -20,6 +20,7 @@ async function gateway() {
   const wss = new WebSocketServer({ server });
   const state = {
     scopes: ["operator.read", "operator.write"] as string[] | undefined,
+    connectDelayMs: 0,
     calls: [] as Array<{ uid: string; method: string; params: Record<string, unknown> }>,
     closed: [] as string[],
     profiles: [{ id: "native-alice", emails: ["alice"] }],
@@ -28,6 +29,7 @@ async function gateway() {
     userSocket: null as import("ws").WebSocket | null,
     connects: [] as Array<{ uid: string; device: { id: string }; scopes: string[]; caps?: string[] }>,
   };
+  const connectTimers = new Set<ReturnType<typeof setTimeout>>();
   wss.on("connection", (ws, req) => {
     if (req.headers["x-octogee-user"] === "alice") state.userSocket = ws;
     ws.on("close", () => state.closed.push(String(req.headers["x-octogee-user"])));
@@ -36,7 +38,11 @@ async function gateway() {
       const frame = JSON.parse(raw.toString());
       if (frame.method === "connect") {
         state.connects.push({ uid: String(req.headers["x-octogee-user"]), device: frame.params.device, scopes: frame.params.scopes, ...(frame.params.caps ? { caps: frame.params.caps } : {}) });
-        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok", auth: { scopes: state.scopes } } }));
+        const reply = () => ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok", auth: { scopes: state.scopes } } }));
+        if (state.connectDelayMs > 0) {
+          const timer = setTimeout(() => { connectTimers.delete(timer); reply(); }, state.connectDelayMs);
+          connectTimers.add(timer);
+        } else reply();
       } else {
         state.calls.push({ uid: String(req.headers["x-octogee-user"]), method: frame.method, params: frame.params });
         if (frame.method === "users.list") {
@@ -55,6 +61,7 @@ async function gateway() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   cleanup.push(() => new Promise(resolve => {
+    for (const timer of connectTimers) clearTimeout(timer);
     for (const client of wss.clients) client.terminate();
     wss.close(() => server.close(() => resolve()));
   }));
@@ -69,6 +76,16 @@ async function gateway() {
 }
 
 describe("native user RPC identity", () => {
+  it("waits for native profile acquisition beyond five seconds before accepting effective scopes", async () => {
+    const { state, env } = await gateway();
+    state.connectDelayMs = 6_000;
+    state.scopes = [...OPENCLAW_FULL_OPERATOR_SCOPES];
+    const native = await openNativeUserClient("alice", "b-alice", env);
+    expect(native.scopes.has("operator.admin")).toBe(true);
+    expect(state.connects).toHaveLength(1);
+    native.close();
+  });
+
   it("keeps one device per user while native role changes update effective scopes", async () => {
     const { state, env } = await gateway();
     const first = await openNativeUserClient("alice", "b-alice", env);

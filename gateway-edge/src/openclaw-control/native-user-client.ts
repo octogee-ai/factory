@@ -53,7 +53,7 @@ export async function openNativeUserSocket(uid: string, gatewayId: string, env: 
   const headers = (user: string) => ({ ...openClawProxyIdentityHeaders({ user, clientAddress: podClientAddress() }), origin: openClawProxyOrigin(env) });
   assertWorkspaceIdentityReady(env);
   let scopes: string[] = [];
-  const ws = await openProxyIdentitySocket({ url, headers: headers(uid), timeoutMs: 5000,
+  const ws = await openProxyIdentitySocket({ url, headers: headers(uid), timeoutMs: 30_000,
     identity: deriveDeviceIdentity({ secret, subject: openClawDeviceSubject(gatewayId, uid) }),
     onScopes: value => { scopes = value; },
     caps: options.caps,
