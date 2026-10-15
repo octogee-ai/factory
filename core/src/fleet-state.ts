@@ -9,6 +9,7 @@ import {
   GLM_OPERATIONS_COLLECTION,
   type CustomerMigrationV2GatewayRootFence,
   resolveUserGatewayControlState,
+  readSchedulerMigrationIdentity,
 } from "@octogee/shared/types/glm";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
@@ -167,11 +168,10 @@ async function workspaceMigrationRecovery(
     const marker = readWorkspaceMigrationMarker(openclaw);
     const handoff = recordOrEmpty(operation.schedulerHandoff);
     const recovery = recordOrEmpty(handoff.sourceRecovery);
-    const handoffAttempt = typeof handoff.migrationId === "string" ? Number(handoff.migrationId.split(":").at(-1)) : NaN;
+    const handoffIdentity = readSchedulerMigrationIdentity(params.operationId, handoff.migrationId);
     const recoveryIntentMatches = input.recoverSourceOnly !== true || [
       handoff.uid === params.uid, handoff.fromGatewayId === params.sourceGatewayId, handoff.toGatewayId === input.toGatewayId,
-      Number.isSafeInteger(handoffAttempt), handoffAttempt > 0,
-      handoff.migrationId === `mig-${params.operationId}:scheduler:${handoffAttempt}`, recovery.migrationId === handoff.migrationId,
+      handoffIdentity !== null, recovery.migrationId === handoff.migrationId,
       recovery.sourceEpoch === params.sourceEpoch, Array.isArray(recovery.steps),
     ].every(Boolean);
     const exact = [

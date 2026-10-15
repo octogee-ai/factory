@@ -3253,7 +3253,7 @@ function sourceOnlyRollbackCompleted(data: Record<string, unknown>, request: Enq
   const steps = Array.isArray(data.steps) ? data.steps : [];
   const step = record(steps[0]);
   return isAutomaticRolledBackPlacement(data, request) && record(data.input)?.recoverSourceOnly === true &&
-    sourceRecoveryForwardRetryable(data as unknown as Parameters<typeof sourceRecoveryForwardRetryable>[0]) &&
+    sourceRecoveryForwardRetryable({ ...data, id: request.operationId } as unknown as Parameters<typeof sourceRecoveryForwardRetryable>[0]) &&
     data.cutoverCommittedAt === undefined && data.cancellationRequestedAt === undefined && steps.length === 1 &&
     step?.name === "recover-source" && step.status === "done";
 }

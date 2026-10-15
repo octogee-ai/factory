@@ -20,7 +20,7 @@ async function synchronizeConnectedChannelMembership(input: {
   reauthorize(): Promise<void>;
 }): Promise<void> {
   const service = await openProxyIdentitySocket({ url: input.url, headers: input.headers, timeoutMs: 5000 });
-  const rpc = attachUpstreamRpcClient(service, { timeoutMs: 5000 });
+  const rpc = attachUpstreamRpcClient(service, { timeoutMs: 30_000 });
   try {
     const profiles = await rpc.call<{ profiles: OpenClawProfileListItem[] }>("users.list", {});
     if (!profiles.ok) throw new Error(`users.list failed: ${profiles.reason}`);

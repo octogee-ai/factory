@@ -503,8 +503,12 @@ function v2PhaseTransportIds(state: CustomerMigrationV2State): string[] {
 }
 
 function requiredClaimStartedAt(op: Operation): number {
-  if (typeof op.startedAt !== 'number' || !Number.isSafeInteger(op.startedAt) || op.startedAt <= 0) throw new Error('retained source requires a current claim timestamp');
+  if (typeof op.startedAt !== 'number' || !Number.isSafeInteger(op.startedAt) || op.startedAt <= 0) throw new Error('migration requires a current claim timestamp');
   return op.startedAt;
+}
+
+function claimSchedulerMigrationId(migrationId: string, op: Operation): string {
+  return `${migrationId}:scheduler:${(op.attempts ?? 0) + 1}:claim:${requiredClaimStartedAt(op)}`;
 }
 
 async function buildV2DriverDeps(
@@ -705,7 +709,6 @@ interface FreshProvision {
   ctx: OperationContext;
   op: Operation;
   operationId: string;
-  attempt: number;
   targets: MigrationTargets;
   uid: string;
   slug: string;
@@ -936,11 +939,11 @@ async function persistNativeReturnHandoff(input: {
   uid: string;
   slug: string;
   migrationId: string;
-  attempt: number;
+  op: Operation;
 }): Promise<SchedulerHandoffState> {
   if (!input.ctx.persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
   const handoff: SchedulerHandoffState = {
-    migrationId: `${input.migrationId}:scheduler:${input.attempt}`,
+    migrationId: claimSchedulerMigrationId(input.migrationId, input.op),
     fromGatewayId: input.targets.fromGatewayId,
     toGatewayId: input.targets.toGatewayId,
     uid: input.uid,
@@ -1305,7 +1308,6 @@ async function executeProvisionFresh(input: MigrationExecutionInput & {
     ctx: input.ctx,
     op: input.op,
     operationId: input.op.id,
-    attempt: (input.op.attempts ?? 0) + 1,
     targets: input.targets,
     uid: input.uid,
     slug: input.slug,
@@ -1665,7 +1667,7 @@ async function resumePreviousSchedulerAttempt(
   if (
     !previous ||
     op.schedulerHandoffReleased === true ||
-    previous.migrationId === `${deps.genMigrationId(op.id)}:scheduler:${(op.attempts ?? 0) + 1}`
+    previous.migrationId === claimSchedulerMigrationId(deps.genMigrationId(op.id), op)
   ) return false;
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
@@ -1956,7 +1958,7 @@ async function executeMigration(
       await progress.report(step.name, step.status);
     },
   };
-  const schedulerMigrationId = `${prepared.migrationId}:scheduler:${attempt}`;
+  const schedulerMigrationId = claimSchedulerMigrationId(prepared.migrationId, op);
   const persistSchedulerHandoff = ctx.persistSchedulerHandoff;
   if (!persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
   const heldTarget = prepared.targets.toGatewayClass === "builder";

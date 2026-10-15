@@ -1,6 +1,6 @@
 import { GATEWAYS_COLLECTION, } from "@octogee/shared/types/fleet-controller";
 import { isDeepStrictEqual } from "node:util";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, resolveUserGatewayControlState, } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, resolveUserGatewayControlState, readSchedulerMigrationIdentity, } from "@octogee/shared/types/glm";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, customerRestoreFencePresent, customerRuntimeMutationFenced, hasFreshReadyKubernetesObservation, isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, } from "@octogee/shared/types/gateway-releases";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
@@ -95,11 +95,10 @@ async function workspaceMigrationRecovery(deps, params, complete) {
         const marker = readWorkspaceMigrationMarker(openclaw);
         const handoff = recordOrEmpty(operation.schedulerHandoff);
         const recovery = recordOrEmpty(handoff.sourceRecovery);
-        const handoffAttempt = typeof handoff.migrationId === "string" ? Number(handoff.migrationId.split(":").at(-1)) : NaN;
+        const handoffIdentity = readSchedulerMigrationIdentity(params.operationId, handoff.migrationId);
         const recoveryIntentMatches = input.recoverSourceOnly !== true || [
             handoff.uid === params.uid, handoff.fromGatewayId === params.sourceGatewayId, handoff.toGatewayId === input.toGatewayId,
-            Number.isSafeInteger(handoffAttempt), handoffAttempt > 0,
-            handoff.migrationId === `mig-${params.operationId}:scheduler:${handoffAttempt}`, recovery.migrationId === handoff.migrationId,
+            handoffIdentity !== null, recovery.migrationId === handoff.migrationId,
             recovery.sourceEpoch === params.sourceEpoch, Array.isArray(recovery.steps),
         ].every(Boolean);
         const exact = [

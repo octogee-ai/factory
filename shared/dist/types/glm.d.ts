@@ -395,6 +395,10 @@ export interface OperationStep {
     error?: string;
     detail?: string;
 }
+export declare function readSchedulerMigrationIdentity(operationId: unknown, migrationId: unknown): {
+    attempt: number;
+    claimStartedAt: number;
+} | null;
 export interface SchedulerHandoffState {
     migrationId: string;
     fromGatewayId: string;

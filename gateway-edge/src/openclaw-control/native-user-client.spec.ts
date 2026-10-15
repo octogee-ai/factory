@@ -21,6 +21,7 @@ async function gateway() {
   const state = {
     scopes: ["operator.read", "operator.write"] as string[] | undefined,
     connectDelayMs: 0,
+    syncDelayMs: 0,
     calls: [] as Array<{ uid: string; method: string; params: Record<string, unknown> }>,
     closed: [] as string[],
     profiles: [{ id: "native-alice", emails: ["alice"] }],
@@ -29,7 +30,7 @@ async function gateway() {
     userSocket: null as import("ws").WebSocket | null,
     connects: [] as Array<{ uid: string; device: { id: string }; scopes: string[]; caps?: string[] }>,
   };
-  const connectTimers = new Set<ReturnType<typeof setTimeout>>();
+  const responseTimers = new Set<ReturnType<typeof setTimeout>>();
   wss.on("connection", (ws, req) => {
     if (req.headers["x-octogee-user"] === "alice") state.userSocket = ws;
     ws.on("close", () => state.closed.push(String(req.headers["x-octogee-user"])));
@@ -40,8 +41,8 @@ async function gateway() {
         state.connects.push({ uid: String(req.headers["x-octogee-user"]), device: frame.params.device, scopes: frame.params.scopes, ...(frame.params.caps ? { caps: frame.params.caps } : {}) });
         const reply = () => ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { type: "hello-ok", auth: { scopes: state.scopes } } }));
         if (state.connectDelayMs > 0) {
-          const timer = setTimeout(() => { connectTimers.delete(timer); reply(); }, state.connectDelayMs);
-          connectTimers.add(timer);
+          const timer = setTimeout(() => { responseTimers.delete(timer); reply(); }, state.connectDelayMs);
+          responseTimers.add(timer);
         } else reply();
       } else {
         state.calls.push({ uid: String(req.headers["x-octogee-user"]), method: frame.method, params: frame.params });
@@ -52,7 +53,11 @@ async function gateway() {
             state.userSocket.close();
           } else reply();
         } else if (frame.method === "sessions.channel.sync" && !state.rejectSync) {
-          ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { changed: true } }));
+          const reply = () => ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { changed: true } }));
+          if (state.syncDelayMs > 0) {
+            const timer = setTimeout(() => { responseTimers.delete(timer); reply(); }, state.syncDelayMs);
+            responseTimers.add(timer);
+          } else reply();
         } else {
           ws.send(JSON.stringify({ type: "res", id: frame.id, ok: false, error: { message: "native role denied" } }));
         }
@@ -61,7 +66,7 @@ async function gateway() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   cleanup.push(() => new Promise(resolve => {
-    for (const timer of connectTimers) clearTimeout(timer);
+    for (const timer of responseTimers) clearTimeout(timer);
     for (const client of wss.clients) client.terminate();
     wss.close(() => server.close(() => resolve()));
   }));
@@ -114,6 +119,18 @@ describe("native user RPC identity", () => {
         agentId: "octogee-alice-coach", channel: "mattermost", peerKind: "group", peerId: "a".repeat(26), profileId: "native-alice", member: true,
       } },
     ]);
+    await vi.waitFor(() => expect(state.closed).toContain(OPENCLAW_EDGE_SERVICE_IDENTITY));
+    expect(native.ws.readyState).toBe(1);
+    native.ws.close();
+  });
+
+  it("accepts cold channel membership synchronization within the native preparation budget without retrying", async () => {
+    const { state, env } = await gateway();
+    state.syncDelayMs = 6_000;
+    const channelSessionKey = `agent:octogee-alice-coach:mattermost:group:${"a".repeat(26)}`;
+    const native = await openNativeUserSocket("alice", "b-alice", env, { channelSessionKey, threadRootPostId: root });
+    expect(state.calls.map(call => call.method)).toEqual(["users.list", "sessions.channel.sync"]);
+    expect(state.connects.map(connect => connect.uid)).toEqual(["alice", OPENCLAW_EDGE_SERVICE_IDENTITY]);
     await vi.waitFor(() => expect(state.closed).toContain(OPENCLAW_EDGE_SERVICE_IDENTITY));
     expect(native.ws.readyState).toBe(1);
     native.ws.close();

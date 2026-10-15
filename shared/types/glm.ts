@@ -928,6 +928,19 @@ export interface OperationStep {
   detail?: string;
 }
 
+export function readSchedulerMigrationIdentity(operationId: unknown, migrationId: unknown): { attempt: number; claimStartedAt: number } | null {
+  if (typeof operationId !== "string" || !operationId || typeof migrationId !== "string") return null;
+  const prefix = `mig-${operationId}:scheduler:`;
+  if (!migrationId.startsWith(prefix)) return null;
+  const parts = migrationId.slice(prefix.length).split(":");
+  if (parts.length !== 3 || parts[1] !== "claim") return null;
+  const attempt = Number(parts[0]);
+  if (!Number.isSafeInteger(attempt) || attempt < 1 || String(attempt) !== parts[0]) return null;
+  const claimStartedAt = Number(parts[2]);
+  if (!Number.isSafeInteger(claimStartedAt) || claimStartedAt < 1 || String(claimStartedAt) !== parts[2]) return null;
+  return { attempt, claimStartedAt };
+}
+
 export interface SchedulerHandoffState {
   migrationId: string;
   fromGatewayId: string;

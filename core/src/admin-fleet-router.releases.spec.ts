@@ -1555,7 +1555,7 @@ describe('POST /gateways/:id/recover-source', () => {
         { name: 'target-scheduler-ready', status: 'done' }, { name: 'wait-for-active-work', status: 'failed', error: row.error },
         { name: 'rollback:unmount-target', status: 'done' }];
       row.rolledBack = true; row.schedulerHandoffReleased = true; row.schedulerHandoffReleasedAt = 450;
-      row.schedulerHandoff = { migrationId: `mig-export-${index}:scheduler:2`, fromGatewayId: 'shared-0', toGatewayId: 'shared-1', uid, slug };
+      row.schedulerHandoff = { migrationId: `mig-export-${index}:scheduler:2:claim:${row.startedAt}`, fromGatewayId: 'shared-0', toGatewayId: 'shared-1', uid, slug };
       row.attemptHistory = [{ attempt: 1, startedAt: 100, completedAt: 200, steps: [
         { name: 'quiesce-source', status: 'failed' }, ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))] }];
       row.attemptHistory.push({ attempt: 2, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) });
@@ -1564,10 +1564,20 @@ describe('POST /gateways/:id/recover-source', () => {
     }
     return seed;
   }
-  it('captures terminal rolled-back management failures and their exact retained markers without changing customer state', async () => {
-    const seed = managementSeed(), before = structuredClone(seed), manifest = immutableBuild();
+  it.each([false, true])('captures terminal rolled-back management failures with claimed custody=%s without changing customer state', async claimed => {
+    const seed = managementSeed();
+    if (!claimed) for (const id of ['export-0', 'export-1']) {
+      const row = seed[`glmOperations/${id}`] as any;
+      row.schedulerHandoff.migrationId = `mig-${id}:scheduler:${row.attempts}`;
+    }
+    const before = structuredClone(seed), manifest = immutableBuild();
     const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
+    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(claimed ? 202 : 409);
+    if (!claimed) {
+      expect(opsIn(store, 'restart-gateway')).toHaveLength(0);
+      for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
+      return;
+    }
     const input = opsIn(store, 'restart-gateway')[0].input.sourceRecovery;
     expect(input.managementRecovery).toMatchObject({ podUid: 'same-pod', podName: 'same-name' });
     expect(input.managementRecovery.failures[0].receipt).toEqual(before['glmOperations/export-0']);
@@ -1623,7 +1633,7 @@ describe('POST /gateways/:id/recover-source', () => {
     await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: immutableBuild().sourceSha }).expect(409);
     expect(opsIn(h.store, 'restart-gateway')).toHaveLength(0);
   });
-  it.each(['unreleased', 'history-release', 'missing-history', 'duplicate-history', 'zero-history', 'marker', 'cutover', 'running', 'receipt', 'unready', 'roster'])('refuses management recovery with %s custody', async change => {
+  it.each(['unreleased', 'history-release', 'missing-history', 'duplicate-history', 'zero-history', 'marker', 'cutover', 'running', 'receipt', 'unready', 'roster', 'handoff-operation', 'handoff-attempt', 'handoff-claim'])('refuses management recovery with %s custody', async change => {
     const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
     if (change === 'unreleased') row.schedulerHandoffReleased = false;
     if (change === 'history-release') row.attemptHistory[0].steps.pop();
@@ -1634,6 +1644,9 @@ describe('POST /gateways/:id/recover-source', () => {
     if (change === 'cutover') row.cutoverCommittedAt = 350;
     if (change === 'running') row.status = 'running';
     if (change === 'receipt') row.restoreAttempt = {};
+    if (change === 'handoff-operation') row.schedulerHandoff.migrationId = `mig-foreign:scheduler:2:claim:${row.startedAt}`;
+    if (change === 'handoff-attempt') row.schedulerHandoff.migrationId = `mig-export-0:scheduler:1:claim:${row.startedAt}`;
+    if (change === 'handoff-claim') row.schedulerHandoff.migrationId = `mig-export-0:scheduler:2:claim:${row.startedAt + 1}`;
     if (change === 'unready') (seed['glmGateways/shared-0'].kubernetes as any).readyPods = 0;
     if (change === 'roster') (seed['glmGateways/shared-0'].heartbeat as any).mountedCustomers.pop();
     const manifest = immutableBuild(), h = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });

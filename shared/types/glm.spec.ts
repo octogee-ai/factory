@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   GATEWAY_CLASSES,
+  readSchedulerMigrationIdentity,
   defaultBuilderGatewayAccess,
   deriveGatewayIdentity,
   BUILDER_GATEWAY_LOCKED_ACCESS,
@@ -435,5 +436,17 @@ describe("computer recovery checkpoint validation", () => {
     expect(isGatewayVmHomeCheckpoint({ ...saved, coverage: "unknown" })).toBe(false);
     expect(isGatewayVmHomeCheckpoint({ ...saved, writerProtocol: 1 })).toBe(false);
     expect(isDisposableHomeCheckpoint({ ...saved, instanceId: null })).toBe(false);
+  });
+});
+
+
+describe("scheduler migration identity", () => {
+  it("requires claim-qualified scheduler custody", () => {
+    expect(readSchedulerMigrationIdentity("op-1", "mig-op-1:scheduler:2")).toBeNull();
+    expect(readSchedulerMigrationIdentity("op-1", "mig-op-1:scheduler:2:claim:1000")).toEqual({ attempt: 2, claimStartedAt: 1000 });
+  });
+  it.each([null, "mig-other:scheduler:2:claim:1000", "mig-op-1:scheduler:02", "mig-op-1:scheduler:0", "mig-op-1:scheduler:2:claim:0",
+    "mig-op-1:scheduler:2:claim:01000", "mig-op-1:scheduler:2:claim:1000:extra", "mig-op-1:scheduler:2:claim:9007199254740992"])("rejects malformed or foreign custody %s", id => {
+    expect(readSchedulerMigrationIdentity("op-1", id)).toBeNull();
   });
 });

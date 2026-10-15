@@ -1,6 +1,6 @@
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
-import { GLM_OPERATIONS_COLLECTION, type Operation, type SchedulerHandoffState } from "@octogee/shared/types/glm";
+import { GLM_OPERATIONS_COLLECTION, readSchedulerMigrationIdentity, type Operation, type SchedulerHandoffState } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 import { builderActivationRecoveryTargetMatches } from "@octogee/core/fleet-state";
@@ -8,14 +8,16 @@ import { classifyOperationFailure, retryBackoffMs } from "./operation-retry.js";
 
 function handoffAttemptEvidence(operation: Partial<Operation>) {
   const handoff = operation.schedulerHandoff;
+  const identity = readSchedulerMigrationIdentity(operation.id, handoff?.migrationId);
+  if (!identity) return undefined;
   if (handoff?.sourceRecovery) {
     return handoff.sourceRecovery.migrationId === handoff.migrationId ? handoff.sourceRecovery : undefined;
   }
-  const attempt = Number(operation.schedulerHandoff?.migrationId.split(":").at(-1));
-  if (!Number.isSafeInteger(attempt) || attempt < 1) return undefined;
-  const prior = operation.attemptHistory?.slice().reverse().find((entry) => entry.attempt === attempt);
+  const { attempt, claimStartedAt } = identity;
+  const claimMatches = (startedAt: number | null | undefined) => claimStartedAt === startedAt;
+  const prior = operation.attemptHistory?.slice().reverse().find((entry) => entry.attempt === attempt && claimMatches(entry.startedAt));
   const currentAttempt = operation.status === "running" ? (operation.attempts ?? 0) + 1 : operation.attempts;
-  return prior ?? (currentAttempt === attempt ? { steps: operation.steps } : undefined);
+  return prior ?? (currentAttempt === attempt && claimMatches(operation.startedAt) ? { steps: operation.steps } : undefined);
 }
 
 const SOURCE_HOLDING_STEP_STATUSES: ReadonlySet<string> = new Set(["running", "done", "failed"]);
@@ -91,7 +93,7 @@ function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt
   const input = operation.input;
   const handoff = operation.schedulerHandoff;
   if (!handoff || typeof input.fromGatewayId !== "string" || typeof input.toGatewayId !== "string") return false;
-  const attempt = Number(handoff.migrationId.split(":").at(-1));
+  const identity = readSchedulerMigrationIdentity(operation.id, handoff.migrationId);
   return [
     operation.kind === "migrate-customer", operation.customerMigrationV2 === undefined,
     operation.cutoverCommittedAt === undefined, operation.cancellationRequestedAt === undefined,
@@ -100,8 +102,7 @@ function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt
     typeof input.uid === "string", input.fromGatewayId.startsWith("shared-"), input.fromGatewayId !== input.toGatewayId,
     handoff.uid === input.uid, handoff.fromGatewayId === input.fromGatewayId, handoff.toGatewayId === input.toGatewayId,
     input.toGatewayId.startsWith("shared-") && handoff.stageAfterCutover !== true || builderActivationSourceRecoveryPending(operation),
-    Number.isSafeInteger(attempt), attempt > 0,
-    handoff.migrationId === `mig-${operation.id}:scheduler:${attempt}`,
+    identity !== null,
   ].every(Boolean);
 }
 
@@ -121,7 +122,7 @@ function ownsLegacySource(operation: Operation, user: FirebaseFirestore.Document
 function recoveryAttemptHistory(operation: Operation, now: number): { attempt: number; history: NonNullable<Operation["attemptHistory"]> } {
   const attempt = operation.status === "running"
     ? (operation.attempts ?? 0) + 1
-    : Math.max(operation.attempts ?? 0, Number(operation.schedulerHandoff!.migrationId.split(":").at(-1)));
+    : Math.max(operation.attempts ?? 0, readSchedulerMigrationIdentity(operation.id, operation.schedulerHandoff!.migrationId)!.attempt);
   const currentAttempt = operation.status === "running" ? (operation.attempts ?? 0) + 1 : operation.attempts;
   const recorded = currentAttempt === attempt && !operation.attemptHistory?.some((entry) => entry.attempt === attempt) ? [{
     attempt, startedAt: operation.startedAt ?? now, completedAt: now,
@@ -136,8 +137,8 @@ function recoveryIntent(operation: Operation, sourceEpoch: number): NonNullable<
   const prior = handoff.sourceRecovery;
   if (prior) return prior.migrationId === handoff.migrationId && prior.sourceEpoch === sourceEpoch && Array.isArray(prior.steps) ? prior : null;
   const steps = handoffAttemptEvidence(operation)?.steps;
-  if (operation.input.recoverSourceOnly === true && !steps) return null;
-  return { migrationId: handoff.migrationId, sourceEpoch, steps: steps ?? operation.steps };
+  if (!steps) return null;
+  return { migrationId: handoff.migrationId, sourceEpoch, steps };
 }
 
 function recoveryRearmPatch(operation: Operation, intent: NonNullable<SchedulerHandoffState["sourceRecovery"]>, now: number) {

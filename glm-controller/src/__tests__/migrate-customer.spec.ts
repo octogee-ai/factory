@@ -10,7 +10,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
-import { classifyOperationFailure } from "../operation-retry";
+import { buildOperationCompletionUpdate, classifyOperationFailure } from "../operation-retry";
 import { PendingCustomerRestoreError } from "../operation-context";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
@@ -59,10 +59,10 @@ function mkOp(overrides: Partial<Operation>): Operation {
   return {
     id: "op-1",
     kind: "migrate-customer",
-    status: "pending",
+    status: "running",
     createdBy: "admin@octogee.com",
     createdAt: 1_000,
-    startedAt: null,
+    startedAt: 4_000,
     completedAt: null,
     input: { uid: "uid-alice", toGatewayId: "gw-green" },
     steps: [],
@@ -269,7 +269,7 @@ describe("abandoned Shared migration recovery", () => {
     const id = `builder-activate-${target}`;
     const request = mkOp({ id, status: "running", startedAt: 4_000, attempts: 1,
       input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
-      schedulerHandoff: { migrationId: `mig-${id}:scheduler:1`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
+      schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
     });
     request.schedulerHandoff!.sourceRecovery = { migrationId: request.schedulerHandoff!.migrationId, sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" }] };
     if (scenario === "resume-failure") h.client.resume = vi.fn().mockRejectedValue(new Error("native resume refused"));
@@ -297,7 +297,7 @@ describe("abandoned Shared migration recovery", () => {
       if (scenario === "authority-failure" || scenario === "ownership-changed") expect(h.client.resume).not.toHaveBeenCalled();
     }
   });
-  const previous = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };
+  const previous = { migrationId: "mig-op-1:scheduler:1:claim:1000", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };
   function recovery() {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     return h;
@@ -310,7 +310,7 @@ describe("abandoned Shared migration recovery", () => {
     const steps: OperationStep[] = [{ name: "keys-sync-state", status: "done" }, { name: "pre-sync-state", status: "failed", error: "agent database files are still held open: /state/agent.sqlite" }, { name: "rollback:unmount-target", status: "failed" }];
     request.schedulerHandoff = { ...previous, sourceRecovery: { migrationId: previous.migrationId, sourceEpoch: 4, steps } };
     if (scenario === "missing") delete request.schedulerHandoff.sourceRecovery;
-    if (scenario === "foreign-id") request.schedulerHandoff.sourceRecovery!.migrationId = "mig-other:scheduler:1";
+    if (scenario === "foreign-id") request.schedulerHandoff.sourceRecovery!.migrationId = "mig-other:scheduler:1:claim:1000";
     if (scenario === "changed-epoch") request.schedulerHandoff.sourceRecovery!.sourceEpoch = 3;
     request.attemptHistory = Array.from({ length: 20 }, (_, index) => ({ attempt: 4 + index, startedAt: 1_000, completedAt: 2_000, error: "cleanup failed", classification: "terminal", steps: [] }));
     vi.mocked(h.client.resume).mockRejectedValue(new Error("foreign voice hold"));
@@ -391,7 +391,7 @@ describe("abandoned Shared migration recovery", () => {
     });
     expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
     expect(h.client.abortImport).toHaveBeenCalledTimes(3);
-    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith(expect.objectContaining({ migrationId: "mig-op-1:scheduler:2" }));
+    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith(expect.objectContaining({ migrationId: "mig-op-1:scheduler:2:claim:4000" }));
   });
   it.each(["authority", "abort", "unmount", "resume", "publish"])("does not start a fresh transfer after %s recovery failure", async (step) => {
     const h = recovery();
@@ -1166,7 +1166,7 @@ describe("native computer return", () => {
   });
 
   describe("partial scheduler handoff", () => {
-    const handoffId = "mig-op-1:scheduler:1";
+    const handoffId = "mig-op-1:scheduler:1:claim:4000";
     const schedulerCalls = (h: ReturnType<typeof mkDeps>) =>
       vi.mocked(h.client.scheduler).mock.calls.map(([request]) => [request.gatewayId, request.phase, request.retainNonportable]);
 
@@ -1309,7 +1309,7 @@ describe("native computer return", () => {
       const native = nativeReturn(h);
       native.checkpointRequested = true;
       const previous = { migrationId: handoffId, fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
-      const retried = "mig-op-1:scheduler:2";
+      const retried = "mig-op-1:scheduler:2:claim:6000";
       const order: string[] = [];
       vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
         order.push(`quiesce:${request.gatewayId}:${request.schedulerMigrationId}:${request.retainNonportable}`);
@@ -1321,7 +1321,7 @@ describe("native computer return", () => {
       });
       vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
 
-      expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1, startedAt: 6_000 }), h.ctx)).toMatchObject({ success: true });
       expect(order).toEqual([
         `gw-green:abort:${handoffId}`, `gw-blue:resume:${handoffId}`,
         "quiesce:gw-blue:undefined:undefined",
@@ -1412,7 +1412,7 @@ describe("migrate-customer — Builder computer activation", () => {
 describe("migrate-customer — Builder activation onto a held computer", () => {
   const HELD = '/scheduler/gw-green: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
   const deferred = {
-    migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
+    migrationId: "mig-op-1:scheduler:1:claim:4000", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
     stageAfterCutover: true as const,
   };
 
@@ -1454,7 +1454,7 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
     expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledTimes(1);
     expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({
-      migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
+      migrationId: "mig-op-1:scheduler:1:claim:4000", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
     });
   });
 
@@ -1511,7 +1511,7 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
   it("resumes only the source when a retry follows a pre-cutover failure: the held computer never received anything", async () => {
     const h = heldActivation();
 
-    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1, startedAt: 6_000 }), h.ctx)).toMatchObject({ success: true });
 
     expect(h.order[0]).toBe(`gw-blue:resume:${deferred.migrationId}`);
     expect(h.order.filter((call) => call.includes(`:${deferred.migrationId}`))).toEqual([`gw-blue:resume:${deferred.migrationId}`]);
@@ -1519,13 +1519,13 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
 
   it("retries, never fails terminally, when a staged attempt's target cannot yet abort it", async () => {
     const h = mkDeps();
-    const previous = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
+    const previous = { migrationId: "mig-op-1:scheduler:1:claim:4000", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
     vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase }) => {
       if (gatewayId === "gw-green" && phase === "abort") throw new Error(HELD);
       throw new Error(`unexpected ${gatewayId}:${phase}`);
     });
 
-    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1 }), h.ctx);
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: previous, attempts: 1, startedAt: 6_000 }), h.ctx);
 
     expect(result.success).toBe(false);
     expect(classifyOperationFailure(result.error)).toBe("transient");
@@ -2104,7 +2104,7 @@ describe("scheduler handoff recovery", () => {
     if (released === true) {
       expect(result).toMatchObject({ success: true });
       expect(h.deps.resolveGatewayUrl).not.toHaveBeenCalledWith(previous.toGatewayId);
-      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ ...schedulerHandoff, migrationId: "mig-op-1:scheduler:3" });
+      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ ...schedulerHandoff, migrationId: "mig-op-1:scheduler:3:claim:4000" });
       expect(h.deps.commitCutover).toHaveBeenCalledWith(expect.objectContaining({ toGatewayId: "gw-green" }));
     } else {
       expect(result).toMatchObject({ success: false, error: `gateway not registered in glmGateways: ${previous.toGatewayId}` });
@@ -2114,10 +2114,19 @@ describe("scheduler handoff recovery", () => {
     }
   });
 
+  it("requires a current operation claim before creating scheduler custody", async () => {
+    const h = mkDeps();
+    await expect(createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: null }), h.ctx))
+      .rejects.toThrow("migration requires a current claim timestamp");
+    expect(h.ctx.persistSchedulerHandoff).not.toHaveBeenCalled();
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.scheduler).not.toHaveBeenCalled();
+  });
+
   it("persists its scheduler attempt before contacting the scheduler", async () => {
     const h = mkDeps();
     vi.mocked(h.client.scheduler).mockImplementation(async ({ migrationId, phase }) => {
-      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith(schedulerHandoff);
+      expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ ...schedulerHandoff, migrationId: "mig-op-1:scheduler:1:claim:4000" });
       return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: {} };
     });
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
@@ -2159,9 +2168,9 @@ describe("scheduler handoff recovery", () => {
     const h = mkDeps();
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
     expect(vi.mocked(h.client.scheduler).mock.calls.slice(0, 3).map(([request]) => [request.gatewayId, request.phase, request.migrationId])).toEqual([
-      ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "export", "mig-op-1:scheduler:2"],
+      ["gw-green", "abort", schedulerHandoff.migrationId], ["gw-blue", "resume", schedulerHandoff.migrationId], ["gw-blue", "export", "mig-op-1:scheduler:2:claim:4000"],
     ]);
-    expect(vi.mocked(h.client.quiesce).mock.calls[1][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "mig-op-1:scheduler:2" });
+    expect(vi.mocked(h.client.quiesce).mock.calls[1][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "mig-op-1:scheduler:2:claim:4000" });
   });
 
   it("finishes handoff cleanup for a migration whose serial lock was already released", async () => {
@@ -2274,6 +2283,42 @@ describe("retained source cancellation", () => {
 });
 
 describe("waiting for active Builder work", () => {
+  it("uses fresh scheduler custody after an idle deferral without consuming a failure attempt", async () => {
+    const h = mkDeps();
+    const resumed = new Set<string>();
+    const held: string[] = [];
+    let defer = true;
+    const scheduler = h.client.scheduler;
+    h.client.scheduler = vi.fn(async request => {
+      if (request.phase === "resume") resumed.add(request.migrationId);
+      return scheduler(request);
+    });
+    h.client.quiesce = vi.fn(async request => {
+      if (request.schedulerHandoff) {
+        const id = request.schedulerMigrationId!;
+        if (resumed.has(id)) throw new Error("Cron migration already resumed");
+        held.push(id);
+        if (defer) { defer = false; throw new MigrationDrainPendingError("scheduler still draining"); }
+      }
+      return { migrationId: request.migrationId, slug: request.slug, drained: true, runningCount: 0 };
+    });
+    const handler = createMigrateCustomerHandler(h.deps);
+    const first = mkOp({ status: "running", startedAt: 4_000, attempts: 1 });
+    const waiting = await handler(first, h.ctx);
+    expect(waiting).toMatchObject({ waitingForBuilderIdle: true });
+    expect(resumed.has(held[0])).toBe(true);
+    const update = buildOperationCompletionUpdate({ op: first, result: waiting, steps: h.steps, now: 5_000 });
+    expect(update).not.toHaveProperty("attempts");
+    const previous = vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)![0];
+    const next = { ...first, ...update, status: "running", startedAt: 6_000,
+      schedulerHandoff: previous, schedulerHandoffReleased: false } as Operation;
+    const result = await handler(next, h.ctx);
+    expect(result.error).toBeUndefined();
+    expect(result).toMatchObject({ success: true });
+    expect(held).toHaveLength(2);
+    expect(held[1]).not.toBe(held[0]);
+  });
+
   it.each([false, true])("keeps prepared targets and resumes source ingress without failing migration (durable=%s)", async (durable) => {
     const h = mkDeps({ durable });
     vi.mocked(h.client.quiesce).mockRejectedValue(new MigrationDrainPendingError("coach still active"));

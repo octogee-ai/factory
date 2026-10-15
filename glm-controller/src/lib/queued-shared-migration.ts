@@ -1,3 +1,4 @@
+import { readSchedulerMigrationIdentity } from "@octogee/shared/types/glm";
 import type { DocumentData, Firestore, Transaction } from 'firebase-admin/firestore';
 import { customerRuntimeMutationFenced } from '@octogee/shared/types/gateway-releases';
 import { readWorkspaceMigrationMarker } from '@octogee/shared/types/workspace-migration';
@@ -29,9 +30,11 @@ function untouchedTransportHistory(row: DocumentData): boolean {
 
 function handoffMatches(row: DocumentData, id: string): boolean {
   const input = row.input, handoff = row.schedulerHandoff;
-  return handoff && handoff.uid === input.uid && handoff.slug === input.builderSlug &&
+  const identity = readSchedulerMigrationIdentity(id, handoff?.migrationId);
+  return handoff && identity !== null && handoff.uid === input.uid && handoff.slug === input.builderSlug &&
     handoff.fromGatewayId === input.fromGatewayId && handoff.toGatewayId === input.toGatewayId &&
-    handoff.migrationId === `mig-${id}:scheduler:${row.attempts}` &&
+    identity.attempt === row.attempts &&
+    identity.claimStartedAt === row.attemptHistory?.at(-1)?.startedAt &&
     ['stageAfterCutover', 'stagedAt', 'sourceRecovery'].every(key => handoff[key] === undefined);
 }
 

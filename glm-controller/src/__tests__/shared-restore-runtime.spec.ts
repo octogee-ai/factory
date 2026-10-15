@@ -329,7 +329,7 @@ describe('journaled Shared restore runtime recovery', () => {
     row.input = { uid: 'other', builderSlug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' };
     Object.assign(row, { attempts, firstStartedAt: 1_100, lastProgressAt: 1_200 + attempts * 100, nextAttemptAt: 481_200 + attempts * 100,
       error: `attempt ${attempts} failed (transient): ${error} — retrying in 480s`, output: { stateMigration: { strategy: 'migrate-state' } },
-      schedulerHandoff: { uid: 'other', slug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', migrationId: `mig-queued:scheduler:${attempts}` },
+      schedulerHandoff: { uid: 'other', slug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', migrationId: `mig-queued:scheduler:${attempts}:claim:${1_100 + (attempts - 1) * 100}` },
       schedulerHandoffReleased: false, attemptHistory: Array.from({ length: attempts }, (_, index) => ({
         attempt: index + 1, startedAt: 1_100 + index * 100, completedAt: 1_200 + index * 100,
         error, classification: 'transient', steps: [{ name: 'keys-sync-state', status: 'failed', error }],
@@ -632,8 +632,8 @@ describe('journaled Shared restore runtime recovery', () => {
     await expect(releaseAbandonedSchedulerHandoffs({ db: h.deps.db, scheduler,
       gatewayExists: async () => true, log: vi.fn(), now: () => 3_000 })).resolves.toEqual({ released: 1 });
     expect(scheduler.mock.calls).toEqual([
-      ['shared-2', { migrationId: 'mig-queued:scheduler:13', slug: 'bob', phase: 'abort' }],
-      ['shared-1', { migrationId: 'mig-queued:scheduler:13', slug: 'bob', phase: 'resume' }],
+      ['shared-2', { migrationId: 'mig-queued:scheduler:13:claim:2300', slug: 'bob', phase: 'abort' }],
+      ['shared-1', { migrationId: 'mig-queued:scheduler:13:claim:2300', slug: 'bob', phase: 'resume' }],
     ]);
     expect(queued.row).toMatchObject({ status: 'failed', schedulerHandoffReleased: true });
   });
@@ -948,7 +948,7 @@ describe('journaled Shared source schema repair', () => {
         Object.assign(row, { origin: 'automatic', createdBy: 'glm-controller-placement-policy', attempts: 1,
           error: '/quiesce/shared-1: 500 ' + JSON.stringify({ error: 'quiesce failed', message: 'WorkerTaskError: Session history database read was revoked: code=unavailable' }),
           rolledBack: true, schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 250, attemptHistory: [],
-          schedulerHandoff: { migrationId: `mig-${operationId}:scheduler:1`, fromGatewayId: 'shared-1', toGatewayId: 'shared-2', uid, slug } });
+          schedulerHandoff: { migrationId: `mig-${operationId}:scheduler:1:claim:${row.startedAt}`, fromGatewayId: 'shared-1', toGatewayId: 'shared-2', uid, slug } });
         Object.assign(row.input, { builderSlug: slug, source: 'continuous-placement-policy' });
         row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'target-scheduler-ready', status: 'done' },
           { name: 'wait-for-active-work', status: 'failed', error: row.error }, { name: 'rollback:unmount-target', status: 'done' }];
