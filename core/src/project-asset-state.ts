@@ -66,18 +66,29 @@ export async function initializeProjectAssetManifest(root: string, prefix: strin
 }
 
 export async function withProjectAssetManifest<T>(root: string, prefix: string, use: (manifest: Manifest) => Promise<T>): Promise<T> {
-  return projectFile(root, ".files", "manifest.json", async file => {
-    const contents = await file.read();
-    const manifest = contents === null ? {} : parseManifest(manifestObjectPath(prefix), contents);
-    const before = serializeManifest(manifest);
-    const result = await use(manifest);
-    const after = serializeManifest(manifest);
-    if (before !== after) {
-      parseManifest(manifestObjectPath(prefix), after);
-      await file.write(after);
-    }
-    return result;
-  });
+  return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, async readyFile => {
+    const receipt = await readyFile.read();
+    const state = receipt === null ? null : JSON.parse(receipt);
+    if (state !== null && (state.version !== 1 || prefix !== `customers/${state.slug}/projects/${state.project}`)) throw new Error("project restore owner differs");
+    const checkout = state === null ? null : await projectCheckoutIdentity(root, false);
+    return projectFile(root, ".files", "manifest.json", async file => {
+      const contents = await file.read();
+      const restored = checkout !== null && state?.identity === projectAssetVersion(checkout, contents);
+      const manifest = contents === null ? {} : parseManifest(manifestObjectPath(prefix), contents);
+      const before = serializeManifest(manifest);
+      const result = await use(manifest);
+      const after = serializeManifest(manifest);
+      if (before !== after) {
+        parseManifest(manifestObjectPath(prefix), after);
+        await file.write(after);
+        if (restored) {
+          if (await projectCheckoutIdentity(root, false) !== checkout) throw new Error("project checkout changed during asset edit");
+          await readyFile.write(JSON.stringify({ ...state, identity: projectAssetVersion(checkout, after) }));
+        }
+      }
+      return result;
+    });
+  }, false);
 }
 
 export async function withMaterializedProjectAssets<T>(root: string, prefix: string, use: (manifest: Manifest) => Promise<T>): Promise<T> {
@@ -99,12 +110,12 @@ export async function withMaterializedProjectAssets<T>(root: string, prefix: str
 }
 
 export async function writeProjectRestoreReady(root: string, slug: string, project: string): Promise<void> {
-  const identity = await projectCheckoutIdentity(root, true);
+  const identity = await projectAssetIdentity(root, true);
   await projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, file => file.write(JSON.stringify({ version: 1, slug, project, identity })));
 }
 
 export async function readProjectRestoreReady(root: string, slug: string, project: string): Promise<boolean> {
-  const identity = await projectCheckoutIdentity(root, false);
+  const identity = await projectAssetIdentity(root, false);
   if (identity === null) return false;
   return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, async file => {
     const contents = await file.read();
@@ -113,6 +124,17 @@ export async function readProjectRestoreReady(root: string, slug: string, projec
     if (state.version !== 1 || state.slug !== slug || state.project !== project) throw new Error("project restore owner differs");
     return state.identity === identity;
   }, false);
+}
+
+async function projectAssetIdentity(root: string, create: boolean): Promise<string | null> {
+  const checkout = await projectCheckoutIdentity(root, create);
+  if (checkout === null) return null;
+  const manifest = await projectFile(root, ".files", "manifest.json", file => file.read(), false);
+  return projectAssetVersion(checkout, manifest);
+}
+
+function projectAssetVersion(checkout: string, manifest: string | null): string {
+  return createHash("sha256").update(JSON.stringify([checkout, manifest])).digest("hex");
 }
 
 async function projectCheckoutIdentity(root: string, create: boolean): Promise<string | null> {

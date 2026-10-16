@@ -10,7 +10,7 @@ import { persistBuilderProjects } from "./project-persistence.js";
 import { commitAndPushWorkspace, gitStatus, resolveProjectDir } from "./workspace-git.js";
 import { divertWorktreeBinaries } from "./binary-diversion.js";
 import { createBrokeredProjectBlobHydrator } from "@octogee/core/project-blob-materialization";
-import { writeProjectRestoreReady } from "@octogee/core/project-asset-state";
+import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProjectAssets } from "@octogee/core/project-asset-state";
 let root: string;
 afterEach(async()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();if(root)await rm(root,{recursive:true,force:true});});
 function git(cwd: string,...args: string[]){return execFileSync("git",args,{cwd,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim();}
@@ -36,6 +36,7 @@ it("restores text and the matching immutable asset after losing the working set,
   for(const n of [1,2]){
     const body=Buffer.from([0,1,2,n]);await writeFile(path.join(dir,"asset.bin"),body);await writeFile(path.join(dir,"README.md"),`revision ${n}\n`);
     expect(await persistBuilderProjects({root:customers,slug:"alice"},deps)).toEqual({projects:1});
+    expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(true);
     for (let save = 0; save < 2; save++) {
       const head = git(dir,"rev-parse","HEAD");
       const uploads = store.mock.calls.length;
@@ -84,4 +85,30 @@ it("restores text and the matching immutable asset after losing the working set,
     expect(await readFile(path.join(dir,"README.md"),"utf8")).toBe(`revision ${version.n}\n`);
   }
   expect(manifestRead).not.toHaveBeenCalled();
+});
+
+it("retains restoration and materialized receipts after a local asset upload and deletion",async()=>{
+  root=await mkdtemp(path.join(tmpdir(),"project-edit-ready-"));
+  const dir=path.join(root,"demo"),remote=path.join(root,"remote.git");
+  await mkdir(dir);
+  git(root,"init","--bare","--initial-branch=main",remote);
+  git(dir,"init","--initial-branch=main");git(dir,"config","user.name","Fixture");git(dir,"config","user.email","fixture@example.test");
+  await writeFile(path.join(dir,"README.md"),"initial\n");git(dir,"add",".");git(dir,"commit","-m","initial");git(dir,"remote","add","origin",remote);git(dir,"push","-u","origin","main");
+  const transport=path.join(root,"test-ssh");
+  await writeFile(transport,"#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");await chmod(transport,0o755);
+  git(dir,"remote","set-url","origin",`ssh://git@localhost${remote}`);vi.stubEnv("GIT_SSH",transport);
+  await writeProjectRestoreReady(dir,"alice","demo");
+  const target:FileTarget={slug:"alice",projectSlug:"demo",provider:"gitea",org:"alice",repoName:"demo",gcsPrefix:"customers/alice/projects/demo",sudoUser:"ws-alice"};
+  const contents=Buffer.from([0,7,8,9]),sha256=createHash("sha256").update(contents).digest("hex");
+  const stored={sha256,size:contents.length,gcsPath:`${target.gcsPrefix}/.objects/${sha256}`};
+  const divert=async()=>({diverted:[],failures:[],failedPaths:[]});
+
+  await commitLocalProjectAsset({target,dir,name:"asset.bin",contents,upload:async()=>stored,divert});
+
+  const manifest=JSON.parse(await readFile(path.join(dir,".files/manifest.json"),"utf8"));
+  expect(await withMaterializedProjectAssets(dir,target.gcsPrefix,async files=>files)).toEqual(manifest);
+  expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(true);
+  await commitLocalProjectAsset({target,dir,name:"asset.bin",contents:null,upload:async()=>{throw new Error("delete must not upload");},divert});
+  expect(await withMaterializedProjectAssets(dir,target.gcsPrefix,async files=>files)).toEqual({});
+  expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(true);
 });

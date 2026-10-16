@@ -2,12 +2,21 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
+import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
+import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 
 const paths = vi.hoisted(() => ({
-  customers: `${process.platform === "linux" ? "/dev/shm" : "/tmp"}/octogee-gh-project-${process.pid}`,
+  customers: `/tmp/octogee-gh-project-${process.pid}`,
   keys: `/tmp/octogee-gh-project-keys-${process.pid}`,
   scratch: `/tmp/octogee-gh-project-scratch-${process.pid}`,
-  openclaw: `/tmp/octogee-gh-project-openclaw-${process.pid}`,
+  openclaw: `${process.platform === "linux" ? "/dev/shm" : "/tmp"}/octogee-gh-project-openclaw-${process.pid}`,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:fs/promises")>(),
+  statfs: vi.fn(async () => ({ bavail: 256 * 1024 * 1024, bsize: 1 })),
 }));
 
 vi.mock("../lib/config.js", () => ({
@@ -36,7 +45,8 @@ vi.mock("../lib/github-project-clone-broker.js", () => ({
   }),
 }));
 
-vi.mock("../lib/gitea-admin-broker-client.js", () => ({
+vi.mock("../lib/gitea-admin-broker-client.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/gitea-admin-broker-client.js")>(),
   repoExists: vi.fn(async () => true),
   ensureGiteaUser: vi.fn(async () => {}),
   readGiteaUserPubKeys: vi.fn(async () => []),
@@ -51,6 +61,8 @@ const {
   githubCloneCredentialEnv,
   projectCheckoutMatchesSource,
 } = await import("../lib/git.js");
+
+const { buildBrokeredLifecycleAdapter } = await import("../lib/customer-lifecycle-broker-adapter.js");
 
 const SLUG = "alice";
 const GITHUB_REMOTE = "https://github.com/octogee-ai/demo.git";
@@ -565,6 +577,248 @@ describe("GitHub checkouts brokered through gateway-edge", () => {
 
     await expect(cloneProjectRepo(SLUG, "demo", "", { repoSource })).resolves.toBe(true);
     expect(broker.calls).toBe(1);
+  });
+
+  describe.skipIf(process.platform !== "linux")("prepared project asset readiness", () => {
+    let previousMount: string | undefined;
+    beforeEach(() => {
+      previousMount = process.env.OCTOGEE_PROJECTS_MOUNT;
+      process.env.OCTOGEE_PROJECTS_MOUNT = paths.customers;
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
+    });
+    afterEach(() => {
+      if (previousMount === undefined) delete process.env.OCTOGEE_PROJECTS_MOUNT;
+      else process.env.OCTOGEE_PROJECTS_MOUNT = previousMount;
+      vi.unstubAllGlobals();
+    });
+
+    function restoringAdapter(isBuilderGateway = () => true) {
+      const manifestRead = vi.fn(async () => ({
+        url: "https://signed.test/manifest", method: "GET", gcsPath: "manifest", expiresAt: "later",
+      }));
+      const blobRead = vi.fn<FleetBrokerClient["blobMaterializationReadUrl"]>();
+      const client = { workspaceManifestReadUrl: manifestRead, blobMaterializationReadUrl: blobRead } as unknown as FleetBrokerClient;
+      return { manifestRead, blobRead, adapter: buildBrokeredLifecycleAdapter({
+        client, rpc: {} as GatewayRpcClient, log: vi.fn(), isBuilderGateway,
+      }) };
+    }
+
+    it.each(["github", "gitea"] as const)("refreshes an empty %s repository before its first commit", async provider => {
+      git(canonicalOrigin, ["update-ref", "-d", "refs/heads/main"]);
+      const keyDir = path.join(paths.keys, SLUG);
+      fs.mkdirSync(keyDir, { recursive: true });
+      fs.writeFileSync(path.join(keyDir, "id_ed25519"), "not-a-real-key\n");
+      const { adapter, manifestRead } = restoringAdapter(() => false);
+      const options = { repoSource: provider === "github" ? repoSource : undefined, gitExec: localGitExec,
+        prepareRepository: provider === "gitea" ? (worktree: string) => {
+          externalizeCustomerGitDir(worktree, { giteaRepoName: "demo", fetchCanonical: (_dest, metadata) => {
+            git(metadata, ["fetch", canonicalOrigin, "+refs/heads/*:refs/remotes/origin/*"]);
+          } });
+        } : undefined,
+      };
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", "demo", options)).resolves.toBe(true);
+      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", "demo", { ...options, refreshRemote: true })).resolves.toBe(true);
+
+      expect(git(dest, ["rev-parse", "--revs-only", "HEAD"])).toBe("");
+      expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).toBe(pointer.birthtimeNs);
+      expect(manifestRead).not.toHaveBeenCalled();
+    });
+
+    it("hydrates the first upstream commit of an unborn project when preparing a Builder", async () => {
+      git(canonicalOrigin, ["update-ref", "-d", "refs/heads/main"]);
+      let builder = false;
+      const { adapter, blobRead } = restoringAdapter(() => builder);
+      await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
+      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+      expect(git(dest, ["rev-parse", "--revs-only", "HEAD"])).toBe("");
+      const seed = path.join(paths.scratch, "seed");
+      const gcsPath = `customers/${SLUG}/projects/demo/asset.bin`;
+      fs.mkdirSync(path.join(seed, ".files"));
+      fs.writeFileSync(path.join(seed, ".files", "manifest.json"), JSON.stringify({
+        "asset.bin": { type: "blob", gcsPath, size: 3, mimeType: "application/octet-stream", uploadedAt: "2026-10-16T18:00:00Z" },
+      }));
+      git(seed, ["add", ".files/manifest.json"]);
+      git(seed, ["commit", "-q", "-m", "first published asset manifest"]);
+      git(seed, ["push", "-q", "origin", "main"]);
+      blobRead.mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==",
+        download: { url: "https://signed.test/blob", method: "GET", gcsPath, expiresAt: "later" } });
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("abc", { headers: { "x-goog-generation": "17" } })));
+      builder = true;
+      const options = { repoSource, refreshRemote: true, gitExec: localGitExec };
+
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", null, options)).resolves.toBe(true);
+
+      expect(git(dest, ["rev-parse", "HEAD"])).toBe(git(seed, ["rev-parse", "HEAD"]));
+      expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).toBe(pointer.birthtimeNs);
+      expect(blobRead).toHaveBeenCalledWith({ slug: SLUG, path: "projects/demo/asset.bin", size: 3 });
+      expect(fs.readFileSync(path.join(dest, "asset.bin"), "utf8")).toBe("abc");
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+    });
+
+    it.each(["022", "077"])("refreshes an unchanged prepared checkout without repeating hydration under umask %s", async mask => {
+      const umask = Number.parseInt(mask, 8);
+      const previousUmask = process.umask(umask);
+      try {
+        const dest = path.join(paths.customers, SLUG, "projects", "demo");
+        const { adapter, manifestRead } = restoringAdapter();
+        await expect(adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource })).resolves.toBe(true);
+        expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+        const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+        expect(pointer.mode & 0o777n).toBe(BigInt(0o444 & ~umask));
+        let competingLease: ReturnType<typeof acquireWorkspaceMutationLeaseSync> = null;
+        const acquire = vi.fn<typeof acquireWorkspaceMutationLeaseSync>(options => {
+          const lease = acquireWorkspaceMutationLeaseSync(options);
+          expect(lease).not.toBeNull();
+          return { ownerToken: lease!.ownerToken, release() {
+            lease!.release();
+            competingLease = acquireWorkspaceMutationLeaseSync({
+              workspaceDir: dest, gitDir: projectMutationLeaseGitDir(dest, paths.customers)!,
+            });
+            expect(competingLease).not.toBeNull();
+          } };
+        });
+        const options = { repoSource, refreshRemote: true, gitExec: localGitExec, acquireMutationLease: acquire };
+        try {
+          await expect(adapter.cloneProjectRepo(SLUG, "demo", null, options)).resolves.toBe(true);
+          expect(acquire).toHaveBeenCalledOnce();
+          expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+          expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).toBe(pointer.birthtimeNs);
+          expect(manifestRead).toHaveBeenCalledOnce();
+          expect(process.umask()).toBe(umask);
+          expect(fs.statSync(path.join(dest, ".git")).mode & 0o777).toBe(0o444 & ~umask);
+        } finally { (competingLease as ReturnType<typeof acquireWorkspaceMutationLeaseSync>)?.release(); }
+      } finally { process.umask(previousUmask); }
+    });
+
+    it.each(["lifecycle", "Canvas"])("hydrates an advanced asset manifest after a %s fast-forward", async writer => {
+      const seed = path.join(paths.scratch, "seed");
+      fs.mkdirSync(path.join(seed, ".files"));
+      fs.writeFileSync(path.join(seed, ".files", "manifest.json"), "{}");
+      git(seed, ["add", ".files/manifest.json"]);
+      git(seed, ["commit", "-q", "-m", "initial asset manifest"]);
+      git(seed, ["push", "-q", "origin", "main"]);
+      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const { adapter, blobRead } = restoringAdapter();
+      await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
+      const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+      const gcsPath = `customers/${SLUG}/projects/demo/asset.bin`;
+      fs.writeFileSync(path.join(seed, ".files", "manifest.json"), JSON.stringify({
+        "asset.bin": { type: "blob", gcsPath, size: 3, mimeType: "application/octet-stream", uploadedAt: "2026-10-16T18:00:00Z" },
+      }));
+      git(seed, ["add", ".files/manifest.json"]);
+      git(seed, ["commit", "-q", "-m", "new asset"]);
+      git(seed, ["push", "-q", "origin", "main"]);
+      blobRead.mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==",
+        download: { url: "https://signed.test/blob", method: "GET", gcsPath, expiresAt: "later" } });
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("abc", { headers: { "x-goog-generation": "17" } })));
+      if (writer === "Canvas") {
+        expect(git(dest, ["status", "--porcelain"])).toBe("");
+        const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: dest, gitDir: projectMutationLeaseGitDir(dest, paths.customers)! });
+        expect(lease).not.toBeNull();
+        try {
+          git(dest, ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+          git(dest, ["merge", "--ff-only", "--no-edit", "origin/main"]);
+        } finally { lease!.release(); }
+        expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).toBe(pointer.birthtimeNs);
+      }
+      let readinessAfterRefresh: Promise<boolean> | undefined;
+      const options = { repoSource, refreshRemote: true, gitExec: localGitExec,
+        acquireMutationLease: (input: Parameters<typeof acquireWorkspaceMutationLeaseSync>[0]) => {
+          const lease = acquireWorkspaceMutationLeaseSync(input);
+          expect(lease).not.toBeNull();
+          return { ownerToken: lease!.ownerToken, release() {
+            lease!.release();
+            readinessAfterRefresh = readProjectRestoreReady(dest, SLUG, "demo");
+          } };
+        },
+      };
+
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", null, options)).resolves.toBe(true);
+
+      expect(await readinessAfterRefresh).toBe(false);
+      expect(git(dest, ["rev-parse", "HEAD"])).toBe(git(seed, ["rev-parse", "HEAD"]));
+      expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).toBe(pointer.birthtimeNs);
+      expect(blobRead).toHaveBeenCalledWith({ slug: SLUG, path: "projects/demo/asset.bin", size: 3 });
+      expect(fs.readFileSync(path.join(dest, "asset.bin"), "utf8")).toBe("abc");
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+    });
+
+    it("restores asset readiness after rebuilding an emptied working tree with retained Git metadata", async () => {
+      const seed = path.join(paths.scratch, "seed");
+      const gcsPath = `customers/${SLUG}/projects/demo/asset.bin`;
+      fs.mkdirSync(path.join(seed, ".files"));
+      fs.writeFileSync(path.join(seed, ".files", "manifest.json"), JSON.stringify({
+        "asset.bin": { type: "blob", gcsPath, size: 3, mimeType: "application/octet-stream", uploadedAt: "2026-10-16T18:00:00Z" },
+      }));
+      git(seed, ["add", ".files/manifest.json"]);
+      git(seed, ["commit", "-q", "-m", "asset manifest"]);
+      git(seed, ["push", "-q", "origin", "main"]);
+      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const { adapter, blobRead } = restoringAdapter();
+      blobRead.mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==",
+        download: { url: "https://signed.test/blob", method: "GET", gcsPath, expiresAt: "later" } });
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("abc", { headers: { "x-goog-generation": "17" } })));
+      await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
+      expect(fs.readFileSync(path.join(dest, "asset.bin"), "utf8")).toBe("abc");
+      const pointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+      for (const entry of fs.readdirSync(dest).filter(entry => entry !== ".git")) {
+        fs.rmSync(path.join(dest, entry), { recursive: true, force: true });
+      }
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(false);
+      const options = { repoSource, refreshRemote: true, gitExec: localGitExec };
+
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", null, options)).resolves.toBe(true);
+
+      expect(fs.readFileSync(path.join(dest, "asset.bin"), "utf8")).toBe("abc");
+      expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).not.toBe(pointer.birthtimeNs);
+      expect(blobRead).toHaveBeenCalledTimes(2);
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+    });
+
+    it("normalizes retained same-origin Git configuration without invalidating asset readiness", async () => {
+      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const { adapter, manifestRead } = restoringAdapter();
+      await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+      const originalPointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+      git(dest, ["config", "user.name", "Stale retained identity"]);
+      git(dest, ["config", "remote.origin.fetch", "+refs/heads/topic:refs/remotes/origin/topic"]);
+
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource })).resolves.toBe(true);
+
+      expect(localConfig(dest, "user.name")).toBe(`Octo (${SLUG})`);
+      expect(localConfig(dest, "remote.origin.fetch")).toBe("+refs/heads/*:refs/remotes/origin/*");
+      expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).toBe(originalPointer.birthtimeNs);
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+      expect(manifestRead).toHaveBeenCalledOnce();
+    });
+
+    it("requires new asset readiness when the canonical project source changes", async () => {
+      const dest = path.join(paths.customers, SLUG, "projects", "demo");
+      const { adapter, manifestRead } = restoringAdapter();
+      await adapter.cloneProjectRepo(SLUG, "demo", null, { repoSource });
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+      const originalPointer = fs.lstatSync(path.join(dest, ".git"), { bigint: true });
+      const clone = edgeBrokerClone();
+      broker.clone = async (slug, project) => {
+        await clone(slug, project);
+        git(path.join(paths.customers, slug, "projects", project), ["remote", "set-url", "origin", GITHUB_REMOTE_B]);
+        return true;
+      };
+
+      await expect(adapter.cloneProjectRepo(SLUG, "demo", null, {
+        repoSource: { ...repoSource, repo: "demo2" },
+      })).resolves.toBe(true);
+
+      expect(fs.lstatSync(path.join(dest, ".git"), { bigint: true }).birthtimeNs).not.toBe(originalPointer.birthtimeNs);
+      expect(manifestRead).toHaveBeenCalledTimes(2);
+      expect(await readProjectRestoreReady(dest, SLUG, "demo")).toBe(true);
+    });
   });
 
   it("sets a checkout that does not match its GitHub source aside and re-clones through the broker", async () => {

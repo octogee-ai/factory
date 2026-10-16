@@ -138,6 +138,7 @@ describe("customer Git pointer replacement", () => {
     const outside = path.join(paths.root, "outside.txt");
     fs.writeFileSync(outside, "outside contents\n");
     fs.symlinkSync(outside, collision);
+    fs.chmodSync(pointer, 0o644);
     const previousPointer = fs.readFileSync(pointer, "utf8");
     vi.mocked(randomUUID).mockReturnValueOnce(id);
 

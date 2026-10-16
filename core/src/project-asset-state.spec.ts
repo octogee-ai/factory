@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readProjectRestoreReady, writeProjectRestoreReady } from "./project-asset-state.js";
+import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProjectAssets, withProjectAssetManifest } from "./project-asset-state.js";
 
 vi.mock("node:fs/promises", async importOriginal => ({ ...await importOriginal<typeof import("node:fs/promises")>() }));
 
@@ -65,6 +65,103 @@ describe.skipIf(process.platform !== "linux")("project checkout restore readines
     await mkdir(root);
     await writeFile(path.join(root, ".git"), pointer);
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+  });
+
+  it("binds readiness to manifest content while retaining unaffected materialized assets", async () => {
+    const prefix = "customers/alice/projects/demo";
+    const entry = { type: "blob" as const, gcsPath: `${prefix}/asset.bin`, size: 3, mimeType: "application/octet-stream", uploadedAt: "first" };
+    const manifest = JSON.stringify({ "asset.bin": entry });
+    await mkdir(path.join(root, ".files"));
+    await writeFile(path.join(root, ".files/manifest.json"), manifest);
+    await writeProjectRestoreReady(root, "alice", "demo");
+    await withMaterializedProjectAssets(root, prefix, async files => { files["asset.bin"] = entry; });
+    await writeFile(path.join(root, "README.md"), "unrelated text change");
+    await writeFile(path.join(root, ".files/manifest.json"), manifest);
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(true);
+    expect(await withMaterializedProjectAssets(root, prefix, async files => files)).toEqual({ "asset.bin": entry });
+
+    await writeFile(path.join(root, ".files/manifest.json"), JSON.stringify({ "asset.bin": { ...entry, uploadedAt: "second" } }));
+
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    expect(await withMaterializedProjectAssets(root, prefix, async files => files)).toEqual({ "asset.bin": entry });
+    await writeProjectRestoreReady(root, "alice", "demo");
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(true);
+  });
+
+  it("keeps owned local manifest edits restored with matching materialized receipts", async () => {
+    const prefix = "customers/alice/projects/demo";
+    const entry = { type: "blob" as const, gcsPath: `${prefix}/asset.bin`, size: 3, mimeType: "application/octet-stream", uploadedAt: "first" };
+    await writeProjectRestoreReady(root, "alice", "demo");
+
+    await withProjectAssetManifest(root, prefix, async manifest => {
+      manifest["asset.bin"] = entry;
+      await withMaterializedProjectAssets(root, prefix, async files => { files["asset.bin"] = entry; });
+    });
+
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(true);
+    expect(await withMaterializedProjectAssets(root, prefix, async files => files)).toEqual({ "asset.bin": entry });
+  });
+
+  it.each(["absent", "stale"])("does not create readiness for an %s receipt through local manifest edits", async state => {
+    const prefix = "customers/alice/projects/demo";
+    if (state === "stale") {
+      await writeProjectRestoreReady(root, "alice", "demo");
+      await mkdir(path.join(root, ".files"));
+      await writeFile(path.join(root, ".files/manifest.json"), "{}");
+    }
+    await withProjectAssetManifest(root, prefix, async manifest => {
+      manifest["asset.bin"] = { type: "blob", gcsPath: `${prefix}/asset.bin`, size: 3, mimeType: "application/octet-stream", uploadedAt: "first" };
+    });
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+  });
+
+  it.each(["callback", "publication"])("does not renew readiness after a local manifest %s failure", async phase => {
+    const prefix = "customers/alice/projects/demo";
+    await writeProjectRestoreReady(root, "alice", "demo");
+    const receipt = path.join(parent, ".octogee-state/demo.json");
+    const before = await fs.readFile(receipt, "utf8");
+    if (phase === "publication") {
+      const renameFile = fs.rename;
+      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (String(destination).endsWith("/manifest.json")) throw new Error("publication failed");
+        await renameFile(source, destination);
+      });
+    }
+    await expect(withProjectAssetManifest(root, prefix, async manifest => {
+      manifest["asset.bin"] = { type: "blob", gcsPath: `${prefix}/asset.bin`, size: 3, mimeType: "application/octet-stream", uploadedAt: "first" };
+      if (phase === "callback") throw new Error("callback failed");
+    })).rejects.toThrow(`${phase} failed`);
+    expect(await fs.readFile(receipt, "utf8")).toBe(before);
+  });
+
+  it("distinguishes absent manifests without creating asset directories during readiness reads", async () => {
+    await writeProjectRestoreReady(root, "alice", "demo");
+    await mkdir(path.join(root, ".files"));
+    await writeFile(path.join(root, ".files/manifest.json"), "{}");
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    await writeProjectRestoreReady(root, "alice", "demo");
+    await rm(path.join(root, ".files"), { recursive: true });
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    expect(await fs.readdir(root)).toEqual([".git"]);
+  });
+
+  it.each(["directory", "manifest"])("rejects a substituted %s symlink when reading asset identity", async kind => {
+    await mkdir(path.join(root, ".files"));
+    await writeFile(path.join(root, ".files/manifest.json"), "{}");
+    await writeProjectRestoreReady(root, "alice", "demo");
+    const original = path.join(root, kind === "directory" ? ".files" : ".files/manifest.json");
+    const outside = path.join(parent, "outside");
+    await rename(original, outside);
+    await symlink(outside, original);
+    await expect(readProjectRestoreReady(root, "alice", "demo")).rejects.toThrow();
+    await expect(writeProjectRestoreReady(root, "alice", "demo")).rejects.toThrow();
+  });
+
+  it("rejects an oversized manifest before accepting restore readiness", async () => {
+    await writeProjectRestoreReady(root, "alice", "demo");
+    await mkdir(path.join(root, ".files"));
+    await writeFile(path.join(root, ".files/manifest.json"), Buffer.alloc(10 * 1024 * 1024 + 1));
+    await expect(readProjectRestoreReady(root, "alice", "demo")).rejects.toThrow("invalid project asset state file");
   });
 
   it("rejects a symlink substituted for the restored checkout", async () => {

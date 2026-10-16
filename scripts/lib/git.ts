@@ -454,6 +454,17 @@ export function customerRepositoryHasCanonicalRemote(repoDir: string): boolean {
   }
 }
 
+function currentCustomerGitPointer(filename: string, pointer: string): boolean {
+  try {
+    const stat = fs.lstatSync(filename);
+    return stat.isFile() && stat.nlink === 1 && (stat.mode & 0o400) !== 0 && (stat.mode & 0o333) === 0 &&
+      stat.size === Buffer.byteLength(pointer) && fs.readFileSync(filename, "utf8") === pointer;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 export function externalizeCustomerGitDir(
   repoDir: string,
   deps: CustomerGitRefreshDeps = {},
@@ -482,6 +493,16 @@ export function externalizeCustomerGitDir(
   }
   fs.rmSync(customerGitRefreshMarker(target), { force: true });
   const pointer = `gitdir: ${target}\n`;
+  if (currentCustomerGitPointer(localGit, pointer)) return target;
+  publishCustomerGitPointer(repoDir);
+  return target;
+}
+
+function publishCustomerGitPointer(repoDir: string): void {
+  const target = customerGitMetadataDir(repoDir);
+  if (!target) throw new Error(`[git] customer Git pointer owner is missing for ${repoDir}`);
+  const localGit = path.join(repoDir, ".git");
+  const pointer = `gitdir: ${target}\n`;
   const pointerTmp = `${localGit}.octogee-${randomUUID()}.tmp`;
   const pointerFd = fs.openSync(pointerTmp, "wx", 0o444);
   try {
@@ -494,7 +515,6 @@ export function externalizeCustomerGitDir(
   } finally {
     fs.rmSync(pointerTmp, { force: true });
   }
-  return target;
 }
 
 function trustedGitDir(cwd: string): string | null {
@@ -881,12 +901,11 @@ export async function cloneProjectRepo(
       }
       return replaceProjectRepoCheckout(slug, projectSlug, dest, giteaRepoName, opts);
     }
-    if (restoreEmptiedWorkspaceTree(dest, `${slug}/${projectSlug}`) === null) return false;
-    setRepoSshCommand(dest, slug, {
+    if (!restoreProjectCheckoutTree(dest, slug, {
       repoSource: opts.repoSource,
       giteaRepoName,
       githubToken: opts.githubToken,
-    });
+    })) return false;
     if (!projectCheckoutMatchesSource(slug, projectSlug, giteaRepoName, opts.repoSource)
       || !customerRepositoryHasCanonicalRemote(dest)) return false;
     return refreshProjectCheckout(slug, projectSlug, dest, opts);
@@ -911,6 +930,14 @@ export async function cloneProjectRepo(
     opts.gitExec ?? gitExec,
     opts.prepareRepository ?? setRepoSshCommand,
   );
+}
+
+function restoreProjectCheckoutTree(dest: string, slug: string, deps: CustomerGitRefreshDeps): boolean {
+  const restored = restoreEmptiedWorkspaceTree(dest, `${slug}/${path.basename(dest)}`);
+  if (restored === null) return false;
+  setRepoSshCommand(dest, slug, deps);
+  if (restored) publishCustomerGitPointer(dest);
+  return true;
 }
 
 function gitDiffPaths(raw: string): string[] {
