@@ -10,7 +10,7 @@ const OPENCLAW_WORKSPACE_MARKER_FILES = [
   "USER.md",
 ] as const;
 
-function deferredProjectPlaceholder(slug: string, projectSlug: string): string {
+export function deferredProjectPlaceholder(slug: string, projectSlug: string): string {
   return [
     `# ${projectSlug}`,
     "",
