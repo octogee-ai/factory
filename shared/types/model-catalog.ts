@@ -125,7 +125,9 @@ const DIRECT_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 
 export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
   ...DIRECT_MODEL_CATALOG,
-  ...OPENROUTER_MODEL_CATALOG.map((entry): ModelCatalogEntry => entry.id === "z-ai/glm-5.2"
+  ...OPENROUTER_MODEL_CATALOG
+    .filter((entry) => entry.id !== "google/gemini-3.1-flash-lite-preview")
+    .map((entry): ModelCatalogEntry => entry.id === "z-ai/glm-5.2"
     ? { ...entry, reasoningEfforts: ["high", "xhigh"], defaultReasoningEffort: "xhigh" }
     : entry),
 ];

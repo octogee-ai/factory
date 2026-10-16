@@ -253,6 +253,7 @@
       "octogee-activity-tools",
       "parallel",
       "openai",
+      "codex",
       "browser"
     ],
     "entries": {
@@ -260,6 +261,9 @@
         "enabled": true
       },
       "anthropic": {
+        "enabled": true
+      },
+      "codex": {
         "enabled": true
       },
       "browser": {

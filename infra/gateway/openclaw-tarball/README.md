@@ -140,43 +140,47 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`c8260d933e58a84ded513f929391b7bb990665c4`](https://github.com/openclaw/openclaw/commit/c8260d933e58a84ded513f929391b7bb990665c4),
-frozen for the October 15 native-first recut to include merged #158986. Exact
-native source is `28177e858ad2299f3c0727ab14094579554bf270`, branch
-`codex/retire-memory-shadow-custody`, with predecessor
-`ffcedc872c5539bfad05dfb0682c9c749fe24150`. It retains the exact three-file
-production correction from [upstream #173366](https://github.com/openclaw/openclaw/pull/173366)
-at `0ccdb4da7dd01ea1f76a515834fbc84255d5a676`, plus a Gateway-startup/admission
-regression. It also retires memory reindex shadow admission after its owned
-SQLite workers close, before unlinking the shadow. TEST return cleanup reproduced
-a retained creation descriptor; the real descriptor regression fails before this
-fix and preserves the canonical database with it. The selected base does not
-include these corrections. No broader upstream advance is included. Package
-`2026.10.3` is a main snapshot, not a released tag. This is the operator-selected
-independent local qualification lane, not a claim that moving main or the full
-upstream CI matrix passed. No external OpenClaw/fork/iOS validation is dispatched.
+[`515b3c409583b17f942260767bb6be51640fe355`](https://github.com/openclaw/openclaw/commit/515b3c409583b17f942260767bb6be51640fe355),
+frozen for the October 16 recut. Exact native source is
+`8b710792251f25968f737c4c59217f4ea7da46ca`, fork branch
+`codex/openclaw-515b3c4-oct16`. Package `2026.10.4` is a main snapshot, not a
+released tag. The operator selected independent local qualification; this is not
+a claim that the selected snapshot passed the full upstream CI matrix. No
+external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-10e2b8fa.tgz` (generation
-`1792102983758489`) and `openclaw-mattermost-1bcc5864.tgz` (generation
-`1792102995527387`), packed sequentially from this exact clean build. Both
-write-once published generations were downloaded and verified against the
-qualified archives, complete SHA256 hashes and byte counts.
+`current.json` selects `openclaw-fork-a32a69d2.tgz` and
+`openclaw-mattermost-6dfcda0d.tgz`, packed sequentially from this exact clean
+build. Publication is write-once; complete hashes, not object-name prefixes,
+identify the qualified pair.
 
-Root SHA256: `10e2b8fa01d6795a02e1cf76e11e37bc0b0f1b4d28af1332590656bc78d2ac8d`.
-Mattermost SHA256: `1bcc5864c3f57e3b57e783c255c766037f72ebf481f547e799c6881053cfcb65`.
+Root generation `1792173488583650` and Mattermost generation
+`1792173492169873` were downloaded by exact generation and verified byte-for-byte
+against the locally qualified pair.
 
-Shared-state schema **24**, agent schema **27** and protocol **4** are the
+Root: **129852686 bytes**, SHA256
+`a32a69d2091a890e2bf5472ddbf0832c6b9cb1e0b6c7ed6338be361b804eb0e1`.
+Mattermost: **1251192 bytes**, SHA256
+`6dfcda0ded52935cee1d73112058af91f949bd986d4827c31750ee711f9b4433`.
+
+Shared-state schema **25**, agent schema **27** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
 database admission remain native. Do not preserve the old October 12 no-22
 restriction or create an Octogee schema dialect.
 
 ### What was removed
 
-This cut adopts upstream catalog retention/retirement (#158986), startup model
-publication retry (#172632) and WAL ownership (#172414), removing their duplicate
-fork owners and the unused prepared catalog seed. Redundant worker qualification
-tests, an unused absolute commit-deadline customization and requester/receipt
-validation already supplied upstream are also removed. Earlier reductions remain:
+This cut drops the startup model-publication handoff carry because the selected
+base includes upstream #173366. Native owner-supersession coverage replaces the
+obsolete hanging startup fixture. Native Solid participant/header presence,
+HTTP-disconnect cleanup, maintenance and committed-token/revocation owners replace
+duplicate fork adaptations and fixtures. The unused authority-owner extraction
+and broad reload deferral are removed; genuine reload failures retain their
+normal recovery path. Earlier reductions remain:
+
+Upstream catalog retention/retirement (#158986), startup model publication retry
+(#172632) and WAL ownership (#172414) own those contracts. Their duplicate fork
+owners, prepared catalog seed, absolute commit-deadline customization and
+redundant requester/receipt checks stay removed.
 
 Native Talk now owns consultation, interruption and cancellation. The fork's
 channel-consult ingress, `talk_voice` verbatim playback-wait narration and
@@ -230,7 +234,7 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 | Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
 | Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
 | Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. Retain only reproduced lifetime/settlement gaps while preserving native FIFO, cancellation and database owners; upstream now owns catalog retention/retirement and startup publication retry. Drop each remaining hunk when the selected upstream passes its boundary control. |
-| Startup model-publication handoff | Agent admission can replace initial model preparation and abort whole Gateway startup with a typed publication-superseded error despite a valid successor. The exact upstream #173366 correction registers the successor before cancellation and lets startup join it under its existing deadline. Remove this carry when the selected upstream contains the correction and the real startup/admission regression passes. |
+| Memory reindex shadow custody | A creation descriptor can outlive the joined shadow workers and prevent source cleanup after unlink. Retain retirement through the existing descriptor owner; remove when native shadow creation/retirement passes the actual file-descriptor regression. Canonical database and held-file guards remain unchanged. |
 | Queued Mattermost channel identity | A drained follow-up must keep its originating nativeChannelId instead of inferring the current reply destination. Upstream #163685 remains a separate contribution; remove this carry only once the selected upstream includes it and the queued-turn controls pass. |
 | Channel account removal and deleted-agent discovery | Removing one account must join its startup/cleanup without stopping siblings; Doctor must discover journaled deleted identities and restored files. Keep these scoped owner repairs until native removal and maintenance discovery preserve those cases. |
 | Plugin instance through final delivery | Finalization must use the originating plugin instance and receiver, not a replacement ID lookup; AbortSignal and other data retain identity. Remove when native delivery custody covers that finalization boundary. |
@@ -246,108 +250,50 @@ features are not relabeled as upstream bug fixes.
 The old fork's shared-21 cron layout is recognized only as a complete known
 layout. Normal native Doctor takes verified backups, derives canonical predicate
 columns where needed, imports retained cron custody and performs upstream's
-canonical migration through 24. Partial or ambiguous custody refuses conversion.
+canonical migration through 25. Partial or ambiguous custody refuses conversion.
 Known legacy cron custody tables select the full native repair/import owner rather
-than the bounded20→24 fast path. Agent26→27 uses the unchanged upstream FIFO
+than the bounded fast path. Agent26→27 uses the unchanged upstream FIFO
 outbox migration; no version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
-The `28177e85` shadow cleanup correction passes 28 focused owner/reindex/admission
-checks after its real file-descriptor regression fails on the predecessor. Source
-and test types, focused lint/format, full native build, strict Voice/Activity SDK
-checks, sequential packers and archive integrity pass. Canonical database
-admission and the Octogee held-file guard remain unchanged.
+The exact clean native commit passed the pinned full build, targeted behavior
+and changed-test type checks, production core/UI/extension types, scoped
+lint/format, generated catalogs and storage ratchets. Strict Voice/Activity SDK
+gates, sequential packers and the native package-tarball checker passed. The
+independent source review completed at its requested P0 scope with no findings;
+it is not a full-priority or runtime review.
 
-Fresh matched-package installs of `28177e85` in the existing qualified Linux
-arm64 and amd64 installer images pass registry refresh, Codex/Parallel source
-matching, three native-hook imports, CUA artifact validation, the publication
-import and installed SQLite SDK retirement control. Runtime checks follow an
-actual network disconnect as UID1000. The SDK control is not an installed memory
-owner test, full Gateway boot or desktop proof; corrected-family TEST return
-and activation cleanup remain required. Hosted assets regenerate deterministically
-from the same source; only chunk references and provenance differ from the
-predecessor's runtime content.
+Both actual Linux arm64 and amd64 full-plugin installer targets passed native
+registry refresh, Codex/Parallel source matching, bundled trust, driver-artifact
+and native-hook imports. Real Octogee external plugins and bundled identity
+were built by maintained owners and imported against the installed native SDK.
 
-The `ffcedc87` correction fails its real startup/admission regression on frozen
-`fc8389a6` and passes with the exact upstream production delta. The regression
-and 32 adjacent owner/auth controls pass, alongside core and test-graph types,
-focused lint/format, the full native build, strict Voice/Activity SDK checks,
-sequential packers and archive integrity. Fresh matched-package installs in the
-existing qualified arm64 and amd64 images pass registry refresh, Codex/Parallel
-source matching, three native-hook imports, CUA artifact validation and the
-changed publication-owner import. Runtime checks run as UID1000 after networking
-is disconnected. Four npm12 script skips and the optional fs-safe native-binding
-warning remain visible; no allowlist or lifecycle-marker bypass was used.
-No new image, full Gateway boot, desktop or live startup recovery is claimed.
-The existing startup deadline/degraded semantics remain unchanged; the original
-TEST startup failure and timing failures still require corrected-family acceptance.
+Shared and Builder configs were materialized through real template, roster,
+account, pre-boot, class-policy and broker-catalog writers. All four architecture/
+class combinations passed installed config validation, actual writable
+post-plugin update Doctor, second validation and strict before/after comparison.
+The image was read-only, UID1000 used fresh tmpfs, and networking was disconnected.
+Defaults, policy, plugin choices and complete per-agent model catalogs stayed
+exact. Only individually checked native version, migration and timed Doctor
+bookkeeping fields changed.
 
-The predecessor `fc8389a6` native build passed with repository-pinned pnpm 12.10.1
-in 4m26.2s (268.55s wrapper wall time), with matching build-info. Maintained
-sequential packers, strict Voice/Activity SDK gates and native root archive
-integrity passed. Both actual Linux arm64 and amd64 full-plugin installer
-targets passed registry refresh, source-match, bundled trust, driver-artifact
-and native-hook checks. Normal native launch settled package lifecycle; there
-was no install-script allowlist or marker bypass. These local installer images
-are not immutable Build main family digests or full Builder runtime/desktop proof.
+The same Octogee companion removes the retired Flash Lite preview alias from
+the application catalog, emits owner group allowlists, makes Codex available in
+fresh Builder templates and defaults missing configured voice enablement.
+Explicit Builder plugin opt-outs remain intact. These are writer corrections,
+not ignored Doctor translations.
 
-The isolated account-supported source review completed four passes and reported
-one P2 about cleanup after a failed account stop. The retained admitted stop owner
-already preserves the original configuration/account across that retry. Restoring
-the exact upstream regression proved that path; all 96 lifecycle tests passed.
-The finding is rejected with that evidence, not relabeled a clean original review.
-Core/UI/extension types, focused lint/format, owning behavior graphs, the changed
-source line-cap ratchet and storage dialect/worker checks passed. No guard was
-weakened and no aggregate `pnpm check` or full upstream/fork/iOS CI is claimed.
+Hosted islands and Browser resource projections regenerate from the same native
+commit. Two runs produced identical output, with unchanged adapter inputs;
+217 focused consumer/artifact checks and app/edge production types passed.
 
-A fresh synthetic store authored through the exact installed published
-`deee9d25` predecessor was upgraded on a closed Linux copy through the actual
-installed candidate's Doctor. Canonical shared22→24 and agent26→27 passed.
-Authored sessions, transcript events, raw JSON/BLOB values, plugin state and the
-disabled cron specimen remained exact. A labeled cold-SQL outbox specimen used
-sparse rowids40/91 opposing key/timestamp order; native27 retained them as
-enqueue_sequence40/91 with unchanged payload and attempt metadata. Native full
-22/26 backups and the completed backup group were verified; the sealed original's
-complete file hashes remained unchanged.
-
-The fixture's failed controls are preserved. Its setup order now matches the
-maintained native installer; normal offline close is allowed only for a zero-byte
-WAL and must not change the database hash. No sidecars or schema markers were
-deleted or rewritten. Schema observation follows the native optional content
-marker contract; the SDK assertion targets the authored job rather than rejecting
-Doctor's already-existing heartbeat. These were source-proven fixture corrections,
-not product repairs or weakened authored-data assertions. This proof ran without
-networking, Gateway boots or providers; it does not prove actual outbox dispatch,
-runtime drain, populated scratch, live acknowledgment or TEST acceptance.
-
-Shared and Builder configurations were independently materialized through 73
-verified production inputs from exact Octogee `ec9be511` policy, roster, account,
-pre-boot, class-policy and broker-catalog owners. Both passed installed-native
-config validation as UID1000 in fresh Linux tmpfs with a read-only image and
-network disabled. Configured model/tool/browser policy, channel memory, credentials
-references and authored catalogs stayed exact. This installer-only image lacks
-the Octogee custom extensions: ten Shared and twelve Builder plugin IDs generate
-visible missing-plugin warnings. No Doctor, Gateway or provider was run in this
-config check; custom-plugin and live readiness remain TEST work.
-
-All six generated UI/resource provenance and license records select this exact
-source. Browser and Computer retain the current native HTMLElement bridges and
-React mount/update/destroy contracts, with one shared native module graph. The
-upstream input change report was reviewed. The landed React model picker/tool
-icons and read-only tenant-filtered Automations stay. The regenerated consumers
-passed 183 tests across 19 files, the generator/license owners passed 16 tests across
-two files, and app production types passed. All 218 focused artifact, base,
-publication, provenance and pin checks passed across seven files on the adopted
-tuple. Synthetic/component tests do not prove
-connected capability, layout parity or TEST acceptance.
-
-Full offline Doctor can change configuration and is not a semantic no-op.
-Provider/model, SDK deprecation, TypeScript, size and CSS warnings remain visible;
-there is no paid-response or faster-startup claim. Earlier live and upgrade
-results are prior evidence, not acceptance for this source. Recovery retains the
-active TEST/Fleet/fixture lane; only a separately successful immutable main build
-and single-owner coordinated rollout can qualify this recut live.
+Earlier failed controls remain failed evidence. Doctor emitted isolated-fixture
+and upstream deprecation/ownership diagnostics; a successful command is not a
+warning-free report or clean-close proof. This qualification does not establish
+historical-data migration, full Gateway startup, provider/tool/desktop behavior
+or live acceptance. TEST must qualify the resulting immutable main family;
+PROD remains a separate operator decision.
 
 ### Base-image inputs
 

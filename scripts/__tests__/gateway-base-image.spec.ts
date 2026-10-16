@@ -82,7 +82,7 @@ describe("gateway base image", () => {
     expect(builderBase).toContain("DEBIAN_PACKAGES=");
     expect(builderBase).toContain("standaloneTools.gcloud.version");
     expect(builderBase).toContain("pip3 install --break-system-packages --no-cache-dir");
-    expect(builderConfig).not.toContain('"codex": {');
+    expect(JSON.parse(builderConfig).plugins.entries.codex).toEqual({ enabled: true });
     expect(builderConfig).not.toContain('"browser": {\n    "enabled": true');
   });
 

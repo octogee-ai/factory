@@ -78,10 +78,10 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed boot
     expect(builder).not.toHaveProperty("skills");
   });
 
-  it("keeps the core plugin surface while leaving browser and Codex payloads out of boot", () => {
-    expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "browser"]);
+  it("keeps core and native Codex available while leaving the managed browser disabled", () => {
+    expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "codex", "browser"]);
     expect(builder.plugins.entries.browser).toEqual({ enabled: false });
-    expect(builder.plugins.entries).not.toHaveProperty("codex");
+    expect(builder.plugins.entries.codex).toEqual({ enabled: true });
     const { codex: _sharedCodex, browser: _sharedBrowser, ...sharedEntries } = shared.plugins.entries;
     const { codex: _builderCodex, browser: _builderBrowser, ...builderEntries } = builder.plugins.entries;
     expect(builderEntries).toEqual(sharedEntries);

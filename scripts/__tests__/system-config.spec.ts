@@ -298,9 +298,9 @@ describe("system_config restore", () => {
     expect(seeded.commands).not.toHaveProperty("bash");
     expect(seeded).not.toHaveProperty("cron");
     expect(seeded.plugins.allow).toContain("browser");
-    expect(seeded.plugins.allow).not.toContain("codex");
+    expect(seeded.plugins.allow).toContain("codex");
     expect(seeded.plugins.entries.browser).toEqual({ enabled: false });
-    expect(seeded.plugins.entries).not.toHaveProperty("codex");
+    expect(seeded.plugins.entries.codex).toEqual({ enabled: true });
     expect(seeded.browser).toEqual({
       enabled: false,
       defaultProfile: "openclaw",

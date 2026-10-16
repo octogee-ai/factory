@@ -36,6 +36,13 @@ describe("MODEL_CATALOG", () => {
     expect(entry?.reasoningEfforts).toEqual(["high", "xhigh"]);
   });
 
+  it("offers canonical Flash Lite without its retired preview alias", () => {
+    const ids = modelCatalogForProvider("openrouter").map((entry) => entry.id);
+    expect(ids).toContain("google/gemini-3.1-flash-lite");
+    expect(ids).not.toContain("google/gemini-3.1-flash-lite-preview");
+    expect(modelCatalogEntryFor("openrouter", "google/gemini-3.1-flash-lite-preview")).toBeNull();
+  });
+
   it("carries GPT-5.6 Luna through OpenRouter with its full context window", () => {
     const entry = modelCatalogEntryFor("openrouter", "openai/gpt-5.6-luna");
     expect(entry).toMatchObject({

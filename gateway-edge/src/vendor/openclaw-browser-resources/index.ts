@@ -4,7 +4,7 @@ var gb = Object.defineProperty;
 var FV = Object.getOwnPropertyDescriptor;
 var zV = Object.getOwnPropertyNames;
 var jV = Object.getPrototypeOf, BV = Object.prototype.hasOwnProperty;
-var d = (e, t, n) => () => {
+var p = (e, t, n) => () => {
   if (n) throw n[0];
   try {
     return e && (t = e(e = 0)), t;
@@ -52,7 +52,7 @@ function hb(e) {
 function Gi(e) {
   return hb(e) ?? null;
 }
-var Le = d(() => {
+var Le = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/string-coerce.ts
@@ -68,20 +68,20 @@ function Xt(e) {
 function ze(e) {
   return typeof e == "string" && e.trim() ? e : void 0;
 }
-var pt = d(() => {
+var pt = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/number-coercion.ts
 function $o(e) {
   return typeof e == "number" && Number.isFinite(e) ? e : void 0;
 }
-var GV, rpe, Po = d(() => {
+var GV, rpe, Po = p(() => {
   pt();
   GV = 2147e6, rpe = Math.floor(GV / 1e3);
 });
 
 // openclaw/node_modules/.pnpm/@noble+ed25519@3.2.0/node_modules/@noble/ed25519/index.js
-var RR, ls, bb, Kd, xb, vb, Hd, KV, HV, kR, Vd, VV, AR, $R, PR, WV, Ki, _t, _R, K, ZV, yb, OR, Vi, eu, Hi, JV, YV, Xr, XV, ER, QV, Ib, eW, TR, CR, tW, DR = d(() => {
+var RR, ls, bb, Kd, xb, vb, Hd, KV, HV, kR, Vd, VV, AR, $R, PR, WV, Ki, _t, _R, K, ZV, yb, OR, Vi, eu, Hi, JV, YV, Xr, XV, ER, QV, Ib, eW, TR, CR, tW, DR = p(() => {
   RR = Object.freeze, ls = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn, bb = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn, Kd = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n, xb = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an, vb = 0x6666666666666666666666666666666666666666666666666666666666666658n, Hd = ls - 1n, KV = RR({
     p: ls,
     n: bb,
@@ -326,26 +326,26 @@ var RR, ls, bb, Kd, xb, vb, Hd, KV, HV, kR, Vd, VV, AR, $R, PR, WV, Ki, _t, _R, 
 });
 
 // openclaw/packages/gateway-client/src/device-auth.ts
-var MR = d(() => {
+var MR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/chat-stream-message.ts
-var NR = d(() => {
+var NR = p(() => {
   Le();
 });
 
 // openclaw/packages/gateway-client/src/chat-stream-projection.ts
-var UR = d(() => {
+var UR = p(() => {
   Le();
 });
 
 // openclaw/packages/normalization-core/src/string-normalization.ts
-var Wd = d(() => {
+var Wd = p(() => {
   pt();
 });
 
 // openclaw/packages/gateway-protocol/src/connect-error-details.ts
-var $e, gpe, hpe, wb = d(() => {
+var $e, gpe, hpe, wb = p(() => {
   Wd();
   $e = {
     AUTH_REQUIRED: "AUTH_REQUIRED",
@@ -414,20 +414,20 @@ var $e, gpe, hpe, wb = d(() => {
 });
 
 // openclaw/packages/gateway-client/src/connect-auth.ts
-var LR = d(() => {
+var LR = p(() => {
   pt();
 });
 
 // openclaw/packages/gateway-client/src/browser-device-auth.ts
-var FR = d(() => {
+var FR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/gateway-origin-scope.ts
-var zR = d(() => {
+var zR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/model-catalog-connect.ts
-var jR = d(() => {
+var jR = p(() => {
 });
 
 // openclaw/packages/retry/src/index.ts
@@ -510,7 +510,7 @@ function uW(e = {}) {
     throw o(u);
   };
 }
-var BR, rW, Spe, Sb = d(() => {
+var BR, rW, Spe, Sb = p(() => {
   BR = {
     attempts: 3,
     minDelayMs: 300,
@@ -529,13 +529,13 @@ var BR, rW, Spe, Sb = d(() => {
 });
 
 // openclaw/packages/gateway-client/src/protocol-client.ts
-var qR = d(() => {
+var qR = p(() => {
   Le();
   Sb();
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var Dpe, GR = d(() => {
+var Dpe, GR = p(() => {
   wb();
   Dpe = /* @__PURE__ */ new Set([
     $e.AUTH_TOKEN_MISSING,
@@ -557,11 +557,11 @@ var Dpe, GR = d(() => {
 });
 
 // openclaw/packages/normalization-core/src/stable-stringify.ts
-var KR = d(() => {
+var KR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/gateway-error-details.ts
-var HR = d(() => {
+var HR = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/session-projection-message-identity.ts
@@ -595,39 +595,39 @@ function kb(e, t) {
     externalSource: h && i && a && s ? JSON.stringify([i, a, s]) : null
   };
 }
-var ZR = d(() => {
+var ZR = p(() => {
   Le();
   pt();
 });
 
 // openclaw/packages/gateway-client/src/session-projection.ts
-var JR = d(() => {
+var JR = p(() => {
   Le();
   pt();
   ZR();
 });
 
 // openclaw/packages/normalization-core/src/result.ts
-var YR = d(() => {
+var YR = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/agent-id.ts
-var Jd = d(() => {
+var Jd = p(() => {
   YR();
 });
 
 // openclaw/packages/normalization-core/src/uuid.ts
-var _b = d(() => {
+var _b = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/session-subscriptions.ts
-var XR = d(() => {
+var XR = p(() => {
   Jd();
   _b();
 });
 
 // openclaw/packages/gateway-protocol/src/client-info.ts
-var Tb, Cb, ome, ime, Rb = d(() => {
+var Tb, Cb, ome, ime, Rb = p(() => {
   pt();
   Tb = {
     WEBCHAT_UI: "webchat-ui",
@@ -661,15 +661,15 @@ var Tb, Cb, ome, ime, Rb = d(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/startup-unavailable.ts
-var QR = d(() => {
+var QR = p(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/version.ts
-var e0 = d(() => {
+var e0 = p(() => {
 });
 
 // openclaw/packages/gateway-client/src/browser.ts
-var t0 = d(() => {
+var t0 = p(() => {
   MR();
   NR();
   UR();
@@ -689,15 +689,15 @@ var t0 = d(() => {
 });
 
 // openclaw/packages/normalization-core/src/balanced-json.ts
-var n0 = d(() => {
+var n0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/boolean-coercion.ts
-var r0 = d(() => {
+var r0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/cjk-chars.ts
-var Ab, Rme, Ame, o0 = d(() => {
+var Ab, Rme, Ame, o0 = p(() => {
   Ab = [
     [
       [183, 183],
@@ -754,11 +754,11 @@ var Ab, Rme, Ame, o0 = d(() => {
 });
 
 // openclaw/packages/normalization-core/src/code-points.ts
-var $b = d(() => {
+var $b = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/error-coercion.ts
-var dW, a0, s0, i0, c0 = d(() => {
+var dW, a0, s0, i0, c0 = p(() => {
   dW = /* @__PURE__ */ Symbol.for(
     "openclaw.provider-auth-persistence-error"
   ), i0 = class extends (s0 = AggregateError, a0 = dW, s0) {
@@ -771,11 +771,11 @@ var dW, a0, s0, i0, c0 = d(() => {
 });
 
 // openclaw/packages/normalization-core/src/expect.ts
-var Pb = d(() => {
+var Pb = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/format.ts
-var u0 = d(() => {
+var u0 = p(() => {
   Pb();
 });
 
@@ -790,16 +790,16 @@ function Ob(e) {
 function Zi(e) {
   return /^[\t\n\r ]*\{/.test(e) ? $t(Ob(e)) : void 0;
 }
-var Db = d(() => {
+var Db = p(() => {
   Le();
 });
 
 // openclaw/packages/normalization-core/src/response-bytes.ts
-var l0 = d(() => {
+var l0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/text-decoding.ts
-var d0 = d(() => {
+var d0 = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/utf16-slice.ts
@@ -827,11 +827,11 @@ function ds(e, t) {
   let n = Math.max(0, Math.floor(t));
   return e.length <= n ? e : f0(e, 0, n);
 }
-var Ji = d(() => {
+var Ji = p(() => {
 });
 
 // openclaw/packages/normalization-core/src/index.ts
-var Pr = d(() => {
+var Pr = p(() => {
   n0();
   r0();
   o0();
@@ -851,7 +851,7 @@ var Pr = d(() => {
 });
 
 // openclaw/packages/net-policy/src/redact-sensitive-url.ts
-var g0 = d(() => {
+var g0 = p(() => {
   pt();
 });
 
@@ -863,19 +863,19 @@ function h0(e) {
   let n = t[1] ?? "", o = t[2] ?? "";
   return [n, o.includes("g") ? o : `${o}g`];
 }
-var y0 = d(() => {
+var y0 = p(() => {
 });
 
 // openclaw/packages/acp-core/src/structured-auth-redaction.ts
-var Yd, ni, ps, ms, Oo, Do, Xd, Yi, ut, cfe, ufe, b0 = d(() => {
-  Yd = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ni = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, ps = String.raw`\\{1,64}t`, ms = String.raw`(?:[ \t]+|${ps})`, Oo = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]*)`, Do = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]+)`, Xd = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${ps})|[ \t]*\\{1,64}n(?:[ \t]*|${ps})|[ \t]*${ps}[ \t]*)`, Yi = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, ut = String.raw`(?:\\{1,64}["']|["']|)`, cfe = String.raw`${Yi}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${ut}[ \t]*[:=]${Oo}${ut}([^\s\\"',;]+)`, ufe = new RegExp(
+var Yd, ri, ps, ms, Oo, Do, Xd, Yi, ut, cfe, ufe, b0 = p(() => {
+  Yd = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ri = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, ps = String.raw`\\{1,64}t`, ms = String.raw`(?:[ \t]+|${ps})`, Oo = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]*)`, Do = String.raw`(?:[ \t]*\r?\n${ms}|[ \t]*\\{1,64}r\\{1,64}n${ms}|[ \t]*\\{1,64}n${ms}|[ \t]*${ps}[ \t]*|[ \t]+)`, Xd = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${ps})|[ \t]*\\{1,64}n(?:[ \t]*|${ps})|[ \t]*${ps}[ \t]*)`, Yi = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, ut = String.raw`(?:\\{1,64}["']|["']|)`, cfe = String.raw`${Yi}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${ut}[ \t]*[:=]${Oo}${ut}([^\s\\"',;]+)`, ufe = new RegExp(
     String.raw`${Yi}(?:Proxy-)?Authorization${ut}[ \t]*[:=]${Oo}${ut}(${Yd})${Do}`,
     "giu"
   );
 });
 
 // openclaw/src/logging/redact-pem.ts
-var x0, v0 = d(() => {
+var x0, v0 = p(() => {
   x0 = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`;
 });
 
@@ -978,7 +978,7 @@ function* FW(e) {
 ` || a === "\r" ? o = !1 : (a === "=" || a === ":" && !LW.test(e[r + 1] ?? " ")) && (o = !0);
   }
 }
-var S0, fs, pW, ep, mW, fW, k0, Ub, _0, gW, E0, I0, ffe, hW, yW, bW, xW, vW, IW, wW, SW, kW, _W, EW, TW, CW, RW, AW, Xi, Qd, T0, $W, PW, OW, MW, NW, w0, UW, LW, zW, jW, BW, R0, A0, tp, qW, GW, KW, HW, VW, WW, ZW, JW, YW, XW, QW, $0, P0 = d(() => {
+var S0, fs, pW, ep, mW, fW, k0, Ub, _0, gW, E0, I0, ffe, hW, yW, bW, xW, vW, IW, wW, SW, kW, _W, EW, TW, CW, RW, AW, Xi, Qd, T0, $W, PW, OW, MW, NW, w0, UW, LW, zW, jW, BW, R0, A0, tp, qW, GW, KW, HW, VW, WW, ZW, JW, YW, XW, QW, $0, P0 = p(() => {
   b0();
   v0();
   S0 = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, fs = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, pW = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, ep = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, mW = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${ep}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, fW = String.raw`${mW}|app[-_]?secret|credential|${fs}`, k0 = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${fs}`, Ub = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${fs}`, _0 = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${fs}`, gW = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, E0 = String.raw`password|passphrase|pass|passwd`, I0 = String.raw`${ep}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${fs}`, ffe = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, hW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${S0})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, yW = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${S0})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, bW = String.raw`(^|[\s,;({\["])(?:${k0})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, xW = String.raw`(^|[\s,;({\["])(?:${k0})=(["'\x60]?[^\s&#"'\x60<>]+)`, vW = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${fs}`, IW = String.raw`/(^|[\s,{])(?:(?:${vW})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${E0})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${Ub})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, wW = String.raw`/(^|[\s,{])(?:(?:${_0})\s*:\s*|(?:${Ub})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, SW = String.raw`/(^|[\s,{])(?:${gW})=([^\s#"'\x60<>]+)/g`, kW = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${E0})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, _W = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${Ub})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, EW = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${ep}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, TW = String.raw`"(?:${pW})"\s*:\s*"([^"]+)"`, CW = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, RW = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, AW = String.raw`(^|[^A-Za-z0-9])`, Xi = (e) => String.raw`${AW}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, Qd = String.raw`(^|[^A-Za-z0-9_])`;
@@ -996,13 +996,13 @@ var S0, fs, pW, ep, mW, fW, k0, Ub, _0, gW, E0, I0, ffe, hW, yW, bW, xW, vW, IW,
     source: "bare-pass-assignment",
     exec: FW
   }), jW = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`, BW = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`, R0 = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token", A0 = "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token", tp = String.raw`(^|[^A-Za-z0-9_?&-]|\\{1,64}[rn])`, qW = String.raw`${tp}(?:${R0})${ut}[ \t]*:${Oo}${ut}([^\s\\"',;]+)`, GW = String.raw`${tp}(?:${R0})${ut}[ \t]*=${Oo}${ut}([^\s\\"',;]+)`, KW = String.raw`${tp}(?:${A0})\s*:\s*([^\s"',;]+)`, HW = String.raw`${tp}(?:${A0})\s*=\s*([^\s"',;]+)`, VW = [
-    String.raw`${Yi}Proxy-Authorization${ut}[ \t]*[:=]${Oo}${ut}${Yd}${Do}(${ni})`,
-    String.raw`${Yi}Proxy-Authorization${ut}[ \t]*[:=]${Oo}${ut}(${ni})[ \t]*(?=${ut}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
-    String.raw`${Yi}Authorization${ut}[ \t]*[:=]${Oo}${ut}(?!(?:Bearer|Basic|Bot)(?=${Do}))${Yd}${Do}(${ni})`,
-    String.raw`${Yi}Authorization${ut}[ \t]*[:=]${Oo}${ut}(?!(?:Bearer|Basic|Bot)(?=${Do}))(${ni})[ \t]*(?=${ut}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
+    String.raw`${Yi}Proxy-Authorization${ut}[ \t]*[:=]${Oo}${ut}${Yd}${Do}(${ri})`,
+    String.raw`${Yi}Proxy-Authorization${ut}[ \t]*[:=]${Oo}${ut}(${ri})[ \t]*(?=${ut}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
+    String.raw`${Yi}Authorization${ut}[ \t]*[:=]${Oo}${ut}(?!(?:Bearer|Basic|Bot)(?=${Do}))${Yd}${Do}(${ri})`,
+    String.raw`${Yi}Authorization${ut}[ \t]*[:=]${Oo}${ut}(?!(?:Bearer|Basic|Bot)(?=${Do}))(${ri})[ \t]*(?=${ut}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
     qW,
     GW
-  ], WW = String.raw`Authorization${ut}[ \t]*[:=]${Xd}${ut}Bearer${Do}(${ni})`, ZW = String.raw`Authorization${ut}[ \t]*[:=]${Xd}${ut}Basic${Do}(${ni})`, JW = String.raw`Authorization${ut}[ \t]*[:=]${Xd}${ut}Bot${Do}(${ni})`, YW = String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`, XW = [
+  ], WW = String.raw`Authorization${ut}[ \t]*[:=]${Xd}${ut}Bearer${Do}(${ri})`, ZW = String.raw`Authorization${ut}[ \t]*[:=]${Xd}${ut}Basic${Do}(${ri})`, JW = String.raw`Authorization${ut}[ \t]*[:=]${Xd}${ut}Bot${Do}(${ri})`, YW = String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`, XW = [
     hW,
     yW,
     EW,
@@ -1131,7 +1131,7 @@ var S0, fs, pW, ep, mW, fW, k0, Ub, _0, gW, E0, I0, ffe, hW, yW, bW, xW, vW, IW,
 });
 
 // openclaw/ui/src/lib/browser-redact.ts
-var Sfe, O0 = d(() => {
+var Sfe, O0 = p(() => {
   g0();
   Ji();
   y0();
@@ -1142,27 +1142,27 @@ var Sfe, O0 = d(() => {
 });
 
 // openclaw/ui/src/lib/format-error.ts
-var np = d(() => {
+var np = p(() => {
   Pr();
   O0();
 });
 
 // openclaw/src/shared/control-ui-storage.ts
-var M0, eZ, N0 = d(() => {
+var M0, eZ, N0 = p(() => {
   M0 = "openclaw.device.auth.v1", eZ = `${M0}:`;
 });
 
 // openclaw/src/shared/device-auth.ts
-var Lb = d(() => {
+var Lb = p(() => {
   Wd();
 });
 
 // openclaw/ui/src/local-storage.ts
-var U0 = d(() => {
+var U0 = p(() => {
 });
 
 // openclaw/ui/src/lib/bytes-base64.ts
-var L0 = d(() => {
+var L0 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/@noble+hashes@2.4.0/node_modules/@noble/hashes/_u64.js
@@ -1185,7 +1185,7 @@ function Qr(e, t, n, o) {
   let r = (t >>> 0) + (o >>> 0);
   return { h: e + n + (r / 2 ** 32 | 0) | 0, l: r | 0 };
 }
-var rp, F0, nZ, rZ, Fb, zb, Qi, ea, ru, ou, B0, q0, G0, K0, H0, V0, jb = d(() => {
+var rp, F0, nZ, rZ, Fb, zb, Qi, ea, ru, ou, B0, q0, G0, K0, H0, V0, jb = p(() => {
   rp = BigInt(4294967295), F0 = /* @__PURE__ */ BigInt(32);
   nZ = (e) => e / 2 ** 32 | 0, rZ = (e) => e >>> 0;
   Fb = (e, t, n) => e >>> n, zb = (e, t, n) => e << 32 - n | t >>> n, Qi = (e, t, n) => e >>> n | t << 32 - n, ea = (e, t, n) => e << 32 - n | t >>> n, ru = (e, t, n) => e << 64 - n | t >>> n - 32, ou = (e, t, n) => e >>> n - 32 | t << 64 - n;
@@ -1242,7 +1242,7 @@ function ta(e, t = {}) {
   let n = (r, i) => e(i).update(r).digest(), o = e(void 0);
   return n.outputLen = o.outputLen, n.blockLen = o.blockLen, n.canXOF = o.canXOF, n.create = (r) => e(r), Object.assign(n, t), Object.freeze(n);
 }
-var Bb, aZ, Z0, na, Kb = d(() => {
+var Bb, aZ, Z0, na, Kb = p(() => {
   Bb = (e) => e ? `"${e}" ` : "";
   aZ = (e, t) => {
     if (e === null || typeof e != "object" || Array.isArray(e))
@@ -1269,7 +1269,7 @@ function Y0(e, t, n) {
 function X0(e, t, n) {
   return e & t ^ e & n ^ t & n;
 }
-var au, Q0, eA, tA, nA, rA = d(() => {
+var au, Q0, eA, tA, nA, rA = p(() => {
   jb();
   Kb();
   au = class {
@@ -1398,7 +1398,7 @@ ct(iA, {
   sha512_224: () => bZ,
   sha512_256: () => yZ
 });
-var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, gZ, hZ, yZ, bZ, aA = d(() => {
+var cZ, oi, ip, ap, sp, oA, uZ, lZ, ii, ai, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, gZ, hZ, yZ, bZ, aA = p(() => {
   rA();
   jb();
   Kb();
@@ -1467,7 +1467,7 @@ var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, 
     2756734187,
     3204031479,
     3329325298
-  ]), ri = /* @__PURE__ */ new Uint32Array(64), ip = class extends au {
+  ]), oi = /* @__PURE__ */ new Uint32Array(64), ip = class extends au {
     // We cannot use array here since array allows indexing by variable
     // which means optimizer/compiler cannot use registers.
     // Numeric initializers matter: starting the fields as `undefined` changes
@@ -1496,20 +1496,20 @@ var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, 
     }
     process(t, n) {
       for (let h = 0; h < 16; h++, n += 4)
-        ri[h] = t.getUint32(n, !1);
+        oi[h] = t.getUint32(n, !1);
       for (let h = 16; h < 64; h++) {
-        let b = ri[h - 15], f = ri[h - 2], y = Or(b, 7) ^ Or(b, 18) ^ b >>> 3, x = Or(f, 17) ^ Or(f, 19) ^ f >>> 10;
-        ri[h] = x + ri[h - 7] + y + ri[h - 16] | 0;
+        let b = oi[h - 15], f = oi[h - 2], y = Or(b, 7) ^ Or(b, 18) ^ b >>> 3, x = Or(f, 17) ^ Or(f, 19) ^ f >>> 10;
+        oi[h] = x + oi[h - 7] + y + oi[h - 16] | 0;
       }
       let { A: o, B: r, C: i, D: a, E: s, F: u, G: l, H: m } = this;
       for (let h = 0; h < 64; h++) {
-        let b = Or(s, 6) ^ Or(s, 11) ^ Or(s, 25), f = m + b + Y0(s, u, l) + cZ[h] + ri[h] | 0, x = (Or(o, 2) ^ Or(o, 13) ^ Or(o, 22)) + X0(o, r, i) | 0;
+        let b = Or(s, 6) ^ Or(s, 11) ^ Or(s, 25), f = m + b + Y0(s, u, l) + cZ[h] + oi[h] | 0, x = (Or(o, 2) ^ Or(o, 13) ^ Or(o, 22)) + X0(o, r, i) | 0;
         m = l, l = u, u = s, s = a + f | 0, a = i, i = r, r = o, o = f + x | 0;
       }
       o = o + this.A | 0, r = r + this.B | 0, i = i + this.C | 0, a = a + this.D | 0, s = s + this.E | 0, u = u + this.F | 0, l = l + this.G | 0, m = m + this.H | 0, this.set(o, r, i, a, s, u, l, m);
     }
     roundClean() {
-      iu(ri);
+      iu(oi);
     }
     destroy() {
       this.destroyed = !0, this.set(0, 0, 0, 0, 0, 0, 0, 0), iu(this.buffer);
@@ -1603,7 +1603,7 @@ var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, 
     "0x597f299cfc657e2a",
     "0x5fcb6fab3ad6faec",
     "0x6c44198c4a475817"
-  ].map((e) => BigInt(e))), uZ = oA[0], lZ = oA[1], oi = /* @__PURE__ */ new Uint32Array(80), ii = /* @__PURE__ */ new Uint32Array(80), gs = class extends au {
+  ].map((e) => BigInt(e))), uZ = oA[0], lZ = oA[1], ii = /* @__PURE__ */ new Uint32Array(80), ai = /* @__PURE__ */ new Uint32Array(80), gs = class extends au {
     // We cannot use array here since array allows indexing by variable
     // which means optimizer/compiler cannot use registers.
     // h -- high 32 bits, l -- low 32 bits
@@ -1642,14 +1642,14 @@ var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, 
     }
     process(t, n) {
       for (let k = 0; k < 16; k++, n += 4)
-        oi[k] = t.getUint32(n), ii[k] = t.getUint32(n += 4);
+        ii[k] = t.getUint32(n), ai[k] = t.getUint32(n += 4);
       for (let k = 16; k < 80; k++) {
-        let C = oi[k - 15] | 0, A = ii[k - 15] | 0, D = Qi(C, A, 1) ^ Qi(C, A, 8) ^ Fb(C, A, 7), V = ea(C, A, 1) ^ ea(C, A, 8) ^ zb(C, A, 7), te = oi[k - 2] | 0, Z = ii[k - 2] | 0, Ae = Qi(te, Z, 19) ^ ru(te, Z, 61) ^ Fb(te, Z, 6), me = ea(te, Z, 19) ^ ou(te, Z, 61) ^ zb(te, Z, 6), ue = G0(V, me, ii[k - 7], ii[k - 16]), At = K0(ue, D, Ae, oi[k - 7], oi[k - 16]);
-        oi[k] = At | 0, ii[k] = ue | 0;
+        let C = ii[k - 15] | 0, A = ai[k - 15] | 0, D = Qi(C, A, 1) ^ Qi(C, A, 8) ^ Fb(C, A, 7), V = ea(C, A, 1) ^ ea(C, A, 8) ^ zb(C, A, 7), te = ii[k - 2] | 0, Z = ai[k - 2] | 0, Ae = Qi(te, Z, 19) ^ ru(te, Z, 61) ^ Fb(te, Z, 6), me = ea(te, Z, 19) ^ ou(te, Z, 61) ^ zb(te, Z, 6), ue = G0(V, me, ai[k - 7], ai[k - 16]), At = K0(ue, D, Ae, ii[k - 7], ii[k - 16]);
+        ii[k] = At | 0, ai[k] = ue | 0;
       }
       let { Ah: o, Al: r, Bh: i, Bl: a, Ch: s, Cl: u, Dh: l, Dl: m, Eh: h, El: b, Fh: f, Fl: y, Gh: x, Gl: v, Hh: S, Hl: w } = this;
       for (let k = 0; k < 80; k++) {
-        let C = Qi(h, b, 14) ^ Qi(h, b, 18) ^ ru(h, b, 41), A = ea(h, b, 14) ^ ea(h, b, 18) ^ ou(h, b, 41), D = h & f ^ ~h & x, V = b & y ^ ~b & v, te = H0(w, A, V, lZ[k], ii[k]), Z = V0(te, S, C, D, uZ[k], oi[k]), Ae = te | 0, me = Qi(o, r, 28) ^ ru(o, r, 34) ^ ru(o, r, 39), ue = ea(o, r, 28) ^ ou(o, r, 34) ^ ou(o, r, 39), At = o & i ^ o & s ^ i & s, In = r & a ^ r & u ^ a & u;
+        let C = Qi(h, b, 14) ^ Qi(h, b, 18) ^ ru(h, b, 41), A = ea(h, b, 14) ^ ea(h, b, 18) ^ ou(h, b, 41), D = h & f ^ ~h & x, V = b & y ^ ~b & v, te = H0(w, A, V, lZ[k], ai[k]), Z = V0(te, S, C, D, uZ[k], ii[k]), Ae = te | 0, me = Qi(o, r, 28) ^ ru(o, r, 34) ^ ru(o, r, 39), ue = ea(o, r, 28) ^ ou(o, r, 34) ^ ou(o, r, 39), At = o & i ^ o & s ^ i & s, In = r & a ^ r & u ^ a & u;
         S = x | 0, w = v | 0, x = f | 0, v = y | 0, f = h | 0, y = b | 0, { h, l: b } = Qr(l | 0, m | 0, Z | 0, Ae | 0), l = s | 0, m = u | 0, s = i | 0, u = a | 0, i = o | 0, a = r | 0;
         let pn = B0(Ae, ue, In);
         o = q0(pn, Z, me, At), r = pn | 0;
@@ -1657,7 +1657,7 @@ var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, 
       ({ h: o, l: r } = Qr(this.Ah | 0, this.Al | 0, o | 0, r | 0)), { h: i, l: a } = Qr(this.Bh | 0, this.Bl | 0, i | 0, a | 0), { h: s, l: u } = Qr(this.Ch | 0, this.Cl | 0, s | 0, u | 0), { h: l, l: m } = Qr(this.Dh | 0, this.Dl | 0, l | 0, m | 0), { h, l: b } = Qr(this.Eh | 0, this.El | 0, h | 0, b | 0), { h: f, l: y } = Qr(this.Fh | 0, this.Fl | 0, f | 0, y | 0), { h: x, l: v } = Qr(this.Gh | 0, this.Gl | 0, x | 0, v | 0), { h: S, l: w } = Qr(this.Hh | 0, this.Hl | 0, S | 0, w | 0), this.set(o, r, i, a, s, u, l, m, h, b, f, y, x, v, S, w);
     }
     roundClean() {
-      iu(oi, ii);
+      iu(ii, ai);
     }
     destroy() {
       this.destroyed = !0, iu(this.buffer), this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1734,7 +1734,7 @@ var cZ, ri, ip, ap, sp, oA, uZ, lZ, oi, ii, gs, cp, up, dZ, pZ, lp, dp, mZ, fZ, 
 });
 
 // openclaw/ui/src/lib/nodes/index.ts
-var IZ, sA, Hb = d(() => {
+var IZ, sA, Hb = p(() => {
   DR();
   Le();
   N0();
@@ -1788,7 +1788,7 @@ function MA(e) {
     n = KZ(e, n), t++;
   return t;
 }
-var NA = d(() => {
+var NA = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/unicode/unicode.mjs
@@ -1806,7 +1806,7 @@ function UA(e, t) {
 function LA(e, t) {
   return e.length >= t << 1 || e.length >= t && bp(e) >= t;
 }
-var FA = d(() => {
+var FA = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/guard.mjs
@@ -1996,13 +1996,13 @@ function h8(e, t) {
 function Qb(e, t) {
   return uu(e) ? h8(e, t) : lu(e) ? g8(e, t) : Ee(e, t);
 }
-var bs = d(() => {
+var bs = p(() => {
   NA();
   FA();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/emit.mjs
-var HA = d(() => {
+var HA = p(() => {
   bs();
 });
 
@@ -2086,16 +2086,16 @@ function D8(e) {
 function M8(e) {
   return e instanceof globalThis.Map;
 }
-var VA = d(() => {
+var VA = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/native.mjs
-var WA = d(() => {
+var WA = p(() => {
   bs();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/index.mjs
-var kp, I = d(() => {
+var kp, I = p(() => {
   HA();
   VA();
   WA();
@@ -2123,7 +2123,7 @@ function L8(e) {
 function _p() {
   return Dr;
 }
-var Dr, ex = d(() => {
+var Dr, ex = p(() => {
   I();
   Dr = {
     immutableTypes: !1,
@@ -2139,7 +2139,7 @@ var Dr, ex = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/settings/index.mjs
-var eo = d(() => {
+var eo = p(() => {
   ex();
 });
 
@@ -2147,7 +2147,7 @@ var eo = d(() => {
 function Ep(e) {
   return c.HasPropertyKey(e, "~refine") && c.IsArray(e["~refine"]) && c.Every(e["~refine"], 0, (t) => c.IsObject(t) && c.HasPropertyKey(t, "check") && c.HasPropertyKey(t, "error") && c.IsFunction(t.check) && c.IsFunction(t.error));
 }
-var ZA = d(() => {
+var ZA = p(() => {
   I();
 });
 
@@ -2161,7 +2161,7 @@ function oa(e) {
 function oe(e) {
   return $n(e) || oa(e);
 }
-var Dt = d(() => {
+var Dt = p(() => {
   I();
 });
 
@@ -2169,7 +2169,7 @@ var Dt = d(() => {
 function Tp(e) {
   return c.HasPropertyKey(e, "additionalItems") && oe(e.additionalItems);
 }
-var JA = d(() => {
+var JA = p(() => {
   I();
   Dt();
 });
@@ -2178,7 +2178,7 @@ var JA = d(() => {
 function hr(e) {
   return c.HasPropertyKey(e, "additionalProperties") && oe(e.additionalProperties);
 }
-var YA = d(() => {
+var YA = p(() => {
   I();
   Dt();
 });
@@ -2187,7 +2187,7 @@ var YA = d(() => {
 function Cp(e) {
   return c.HasPropertyKey(e, "allOf") && c.IsArray(e.allOf) && e.allOf.every((t) => oe(t));
 }
-var XA = d(() => {
+var XA = p(() => {
   I();
   Dt();
 });
@@ -2196,7 +2196,7 @@ var XA = d(() => {
 function QA(e) {
   return c.HasPropertyKey(e, "$anchor") && c.IsString(e.$anchor);
 }
-var e$ = d(() => {
+var e$ = p(() => {
   I();
 });
 
@@ -2204,7 +2204,7 @@ var e$ = d(() => {
 function Rp(e) {
   return c.HasPropertyKey(e, "anyOf") && c.IsArray(e.anyOf) && e.anyOf.every((t) => oe(t));
 }
-var t$ = d(() => {
+var t$ = p(() => {
   I();
   Dt();
 });
@@ -2213,15 +2213,15 @@ var t$ = d(() => {
 function tx(e) {
   return c.HasPropertyKey(e, "const");
 }
-var n$ = d(() => {
+var n$ = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/types/contains.mjs
-function ai(e) {
+function si(e) {
   return c.HasPropertyKey(e, "contains") && oe(e.contains);
 }
-var r$ = d(() => {
+var r$ = p(() => {
   I();
   Dt();
 });
@@ -2230,12 +2230,12 @@ var r$ = d(() => {
 function Hn(e) {
   return c.HasPropertyKey(e, "default");
 }
-var o$ = d(() => {
+var o$ = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/types/defs.mjs
-var i$ = d(() => {
+var i$ = p(() => {
   I();
   Dt();
 });
@@ -2244,7 +2244,7 @@ var i$ = d(() => {
 function nx(e) {
   return c.HasPropertyKey(e, "dependencies") && c.IsObject(e.dependencies) && Object.values(e.dependencies).every((t) => oe(t) || c.IsArray(t) && t.every((n) => c.IsString(n)));
 }
-var a$ = d(() => {
+var a$ = p(() => {
   I();
   Dt();
 });
@@ -2253,7 +2253,7 @@ var a$ = d(() => {
 function rx(e) {
   return c.HasPropertyKey(e, "dependentRequired") && c.IsObject(e.dependentRequired) && Object.values(e.dependentRequired).every((t) => c.IsArray(t) && t.every((n) => c.IsString(n)));
 }
-var s$ = d(() => {
+var s$ = p(() => {
   I();
 });
 
@@ -2261,16 +2261,16 @@ var s$ = d(() => {
 function Ap(e) {
   return c.HasPropertyKey(e, "dependentSchemas") && c.IsObject(e.dependentSchemas) && Object.values(e.dependentSchemas).every((t) => oe(t));
 }
-var c$ = d(() => {
+var c$ = p(() => {
   I();
   Dt();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/types/dynamicAnchor.mjs
-function si(e) {
+function ci(e) {
   return c.HasPropertyKey(e, "$dynamicAnchor") && c.IsString(e.$dynamicAnchor);
 }
-var u$ = d(() => {
+var u$ = p(() => {
   I();
 });
 
@@ -2278,7 +2278,7 @@ var u$ = d(() => {
 function $p(e) {
   return c.HasPropertyKey(e, "$dynamicRef") && c.IsString(e.$dynamicRef);
 }
-var l$ = d(() => {
+var l$ = p(() => {
   I();
 });
 
@@ -2286,7 +2286,7 @@ var l$ = d(() => {
 function Pp(e) {
   return c.HasPropertyKey(e, "else") && oe(e.else);
 }
-var d$ = d(() => {
+var d$ = p(() => {
   I();
   Dt();
 });
@@ -2295,7 +2295,7 @@ var d$ = d(() => {
 function ox(e) {
   return c.HasPropertyKey(e, "enum") && c.IsArray(e.enum);
 }
-var p$ = d(() => {
+var p$ = p(() => {
   I();
 });
 
@@ -2303,7 +2303,7 @@ var p$ = d(() => {
 function ix(e) {
   return c.HasPropertyKey(e, "exclusiveMaximum") && (c.IsNumber(e.exclusiveMaximum) || c.IsBigInt(e.exclusiveMaximum));
 }
-var m$ = d(() => {
+var m$ = p(() => {
   I();
 });
 
@@ -2311,7 +2311,7 @@ var m$ = d(() => {
 function Mo(e) {
   return c.HasPropertyKey(e, "exclusiveMinimum") && (c.IsNumber(e.exclusiveMinimum) || c.IsBigInt(e.exclusiveMinimum));
 }
-var f$ = d(() => {
+var f$ = p(() => {
   I();
 });
 
@@ -2319,7 +2319,7 @@ var f$ = d(() => {
 function du(e) {
   return c.HasPropertyKey(e, "format") && c.IsString(e.format);
 }
-var g$ = d(() => {
+var g$ = p(() => {
   I();
 });
 
@@ -2327,7 +2327,7 @@ var g$ = d(() => {
 function wn(e) {
   return c.HasPropertyKey(e, "$id") && c.IsString(e.$id);
 }
-var h$ = d(() => {
+var h$ = p(() => {
   I();
 });
 
@@ -2335,7 +2335,7 @@ var h$ = d(() => {
 function Op(e) {
   return c.HasPropertyKey(e, "if") && oe(e.if);
 }
-var y$ = d(() => {
+var y$ = p(() => {
   I();
   Dt();
 });
@@ -2347,7 +2347,7 @@ function ia(e) {
 function Dp(e) {
   return ia(e) && c.IsArray(e.items);
 }
-var b$ = d(() => {
+var b$ = p(() => {
   I();
   Dt();
 });
@@ -2356,7 +2356,7 @@ var b$ = d(() => {
 function ax(e) {
   return c.HasPropertyKey(e, "maximum") && (c.IsNumber(e.maximum) || c.IsBigInt(e.maximum));
 }
-var x$ = d(() => {
+var x$ = p(() => {
   I();
 });
 
@@ -2364,7 +2364,7 @@ var x$ = d(() => {
 function sx(e) {
   return c.HasPropertyKey(e, "maxContains") && c.IsNumber(e.maxContains);
 }
-var v$ = d(() => {
+var v$ = p(() => {
   I();
 });
 
@@ -2372,7 +2372,7 @@ var v$ = d(() => {
 function pu(e) {
   return c.HasPropertyKey(e, "maxItems") && c.IsNumber(e.maxItems);
 }
-var I$ = d(() => {
+var I$ = p(() => {
   I();
 });
 
@@ -2380,7 +2380,7 @@ var I$ = d(() => {
 function cx(e) {
   return c.HasPropertyKey(e, "maxLength") && c.IsNumber(e.maxLength);
 }
-var w$ = d(() => {
+var w$ = p(() => {
   I();
 });
 
@@ -2388,7 +2388,7 @@ var w$ = d(() => {
 function ux(e) {
   return c.HasPropertyKey(e, "maxProperties") && c.IsNumber(e.maxProperties);
 }
-var S$ = d(() => {
+var S$ = p(() => {
   I();
 });
 
@@ -2396,7 +2396,7 @@ var S$ = d(() => {
 function No(e) {
   return c.HasPropertyKey(e, "minimum") && (c.IsNumber(e.minimum) || c.IsBigInt(e.minimum));
 }
-var k$ = d(() => {
+var k$ = p(() => {
   I();
 });
 
@@ -2404,7 +2404,7 @@ var k$ = d(() => {
 function aa(e) {
   return c.HasPropertyKey(e, "minContains") && c.IsNumber(e.minContains);
 }
-var _$ = d(() => {
+var _$ = p(() => {
   I();
 });
 
@@ -2412,7 +2412,7 @@ var _$ = d(() => {
 function sa(e) {
   return c.HasPropertyKey(e, "minItems") && c.IsNumber(e.minItems);
 }
-var E$ = d(() => {
+var E$ = p(() => {
   I();
 });
 
@@ -2420,7 +2420,7 @@ var E$ = d(() => {
 function mu(e) {
   return c.HasPropertyKey(e, "minLength") && c.IsNumber(e.minLength);
 }
-var T$ = d(() => {
+var T$ = p(() => {
   I();
 });
 
@@ -2428,7 +2428,7 @@ var T$ = d(() => {
 function fu(e) {
   return c.HasPropertyKey(e, "minProperties") && c.IsNumber(e.minProperties);
 }
-var C$ = d(() => {
+var C$ = p(() => {
   I();
 });
 
@@ -2436,7 +2436,7 @@ var C$ = d(() => {
 function lx(e) {
   return c.HasPropertyKey(e, "multipleOf") && (c.IsNumber(e.multipleOf) || c.IsBigInt(e.multipleOf));
 }
-var R$ = d(() => {
+var R$ = p(() => {
   I();
 });
 
@@ -2444,7 +2444,7 @@ var R$ = d(() => {
 function Mp(e) {
   return c.HasPropertyKey(e, "not") && oe(e.not);
 }
-var A$ = d(() => {
+var A$ = p(() => {
   I();
   Dt();
 });
@@ -2453,7 +2453,7 @@ var A$ = d(() => {
 function Np(e) {
   return c.HasPropertyKey(e, "oneOf") && c.IsArray(e.oneOf) && e.oneOf.every((t) => oe(t));
 }
-var $$ = d(() => {
+var $$ = p(() => {
   I();
   Dt();
 });
@@ -2462,7 +2462,7 @@ var $$ = d(() => {
 function gu(e) {
   return c.HasPropertyKey(e, "pattern") && (c.IsString(e.pattern) || e.pattern instanceof RegExp);
 }
-var P$ = d(() => {
+var P$ = p(() => {
   I();
 });
 
@@ -2470,7 +2470,7 @@ var P$ = d(() => {
 function xs(e) {
   return c.HasPropertyKey(e, "patternProperties") && c.IsObject(e.patternProperties) && Object.values(e.patternProperties).every((t) => oe(t));
 }
-var O$ = d(() => {
+var O$ = p(() => {
   I();
   Dt();
 });
@@ -2479,7 +2479,7 @@ var O$ = d(() => {
 function ca(e) {
   return c.HasPropertyKey(e, "prefixItems") && c.IsArray(e.prefixItems) && e.prefixItems.every((t) => oe(t));
 }
-var D$ = d(() => {
+var D$ = p(() => {
   I();
   Dt();
 });
@@ -2488,7 +2488,7 @@ var D$ = d(() => {
 function vs(e) {
   return c.HasPropertyKey(e, "properties") && c.IsObject(e.properties) && Object.values(e.properties).every((t) => oe(t));
 }
-var M$ = d(() => {
+var M$ = p(() => {
   I();
   Dt();
 });
@@ -2497,7 +2497,7 @@ var M$ = d(() => {
 function Up(e) {
   return c.HasPropertyKey(e, "propertyNames") && (c.IsObject(e.propertyNames) || oe(e.propertyNames));
 }
-var N$ = d(() => {
+var N$ = p(() => {
   I();
   Dt();
 });
@@ -2509,7 +2509,7 @@ function F8(e) {
 function hu(e) {
   return F8(e) && c.IsEqual(e.$recursiveAnchor, !0);
 }
-var U$ = d(() => {
+var U$ = p(() => {
   I();
 });
 
@@ -2517,7 +2517,7 @@ var U$ = d(() => {
 function Lp(e) {
   return c.HasPropertyKey(e, "$recursiveRef") && c.IsString(e.$recursiveRef);
 }
-var L$ = d(() => {
+var L$ = p(() => {
   I();
 });
 
@@ -2525,7 +2525,7 @@ var L$ = d(() => {
 function Fp(e) {
   return c.HasPropertyKey(e, "$ref") && c.IsString(e.$ref);
 }
-var F$ = d(() => {
+var F$ = p(() => {
   I();
 });
 
@@ -2533,7 +2533,7 @@ var F$ = d(() => {
 function ua(e) {
   return c.HasPropertyKey(e, "required") && c.IsArray(e.required) && e.required.every((t) => c.IsString(t));
 }
-var z$ = d(() => {
+var z$ = p(() => {
   I();
 });
 
@@ -2541,7 +2541,7 @@ var z$ = d(() => {
 function zp(e) {
   return c.HasPropertyKey(e, "then") && oe(e.then);
 }
-var j$ = d(() => {
+var j$ = p(() => {
   I();
   Dt();
 });
@@ -2550,15 +2550,15 @@ var j$ = d(() => {
 function dx(e) {
   return c.HasPropertyKey(e, "type") && (c.IsString(e.type) || c.IsArray(e.type) && e.type.every((t) => c.IsString(t)));
 }
-var B$ = d(() => {
+var B$ = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/types/uniqueItems.mjs
-function ci(e) {
+function ui(e) {
   return c.HasPropertyKey(e, "uniqueItems") && c.IsBoolean(e.uniqueItems);
 }
-var q$ = d(() => {
+var q$ = p(() => {
   I();
 });
 
@@ -2566,7 +2566,7 @@ var q$ = d(() => {
 function yu(e) {
   return c.HasPropertyKey(e, "unevaluatedItems") && oe(e.unevaluatedItems);
 }
-var G$ = d(() => {
+var G$ = p(() => {
   I();
   Dt();
 });
@@ -2575,13 +2575,13 @@ var G$ = d(() => {
 function bu(e) {
   return c.HasPropertyKey(e, "unevaluatedProperties") && oe(e.unevaluatedProperties);
 }
-var K$ = d(() => {
+var K$ = p(() => {
   I();
   Dt();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/types/index.mjs
-var je = d(() => {
+var je = p(() => {
   ZA();
   JA();
   YA();
@@ -2636,7 +2636,7 @@ var je = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_context.mjs
-var Sn, sn, to = d(() => {
+var Sn, sn, to = p(() => {
   eo();
   je();
   I();
@@ -2704,7 +2704,7 @@ var Sn, sn, to = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_externals.mjs
-var Uo = d(() => {
+var Uo = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_refine.mjs
@@ -2714,7 +2714,7 @@ function H$(e, t, n, o) {
 function V$(e, t, n, o, r, i) {
   return c.EveryAll(r["~refine"], 0, (a, s) => a.check(i) || t.AddError("~refine", n, o, { index: s, message: a.error(i) }));
 }
-var px = d(() => {
+var px = p(() => {
   Uo();
   I();
 });
@@ -2748,7 +2748,7 @@ function mx(e, t, n = !0) {
     return t.reduce((r, i) => mx(r, i, !1), e);
   if (!$n(t) || !n && wn(t))
     return e;
-  let o = !n && si(t) ? [...e, t] : e;
+  let o = !n && ci(t) ? [...e, t] : e;
   return Object.keys(t).reduce((r, i) => mx(r, t[i], !1), o);
 }
 function vu(e, t) {
@@ -2768,7 +2768,7 @@ function B8(e, t) {
 }
 function q8(e, t) {
   let n = wn(t) ? mx(e.dynamicAnchors, t) : e.dynamicAnchors;
-  return si(t) ? [...n, t] : n;
+  return ci(t) ? [...n, t] : n;
 }
 function G8(e, t) {
   return wn(t) ? !1 : e.pendingResource;
@@ -2793,7 +2793,7 @@ function H8(e, t) {
   return n ? n.root : wn(t) ? t : e.lexicalSchema;
 }
 function V8(e, t) {
-  return $n(t) && (wn(t) || si(t) || c.IsUndefined(e.recursiveAnchor) && hu(t) || !c.IsUndefined(vu(e, t)));
+  return $n(t) && (wn(t) || ci(t) || c.IsUndefined(e.recursiveAnchor) && hu(t) || !c.IsUndefined(vu(e, t)));
 }
 function Ss(e, t) {
   return V8(e, t) ? {
@@ -2810,14 +2810,14 @@ function Ss(e, t) {
     enteredResource: W$(e, t)
   } : e;
 }
-var xu, Iu = d(() => {
+var xu, Iu = p(() => {
   I();
   je();
   xu = "urn:typebox:root";
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_unique.mjs
-var Mr = d(() => {
+var Mr = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/additionalItems.mjs
@@ -2833,7 +2833,7 @@ function eP(e, t, n, o, r, i) {
     return c.IsLessThan(u, r.items.length) || cr(e, t, l, m, r.additionalItems, s) && t.AddIndex(u);
   }) : !0;
 }
-var gx = d(() => {
+var gx = p(() => {
   je();
   Mr();
   I();
@@ -2844,14 +2844,14 @@ var gx = d(() => {
 function Vn(e) {
   return e.replace(/~/g, "~0").replace(/\//g, "~1");
 }
-var da = d(() => {
+var da = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_regexp.mjs
-function ui(e) {
+function li(e) {
   return new RegExp(e, "u");
 }
-var jp = d(() => {
+var jp = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/additionalProperties.mjs
@@ -2863,17 +2863,17 @@ function tP(e) {
   return xs(e) && t.push(...c.Keys(e.patternProperties)), vs(e) && t.push(...c.Keys(e.properties).map(W8)), c.IsEqual(t.length, 0) ? "(?!)" : `(${t.join("|")})`;
 }
 function nP(e, t, n, o) {
-  let r = ui(tP(n));
+  let r = li(tP(n));
   return c.Every(c.Keys(o), 0, (a, s) => r.test(a) || sr(e, t, n.additionalProperties, o[a]) && t.AddKey(a));
 }
 function rP(e, t, n, o, r, i) {
-  let a = ui(tP(r)), s = [];
+  let a = li(tP(r)), s = [];
   return c.EveryAll(c.Keys(i), 0, (l, m) => {
     let h = `${n}/additionalProperties`, b = `${o}/${Vn(l)}`, f = a.test(l) || cr(e, t, h, b, r.additionalProperties, i[l]) && t.AddKey(l);
     return f || s.push(l), f;
   }) || t.AddError("additionalProperties", n, o, { additionalProperties: s });
 }
-var hx = d(() => {
+var hx = p(() => {
   je();
   Uo();
   da();
@@ -2884,7 +2884,7 @@ var hx = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_reducer.mjs
-var _s = d(() => {
+var _s = p(() => {
   I();
   nt();
 });
@@ -2904,7 +2904,7 @@ function iP(e, t, n, o, r, i) {
   }, []), u = c.IsEqual(s.length, r.allOf.length) && t.Merge(s);
   return u || a.forEach((l) => t.AddErrors(l.GetErrors())), u;
 }
-var bx = d(() => {
+var bx = p(() => {
   to();
   _s();
   I();
@@ -2926,7 +2926,7 @@ function sP(e, t, n, o, r, i) {
   }, []), u = c.IsGreaterThan(s.length, 0) && t.Merge(s);
   return u || a.forEach((l) => t.AddErrors(l.GetErrors())), u || t.AddError("anyOf", n, o, {});
 }
-var xx = d(() => {
+var xx = p(() => {
   _s();
   to();
   nt();
@@ -2940,7 +2940,7 @@ function vx(e, t, n, o) {
 function cP(e, t, n, o, r, i) {
   return vx(e, t, r, i) || t.AddError("boolean", n, o, {});
 }
-var Ix = d(() => {
+var Ix = p(() => {
   I();
 });
 
@@ -2951,7 +2951,7 @@ function wx(e, t, n, o) {
 function uP(e, t, n, o, r, i) {
   return wx(e, t, r, i) || t.AddError("const", n, o, { allowedValue: r.const });
 }
-var Sx = d(() => {
+var Sx = p(() => {
   Uo();
   I();
 });
@@ -2966,7 +2966,7 @@ function kx(e, t, n, o) {
 function lP(e, t, n, o, r, i) {
   return kx(e, t, r, i) || t.AddError("contains", n, o, { minContains: 1 });
 }
-var _x = d(() => {
+var _x = p(() => {
   je();
   Mr();
   I();
@@ -2985,7 +2985,7 @@ function pP(e, t, n, o, r, i) {
   });
   return a || s;
 }
-var Ex = d(() => {
+var Ex = p(() => {
   da();
   I();
   nt();
@@ -3000,7 +3000,7 @@ function fP(e, t, n, o, r, i) {
   let a = c.IsEqual(c.Keys(i).length, 0), s = c.EveryAll(c.Entries(r.dependentRequired), 0, ([u, l]) => !c.HasPropertyKey(i, u) || c.EveryAll(l, 0, (m) => c.HasPropertyKey(i, m) || t.AddError("dependentRequired", n, o, { property: u, dependencies: l })));
   return a || s;
 }
-var Tx = d(() => {
+var Tx = p(() => {
   I();
 });
 
@@ -3016,14 +3016,14 @@ function hP(e, t, n, o, r, i) {
   });
   return a || s;
 }
-var Cx = d(() => {
+var Cx = p(() => {
   da();
   I();
   nt();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/pointer/pointer_get.mjs
-var yP = d(() => {
+var yP = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/pointer/pointer.mjs
@@ -3082,12 +3082,12 @@ function Q8(e, t) {
   let r = vP(e, n, o);
   return c.IsArray(r) && /^(0|[1-9]\d*)$/.test(o) ? r.splice(Number(o), 1) : delete r[o], e;
 }
-var IP = d(() => {
+var IP = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/pointer/index.mjs
-var Bp = d(() => {
+var Bp = p(() => {
   yP();
   IP();
 });
@@ -3118,7 +3118,7 @@ function nJ(e) {
   return e.startsWith("#/");
 }
 function wP(e, t) {
-  if (c.IsObject(e) && si(e) && c.IsEqual(e.$dynamicAnchor, t))
+  if (c.IsObject(e) && ci(e) && c.IsEqual(e.$dynamicAnchor, t))
     return e;
   if (c.IsObject(e))
     for (let n of c.Keys(e)) {
@@ -3169,7 +3169,7 @@ function oJ(e, t, n) {
   return c.IsEqual(o.href, r.href) ? e : void 0;
 }
 function iJ(e, t, n) {
-  if (!si(e))
+  if (!ci(e))
     return;
   let o = new URL(`#${e.$dynamicAnchor}`, t.href), r = new URL(n.href, t.href);
   return c.IsEqual(o.href, r.href) ? e : void 0;
@@ -3289,7 +3289,7 @@ function EP(e, t) {
   return e.dynamicAnchors.find((n) => c.IsEqual(n.$dynamicAnchor, t)) ?? wP(e.schema, t);
 }
 function kJ(e, t, n) {
-  if (!$n(n) || !si(n))
+  if (!$n(n) || !ci(n))
     return n;
   let o = _P(e, t);
   return nJ(o) ? n : EP(e, n.$dynamicAnchor);
@@ -3302,7 +3302,7 @@ function EJ(e, t) {
   let n = t.$dynamicRef.startsWith("#") ? e.lexicalSchema : e.schema, o = Gp(e.context, n, e.lexicalBase, t.$dynamicRef);
   return c.IsUndefined(o) ? _J(e, t) : kJ(e, t, o);
 }
-var TP = d(() => {
+var TP = p(() => {
   I();
   Bp();
   je();
@@ -3310,7 +3310,7 @@ var TP = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/resolve/index.mjs
-var Es = d(() => {
+var Es = p(() => {
   TP();
 });
 
@@ -3323,7 +3323,7 @@ function RP(e, t, n, o, r, i) {
   let a = yr.DynamicRef(e, r) ?? !1, s = a ? { ...e, pendingResource: !0 } : e;
   return oe(a) && Ve(s, t, n, o, a, i);
 }
-var AP = d(() => {
+var AP = p(() => {
   je();
   ku();
   Es();
@@ -3337,7 +3337,7 @@ function Nx(e, t, n, o) {
 function $P(e, t, n, o, r, i) {
   return Nx(e, t, r, i) || t.AddError("enum", n, o, { allowedValues: r.enum });
 }
-var Ux = d(() => {
+var Ux = p(() => {
   Uo();
   I();
 });
@@ -3349,7 +3349,7 @@ function Lx(e, t, n, o) {
 function PP(e, t, n, o, r, i) {
   return Lx(e, t, r, i) || t.AddError("exclusiveMaximum", n, o, { comparison: "<", limit: r.exclusiveMaximum });
 }
-var Fx = d(() => {
+var Fx = p(() => {
   I();
 });
 
@@ -3360,7 +3360,7 @@ function zx(e, t, n, o) {
 function OP(e, t, n, o, r, i) {
   return zx(e, t, r, i) || t.AddError("exclusiveMinimum", n, o, { comparison: ">", limit: r.exclusiveMinimum });
 }
-var jx = d(() => {
+var jx = p(() => {
   I();
 });
 
@@ -3375,7 +3375,7 @@ function Ts(e) {
   let n = +t[1], o = +t[2], r = +t[3];
   return o >= 1 && o <= 12 && r >= 1 && r <= (o === 2 && RJ(n) ? 29 : TJ[o]);
 }
-var TJ, CJ, Kp = d(() => {
+var TJ, CJ, Kp = p(() => {
   TJ = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], CJ = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
 });
 
@@ -3397,7 +3397,7 @@ function Cs(e, t = !0) {
   let a = n[5] === "-" ? -1 : 1, s = +(n[6] || 0), u = +(n[7] || 0);
   return ((o * 60 + r - a * (s * 60 + u)) % 1440 + 1440) % 1440 === 1439;
 }
-var AJ, Hp = d(() => {
+var AJ, Hp = p(() => {
   AJ = /^(\d\d):(\d\d):(\d\d)(?:\.\d+)?(?:([Zz])|([+-])(\d\d):(\d\d))?$/;
 });
 
@@ -3406,7 +3406,7 @@ function Vp(e) {
   let t = e.split(/T/i);
   return t.length === 2 && Ts(t[0]) && Cs(t[1]);
 }
-var Bx = d(() => {
+var Bx = p(() => {
   Kp();
   Hp();
 });
@@ -3415,7 +3415,7 @@ var Bx = d(() => {
 function Wp(e) {
   return $J.test(e);
 }
-var $J, qx = d(() => {
+var $J, qx = p(() => {
   $J = /^P((\d+Y(\d+M(\d+D)?)?|\d+M(\d+D)?|\d+D)(T(\d+H(\d+M(\d+S)?)?|\d+M(\d+S)?|\d+S))?|T(\d+H(\d+M(\d+S)?)?|\d+M(\d+S)?|\d+S)|\d+W)$/;
 });
 
@@ -3423,12 +3423,12 @@ var $J, qx = d(() => {
 function Zp(e) {
   return PJ.test(e);
 }
-var PJ, Gx = d(() => {
+var PJ, Gx = p(() => {
   PJ = /^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[^"\\]|\\[\x20-\x7e])*")@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[(?:IPv6:[a-f0-9:]+|(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3})\])$/i;
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/format/idna/pattern/pattern.mjs
-var DP, MP, NP, Rs, OJ, UP, DJ, MJ, NJ, Kx, UJ, LP, Hx, LJ, FP, Jp, zP, jP, Vx, BP, FJ, zJ, qP, GP, As = d(() => {
+var DP, MP, NP, Rs, OJ, UP, DJ, MJ, NJ, Kx, UJ, LP, Hx, LJ, FP, Jp, zP, jP, Vx, BP, FJ, zJ, qP, GP, As = p(() => {
   DP = /^(?!-).*(?<!-)$/, MP = /^(?!..--)/, NP = /^[a-zA-Z0-9-]*$/, Rs = /[^\p{ASCII}]/u, OJ = /[0-9]/, UP = /[\u{0660}-\u{0669}]/u, DJ = /[\u{06f0}-\u{06f9}]/u, MJ = /[\u{002e}\u{002c}\u{003a}\u{002f}]/u, NJ = /[\u{002d}\u{002b}]/u, Kx = /\p{Mn}/u, UJ = /\p{Mc}/u, LP = /[\p{Mn}\p{Mc}\p{Me}]/u, Hx = /\p{L}/u, LJ = /\p{Nd}/u, FP = /\p{Script=Greek}/u, Jp = /\p{Script=Hebrew}/u, zP = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, jP = /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Mandaic}]/u, Vx = /[\u{094d}\u{09cd}\u{0a4d}\u{0acd}\u{0b4d}\u{0bcd}\u{0c4d}\u{0ccd}\u{0d3b}\u{0d3c}\u{0d4d}\u{0dca}\u{1b44}\u{1baa}\u{1bab}\u{a9c0}\u{11046}\u{1107f}\u{110b9}\u{11133}\u{11134}\u{111c0}\u{11235}\u{1134d}\u{11442}\u{114c2}\u{115bf}\u{1163f}\u{116b6}\u{11c3f}\u{11d44}\u{11d45}]/u, BP = /[\u{0640}\u{07fa}\u{302e}\u{302f}\u{3031}\u{3032}\u{3033}\u{3034}\u{3035}\u{303b}]/u, FJ = /[\u{00b7}\u{0375}\u{05f3}\u{05f4}\u{200c}\u{200d}\u{30fb}]/u, zJ = /[\u{00df}\u{03c2}\u{06fd}\u{06fe}\u{0f0b}\u{3007}]/u, qP = new RegExp([
     OJ,
     DJ
@@ -3448,7 +3448,7 @@ var DP, MP, NP, Rs, OJ, UP, DJ, MJ, NJ, Kx, UJ, LP, Hx, LJ, FP, Jp, zP, jP, Vx, 
 function KP(e) {
   return DP.test(e) && MP.test(e) && NP.test(e);
 }
-var HP = d(() => {
+var HP = p(() => {
   As();
 });
 
@@ -3516,7 +3516,7 @@ function YP(e) {
   }
   return o.join("");
 }
-var Ur, Eu, Tu, BJ, qJ, WP, ZP, GJ, Qp = d(() => {
+var Ur, Eu, Tu, BJ, qJ, WP, ZP, GJ, Qp = p(() => {
   As();
   Ur = 36, Eu = 1, Tu = 26, BJ = 38, qJ = 700, WP = 72, ZP = 128;
   GJ = new RegExp(Rs.source, "gu");
@@ -3561,7 +3561,7 @@ function tm(e) {
   }
   return !(t && o && r);
 }
-var KJ, XP, HJ, Jx = d(() => {
+var KJ, XP, HJ, Jx = p(() => {
   Qp();
   As();
   KJ = /^(?:R|AL|AN|EN|ES|CS|ET|ON|BN|NSM)$/, XP = /^(?:L|EN|ES|CS|ET|ON|BN|NSM)$/, HJ = /^(?:R|AL|AN)$/;
@@ -3618,7 +3618,7 @@ function nm(e) {
   }
   return !(e.includes("\u30FB") && !r);
 }
-var Yx = d(() => {
+var Yx = p(() => {
   As();
   Jx();
   Qp();
@@ -3638,7 +3638,7 @@ function rm(e) {
     return !1;
   }
 }
-var Xx = d(() => {
+var Xx = p(() => {
   Qp();
   Yx();
   As();
@@ -3654,7 +3654,7 @@ function JJ(e) {
 function oO(e) {
   return e.length === 0 || e.length > 253 || e.charCodeAt(e.length - 1) === 46 ? !1 : e.split(".").every((t) => JJ(t));
 }
-var iO = d(() => {
+var iO = p(() => {
   HP();
   Xx();
 });
@@ -3678,14 +3678,14 @@ function aO(e) {
   let n = t.split("."), o = n.some((r) => QP(r));
   return n.every((r) => XJ(r) && (!o || tm(r)));
 }
-var sO = d(() => {
+var sO = p(() => {
   Jx();
   Yx();
   Xx();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/format/idna/index.mjs
-var Qx = d(() => {
+var Qx = p(() => {
   iO();
   sO();
 });
@@ -3694,7 +3694,7 @@ var Qx = d(() => {
 function om(e) {
   return oO(e);
 }
-var ev = d(() => {
+var ev = p(() => {
   Qx();
 });
 
@@ -3702,7 +3702,7 @@ var ev = d(() => {
 function im(e) {
   return e7.test(e.normalize("NFC"));
 }
-var e7, tv = d(() => {
+var e7, tv = p(() => {
   e7 = /^(?:[A-Za-z0-9!#$%&'*+\/=?^_`{|}~\u{0080}-\u{10FFFF}-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~\u{0080}-\u{10FFFF}-]+)*|"(?:[^"\\]|\\.)*")@[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})(?<!-)(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})(?<!-))*$/iu;
 });
 
@@ -3710,7 +3710,7 @@ var e7, tv = d(() => {
 function am(e) {
   return aO(e);
 }
-var nv = d(() => {
+var nv = p(() => {
   Qx();
 });
 
@@ -3718,7 +3718,7 @@ var nv = d(() => {
 function sm(e) {
   return t7.test(e);
 }
-var t7, rv = d(() => {
+var t7, rv = p(() => {
   t7 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 });
 
@@ -3726,7 +3726,7 @@ var t7, rv = d(() => {
 function cm(e) {
   return n7.test(e);
 }
-var n7, ov = d(() => {
+var n7, ov = p(() => {
   n7 = /^(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:)?[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)$/i;
 });
 
@@ -3734,7 +3734,7 @@ var n7, ov = d(() => {
 function um(e) {
   return !r7.test(e) && !o7.test(e) && URL.canParse(e, "http://example.com");
 }
-var r7, o7, iv = d(() => {
+var r7, o7, iv = p(() => {
   r7 = /[\x00-\x20\x7F\\]|%(?![0-9a-fA-F]{2})/, o7 = /^[a-zA-Z][a-zA-Z0-9+\-.]*\/\//;
 });
 
@@ -3742,7 +3742,7 @@ var r7, o7, iv = d(() => {
 function lm(e) {
   return i7.test(e) || a7.test(e) ? !1 : URL.canParse(e);
 }
-var i7, a7, av = d(() => {
+var i7, a7, av = p(() => {
   i7 = /[\x00-\x20<>\^`{|}\\]/, a7 = /%(?![0-9a-fA-F]{2})/;
 });
 
@@ -3750,7 +3750,7 @@ var i7, a7, av = d(() => {
 function dm(e) {
   return s7.test(e);
 }
-var s7, sv = d(() => {
+var s7, sv = p(() => {
   s7 = /^#(?:\/(?:[a-z0-9_\-.!$&'()*+,;:=@]|%[0-9a-f]{2}|~0|~1)*)*$/i;
 });
 
@@ -3758,7 +3758,7 @@ var s7, sv = d(() => {
 function pm(e) {
   return c7.test(e);
 }
-var c7, cv = d(() => {
+var c7, cv = p(() => {
   c7 = /^(?:\/(?:[^~/]|~0|~1)*)*$/;
 });
 
@@ -3770,14 +3770,14 @@ function mm(e) {
     return !1;
   }
 }
-var uv = d(() => {
+var uv = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/format/relative_json_pointer.mjs
 function fm(e) {
   return u7.test(e);
 }
-var u7, lv = d(() => {
+var u7, lv = p(() => {
   u7 = /^(?:0|[1-9][0-9]*)(?:#|(?:\/(?:[^~/]|~0|~1)*)*)$/;
 });
 
@@ -3785,7 +3785,7 @@ var u7, lv = d(() => {
 function gm(e) {
   return l7.test(e);
 }
-var l7, dv = d(() => {
+var l7, dv = p(() => {
   l7 = /^(?:[a-z][a-z0-9+\-.]*:(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?)(?:\?(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
 });
 
@@ -3793,7 +3793,7 @@ var l7, dv = d(() => {
 function hm(e) {
   return d7.test(e);
 }
-var d7, pv = d(() => {
+var d7, pv = p(() => {
   d7 = /^(?:(?:[^\x00-\x20"<>%\\^`{|}\x7f]|%[0-9a-f]{2})|\{[+#./;?&=,!@|]?(?:[a-z0-9_]|%[0-9a-f]{2})+(?:\.(?:[a-z0-9_]|%[0-9a-f]{2})+)*(?::[1-9]\d{0,3}|\*)?(?:,(?:[a-z0-9_]|%[0-9a-f]{2})+(?:\.(?:[a-z0-9_]|%[0-9a-f]{2})+)*(?::[1-9]\d{0,3}|\*)?)*\})*$/i;
 });
 
@@ -3801,7 +3801,7 @@ var d7, pv = d(() => {
 function ym(e) {
   return p7.test(e);
 }
-var p7, mv = d(() => {
+var p7, mv = p(() => {
   p7 = /^[a-z][a-z0-9+\-.]*:(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?(?:\?(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
 });
 
@@ -3809,14 +3809,14 @@ var p7, mv = d(() => {
 function bm(e) {
   return URL.canParse(e);
 }
-var fv = d(() => {
+var fv = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/format/uuid.mjs
 function xm(e) {
   return m7.test(e);
 }
-var m7, gv = d(() => {
+var m7, gv = p(() => {
   m7 = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 });
 
@@ -3842,7 +3842,7 @@ function b7(e, t) {
 function lO() {
   uO(), et.set("date-time", Vp), et.set("date", Ts), et.set("duration", Wp), et.set("email", Zp), et.set("hostname", om), et.set("idn-email", im), et.set("idn-hostname", am), et.set("ipv4", sm), et.set("ipv6", cm), et.set("iri-reference", um), et.set("iri", lm), et.set("json-pointer-uri-fragment", dm), et.set("json-pointer", pm), et.set("regex", mm), et.set("relative-json-pointer", fm), et.set("time", Cs), et.set("uri-reference", gm), et.set("uri-template", hm), et.set("uri", ym), et.set("url", bm), et.set("uuid", xm);
 }
-var et, dO = d(() => {
+var et, dO = p(() => {
   Bx();
   Kp();
   qx();
@@ -3900,7 +3900,7 @@ ct(Cu, {
   Set: () => g7,
   Test: () => b7
 });
-var vm = d(() => {
+var vm = p(() => {
   dO();
   Bx();
   Kp();
@@ -3926,7 +3926,7 @@ var vm = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/format/index.mjs
-var pO = d(() => {
+var pO = p(() => {
   vm();
   vm();
   vm();
@@ -3939,7 +3939,7 @@ function hv(e, t, n, o) {
 function mO(e, t, n, o, r, i) {
   return hv(e, t, r, i) || t.AddError("format", n, o, { format: r.format });
 }
-var yv = d(() => {
+var yv = p(() => {
   Uo();
   pO();
   I();
@@ -3954,7 +3954,7 @@ function gO(e, t, n, o, r, i) {
   let a = zp(r) ? r.then : !0, s = Pp(r) ? r.else : !0, u = new sn(), l = Ve(e, u, `${n}/if`, o, r.if, i) ? Ve(e, u, `${n}/then`, o, a, i) || t.AddError("if", n, o, { failingKeyword: "then" }) : Ve(e, t, `${n}/else`, o, s, i) || t.AddError("if", n, o, { failingKeyword: "else" });
   return l && t.Merge([u]), l;
 }
-var bv = d(() => {
+var bv = p(() => {
   je();
   to();
   nt();
@@ -3988,7 +3988,7 @@ function hO(e, t, n, o) {
 function yO(e, t, n, o, r, i) {
   return Dp(r) ? v7(e, t, n, o, r, i) : w7(e, t, n, o, r, i);
 }
-var xv = d(() => {
+var xv = p(() => {
   je();
   nt();
   I();
@@ -3996,7 +3996,7 @@ var xv = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/maxContains.mjs
 function S7(e) {
-  return ai(e);
+  return si(e);
 }
 function vv(e, t, n, o) {
   if (!S7(n))
@@ -4008,7 +4008,7 @@ function bO(e, t, n, o, r, i) {
   let a = aa(r) ? r.minContains : 1;
   return vv(e, t, r, i) || t.AddError("contains", n, o, { minContains: a, maxContains: r.maxContains });
 }
-var Iv = d(() => {
+var Iv = p(() => {
   je();
   Mr();
   I();
@@ -4022,7 +4022,7 @@ function wv(e, t, n, o) {
 function xO(e, t, n, o, r, i) {
   return wv(e, t, r, i) || t.AddError("maximum", n, o, { comparison: "<=", limit: r.maximum });
 }
-var Sv = d(() => {
+var Sv = p(() => {
   I();
 });
 
@@ -4033,7 +4033,7 @@ function kv(e, t, n, o) {
 function vO(e, t, n, o, r, i) {
   return kv(e, t, r, i) || t.AddError("maxItems", n, o, { limit: r.maxItems });
 }
-var _v = d(() => {
+var _v = p(() => {
   I();
 });
 
@@ -4044,7 +4044,7 @@ function Ev(e, t, n, o) {
 function IO(e, t, n, o, r, i) {
   return Ev(e, t, r, i) || t.AddError("maxLength", n, o, { limit: r.maxLength });
 }
-var Tv = d(() => {
+var Tv = p(() => {
   I();
 });
 
@@ -4055,13 +4055,13 @@ function Cv(e, t, n, o) {
 function wO(e, t, n, o, r, i) {
   return Cv(e, t, r, i) || t.AddError("maxProperties", n, o, { limit: r.maxProperties });
 }
-var Rv = d(() => {
+var Rv = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/minContains.mjs
 function k7(e) {
-  return ai(e);
+  return si(e);
 }
 function Av(e, t, n, o) {
   if (!k7(n))
@@ -4072,7 +4072,7 @@ function Av(e, t, n, o) {
 function SO(e, t, n, o, r, i) {
   return Av(e, t, r, i) || t.AddError("contains", n, o, { minContains: r.minContains });
 }
-var $v = d(() => {
+var $v = p(() => {
   je();
   Mr();
   I();
@@ -4086,7 +4086,7 @@ function Pv(e, t, n, o) {
 function kO(e, t, n, o, r, i) {
   return Pv(e, t, r, i) || t.AddError("minimum", n, o, { comparison: ">=", limit: r.minimum });
 }
-var Ov = d(() => {
+var Ov = p(() => {
   I();
 });
 
@@ -4097,7 +4097,7 @@ function Dv(e, t, n, o) {
 function _O(e, t, n, o, r, i) {
   return Dv(e, t, r, i) || t.AddError("minItems", n, o, { limit: r.minItems });
 }
-var Mv = d(() => {
+var Mv = p(() => {
   I();
 });
 
@@ -4108,7 +4108,7 @@ function Nv(e, t, n, o) {
 function EO(e, t, n, o, r, i) {
   return Nv(e, t, r, i) || t.AddError("minLength", n, o, { limit: r.minLength });
 }
-var Uv = d(() => {
+var Uv = p(() => {
   I();
 });
 
@@ -4119,7 +4119,7 @@ function Lv(e, t, n, o) {
 function TO(e, t, n, o, r, i) {
   return Lv(e, t, r, i) || t.AddError("minProperties", n, o, { limit: r.minProperties });
 }
-var Fv = d(() => {
+var Fv = p(() => {
   I();
 });
 
@@ -4130,7 +4130,7 @@ function zv(e, t, n, o) {
 function CO(e, t, n, o, r, i) {
   return zv(e, t, r, i) || t.AddError("multipleOf", n, o, { multipleOf: r.multipleOf });
 }
-var jv = d(() => {
+var jv = p(() => {
   I();
 });
 
@@ -4142,7 +4142,7 @@ function Bv(e, t, n, o) {
 function RO(e, t, n, o, r, i) {
   return Bv(e, t, r, i) || t.AddError("not", n, o, {});
 }
-var qv = d(() => {
+var qv = p(() => {
   _s();
   to();
   nt();
@@ -4164,7 +4164,7 @@ function $O(e, t, n, o, r, i) {
   }, []), l = c.IsEqual(u.length, 1) && t.Merge(u);
   return !l && c.IsEqual(s.length, 0) && a.forEach((m) => t.AddErrors(m.GetErrors())), l || t.AddError("oneOf", n, o, { passingSchemas: s });
 }
-var Gv = d(() => {
+var Gv = p(() => {
   _s();
   Mr();
   to();
@@ -4174,12 +4174,12 @@ var Gv = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/pattern.mjs
 function Kv(e, t, n, o) {
-  return (c.IsString(n.pattern) ? ui(n.pattern) : n.pattern).test(o);
+  return (c.IsString(n.pattern) ? li(n.pattern) : n.pattern).test(o);
 }
 function PO(e, t, n, o, r, i) {
   return Kv(e, t, r, i) || t.AddError("pattern", n, o, { pattern: r.pattern });
 }
-var Hv = d(() => {
+var Hv = p(() => {
   Uo();
   jp();
   I();
@@ -4188,20 +4188,20 @@ var Hv = d(() => {
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/patternProperties.mjs
 function OO(e, t, n, o) {
   return c.Every(c.Entries(n.patternProperties), 0, ([r, i]) => {
-    let a = ui(r);
+    let a = li(r);
     return c.Every(c.Entries(o), 0, ([s, u]) => !a.test(s) || sr(e, t, i, u) && t.AddKey(s));
   });
 }
 function DO(e, t, n, o, r, i) {
   return c.EveryAll(c.Entries(r.patternProperties), 0, ([a, s]) => {
-    let u = `${n}/patternProperties/${Vn(a)}`, l = ui(a);
+    let u = `${n}/patternProperties/${Vn(a)}`, l = li(a);
     return c.EveryAll(c.Entries(i), 0, ([m, h]) => {
       let b = `${o}/${Vn(m)}`;
       return !l.test(m) || cr(e, t, u, b, s, h) && t.AddKey(m);
     });
   });
 }
-var Vv = d(() => {
+var Vv = p(() => {
   Uo();
   da();
   Mr();
@@ -4220,7 +4220,7 @@ function NO(e, t, n, o, r, i) {
     return c.IsLessEqualThan(i.length, s) || cr(e, t, u, l, a, i[s]) && t.AddIndex(s);
   });
 }
-var Wv = d(() => {
+var Wv = p(() => {
   nt();
   I();
 });
@@ -4232,7 +4232,7 @@ function Zv(e, t) {
 function Jv(e, t) {
   return c.IsUndefined(e[t]);
 }
-var UO = d(() => {
+var UO = p(() => {
   eo();
   I();
 });
@@ -4252,7 +4252,7 @@ function FO(e, t, n, o, r, i) {
     return Zv(a, u) ? b() : Jv(i, u) || b();
   });
 }
-var Yv = d(() => {
+var Yv = p(() => {
   je();
   da();
   nt();
@@ -4271,7 +4271,7 @@ function jO(e, t, n, o, r, i) {
     return b || a.push(u), b;
   }) || t.AddError("propertyNames", n, o, { propertyNames: a });
 }
-var Xv = d(() => {
+var Xv = p(() => {
   da();
   Mr();
   nt();
@@ -4287,7 +4287,7 @@ function qO(e, t, n, o, r, i) {
   let a = yr.RecursiveRef(e, r) ?? !1, s = a ? { ...e, pendingResource: !0 } : e;
   return oe(a) && Ve(s, t, n, o, a, i);
 }
-var Qv = d(() => {
+var Qv = p(() => {
   je();
   ku();
   Es();
@@ -4303,7 +4303,7 @@ function KO(e, t, n, o, r, i) {
   let a = yr.Ref(e, r), s = a.schema ?? !1, u = new sn(), l = oe(s) && Ve(a.stack, u, n, o, s, i);
   return l && t.Merge([u]), l || t.AddErrors(u.GetErrors()), l;
 }
-var eI = d(() => {
+var eI = p(() => {
   ku();
   je();
   Es();
@@ -4323,7 +4323,7 @@ function VO(e, t, n, o, r, i) {
     return l || a.push(u), l;
   }) || t.AddError("required", n, o, { requiredProperties: a });
 }
-var tI = d(() => {
+var tI = p(() => {
   I();
 });
 
@@ -4346,7 +4346,7 @@ function ZO(e, t, n, o) {
 function JO(e, t, n, o, r, i) {
   return (c.IsArray(r.type) ? WO(e, t, r.type, r, i) : nI(e, t, r.type, r, i)) || t.AddError("type", n, o, { type: r.type });
 }
-var rI = d(() => {
+var rI = p(() => {
   I();
 });
 
@@ -4362,7 +4362,7 @@ function XO(e, t, n, o, r, i) {
     return b || s.push(m), b;
   }) || t.AddError("unevaluatedItems", n, o, { unevaluatedItems: s });
 }
-var oI = d(() => {
+var oI = p(() => {
   Mr();
   to();
   nt();
@@ -4381,7 +4381,7 @@ function eD(e, t, n, o, r, i) {
     return b || s.push(l), b;
   }) || t.AddError("unevaluatedProperties", n, o, { unevaluatedProperties: s });
 }
-var iI = d(() => {
+var iI = p(() => {
   Mr();
   to();
   nt();
@@ -4392,11 +4392,11 @@ var iI = d(() => {
 function ft() {
   throw new Error("Unreachable");
 }
-var aI = d(() => {
+var aI = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/unreachable/index.mjs
-var Lr = d(() => {
+var Lr = p(() => {
   aI();
 });
 
@@ -4424,7 +4424,7 @@ function Qt(e) {
 function A7(e) {
   Qt(kn.Array);
   for (let t of e)
-    li(t);
+    di(t);
 }
 function $7(e) {
   Qt(kn.BigInt), oD.setBigInt64(0, e);
@@ -4435,13 +4435,13 @@ function tD(e) {
   Qt(kn.Boolean), Qt(e ? 1 : 0);
 }
 function P7(e) {
-  Qt(kn.Constructor), li(e.toString());
+  Qt(kn.Constructor), di(e.toString());
 }
 function O7(e) {
-  Qt(kn.Date), li(e.getTime());
+  Qt(kn.Date), di(e.getTime());
 }
 function D7(e) {
-  Qt(kn.Function), li(e.toString());
+  Qt(kn.Function), di(e.toString());
 }
 function M7(e) {
   Qt(kn.Null);
@@ -4459,7 +4459,7 @@ function nD(e) {
 function N7(e) {
   Qt(kn.Object);
   for (let t of _7(e).sort())
-    li(t), li(e[t]);
+    di(t), di(e[t]);
 }
 function U7(e) {
   Qt(kn.RegExp), sI(e.toString());
@@ -4470,7 +4470,7 @@ function sI(e) {
     Qt(t);
 }
 function F7(e) {
-  Qt(kn.Symbol), li(e.toString());
+  Qt(kn.Symbol), di(e.toString());
 }
 function z7(e) {
   Qt(kn.TypeArray);
@@ -4481,16 +4481,16 @@ function z7(e) {
 function j7(e) {
   return Qt(kn.Undefined);
 }
-function li(e) {
+function di(e) {
   return Ot.IsTypeArray(e) ? z7(e) : Ot.IsDate(e) ? O7(e) : Ot.IsRegExp(e) ? U7(e) : Ot.IsBoolean(e) ? tD(e.valueOf()) : Ot.IsString(e) ? sI(e.valueOf()) : Ot.IsNumber(e) ? nD(e.valueOf()) : E7(e) ? nD(e) : c.IsArray(e) ? A7(e) : c.IsBoolean(e) ? tD(e) : c.IsBigInt(e) ? $7(e) : c.IsConstructor(e) ? P7(e) : c.IsNull(e) ? M7(e) : c.IsObject(e) ? N7(e) : c.IsString(e) ? sI(e) : c.IsSymbol(e) ? F7(e) : c.IsUndefined(e) ? j7(e) : c.IsFunction(e) ? D7(e) : ft();
 }
 function aD(e) {
-  return $s = BigInt("14695981039346656037"), li(e), $s;
+  return $s = BigInt("14695981039346656037"), di(e), $s;
 }
 function B7(e) {
   return aD(e).toString(16).padStart(16, "0");
 }
-var kn, $s, T7, C7, R7, rD, oD, iD, L7, sD = d(() => {
+var kn, $s, T7, C7, R7, rD, oD, iD, L7, sD = p(() => {
   Lr();
   I();
   (function(e) {
@@ -4504,7 +4504,7 @@ var kn, $s, T7, C7, R7, rD, oD, iD, L7, sD = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/hashing/index.mjs
-var Ru = d(() => {
+var Ru = p(() => {
   sD();
 });
 
@@ -4527,7 +4527,7 @@ function lD(e, t, n, o, r, i) {
   }, []);
   return c.IsEqual(s.length, 0) || t.AddError("uniqueItems", n, o, { duplicateItems: s });
 }
-var cI = d(() => {
+var cI = p(() => {
   Ru();
   I();
 });
@@ -4538,7 +4538,7 @@ function sr(e, t, n, o) {
 }
 function Te(e, t, n, o) {
   let r = Ss(e, n);
-  return oa(n) ? vx(r, t, n, o) : (!dx(n) || ZO(r, t, n, o)) && (!(c.IsObject(o) && !c.IsArray(o)) || (!ua(n) || HO(r, t, n, o)) && (!hr(n) || nP(r, t, n, o)) && (!nx(n) || dP(r, t, n, o)) && (!rx(n) || mP(r, t, n, o)) && (!Ap(n) || gP(r, t, n, o)) && (!xs(n) || OO(r, t, n, o)) && (!vs(n) || LO(r, t, n, o)) && (!Up(n) || zO(r, t, n, o)) && (!fu(n) || Lv(r, t, n, o)) && (!ux(n) || Cv(r, t, n, o))) && (!c.IsArray(o) || (!Tp(n) || Q$(r, t, n, o)) && (!ai(n) || kx(r, t, n, o)) && (!ia(n) || hO(r, t, n, o)) && (!aa(n) || Av(r, t, n, o)) && (!sx(n) || vv(r, t, n, o)) && (!sa(n) || Dv(r, t, n, o)) && (!pu(n) || kv(r, t, n, o)) && (!ca(n) || MO(r, t, n, o)) && (!ci(n) || uD(r, t, n, o))) && (!c.IsString(o) || (!mu(n) || Nv(r, t, n, o)) && (!cx(n) || Ev(r, t, n, o)) && (!du(n) || hv(r, t, n, o)) && (!gu(n) || Kv(r, t, n, o))) && (!(c.IsNumber(o) || c.IsBigInt(o)) || (!Mo(n) || zx(r, t, n, o)) && (!ix(n) || Lx(r, t, n, o)) && (!No(n) || Pv(r, t, n, o)) && (!ax(n) || wv(r, t, n, o)) && (!lx(n) || zv(r, t, n, o))) && (!Fp(n) || GO(r, t, n, o)) && (!Lp(n) || BO(r, t, n, o)) && (!$p(n) || CP(r, t, n, o)) && (!tx(n) || wx(r, t, n, o)) && (!ox(n) || Nx(r, t, n, o)) && (!Op(n) || fO(r, t, n, o)) && (!Mp(n) || Bv(r, t, n, o)) && (!Cp(n) || oP(r, t, n, o)) && (!Rp(n) || aP(r, t, n, o)) && (!Np(n) || AO(r, t, n, o)) && (!yu(n) || !c.IsArray(o) || YO(r, t, n, o)) && (!bu(n) || !c.IsObject(o) || QO(r, t, n, o)) && (!Ep(n) || H$(r, t, n, o));
+  return oa(n) ? vx(r, t, n, o) : (!dx(n) || ZO(r, t, n, o)) && (!(c.IsObject(o) && !c.IsArray(o)) || (!ua(n) || HO(r, t, n, o)) && (!hr(n) || nP(r, t, n, o)) && (!nx(n) || dP(r, t, n, o)) && (!rx(n) || mP(r, t, n, o)) && (!Ap(n) || gP(r, t, n, o)) && (!xs(n) || OO(r, t, n, o)) && (!vs(n) || LO(r, t, n, o)) && (!Up(n) || zO(r, t, n, o)) && (!fu(n) || Lv(r, t, n, o)) && (!ux(n) || Cv(r, t, n, o))) && (!c.IsArray(o) || (!Tp(n) || Q$(r, t, n, o)) && (!si(n) || kx(r, t, n, o)) && (!ia(n) || hO(r, t, n, o)) && (!aa(n) || Av(r, t, n, o)) && (!sx(n) || vv(r, t, n, o)) && (!sa(n) || Dv(r, t, n, o)) && (!pu(n) || kv(r, t, n, o)) && (!ca(n) || MO(r, t, n, o)) && (!ui(n) || uD(r, t, n, o))) && (!c.IsString(o) || (!mu(n) || Nv(r, t, n, o)) && (!cx(n) || Ev(r, t, n, o)) && (!du(n) || hv(r, t, n, o)) && (!gu(n) || Kv(r, t, n, o))) && (!(c.IsNumber(o) || c.IsBigInt(o)) || (!Mo(n) || zx(r, t, n, o)) && (!ix(n) || Lx(r, t, n, o)) && (!No(n) || Pv(r, t, n, o)) && (!ax(n) || wv(r, t, n, o)) && (!lx(n) || zv(r, t, n, o))) && (!Fp(n) || GO(r, t, n, o)) && (!Lp(n) || BO(r, t, n, o)) && (!$p(n) || CP(r, t, n, o)) && (!tx(n) || wx(r, t, n, o)) && (!ox(n) || Nx(r, t, n, o)) && (!Op(n) || fO(r, t, n, o)) && (!Mp(n) || Bv(r, t, n, o)) && (!Cp(n) || oP(r, t, n, o)) && (!Rp(n) || aP(r, t, n, o)) && (!Np(n) || AO(r, t, n, o)) && (!yu(n) || !c.IsArray(o) || YO(r, t, n, o)) && (!bu(n) || !c.IsObject(o) || QO(r, t, n, o)) && (!Ep(n) || H$(r, t, n, o));
 }
 function cr(e, t, n, o, r, i) {
   return t.Push() && Ve(e, t, n, o, r, i) && t.Pop();
@@ -4547,9 +4547,9 @@ function Ve(e, t, n, o, r, i) {
   if (t.AtCapacity())
     return !1;
   let a = Ss(e, r);
-  return oa(r) ? cP(a, t, n, o, r, i) : !!(+(!dx(r) || JO(a, t, n, o, r, i)) & +(!(c.IsObject(i) && !c.IsArray(i)) || !!(+(!ua(r) || VO(a, t, n, o, r, i)) & +(!hr(r) || rP(a, t, n, o, r, i)) & +(!nx(r) || pP(a, t, n, o, r, i)) & +(!rx(r) || fP(a, t, n, o, r, i)) & +(!Ap(r) || hP(a, t, n, o, r, i)) & +(!xs(r) || DO(a, t, n, o, r, i)) & +(!vs(r) || FO(a, t, n, o, r, i)) & +(!Up(r) || jO(a, t, n, o, r, i)) & +(!fu(r) || TO(a, t, n, o, r, i)) & +(!ux(r) || wO(a, t, n, o, r, i)))) & +(!c.IsArray(i) || !!(+(!Tp(r) || eP(a, t, n, o, r, i)) & +(!ai(r) || lP(a, t, n, o, r, i)) & +(!ia(r) || yO(a, t, n, o, r, i)) & +(!aa(r) || SO(a, t, n, o, r, i)) & +(!sx(r) || bO(a, t, n, o, r, i)) & +(!sa(r) || _O(a, t, n, o, r, i)) & +(!pu(r) || vO(a, t, n, o, r, i)) & +(!ca(r) || NO(a, t, n, o, r, i)) & +(!ci(r) || lD(a, t, n, o, r, i)))) & +(!c.IsString(i) || !!(+(!mu(r) || EO(a, t, n, o, r, i)) & +(!cx(r) || IO(a, t, n, o, r, i)) & +(!du(r) || mO(a, t, n, o, r, i)) & +(!gu(r) || PO(a, t, n, o, r, i)))) & +(!(c.IsNumber(i) || c.IsBigInt(i)) || !!(+(!Mo(r) || OP(a, t, n, o, r, i)) & +(!ix(r) || PP(a, t, n, o, r, i)) & +(!No(r) || kO(a, t, n, o, r, i)) & +(!ax(r) || xO(a, t, n, o, r, i)) & +(!lx(r) || CO(a, t, n, o, r, i)))) & +(!Fp(r) || KO(a, t, n, o, r, i)) & +(!Lp(r) || qO(a, t, n, o, r, i)) & +(!$p(r) || RP(a, t, n, o, r, i)) & +(!tx(r) || uP(a, t, n, o, r, i)) & +(!ox(r) || $P(a, t, n, o, r, i)) & +(!Op(r) || gO(a, t, n, o, r, i)) & +(!Mp(r) || RO(a, t, n, o, r, i)) & +(!Cp(r) || iP(a, t, n, o, r, i)) & +(!Rp(r) || sP(a, t, n, o, r, i)) & +(!Np(r) || $O(a, t, n, o, r, i)) & +(!yu(r) || !c.IsArray(i) || XO(a, t, n, o, r, i)) & +(!bu(r) || !c.IsObject(i) || eD(a, t, n, o, r, i))) && (!Ep(r) || V$(a, t, n, o, r, i));
+  return oa(r) ? cP(a, t, n, o, r, i) : !!(+(!dx(r) || JO(a, t, n, o, r, i)) & +(!(c.IsObject(i) && !c.IsArray(i)) || !!(+(!ua(r) || VO(a, t, n, o, r, i)) & +(!hr(r) || rP(a, t, n, o, r, i)) & +(!nx(r) || pP(a, t, n, o, r, i)) & +(!rx(r) || fP(a, t, n, o, r, i)) & +(!Ap(r) || hP(a, t, n, o, r, i)) & +(!xs(r) || DO(a, t, n, o, r, i)) & +(!vs(r) || FO(a, t, n, o, r, i)) & +(!Up(r) || jO(a, t, n, o, r, i)) & +(!fu(r) || TO(a, t, n, o, r, i)) & +(!ux(r) || wO(a, t, n, o, r, i)))) & +(!c.IsArray(i) || !!(+(!Tp(r) || eP(a, t, n, o, r, i)) & +(!si(r) || lP(a, t, n, o, r, i)) & +(!ia(r) || yO(a, t, n, o, r, i)) & +(!aa(r) || SO(a, t, n, o, r, i)) & +(!sx(r) || bO(a, t, n, o, r, i)) & +(!sa(r) || _O(a, t, n, o, r, i)) & +(!pu(r) || vO(a, t, n, o, r, i)) & +(!ca(r) || NO(a, t, n, o, r, i)) & +(!ui(r) || lD(a, t, n, o, r, i)))) & +(!c.IsString(i) || !!(+(!mu(r) || EO(a, t, n, o, r, i)) & +(!cx(r) || IO(a, t, n, o, r, i)) & +(!du(r) || mO(a, t, n, o, r, i)) & +(!gu(r) || PO(a, t, n, o, r, i)))) & +(!(c.IsNumber(i) || c.IsBigInt(i)) || !!(+(!Mo(r) || OP(a, t, n, o, r, i)) & +(!ix(r) || PP(a, t, n, o, r, i)) & +(!No(r) || kO(a, t, n, o, r, i)) & +(!ax(r) || xO(a, t, n, o, r, i)) & +(!lx(r) || CO(a, t, n, o, r, i)))) & +(!Fp(r) || KO(a, t, n, o, r, i)) & +(!Lp(r) || qO(a, t, n, o, r, i)) & +(!$p(r) || RP(a, t, n, o, r, i)) & +(!tx(r) || uP(a, t, n, o, r, i)) & +(!ox(r) || $P(a, t, n, o, r, i)) & +(!Op(r) || gO(a, t, n, o, r, i)) & +(!Mp(r) || RO(a, t, n, o, r, i)) & +(!Cp(r) || iP(a, t, n, o, r, i)) & +(!Rp(r) || sP(a, t, n, o, r, i)) & +(!Np(r) || $O(a, t, n, o, r, i)) & +(!yu(r) || !c.IsArray(i) || XO(a, t, n, o, r, i)) & +(!bu(r) || !c.IsObject(i) || eD(a, t, n, o, r, i))) && (!Ep(r) || V$(a, t, n, o, r, i));
 }
-var nt = d(() => {
+var nt = p(() => {
   je();
   px();
   Iu();
@@ -4599,13 +4599,13 @@ var nt = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/_functions.mjs
-var ku = d(() => {
+var ku = p(() => {
   I();
   nt();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/engine/index.mjs
-var Au = d(() => {
+var Au = p(() => {
   to();
   Uo();
   ku();
@@ -4666,27 +4666,27 @@ function q7(e, t) {
     throw Error("Invalid Arguments");
   })();
 }
-var dD = d(() => {
+var dD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/arguments/index.mjs
-var Et = d(() => {
+var Et = p(() => {
   dD();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/environment/evaluate.mjs
-var pD = d(() => {
+var pD = p(() => {
   eo();
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/environment/environment.mjs
-var fD = d(() => {
+var fD = p(() => {
   pD();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/environment/index.mjs
-var lI = d(() => {
+var lI = p(() => {
   fD();
 });
 
@@ -4760,168 +4760,168 @@ function gD(e) {
       return "an unknown validation error occurred";
   }
 }
-var dI = d(() => {
+var dI = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/_config.mjs
 function hD() {
   return G7;
 }
-var G7, pI = d(() => {
+var G7, pI = p(() => {
   dI();
   G7 = gD;
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ar_001.mjs
-var yD = d(() => {
+var yD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/bn_BD.mjs
-var bD = d(() => {
+var bD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/cs_CZ.mjs
-var xD = d(() => {
+var xD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/de_DE.mjs
-var vD = d(() => {
+var vD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/el_GR.mjs
-var ID = d(() => {
+var ID = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/es_419.mjs
-var wD = d(() => {
+var wD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/es_AR.mjs
-var SD = d(() => {
+var SD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/es_ES.mjs
-var kD = d(() => {
+var kD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/es_MX.mjs
-var _D = d(() => {
+var _D = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/fa_IR.mjs
-var ED = d(() => {
+var ED = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/fil_PH.mjs
-var TD = d(() => {
+var TD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/fr_CA.mjs
-var mI = d(() => {
+var mI = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/fr_FR.mjs
-var CD = d(() => {
+var CD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ha_NG.mjs
-var RD = d(() => {
+var RD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/hi_IN.mjs
-var AD = d(() => {
+var AD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/hu_HU.mjs
-var $D = d(() => {
+var $D = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/id_ID.mjs
-var PD = d(() => {
+var PD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/it_IT.mjs
-var OD = d(() => {
+var OD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ja_JP.mjs
-var DD = d(() => {
+var DD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ko_KR.mjs
-var MD = d(() => {
+var MD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ms_MY.mjs
-var ND = d(() => {
+var ND = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/nl_NL.mjs
-var UD = d(() => {
+var UD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/pl_PL.mjs
-var LD = d(() => {
+var LD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/pt_BR.mjs
-var FD = d(() => {
+var FD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/pt_PT.mjs
-var zD = d(() => {
+var zD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ro_RO.mjs
-var jD = d(() => {
+var jD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ru_RU.mjs
-var BD = d(() => {
+var BD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/sv_SE.mjs
-var qD = d(() => {
+var qD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/sw_TZ.mjs
-var GD = d(() => {
+var GD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/th_TH.mjs
-var KD = d(() => {
+var KD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/tr_TR.mjs
-var HD = d(() => {
+var HD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/uk_UA.mjs
-var VD = d(() => {
+var VD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/ur_PK.mjs
-var WD = d(() => {
+var WD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/vi_VN.mjs
-var ZD = d(() => {
+var ZD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/yo_NG.mjs
-var JD = d(() => {
+var JD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/zh_Hans.mjs
-var YD = d(() => {
+var YD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/zh_Hant.mjs
-var XD = d(() => {
+var XD = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/_locale.mjs
-var QD = d(() => {
+var QD = p(() => {
   pI();
   yD();
   bD();
@@ -4965,12 +4965,12 @@ var QD = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/locale/index.mjs
-var eM = d(() => {
+var eM = p(() => {
   QD();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/memory/metrics.mjs
-var Fr, pa = d(() => {
+var Fr, pa = p(() => {
   Fr = {
     assign: 0,
     create: 0,
@@ -4981,18 +4981,18 @@ var Fr, pa = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/memory/freeze.mjs
-function di(e) {
+function pi(e) {
   return mt.Get().immutableTypes ? Object.freeze(e) : e;
 }
-var $u = d(() => {
+var $u = p(() => {
   eo();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/memory/assign.mjs
 function H7(e, t) {
-  return Fr.assign += 1, di({ ...e, ...t });
+  return Fr.assign += 1, pi({ ...e, ...t });
 }
-var tM = d(() => {
+var tM = p(() => {
   pa();
   $u();
 });
@@ -5043,7 +5043,7 @@ function ma(e) {
 function fa(e) {
   return Fr.clone += 1, ma(e);
 }
-var Pu = d(() => {
+var Pu = p(() => {
   I();
   pa();
 });
@@ -5065,9 +5065,9 @@ function nM(e, t) {
 function rY(e, t, n = {}) {
   Fr.create += 1;
   let o = nM(t, n), r = mt.Get().enumerableKind ? nM(o, e) : nY(o, e);
-  return di(r);
+  return pi(r);
 }
-var rM = d(() => {
+var rM = p(() => {
   eo();
   pa();
   $u();
@@ -5083,9 +5083,9 @@ function oY(e, t) {
     let r = Object.getOwnPropertyDescriptor(e, o);
     r.value = fa(r.value), Object.defineProperty(n, o, r);
   }
-  return di(n);
+  return pi(n);
 }
-var oM = d(() => {
+var oM = p(() => {
   I();
   pa();
   $u();
@@ -5110,9 +5110,9 @@ function iY(e, t, n) {
       writable: !0,
       value: n[i]
     });
-  return di(r);
+  return pi(r);
 }
-var iM = d(() => {
+var iM = p(() => {
   eo();
   pa();
   $u();
@@ -5129,7 +5129,7 @@ ct(_, {
   Metrics: () => Fr,
   Update: () => iY
 });
-var aM = d(() => {
+var aM = p(() => {
   tM();
   Pu();
   rM();
@@ -5139,12 +5139,12 @@ var aM = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/memory/index.mjs
-var z = d(() => {
+var z = p(() => {
   aM();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/system.mjs
-var Ou = d(() => {
+var Ou = p(() => {
   Et();
   lI();
   Ru();
@@ -5154,14 +5154,14 @@ var Ou = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/system/index.mjs
-var ga = d(() => {
+var ga = p(() => {
   Ou();
   Ou();
   Ou();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/intern/intern.mjs
-var cM = d(() => {
+var cM = p(() => {
   Et();
   ga();
   je();
@@ -5171,40 +5171,40 @@ var cM = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/intern/index.mjs
-var uM = d(() => {
+var uM = p(() => {
   cM();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/schema.mjs
-var lM = d(() => {
+var lM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/draft_2020_12.mjs
-var dM = d(() => {
+var dM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/draft_2019_09.mjs
-var pM = d(() => {
+var pM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/draft_7.mjs
-var mM = d(() => {
+var mM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/draft_6.mjs
-var fM = d(() => {
+var fM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/draft_4.mjs
-var gM = d(() => {
+var gM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/draft_3.mjs
-var hM = d(() => {
+var hM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/meta.mjs
-var yM = d(() => {
+var yM = p(() => {
   dM();
   pM();
   mM();
@@ -5214,17 +5214,17 @@ var yM = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/meta/index.mjs
-var bM = d(() => {
+var bM = p(() => {
   lM();
   yM();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/static/index.mjs
-var xM = d(() => {
+var xM = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/build.mjs
-var fI = d(() => {
+var fI = p(() => {
   Et();
   lI();
   Ru();
@@ -5240,7 +5240,7 @@ function Im(...e) {
   }), r = ws(t, n), i = new sn(), a = Ve(r, i, "#", "", n, o), s = i.GetErrors(), u = hD(), l = s.map((m) => ({ ...m, message: u(m) }));
   return [a, l];
 }
-var wm = d(() => {
+var wm = p(() => {
   Et();
   pI();
   Au();
@@ -5255,7 +5255,7 @@ function Mu() {
   let e = _p();
   e.maxErrors = vM;
 }
-var vM, Sm = d(() => {
+var vM, Sm = p(() => {
   ex();
   vM = 0;
 });
@@ -5268,13 +5268,13 @@ function Nu(...e) {
   }), r = ws(t, n), i = new Sn();
   return Te(r, i, n, o);
 }
-var gI = d(() => {
+var gI = p(() => {
   Et();
   Au();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/parse.mjs
-var hI = d(() => {
+var hI = p(() => {
   Sm();
   Et();
   gI();
@@ -5282,7 +5282,7 @@ var hI = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/compile.mjs
-var wM = d(() => {
+var wM = p(() => {
   Et();
   fI();
   wm();
@@ -5290,7 +5290,7 @@ var wM = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/schema.mjs
-var yI = d(() => {
+var yI = p(() => {
   Au();
   uM();
   bM();
@@ -5306,13 +5306,13 @@ var yI = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/schema/index.mjs
-var jo = d(() => {
+var jo = p(() => {
   yI();
   yI();
 });
 
 // openclaw/packages/normalization-core/src/json-schema.ts
-var SM = d(() => {
+var SM = p(() => {
   I();
   jo();
   Le();
@@ -5326,13 +5326,13 @@ function be(...e) {
   });
   return Nu(t, n, o);
 }
-var kM = d(() => {
+var kM = p(() => {
   Et();
   jo();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/check/index.mjs
-var jt = d(() => {
+var jt = p(() => {
   kM();
 });
 
@@ -5344,13 +5344,13 @@ function br(...e) {
   }), [r, i] = Im(t, n, o);
   return i;
 }
-var _M = d(() => {
+var _M = p(() => {
   Et();
   jo();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/errors/index.mjs
-var ha = d(() => {
+var ha = p(() => {
   _M();
 });
 
@@ -5363,7 +5363,7 @@ function km(...e) {
   if (!be(t, n, o))
     throw new Bo("Assert", o, br(t, n, o));
 }
-var Bo, EM = d(() => {
+var Bo, EM = p(() => {
   Et();
   jt();
   ha();
@@ -5380,7 +5380,7 @@ var Bo, EM = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/assert/index.mjs
-var ya = d(() => {
+var ya = p(() => {
   EM();
 });
 
@@ -5391,7 +5391,7 @@ function q(e, t) {
 function rt(e) {
   return c.IsObject(e);
 }
-var fe = d(() => {
+var fe = p(() => {
   I();
 });
 
@@ -5399,10 +5399,10 @@ var fe = d(() => {
 function G(e, t, n) {
   return _.Create({ "~kind": "Deferred" }, { type: "deferred", action: e, parameters: t, options: n }, {});
 }
-function pi(e) {
+function mi(e) {
   return q(e, "Deferred");
 }
-var Oe = d(() => {
+var Oe = p(() => {
   z();
   fe();
 });
@@ -5415,10 +5415,10 @@ function Uu(e, t) {
   return _.Update(cY(e), {}, t);
 }
 function TM(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Uu(r, o);
 }
-var _m = d(() => {
+var _m = p(() => {
   z();
   J();
 });
@@ -5431,10 +5431,10 @@ function Lu(e, t) {
   return _.Update(uY(e), {}, t);
 }
 function CM(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Lu(r, o);
 }
-var Em = d(() => {
+var Em = p(() => {
   z();
   J();
 });
@@ -5449,7 +5449,7 @@ function ve(e) {
 function Ps(e) {
   return _.Discard(e, ["~kind", "type", "items"]);
 }
-var _n = d(() => {
+var _n = p(() => {
   z();
   fe();
 });
@@ -5464,7 +5464,7 @@ function gt(e) {
 function RM(e) {
   return _.Discard(e, ["~kind", "type", "parameters", "instanceType"]);
 }
-var xr = d(() => {
+var xr = p(() => {
   z();
   fe();
 });
@@ -5479,7 +5479,7 @@ function ht(e) {
 function AM(e) {
   return _.Discard(e, ["~kind", "type", "parameters", "returnType"]);
 }
-var vr = d(() => {
+var vr = p(() => {
   z();
   fe();
 });
@@ -5491,19 +5491,19 @@ function Bt(e, t) {
 function De(e) {
   return q(e, "Ref");
 }
-var Ir = d(() => {
+var Ir = p(() => {
   z();
   fe();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/types/generic.mjs
-function mi(e, t) {
+function fi(e, t) {
   return _.Create({ "~kind": "Generic" }, { type: "generic", parameters: e, expression: t });
 }
 function Os(e) {
   return q(e, "Generic");
 }
-var Fu = d(() => {
+var Fu = p(() => {
   z();
   fe();
 });
@@ -5515,7 +5515,7 @@ function Ds(e) {
 function lt(e) {
   return q(e, "Any");
 }
-var On = d(() => {
+var On = p(() => {
   z();
   fe();
 });
@@ -5527,7 +5527,7 @@ function Fe(e) {
 function Dn(e) {
   return q(e, "Never");
 }
-var $M, en = d(() => {
+var $M, en = p(() => {
   z();
   fe();
   $M = "(?!)";
@@ -5540,7 +5540,7 @@ function oo(e, t = {}) {
 function ba(e, t = {}) {
   return Lu(e, t);
 }
-var zu = d(() => {
+var zu = p(() => {
   Oe();
   Em();
 });
@@ -5552,7 +5552,7 @@ function PM(e) {
 function qt(e) {
   return rt(e) && c.HasPropertyKey(e, "~optional");
 }
-var fi = d(() => {
+var gi = p(() => {
   I();
   fe();
   zu();
@@ -5568,9 +5568,9 @@ function Tm(e) {
 function Cm(e) {
   return c.Values(e);
 }
-var xa = d(() => {
+var xa = p(() => {
   I();
-  fi();
+  gi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/types/object.mjs
@@ -5584,7 +5584,7 @@ function Q(e) {
 function DM(e) {
   return _.Discard(e, ["~kind", "type", "properties", "required"]);
 }
-var Ne = d(() => {
+var Ne = p(() => {
   z();
   fe();
   xa();
@@ -5597,7 +5597,7 @@ function Mt(e) {
 function Tt(e) {
   return q(e, "Unknown");
 }
-var cn = d(() => {
+var cn = p(() => {
   z();
   fe();
 });
@@ -5610,7 +5610,7 @@ function io(e, t, n) {
 function Be(e) {
   return q(e, "Cyclic");
 }
-var Mn = d(() => {
+var Mn = p(() => {
   I();
   z();
   fe();
@@ -5623,7 +5623,7 @@ function MM(e) {
 function Rm(e) {
   return c.IsObjectNotArray(e) && c.HasPropertyKey(e, "~unsafe") && c.IsNull(e["~unsafe"]);
 }
-var Am = d(() => {
+var Am = p(() => {
   I();
   z();
 });
@@ -5639,7 +5639,7 @@ function ju(...e) {
 function Ct(e) {
   return q(e, "Infer");
 }
-var wr = d(() => {
+var wr = p(() => {
   Et();
   z();
   fe();
@@ -5656,7 +5656,7 @@ function yt(e) {
 function NM(e) {
   return _.Discard(e, ["~kind", "if", "then", "else"]);
 }
-var Zn = d(() => {
+var Zn = p(() => {
   z();
   fe();
 });
@@ -5668,7 +5668,7 @@ function UM(e) {
 function LM(e) {
   return c.Keys(e).filter((n) => isNaN(n)).reduce((n, o) => [...n, e[o]], []);
 }
-var $m = d(() => {
+var $m = p(() => {
   I();
 });
 
@@ -5683,7 +5683,7 @@ function zM(e, t) {
 function bt(e) {
   return q(e, "Enum");
 }
-var zr = d(() => {
+var zr = p(() => {
   I();
   z();
   fe();
@@ -5701,7 +5701,7 @@ function Y(e) {
 function jM(e) {
   return _.Discard(e, ["~kind", "allOf"]);
 }
-var Gt = d(() => {
+var Gt = p(() => {
   z();
   fe();
 });
@@ -5723,7 +5723,7 @@ function qM(e, t) {
 function En(e) {
   return rt(e) && c.HasPropertyKey(e, "~codec") && c.IsObject(e["~codec"]) && c.HasPropertyKey(e["~codec"], "encode") && c.HasPropertyKey(e["~codec"], "decode");
 }
-var Bu, qu, bI = d(() => {
+var Bu, qu, bI = p(() => {
   ga();
   I();
   fe();
@@ -5752,7 +5752,7 @@ function GM(e) {
 function Ia(e) {
   return rt(e) && c.HasPropertyKey(e, "~immutable");
 }
-var Gu = d(() => {
+var Gu = p(() => {
   I();
   fe();
   Ku();
@@ -5765,7 +5765,7 @@ function ao(e, t = {}) {
 function wa(e, t = {}) {
   return Uu(e, t);
 }
-var Hu = d(() => {
+var Hu = p(() => {
   Oe();
   _m();
 });
@@ -5777,7 +5777,7 @@ function KM(e) {
 function Sa(e) {
   return rt(e) && c.HasPropertyKey(e, "~readonly");
 }
-var Vu = d(() => {
+var Vu = p(() => {
   I();
   fe();
   Hu();
@@ -5801,7 +5801,7 @@ function dY(e) {
 function Wu(e) {
   return rt(e) && c.HasPropertyKey(e, "~refine") && c.IsArray(e["~refine"]) && c.Every(e["~refine"], 0, (t) => dY(t));
 }
-var xI = d(() => {
+var xI = p(() => {
   Et();
   z();
   I();
@@ -5815,7 +5815,7 @@ function Zu(e) {
 function Jn(e) {
   return q(e, "BigInt");
 }
-var VM, ka = d(() => {
+var VM, ka = p(() => {
   z();
   fe();
   VM = "-?(?:0|[1-9][0-9]*)n";
@@ -5828,7 +5828,7 @@ function Om(e) {
 function Tn(e) {
   return q(e, "Boolean");
 }
-var gi = d(() => {
+var hi = p(() => {
   z();
   fe();
 });
@@ -5840,7 +5840,7 @@ function Ju(e) {
 function WM(e) {
   return q(e, "Identifier");
 }
-var vI = d(() => {
+var vI = p(() => {
   z();
   fe();
 });
@@ -5852,7 +5852,7 @@ function _a(e) {
 function Vt(e) {
   return q(e, "Integer");
 }
-var Dm, so = d(() => {
+var Dm, so = p(() => {
   z();
   fe();
   Dm = "-?(?:0|[1-9][0-9]*)";
@@ -5885,7 +5885,7 @@ function Um(e) {
 function xe(e) {
   return q(e, "Literal");
 }
-var II, Nt = d(() => {
+var II, Nt = p(() => {
   z();
   I();
   fe();
@@ -5908,7 +5908,7 @@ function Ns(e) {
 function co(e) {
   return q(e, "Null");
 }
-var Us = d(() => {
+var Us = p(() => {
   z();
   fe();
 });
@@ -5920,7 +5920,7 @@ function Yn(e) {
 function ot(e) {
   return q(e, "Number");
 }
-var Lm, Cn = d(() => {
+var Lm, Cn = p(() => {
   z();
   fe();
   Lm = "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?";
@@ -5933,7 +5933,7 @@ function Ls(e) {
 function uo(e) {
   return q(e, "Symbol");
 }
-var Ea = d(() => {
+var Ea = p(() => {
   z();
   fe();
 });
@@ -5950,7 +5950,7 @@ function Ta(...e) {
 function YM(e) {
   return q(e, "Parameter");
 }
-var wI = d(() => {
+var wI = p(() => {
   Et();
   z();
   fe();
@@ -5964,7 +5964,7 @@ function un(e) {
 function Ut(e) {
   return q(e, "String");
 }
-var Fm, Sr = d(() => {
+var Fm, Sr = p(() => {
   z();
   fe();
   Fm = ".*";
@@ -5980,7 +5980,7 @@ function F(e) {
 function XM(e) {
   return _.Discard(e, ["~kind", "anyOf"]);
 }
-var Ie = d(() => {
+var Ie = p(() => {
   z();
   fe();
 });
@@ -5990,7 +5990,7 @@ function Yu(e) {
   let t = QM(e);
   return c.IsEqual(t.length, 2) ? t[0] : [];
 }
-var Xu = d(() => {
+var Xu = p(() => {
   I();
   zm();
 });
@@ -6011,7 +6011,7 @@ function fY(e) {
 function jm(e) {
   return t1(e);
 }
-var Bm = d(() => {
+var Bm = p(() => {
   I();
   Nt();
   Ie();
@@ -6021,7 +6021,7 @@ var Bm = d(() => {
 function qm(e) {
   return _.Create({ "~kind": "TemplateLiteral" }, { type: "string", pattern: e }, {});
 }
-var Gm = d(() => {
+var Gm = p(() => {
   z();
 });
 
@@ -6062,7 +6062,7 @@ function Fs(e) {
   let t = SI(e);
   return qe(t) ? un() : t;
 }
-var Km = d(() => {
+var Km = p(() => {
   I();
   Lr();
   Nt();
@@ -6079,7 +6079,7 @@ function Un(e, t) {
   let n = "object", o = { [e]: t };
   return _.Create({ "~kind": "Record" }, { type: n, patternProperties: o });
 }
-var hi = d(() => {
+var yi = p(() => {
   z();
 });
 
@@ -6087,16 +6087,16 @@ var hi = d(() => {
 function a1(e) {
   return Un(jr, e);
 }
-var s1 = d(() => {
+var s1 = p(() => {
   tn();
-  hi();
+  yi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key_boolean.mjs
 function c1(e) {
   return X({ true: e, false: e });
 }
-var u1 = d(() => {
+var u1 = p(() => {
   Ne();
 });
 
@@ -6111,7 +6111,7 @@ function ge(e) {
 function l1(e) {
   return _.Discard(e, ["~kind", "type", "items", "minItems", "additionalItems"]);
 }
-var Kt = d(() => {
+var Kt = p(() => {
   z();
   fe();
 });
@@ -6124,10 +6124,10 @@ function kI(e, t) {
   return _.Update(xY(e), {}, t);
 }
 function d1(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return kI(r, o);
 }
-var _I = d(() => {
+var _I = p(() => {
   z();
   J();
 });
@@ -6139,7 +6139,7 @@ function p1(e, t = {}) {
 function m1(e, t = {}) {
   return kI(e, t);
 }
-var EI = d(() => {
+var EI = p(() => {
   Oe();
   _I();
 });
@@ -6152,10 +6152,10 @@ function TI(e, t) {
   return _.Update(vY(e), {}, t);
 }
 function f1(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return TI(r, o);
 }
-var CI = d(() => {
+var CI = p(() => {
   z();
   J();
 });
@@ -6167,7 +6167,7 @@ function g1(e, t = {}) {
 function Hm(e, t = {}) {
   return TI(e, t);
 }
-var Vm = d(() => {
+var Vm = p(() => {
   Oe();
   CI();
 });
@@ -6180,7 +6180,7 @@ function h1(e) {
   let t = RI(e.items);
   return X(t);
 }
-var AI = d(() => {
+var AI = p(() => {
   Ne();
 });
 
@@ -6211,10 +6211,10 @@ function b1(e, t) {
   let n = y1(e), o = y1(t), r = _Y(n, o);
   return X(r);
 }
-var PI = d(() => {
+var PI = p(() => {
   I();
   Vu();
-  fi();
+  gi();
   Ne();
   en();
   Kt();
@@ -6238,7 +6238,7 @@ function TY(e, t) {
 function x1(e, t) {
   return Dn(e) || lt(e) ? e : Tt(e) || Dn(t) || lt(t) ? t : Tt(t) ? e : TY(e, t);
 }
-var OI = d(() => {
+var OI = p(() => {
   I();
   On();
   en();
@@ -6264,7 +6264,7 @@ function I1(e, t, n = []) {
 function rl(e, t = []) {
   return c.ShiftLeft(e, (n, o) => F(n) ? rl(o, I1(n.anyOf, t)) : rl(o, v1(n, t)), () => t);
 }
-var DI = d(() => {
+var DI = p(() => {
   I();
   Ie();
   OI();
@@ -6284,7 +6284,7 @@ function Wm(e, t) {
   let n = kr(e), o = F(n) ? n.anyOf : [n], r = w1(o, t);
   return Ln(r);
 }
-var MI = d(() => {
+var MI = p(() => {
   I();
   Ie();
   Br();
@@ -6310,15 +6310,15 @@ function gn(e) {
 }
 function Ln(e) {
   let t = NI(e);
-  return yi(t);
+  return bi(t);
 }
 function kr(e) {
   return yt(e) ? qr(e.if, e.then, e.else) : bt(e) ? Rn(e.enum) : Y(e) ? it(e.allOf) : qe(e) ? gn(e.pattern) : F(e) ? Ln(e.anyOf) : e;
 }
-function yi(e) {
+function bi(e) {
   return c.IsEqual(e.length, 1) ? e[0] : c.IsEqual(e.length, 0) ? Fe() : ie(e);
 }
-var ye = d(() => {
+var ye = p(() => {
   I();
   Zn();
   zr();
@@ -6336,28 +6336,28 @@ var ye = d(() => {
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key_enum.mjs
 function S1(e, t) {
   let n = Rn(e);
-  return bi(n, t);
+  return xi(n, t);
 }
-var k1 = d(() => {
+var k1 = p(() => {
   ol();
   ye();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key_integer.mjs
 function _1(e, t) {
-  return Un(xi, t);
+  return Un(vi, t);
 }
-var E1 = d(() => {
+var E1 = p(() => {
   tn();
-  hi();
+  yi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key_intersect.mjs
 function T1(e, t) {
   let n = it(e);
-  return bi(n, t);
+  return xi(n, t);
 }
-var C1 = d(() => {
+var C1 = p(() => {
   ye();
   ol();
 });
@@ -6366,7 +6366,7 @@ var C1 = d(() => {
 function R1(e, t) {
   return c.IsString(e) || c.IsNumber(e) ? X({ [e]: t }) : c.IsEqual(e, !1) ? X({ false: t }) : c.IsEqual(e, !0) ? X({ true: t }) : X({});
 }
-var A1 = d(() => {
+var A1 = p(() => {
   I();
   Ne();
 });
@@ -6375,42 +6375,42 @@ var A1 = d(() => {
 function $1(e, t) {
   return Un(js, t);
 }
-var P1 = d(() => {
+var P1 = p(() => {
   tn();
-  hi();
+  yi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key_string.mjs
 function O1(e, t) {
   return c.HasPropertyKey(e, "pattern") && (c.IsString(e.pattern) || e.pattern instanceof RegExp) ? Un(e.pattern.toString(), t) : Un(jr, t);
 }
-var D1 = d(() => {
+var D1 = p(() => {
   I();
   tn();
-  hi();
+  yi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key_template_literal.mjs
 function M1(e, t) {
   let n = Yu(e);
-  return jm(n) ? bi(gn(e), t) : Un(e, t);
+  return jm(n) ? xi(gn(e), t) : Un(e, t);
 }
-var N1 = d(() => {
+var N1 = p(() => {
   ol();
   Xu();
   Bm();
   ye();
-  hi();
+  yi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/evaluate/flatten.mjs
 function $Y(e) {
-  return F(e) ? vi(e.anyOf) : [e];
+  return F(e) ? Ii(e.anyOf) : [e];
 }
-function vi(e, t = []) {
-  return c.ShiftLeft(e, (n, o) => vi(o, [...t, ...$Y(n)]), () => t);
+function Ii(e, t = []) {
+  return c.ShiftLeft(e, (n, o) => Ii(o, [...t, ...$Y(n)]), () => t);
 }
-var Zm = d(() => {
+var Zm = p(() => {
   I();
   Ie();
 });
@@ -6430,10 +6430,10 @@ function MY(e, t) {
   return X(n);
 }
 function U1(e, t) {
-  let n = vi(e), o = OY(n, t);
+  let n = Ii(e), o = OY(n, t);
   return rt(o) ? o : MY(n, t);
 }
-var L1 = d(() => {
+var L1 = p(() => {
   I();
   fe();
   Nt();
@@ -6443,16 +6443,16 @@ var L1 = d(() => {
   Sr();
   tn();
   Zm();
-  hi();
+  yi();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/from_key.mjs
-function bi(e, t) {
+function xi(e, t) {
   return lt(e) ? a1(t) : Tn(e) ? c1(t) : bt(e) ? S1(e.enum, t) : Vt(e) ? _1(e, t) : Y(e) ? T1(e.allOf, t) : xe(e) ? R1(e.const, t) : ot(e) ? $1(e, t) : F(e) ? U1(e.anyOf, t) : Ut(e) ? O1(e, t) : qe(e) ? M1(e.pattern, t) : X({});
 }
-var ol = d(() => {
+var ol = p(() => {
   On();
-  gi();
+  hi();
   zr();
   Gt();
   so();
@@ -6476,13 +6476,13 @@ var ol = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/instantiate.mjs
 function LI(e, t, n) {
-  return de([e]) ? _.Update(bi(e, t), {}, n) : Ym(e, t, n);
+  return de([e]) ? _.Update(xi(e, t), {}, n) : Ym(e, t, n);
 }
 function F1(e, t, n, o, r) {
-  let i = M(e, t, n), a = M(e, t, o);
+  let i = N(e, t, n), a = N(e, t, o);
   return LI(i, a, r);
 }
-var Jm = d(() => {
+var Jm = p(() => {
   z();
   tn();
   ol();
@@ -6500,7 +6500,7 @@ function z1(e, t) {
   return Un(e, t);
 }
 function Xm(e) {
-  return c.IsEqual(e, jr) ? un() : c.IsEqual(e, xi) ? _a() : c.IsEqual(e, js) ? Yn() : SI(e);
+  return c.IsEqual(e, jr) ? un() : c.IsEqual(e, vi) ? _a() : c.IsEqual(e, js) ? Yn() : SI(e);
 }
 function Rt(e) {
   return c.Keys(e.patternProperties)[0];
@@ -6515,7 +6515,7 @@ function We(e) {
 function Ue(e) {
   return q(e, "Record");
 }
-var xi, js, jr, tn = d(() => {
+var vi, js, jr, tn = p(() => {
   z();
   I();
   fe();
@@ -6524,25 +6524,25 @@ var xi, js, jr, tn = d(() => {
   Sr();
   Oe();
   Km();
-  hi();
+  yi();
   Jm();
-  xi = `^${Dm}$`, js = `^${Lm}$`, jr = `^${Fm}$`;
+  vi = `^${Dm}$`, js = `^${Lm}$`, jr = `^${Fm}$`;
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/types/rest.mjs
 function Ca(e) {
   return _.Create({ "~kind": "Rest" }, { type: "rest", items: e }, {});
 }
-function Ii(e) {
+function wi(e) {
   return q(e, "Rest");
 }
-var Gs = d(() => {
+var Gs = p(() => {
   z();
   fe();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/types/static.mjs
-var j1 = d(() => {
+var j1 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/types/this.mjs
@@ -6552,7 +6552,7 @@ function Qm(e) {
 function ef(e) {
   return q(e, "This");
 }
-var tf = d(() => {
+var tf = p(() => {
   z();
   fe();
 });
@@ -6564,7 +6564,7 @@ function Ks(e) {
 function _r(e) {
   return q(e, "Undefined");
 }
-var Hs = d(() => {
+var Hs = p(() => {
   z();
   fe();
 });
@@ -6576,22 +6576,22 @@ function nf(e) {
 function Xn(e) {
   return q(e, "Void");
 }
-var Ra = d(() => {
+var Ra = p(() => {
   z();
   fe();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/types/index.mjs
-var il = d(() => {
+var il = p(() => {
   bI();
   Gu();
-  fi();
+  gi();
   Vu();
   xI();
   On();
   _n();
   ka();
-  gi();
+  hi();
   Vs();
   xr();
   Mn();
@@ -6801,7 +6801,7 @@ function NN(e) {
   return e[1];
 }
 function UN(e) {
-  return mi(e[0], e[2]);
+  return fi(e[0], e[2]);
 }
 function LN(e) {
   return c.IsEqual(e.length, 4) ? ju(e[1], e[3]) : c.IsEqual(e.length, 2) ? ju(e[1], Mt()) : Aa();
@@ -6810,7 +6810,7 @@ function FN(e) {
   return `${e}`;
 }
 function zN(e) {
-  return Vt(e[3]) ? xi : ot(e[3]) ? js : uo(e[3]) ? jr : Ut(e[3]) ? jr : Aa();
+  return Vt(e[3]) ? vi : ot(e[3]) ? js : uo(e[3]) ? jr : Ut(e[3]) ? jr : Aa();
 }
 function jN(e) {
   return e.length > 0;
@@ -6828,7 +6828,7 @@ function GN(e) {
   return qo(e);
 }
 function KN(e) {
-  return e.reduce((t, n) => c.HasPropertyKey(n, xi) || c.HasPropertyKey(n, js) || c.HasPropertyKey(n, jr) ? [t[0], _.Assign(t[1], n)] : [_.Assign(t[0], n), t[1]], [{}, {}]);
+  return e.reduce((t, n) => c.HasPropertyKey(n, vi) || c.HasPropertyKey(n, js) || c.HasPropertyKey(n, jr) ? [t[0], _.Assign(t[1], n)] : [_.Assign(t[0], n), t[1]], [{}, {}]);
 }
 function HN(e) {
   return KN(e[1]);
@@ -6968,14 +6968,14 @@ function PU(e) {
 }
 function OU(e) {
   let t = e[2], n = e[3], [o, r] = e[4], i = c.IsEqual(c.Keys(r).length, 0) ? {} : { patternProperties: r };
-  return { [e[1]]: mi(t, sl(n, o, i)) };
+  return { [e[1]]: fi(t, sl(n, o, i)) };
 }
 function DU(e) {
   let t = e[2], [n, o] = e[3], r = c.IsEqual(c.Keys(o).length, 0) ? {} : { patternProperties: o };
   return { [e[1]]: sl(t, n, r) };
 }
 function MU(e) {
-  return { [e[1]]: mi(e[2], e[4]) };
+  return { [e[1]]: fi(e[2], e[4]) };
 }
 function NU(e) {
   return { [e[1]]: e[3] };
@@ -6993,7 +6993,7 @@ function zU(e) {
   let [t, n] = [e[0], e[1]];
   return GU(_.Assign(t, KN(n)[0]));
 }
-var jU = d(() => {
+var jU = p(() => {
   z();
   I();
   il();
@@ -7001,7 +7001,7 @@ var jU = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/internal/guard.mjs
-var Go = d(() => {
+var Go = p(() => {
   bs();
 });
 
@@ -7012,7 +7012,7 @@ function dl(e) {
 function Se(e, t, n) {
   return dl(e) ? t(e[0], e[1]) : n();
 }
-var Qn = d(() => {
+var Qn = p(() => {
   Go();
 });
 
@@ -7028,7 +7028,7 @@ function dt(e, t) {
   }
   return [];
 }
-var lo = d(() => {
+var lo = p(() => {
   Qn();
   Go();
 });
@@ -7037,14 +7037,14 @@ var lo = d(() => {
 function zI(e, t) {
   return Array.from({ length: t - e + 1 }, (n, o) => String.fromCharCode(e + o));
 }
-var KU, jI, BI, Ws, HU, Zs, wi, Sf, VU, kf, hn = d(() => {
+var KU, jI, BI, Ws, HU, Zs, Si, Sf, VU, kf, hn = p(() => {
   KU = [
     ...zI(97, 122),
     // Lowercase
     ...zI(65, 90)
     // Uppercase
   ], jI = "0", BI = zI(49, 57), Ws = [jI, ...BI], HU = " ", Zs = `
-`, wi = "_", Sf = ".", VU = "$", kf = "-";
+`, Si = "_", Sf = ".", VU = "$", kf = "-";
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/internal/trim.mjs
@@ -7067,7 +7067,7 @@ function nn(e) {
   let t = e.trimStart();
   return t.startsWith(ZU) ? nn(JU(t.slice(2))) : t.startsWith(WU) ? nn(YU(t.slice(2))) : t;
 }
-var WU, ZU, GY, po = d(() => {
+var WU, ZU, GY, po = p(() => {
   Go();
   hn();
   WU = "//", ZU = "/*", GY = "*/";
@@ -7077,7 +7077,7 @@ var WU, ZU, GY, po = d(() => {
 function Ef(e, t) {
   return Se(dt([e], t), (n, o) => [n, o], () => ["", t]);
 }
-var qI = d(() => {
+var qI = p(() => {
   Qn();
   lo();
 });
@@ -7089,7 +7089,7 @@ function HY(e, t) {
 function Js(e, t, n, o = "") {
   return Se(dt(e, n), (r, i) => HY(t, r) ? Js(e, t, i, o) : Js(e, t, i, `${o}${r}`), () => [o, n]);
 }
-var GI = d(() => {
+var GI = p(() => {
   Qn();
   lo();
 });
@@ -7099,7 +7099,7 @@ function VY(e) {
   return dt(BI, e);
 }
 function ZY(e) {
-  return Js(WY, [wi], e);
+  return Js(WY, [Si], e);
 }
 function JY(e) {
   return Se(dt([jI], e), (t, n) => [t, n], () => Se(
@@ -7112,7 +7112,7 @@ function JY(e) {
 function Tf(e) {
   return JY(nn(e));
 }
-var WY, Cf = d(() => {
+var WY, Cf = p(() => {
   Qn();
   po();
   lo();
@@ -7121,7 +7121,7 @@ var WY, Cf = d(() => {
   hn();
   hn();
   hn();
-  WY = [...Ws, wi];
+  WY = [...Ws, Si];
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/integer.mjs
@@ -7139,7 +7139,7 @@ function XY(e) {
 function XU(e) {
   return XY(nn(e));
 }
-var KI = d(() => {
+var KI = p(() => {
   Qn();
   po();
   qI();
@@ -7159,7 +7159,7 @@ function QY(e) {
 function HI(e) {
   return QY(e);
 }
-var QU = d(() => {
+var QU = p(() => {
   Qn();
   lo();
   KI();
@@ -7172,7 +7172,7 @@ function VI(e, t) {
 function R(e, t) {
   return Ee(e, "") ? ["", t] : e.startsWith(Zs) ? VI(e, _f(t)) : e.startsWith(HU) ? VI(e, t) : VI(e, nn(t));
 }
-var eL = d(() => {
+var eL = p(() => {
   Go();
   po();
   po();
@@ -7199,7 +7199,7 @@ function nX(e) {
 function vt(e) {
   return nX(nn(e));
 }
-var tL, tX, rL = d(() => {
+var tL, tX, rL = p(() => {
   Qn();
   po();
   lo();
@@ -7207,7 +7207,7 @@ var tL, tX, rL = d(() => {
   hn();
   hn();
   hn();
-  tL = [...KU, wi, VU];
+  tL = [...KU, Si, VU];
   tX = [...tL, ...Ws];
 });
 
@@ -7216,7 +7216,7 @@ function oX(e) {
   return dl(dt([Sf], e));
 }
 function oL(e) {
-  return Se(Js(rX, [wi], e), (t, n) => Ee(t, "") ? [] : [t, n], () => []);
+  return Se(Js(rX, [Si], e), (t, n) => Ee(t, "") ? [] : [t, n], () => []);
 }
 function iX(e) {
   return Se(
@@ -7245,7 +7245,7 @@ function sX(e) {
 function iL(e) {
   return sX(nn(e));
 }
-var rX, WI = d(() => {
+var rX, WI = p(() => {
   Go();
   Qn();
   po();
@@ -7254,7 +7254,7 @@ var rX, WI = d(() => {
   hn();
   hn();
   Cf();
-  rX = [...Ws, wi];
+  rX = [...Ws, Si];
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/number.mjs
@@ -7272,7 +7272,7 @@ function uX(e) {
 function Rf(e) {
   return uX(nn(e));
 }
-var aL = d(() => {
+var aL = p(() => {
   Qn();
   po();
   qI();
@@ -7281,7 +7281,7 @@ var aL = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/rest.mjs
-var sL = d(() => {
+var sL = p(() => {
   Go();
 });
 
@@ -7292,14 +7292,14 @@ function lX(e) {
 function cL(e, t) {
   return Sp(e, (n, o) => t.startsWith(n) ? !0 : cL(o, t), () => !1);
 }
-function Si(e, t, n = "") {
+function ki(e, t, n = "") {
   return Se(
     lX(t),
-    (o, r) => cL(e, t) ? [n, t] : Si(e, r, `${n}${o}`),
+    (o, r) => cL(e, t) ? [n, t] : ki(e, r, `${n}${o}`),
     () => []
   );
 }
-var Af = d(() => {
+var Af = p(() => {
   Qn();
   Go();
 });
@@ -7309,7 +7309,7 @@ function dX(e, t, n) {
   return Se(
     dt([e], n),
     (o, r) => Se(
-      Si([t], r),
+      ki([t], r),
       (i, a) => Se(dt([t], a), (s, u) => [`${i}`, u], () => []),
       // fail: did not match End
       () => []
@@ -7322,7 +7322,7 @@ function pX(e, t, n) {
   return Se(
     dt([e], n),
     (o, r) => Se(
-      Si([Zs, t], r),
+      ki([Zs, t], r),
       (i, a) => Se(dt([t], a), (s, u) => [`${i}`, u], () => []),
       // fail: did not match End
       () => []
@@ -7334,7 +7334,7 @@ function pX(e, t, n) {
 function uL(e, t, n, o) {
   return n ? dX(e, t, nn(o)) : pX(e, t, nn(o));
 }
-var ZI = d(() => {
+var ZI = p(() => {
   Qn();
   po();
   hn();
@@ -7355,7 +7355,7 @@ function gX(e, t) {
 function $f(e, t) {
   return gX(e, nn(t));
 }
-var lL = d(() => {
+var lL = p(() => {
   Qn();
   lo();
   po();
@@ -7364,16 +7364,16 @@ var lL = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/until_1.mjs
 function dL(e, t) {
-  return Se(Si(e, t), (n, o) => Ee(n, "") ? [] : [n, o], () => []);
+  return Se(ki(e, t), (n, o) => Ee(n, "") ? [] : [n, o], () => []);
 }
-var pL = d(() => {
+var pL = p(() => {
   Go();
   Qn();
   Af();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/token/index.mjs
-var mL = d(() => {
+var mL = p(() => {
   QU();
   eL();
   rL();
@@ -7389,10 +7389,10 @@ var mL = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/parser.mjs
-var g, yX, bX, xX, vX, hL, yL, IX, XI, bL, wX, SX, kX, xL, vL, IL, _X, EX, TX, wL, CX, RX, AX, $X, PX, SL, OX, DX, MX, JI, kL, QI, NX, UX, LX, FX, zX, jX, BX, _L, qX, GX, KX, HX, EL, TL, CL, RL, Pf, VX, WX, ZX, JX, Ce, YX, XX, QX, eQ, AL, $L, PL, OL, Of, DL, tQ, ew, nQ, rQ, fL, ML, NL, oQ, iQ, aQ, sQ, cQ, uQ, gL, UL, LL, FL, lQ, dQ, pQ, mQ, fQ, gQ, hQ, yQ, bQ, xQ, vQ, IQ, wQ, zL, jL, SQ, BL, qL, kQ, _Q, tw, EQ, TQ, CQ, RQ, AQ, $Q, PQ, OQ, GL, YI, nw, QM, KL, DQ, HL, MQ, NQ, UQ, LQ, FQ, VL, WL, zQ, rw, jQ, ZL, zm = d(() => {
+var g, yX, bX, xX, vX, hL, yL, IX, XI, bL, wX, SX, kX, xL, vL, IL, _X, EX, TX, wL, CX, RX, AX, $X, PX, SL, OX, DX, MX, JI, kL, QI, NX, UX, LX, FX, zX, jX, BX, _L, qX, GX, KX, HX, EL, TL, CL, RL, Pf, VX, WX, ZX, JX, Ce, YX, XX, QX, eQ, AL, $L, PL, OL, Of, DL, tQ, ew, nQ, rQ, fL, ML, NL, oQ, iQ, aQ, sQ, cQ, uQ, gL, UL, LL, FL, lQ, dQ, pQ, mQ, fQ, gQ, hQ, yQ, bQ, xQ, vQ, IQ, wQ, zL, jL, SQ, BL, qL, kQ, _Q, tw, EQ, TQ, CQ, RQ, AQ, $Q, PQ, OQ, GL, YI, nw, QM, KL, DQ, HL, MQ, NQ, UQ, LQ, FQ, VL, WL, zQ, rw, jQ, ZL, zm = p(() => {
   jU();
   mL();
-  g = (e, t, n = () => []) => e.length === 2 ? t(e) : n(), yX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [V1(t), n]), bX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [W1(t), n]), xX = (e) => g(g(vt(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Z1(t), n]), vX = (e) => g(vt(e), ([t, n]) => [J1(t), n]), hL = (e) => g(g(yX(e), ([t, n]) => [t, n], () => g(bX(e), ([t, n]) => [t, n], () => g(xX(e), ([t, n]) => [t, n], () => g(vX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), yL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(hL(o), ([r, i]) => [[n, r], i])), ([n, o]) => yL(o, [...t, n]), () => [t, e]), IX = (e) => g(g(g(hL(e), ([t, n]) => g(yL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [Y1(t), n]), XI = (e) => g(g(R("<", e), ([t, n]) => g(IX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [X1(t), n]), bL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => bL(o, [...t, n]), () => [t, e]), wX = (e) => g(g(g(Ce(e), ([t, n]) => g(bL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [Q1(t), n]), SX = (e) => g(g(R("<", e), ([t, n]) => g(wX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [eN(t), n]), kX = (e) => g(g(vt(e), ([t, n]) => g(SX(n), ([o, r]) => [[t, o], r])), ([t, n]) => [tN(t), n]), xL = (e) => g(g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [nN(t), n]), vL = (e) => g(R("string", e), ([t, n]) => [rN(t), n]), IL = (e) => g(R("number", e), ([t, n]) => [oN(t), n]), _X = (e) => g(R("boolean", e), ([t, n]) => [iN(t), n]), EX = (e) => g(R("undefined", e), ([t, n]) => [aN(t), n]), TX = (e) => g(R("null", e), ([t, n]) => [sN(t), n]), wL = (e) => g(R("integer", e), ([t, n]) => [cN(t), n]), CX = (e) => g(R("bigint", e), ([t, n]) => [uN(t), n]), RX = (e) => g(R("unknown", e), ([t, n]) => [lN(t), n]), AX = (e) => g(R("any", e), ([t, n]) => [dN(t), n]), $X = (e) => g(R("object", e), ([t, n]) => [pN(t), n]), PX = (e) => g(R("never", e), ([t, n]) => [mN(t), n]), SL = (e) => g(R("symbol", e), ([t, n]) => [fN(t), n]), OX = (e) => g(R("void", e), ([t, n]) => [gN(t), n]), DX = (e) => g(R("this", e), ([t, n]) => [hN(t), n]), MX = (e) => g(g(R("${", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [IN(t), n]), JI = (e) => g(Si(["${", "`"], e), ([t, n]) => [wN(t), n]), kL = (e) => g(g(g(JI(e), ([t, n]) => g(MX(n), ([o, r]) => g(kL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(JI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(JI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [SN(t), n]), QI = (e) => g(g(R("`", e), ([t, n]) => g(kL(n), ([o, r]) => g(R("`", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [kN(t), n]), NX = (e) => g(QI(e), ([t, n]) => [_N(t), n]), UX = (e) => g(g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R("else", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => [])), ([t, n]) => [EN(t), n]), LX = (e) => g(HI(e), ([t, n]) => [yN(t), n]), FX = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [bN(t), n]), zX = (e) => g(Rf(e), ([t, n]) => [xN(t), n]), jX = (e) => g($f(["'", '"'], e), ([t, n]) => [vN(t), n]), BX = (e) => g(g(g(R("keyof", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [TN(t), n]), _L = (e, t = []) => g(g(g(R("[", e), ([n, o]) => g(Ce(o), ([r, i]) => g(R("]", i), ([a, s]) => [[n, r, a], s]))), ([n, o]) => [n, o], () => g(g(R("[", e), ([n, o]) => g(R("]", o), ([r, i]) => [[n, r], i])), ([n, o]) => [n, o], () => [])), ([n, o]) => _L(o, [...t, n]), () => [t, e]), qX = (e) => g(_L(e), ([t, n]) => [CN(t), n]), GX = (e) => g(g(g(R("extends", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("?", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R(":", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [RN(t), n]), KX = (e) => g(g(g(R("(", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(vL(e), ([t, n]) => [t, n], () => g(IL(e), ([t, n]) => [t, n], () => g(_X(e), ([t, n]) => [t, n], () => g(EX(e), ([t, n]) => [t, n], () => g(TX(e), ([t, n]) => [t, n], () => g(wL(e), ([t, n]) => [t, n], () => g(CX(e), ([t, n]) => [t, n], () => g(RX(e), ([t, n]) => [t, n], () => g(AX(e), ([t, n]) => [t, n], () => g($X(e), ([t, n]) => [t, n], () => g(PX(e), ([t, n]) => [t, n], () => g(SL(e), ([t, n]) => [t, n], () => g(OX(e), ([t, n]) => [t, n], () => g(DX(e), ([t, n]) => [t, n], () => g(LX(e), ([t, n]) => [t, n], () => g(FX(e), ([t, n]) => [t, n], () => g(zX(e), ([t, n]) => [t, n], () => g(jX(e), ([t, n]) => [t, n], () => g(NX(e), ([t, n]) => [t, n], () => g(UX(e), ([t, n]) => [t, n], () => g(nQ(e), ([t, n]) => [t, n], () => g(iQ(e), ([t, n]) => [t, n], () => g(dQ(e), ([t, n]) => [t, n], () => g(lQ(e), ([t, n]) => [t, n], () => g(gQ(e), ([t, n]) => [t, n], () => g(kX(e), ([t, n]) => [t, n], () => g(hQ(e), ([t, n]) => [t, n], () => [])))))))))))))))))))))))))))), ([t, n]) => [AN(t), n]), HX = (e) => g(g(g(R("with", e), ([t, n]) => g(BL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$N(t), n]), EL = (e) => g(g(BX(e), ([t, n]) => g(KX(n), ([o, r]) => g(qX(r), ([i, a]) => g(GX(a), ([s, u]) => g(HX(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [PN(t), n]), TL = (e) => g(g(g(R("&", e), ([t, n]) => g(EL(n), ([o, r]) => g(TL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), CL = (e) => g(g(EL(e), ([t, n]) => g(TL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [ON(t), n]), RL = (e) => g(g(g(R("|", e), ([t, n]) => g(CL(n), ([o, r]) => g(RL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), Pf = (e) => g(g(CL(e), ([t, n]) => g(RL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [DN(t), n]), VX = (e) => g(g(R("readonly", e), ([t, n]) => g(Pf(n), ([o, r]) => [[t, o], r])), ([t, n]) => [MN(t), n]), WX = (e) => g(g(R("|", e), ([t, n]) => g(Pf(n), ([o, r]) => [[t, o], r])), ([t, n]) => [NN(t), n]), ZX = (e) => g(g(XI(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [UN(t), n]), JX = (e) => g(g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("extends", r), ([i, a]) => g(Pf(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => [])), ([t, n]) => [LN(t), n]), Ce = (e) => g(g(JX(e), ([t, n]) => [t, n], () => g(WX(e), ([t, n]) => [t, n], () => g(VX(e), ([t, n]) => [t, n], () => g(Pf(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), YX = (e) => g(Rf(e), ([t, n]) => [FN(t), n]), XX = (e) => g(vt(e), ([t, n]) => [t, n]), QX = (e) => g($f(["'", '"'], e), ([t, n]) => [t, n]), eQ = (e) => g(g(R("[", e), ([t, n]) => g(vt(n), ([o, r]) => g(R(":", r), ([i, a]) => g(g(wL(a), ([s, u]) => [s, u], () => g(IL(a), ([s, u]) => [s, u], () => g(vL(a), ([s, u]) => [s, u], () => g(SL(a), ([s, u]) => [s, u], () => [])))), ([s, u]) => g(R("]", u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [zN(t), n]), AL = (e) => g(g(YX(e), ([t, n]) => [t, n], () => g(XX(e), ([t, n]) => [t, n], () => g(QX(e), ([t, n]) => [t, n], () => g(eQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), $L = (e) => g(g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [jN(t), n]), PL = (e) => g(g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [BN(t), n]), OL = (e) => g(g($L(e), ([t, n]) => g(AL(n), ([o, r]) => g(PL(r), ([i, a]) => g(R(":", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [qN(t), n]), Of = (e) => g(g(g(R(",", e), ([t, n]) => g(R(`
+  g = (e, t, n = () => []) => e.length === 2 ? t(e) : n(), yX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [V1(t), n]), bX = (e) => g(g(vt(e), ([t, n]) => g(R("extends", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [W1(t), n]), xX = (e) => g(g(vt(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [Z1(t), n]), vX = (e) => g(vt(e), ([t, n]) => [J1(t), n]), hL = (e) => g(g(yX(e), ([t, n]) => [t, n], () => g(bX(e), ([t, n]) => [t, n], () => g(xX(e), ([t, n]) => [t, n], () => g(vX(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), yL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(hL(o), ([r, i]) => [[n, r], i])), ([n, o]) => yL(o, [...t, n]), () => [t, e]), IX = (e) => g(g(g(hL(e), ([t, n]) => g(yL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [Y1(t), n]), XI = (e) => g(g(R("<", e), ([t, n]) => g(IX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [X1(t), n]), bL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => bL(o, [...t, n]), () => [t, e]), wX = (e) => g(g(g(Ce(e), ([t, n]) => g(bL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [Q1(t), n]), SX = (e) => g(g(R("<", e), ([t, n]) => g(wX(n), ([o, r]) => g(R(">", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [eN(t), n]), kX = (e) => g(g(vt(e), ([t, n]) => g(SX(n), ([o, r]) => [[t, o], r])), ([t, n]) => [tN(t), n]), xL = (e) => g(g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [nN(t), n]), vL = (e) => g(R("string", e), ([t, n]) => [rN(t), n]), IL = (e) => g(R("number", e), ([t, n]) => [oN(t), n]), _X = (e) => g(R("boolean", e), ([t, n]) => [iN(t), n]), EX = (e) => g(R("undefined", e), ([t, n]) => [aN(t), n]), TX = (e) => g(R("null", e), ([t, n]) => [sN(t), n]), wL = (e) => g(R("integer", e), ([t, n]) => [cN(t), n]), CX = (e) => g(R("bigint", e), ([t, n]) => [uN(t), n]), RX = (e) => g(R("unknown", e), ([t, n]) => [lN(t), n]), AX = (e) => g(R("any", e), ([t, n]) => [dN(t), n]), $X = (e) => g(R("object", e), ([t, n]) => [pN(t), n]), PX = (e) => g(R("never", e), ([t, n]) => [mN(t), n]), SL = (e) => g(R("symbol", e), ([t, n]) => [fN(t), n]), OX = (e) => g(R("void", e), ([t, n]) => [gN(t), n]), DX = (e) => g(R("this", e), ([t, n]) => [hN(t), n]), MX = (e) => g(g(R("${", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [IN(t), n]), JI = (e) => g(ki(["${", "`"], e), ([t, n]) => [wN(t), n]), kL = (e) => g(g(g(JI(e), ([t, n]) => g(MX(n), ([o, r]) => g(kL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(JI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(JI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))), ([t, n]) => [SN(t), n]), QI = (e) => g(g(R("`", e), ([t, n]) => g(kL(n), ([o, r]) => g(R("`", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [kN(t), n]), NX = (e) => g(QI(e), ([t, n]) => [_N(t), n]), UX = (e) => g(g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R("else", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g(g(R("if", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("then", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => [])), ([t, n]) => [EN(t), n]), LX = (e) => g(HI(e), ([t, n]) => [yN(t), n]), FX = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [bN(t), n]), zX = (e) => g(Rf(e), ([t, n]) => [xN(t), n]), jX = (e) => g($f(["'", '"'], e), ([t, n]) => [vN(t), n]), BX = (e) => g(g(g(R("keyof", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [TN(t), n]), _L = (e, t = []) => g(g(g(R("[", e), ([n, o]) => g(Ce(o), ([r, i]) => g(R("]", i), ([a, s]) => [[n, r, a], s]))), ([n, o]) => [n, o], () => g(g(R("[", e), ([n, o]) => g(R("]", o), ([r, i]) => [[n, r], i])), ([n, o]) => [n, o], () => [])), ([n, o]) => _L(o, [...t, n]), () => [t, e]), qX = (e) => g(_L(e), ([t, n]) => [CN(t), n]), GX = (e) => g(g(g(R("extends", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R("?", r), ([i, a]) => g(Ce(a), ([s, u]) => g(R(":", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [RN(t), n]), KX = (e) => g(g(g(R("(", e), ([t, n]) => g(Ce(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(vL(e), ([t, n]) => [t, n], () => g(IL(e), ([t, n]) => [t, n], () => g(_X(e), ([t, n]) => [t, n], () => g(EX(e), ([t, n]) => [t, n], () => g(TX(e), ([t, n]) => [t, n], () => g(wL(e), ([t, n]) => [t, n], () => g(CX(e), ([t, n]) => [t, n], () => g(RX(e), ([t, n]) => [t, n], () => g(AX(e), ([t, n]) => [t, n], () => g($X(e), ([t, n]) => [t, n], () => g(PX(e), ([t, n]) => [t, n], () => g(SL(e), ([t, n]) => [t, n], () => g(OX(e), ([t, n]) => [t, n], () => g(DX(e), ([t, n]) => [t, n], () => g(LX(e), ([t, n]) => [t, n], () => g(FX(e), ([t, n]) => [t, n], () => g(zX(e), ([t, n]) => [t, n], () => g(jX(e), ([t, n]) => [t, n], () => g(NX(e), ([t, n]) => [t, n], () => g(UX(e), ([t, n]) => [t, n], () => g(nQ(e), ([t, n]) => [t, n], () => g(iQ(e), ([t, n]) => [t, n], () => g(dQ(e), ([t, n]) => [t, n], () => g(lQ(e), ([t, n]) => [t, n], () => g(gQ(e), ([t, n]) => [t, n], () => g(kX(e), ([t, n]) => [t, n], () => g(hQ(e), ([t, n]) => [t, n], () => [])))))))))))))))))))))))))))), ([t, n]) => [AN(t), n]), HX = (e) => g(g(g(R("with", e), ([t, n]) => g(BL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$N(t), n]), EL = (e) => g(g(BX(e), ([t, n]) => g(KX(n), ([o, r]) => g(qX(r), ([i, a]) => g(GX(a), ([s, u]) => g(HX(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [PN(t), n]), TL = (e) => g(g(g(R("&", e), ([t, n]) => g(EL(n), ([o, r]) => g(TL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), CL = (e) => g(g(EL(e), ([t, n]) => g(TL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [ON(t), n]), RL = (e) => g(g(g(R("|", e), ([t, n]) => g(CL(n), ([o, r]) => g(RL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), Pf = (e) => g(g(CL(e), ([t, n]) => g(RL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [DN(t), n]), VX = (e) => g(g(R("readonly", e), ([t, n]) => g(Pf(n), ([o, r]) => [[t, o], r])), ([t, n]) => [MN(t), n]), WX = (e) => g(g(R("|", e), ([t, n]) => g(Pf(n), ([o, r]) => [[t, o], r])), ([t, n]) => [NN(t), n]), ZX = (e) => g(g(XI(e), ([t, n]) => g(R("=", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [UN(t), n]), JX = (e) => g(g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("extends", r), ([i, a]) => g(Pf(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(R("infer", e), ([t, n]) => g(vt(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => [])), ([t, n]) => [LN(t), n]), Ce = (e) => g(g(JX(e), ([t, n]) => [t, n], () => g(WX(e), ([t, n]) => [t, n], () => g(VX(e), ([t, n]) => [t, n], () => g(Pf(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), YX = (e) => g(Rf(e), ([t, n]) => [FN(t), n]), XX = (e) => g(vt(e), ([t, n]) => [t, n]), QX = (e) => g($f(["'", '"'], e), ([t, n]) => [t, n]), eQ = (e) => g(g(R("[", e), ([t, n]) => g(vt(n), ([o, r]) => g(R(":", r), ([i, a]) => g(g(wL(a), ([s, u]) => [s, u], () => g(IL(a), ([s, u]) => [s, u], () => g(vL(a), ([s, u]) => [s, u], () => g(SL(a), ([s, u]) => [s, u], () => [])))), ([s, u]) => g(R("]", u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [zN(t), n]), AL = (e) => g(g(YX(e), ([t, n]) => [t, n], () => g(XX(e), ([t, n]) => [t, n], () => g(QX(e), ([t, n]) => [t, n], () => g(eQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), $L = (e) => g(g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [jN(t), n]), PL = (e) => g(g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [BN(t), n]), OL = (e) => g(g($L(e), ([t, n]) => g(AL(n), ([o, r]) => g(PL(r), ([i, a]) => g(R(":", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [qN(t), n]), Of = (e) => g(g(g(R(",", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => g(R(`
 `, n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R(",", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(";", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g(g(R(`
 `, e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => []))))), ([t, n]) => [t, n]), DL = (e, t = []) => g(g(Of(e), ([n, o]) => g(OL(o), ([r, i]) => [[n, r], i])), ([n, o]) => DL(o, [...t, n]), () => [t, e]), tQ = (e) => g(g(g(OL(e), ([t, n]) => g(DL(n), ([o, r]) => g(g(Of(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [GN(t), n]), ew = (e) => g(g(R("{", e), ([t, n]) => g(tQ(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [HN(t), n]), nQ = (e) => g(ew(e), ([t, n]) => [VN(t), n]), rQ = (e) => g(g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [t, n], () => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])))), ([t, n]) => [WN(t), n]), fL = (e) => g(g(rQ(e), ([t, n]) => [t, n], () => g(g($L(e), ([t, n]) => g(Ce(n), ([o, r]) => g(PL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => [])), ([t, n]) => [ZN(t), n]), ML = (e) => g(g(g(R("...", e), ([t, n]) => g(fL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(fL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [JN(t), n]), NL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(ML(o), ([r, i]) => [[n, r], i])), ([n, o]) => NL(o, [...t, n]), () => [t, e]), oQ = (e) => g(g(g(ML(e), ([t, n]) => g(NL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [YN(t), n]), iQ = (e) => g(g(R("[", e), ([t, n]) => g(oQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [XN(t), n]), aQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(R("readonly", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [QN(t), n]), sQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(R("readonly", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [eU(t), n]), cQ = (e) => g(g(vt(e), ([t, n]) => g(R("?", n), ([o, r]) => g(R(":", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [tU(t), n]), uQ = (e) => g(g(vt(e), ([t, n]) => g(R(":", n), ([o, r]) => g(Ce(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [nU(t), n]), gL = (e) => g(g(aQ(e), ([t, n]) => [t, n], () => g(sQ(e), ([t, n]) => [t, n], () => g(cQ(e), ([t, n]) => [t, n], () => g(uQ(e), ([t, n]) => [t, n], () => [])))), ([t, n]) => [t, n]), UL = (e) => g(g(g(R("...", e), ([t, n]) => g(gL(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(gL(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => [])), ([t, n]) => [rU(t), n]), LL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(UL(o), ([r, i]) => [[n, r], i])), ([n, o]) => LL(o, [...t, n]), () => [t, e]), FL = (e) => g(g(g(UL(e), ([t, n]) => g(LL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [oU(t), n]), lQ = (e) => g(g(R("(", e), ([t, n]) => g(FL(n), ([o, r]) => g(R(")", r), ([i, a]) => g(R("=>", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [iU(t), n]), dQ = (e) => g(g(R("new", e), ([t, n]) => g(R("(", n), ([o, r]) => g(FL(r), ([i, a]) => g(R(")", a), ([s, u]) => g(R("=>", u), ([l, m]) => g(Ce(m), ([h, b]) => [[t, o, i, s, l, h], b])))))), ([t, n]) => [aU(t), n]), pQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("readonly", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("readonly", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [sU(t), n]), mQ = (e) => g(g(g(R("+", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("-", e), ([t, n]) => g(R("?", n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g(g(R("?", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])))), ([t, n]) => [cU(t), n]), fQ = (e) => g(g(g(R("as", e), ([t, n]) => g(Ce(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [uU(t), n]), gQ = (e) => g(g(R("{", e), ([t, n]) => g(pQ(n), ([o, r]) => g(R("[", r), ([i, a]) => g(vt(a), ([s, u]) => g(R("in", u), ([l, m]) => g(Ce(m), ([h, b]) => g(fQ(b), ([f, y]) => g(R("]", y), ([x, v]) => g(mQ(v), ([S, w]) => g(R(":", w), ([k, C]) => g(Ce(C), ([A, D]) => g(xL(D), ([V, te]) => g(R("}", te), ([Z, Ae]) => [[t, o, i, s, l, h, f, x, S, k, A, V, Z], Ae]))))))))))))), ([t, n]) => [lU(t), n]), hQ = (e) => g(vt(e), ([t, n]) => [dU(t), n]), yQ = (e) => g(HI(e), ([t, n]) => [pU(t), n]), bQ = (e) => g(Rf(e), ([t, n]) => [mU(t), n]), xQ = (e) => g(g(R("true", e), ([t, n]) => [t, n], () => g(R("false", e), ([t, n]) => [t, n], () => [])), ([t, n]) => [fU(t), n]), vQ = (e) => g($f(['"', "'"], e), ([t, n]) => [t, n]), IQ = (e) => g(R("null", e), ([t, n]) => [gU(t), n]), wQ = (e) => g(R("undefined", e), ([t, n]) => [void 0, n]), zL = (e) => g(g(AL(e), ([t, n]) => g(R(":", n), ([o, r]) => g(tw(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [hU(t), n]), jL = (e, t = []) => g(g(Of(e), ([n, o]) => g(zL(o), ([r, i]) => [[n, r], i])), ([n, o]) => jL(o, [...t, n]), () => [t, e]), SQ = (e) => g(g(g(zL(e), ([t, n]) => g(jL(n), ([o, r]) => g(g(Of(r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [yU(t), n]), BL = (e) => g(g(R("{", e), ([t, n]) => g(SQ(n), ([o, r]) => g(R("}", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [bU(t), n]), qL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(tw(o), ([r, i]) => [[n, r], i])), ([n, o]) => qL(o, [...t, n]), () => [t, e]), kQ = (e) => g(g(g(tw(e), ([t, n]) => g(qL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [xU(t), n]), _Q = (e) => g(g(R("[", e), ([t, n]) => g(kQ(n), ([o, r]) => g(R("]", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [vU(t), n]), tw = (e) => g(g(yQ(e), ([t, n]) => [t, n], () => g(bQ(e), ([t, n]) => [t, n], () => g(xQ(e), ([t, n]) => [t, n], () => g(vQ(e), ([t, n]) => [t, n], () => g(IQ(e), ([t, n]) => [t, n], () => g(wQ(e), ([t, n]) => [t, n], () => g(BL(e), ([t, n]) => [t, n], () => g(_Q(e), ([t, n]) => [t, n], () => [])))))))), ([t, n]) => [t, n]), EQ = (e) => g(R("-?(?:0|[1-9][0-9]*)n", e), ([t, n]) => [IU(t), n]), TQ = (e) => g(R(".*", e), ([t, n]) => [wU(t), n]), CQ = (e) => g(R("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", e), ([t, n]) => [SU(t), n]), RQ = (e) => g(R("-?(?:0|[1-9][0-9]*)", e), ([t, n]) => [kU(t), n]), AQ = (e) => g(R("(?!)", e), ([t, n]) => [_U(t), n]), $Q = (e) => g(dL(["-?(?:0|[1-9][0-9]*)n", ".*", "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?", "-?(?:0|[1-9][0-9]*)", "(?!)", "(", ")", "$", "|"], e), ([t, n]) => [EU(t), n]), PQ = (e) => g(g(EQ(e), ([t, n]) => [t, n], () => g(TQ(e), ([t, n]) => [t, n], () => g(CQ(e), ([t, n]) => [t, n], () => g(RQ(e), ([t, n]) => [t, n], () => g(AQ(e), ([t, n]) => [t, n], () => g(OQ(e), ([t, n]) => [t, n], () => g($Q(e), ([t, n]) => [t, n], () => []))))))), ([t, n]) => [t, n]), OQ = (e) => g(g(R("(", e), ([t, n]) => g(nw(n), ([o, r]) => g(R(")", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [TU(t), n]), GL = (e) => g(g(g(YI(e), ([t, n]) => g(R("|", n), ([o, r]) => g(GL(r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g(g(YI(e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => []))), ([t, n]) => [CU(t), n]), YI = (e) => g(g(PQ(e), ([t, n]) => g(nw(n), ([o, r]) => [[t, o], r])), ([t, n]) => [RU(t), n]), nw = (e) => g(g(GL(e), ([t, n]) => [t, n], () => g(YI(e), ([t, n]) => [t, n], () => [])), ([t, n]) => [t, n]), QM = (e) => g(g(R("^", e), ([t, n]) => g(nw(n), ([o, r]) => g(R("$", r), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [AU(t), n]), KL = (e, t = []) => g(g(R(",", e), ([n, o]) => g(Ce(o), ([r, i]) => [[n, r], i])), ([n, o]) => KL(o, [...t, n]), () => [t, e]), DQ = (e) => g(g(g(Ce(e), ([t, n]) => g(KL(n), ([o, r]) => g(g(R(",", r), ([i, a]) => [[i], a], () => [[], r]), ([i, a]) => [[t, o, i], a]))), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [$U(t), n]), HL = (e) => g(g(g(R("extends", e), ([t, n]) => g(DQ(n), ([o, r]) => [[t, o], r])), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [PU(t), n]), MQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(XI(r), ([i, a]) => g(HL(a), ([s, u]) => g(ew(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [OU(t), n]), NQ = (e) => g(g(R("interface", e), ([t, n]) => g(vt(n), ([o, r]) => g(HL(r), ([i, a]) => g(ew(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [DU(t), n]), UQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(XI(r), ([i, a]) => g(R("=", a), ([s, u]) => g(Ce(u), ([l, m]) => [[t, o, i, s, l], m]))))), ([t, n]) => [MU(t), n]), LQ = (e) => g(g(R("type", e), ([t, n]) => g(vt(n), ([o, r]) => g(R("=", r), ([i, a]) => g(Ce(a), ([s, u]) => [[t, o, i, s], u])))), ([t, n]) => [NU(t), n]), FQ = (e) => g(g(g(R("export", e), ([t, n]) => [[t], n]), ([t, n]) => [t, n], () => g([[], e], ([t, n]) => [t, n], () => [])), ([t, n]) => [UU(t), n]), VL = (e) => g(g(g(R(";", e), ([t, n]) => g(R(`
@@ -7405,7 +7405,7 @@ function JL(e) {
   let t = QI(`\`${e}\``);
   return c.IsEqual(t.length, 2) ? t[0] : ft();
 }
-var ow = d(() => {
+var ow = p(() => {
   Lr();
   I();
   zm();
@@ -7419,25 +7419,25 @@ function GQ(e) {
   return e.slice(1, e.length - 1);
 }
 function KQ(e, t, n) {
-  return ki(t, `${n}${e}`);
+  return _i(t, `${n}${e}`);
 }
 function HQ(e, t) {
-  return ki(e, `${t}${VM}`);
+  return _i(e, `${t}${VM}`);
 }
 function VQ(e, t) {
-  return ki(e, `${t}${Dm}`);
+  return _i(e, `${t}${Dm}`);
 }
 function WQ(e, t) {
-  return ki(e, `${t}${Lm}`);
+  return _i(e, `${t}${Lm}`);
 }
 function ZQ(e, t) {
   return pl(ie([he("false"), he("true")]), e, t);
 }
 function JQ(e, t) {
-  return ki(e, `${t}${Fm}`);
+  return _i(e, `${t}${Fm}`);
 }
 function YQ(e, t, n) {
-  return ki(t, `${n}${GQ(e)}`);
+  return _i(t, `${n}${GQ(e)}`);
 }
 function XQ(e, t, n) {
   let o = ml(e, {});
@@ -7448,22 +7448,22 @@ function QQ(e, t, n) {
   return pl(o, t, n);
 }
 function YL(e, t, n, o = []) {
-  return c.ShiftLeft(e, (r, i) => YL(i, t, n, [...o, pl(r, [], "")]), () => ki(t, `${n}(${qQ(o)})`));
+  return c.ShiftLeft(e, (r, i) => YL(i, t, n, [...o, pl(r, [], "")]), () => _i(t, `${n}(${qQ(o)})`));
 }
 function pl(e, t, n) {
   return bt(e) ? QQ(e.enum, t, n) : Vt(e) ? VQ(t, n) : xe(e) ? KQ(e.const, t, n) : Jn(e) ? HQ(t, n) : Tn(e) ? ZQ(t, n) : ot(e) ? WQ(t, n) : Ut(e) ? JQ(t, n) : qe(e) ? YQ(e.pattern, t, n) : QL(e) ? XQ(e.parameters[0], t, n) : F(e) ? YL(e.anyOf, t, n) : $M;
 }
-function ki(e, t) {
+function _i(e, t) {
   return c.ShiftLeft(e, (n, o) => pl(n, o, t), () => t);
 }
 function eee(e) {
-  return `^${ki(e, "")}$`;
+  return `^${_i(e, "")}$`;
 }
 function XL(e) {
   let t = eee(e);
   return qm(t);
 }
-var iw = d(() => {
+var iw = p(() => {
   I();
   zr();
   Nt();
@@ -7473,7 +7473,7 @@ var iw = d(() => {
   Sr();
   Cn();
   so();
-  gi();
+  hi();
   en();
   Gm();
   ye();
@@ -7488,7 +7488,7 @@ function eF(e, t, n, o) {
   let r = ur(e, t, n);
   return ml(r, o);
 }
-var Df = d(() => {
+var Df = p(() => {
   z();
   Nn();
   iw();
@@ -7516,7 +7516,7 @@ function nF(e, t = {}) {
 function qe(e) {
   return q(e, "TemplateLiteral");
 }
-var Nn = d(() => {
+var Nn = p(() => {
   Ou();
   I();
   fe();
@@ -7561,7 +7561,7 @@ function mo(e) {
 function It(e, t, n) {
   return mo(e) ? t(e.inferred) : n();
 }
-var Ye = d(() => {
+var Ye = p(() => {
   I();
   z();
 });
@@ -7593,7 +7593,7 @@ function aF(e, t, n) {
 function Me(e, t, n) {
   return lt(n) ? oee(e, t) : yt(n) ? iee(e, t, n.if, n.then, n.else) : bt(n) ? aee(e, t, n.enum) : Ct(n) ? ree(e, n.name, t, n.extends) : Y(n) ? iF(e, t, n.allOf) : qe(n) ? see(e, t, n.pattern) : F(n) ? aF(e, t, n.anyOf) : Tt(n) ? j(e) : ce();
 }
-var yn = d(() => {
+var yn = p(() => {
   I();
   z();
   On();
@@ -7614,7 +7614,7 @@ var yn = d(() => {
 function sF(e, t, n) {
   return Ct(n) ? Me(e, t, n) : lt(n) ? j(e) : Tt(n) ? j(e) : aw(e);
 }
-var cF = d(() => {
+var cF = p(() => {
   wr();
   On();
   cn();
@@ -7630,7 +7630,7 @@ function cee(e, t) {
 function uF(e, t, n, o) {
   return ve(o) ? cee(t, o) ? _e(e, n, o.items) : ce() : Me(e, t, o);
 }
-var lF = d(() => {
+var lF = p(() => {
   _n();
   Gu();
   yn();
@@ -7642,7 +7642,7 @@ var lF = d(() => {
 function dF(e, t, n) {
   return Jn(n) ? j(e) : Me(e, t, n);
 }
-var pF = d(() => {
+var pF = p(() => {
   ka();
   yn();
   Ye();
@@ -7652,8 +7652,8 @@ var pF = d(() => {
 function mF(e, t, n) {
   return Tn(n) ? j(e) : Me(e, t, n);
 }
-var fF = d(() => {
-  gi();
+var fF = p(() => {
+  hi();
   yn();
   Ye();
 });
@@ -7672,10 +7672,10 @@ function dee(e, t, n) {
 function fl(e, t, n) {
   return dee(e, t, n);
 }
-var sw = d(() => {
+var sw = p(() => {
   I();
   wr();
-  fi();
+  gi();
   Fn();
   Ye();
 });
@@ -7684,7 +7684,7 @@ var sw = d(() => {
 function Mf(e, t, n) {
   return Xn(n) ? j(e) : _e(e, t, n);
 }
-var cw = d(() => {
+var cw = p(() => {
   Ra();
   Fn();
   Ye();
@@ -7694,7 +7694,7 @@ var cw = d(() => {
 function gF(e, t, n, o) {
   return lt(o) ? j(e) : Tt(o) ? j(e) : gt(o) ? It(fl(e, t, o.parameters), (r) => Mf(r, n, o.instanceType), () => ce()) : ce();
 }
-var hF = d(() => {
+var hF = p(() => {
   On();
   xr();
   cn();
@@ -7707,7 +7707,7 @@ var hF = d(() => {
 function yF(e, t, n, o, r) {
   return It(_e(e, t, r), () => _e(e, n, r), () => _e(e, o, r));
 }
-var bF = d(() => {
+var bF = p(() => {
   Fn();
   Ye();
 });
@@ -7717,7 +7717,7 @@ function xF(e, t, n) {
   let o = Rn(t);
   return _e(e, o, n);
 }
-var vF = d(() => {
+var vF = p(() => {
   Fn();
   ye();
 });
@@ -7726,7 +7726,7 @@ var vF = d(() => {
 function IF(e, t, n, o) {
   return lt(o) ? j(e) : Tt(o) ? j(e) : ht(o) ? It(fl(e, t, o.parameters), (r) => Mf(r, n, o.returnType), () => ce()) : ce();
 }
-var wF = d(() => {
+var wF = p(() => {
   On();
   vr();
   cn();
@@ -7739,7 +7739,7 @@ var wF = d(() => {
 function SF(e, t, n) {
   return Vt(n) ? j(e) : ot(n) ? j(e) : Me(e, t, n);
 }
-var kF = d(() => {
+var kF = p(() => {
   so();
   Cn();
   yn();
@@ -7751,7 +7751,7 @@ function _F(e, t, n) {
   let o = it(t);
   return _e(e, o, n);
 }
-var EF = d(() => {
+var EF = p(() => {
   Fn();
   Ys();
 });
@@ -7775,12 +7775,12 @@ function gee(e, t, n) {
 function TF(e, t, n) {
   return c.IsBigInt(t.const) ? pee(e, t.const, n) : c.IsBoolean(t.const) ? mee(e, t.const, n) : c.IsNumber(t.const) ? fee(e, t.const, n) : c.IsString(t.const) ? gee(e, t.const, n) : ft();
 }
-var CF = d(() => {
+var CF = p(() => {
   I();
   aI();
   Nt();
   ka();
-  gi();
+  hi();
   Cn();
   Sr();
   yn();
@@ -7791,7 +7791,7 @@ var CF = d(() => {
 function RF(e, t, n) {
   return Ct(n) ? Me(e, t, n) : j(e);
 }
-var AF = d(() => {
+var AF = p(() => {
   wr();
   yn();
   Ye();
@@ -7801,7 +7801,7 @@ var AF = d(() => {
 function $F(e, t, n) {
   return co(n) ? j(e) : Me(e, t, n);
 }
-var PF = d(() => {
+var PF = p(() => {
   Us();
   yn();
   Ye();
@@ -7811,7 +7811,7 @@ var PF = d(() => {
 function OF(e, t, n) {
   return ot(n) ? j(e) : Me(e, t, n);
 }
-var DF = d(() => {
+var DF = p(() => {
   Cn();
   yn();
   Ye();
@@ -7860,11 +7860,11 @@ function See(e, t, n, o) {
 function NF(e, t, n) {
   return Ue(n) ? See(e, t, Rt(n), We(n)) : Q(n) ? Iee(e, t, n.properties) : Me(e, X(t), n);
 }
-var UF = d(() => {
+var UF = p(() => {
   Lr();
   z();
   I();
-  fi();
+  gi();
   wr();
   en();
   Ne();
@@ -7885,7 +7885,7 @@ function _ee(e, t, n, o, r) {
 function LF(e, t, n, o) {
   return Ue(o) ? _ee(e, Xm(t), n, Xm(Rt(o)), We(o)) : Q(o) ? kee(e, o.properties) : lt(o) ? j(e) : Tt(o) ? j(e) : ce();
 }
-var FF = d(() => {
+var FF = p(() => {
   I();
   On();
   cn();
@@ -7899,7 +7899,7 @@ var FF = d(() => {
 function zF(e, t, n) {
   return Ut(n) ? j(e) : Me(e, t, n);
 }
-var jF = d(() => {
+var jF = p(() => {
   Sr();
   yn();
   Ye();
@@ -7909,7 +7909,7 @@ var jF = d(() => {
 function BF(e, t, n) {
   return uo(n) ? j(e) : Me(e, t, n);
 }
-var qF = d(() => {
+var qF = p(() => {
   Ea();
   yn();
   Ye();
@@ -7920,7 +7920,7 @@ function GF(e, t, n) {
   let o = gn(t);
   return _e(e, o, n);
 }
-var KF = d(() => {
+var KF = p(() => {
   Fn();
   ye();
 });
@@ -7933,7 +7933,7 @@ function gl(e) {
   return c.IsObject(e) && c.HasPropertyKey(e, "~kind") && c.HasPropertyKey(e, "name") && c.HasPropertyKey(e, "type") && c.IsEqual(e["~kind"], "Inferrable") && c.IsString(e.name) && c.IsObject(e.type);
 }
 function lw(e) {
-  return Ii(e) ? Ct(e.items) ? ve(e.items.extends) ? uw(e.items.name, e.items.extends.items) : Tt(e.items.extends) ? uw(e.items.name, e.items.extends) : void 0 : ft() : void 0;
+  return wi(e) ? Ct(e.items) ? ve(e.items.extends) ? uw(e.items.name, e.items.extends.items) : Tt(e.items.extends) ? uw(e.items.name, e.items.extends) : void 0 : ft() : void 0;
 }
 function Uf(e) {
   return Ct(e) ? uw(e.name, e.extends) : void 0;
@@ -7955,7 +7955,7 @@ function Lf(e, t, n, o) {
   let r = HF(n, o);
   return c.IsArray(r) ? j(_.Assign(e, { [t]: ie(r) })) : ce();
 }
-var dw = d(() => {
+var dw = p(() => {
   Lr();
   z();
   I();
@@ -7997,7 +7997,7 @@ function WF(e, t, n, o) {
   return Aee(e, t, n, o);
 }
 function $ee(e, t, n) {
-  let o = _i(e, Xe([], []), n), r = Tee(o);
+  let o = Ei(e, Xe([], []), n), r = Tee(o);
   return WF(e, r, pw(t, r), pw(o, r));
 }
 function Pee(e, t, n) {
@@ -8014,10 +8014,10 @@ function Oee(e, t, n) {
   return gl(o) ? Lf(e, o.name, t, o.type) : Pee(e, t, n);
 }
 function ZF(e, t, n) {
-  let o = _i(e, Xe([], []), t);
+  let o = Ei(e, Xe([], []), t);
   return ge(n) ? $ee(e, o, n.items) : ve(n) ? Oee(e, o, n.items) : Me(e, xt(o), n);
 }
-var JF = d(() => {
+var JF = p(() => {
   I();
   fe();
   _n();
@@ -8034,7 +8034,7 @@ var JF = d(() => {
 function YF(e, t, n) {
   return Xn(n) ? j(e) : _r(n) ? j(e) : Me(e, t, n);
 }
-var XF = d(() => {
+var XF = p(() => {
   Hs();
   Ra();
   yn();
@@ -8052,7 +8052,7 @@ function ez(e, t, n) {
   let o = Uf(n);
   return gl(o) ? Lf(e, o.name, t, o.type) : F(n) ? mw(e, t, n.anyOf) : mw(e, t, [n]);
 }
-var tz = d(() => {
+var tz = p(() => {
   I();
   Ie();
   Fn();
@@ -8064,7 +8064,7 @@ var tz = d(() => {
 function nz(e, t, n) {
   return Ct(n) ? Me(e, t, n) : lt(n) ? j(e) : Tt(n) ? j(e) : ce();
 }
-var rz = d(() => {
+var rz = p(() => {
   On();
   cn();
   wr();
@@ -8076,7 +8076,7 @@ var rz = d(() => {
 function oz(e, t, n) {
   return Xn(n) ? j(e) : Me(e, t, n);
 }
-var iz = d(() => {
+var iz = p(() => {
   Ra();
   yn();
   Ye();
@@ -8086,7 +8086,7 @@ var iz = d(() => {
 function _e(e, t, n) {
   return lt(t) ? sF(e, t, n) : ve(t) ? uF(e, t, t.items, n) : Jn(t) ? dF(e, t, n) : Tn(t) ? mF(e, t, n) : gt(t) ? gF(e, t.parameters, t.instanceType, n) : yt(t) ? yF(e, t.if, t.then, t.else, n) : bt(t) ? xF(e, t.enum, n) : ht(t) ? IF(e, t.parameters, t.returnType, n) : Vt(t) ? SF(e, t, n) : Y(t) ? _F(e, t.allOf, n) : xe(t) ? TF(e, t, n) : Dn(t) ? RF(e, t, n) : co(t) ? $F(e, t, n) : ot(t) ? OF(e, t, n) : Q(t) ? NF(e, t.properties, n) : Ue(t) ? LF(e, Rt(t), We(t), n) : Ut(t) ? zF(e, t, n) : uo(t) ? BF(e, t, n) : qe(t) ? GF(e, t.pattern, n) : ge(t) ? ZF(e, t.items, n) : _r(t) ? YF(e, t, n) : F(t) ? ez(e, t.anyOf, n) : Tt(t) ? nz(e, t, n) : Xn(t) ? oz(e, t, n) : ce();
 }
-var Fn = d(() => {
+var Fn = p(() => {
   cF();
   lF();
   pF();
@@ -8114,7 +8114,7 @@ var Fn = d(() => {
   On();
   _n();
   ka();
-  gi();
+  hi();
   xr();
   Zn();
   zr();
@@ -8149,7 +8149,7 @@ function az(e, t, n, o, r) {
   let i = ur(e, t, n), a = hl(e, t, o);
   return fw(i, a, r);
 }
-var Ff = d(() => {
+var Ff = p(() => {
   z();
   Ne();
   ye();
@@ -8169,7 +8169,7 @@ function Xs(e) {
 function sz(e, t, n = {}) {
   return fw(e, t, n);
 }
-var yl = d(() => {
+var yl = p(() => {
   I();
   fe();
   Oe();
@@ -8193,7 +8193,7 @@ function bl(e, t, n) {
 function uz(e, t, n) {
   return bl(e, t, n);
 }
-var gw = d(() => {
+var gw = p(() => {
   I();
   _n();
   xr();
@@ -8216,7 +8216,7 @@ function lz(e) {
   let t = Tm(e);
   return Nee(e, t);
 }
-var hw = d(() => {
+var hw = p(() => {
   xa();
   gw();
 });
@@ -8238,7 +8238,7 @@ function xl(e, t, n) {
 function pz(e, t, n) {
   return xl(e, n, [t]);
 }
-var yw = d(() => {
+var yw = p(() => {
   Lr();
   _n();
   xr();
@@ -8272,7 +8272,7 @@ function zee(e, t) {
 function mz(e) {
   return zee(e.$defs, e.$ref);
 }
-var fz = d(() => {
+var fz = p(() => {
   I();
   On();
   _n();
@@ -8302,7 +8302,7 @@ function gz(e, t, n) {
   let o = pz(e, t, n), r = Bee(e, o);
   return io(r, t);
 }
-var bw = d(() => {
+var bw = p(() => {
   I();
   Mn();
   Ne();
@@ -8321,13 +8321,13 @@ function hz(e, t) {
 function fo(e, t) {
   return hz(e, t);
 }
-var Da = d(() => {
+var Da = p(() => {
   en();
   Ir();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/cyclic/index.mjs
-var xw = d(() => {
+var xw = p(() => {
   hw();
   gw();
   yw();
@@ -8344,7 +8344,7 @@ function ln(e, t, n) {
   let o = yz(t), r = yz(n);
   return _e(e, o, r);
 }
-var bz = d(() => {
+var bz = p(() => {
   Mn();
   cn();
   Am();
@@ -8353,7 +8353,7 @@ var bz = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/extends/index.mjs
-var Br = d(() => {
+var Br = p(() => {
   bz();
   Ye();
 });
@@ -8363,7 +8363,7 @@ function zs(e, t) {
   let n = [ln({}, e, t), ln({}, t, e)];
   return re.IsExtendsTrueLike(n[0]) && re.IsExtendsTrueLike(n[1]) ? Qu : re.IsExtendsTrueLike(n[0]) && re.IsExtendsFalse(n[1]) ? el : re.IsExtendsFalse(n[0]) && re.IsExtendsTrueLike(n[1]) ? tl : Il;
 }
-var Qu, Il, el, tl, nl = d(() => {
+var Qu, Il, el, tl, nl = p(() => {
   Br();
   Qu = 0, Il = 1, el = 2, tl = 3;
 });
@@ -8396,9 +8396,9 @@ function zf(e, t = []) {
 }
 function NI(e) {
   let t = zf(e);
-  return vi(t);
+  return Ii(t);
 }
-var UI = d(() => {
+var UI = p(() => {
   I();
   On();
   en();
@@ -8414,17 +8414,17 @@ function Iw(e, t) {
   return _.Update(kr(e), {}, t);
 }
 function xz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Iw(r, o);
 }
-var jf = d(() => {
+var jf = p(() => {
   z();
   J();
   ye();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/evaluate/index.mjs
-var Ys = d(() => {
+var Ys = p(() => {
   UI();
   nl();
   PI();
@@ -8439,7 +8439,7 @@ var Ys = d(() => {
 function wl(e, t = []) {
   return (
     // Conditional
-    pi(e) && c.IsEqual(e.action, "Conditional") ? De(e.parameters[0]) ? wl(e.parameters[2], wl(e.parameters[3], [...t, e.parameters[0].$ref])) : wl(e.parameters[2], wl(e.parameters[3], t)) : pi(e) && c.IsEqual(e.action, "Mapped") && pi(e.parameters[1]) && c.IsEqual(e.parameters[1].action, "KeyOf") && De(e.parameters[1].parameters[0]) ? [...t, e.parameters[1].parameters[0].$ref] : t
+    mi(e) && c.IsEqual(e.action, "Conditional") ? De(e.parameters[0]) ? wl(e.parameters[2], wl(e.parameters[3], [...t, e.parameters[0].$ref])) : wl(e.parameters[2], wl(e.parameters[3], t)) : mi(e) && c.IsEqual(e.action, "Mapped") && mi(e.parameters[1]) && c.IsEqual(e.parameters[1].action, "KeyOf") && De(e.parameters[1].parameters[0]) ? [...t, e.parameters[1].parameters[0].$ref] : t
   );
 }
 function Gee(e, t) {
@@ -8466,9 +8466,9 @@ function Iz(e) {
 }
 function Sz(e, t, n) {
   let o = wl(n), r = Gee(e, o), i = wz(t, r);
-  return pi(n) && c.IsEqual(n.action, "Conditional") || pi(n) && c.IsEqual(n.action, "Mapped") ? Iz(i) : [t];
+  return mi(n) && c.IsEqual(n.action, "Conditional") || mi(n) && c.IsEqual(n.action, "Mapped") ? Iz(i) : [t];
 }
-var kz = d(() => {
+var kz = p(() => {
   I();
   Ie();
   Oe();
@@ -8487,7 +8487,7 @@ function Zee() {
   return ["(not-generic)", Fe()];
 }
 function Jee(e, t, n) {
-  return [e, mi(t, n)];
+  return [e, fi(t, n)];
 }
 function Yee(e, t, n) {
   return t in e ? _z(e, t, e[t], n) : Wee();
@@ -8498,7 +8498,7 @@ function _z(e, t, n, o) {
 function Ez(e, t, n) {
   return _z(e, "(anonymous)", t, n);
 }
-var Tz = d(() => {
+var Tz = p(() => {
   Fu();
   Ir();
   en();
@@ -8512,11 +8512,11 @@ function Xee(e, t, n) {
   throw new Error(`Argument for parameter ${e} does not satisfy constraint`, { cause: o });
 }
 function Cz(e, t, n, o, r) {
-  let i = M(e, t, r);
+  let i = N(e, t, r);
   return Xee(n, i, o), _.Assign(e, { [n]: i });
 }
 function Qee(e, t, n, o, r) {
-  let i = M(e, t, n.extends), a = M(e, t, n.equals);
+  let i = N(e, t, n.extends), a = N(e, t, n.equals);
   return c.ShiftLeft(r, (s, u) => ww(Cz(e, t, n.name, i, s), t, o, u), () => ww(Cz(e, t, n.name, i, a), t, o, []));
 }
 function ww(e, t, n, o) {
@@ -8525,7 +8525,7 @@ function ww(e, t, n, o) {
 function Rz(e, t, n, o) {
   return ww(e, t, n, o);
 }
-var Az = d(() => {
+var Az = p(() => {
   I();
   z();
   J();
@@ -8554,8 +8554,8 @@ function ote(e, t) {
 function ite(e, t, n, o, r, i) {
   tte();
   try {
-    let a = Rz(e, t, o, i), s = M(a, Xe([...t.callstack, n.$ref], t.visited), r);
-    return M(a, Xe([], []), s);
+    let a = Rz(e, t, o, i), s = N(a, Xe([...t.callstack, n.$ref], t.visited), r);
+    return N(a, Xe([], []), s);
   } finally {
     nte();
   }
@@ -8574,7 +8574,7 @@ function Bf(e, t, n, o) {
   let r = ur(e, t, o), i = Ez(e, n, o), a = i[0], s = i[1];
   return Os(s) ? ote(t, a) ? cl(Bt(a), r) : ste(e, t, Bt(a), s.parameters, s.expression, r) : cl(n, r);
 }
-var Sw, kw, _w = d(() => {
+var Sw, kw, _w = p(() => {
   eo();
   I();
   Vs();
@@ -8600,7 +8600,7 @@ function $z(e, t) {
 function ec(e) {
   return q(e, "Call");
 }
-var Vs = d(() => {
+var Vs = p(() => {
   z();
   fe();
   _w();
@@ -8615,10 +8615,10 @@ function Pz(e, t) {
   return _.Update(cte(e), {}, t);
 }
 function Oz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Pz(r, o);
 }
-var Ew = d(() => {
+var Ew = p(() => {
   z();
   J();
 });
@@ -8627,14 +8627,14 @@ var Ew = d(() => {
 function Dz(e, t) {
   return e(t);
 }
-var Mz = d(() => {
+var Mz = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/intrinsics/from_literal.mjs
 function Nz(e, t) {
   return c.IsString(t) ? he(Dz(e, t)) : he(t);
 }
-var Uz = d(() => {
+var Uz = p(() => {
   I();
   Nt();
   Mz();
@@ -8645,7 +8645,7 @@ function Lz(e, t) {
   let n = gn(t);
   return Ko(e, n);
 }
-var Fz = d(() => {
+var Fz = p(() => {
   qf();
   Ys();
 });
@@ -8655,7 +8655,7 @@ function zz(e, t) {
   let n = t.map((o) => Ko(e, o));
   return ie(n);
 }
-var jz = d(() => {
+var jz = p(() => {
   Ie();
   qf();
 });
@@ -8664,7 +8664,7 @@ var jz = d(() => {
 function Ko(e, t) {
   return xe(t) ? Nz(e, t.const) : qe(t) ? Lz(e, t.pattern) : F(t) ? zz(e, t.anyOf) : t;
 }
-var qf = d(() => {
+var qf = p(() => {
   Nt();
   Nn();
   Ie();
@@ -8680,7 +8680,7 @@ function of(e, t = {}) {
 function Bz(e, t = {}) {
   return Tw(e, t);
 }
-var Gf = d(() => {
+var Gf = p(() => {
   Oe();
   go();
 });
@@ -8692,7 +8692,7 @@ function af(e, t = {}) {
 function qz(e, t = {}) {
   return Cw(e, t);
 }
-var Kf = d(() => {
+var Kf = p(() => {
   Oe();
   go();
 });
@@ -8704,7 +8704,7 @@ function sf(e, t = {}) {
 function Gz(e, t = {}) {
   return Rw(e, t);
 }
-var Hf = d(() => {
+var Hf = p(() => {
   Oe();
   go();
 });
@@ -8716,7 +8716,7 @@ function cf(e, t = {}) {
 function Kz(e, t = {}) {
   return Aw(e, t);
 }
-var Vf = d(() => {
+var Vf = p(() => {
   Oe();
   go();
 });
@@ -8735,22 +8735,22 @@ function Aw(e, t) {
   return de([e]) ? _.Update(Ko(pte, e), {}, t) : cf(e, t);
 }
 function Hz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Tw(r, o);
 }
 function Vz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Cw(r, o);
 }
 function Wz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Rw(r, o);
 }
 function Zz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Aw(r, o);
 }
-var ute, lte, dte, pte, go = d(() => {
+var ute, lte, dte, pte, go = p(() => {
   z();
   qf();
   J();
@@ -8768,7 +8768,7 @@ function uf(e, t, n, o, r = {}) {
 function Jz(e, t, n, o, r = {}) {
   return $w({}, Xe([], []), e, t, n, o, r);
 }
-var Wf = d(() => {
+var Wf = p(() => {
   Oe();
   Pw();
   J();
@@ -8777,16 +8777,16 @@ var Wf = d(() => {
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/conditional/instantiate.mjs
 function mte(e, t, n, o, r, i) {
   let a = ln(e, n, o);
-  return re.IsExtendsUnion(a) ? ie([M(a.inferred, t, r), M(e, t, i)]) : re.IsExtendsTrue(a) ? M(a.inferred, t, r) : M(e, t, i);
+  return re.IsExtendsUnion(a) ? ie([N(a.inferred, t, r), N(e, t, i)]) : re.IsExtendsTrue(a) ? N(a.inferred, t, r) : N(e, t, i);
 }
 function $w(e, t, n, o, r, i, a) {
   return de([n, o]) ? _.Update(mte(e, t, n, o, r, i), {}, a) : uf(n, o, r, i, a);
 }
 function Yz(e, t, n, o, r, i, a) {
-  let s = M(e, t, n), u = M(e, t, o);
+  let s = N(e, t, n), u = N(e, t, o);
   return $w(e, t, s, u, r, i, a);
 }
-var Pw = d(() => {
+var Pw = p(() => {
   z();
   Ie();
   Br();
@@ -8795,7 +8795,7 @@ var Pw = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/conditional/index.mjs
-var Ow = d(() => {
+var Ow = p(() => {
   Pw();
 });
 
@@ -8806,24 +8806,24 @@ function lf(e, t = {}) {
 function Xz(e, t = {}) {
   return Dw(e, t);
 }
-var Zf = d(() => {
+var Zf = p(() => {
   Oe();
   Jf();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/constructor_parameters/instantiate.mjs
 function fte(e) {
-  let t = gt(e) ? e.parameters : [], n = _i({}, Xe([], []), t);
+  let t = gt(e) ? e.parameters : [], n = Ei({}, Xe([], []), t);
   return xt(n);
 }
 function Dw(e, t) {
   return de([e]) ? _.Update(fte(e), {}, t) : lf(e, t);
 }
 function Qz(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Dw(r, o);
 }
-var Jf = d(() => {
+var Jf = p(() => {
   z();
   xr();
   Kt();
@@ -8840,7 +8840,7 @@ function df(e, t, n = {}) {
 function ej(e, t, n = {}) {
   return Sl(e, t, n);
 }
-var Yf = d(() => {
+var Yf = p(() => {
   Oe();
   kl();
 });
@@ -8850,10 +8850,10 @@ function Sl(e, t, n) {
   return de([e, t]) ? _.Update(Wm(e, t), {}, n) : df(e, t, n);
 }
 function tj(e, t, n, o, r) {
-  let i = M(e, t, n), a = M(e, t, o);
+  let i = N(e, t, n), a = N(e, t, o);
   return Sl(i, a, r);
 }
-var kl = d(() => {
+var kl = p(() => {
   z();
   J();
   Yf();
@@ -8867,7 +8867,7 @@ function pf(e, t, n = {}) {
 function nj(e, t, n = {}) {
   return Mw(e, t, n);
 }
-var Xf = d(() => {
+var Xf = p(() => {
   Oe();
   Qf();
 });
@@ -8884,7 +8884,7 @@ function oj(e, t) {
   let n = kr(e), o = F(n) ? n.anyOf : [n], r = rj(o, t);
   return Ln(r);
 }
-var ij = d(() => {
+var ij = p(() => {
   I();
   Ie();
   Br();
@@ -8897,10 +8897,10 @@ function Mw(e, t, n) {
   return de([e, t]) ? _.Update(oj(e, t), {}, n) : pf(e, t, n);
 }
 function aj(e, t, n, o, r) {
-  let i = M(e, t, n), a = M(e, t, o);
+  let i = N(e, t, n), a = N(e, t, o);
   return Mw(i, a, r);
 }
-var Qf = d(() => {
+var Qf = p(() => {
   z();
   J();
   Xf();
@@ -8915,7 +8915,7 @@ function tc(e) {
   let t = hte(e);
   return ie(t);
 }
-var _l = d(() => {
+var _l = p(() => {
   Nt();
   Ie();
 });
@@ -8928,7 +8928,7 @@ function sj(e, t, n = {}) {
   let o = c.IsArray(t) ? tc(t) : t;
   return Uw(e, o, n);
 }
-var Nw = d(() => {
+var Nw = p(() => {
   I();
   Oe();
   _l();
@@ -8940,7 +8940,7 @@ function cj(e, t) {
   let n = fo(e, t);
   return lr(n);
 }
-var uj = d(() => {
+var uj = p(() => {
   Ma();
   Da();
 });
@@ -8950,7 +8950,7 @@ function lj(e, t, n) {
   let o = qr(e, t, n);
   return lr(o);
 }
-var dj = d(() => {
+var dj = p(() => {
   Ma();
   ye();
 });
@@ -8963,7 +8963,7 @@ function yte(e, t) {
 function pj(e) {
   return e.reduce((t, n) => yte(t, lr(n)), {});
 }
-var mj = d(() => {
+var mj = p(() => {
   z();
   I();
   Ma();
@@ -8971,7 +8971,7 @@ var mj = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/object/from_object.mjs
-var fj = d(() => {
+var fj = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/object/from_tuple.mjs
@@ -8979,7 +8979,7 @@ function gj(e) {
   let t = h1(xt(e));
   return lr(t);
 }
-var hj = d(() => {
+var hj = p(() => {
   Kt();
   AI();
   Ma();
@@ -8995,7 +8995,7 @@ function yj(e, t) {
 function bj(e) {
   return c.ShiftLeft(e, (t, n) => yj(n, lr(t)), () => ft());
 }
-var xj = d(() => {
+var xj = p(() => {
   I();
   Lr();
   ye();
@@ -9006,7 +9006,7 @@ var xj = d(() => {
 function lr(e) {
   return Be(e) ? cj(e.$defs, e.$ref) : yt(e) ? lj(e.if, e.then, e.else) : Y(e) ? pj(e.allOf) : F(e) ? bj(e.anyOf) : ge(e) ? gj(e.items) : Q(e) ? e.properties : {};
 }
-var Ma = d(() => {
+var Ma = p(() => {
   Mn();
   Zn();
   Gt();
@@ -9026,13 +9026,13 @@ function nc(e) {
   let t = lr(e);
   return X(t);
 }
-var vj = d(() => {
+var vj = p(() => {
   Ne();
   Ma();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/object/index.mjs
-var El = d(() => {
+var El = p(() => {
   vj();
 });
 
@@ -9041,7 +9041,7 @@ function rc(e) {
   let t = `${e}`;
   return xte.test(t) ? parseInt(t) : e;
 }
-var xte, Tl = d(() => {
+var xte, Tl = p(() => {
   xte = new RegExp("^(?:0|[1-9][0-9]*)$");
 });
 
@@ -9062,7 +9062,7 @@ function Sj(e, t) {
     re.IsExtendsTrueLike(o) ? e : xe(t) && c.IsEqual(t.const, "length") ? Yn() : Fe()
   );
 }
-var kj = d(() => {
+var kj = p(() => {
   I();
   Gt();
   Ie();
@@ -9078,8 +9078,8 @@ function _j(e, t) {
   let n = fo(e, t);
   return er(n);
 }
-var Ej = d(() => {
-  Ei();
+var Ej = p(() => {
+  Ti();
   Da();
 });
 
@@ -9088,8 +9088,8 @@ function Tj(e, t, n) {
   let o = qr(e, t, n);
   return er(o);
 }
-var Cj = d(() => {
-  Ei();
+var Cj = p(() => {
+  Ti();
   ye();
 });
 
@@ -9098,8 +9098,8 @@ function Rj(e) {
   let t = Rn(e);
   return er(t);
 }
-var Aj = d(() => {
-  Ei();
+var Aj = p(() => {
+  Ti();
   ye();
 });
 
@@ -9108,16 +9108,16 @@ function $j(e) {
   let t = it(e);
   return er(t);
 }
-var Pj = d(() => {
+var Pj = p(() => {
   ye();
-  Ei();
+  Ti();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/indexable/from_literal.mjs
 function Oj(e) {
   return [`${e}`];
 }
-var Dj = d(() => {
+var Dj = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/indexable/from_template_literal.mjs
@@ -9125,8 +9125,8 @@ function Mj(e) {
   let t = gn(e);
   return er(t);
 }
-var Nj = d(() => {
-  Ei();
+var Nj = p(() => {
+  Ti();
   ye();
 });
 
@@ -9134,15 +9134,15 @@ var Nj = d(() => {
 function Uj(e) {
   return e.reduce((t, n) => [...t, ...er(n)], []);
 }
-var Lj = d(() => {
-  Ei();
+var Lj = p(() => {
+  Ti();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/indexable/from_type.mjs
 function er(e) {
   return Be(e) ? _j(e.$defs, e.$ref) : yt(e) ? Tj(e.if, e.then, e.else) : bt(e) ? Rj(e.enum) : Y(e) ? $j(e.allOf) : xe(e) ? Oj(e.const) : qe(e) ? Mj(e.pattern) : F(e) ? Uj(e.anyOf) : [];
 }
-var Ei = d(() => {
+var Ti = p(() => {
   Mn();
   Zn();
   zr();
@@ -9163,8 +9163,8 @@ var Ei = d(() => {
 function oc(e) {
   return er(e);
 }
-var tg = d(() => {
-  Ei();
+var tg = p(() => {
+  Ti();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/this/expand_this.mjs
@@ -9177,7 +9177,7 @@ function Rl(e, t) {
 function Fj(e, t) {
   return Rl(e, t);
 }
-var zj = d(() => {
+var zj = p(() => {
   _n();
   xr();
   vr();
@@ -9210,7 +9210,7 @@ function _te(e) {
 function Bj(e, t) {
   return ot(t) ? _te(e) : wte(e, t);
 }
-var Ste, qj = d(() => {
+var Ste, qj = p(() => {
   Cn();
   en();
   xa();
@@ -9218,7 +9218,7 @@ var Ste, qj = d(() => {
   tg();
   tn();
   zj();
-  Ste = new RegExp(xi);
+  Ste = new RegExp(vi);
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/indexed/array_indexer.mjs
@@ -9231,7 +9231,7 @@ function Gj(e) {
 function Lw(e) {
   return Y(e) ? fn(Gj(e.allOf)) : F(e) ? ie(Gj(e.anyOf)) : xe(e) ? Ete(e.const) : e;
 }
-var Kj = d(() => {
+var Kj = p(() => {
   Ie();
   Gt();
   Nt();
@@ -9247,10 +9247,10 @@ function Tte(e, t) {
 }
 function Cte(e, t) {
   let n = Lw(t), o = Tte(e, n);
-  return yi(o);
+  return bi(o);
 }
 function Rte(e) {
-  return yi(e);
+  return bi(e);
 }
 function Hj(e, t) {
   return (
@@ -9258,7 +9258,7 @@ function Hj(e, t) {
     xe(t) && c.IsEqual(t.const, "length") ? he(e.length) : ot(t) || Vt(t) ? Rte(e) : Cte(e, t)
   );
 }
-var Vj = d(() => {
+var Vj = p(() => {
   I();
   Nt();
   Cn();
@@ -9272,7 +9272,7 @@ var Vj = d(() => {
 function Wj(e, t) {
   return ve(e) ? Sj(e.items, t) : Q(e) ? Bj(e.properties, t) : ge(e) ? Hj(e.items, t) : Fe();
 }
-var Zj = d(() => {
+var Zj = p(() => {
   _n();
   en();
   Ne();
@@ -9290,10 +9290,10 @@ function Uw(e, t, n) {
   return de([e, t]) ? _.Update(Wj(Ate(e), t), {}, n) : ul(e, t, n);
 }
 function Jj(e, t, n, o, r) {
-  let i = M(e, t, n), a = M(e, t, o);
+  let i = N(e, t, n), a = N(e, t, o);
   return Uw(i, a, r);
 }
-var eg = d(() => {
+var eg = p(() => {
   z();
   Mn();
   Zn();
@@ -9312,7 +9312,7 @@ function mf(e, t = {}) {
 function Yj(e, t = {}) {
   return Fw(e, t);
 }
-var ng = d(() => {
+var ng = p(() => {
   Oe();
   rg();
 });
@@ -9325,10 +9325,10 @@ function Fw(e, t) {
   return de([e]) ? _.Update($te(e), {}, t) : mf(e, t);
 }
 function Xj(e, t, n, o = {}) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Fw(r, o);
 }
-var rg = d(() => {
+var rg = p(() => {
   z();
   xr();
   en();
@@ -9343,7 +9343,7 @@ function ll(e, t = {}) {
 function Qj(e, t = {}) {
   return zw(e, t);
 }
-var og = d(() => {
+var og = p(() => {
   Oe();
   ig();
 });
@@ -9352,7 +9352,7 @@ var og = d(() => {
 function e4() {
   return ie([Yn(), un(), Ls()]);
 }
-var t4 = d(() => {
+var t4 = p(() => {
   Cn();
   Sr();
   Ea();
@@ -9363,7 +9363,7 @@ var t4 = d(() => {
 function n4(e) {
   return Yn();
 }
-var r4 = d(() => {
+var r4 = p(() => {
   Cn();
 });
 
@@ -9373,9 +9373,9 @@ function Pte(e) {
 }
 function o4(e) {
   let t = c.Keys(e), n = Pte(t);
-  return yi(n);
+  return bi(n);
 }
-var i4 = d(() => {
+var i4 = p(() => {
   Lr();
   I();
   Nt();
@@ -9387,16 +9387,16 @@ var i4 = d(() => {
 function a4(e) {
   return qs(e);
 }
-var s4 = d(() => {
+var s4 = p(() => {
   tn();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/keyof/from_tuple.mjs
 function c4(e) {
   let t = e.map((n, o) => he(o));
-  return yi(t);
+  return bi(t);
 }
-var u4 = d(() => {
+var u4 = p(() => {
   Nt();
   ye();
 });
@@ -9405,7 +9405,7 @@ var u4 = d(() => {
 function l4(e) {
   return lt(e) ? e4() : ve(e) ? n4(e.items) : Q(e) ? o4(e.properties) : Ue(e) ? a4(e) : ge(e) ? c4(e.items) : Fe();
 }
-var d4 = d(() => {
+var d4 = p(() => {
   On();
   _n();
   en();
@@ -9427,10 +9427,10 @@ function zw(e, t) {
   return de([e]) ? _.Update(l4(Ote(e)), {}, t) : ll(e, t);
 }
 function p4(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return zw(r, o);
 }
-var ig = d(() => {
+var ig = p(() => {
   z();
   Mn();
   Zn();
@@ -9449,7 +9449,7 @@ function al(e, t, n, o, r = {}) {
 function m4(e, t, n, o, r = {}) {
   return jw({}, Xe([], []), e, t, n, o, r);
 }
-var ag = d(() => {
+var ag = p(() => {
   Oe();
   sg();
   J();
@@ -9476,7 +9476,7 @@ function cg(e) {
 function f4(e) {
   return cg(e);
 }
-var g4 = d(() => {
+var g4 = p(() => {
   I();
   Nt();
   zr();
@@ -9491,7 +9491,7 @@ function Lte(e) {
   return qe(e) ? gn(e.pattern) : e;
 }
 function Fte(e, t, n, o, r, i) {
-  let a = _.Assign(e, { [n.name]: o }), s = M(a, t, r), u = Lte(s), l = M(a, t, i);
+  let a = _.Assign(e, { [n.name]: o }), s = N(a, t, r), u = Lte(s), l = N(a, t, i);
   return Nm(u) || Um(u) ? { [u.const]: l } : {};
 }
 function zte(e, t, n, o, r, i) {
@@ -9504,7 +9504,7 @@ function h4(e, t, n, o, r, i) {
   let a = f4(o), s = zte(e, t, n, a, r, i), u = jte(s);
   return it(u);
 }
-var y4 = d(() => {
+var y4 = p(() => {
   z();
   Nt();
   Ne();
@@ -9520,10 +9520,10 @@ function jw(e, t, n, o, r, i, a) {
   return de([o]) ? _.Update(h4(e, t, n, o, r, i), {}, a) : al(n, o, r, i, a);
 }
 function b4(e, t, n, o, r, i, a) {
-  let s = M(e, t, o);
+  let s = N(e, t, o);
   return jw(e, t, n, s, r, i, a);
 }
-var sg = d(() => {
+var sg = p(() => {
   z();
   ag();
   J();
@@ -9537,7 +9537,7 @@ function Bte(e, t, n) {
 }
 function qte(e, t, n) {
   let o = _.Assign(e, t);
-  return c.Keys(t).filter((i) => !n.includes(i)).reduce((i, a) => ({ ...i, [a]: M(o, Xe([], []), t[a]) }), {});
+  return c.Keys(t).filter((i) => !n.includes(i)).reduce((i, a) => ({ ...i, [a]: N(o, Xe([], []), t[a]) }), {});
 }
 function Gte(e, t, n) {
   let o = lz(t), r = Bte(e, t, o), i = qte(e, t, o), a = { ...r, ...i };
@@ -9546,7 +9546,7 @@ function Gte(e, t, n) {
 function ug(e, t, n, o) {
   return Gte(e, n, o);
 }
-var lg = d(() => {
+var lg = p(() => {
   I();
   z();
   J();
@@ -9562,7 +9562,7 @@ function ff(e, t = {}) {
 function x4(e, t = {}) {
   return Bw(e, t);
 }
-var dg = d(() => {
+var dg = p(() => {
   Oe();
   pg();
 });
@@ -9576,10 +9576,10 @@ function Bw(e, t) {
   return de([e]) ? _.Update(Kte(e), {}, t) : ff(e, t);
 }
 function v4(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Bw(r, o);
 }
-var pg = d(() => {
+var pg = p(() => {
   z();
   Us();
   Hs();
@@ -9597,7 +9597,7 @@ function I4(e, t, n = {}) {
   let o = c.IsArray(t) ? tc(t) : t;
   return qw(e, o, n);
 }
-var mg = d(() => {
+var mg = p(() => {
   I();
   Oe();
   _l();
@@ -9609,7 +9609,7 @@ function gg(e) {
   let t = nc(e);
   return Q(t) ? t.properties : ft();
 }
-var Gw = d(() => {
+var Gw = p(() => {
   Lr();
   Ne();
   El();
@@ -9623,7 +9623,7 @@ function w4(e, t) {
   let n = gg(e), o = oc(t), r = Hte(n, o);
   return X(r);
 }
-var S4 = d(() => {
+var S4 = p(() => {
   I();
   Ne();
   tg();
@@ -9635,10 +9635,10 @@ function qw(e, t, n) {
   return de([e, t]) ? _.Update(w4(e, t), {}, n) : gf(e, t, n);
 }
 function k4(e, t, n, o, r) {
-  let i = M(e, t, n), a = M(e, t, o);
+  let i = N(e, t, n), a = N(e, t, o);
   return qw(i, a, r);
 }
-var fg = d(() => {
+var fg = p(() => {
   z();
   mg();
   J();
@@ -9652,24 +9652,24 @@ function hf(e, t = {}) {
 function _4(e, t = {}) {
   return Kw(e, t);
 }
-var hg = d(() => {
+var hg = p(() => {
   Oe();
   yg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/parameters/instantiate.mjs
 function Vte(e) {
-  let t = ht(e) ? e.parameters : [], n = _i({}, Xe([], []), t);
+  let t = ht(e) ? e.parameters : [], n = Ei({}, Xe([], []), t);
   return xt(n);
 }
 function Kw(e, t) {
   return de([e]) ? _.Update(Vte(e), {}, t) : hf(e, t);
 }
 function E4(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Kw(r, o);
 }
-var yg = d(() => {
+var yg = p(() => {
   z();
   vr();
   Kt();
@@ -9686,7 +9686,7 @@ function yf(e, t = {}) {
 function T4(e, t = {}) {
   return Hw(e, t);
 }
-var bg = d(() => {
+var bg = p(() => {
   Oe();
   xg();
 });
@@ -9696,7 +9696,7 @@ function C4(e, t) {
   let n = fo(e, t), o = ho(n);
   return io(_.Assign(e, { [t]: o }), t);
 }
-var R4 = d(() => {
+var R4 = p(() => {
   z();
   Mn();
   ic();
@@ -9708,7 +9708,7 @@ function A4(e, t, n) {
   let o = qr(e, t, n);
   return ho(o);
 }
-var $4 = d(() => {
+var $4 = p(() => {
   ic();
   ye();
 });
@@ -9718,7 +9718,7 @@ function P4(e) {
   let t = it(e);
   return ho(t);
 }
-var O4 = d(() => {
+var O4 = p(() => {
   ic();
   ye();
 });
@@ -9728,7 +9728,7 @@ function D4(e) {
   let t = e.map((n) => ho(n));
   return ie(t);
 }
-var M4 = d(() => {
+var M4 = p(() => {
   Ie();
   ic();
 });
@@ -9738,7 +9738,7 @@ function N4(e) {
   let t = c.Keys(e).reduce((o, r) => ({ ...o, [r]: ba(e[r]) }), {});
   return X(t);
 }
-var U4 = d(() => {
+var U4 = p(() => {
   I();
   Ne();
   zu();
@@ -9748,7 +9748,7 @@ var U4 = d(() => {
 function ho(e) {
   return Be(e) ? C4(e.$defs, e.$ref) : yt(e) ? A4(e.if, e.then, e.else) : Y(e) ? P4(e.allOf) : F(e) ? D4(e.anyOf) : Q(e) ? N4(e.properties) : X({});
 }
-var ic = d(() => {
+var ic = p(() => {
   Mn();
   Zn();
   Gt();
@@ -9766,10 +9766,10 @@ function Hw(e, t) {
   return de([e]) ? _.Update(ho(e), {}, t) : yf(e, t);
 }
 function L4(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Hw(r, o);
 }
-var xg = d(() => {
+var xg = p(() => {
   z();
   bg();
   ic();
@@ -9784,7 +9784,7 @@ function F4(e, t, n = {}) {
   let o = c.IsArray(t) ? tc(t) : t;
   return Vw(e, o, n);
 }
-var vg = d(() => {
+var vg = p(() => {
   I();
   Oe();
   _l();
@@ -9799,7 +9799,7 @@ function z4(e, t) {
   let n = gg(e), o = oc(t), r = Wte(n, o);
   return X(r);
 }
-var j4 = d(() => {
+var j4 = p(() => {
   z();
   I();
   Ne();
@@ -9812,10 +9812,10 @@ function Vw(e, t, n) {
   return de([e, t]) ? _.Update(z4(e, t), {}, n) : bf(e, t, n);
 }
 function B4(e, t, n, o, r) {
-  let i = M(e, t, n), a = M(e, t, o);
+  let i = N(e, t, n), a = N(e, t, o);
   return Vw(i, a, r);
 }
-var Ig = d(() => {
+var Ig = p(() => {
   z();
   vg();
   J();
@@ -9829,7 +9829,7 @@ function xf(e, t = {}) {
 function Ww(e, t = {}) {
   return Zw(e, t);
 }
-var q4, wg = d(() => {
+var q4, wg = p(() => {
   Oe();
   Sg();
   q4 = Ww;
@@ -9839,7 +9839,7 @@ var q4, wg = d(() => {
 function G4(e) {
   return Ms(Pn(e));
 }
-var K4 = d(() => {
+var K4 = p(() => {
   _n();
   Ku();
 });
@@ -9849,7 +9849,7 @@ function H4(e, t) {
   let n = fo(e, t), o = yo(n);
   return io(_.Assign(e, { [t]: o }), t);
 }
-var V4 = d(() => {
+var V4 = p(() => {
   z();
   Mn();
   ac();
@@ -9861,7 +9861,7 @@ function W4(e, t, n) {
   let o = qr(e, t, n);
   return yo(o);
 }
-var Z4 = d(() => {
+var Z4 = p(() => {
   ac();
   ye();
 });
@@ -9871,7 +9871,7 @@ function J4(e) {
   let t = it(e);
   return yo(t);
 }
-var Y4 = d(() => {
+var Y4 = p(() => {
   ac();
   ye();
 });
@@ -9881,7 +9881,7 @@ function X4(e) {
   let t = c.Keys(e).reduce((o, r) => ({ ...o, [r]: wa(e[r]) }), {});
   return X(t);
 }
-var Q4 = d(() => {
+var Q4 = p(() => {
   I();
   Ne();
   Hu();
@@ -9891,7 +9891,7 @@ var Q4 = d(() => {
 function e2(e) {
   return Ms(xt(e));
 }
-var t2 = d(() => {
+var t2 = p(() => {
   Kt();
   Ku();
 });
@@ -9901,7 +9901,7 @@ function n2(e) {
   let t = e.map((n) => yo(n));
   return ie(t);
 }
-var r2 = d(() => {
+var r2 = p(() => {
   Ie();
   ac();
 });
@@ -9910,7 +9910,7 @@ var r2 = d(() => {
 function yo(e) {
   return ve(e) ? G4(e.items) : Be(e) ? H4(e.$defs, e.$ref) : yt(e) ? W4(e.if, e.then, e.else) : Y(e) ? J4(e.allOf) : Q(e) ? X4(e.properties) : ge(e) ? e2(e.items) : F(e) ? n2(e.anyOf) : e;
 }
-var ac = d(() => {
+var ac = p(() => {
   _n();
   Mn();
   Zn();
@@ -9932,10 +9932,10 @@ function Zw(e, t) {
   return de([e]) ? _.Update(yo(e), {}, t) : xf(e);
 }
 function o2(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Zw(r, o);
 }
-var Sg = d(() => {
+var Sg = p(() => {
   z();
   wg();
   ac();
@@ -9944,9 +9944,9 @@ var Sg = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/ref/instantiate.mjs
 function i2(e, t, n, o) {
-  return t.visited.includes(o) ? n : o in e ? M(e, Xe(t.callstack, [...t.visited, o]), e[o]) : n;
+  return t.visited.includes(o) ? n : o in e ? N(e, Xe(t.callstack, [...t.visited, o]), e[o]) : n;
 }
-var Jw = d(() => {
+var Jw = p(() => {
   J();
   J();
 });
@@ -9956,7 +9956,7 @@ function a2(e, t) {
   let n = fo(e, t), o = bo(n);
   return io(_.Assign(e, { [t]: o }), t);
 }
-var s2 = d(() => {
+var s2 = p(() => {
   z();
   Mn();
   sc();
@@ -9968,7 +9968,7 @@ function c2(e, t, n) {
   let o = qr(e, t, n);
   return bo(o);
 }
-var u2 = d(() => {
+var u2 = p(() => {
   sc();
   ye();
 });
@@ -9978,7 +9978,7 @@ function l2(e) {
   let t = it(e);
   return bo(t);
 }
-var d2 = d(() => {
+var d2 = p(() => {
   sc();
   ye();
 });
@@ -9988,7 +9988,7 @@ function p2(e) {
   let t = e.map((n) => bo(n));
   return ie(t);
 }
-var m2 = d(() => {
+var m2 = p(() => {
   Ie();
   sc();
 });
@@ -9998,7 +9998,7 @@ function f2(e) {
   let t = c.Keys(e).reduce((o, r) => ({ ...o, [r]: Hm(e[r]) }), {});
   return X(t);
 }
-var g2 = d(() => {
+var g2 = p(() => {
   I();
   Ne();
   Vm();
@@ -10008,7 +10008,7 @@ var g2 = d(() => {
 function bo(e) {
   return Be(e) ? a2(e.$defs, e.$ref) : yt(e) ? c2(e.if, e.then, e.else) : Y(e) ? l2(e.allOf) : F(e) ? p2(e.anyOf) : Q(e) ? f2(e.properties) : X({});
 }
-var sc = d(() => {
+var sc = p(() => {
   Mn();
   Zn();
   Gt();
@@ -10028,7 +10028,7 @@ function vf(e, t = {}) {
 function h2(e, t = {}) {
   return Yw(e, t);
 }
-var kg = d(() => {
+var kg = p(() => {
   Oe();
   _g();
 });
@@ -10038,10 +10038,10 @@ function Yw(e, t) {
   return de([e]) ? _.Update(bo(e), {}, t) : vf(e, t);
 }
 function y2(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Yw(r, o);
 }
-var _g = d(() => {
+var _g = p(() => {
   z();
   sc();
   kg();
@@ -10055,7 +10055,7 @@ function If(e, t = {}) {
 function b2(e, t = {}) {
   return Xw(e, t);
 }
-var Eg = d(() => {
+var Eg = p(() => {
   Oe();
   Tg();
 });
@@ -10068,10 +10068,10 @@ function Xw(e, t) {
   return de([e]) ? _.Update(Zte(e), {}, t) : If(e, t);
 }
 function x2(e, t, n, o = {}) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Xw(r, o);
 }
-var Tg = d(() => {
+var Tg = p(() => {
   z();
   vr();
   en();
@@ -10086,7 +10086,7 @@ function wf(e, t) {
 function Cg(e, t) {
   return Qw(e, t);
 }
-var Rg = d(() => {
+var Rg = p(() => {
   Oe();
   Ag();
 });
@@ -10096,10 +10096,10 @@ function Qw(e, t) {
   return de([e]) ? _.Update(e, {}, t) : wf(e, t);
 }
 function v2(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Qw(r, o);
 }
-var Ag = d(() => {
+var Ag = p(() => {
   z();
   J();
   Rg();
@@ -10107,12 +10107,12 @@ var Ag = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/rest/spread.mjs
 function Jte(e) {
-  return Ii(e) ? ge(e.items) ? eS(e.items.items) : Ct(e.items) ? [e] : De(e.items) ? [e] : [Fe()] : [e];
+  return wi(e) ? ge(e.items) ? eS(e.items.items) : Ct(e.items) ? [e] : De(e.items) ? [e] : [Fe()] : [e];
 }
 function eS(e) {
   return e.reduce((n, o) => [...n, ...Jte(o)], []);
 }
-var I2 = d(() => {
+var I2 = p(() => {
   wr();
   en();
   Gs();
@@ -10121,7 +10121,7 @@ var I2 = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/rest/index.mjs
-var w2 = d(() => {
+var w2 = p(() => {
   I2();
 });
 
@@ -10133,14 +10133,14 @@ function de(e) {
   return c.ShiftLeft(e, (t, n) => De(t) ? !1 : de(n), () => !0);
 }
 function hl(e, t, n) {
-  return c.Keys(n).reduce((o, r) => ({ ...o, [r]: M(e, t, n[r]) }), {});
+  return c.Keys(n).reduce((o, r) => ({ ...o, [r]: N(e, t, n[r]) }), {});
 }
-function _i(e, t, n) {
+function Ei(e, t, n) {
   let o = ur(e, t, n);
   return eS(o);
 }
 function ur(e, t, n) {
-  return n.map((o) => M(e, t, o));
+  return n.map((o) => N(e, t, o));
 }
 function Yte(e, t) {
   let n = qt(e) ? Lu(t, {}) : t, o = Sa(e) ? Uu(n, {}) : n;
@@ -10156,16 +10156,16 @@ function Xte(e, t, n, o, r) {
   );
 }
 function Qte(e, t, n) {
-  let o = De(n) ? i2(e, t, n, n.$ref) : ve(n) ? Pn(M(e, t, n.items), Ps(n)) : ec(n) ? Bf(e, t, n.target, n.arguments) : gt(n) ? no(ur(e, t, n.parameters), M(e, t, n.instanceType), RM(n)) : ht(n) ? ro(ur(e, t, n.parameters), M(e, t, n.returnType), AM(n)) : yt(n) ? va(M(e, t, n.if), M(e, t, n.then), M(e, t, n.else), NM(n)) : Y(n) ? fn(ur(e, t, n.allOf), jM(n)) : Q(n) ? X(hl(e, t, n.properties), DM(n)) : Ue(n) ? z1(Rt(n), M(e, t, We(n))) : Ii(n) ? Ca(M(e, t, n.items)) : ge(n) ? xt(_i(e, t, n.items), l1(n)) : F(n) ? ie(ur(e, t, n.anyOf), XM(n)) : n;
+  let o = De(n) ? i2(e, t, n, n.$ref) : ve(n) ? Pn(N(e, t, n.items), Ps(n)) : ec(n) ? Bf(e, t, n.target, n.arguments) : gt(n) ? no(ur(e, t, n.parameters), N(e, t, n.instanceType), RM(n)) : ht(n) ? ro(ur(e, t, n.parameters), N(e, t, n.returnType), AM(n)) : yt(n) ? va(N(e, t, n.if), N(e, t, n.then), N(e, t, n.else), NM(n)) : Y(n) ? fn(ur(e, t, n.allOf), jM(n)) : Q(n) ? X(hl(e, t, n.properties), DM(n)) : Ue(n) ? z1(Rt(n), N(e, t, We(n))) : wi(n) ? Ca(N(e, t, n.items)) : ge(n) ? xt(Ei(e, t, n.items), l1(n)) : F(n) ? ie(ur(e, t, n.anyOf), XM(n)) : n;
   return Yte(n, o);
 }
-function M(e, t, n) {
-  return pi(n) ? Xte(e, t, n.action, n.parameters, n.options) : Qte(e, t, n);
+function N(e, t, n) {
+  return mi(n) ? Xte(e, t, n.action, n.parameters, n.options) : Qte(e, t, n);
 }
 function dr(e, t) {
-  return M(e, Xe([], []), t);
+  return N(e, Xe([], []), t);
 }
-var J = d(() => {
+var J = p(() => {
   I();
   $g();
   _m();
@@ -10189,7 +10189,7 @@ var J = d(() => {
   _I();
   Em();
   CI();
-  fi();
+  gi();
   Gu();
   Vu();
   _w();
@@ -10231,10 +10231,10 @@ function Al(e, t) {
   return _.Update(ene(e), {}, t);
 }
 function S2(e, t, n, o) {
-  let r = M(e, t, n);
+  let r = N(e, t, n);
   return Al(r, o);
 }
-var $g = d(() => {
+var $g = p(() => {
   z();
   J();
 });
@@ -10246,13 +10246,13 @@ function BU(e, t = {}) {
 function Ms(e, t = {}) {
   return Al(e, t);
 }
-var Ku = d(() => {
+var Ku = p(() => {
   Oe();
   $g();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/action/_remove_immutable.mjs
-var k2 = d(() => {
+var k2 = p(() => {
   Oe();
   Ew();
 });
@@ -10264,7 +10264,7 @@ function qU(e, t = {}) {
 function Wt(e, t = {}) {
   return Iw(e, t);
 }
-var tS = d(() => {
+var tS = p(() => {
   Oe();
   jf();
 });
@@ -10276,14 +10276,14 @@ function GU(e, t = {}) {
 function _2(e, t = {}) {
   return ug({}, Xe([], []), e, t);
 }
-var nS = d(() => {
+var nS = p(() => {
   Oe();
   J();
   lg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/action/index.mjs
-var $a = d(() => {
+var $a = p(() => {
   Ku();
   Hu();
   zu();
@@ -10317,99 +10317,99 @@ var $a = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/constructor_parameters/index.mjs
-var E2 = d(() => {
+var E2 = p(() => {
   Jf();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/enum/index.mjs
-var T2 = d(() => {
+var T2 = p(() => {
   $m();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/exclude/index.mjs
-var C2 = d(() => {
+var C2 = p(() => {
   kl();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/extract/index.mjs
-var R2 = d(() => {
+var R2 = p(() => {
   Qf();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/helpers/union.mjs
-var A2 = d(() => {
+var A2 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/helpers/index.mjs
-var $2 = d(() => {
+var $2 = p(() => {
   _l();
   Tl();
   A2();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/indexed/index.mjs
-var P2 = d(() => {
+var P2 = p(() => {
   eg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/instance_type/index.mjs
-var O2 = d(() => {
+var O2 = p(() => {
   rg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/interface/index.mjs
-var D2 = d(() => {
+var D2 = p(() => {
   Ff();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/intrinsics/index.mjs
-var M2 = d(() => {
+var M2 = p(() => {
   go();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/keyof/index.mjs
-var N2 = d(() => {
+var N2 = p(() => {
   ig();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/mapped/index.mjs
-var U2 = d(() => {
+var U2 = p(() => {
   sg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/module/index.mjs
-var L2 = d(() => {
+var L2 = p(() => {
   lg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/non_nullable/index.mjs
-var F2 = d(() => {
+var F2 = p(() => {
   pg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/omit/index.mjs
-var z2 = d(() => {
+var z2 = p(() => {
   fg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/parameters/index.mjs
-var j2 = d(() => {
+var j2 = p(() => {
   yg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/patterns/index.mjs
-var B2 = d(() => {
+var B2 = p(() => {
   Xu();
   ow();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/partial/index.mjs
-var q2 = d(() => {
+var q2 = p(() => {
   xg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/pick/index.mjs
-var G2 = d(() => {
+var G2 = p(() => {
   Ig();
 });
 
@@ -10427,53 +10427,53 @@ function H2(e, t = []) {
 function V2(e) {
   return H2(e);
 }
-var W2 = d(() => {
+var W2 = p(() => {
   I();
   nl();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/priority/index.mjs
-var Z2 = d(() => {
+var Z2 = p(() => {
   W2();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/readonly_object/index.mjs
-var J2 = d(() => {
+var J2 = p(() => {
   Sg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/record/index.mjs
-var Y2 = d(() => {
+var Y2 = p(() => {
   Jm();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/ref/index.mjs
-var X2 = d(() => {
+var X2 = p(() => {
   Jw();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/required/index.mjs
-var Q2 = d(() => {
+var Q2 = p(() => {
   _g();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/return_type/index.mjs
-var e6 = d(() => {
+var e6 = p(() => {
   Tg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/template_literal/static.mjs
-var t6 = d(() => {
+var t6 = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/template_literal/is_pattern.mjs
-var n6 = d(() => {
+var n6 = p(() => {
   I();
   Xu();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/template_literal/index.mjs
-var Pg = d(() => {
+var Pg = p(() => {
   Gm();
   Km();
   iw();
@@ -10483,12 +10483,12 @@ var Pg = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/with/index.mjs
-var r6 = d(() => {
+var r6 = p(() => {
   Ag();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/engine/index.mjs
-var rS = d(() => {
+var rS = p(() => {
   J();
   Ow();
   E2();
@@ -10528,10 +10528,10 @@ function o6(...e) {
     2: (a, s) => c.IsString(a) ? [{}, a, s] : [a, s, {}],
     3: (a, s, u) => [a, s, u],
     1: (a) => [{}, a, {}]
-  }), r = ZL(n), i = c.IsArray(r) && c.IsEqual(r.length, 2) ? M(t, Xe([], []), r[0]) : Fe();
+  }), r = ZL(n), i = c.IsArray(r) && c.IsEqual(r.length, 2) ? N(t, Xe([], []), r[0]) : Fe();
   return _.Update(i, {}, o);
 }
-var i6 = d(() => {
+var i6 = p(() => {
   Et();
   z();
   I();
@@ -10542,12 +10542,12 @@ var i6 = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/script/index.mjs
-var Og = d(() => {
+var Og = p(() => {
   i6();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/type/index.mjs
-var ne = d(() => {
+var ne = p(() => {
   $a();
   rS();
   Br();
@@ -10559,7 +10559,7 @@ var ne = d(() => {
 function a6(e, t, n) {
   return c.IsArray(n) ? n.map((o) => Zt(e, t.items, o)) : n;
 }
-var s6 = d(() => {
+var s6 = p(() => {
   I();
   xo();
 });
@@ -10568,7 +10568,7 @@ var s6 = d(() => {
 function c6(e, t, n) {
   return Zt({ ...e, ...t.$defs }, Bt(t.$ref), n);
 }
-var u6 = d(() => {
+var u6 = p(() => {
   ne();
   xo();
 });
@@ -10582,7 +10582,7 @@ function l6(e, t, n) {
   let o = nne(e, t);
   return Zt(e, o, n);
 }
-var d6 = d(() => {
+var d6 = p(() => {
   ne();
   I();
   xo();
@@ -10592,7 +10592,7 @@ var d6 = d(() => {
 function Dg(e) {
   return c.HasPropertyKey(e, "additionalProperties") ? e.additionalProperties : void 0;
 }
-var oS = d(() => {
+var oS = p(() => {
   I();
 });
 
@@ -10617,7 +10617,7 @@ function p6(e, t, n) {
   }
   return n;
 }
-var m6 = d(() => {
+var m6 = p(() => {
   ne();
   I();
   xo();
@@ -10646,7 +10646,7 @@ function f6(e, t, n) {
   }
   return n;
 }
-var g6 = d(() => {
+var g6 = p(() => {
   ne();
   I();
   xo();
@@ -10658,7 +10658,7 @@ var g6 = d(() => {
 function h6(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? Zt(e, e[t.$ref], n) : n;
 }
-var y6 = d(() => {
+var y6 = p(() => {
   I();
   xo();
 });
@@ -10672,7 +10672,7 @@ function b6(e, t, n) {
     n[r] = Zt(e, t.items[r], n[r]);
   return c.IsGreaterThan(n.length, o) ? n.slice(0, o) : n;
 }
-var x6 = d(() => {
+var x6 = p(() => {
   I();
   xo();
 });
@@ -10681,12 +10681,12 @@ var x6 = d(() => {
 function Ze(e) {
   return fa(e);
 }
-var v6 = d(() => {
+var v6 = p(() => {
   Pu();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/clone/index.mjs
-var zn = d(() => {
+var zn = p(() => {
   v6();
 });
 
@@ -10699,7 +10699,7 @@ function I6(e, t, n) {
   }
   return n;
 }
-var w6 = d(() => {
+var w6 = p(() => {
   jt();
   zn();
   xo();
@@ -10709,7 +10709,7 @@ var w6 = d(() => {
 function Zt(e, t, n) {
   return ve(t) ? a6(e, t, n) : Be(t) ? c6(e, t, n) : Y(t) ? l6(e, t, n) : Q(t) ? p6(e, t, n) : Ue(t) ? f6(e, t, n) : De(t) ? h6(e, t, n) : ge(t) ? b6(e, t, n) : F(t) ? I6(e, t, n) : n;
 }
-var xo = d(() => {
+var xo = p(() => {
   ne();
   s6();
   u6();
@@ -10749,7 +10749,7 @@ function $l(e) {
 function cc(e) {
   return $l(e);
 }
-var Pl = d(() => {
+var Pl = p(() => {
   I();
   ne();
   ne();
@@ -10769,14 +10769,14 @@ function Er(...e) {
   }), r = mt.Get().unionPrioritySort ? cc(n) : n;
   return Zt(t, r, o);
 }
-var S6 = d(() => {
+var S6 = p(() => {
   ga();
   xo();
   Pl();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/clean/index.mjs
-var Ua = d(() => {
+var Ua = p(() => {
   S6();
 });
 
@@ -10789,7 +10789,7 @@ function W(e) {
 }
 function La() {
 }
-var Ho = d(() => {
+var Ho = p(() => {
   I();
 });
 
@@ -10797,7 +10797,7 @@ var Ho = d(() => {
 function sne(e) {
   return c.IsArray(e) ? W(e) : W([e]);
 }
-var k6 = d(() => {
+var k6 = p(() => {
   I();
   Ho();
 });
@@ -10822,7 +10822,7 @@ function gne(e) {
 function sS(e) {
   return c.IsBigInt(e) ? W(e) : c.IsBoolean(e) ? cne(e) : c.IsNumber(e) ? W(BigInt(Math.trunc(e))) : c.IsNull(e) ? W(BigInt(0)) : c.IsString(e) ? gne(e) : c.IsUndefined(e) ? W(BigInt(0)) : void 0;
 }
-var une, lne, dne, cS = d(() => {
+var une, lne, dne, cS = p(() => {
   I();
   Ho();
   une = /^-?(0|[1-9]\d*)n$/, lne = /^-?(0|[1-9]\d*)\.\d+$/, dne = /^-?(0|[1-9]\d*)$/;
@@ -10841,7 +10841,7 @@ function bne(e) {
 function xne(e) {
   return c.IsBigInt(e) ? hne(e) : c.IsBoolean(e) ? W(e) : c.IsNumber(e) ? yne(e) : c.IsNull(e) ? W(!1) : c.IsString(e) ? bne(e) : c.IsUndefined(e) ? W(!1) : void 0;
 }
-var _6 = d(() => {
+var _6 = p(() => {
   I();
   Ho();
 });
@@ -10863,7 +10863,7 @@ function Sne(e) {
 function kne(e) {
   return c.IsBigInt(e) ? vne(e) : c.IsBoolean(e) ? Ine(e) : c.IsNumber(e) ? wne(e) : c.IsNull(e) ? W(null) : c.IsString(e) ? Sne(e) : c.IsUndefined(e) ? W(null) : void 0;
 }
-var E6 = d(() => {
+var E6 = p(() => {
   I();
   Ho();
 });
@@ -10890,7 +10890,7 @@ function Tne(e) {
 function Cne(e) {
   return c.IsBigInt(e) ? _ne(e) : c.IsBoolean(e) ? Ene(e) : c.IsNumber(e) ? W(e) : c.IsNull(e) ? W(0) : c.IsString(e) ? Tne(e) : c.IsUndefined(e) ? W(0) : void 0;
 }
-var T6, C6, R6 = d(() => {
+var T6, C6, R6 = p(() => {
   I();
   Ho();
   cS();
@@ -10901,7 +10901,7 @@ var T6, C6, R6 = d(() => {
 function Rne(e) {
   return c.IsBigInt(e) ? W(e.toString()) : c.IsBoolean(e) ? W(e.toString()) : c.IsNumber(e) ? W(e.toString()) : c.IsNull(e) ? W("null") : c.IsString(e) ? W(e) : c.IsUndefined(e) ? W("") : void 0;
 }
-var A6 = d(() => {
+var A6 = p(() => {
   I();
   Ho();
 });
@@ -10923,7 +10923,7 @@ function One(e) {
 function Dne(e) {
   return c.IsBigInt(e) ? Ane(e) : c.IsBoolean(e) ? $ne(e) : c.IsNumber(e) ? Pne(e) : c.IsNull(e) ? W(void 0) : c.IsString(e) ? One(e) : c.IsUndefined(e) ? W(e) : void 0;
 }
-var $6 = d(() => {
+var $6 = p(() => {
   I();
   Ho();
 });
@@ -10942,7 +10942,7 @@ ct(Pe, {
   TryString: () => Rne,
   TryUndefined: () => Dne
 });
-var P6 = d(() => {
+var P6 = p(() => {
   k6();
   cS();
   _6();
@@ -10954,7 +10954,7 @@ var P6 = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/convert/try/index.mjs
-var Gr = d(() => {
+var Gr = p(() => {
   P6();
 });
 
@@ -10962,7 +10962,7 @@ var Gr = d(() => {
 function O6(e, t, n) {
   return Pe.TryArray(n).value.map((r) => wt(e, t.items, r));
 }
-var D6 = d(() => {
+var D6 = p(() => {
   pr();
   Gr();
 });
@@ -10972,7 +10972,7 @@ function M6(e, t, n) {
   let o = Pe.TryBigInt(n);
   return Pe.IsOk(o) ? o.value : n;
 }
-var N6 = d(() => {
+var N6 = p(() => {
   Gr();
 });
 
@@ -10981,7 +10981,7 @@ function U6(e, t, n) {
   let o = Pe.TryBoolean(n);
   return Pe.IsOk(o) ? o.value : n;
 }
-var L6 = d(() => {
+var L6 = p(() => {
   Gr();
 });
 
@@ -10989,7 +10989,7 @@ var L6 = d(() => {
 function F6(e, t, n) {
   return wt({ ...e, ...t.$defs }, Bt(t.$ref), n);
 }
-var z6 = d(() => {
+var z6 = p(() => {
   ne();
   pr();
 });
@@ -10998,7 +10998,7 @@ var z6 = d(() => {
 function j6(e, t, n) {
   return wt(e, Wt(t), n);
 }
-var B6 = d(() => {
+var B6 = p(() => {
   ne();
   pr();
 });
@@ -11008,7 +11008,7 @@ function q6(e, t, n) {
   let o = Pe.TryNumber(n);
   return Pe.IsOk(o) ? Math.trunc(o.value) : n;
 }
-var G6 = d(() => {
+var G6 = p(() => {
   Gr();
 });
 
@@ -11017,7 +11017,7 @@ function K6(e, t, n) {
   let o = dr(e, t), r = Wt(o);
   return wt(e, r, n);
 }
-var H6 = d(() => {
+var H6 = p(() => {
   ne();
   pr();
 });
@@ -11042,7 +11042,7 @@ function Lne(e, t, n) {
 function V6(e, t, n) {
   return c.IsEqual(t.const, n) ? n : ZM(t) ? Mne(e, t, n) : JM(t) ? Nne(e, t, n) : Nm(t) ? Une(e, t, n) : Um(t) ? Lne(e, t, n) : ft();
 }
-var W6 = d(() => {
+var W6 = p(() => {
   Lr();
   I();
   ne();
@@ -11054,7 +11054,7 @@ function Z6(e, t, n) {
   let o = Pe.TryNull(n);
   return Pe.IsOk(o) ? o.value : n;
 }
-var J6 = d(() => {
+var J6 = p(() => {
   Gr();
 });
 
@@ -11063,7 +11063,7 @@ function Y6(e, t, n) {
   let o = Pe.TryNumber(n);
   return Pe.IsOk(o) ? o.value : n;
 }
-var X6 = d(() => {
+var X6 = p(() => {
   Gr();
 });
 
@@ -11075,7 +11075,7 @@ function Mg(e, t, n, o) {
       i.test(s) || (o[s] = wt(e, n, o[s]));
   return o;
 }
-var uS = d(() => {
+var uS = p(() => {
   I();
   pr();
 });
@@ -11084,7 +11084,7 @@ var uS = d(() => {
 function Ol(e, t, n) {
   return qt(e) && c.IsUndefined(n[t]);
 }
-var Ng = d(() => {
+var Ng = p(() => {
   I();
   ne();
 });
@@ -11100,7 +11100,7 @@ function Fne(e, t, n) {
 function Q6(e, t, n) {
   return c.IsObjectNotArray(n) ? Fne(e, t, n) : n;
 }
-var eB = d(() => {
+var eB = p(() => {
   I();
   pr();
   uS();
@@ -11118,7 +11118,7 @@ function zne(e, t, n) {
 function tB(e, t, n) {
   return c.IsObjectNotArray(n) ? zne(e, t, n) : n;
 }
-var nB = d(() => {
+var nB = p(() => {
   I();
   pr();
   uS();
@@ -11128,7 +11128,7 @@ var nB = d(() => {
 function rB(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? wt(e, e[t.$ref], n) : n;
 }
-var oB = d(() => {
+var oB = p(() => {
   pr();
   I();
 });
@@ -11138,7 +11138,7 @@ function iB(e, t, n) {
   let o = Pe.TryString(n);
   return Pe.IsOk(o) ? o.value : n;
 }
-var aB = d(() => {
+var aB = p(() => {
   Gr();
 });
 
@@ -11146,7 +11146,7 @@ var aB = d(() => {
 function sB(e, t, n) {
   return wt(e, Wt(t), n);
 }
-var cB = d(() => {
+var cB = p(() => {
   ne();
   pr();
 });
@@ -11159,7 +11159,7 @@ function uB(e, t, n) {
     n[o] = wt(e, t.items[o], n[o]);
   return n;
 }
-var lB = d(() => {
+var lB = p(() => {
   I();
   pr();
 });
@@ -11169,7 +11169,7 @@ function dB(e, t, n) {
   let o = Pe.TryUndefined(n);
   return Pe.IsOk(o) ? o.value : n;
 }
-var pB = d(() => {
+var pB = p(() => {
   Gr();
 });
 
@@ -11180,7 +11180,7 @@ function mB(e, t, n) {
   let i = t.anyOf.map((a) => wt(e, a, Ze(n))).find((a) => be(e, t, a));
   return c.IsUndefined(i) ? n : i;
 }
-var fB = d(() => {
+var fB = p(() => {
   I();
   jt();
   zn();
@@ -11192,7 +11192,7 @@ function gB(e, t, n) {
   let o = Pe.TryUndefined(n);
   return Pe.IsOk(o) ? void 0 : n;
 }
-var hB = d(() => {
+var hB = p(() => {
   Gr();
 });
 
@@ -11200,7 +11200,7 @@ var hB = d(() => {
 function wt(e, t, n) {
   return ve(t) ? O6(e, t, n) : Jn(t) ? M6(e, t, n) : Tn(t) ? U6(e, t, n) : Be(t) ? F6(e, t, n) : bt(t) ? j6(e, t, n) : Vt(t) ? q6(e, t, n) : Y(t) ? K6(e, t, n) : xe(t) ? V6(e, t, n) : co(t) ? Z6(e, t, n) : ot(t) ? Y6(e, t, n) : Q(t) ? Q6(e, t, n) : Ue(t) ? tB(e, t, n) : De(t) ? rB(e, t, n) : Ut(t) ? iB(e, t, n) : qe(t) ? sB(e, t, n) : ge(t) ? uB(e, t, n) : _r(t) ? dB(e, t, n) : F(t) ? mB(e, t, n) : Xn(t) ? gB(e, t, n) : n;
 }
-var pr = d(() => {
+var pr = p(() => {
   ne();
   D6();
   N6();
@@ -11231,13 +11231,13 @@ function Kr(...e) {
   });
   return wt(t, n, o);
 }
-var yB = d(() => {
+var yB = p(() => {
   Et();
   pr();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/convert/index.mjs
-var Fa = d(() => {
+var Fa = p(() => {
   yB();
 });
 
@@ -11249,7 +11249,7 @@ function bB(e, t, n) {
     n[o] = Jt(e, t.items, n[o]);
   return n;
 }
-var xB = d(() => {
+var xB = p(() => {
   I();
   vo();
 });
@@ -11258,7 +11258,7 @@ var xB = d(() => {
 function vB(e, t, n) {
   return Jt({ ...e, ...t.$defs }, Bt(t.$ref), n);
 }
-var IB = d(() => {
+var IB = p(() => {
   ne();
   vo();
 });
@@ -11267,7 +11267,7 @@ var IB = d(() => {
 function wB(e, t) {
   return c.IsUndefined(t) ? c.IsFunction(e.default) ? e.default() : Ze(e.default) : t;
 }
-var SB = d(() => {
+var SB = p(() => {
   I();
   zn();
 });
@@ -11277,7 +11277,7 @@ function kB(e, t, n) {
   let o = dr(e, t), r = Wt(o);
   return Jt(e, r, n);
 }
-var _B = d(() => {
+var _B = p(() => {
   ne();
   vo();
 });
@@ -11297,7 +11297,7 @@ function EB(e, t, n) {
     o.includes(r) || (n[r] = Jt(e, t.additionalProperties, n[r]));
   return n;
 }
-var TB = d(() => {
+var TB = p(() => {
   ne();
   I();
   vo();
@@ -11317,7 +11317,7 @@ function CB(e, t, n) {
     o.test(i) || (n[i] = Jt(e, t.additionalProperties, n[i]));
   return n;
 }
-var RB = d(() => {
+var RB = p(() => {
   ne();
   je();
   I();
@@ -11328,7 +11328,7 @@ var RB = d(() => {
 function AB(e, t, n) {
   return c.HasPropertyKey(e, t.$ref) ? Jt(e, e[t.$ref], n) : n;
 }
-var $B = d(() => {
+var $B = p(() => {
   I();
   vo();
 });
@@ -11342,7 +11342,7 @@ function PB(e, t, n) {
     i < o.length && (n[i] = Jt(e, o[i], n[i]));
   return n;
 }
-var OB = d(() => {
+var OB = p(() => {
   I();
   vo();
 });
@@ -11356,7 +11356,7 @@ function DB(e, t, n) {
   }
   return n;
 }
-var MB = d(() => {
+var MB = p(() => {
   jt();
   zn();
   vo();
@@ -11367,7 +11367,7 @@ function Jt(e, t, n) {
   let o = Hn(t) ? wB(t, n) : n;
   return ve(t) ? bB(e, t, o) : Be(t) ? vB(e, t, o) : Y(t) ? kB(e, t, o) : Q(t) ? EB(e, t, o) : Ue(t) ? CB(e, t, o) : De(t) ? AB(e, t, o) : ge(t) ? PB(e, t, o) : F(t) ? DB(e, t, o) : o;
 }
-var vo = d(() => {
+var vo = p(() => {
   jo();
   ne();
   xB();
@@ -11389,13 +11389,13 @@ function Vo(...e) {
   });
   return Jt(t, n, o);
 }
-var NB = d(() => {
+var NB = p(() => {
   Et();
   vo();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/default/index.mjs
-var uc = d(() => {
+var uc = p(() => {
   NB();
 });
 
@@ -11409,12 +11409,12 @@ function lc(e) {
     return e.reduce((i, a) => a(n, o, i), r);
   };
 }
-var UB = d(() => {
+var UB = p(() => {
   Et();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/pipeline/index.mjs
-var Dl = d(() => {
+var Dl = p(() => {
   UB();
 });
 
@@ -11428,7 +11428,7 @@ function Bne(e, t, n) {
 function tt(e, t, n, o) {
   return En(n) ? c.IsEqual(e, "Decode") ? jne(t, n, o) : Bne(t, n, o) : o;
 }
-var Io = d(() => {
+var Io = p(() => {
   I();
   ne();
 });
@@ -11452,7 +11452,7 @@ function Gne(e, t, n, o) {
 function LB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? qne(e, t, n, o) : Gne(e, t, n, o);
 }
-var FB = d(() => {
+var FB = p(() => {
   I();
   Hr();
   Io();
@@ -11462,7 +11462,7 @@ var FB = d(() => {
 function zB(e, t, n, o) {
   return o = at(e, { ...t, ...n.$defs }, Bt(n.$ref), o), tt(e, t, n, o);
 }
-var jB = d(() => {
+var jB = p(() => {
   ne();
   Hr();
   Io();
@@ -11493,7 +11493,7 @@ function Hne(e, t, n, o) {
 function GB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? Kne(e, t, n, o) : Hne(e, t, n, o);
 }
-var KB = d(() => {
+var KB = p(() => {
   I();
   Hr();
   Io();
@@ -11520,7 +11520,7 @@ function Wne(e, t, n, o) {
 function HB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? Vne(e, t, n, o) : Wne(e, t, n, o);
 }
-var VB = d(() => {
+var VB = p(() => {
   I();
   Hr();
   Io();
@@ -11548,7 +11548,7 @@ function Jne(e, t, n, o) {
 function WB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? Zne(e, t, n, o) : Jne(e, t, n, o);
 }
-var ZB = d(() => {
+var ZB = p(() => {
   I();
   ne();
   Hr();
@@ -11562,7 +11562,7 @@ function JB(e, t, n, o) {
 function YB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? tt(e, t, n, JB(e, t, n, o)) : JB(e, t, n, tt(e, t, n, o));
 }
-var XB = d(() => {
+var XB = p(() => {
   I();
   Hr();
   Io();
@@ -11587,7 +11587,7 @@ function Xne(e, t, n, o) {
 function QB(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? Yne(e, t, n, o) : Xne(e, t, n, o);
 }
-var eq = d(() => {
+var eq = p(() => {
   I();
   Hr();
   Io();
@@ -11615,7 +11615,7 @@ function ere(e, t, n, o) {
 function tq(e, t, n, o) {
   return c.IsEqual(e, "Decode") ? Qne(e, t, n, o) : ere(e, t, n, o);
 }
-var nq = d(() => {
+var nq = p(() => {
   I();
   Io();
   Hr();
@@ -11627,7 +11627,7 @@ var nq = d(() => {
 function at(e, t, n, o) {
   return ve(n) ? LB(e, t, n, o) : Be(n) ? zB(e, t, n, o) : Y(n) ? GB(e, t, n, o) : Q(n) ? HB(e, t, n, o) : Ue(n) ? WB(e, t, n, o) : De(n) ? YB(e, t, n, o) : ge(n) ? QB(e, t, n, o) : F(n) ? tq(e, t, n, o) : tt(e, t, n, o);
 }
-var Hr = d(() => {
+var Hr = p(() => {
   ne();
   FB();
   jB();
@@ -11657,7 +11657,7 @@ function dS(...e) {
   });
   return rre(t, n, o);
 }
-var lS, rre, rq = d(() => {
+var lS, rre, rq = p(() => {
   ga();
   ya();
   jt();
@@ -11701,7 +11701,7 @@ function mS(...e) {
   });
   return are(t, n, o);
 }
-var pS, are, oq = d(() => {
+var pS, are, oq = p(() => {
   ga();
   ya();
   jt();
@@ -11730,30 +11730,30 @@ var pS, are, oq = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/codec/has.mjs
 function sre(e, t) {
-  return En(t) || Ti(e, t.items);
+  return En(t) || Ci(e, t.items);
 }
 function cre(e, t) {
   return En(t) || iq({ ...e, ...t.$defs }, Bt(t.$ref));
 }
 function ure(e, t) {
-  return En(t) || t.allOf.some((n) => Ti(e, n));
+  return En(t) || t.allOf.some((n) => Ci(e, n));
 }
 function lre(e, t) {
-  return En(t) || c.Keys(t.properties).some((n) => Ti(e, t.properties[n]));
+  return En(t) || c.Keys(t.properties).some((n) => Ci(e, t.properties[n]));
 }
 function dre(e, t) {
-  return En(t) || Ti(e, We(t));
+  return En(t) || Ci(e, We(t));
 }
 function iq(e, t) {
-  return fS.has(t.$ref) ? !1 : (fS.add(t.$ref), En(t) || c.HasPropertyKey(e, t.$ref) && Ti(e, e[t.$ref]));
+  return fS.has(t.$ref) ? !1 : (fS.add(t.$ref), En(t) || c.HasPropertyKey(e, t.$ref) && Ci(e, e[t.$ref]));
 }
 function pre(e, t) {
-  return En(t) || t.items.some((n) => Ti(e, n));
+  return En(t) || t.items.some((n) => Ci(e, n));
 }
 function mre(e, t) {
-  return En(t) || t.anyOf.some((n) => Ti(e, n));
+  return En(t) || t.anyOf.some((n) => Ci(e, n));
 }
-function Ti(e, t) {
+function Ci(e, t) {
   return ve(t) ? sre(e, t) : Be(t) ? cre(e, t) : Y(t) ? ure(e, t) : Q(t) ? lre(e, t) : Ue(t) ? dre(e, t) : De(t) ? iq(e, t) : ge(t) ? pre(e, t) : F(t) ? mre(e, t) : En(t);
 }
 function gS(...e) {
@@ -11761,9 +11761,9 @@ function gS(...e) {
     2: (o, r) => [o, r],
     1: (o) => [{}, o]
   });
-  return fS.clear(), Ti(t, n);
+  return fS.clear(), Ci(t, n);
 }
-var fS, aq = d(() => {
+var fS, aq = p(() => {
   Et();
   I();
   ne();
@@ -11779,14 +11779,14 @@ var fS, aq = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/codec/index.mjs
-var hS = d(() => {
+var hS = p(() => {
   rq();
   oq();
   aq();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/error.mjs
-var Tr, za = d(() => {
+var Tr, za = p(() => {
   Tr = class extends Error {
     constructor(t, n) {
       super(n), this.type = t;
@@ -11798,19 +11798,19 @@ var Tr, za = d(() => {
 function sq(e, t) {
   return c.IsFunction(t.default) ? t.default(t) : c.IsObject(t.default) ? Ze(t.default) : t.default;
 }
-var cq = d(() => {
+var cq = p(() => {
   I();
   zn();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_array.mjs
 function uq(e, t) {
-  if (ci(t) && !Hn(t))
+  if (ui(t) && !Hn(t))
     throw new Tr(t, "Arrays with uniqueItems constraints must specify a default annotation");
   let n = sa(t) ? t.minItems : 0;
   return Array.from({ length: n }, () => St(e, t.items));
 }
-var lq = d(() => {
+var lq = p(() => {
   je();
   mr();
   za();
@@ -11820,7 +11820,7 @@ var lq = d(() => {
 function dq(e, t) {
   return Mo(t) ? BigInt(t.exclusiveMinimum) + BigInt(1) : No(t) ? BigInt(t.minimum) : BigInt(0);
 }
-var pq = d(() => {
+var pq = p(() => {
   je();
 });
 
@@ -11828,7 +11828,7 @@ var pq = d(() => {
 function mq(e, t) {
   return !1;
 }
-var fq = d(() => {
+var fq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_constructor.mjs
@@ -11840,7 +11840,7 @@ function gq(e, t) {
     }
   };
 }
-var hq = d(() => {
+var hq = p(() => {
   mr();
 });
 
@@ -11848,7 +11848,7 @@ var hq = d(() => {
 function yq(e, t) {
   return St({ ...e, ...t.$defs }, Bt(t.$ref));
 }
-var bq = d(() => {
+var bq = p(() => {
   ne();
   mr();
 });
@@ -11857,7 +11857,7 @@ var bq = d(() => {
 function xq(e, t) {
   return St(e, Wt(t));
 }
-var vq = d(() => {
+var vq = p(() => {
   ne();
   mr();
 });
@@ -11867,7 +11867,7 @@ function Iq(e, t) {
   let n = St(e, t.returnType);
   return () => n;
 }
-var wq = d(() => {
+var wq = p(() => {
   mr();
 });
 
@@ -11875,7 +11875,7 @@ var wq = d(() => {
 function Sq(e, t) {
   return Mo(t) && c.IsNumber(t.exclusiveMinimum) ? t.exclusiveMinimum + 1 : No(t) ? t.minimum : 0;
 }
-var kq = d(() => {
+var kq = p(() => {
   I();
   je();
 });
@@ -11885,7 +11885,7 @@ function _q(e, t) {
   let n = dr(e, t), o = Wt(n);
   return St(e, o);
 }
-var Eq = d(() => {
+var Eq = p(() => {
   ne();
   mr();
 });
@@ -11894,14 +11894,14 @@ var Eq = d(() => {
 function Tq(e, t) {
   return t.const;
 }
-var Cq = d(() => {
+var Cq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_never.mjs
 function Rq(e, t) {
   throw new Tr(t, "Cannot create TNever types");
 }
-var Aq = d(() => {
+var Aq = p(() => {
   za();
 });
 
@@ -11909,14 +11909,14 @@ var Aq = d(() => {
 function $q(e, t) {
   return null;
 }
-var Pq = d(() => {
+var Pq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_number.mjs
 function Oq(e, t) {
   return Mo(t) && c.IsNumber(t.exclusiveMinimum) ? t.exclusiveMinimum + 1 : No(t) ? t.minimum : 0;
 }
-var Dq = d(() => {
+var Dq = p(() => {
   I();
   je();
 });
@@ -11925,7 +11925,7 @@ var Dq = d(() => {
 function Mq(e, t) {
   return (c.IsUndefined(t.required) ? [] : t.required).reduce((o, r) => ({ ...o, [r]: St(e, t.properties[r]) }), {});
 }
-var Nq = d(() => {
+var Nq = p(() => {
   I();
   mr();
 });
@@ -11936,7 +11936,7 @@ function Uq(e, t) {
     throw new Tr(t, "Record with the minProperties constraint must have a default annotation");
   return {};
 }
-var Lq = d(() => {
+var Lq = p(() => {
   je();
   za();
 });
@@ -11947,7 +11947,7 @@ function Fq(e, t) {
     throw new Tr(t, "Unable to deref Ref");
   })();
 }
-var zq = d(() => {
+var zq = p(() => {
   I();
   mr();
   za();
@@ -11960,7 +11960,7 @@ function jq(e, t) {
   let o = mu(t) ? t.minLength : 0;
   return "".padEnd(o);
 }
-var Bq = d(() => {
+var Bq = p(() => {
   je();
 });
 
@@ -11968,7 +11968,7 @@ var Bq = d(() => {
 function qq(e, t) {
   return /* @__PURE__ */ Symbol();
 }
-var Gq = d(() => {
+var Gq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_template_literal.mjs
@@ -11978,7 +11978,7 @@ function Kq(e, t) {
     throw new Tr(t, "Unable to create TemplateLiteral due to infinite type expansion");
   return St(e, n);
 }
-var Hq = d(() => {
+var Hq = p(() => {
   ne();
   Pg();
   mr();
@@ -11989,12 +11989,12 @@ var Hq = d(() => {
 function Vq(e, t) {
   return Array.from({ length: t.minItems }, (n, o) => St(e, t.items[o]));
 }
-var Wq = d(() => {
+var Wq = p(() => {
   mr();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_undefined.mjs
-var Zq = d(() => {
+var Zq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_union.mjs
@@ -12003,13 +12003,13 @@ function Jq(e, t) {
     throw Error("Unable to create Union with no variants");
   return St(e, t.anyOf[0]);
 }
-var Yq = d(() => {
+var Yq = p(() => {
   I();
   mr();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_void.mjs
-var Xq = d(() => {
+var Xq = p(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/from_type.mjs
@@ -12026,7 +12026,7 @@ function St(e, t) {
     )
   );
 }
-var mr = d(() => {
+var mr = p(() => {
   ne();
   je();
   cq();
@@ -12063,13 +12063,13 @@ function Yt(...e) {
   });
   return St(t, n);
 }
-var Qq = d(() => {
+var Qq = p(() => {
   Et();
   mr();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/create/index.mjs
-var wo = d(() => {
+var wo = p(() => {
   za();
   Qq();
 });
@@ -12078,12 +12078,12 @@ var wo = d(() => {
 function Ug(e, t) {
   return c.IsDeepEqual(e, t);
 }
-var eG = d(() => {
+var eG = p(() => {
   I();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/equal/index.mjs
-var Lg = d(() => {
+var Lg = p(() => {
   eG();
 });
 
@@ -12091,12 +12091,12 @@ var Lg = d(() => {
 function Fg(e) {
   return zo.Hash(e);
 }
-var tG = d(() => {
+var tG = p(() => {
   Ru();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/hash/index.mjs
-var zg = d(() => {
+var zg = p(() => {
   tG();
 });
 
@@ -12121,7 +12121,7 @@ function rG(...e) {
   let i = br(t, n, o);
   throw Mu(), new Ml(o, i);
 }
-var Ml, nG, oG = d(() => {
+var Ml, nG, oG = p(() => {
   Sm();
   ga();
   ya();
@@ -12147,7 +12147,7 @@ var Ml, nG, oG = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/parse/index.mjs
-var yS = d(() => {
+var yS = p(() => {
   oG();
 });
 
@@ -12204,13 +12204,13 @@ function* Bg(e, t, n) {
 function cG(e, t) {
   return [...Bg("", e, t)];
 }
-var uG = d(() => {
+var uG = p(() => {
   I();
   Lg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/delta/edit.mjs
-var xre, vre, Ire, Qit, lG = d(() => {
+var xre, vre, Ire, Qit, lG = p(() => {
   ne();
   xre = X({
     type: he("insert"),
@@ -12227,7 +12227,7 @@ var xre, vre, Ire, Qit, lG = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/pointer/index.mjs
-var qg = d(() => {
+var qg = p(() => {
   Bp();
 });
 
@@ -12261,20 +12261,20 @@ function dG(e, t) {
     }
   return n;
 }
-var pG = d(() => {
+var pG = p(() => {
   zn();
   qg();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/delta/index.mjs
-var bS = d(() => {
+var bS = p(() => {
   uG();
   lG();
   pG();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/repair/error.mjs
-var Wo, Gg = d(() => {
+var Wo, Gg = p(() => {
   Wo = class extends Error {
     constructor(t, n, o, r) {
       super(r), this.context = t, this.type = n, this.value = o;
@@ -12295,14 +12295,14 @@ function mG(e, t, n) {
   if (be(e, t, n))
     return n;
   let o = c.IsArray(n) ? n : Yt(e, t), r = sa(t) && o.length < t.minItems ? [...o, ...Array.from({ length: t.minItems - o.length }, () => Yt(e, t))] : o, a = (pu(t) && r.length > t.maxItems ? r.slice(0, t.maxItems) : r).map((u) => Lt(e, t.items, u));
-  if (!ci(t) || ci(t) && !c.IsEqual(t.uniqueItems, !0))
+  if (!ui(t) || ui(t) && !c.IsEqual(t.uniqueItems, !0))
     return a;
   let s = kre(a);
   if (!be(e, t, s))
     throw new Wo(e, t, n, "Failed to repair Array due to uniqueItems constraint");
   return s;
 }
-var fG = d(() => {
+var fG = p(() => {
   je();
   I();
   jt();
@@ -12316,7 +12316,7 @@ var fG = d(() => {
 function gG(e, t, n) {
   return Lt(e, Wt(t), n);
 }
-var hG = d(() => {
+var hG = p(() => {
   ne();
   Vr();
 });
@@ -12326,7 +12326,7 @@ function yG(e, t, n) {
   let o = dr(e, t), r = Wt(o);
   return Lt(e, r, n);
 }
-var bG = d(() => {
+var bG = p(() => {
   ne();
   Vr();
 });
@@ -12346,7 +12346,7 @@ function xG(e, t, n) {
       i.includes(a) || (r[a] = Lt(e, t.additionalProperties, n[a]));
   return r;
 }
-var vG = d(() => {
+var vG = p(() => {
   I();
   jt();
   wo();
@@ -12368,7 +12368,7 @@ function IG(e, t, n) {
       i.has(s) || (a[s] = Lt(e, t.additionalProperties, n[s]));
   return a;
 }
-var wG = d(() => {
+var wG = p(() => {
   je();
   ne();
   I();
@@ -12383,7 +12383,7 @@ function SG(e, t, n) {
     throw new Wo(e, t, n, "Unable to de-reference target type");
   })();
 }
-var kG = d(() => {
+var kG = p(() => {
   I();
   Vr();
   Gg();
@@ -12394,7 +12394,7 @@ function _G(e, t, n) {
   let o = Fs(t.pattern);
   return Lt(e, o, n);
 }
-var EG = d(() => {
+var EG = p(() => {
   Pg();
   Vr();
 });
@@ -12403,7 +12403,7 @@ var EG = d(() => {
 function TG(e, t, n) {
   return be(e, t, n) ? n : c.IsArray(n) ? t.items.map((o, r) => Lt(e, o, n[r])) : Yt(e, t);
 }
-var CG = d(() => {
+var CG = p(() => {
   I();
   jt();
   wo();
@@ -12433,7 +12433,7 @@ function AG(e, t, n) {
   }
   return r;
 }
-var xS = d(() => {
+var xS = p(() => {
   ne();
   I();
   jt();
@@ -12441,13 +12441,13 @@ var xS = d(() => {
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/repair/from_union.mjs
 function Ere(e, t, n) {
-  let o = ie(vi(t.anyOf)), r = AG(e, o, n);
+  let o = ie(Ii(t.anyOf)), r = AG(e, o, n);
   return Lt(e, r, n);
 }
 function $G(e, t, n) {
   return be(e, t, n) ? Ze(n) : Hn(t) ? Yt(e, t) : Ere(e, t, n);
 }
-var PG = d(() => {
+var PG = p(() => {
   je();
   ne();
   Ys();
@@ -12465,7 +12465,7 @@ function OG(e, t, n) {
   let o = Kr(e, t, n);
   return be(e, t, o) ? o : Yt(e, t);
 }
-var DG = d(() => {
+var DG = p(() => {
   jt();
   wo();
   Fa();
@@ -12491,7 +12491,7 @@ function Lt(e, t, n) {
   let o = Rre(e, t, n), r = ve(t) ? mG(e, t, o) : bt(t) ? gG(e, t, o) : Y(t) ? yG(e, t, o) : Q(t) ? xG(e, t, o) : Ue(t) ? IG(e, t, o) : De(t) ? SG(e, t, o) : qe(t) ? _G(e, t, o) : ge(t) ? TG(e, t, o) : F(t) ? $G(e, t, o) : OG(e, t, o);
   return Are(e, t, r);
 }
-var Vr = d(() => {
+var Vr = p(() => {
   I();
   ne();
   jt();
@@ -12517,19 +12517,19 @@ function MG(...e) {
   }), r = Lt(t, n, o);
   return km(t, n, r), r;
 }
-var NG = d(() => {
+var NG = p(() => {
   Et();
   Vr();
   ya();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/repair/index.mjs
-var vS = d(() => {
+var vS = p(() => {
   NG();
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/shared/index.mjs
-var UG = d(() => {
+var UG = p(() => {
   Ng();
   Pl();
   xS();
@@ -12557,7 +12557,7 @@ ct(Nl, {
   Pointer: () => Nr,
   Repair: () => MG
 });
-var IS = d(() => {
+var IS = p(() => {
   ya();
   jt();
   Ua();
@@ -12576,7 +12576,7 @@ var IS = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/value/index.mjs
-var wS = d(() => {
+var wS = p(() => {
   ya();
   jt();
   Ua();
@@ -12599,8 +12599,8 @@ var wS = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/typebox.mjs
-var p = {};
-ct(p, {
+var d = {};
+ct(d, {
   Any: () => Ds,
   Array: () => Pn,
   BigInt: () => Zu,
@@ -12624,7 +12624,7 @@ ct(p, {
   ExtendsResult: () => re,
   Extract: () => nj,
   Function: () => ro,
-  Generic: () => mi,
+  Generic: () => fi,
   Identifier: () => Ju,
   Immutable: () => GM,
   Index: () => sj,
@@ -12664,7 +12664,7 @@ ct(p, {
   IsRecord: () => Ue,
   IsRef: () => De,
   IsRefine: () => Wu,
-  IsRest: () => Ii,
+  IsRest: () => wi,
   IsSchema: () => rt,
   IsString: () => Ut,
   IsSymbol: () => uo,
@@ -12719,7 +12719,7 @@ ct(p, {
   Void: () => nf,
   With: () => Cg
 });
-var SS = d(() => {
+var SS = p(() => {
   J();
   Br();
   Og();
@@ -12749,13 +12749,13 @@ var SS = d(() => {
   Rg();
   bI();
   Gu();
-  fi();
+  gi();
   Vu();
   xI();
   On();
   _n();
   ka();
-  gi();
+  hi();
   Vs();
   xr();
   Mn();
@@ -12790,7 +12790,7 @@ var SS = d(() => {
 });
 
 // openclaw/node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/index.mjs
-var Cr = d(() => {
+var Cr = p(() => {
   $a();
   rS();
   Br();
@@ -12802,55 +12802,55 @@ var Cr = d(() => {
 
 // openclaw/packages/gateway-protocol/src/schema/closed-object.ts
 function L(e) {
-  let t = p.Object(e, { additionalProperties: !1 });
+  let t = d.Object(e, { additionalProperties: !1 });
   return Object.defineProperty(t, jre, { value: /* @__PURE__ */ Symbol("closedObject") }), t;
 }
-var jre, Zo = d(() => {
+var jre, Zo = p(() => {
   Cr();
   jre = "~openclawClosedObjectIdentity";
 });
 
 // openclaw/packages/gateway-protocol/src/secret-ref-contract.ts
-var FG, zG, jG, BG, qG = d(() => {
+var FG, zG, jG, BG, qG = p(() => {
   FG = "value", zG = /^[a-z][a-z0-9_-]{0,63}$/, jG = "~(?:[^01]|$)", BG = "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$";
 });
 
 // openclaw/packages/gateway-protocol/src/schema/primitives.ts
-var GG, qre, Gre, N, gdt, hdt, Kre, KG, ydt, HG, bdt, xdt, Hg, Hre, Vre, Wre, Zre, Jre, Yre, vdt, ja = d(() => {
+var GG, qre, Gre, M, gdt, hdt, Kre, KG, ydt, HG, bdt, xdt, Hg, Hre, Vre, Wre, Zre, Jre, Yre, vdt, ja = p(() => {
   Cr();
   Rb();
   qG();
   Zo();
-  GG = /^[A-Z][A-Z0-9_]{0,127}$/, qre = ["external_user", "inter_session", "internal_system"], Gre = 512, N = p.String({ minLength: 1 }), gdt = p.String({
+  GG = /^[A-Z][A-Z0-9_]{0,127}$/, qre = ["external_user", "inter_session", "internal_system"], Gre = 512, M = d.String({ minLength: 1 }), gdt = d.String({
     minLength: 64,
     maxLength: 64,
     pattern: "^[a-fA-F0-9]{64}$"
-  }), hdt = p.String({
+  }), hdt = d.String({
     minLength: 1,
     maxLength: 128
-  }), Kre = 512, KG = p.String({
+  }), Kre = 512, KG = d.String({
     minLength: 1,
     maxLength: Kre
-  }), ydt = p.String({
+  }), ydt = d.String({
     minLength: 1,
     maxLength: Gre
   }), HG = L({
-    kind: p.String({ enum: [...qre] }),
-    originSessionId: p.Optional(p.String()),
-    sourceSessionKey: p.Optional(p.String()),
-    sourceChannel: p.Optional(p.String()),
-    sourceTool: p.Optional(p.String()),
-    sourceRole: p.Optional(p.Literal("subagent")),
-    sourcePromptPrefix: p.Optional(p.String()),
-    jobId: p.Optional(p.String()),
-    runId: p.Optional(p.String())
-  }), bdt = p.Enum(Tb), xdt = p.Enum(Cb), Hg = p.String({
+    kind: d.String({ enum: [...qre] }),
+    originSessionId: d.Optional(d.String()),
+    sourceSessionKey: d.Optional(d.String()),
+    sourceChannel: d.Optional(d.String()),
+    sourceTool: d.Optional(d.String()),
+    sourceRole: d.Optional(d.Literal("subagent")),
+    sourcePromptPrefix: d.Optional(d.String()),
+    jobId: d.Optional(d.String()),
+    runId: d.Optional(d.String())
+  }), bdt = d.Enum(Tb), xdt = d.Enum(Cb), Hg = d.String({
     pattern: zG.source
   }), Hre = L({
-    source: p.Literal("env"),
+    source: d.Literal("env"),
     provider: Hg,
-    id: p.String({ pattern: GG.source })
-  }), Vre = p.Unsafe({
+    id: d.String({ pattern: GG.source })
+  }), Vre = d.Unsafe({
     type: "string",
     anyOf: [
       { const: FG },
@@ -12862,67 +12862,67 @@ var GG, qre, Gre, N, gdt, hdt, Kre, KG, ydt, HG, bdt, xdt, Hg, Hre, Vre, Wre, Zr
       }
     ]
   }), Wre = L({
-    source: p.Literal("file"),
+    source: d.Literal("file"),
     provider: Hg,
     id: Vre
   }), Zre = L({
-    source: p.Literal("exec"),
+    source: d.Literal("exec"),
     provider: Hg,
-    id: p.String({ pattern: BG })
+    id: d.String({ pattern: BG })
   }), Jre = L({
-    source: p.Literal("store"),
+    source: d.Literal("store"),
     provider: Hg,
-    id: p.String({ pattern: GG.source })
-  }), Yre = p.Union([
+    id: d.String({ pattern: GG.source })
+  }), Yre = d.Union([
     Hre,
     Wre,
     Zre,
     Jre
-  ]), vdt = p.Union([p.String(), Yre]);
+  ]), vdt = d.Union([d.String(), Yre]);
 });
 
 // openclaw/packages/gateway-protocol/src/schema/session-participant.ts
-var VG, WG, kS, _S, _dt, ZG = d(() => {
+var VG, WG, kS, _S, _dt, ZG = p(() => {
   Cr();
   Zo();
   ja();
-  VG = 4, WG = 32, kS = p.Union([
-    L({ type: p.Literal("profile"), id: N }),
-    L({ type: p.Literal("agent"), id: N }),
+  VG = 4, WG = 32, kS = d.Union([
+    L({ type: d.Literal("profile"), id: M }),
+    L({ type: d.Literal("agent"), id: M }),
     L({
-      type: p.Literal("remote"),
-      pluginId: N,
-      domain: N,
-      idKind: N,
-      id: N
+      type: d.Literal("remote"),
+      pluginId: M,
+      domain: M,
+      idKind: M,
+      id: M
     }),
     L({
-      type: p.Literal("observation"),
-      pluginId: p.Union([N, p.Null()]),
-      accountId: p.Union([N, p.Null()]),
-      senderKind: p.Union([p.Literal("human"), p.Literal("bot"), p.Literal("unknown")]),
-      id: N
+      type: d.Literal("observation"),
+      pluginId: d.Union([M, d.Null()]),
+      accountId: d.Union([M, d.Null()]),
+      senderKind: d.Union([d.Literal("human"), d.Literal("bot"), d.Literal("unknown")]),
+      id: M
     }),
     L({
-      type: p.Literal("legacy"),
-      actorType: p.String(),
-      source: p.Union([p.String(), p.Null()]),
-      id: p.String()
+      type: d.Literal("legacy"),
+      actorType: d.String(),
+      source: d.Union([d.String(), d.Null()]),
+      id: d.String()
     })
   ]), _S = L({
     identity: kS,
-    label: p.Optional(N),
-    avatarUrl: p.Optional(N)
+    label: d.Optional(M),
+    avatarUrl: d.Optional(M)
   }), _dt = L({
-    identity: L({ type: p.Literal("profile"), id: N }),
-    label: p.Optional(N),
-    avatarUrl: p.Optional(N),
-    sessionCount: p.Integer({ minimum: 1 })
+    identity: L({ type: d.Literal("profile"), id: M }),
+    label: d.Optional(M),
+    avatarUrl: d.Optional(M),
+    sessionCount: d.Integer({ minimum: 1 })
   });
 });
 
 // openclaw/packages/gateway-protocol/src/chat-work-context.ts
-var Jo, Vg, JG = d(() => {
+var Jo, Vg, JG = p(() => {
   Jo = {
     page: 64,
     title: 96,
@@ -12943,7 +12943,7 @@ var _9 = wR((spt, k9) => {
     "not-basic": "Illegal input >= 0x80 (not a basic code point)",
     "invalid-input": "Invalid input"
   }, MS = 35, So = Math.floor, NS = String.fromCharCode;
-  function Ri(e) {
+  function Ai(e) {
     throw new RangeError(Roe[e]);
   }
   function Aoe(e, t) {
@@ -12983,21 +12983,21 @@ var _9 = wR((spt, k9) => {
     let t = [], n = e.length, o = 0, r = 128, i = 72, a = e.lastIndexOf("-");
     a < 0 && (a = 0);
     for (let s = 0; s < a; ++s)
-      e.charCodeAt(s) >= 128 && Ri("not-basic"), t.push(e.charCodeAt(s));
+      e.charCodeAt(s) >= 128 && Ai("not-basic"), t.push(e.charCodeAt(s));
     for (let s = a > 0 ? a + 1 : 0; s < n; ) {
       let u = o;
       for (let m = 1, h = 36; ; h += 36) {
-        s >= n && Ri("invalid-input");
+        s >= n && Ai("invalid-input");
         let b = Poe(e.charCodeAt(s++));
-        b >= 36 && Ri("invalid-input"), b > So((2147483647 - o) / m) && Ri("overflow"), o += b * m;
+        b >= 36 && Ai("invalid-input"), b > So((2147483647 - o) / m) && Ai("overflow"), o += b * m;
         let f = h <= i ? 1 : h >= i + 26 ? 26 : h - i;
         if (b < f)
           break;
         let y = 36 - f;
-        m > So(2147483647 / y) && Ri("overflow"), m *= y;
+        m > So(2147483647 / y) && Ai("overflow"), m *= y;
       }
       let l = t.length + 1;
-      i = I9(o - u, l, u == 0), So(o / l) > 2147483647 - r && Ri("overflow"), r += So(o / l), o %= l, t.splice(o++, 0, r);
+      i = I9(o - u, l, u == 0), So(o / l) > 2147483647 - r && Ai("overflow"), r += So(o / l), o %= l, t.splice(o++, 0, r);
     }
     return String.fromCodePoint(...t);
   }, S9 = function(e) {
@@ -13012,9 +13012,9 @@ var _9 = wR((spt, k9) => {
       for (let m of e)
         m >= o && m < u && (u = m);
       let l = s + 1;
-      u - o > So((2147483647 - r) / l) && Ri("overflow"), r += (u - o) * l, o = u;
+      u - o > So((2147483647 - r) / l) && Ai("overflow"), r += (u - o) * l, o = u;
       for (let m of e)
-        if (m < o && ++r > 2147483647 && Ri("overflow"), m === o) {
+        if (m < o && ++r > 2147483647 && Ai("overflow"), m === o) {
           let h = r;
           for (let b = 36; ; b += 36) {
             let f = b <= i ? 1 : b >= i + 26 ? 26 : b - i;
@@ -13568,112 +13568,112 @@ var tK = wR((eK, rh) => {
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-sharing-values.ts
-var lb, oV, gR = d(() => {
+var lb, oV, gR = p(() => {
   Cr();
-  lb = p.Union([
-    p.Literal("shared"),
-    p.Literal("read-only"),
-    p.Literal("suggest"),
-    p.Literal("draft")
-  ]), oV = p.Union([
-    p.Literal("admin"),
-    p.Literal("owner"),
-    p.Literal("member"),
-    p.Literal("viewer")
+  lb = d.Union([
+    d.Literal("shared"),
+    d.Literal("read-only"),
+    d.Literal("suggest"),
+    d.Literal("draft")
+  ]), oV = d.Union([
+    d.Literal("admin"),
+    d.Literal("owner"),
+    d.Literal("member"),
+    d.Literal("viewer")
   ]);
 });
 
 // openclaw/packages/gateway-protocol/src/schema/human-mentions.ts
-var cde, ude, aV, Ao, hR, sV, cV, iV, lde, uV, bbt, dde, xbt, pde, vbt, Ibt, lV, wbt, Sbt, dV = d(() => {
+var cde, ude, aV, Ao, hR, sV, cV, iV, lde, uV, bbt, dde, xbt, pde, vbt, Ibt, lV, wbt, Sbt, dV = p(() => {
   Cr();
   Zo();
   gR();
-  cde = 10, ude = 100, aV = 100, Ao = p.String({ minLength: 1, maxLength: 256 }), hR = p.String({ minLength: 1, maxLength: 256 }), sV = p.String({ minLength: 1, maxLength: 512 }), cV = p.String({ minLength: 1, maxLength: 2048 }), iV = p.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), lde = L({
+  cde = 10, ude = 100, aV = 100, Ao = d.String({ minLength: 1, maxLength: 256 }), hR = d.String({ minLength: 1, maxLength: 256 }), sV = d.String({ minLength: 1, maxLength: 512 }), cV = d.String({ minLength: 1, maxLength: 2048 }), iV = d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), lde = L({
     profileId: Ao,
-    start: p.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    end: p.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
-  }), uV = p.Array(lde, {
+    start: d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    end: d.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
+  }), uV = d.Array(lde, {
     maxItems: cde
-  }), bbt = p.Union([
+  }), bbt = d.Union([
     L({
       sessionKey: sV,
-      agentId: p.Optional(Ao),
-      query: p.Optional(p.String({ maxLength: 128 }))
+      agentId: d.Optional(Ao),
+      query: d.Optional(d.String({ maxLength: 128 }))
     }),
     L({
       agentId: Ao,
-      visibility: p.Optional(lb),
-      query: p.Optional(p.String({ maxLength: 128 }))
+      visibility: d.Optional(lb),
+      query: d.Optional(d.String({ maxLength: 128 }))
     })
   ]), dde = L({
     profileId: Ao,
     displayName: hR,
-    avatarUrl: p.Optional(cV),
-    online: p.Boolean()
+    avatarUrl: d.Optional(cV),
+    online: d.Boolean()
   }), xbt = L({
-    users: p.Array(dde, { maxItems: ude }),
-    truncated: p.Boolean()
+    users: d.Array(dde, { maxItems: ude }),
+    truncated: d.Boolean()
   }), pde = L({
     id: Ao,
     senderProfileId: Ao,
     senderLabel: hR,
-    senderAvatarUrl: p.Optional(cV),
+    senderAvatarUrl: d.Optional(cV),
     sessionKey: sV,
     agentId: Ao,
     sessionTitle: hR,
     messageId: Ao,
     createdAt: iV,
     expiresAt: iV,
-    excerpt: p.Optional(p.String({ maxLength: 280 }))
+    excerpt: d.Optional(d.String({ maxLength: 280 }))
   }), vbt = L({}), Ibt = L({
-    ids: p.Array(Ao, {
+    ids: d.Array(Ao, {
       maxItems: aV,
       uniqueItems: !0
     })
   }), lV = {
     gatewayInstanceId: Ao,
-    revision: p.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
+    revision: d.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
   }, wbt = L({
     ...lV,
-    items: p.Array(pde, { maxItems: aV })
+    items: d.Array(pde, { maxItems: aV })
   }), Sbt = L(lV);
 });
 
 // openclaw/packages/gateway-protocol/src/schema/session-classification.ts
-var pV, mV, fV = d(() => {
+var pV, mV, fV = p(() => {
   ja();
-  pV = N, mV = N;
+  pV = M, mV = M;
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-activity-summary.ts
-var yR, Abt, $bt, gV = d(() => {
+var yR, Abt, $bt, gV = p(() => {
   Cr();
   Zo();
   ja();
   yR = L({
     /** Caller-specific participation permission; operator.write is required separately. */
-    canEnsure: p.Optional(p.Boolean()),
-    text: p.Optional(p.String({ maxLength: 900 })),
-    updatedAt: p.Optional(p.Integer({ minimum: 0 })),
-    state: p.Union([
-      p.Literal("current"),
-      p.Literal("stale"),
-      p.Literal("updating"),
-      p.Literal("unavailable")
+    canEnsure: d.Optional(d.Boolean()),
+    text: d.Optional(d.String({ maxLength: 900 })),
+    updatedAt: d.Optional(d.Integer({ minimum: 0 })),
+    state: d.Union([
+      d.Literal("current"),
+      d.Literal("stale"),
+      d.Literal("updating"),
+      d.Literal("unavailable")
     ])
   }), Abt = L({
-    sessions: p.Array(
-      L({ key: N, agentId: p.Optional(N) }),
+    sessions: d.Array(
+      L({ key: M, agentId: d.Optional(M) }),
       {
         minItems: 1,
         maxItems: 20
       }
     )
   }), $bt = L({
-    sessions: p.Array(
+    sessions: d.Array(
       L({
-        key: N,
-        agentId: N,
+        key: M,
+        agentId: M,
         activitySummary: yR
       }),
       { maxItems: 20 }
@@ -13682,53 +13682,53 @@ var yR, Abt, $bt, gV = d(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/session-communication.ts
-var db, hV = d(() => {
+var db, hV = p(() => {
   db = ["always", "ask", "never"];
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-communication.ts
-var Xc, yV, bV, Ubt, xV = d(() => {
+var Xc, yV, bV, Ubt, xV = p(() => {
   Cr();
   hV();
   Zo();
-  Xc = p.Union([
-    p.Literal(db[0]),
-    p.Literal(db[1]),
-    p.Literal(db[2])
+  Xc = d.Union([
+    d.Literal(db[0]),
+    d.Literal(db[1]),
+    d.Literal(db[2])
   ]), yV = L({
-    send: p.Optional(Xc),
-    receive: p.Optional(Xc)
+    send: d.Optional(Xc),
+    receive: d.Optional(Xc)
   }), bV = L({
     send: Xc,
     receive: Xc
   }), Ubt = L({
-    send: p.Optional(p.Union([Xc, p.Null()])),
-    receive: p.Optional(p.Union([Xc, p.Null()]))
+    send: d.Optional(d.Union([Xc, d.Null()])),
+    receive: d.Optional(d.Union([Xc, d.Null()]))
   });
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-provider-review.ts
-var vV, Bbt, IV = d(() => {
+var vV, Bbt, IV = p(() => {
   Cr();
   Zo();
   ja();
   vV = L({
-    id: N,
-    runId: N,
-    explanation: p.Optional(p.String({ maxLength: 65536 })),
-    continuationMessage: p.Optional(p.String({ maxLength: 1024 })),
-    canContinue: p.Boolean()
+    id: M,
+    runId: M,
+    explanation: d.Optional(d.String({ maxLength: 65536 })),
+    continuationMessage: d.Optional(d.String({ maxLength: 1024 })),
+    canContinue: d.Boolean()
   }), Bbt = L({
-    sessionKey: N,
-    agentId: p.Optional(N),
-    sessionId: N,
-    reviewId: N,
-    idempotencyKey: p.String({ minLength: 1, maxLength: 128 })
+    sessionKey: M,
+    agentId: d.Optional(M),
+    sessionId: M,
+    reviewId: M,
+    idempotencyKey: d.String({ minLength: 1, maxLength: 128 })
   });
 });
 
 // openclaw/packages/gateway-protocol/src/schema/sessions-row.ts
-var mde, bR, fde, gde, hde, xR, pb, yde, bde, xde, vde, Qbt, wV = d(() => {
+var mde, bR, fde, gde, hde, xR, pb, yde, bde, xde, vde, Qbt, wV = p(() => {
   Cr();
   Zo();
   ja();
@@ -13739,286 +13739,290 @@ var mde, bR, fde, gde, hde, xR, pb, yde, bde, xde, vde, Qbt, wV = d(() => {
   IV();
   gR();
   mde = L({
-    deviceId: N,
-    path: p.String({ minLength: 1, maxLength: 4096 })
-  }), bR = p.Union([
-    p.Literal("read-only"),
-    p.Literal("guarded"),
-    p.Literal("workspace"),
-    p.Literal("full")
+    deviceId: M,
+    path: d.String({ minLength: 1, maxLength: 4096 })
+  }), bR = d.Union([
+    d.Literal("read-only"),
+    d.Literal("guarded"),
+    d.Literal("workspace"),
+    d.Literal("full")
   ]), fde = L({
-    url: p.String({ minLength: 1, maxLength: 2048 }),
-    ref: p.Optional(p.String({ minLength: 1, maxLength: 1024 }))
-  }), gde = p.Union([
-    p.Literal("queued"),
-    p.Literal("running"),
-    p.Literal("done"),
-    p.Literal("failed"),
-    p.Literal("interrupted"),
-    p.Literal("killed"),
-    p.Literal("timeout")
-  ]), hde = p.Union([
-    p.Literal("manual"),
-    p.Literal("active-session-cap"),
-    p.Literal("age-retention"),
-    p.Literal("stale-dashboard"),
-    p.Literal("restart-recovery")
+    url: d.String({ minLength: 1, maxLength: 2048 }),
+    ref: d.Optional(d.String({ minLength: 1, maxLength: 1024 }))
+  }), gde = d.Union([
+    d.Literal("queued"),
+    d.Literal("running"),
+    d.Literal("done"),
+    d.Literal("failed"),
+    d.Literal("interrupted"),
+    d.Literal("killed"),
+    d.Literal("timeout")
+  ]), hde = d.Union([
+    d.Literal("manual"),
+    d.Literal("active-session-cap"),
+    d.Literal("age-retention"),
+    d.Literal("stale-dashboard"),
+    d.Literal("restart-recovery")
   ]), xR = L({
-    mcpServers: p.Optional(p.Record(p.String({ minLength: 1 }), p.Boolean())),
-    mcpToolsDeny: p.Optional(
-      p.Record(p.String({ minLength: 1 }), p.Array(N))
+    mcpServers: d.Optional(d.Record(d.String({ minLength: 1 }), d.Boolean())),
+    mcpToolsDeny: d.Optional(
+      d.Record(d.String({ minLength: 1 }), d.Array(M))
     ),
-    skills: p.Optional(p.Record(p.String({ minLength: 1 }), p.Boolean())),
-    webSearch: p.Optional(p.Boolean())
+    skills: d.Optional(d.Record(d.String({ minLength: 1 }), d.Boolean())),
+    webSearch: d.Optional(d.Boolean())
   }), pb = L({
-    type: p.Union([p.Literal("human"), p.Literal("agent"), p.Literal("system")]),
-    id: p.Optional(N),
-    label: p.Optional(N),
+    type: d.Union([d.Literal("human"), d.Literal("agent"), d.Literal("system")]),
+    id: d.Optional(M),
+    label: d.Optional(M),
     /** Durable profile avatar route; absent for actors without a stored profile avatar. */
-    avatarUrl: p.Optional(N),
+    avatarUrl: d.Optional(M),
     /** Display identity is separate from the actor fields used by ownership policy. */
-    identity: p.Optional(kS)
+    identity: d.Optional(kS)
   }), yde = L({
     actor: pb,
-    assignedBy: p.Optional(pb),
-    assignedAt: p.Optional(p.Number({ minimum: 0 }))
+    assignedBy: d.Optional(pb),
+    assignedAt: d.Optional(d.Number({ minimum: 0 }))
   }), bde = L({
-    groups: p.Array(
+    groups: d.Array(
       L({
-        groupId: N,
-        createdAt: p.Number({ minimum: 0 }),
-        children: p.Optional(
-          p.Array(
+        groupId: M,
+        createdAt: d.Number({ minimum: 0 }),
+        children: d.Optional(
+          d.Array(
             L({
-              sessionKey: N,
-              status: p.Union([
-                p.Literal("queued"),
-                p.Literal("running"),
-                p.Literal("done"),
-                p.Literal("failed")
+              sessionKey: M,
+              status: d.Union([
+                d.Literal("queued"),
+                d.Literal("running"),
+                d.Literal("done"),
+                d.Literal("failed")
               ])
             }),
             { maxItems: 64 }
           )
         ),
-        queued: p.Integer({ minimum: 0 }),
-        running: p.Integer({ minimum: 0 }),
-        done: p.Integer({ minimum: 0 }),
-        failed: p.Integer({ minimum: 0 })
+        queued: d.Integer({ minimum: 0 }),
+        running: d.Integer({ minimum: 0 }),
+        done: d.Integer({ minimum: 0 }),
+        failed: d.Integer({ minimum: 0 })
       }),
       { maxItems: 5 }
     ),
-    otherActiveGroups: p.Integer({ minimum: 0 })
-  }), xde = p.Object(
+    otherActiveGroups: d.Integer({ minimum: 0 })
+  }), xde = d.Object(
     {
-      key: p.String(),
+      key: d.String(),
       /** Fields outside the requested projection must not clear a client's full-row cache. */
-      rowMode: p.Optional(
-        p.Union([p.Literal("compact"), p.Literal("dashboard"), p.Literal("sidebar")])
+      rowMode: d.Optional(
+        d.Union([d.Literal("compact"), d.Literal("dashboard"), d.Literal("sidebar")])
       ),
       /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
-      sharedFacts: p.Optional(p.Array(p.Integer({ minimum: 0 }))),
-      sessionId: p.Optional(p.String()),
+      sharedFacts: d.Optional(d.Array(d.Integer({ minimum: 0 }))),
+      sessionId: d.Optional(d.String()),
       /** Incarnation revision for invalidating session-scoped client caches after resets. */
-      lifecycleRevision: p.Optional(N),
+      lifecycleRevision: d.Optional(M),
       /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
-      sessionModelRevision: p.Optional(N),
-      incognito: p.Optional(p.Literal(!0)),
-      kind: p.Union([
-        p.Literal("direct"),
-        p.Literal("group"),
-        p.Literal("global"),
-        p.Literal("unknown")
+      sessionModelRevision: d.Optional(M),
+      incognito: d.Optional(d.Literal(!0)),
+      kind: d.Union([
+        d.Literal("direct"),
+        d.Literal("group"),
+        d.Literal("global"),
+        d.Literal("unknown")
       ]),
-      label: p.Optional(p.String()),
-      autoLabel: p.Optional(p.String()),
-      icon: p.Optional(p.String()),
+      label: d.Optional(d.String()),
+      autoLabel: d.Optional(d.String()),
+      icon: d.Optional(d.String()),
       /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
-      color: p.Optional(p.String()),
-      channelAvatarUrl: p.Optional(N),
-      boardFace: p.Optional(p.Union([p.Literal("chat"), p.Literal("dashboard")])),
+      color: d.Optional(d.String()),
+      channelAvatarUrl: d.Optional(M),
+      boardFace: d.Optional(d.Union([d.Literal("chat"), d.Literal("dashboard")])),
       /** Prepared dashboard membership fact shared by list and change-event rows. */
-      hasBoard: p.Optional(p.Boolean()),
+      hasBoard: d.Optional(d.Boolean()),
       /** Shared dashboard default; absent means split. */
-      boardPresentation: p.Optional(p.Union([p.Literal("split"), p.Literal("expanded")])),
-      displayName: p.Optional(p.String()),
-      derivedTitle: p.Optional(p.String()),
-      lastMessagePreview: p.Optional(p.String()),
-      channel: p.Optional(p.String()),
+      boardPresentation: d.Optional(d.Union([d.Literal("split"), d.Literal("expanded")])),
+      displayName: d.Optional(d.String()),
+      /** A title request is currently in flight; runtime-only, never persisted. */
+      titlePending: d.Optional(d.Boolean()),
+      derivedTitle: d.Optional(d.String()),
+      lastMessagePreview: d.Optional(d.String()),
+      channel: d.Optional(d.String()),
       /** Stable non-sensitive facts derived from the canonical session route. */
-      classification: p.Optional(pV),
-      agentId: p.Optional(N),
-      accountId: p.Optional(N),
-      peerKind: p.Optional(mV),
-      isMain: p.Optional(p.Boolean()),
-      isBackground: p.Optional(p.Boolean()),
+      classification: d.Optional(pV),
+      agentId: d.Optional(M),
+      accountId: d.Optional(M),
+      peerKind: d.Optional(mV),
+      isMain: d.Optional(d.Boolean()),
+      isBackground: d.Optional(d.Boolean()),
       /** Conversation owned by a plugin dock rather than ordinary session discovery. */
-      isDock: p.Optional(p.Boolean()),
-      chatType: p.Optional(
-        p.Union([p.Literal("direct"), p.Literal("group"), p.Literal("channel")])
+      isDock: d.Optional(d.Boolean()),
+      chatType: d.Optional(
+        d.Union([d.Literal("direct"), d.Literal("group"), d.Literal("channel")])
       ),
-      activitySummary: p.Optional(yR),
-      updatedAt: p.Optional(p.Union([p.Number(), p.Null()])),
+      activitySummary: d.Optional(yR),
+      updatedAt: d.Optional(d.Union([d.Number(), d.Null()])),
       /** Gateway sampling time, retained when a read reuses a cached projection. */
-      snapshotAt: p.Optional(p.Number()),
+      snapshotAt: d.Optional(d.Number()),
       /** Connection-scoped presentation identity on full event ancestor rows. */
-      ancestorRevision: p.Optional(N),
+      ancestorRevision: d.Optional(M),
       /** Personal list preference for the authenticated viewer; not session visibility. */
-      hiddenFromInvolvingMe: p.Optional(p.Boolean()),
-      archived: p.Optional(p.Boolean()),
-      archivedAt: p.Optional(p.Number()),
-      archivedBy: p.Optional(pb),
-      archiveReason: p.Optional(hde),
-      pinned: p.Optional(p.Boolean()),
-      sidebarRoot: p.Optional(p.Boolean()),
-      pinnedAt: p.Optional(p.Number()),
-      snoozedUntil: p.Optional(p.Number()),
-      snoozedAt: p.Optional(p.Number()),
-      unread: p.Optional(p.Boolean()),
-      lastReadAt: p.Optional(p.Number()),
-      markedUnreadAt: p.Optional(p.Number()),
-      lastActivityAt: p.Optional(p.Number()),
-      lastInteractionAt: p.Optional(p.Number()),
-      status: p.Optional(gde),
-      lastRunError: p.Optional(p.String()),
-      providerReview: p.Optional(vV),
+      hiddenFromInvolvingMe: d.Optional(d.Boolean()),
+      archived: d.Optional(d.Boolean()),
+      archivedAt: d.Optional(d.Number()),
+      archivedBy: d.Optional(pb),
+      archiveReason: d.Optional(hde),
+      pinned: d.Optional(d.Boolean()),
+      sidebarRoot: d.Optional(d.Boolean()),
+      pinnedAt: d.Optional(d.Number()),
+      snoozedUntil: d.Optional(d.Number()),
+      snoozedAt: d.Optional(d.Number()),
+      unread: d.Optional(d.Boolean()),
+      lastReadAt: d.Optional(d.Number()),
+      markedUnreadAt: d.Optional(d.Number()),
+      lastActivityAt: d.Optional(d.Number()),
+      lastInteractionAt: d.Optional(d.Number()),
+      status: d.Optional(gde),
+      lastRunError: d.Optional(d.String()),
+      suppressErrorNotice: d.Optional(d.Boolean()),
+      providerReview: d.Optional(vV),
       /** Exact run that produced the latest terminal lifecycle projection. */
-      lastRunId: p.Optional(N),
-      restartRecoveryStatus: p.Optional(p.Literal("tombstoned")),
-      activeLeafEntryId: p.Optional(p.Union([N, p.Null()])),
-      spawnedBy: p.Optional(p.String()),
-      parentSessionKey: p.Optional(p.String()),
-      parentSessionId: p.Optional(p.String()),
-      controlOwnerSessionKey: p.Optional(p.String()),
+      lastRunId: d.Optional(M),
+      restartRecoveryStatus: d.Optional(d.Literal("tombstoned")),
+      restartRecoveryCycleId: d.Optional(M),
+      activeLeafEntryId: d.Optional(d.Union([M, d.Null()])),
+      spawnedBy: d.Optional(d.String()),
+      parentSessionKey: d.Optional(d.String()),
+      parentSessionId: d.Optional(d.String()),
+      controlOwnerSessionKey: d.Optional(d.String()),
       /** Retained owners used by spawnedBy filtering at snapshotAt; empty retires child membership. */
-      childOwnerSessionKeys: p.Optional(p.Array(N, { maxItems: 2 })),
-      childSessions: p.Optional(p.Array(p.String())),
-      forkedFromParent: p.Optional(p.Boolean()),
-      spawnDepth: p.Optional(p.Number()),
-      subagentRole: p.Optional(p.Union([p.Literal("orchestrator"), p.Literal("leaf")])),
-      subagentControlScope: p.Optional(
-        p.Union([p.Literal("children"), p.Literal("none")])
+      childOwnerSessionKeys: d.Optional(d.Array(M, { maxItems: 2 })),
+      childSessions: d.Optional(d.Array(d.String())),
+      forkedFromParent: d.Optional(d.Boolean()),
+      spawnDepth: d.Optional(d.Number()),
+      subagentRole: d.Optional(d.Union([d.Literal("orchestrator"), d.Literal("leaf")])),
+      subagentControlScope: d.Optional(
+        d.Union([d.Literal("children"), d.Literal("none")])
       ),
-      swarmGroupId: p.Optional(p.String()),
+      swarmGroupId: d.Optional(d.String()),
       /** Requester-owned execution counts; never child content or parent synthesis status. */
-      swarm: p.Optional(bde),
-      deviceFolder: p.Optional(mde),
-      worktree: p.Optional(
-        p.Object({
-          id: p.String(),
-          branch: p.String(),
-          repoRoot: p.String()
+      swarm: d.Optional(bde),
+      deviceFolder: d.Optional(mde),
+      worktree: d.Optional(
+        d.Object({
+          id: d.String(),
+          branch: d.String(),
+          repoRoot: d.String()
         })
       ),
-      repositoryWorkspaceId: p.Optional(N),
-      repository: p.Optional(
+      repositoryWorkspaceId: d.Optional(M),
+      repository: d.Optional(
         L({
           ...fde.properties,
-          branch: N
+          branch: M
         })
       ),
-      execNode: p.Optional(p.String()),
-      execCwd: p.Optional(p.String()),
-      spawnedWorkspaceDir: p.Optional(p.String()),
-      spawnedCwd: p.Optional(p.String()),
+      execNode: d.Optional(d.String()),
+      execCwd: d.Optional(d.String()),
+      spawnedWorkspaceDir: d.Optional(d.String()),
+      spawnedCwd: d.Optional(d.String()),
       /** Persisted project registry association, distinct from a cloud repository workspace. */
-      projectId: p.Optional(p.String()),
+      projectId: d.Optional(d.String()),
       /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
-      workspaceDir: p.Optional(p.String()),
-      permissionMode: p.Optional(bR),
-      communication: p.Optional(yV),
-      effectiveCommunication: p.Optional(bV),
+      workspaceDir: d.Optional(d.String()),
+      permissionMode: d.Optional(bR),
+      communication: d.Optional(yV),
+      effectiveCommunication: d.Optional(bV),
       /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
-      sandboxMode: p.Optional(p.Literal("off")),
+      sandboxMode: d.Optional(d.Literal("off")),
       /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
-      nativeRuntimeConsent: p.Optional(N),
-      permissionModePending: p.Optional(p.Boolean()),
-      sessionRoot: p.Optional(p.String()),
-      createdVia: p.Optional(
-        p.Union([
-          p.Literal("operator"),
-          p.Literal("spawn"),
-          p.Literal("channel"),
-          p.Literal("cron"),
-          p.Literal("talk"),
-          p.Literal("run"),
-          p.Literal("plugin"),
-          p.Literal("internal")
+      nativeRuntimeConsent: d.Optional(M),
+      permissionModePending: d.Optional(d.Boolean()),
+      sessionRoot: d.Optional(d.String()),
+      createdVia: d.Optional(
+        d.Union([
+          d.Literal("operator"),
+          d.Literal("spawn"),
+          d.Literal("channel"),
+          d.Literal("cron"),
+          d.Literal("talk"),
+          d.Literal("run"),
+          d.Literal("plugin"),
+          d.Literal("internal")
         ])
       ),
       /** Immutable presentation surface; independent of creation provenance. */
-      createdSurface: p.Optional(p.Literal("plugin-dock")),
-      createdActor: p.Optional(pb),
-      owner: p.Optional(yde),
-      participants: p.Optional(
-        p.Array(_S, { maxItems: VG })
+      createdSurface: d.Optional(d.Literal("plugin-dock")),
+      createdActor: d.Optional(pb),
+      owner: d.Optional(yde),
+      participants: d.Optional(
+        d.Array(_S, { maxItems: VG })
       ),
-      expandedParticipants: p.Optional(
-        p.Array(_S, { maxItems: WG })
+      expandedParticipants: d.Optional(
+        d.Array(_S, { maxItems: WG })
       ),
-      participantCount: p.Optional(p.Integer({ minimum: 0 })),
-      visibility: p.Optional(lb),
-      sharingRole: p.Optional(oV),
+      participantCount: d.Optional(d.Integer({ minimum: 0 })),
+      visibility: d.Optional(lb),
+      sharingRole: d.Optional(oV),
       /** Recipient-local send admission; null explicitly clears a previous restriction. */
-      sendDisabledReason: p.Optional(p.Union([N, p.Null()])),
-      createdAt: p.Optional(p.Number()),
-      forkSource: p.Optional(
-        p.Object({
-          sessionKey: p.String(),
-          sessionId: p.String(),
-          entryId: p.Optional(p.String())
+      sendDisabledReason: d.Optional(d.Union([M, d.Null()])),
+      createdAt: d.Optional(d.Number()),
+      forkSource: d.Optional(
+        d.Object({
+          sessionKey: d.String(),
+          sessionId: d.String(),
+          entryId: d.Optional(d.String())
         })
       ),
-      previousSessionId: p.Optional(p.String()),
-      inputTokens: p.Optional(p.Number()),
-      outputTokens: p.Optional(p.Number()),
-      usageReport: p.Optional(
-        p.Object({ state: p.Union([p.Literal("available"), p.Literal("unavailable")]) })
+      previousSessionId: d.Optional(d.String()),
+      inputTokens: d.Optional(d.Number()),
+      outputTokens: d.Optional(d.Number()),
+      usageReport: d.Optional(
+        d.Object({ state: d.Union([d.Literal("available"), d.Literal("unavailable")]) })
       ),
-      totalTokens: p.Optional(p.Number()),
-      totalTokensFresh: p.Optional(p.Boolean()),
-      contextTokens: p.Optional(p.Number()),
-      estimatedCostUsd: p.Optional(p.Number()),
-      model: p.Optional(p.String()),
-      modelProvider: p.Optional(p.String()),
+      totalTokens: d.Optional(d.Number()),
+      totalTokensFresh: d.Optional(d.Boolean()),
+      contextTokens: d.Optional(d.Number()),
+      estimatedCostUsd: d.Optional(d.Number()),
+      model: d.Optional(d.String()),
+      modelProvider: d.Optional(d.String()),
       /** Runtime model serving this session while it differs from the selected model. */
-      activeModel: p.Optional(p.String()),
-      activeModelProvider: p.Optional(p.String()),
+      activeModel: d.Optional(d.String()),
+      activeModelProvider: d.Optional(d.String()),
       /** Effective override provenance; null means configured default, omission means not projected. */
-      modelOverrideSource: p.Optional(
-        p.Union([
-          p.Literal("user"),
-          p.Literal("auto"),
-          p.Literal("inherited"),
-          p.Null()
+      modelOverrideSource: d.Optional(
+        d.Union([
+          d.Literal("user"),
+          d.Literal("auto"),
+          d.Literal("inherited"),
+          d.Null()
         ])
       ),
-      toolOverrides: p.Optional(xR)
+      toolOverrides: d.Optional(xR)
     },
     { additionalProperties: !0 }
   ), vde = L({
-    key: N,
-    sessionId: p.Optional(p.String()),
-    agentId: p.Optional(N),
-    revision: N,
-    snapshotAt: p.Number()
+    key: M,
+    sessionId: d.Optional(d.String()),
+    agentId: d.Optional(M),
+    revision: M,
+    snapshotAt: d.Number()
   }), Qbt = L({
-    ancestorSessions: p.Array(xde, { maxItems: 64 }),
-    ancestorSessionRefs: p.Optional(p.Array(vde, { maxItems: 64 }))
+    ancestorSessions: d.Array(xde, { maxItems: 64 }),
+    ancestorSessionRefs: d.Optional(d.Array(vde, { maxItems: 64 }))
   });
 });
 
 // openclaw/packages/gateway-protocol/src/schema/string-literal-union.ts
-function qi(e, t) {
-  let n = e.map((o) => p.Literal(o));
-  return p.Union(n, t);
+function ni(e, t) {
+  let n = e.map((o) => d.Literal(o));
+  return d.Union(n, t);
 }
-var SV = d(() => {
+var SV = p(() => {
   Cr();
 });
 
 // openclaw/packages/gateway-protocol/src/schema/logs-chat.ts
-var fxt, gxt, mb, hxt, Ide, wde, Sde, vR, kde, _de, Ede, yxt, bxt, xxt, vxt, Ixt, wxt, Sxt, kxt, Tde, Cde, Rde, Ade, $de, Pde, _xt, Ext, Txt, Gd, Ode, Dde, Mde, Nde, Ude, Lde, Fde, Qc, zde, jde, Cxt, _V = d(() => {
+var fxt, gxt, mb, hxt, Ide, wde, Sde, vR, kde, _de, Ede, yxt, bxt, xxt, vxt, Ixt, wxt, Sxt, kxt, Tde, Cde, Rde, Ade, $de, Pde, _xt, Ext, Txt, Gd, Ode, Dde, Mde, Nde, Ude, Lde, Fde, Qc, zde, jde, Cxt, _V = p(() => {
   Le();
   Ji();
   Cr();
@@ -14029,148 +14033,148 @@ var fxt, gxt, mb, hxt, Ide, wde, Sde, vR, kde, _de, Ede, yxt, bxt, xxt, vxt, Ixt
   wV();
   SV();
   fxt = L({
-    cursor: p.Optional(p.Integer({ minimum: 0 })),
-    limit: p.Optional(p.Integer({ minimum: 1, maximum: 5e3 })),
-    maxBytes: p.Optional(p.Integer({ minimum: 1, maximum: 1e6 }))
+    cursor: d.Optional(d.Integer({ minimum: 0 })),
+    limit: d.Optional(d.Integer({ minimum: 1, maximum: 5e3 })),
+    maxBytes: d.Optional(d.Integer({ minimum: 1, maximum: 1e6 }))
   }), gxt = L({
-    file: N,
-    cursor: p.Integer({ minimum: 0 }),
-    size: p.Integer({ minimum: 0 }),
-    lines: p.Array(p.String()),
-    truncated: p.Optional(p.Boolean()),
-    reset: p.Optional(p.Boolean()),
-    skippedBytes: p.Optional(p.Integer({ minimum: 0 }))
+    file: M,
+    cursor: d.Integer({ minimum: 0 }),
+    size: d.Integer({ minimum: 0 }),
+    lines: d.Array(d.String()),
+    truncated: d.Optional(d.Boolean()),
+    reset: d.Optional(d.Boolean()),
+    skippedBytes: d.Optional(d.Integer({ minimum: 0 }))
   }), mb = L({
-    sessionKey: N,
-    agentId: p.Optional(N),
-    cursor: p.Optional(p.String()),
-    limit: p.Optional(p.Integer({ minimum: 1, maximum: 1e3 })),
-    maxBytes: p.Optional(p.Integer({ minimum: 1024 })),
-    offset: p.Optional(p.Integer({ minimum: 0 })),
-    pendingBefore: p.Optional(p.Integer({ minimum: 1 })),
-    inputRunIds: p.Optional(
-      p.Array(p.String({ minLength: 1, maxLength: 256 }), {
+    sessionKey: M,
+    agentId: d.Optional(M),
+    cursor: d.Optional(d.String()),
+    limit: d.Optional(d.Integer({ minimum: 1, maximum: 1e3 })),
+    maxBytes: d.Optional(d.Integer({ minimum: 1024 })),
+    offset: d.Optional(d.Integer({ minimum: 0 })),
+    pendingBefore: d.Optional(d.Integer({ minimum: 1 })),
+    inputRunIds: d.Optional(
+      d.Array(d.String({ minLength: 1, maxLength: 256 }), {
         minItems: 1,
         maxItems: 50,
         uniqueItems: !0
       })
     ),
-    messageId: p.Optional(N),
-    sessionId: p.Optional(N),
-    maxChars: p.Optional(p.Integer({ minimum: 1, maximum: 5e5 })),
-    toolResultMaxChars: p.Optional(p.Integer({ minimum: 1, maximum: 5e5 }))
-  }), hxt = p.Union([
+    messageId: d.Optional(M),
+    sessionId: d.Optional(M),
+    maxChars: d.Optional(d.Integer({ minimum: 1, maximum: 5e5 })),
+    toolResultMaxChars: d.Optional(d.Integer({ minimum: 1, maximum: 5e5 }))
+  }), hxt = d.Union([
     mb,
     L({
-      shortId: N,
-      slugHint: p.Optional(N),
-      agentId: N,
+      shortId: M,
+      slugHint: d.Optional(M),
+      agentId: M,
       limit: mb.properties.limit,
       maxBytes: mb.properties.maxBytes,
       toolResultMaxChars: mb.properties.toolResultMaxChars
     })
   ]), Ide = L({
-    items: p.Array(
+    items: d.Array(
       L({
-        id: N,
-        runId: p.Optional(p.String({ minLength: 1, maxLength: 256 })),
-        message: p.Unknown(),
-        acceptedAt: p.Number(),
-        state: p.String({ enum: ["queued", "cancelled", "interrupted"] }),
-        queued: p.Optional(p.Literal(!0))
+        id: M,
+        runId: d.Optional(d.String({ minLength: 1, maxLength: 256 })),
+        message: d.Unknown(),
+        acceptedAt: d.Number(),
+        state: d.String({ enum: ["queued", "cancelled", "interrupted"] }),
+        queued: d.Optional(d.Literal(!0))
       }),
       { maxItems: 20 }
     ),
-    total: p.Integer({ minimum: 0 }),
-    queuedCount: p.Optional(p.Integer({ minimum: 0 })),
-    nextBefore: p.Optional(p.Integer({ minimum: 1 }))
-  }), wde = p.Array(
-    p.Union([
+    total: d.Integer({ minimum: 0 }),
+    queuedCount: d.Optional(d.Integer({ minimum: 0 })),
+    nextBefore: d.Optional(d.Integer({ minimum: 1 }))
+  }), wde = d.Array(
+    d.Union([
       L({
-        runId: p.String({ minLength: 1, maxLength: 256 }),
-        state: p.Literal("pending"),
-        queued: p.Optional(p.Literal(!0)),
-        cancelled: p.Optional(p.Literal(!0))
+        runId: d.String({ minLength: 1, maxLength: 256 }),
+        state: d.Literal("pending"),
+        queued: d.Optional(d.Literal(!0)),
+        cancelled: d.Optional(d.Literal(!0))
       }),
       L({
-        runId: p.String({ minLength: 1, maxLength: 256 }),
-        state: p.Literal("consumed"),
-        consumedByEventId: N
+        runId: d.String({ minLength: 1, maxLength: 256 }),
+        state: d.Literal("consumed"),
+        consumedByEventId: M
       })
     ]),
     { maxItems: 50 }
-  ), Sde = p.Array(
+  ), Sde = d.Array(
     L({
-      runId: p.String({ minLength: 1, maxLength: 256 }),
-      consumedByEventId: N
+      runId: d.String({ minLength: 1, maxLength: 256 }),
+      consumedByEventId: M
     }),
     { maxItems: 50 }
   ), vR = L({
-    itemId: N,
-    phase: qi(["start", "update", "end"]),
-    kind: p.String(),
-    title: p.String(),
-    status: p.Optional(
-      qi(["running", "completed", "failed", "blocked", "skipped"])
+    itemId: M,
+    phase: ni(["start", "update", "end"]),
+    kind: d.String(),
+    title: d.String(),
+    status: d.Optional(
+      ni(["running", "completed", "failed", "blocked", "skipped"])
     ),
-    name: p.Optional(p.String()),
-    meta: p.Optional(p.String()),
-    commandBearing: p.Optional(p.Boolean()),
-    toolCallId: p.Optional(p.String()),
+    name: d.Optional(d.String()),
+    meta: d.Optional(d.String()),
+    commandBearing: d.Optional(d.Boolean()),
+    toolCallId: d.Optional(d.String()),
     // The history page has no matching result; this is not a terminal receipt.
-    unpairedCall: p.Optional(p.Boolean()),
-    startedAt: p.Optional(p.Number()),
-    endedAt: p.Optional(p.Number()),
-    error: p.Optional(p.String()),
-    summary: p.Optional(p.String()),
-    progressText: p.Optional(p.String()),
-    suppressChannelProgress: p.Optional(p.Boolean()),
-    hideFromChannelProgress: p.Optional(p.Boolean()),
-    approvalId: p.Optional(p.String()),
-    approvalSlug: p.Optional(p.String())
+    unpairedCall: d.Optional(d.Boolean()),
+    startedAt: d.Optional(d.Number()),
+    endedAt: d.Optional(d.Number()),
+    error: d.Optional(d.String()),
+    summary: d.Optional(d.String()),
+    progressText: d.Optional(d.String()),
+    suppressChannelProgress: d.Optional(d.Boolean()),
+    hideFromChannelProgress: d.Optional(d.Boolean()),
+    approvalId: d.Optional(d.String()),
+    approvalSlug: d.Optional(d.String())
   }), kde = L({
-    messageId: N,
-    items: p.Array(vR)
+    messageId: M,
+    items: d.Array(vR)
   }), _de = L({
-    kind: p.Literal("delta"),
-    messages: p.Array(p.Unknown()),
-    activity: p.Optional(p.Array(kde)),
-    deltaCursor: p.String(),
-    sessionInfo: p.Unknown(),
-    agentsList: p.Optional(p.Unknown()),
-    inFlightRun: p.Optional(p.Unknown()),
-    metadata: p.Optional(p.Unknown()),
-    pendingInputs: p.Optional(Ide),
-    inputReceipts: p.Optional(wde),
-    inputConsumptions: p.Optional(Sde)
+    kind: d.Literal("delta"),
+    messages: d.Array(d.Unknown()),
+    activity: d.Optional(d.Array(kde)),
+    deltaCursor: d.String(),
+    sessionInfo: d.Unknown(),
+    agentsList: d.Optional(d.Unknown()),
+    inFlightRun: d.Optional(d.Unknown()),
+    metadata: d.Optional(d.Unknown()),
+    pendingInputs: d.Optional(Ide),
+    inputReceipts: d.Optional(wde),
+    inputConsumptions: d.Optional(Sde)
   }), Ede = L({
-    kind: p.Literal("reset")
-  }), yxt = p.Union([
+    kind: d.Literal("reset")
+  }), yxt = d.Union([
     _de,
     Ede
   ]), bxt = Object.assign(
     L({
-      agentId: p.Optional(N),
-      includeModels: p.Optional(
-        p.Boolean({
+      agentId: d.Optional(M),
+      includeModels: d.Optional(
+        d.Boolean({
           description: "Include model and account selection metadata (default true). Set false when reading models.list separately."
         })
       ),
-      ifRevision: p.Optional(
-        p.String({
+      ifRevision: d.Optional(
+        d.String({
           minLength: 1,
           description: "For includeModels:false, omit unchanged commands."
         })
       ),
-      authProfileId: p.Optional(
-        p.String({
+      authProfileId: d.Optional(
+        d.String({
           minLength: 1,
           maxLength: 256,
           description: "Preview your own saved model account for a new chat without changing defaults. Cannot be combined with sessionKey."
         })
       ),
-      sessionKey: p.Optional(
-        p.String({
+      sessionKey: d.Optional(
+        d.String({
           minLength: 1,
           description: "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata."
         })
@@ -14178,73 +14182,73 @@ var fxt, gxt, mb, hxt, Ide, wde, Sde, vR, kde, _de, Ede, yxt, bxt, xxt, vxt, Ixt
     }),
     { not: { required: ["sessionKey", "authProfileId"] } }
   ), xxt = L({
-    sessionKey: N,
-    runId: N
+    sessionKey: M,
+    runId: M
   }), vxt = L({
-    text: p.Union([p.String({ maxLength: 500 }), p.Null()])
+    text: d.Union([d.String({ maxLength: 500 }), d.Null()])
   }), Ixt = L({
-    sessionKey: N,
-    agentId: p.Optional(N),
-    items: p.Array(
+    sessionKey: M,
+    agentId: d.Optional(M),
+    items: d.Array(
       L({
-        id: p.String({ minLength: 1, maxLength: 64 }),
-        name: p.String({ minLength: 1, maxLength: 200 }),
-        input: p.String({ minLength: 1, maxLength: 4e3 })
+        id: d.String({ minLength: 1, maxLength: 64 }),
+        name: d.String({ minLength: 1, maxLength: 200 }),
+        input: d.String({ minLength: 1, maxLength: 4e3 })
       }),
       { minItems: 1, maxItems: 24 }
     )
   }), wxt = L({
-    titles: p.Record(p.String(), p.String()),
-    disabled: p.Optional(p.Boolean())
+    titles: d.Record(d.String(), d.String()),
+    disabled: d.Optional(d.Boolean())
   }), Sxt = L({
-    sessionKey: N,
-    agentId: p.Optional(N),
-    sessionId: p.Optional(N),
-    messageId: N,
-    maxChars: p.Optional(p.Integer({ minimum: 1, maximum: 8e6 }))
+    sessionKey: M,
+    agentId: d.Optional(M),
+    sessionId: d.Optional(M),
+    messageId: M,
+    maxChars: d.Optional(d.Integer({ minimum: 1, maximum: 8e6 }))
   }), kxt = L({
-    ok: p.Boolean(),
-    message: p.Optional(p.Unknown()),
-    unavailableReason: p.Optional(qi(["not_found", "oversized", "not_visible"]))
-  }), Tde = p.Object(
+    ok: d.Boolean(),
+    message: d.Optional(d.Unknown()),
+    unavailableReason: d.Optional(ni(["not_found", "oversized", "not_visible"]))
+  }), Tde = d.Object(
     {
-      type: p.Optional(p.String()),
-      mimeType: p.Optional(p.String()),
-      fileName: p.Optional(p.String()),
-      origin: p.Optional(qi(["paste", "file"])),
+      type: d.Optional(d.String()),
+      mimeType: d.Optional(d.String()),
+      fileName: d.Optional(d.String()),
+      origin: d.Optional(ni(["paste", "file"])),
       // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
-      content: p.Optional(p.Unknown()),
-      sizeBytes: p.Optional(p.Number()),
-      durationMs: p.Optional(p.Number()),
-      width: p.Optional(p.Number()),
-      height: p.Optional(p.Number())
+      content: d.Optional(d.Unknown()),
+      sizeBytes: d.Optional(d.Number()),
+      durationMs: d.Optional(d.Number()),
+      width: d.Optional(d.Number()),
+      height: d.Optional(d.Number())
     },
     { additionalProperties: !0 }
-  ), Cde = p.Array(Tde), Rde = p.Record(
-    p.String({ minLength: 1, maxLength: 128 }),
-    p.Unknown(),
+  ), Cde = d.Array(Tde), Rde = d.Record(
+    d.String({ minLength: 1, maxLength: 128 }),
+    d.Unknown(),
     { maxProperties: 16 }
   ), Ade = ["steer", "followup", "collect", "interrupt"], $de = L({
-    kind: p.Literal("session-goal-start"),
-    version: p.Literal(1),
-    issuedAtMs: p.Integer({ minimum: 0 })
+    kind: d.Literal("session-goal-start"),
+    version: d.Literal(1),
+    issuedAtMs: d.Integer({ minimum: 0 })
   }), Pde = L({
-    page: p.String({ minLength: 1, maxLength: Jo.page }),
-    title: p.Optional(p.String({ maxLength: Jo.title })),
-    sessionKey: p.Optional(p.String({ maxLength: Jo.sessionKey })),
-    sessionId: p.Optional(p.String({ maxLength: Jo.sessionId })),
-    agentId: p.Optional(p.String({ maxLength: Jo.agentId })),
-    workspace: p.Optional(p.String({ maxLength: Jo.workspace })),
-    file: p.Optional(p.String({ maxLength: Jo.file })),
-    selection: p.Optional(p.String({ maxLength: Jo.selection })),
-    detail: p.Optional(
-      p.Record(
+    page: d.String({ minLength: 1, maxLength: Jo.page }),
+    title: d.Optional(d.String({ maxLength: Jo.title })),
+    sessionKey: d.Optional(d.String({ maxLength: Jo.sessionKey })),
+    sessionId: d.Optional(d.String({ maxLength: Jo.sessionId })),
+    agentId: d.Optional(d.String({ maxLength: Jo.agentId })),
+    workspace: d.Optional(d.String({ maxLength: Jo.workspace })),
+    file: d.Optional(d.String({ maxLength: Jo.file })),
+    selection: d.Optional(d.String({ maxLength: Jo.selection })),
+    detail: d.Optional(
+      d.Record(
         // TypeBox's default key pattern skips newlines; every field must validate its value.
-        p.String({ pattern: "^[\\s\\S]*$" }),
-        p.String({ maxLength: Vg.value }),
+        d.String({ pattern: "^[\\s\\S]*$" }),
+        d.String({ maxLength: Vg.value }),
         {
           maxProperties: Vg.fields,
-          propertyNames: p.String({
+          propertyNames: d.String({
             minLength: 1,
             maxLength: Vg.key
           })
@@ -14253,67 +14257,67 @@ var fxt, gxt, mb, hxt, Ide, wde, Sde, vR, kde, _de, Ede, yxt, bxt, xxt, vxt, Ixt
     )
   }), _xt = L({
     sessionKey: KG,
-    agentId: p.Optional(N),
-    sessionId: p.Optional(N),
-    message: p.String(),
-    mentions: p.Optional(uV),
-    workContext: p.Optional(Pde),
-    intent: p.Optional($de),
-    thinking: p.Optional(p.String()),
-    fastMode: p.Optional(
-      p.Union([p.Boolean(), p.Literal("auto"), p.Literal("ultrafast")])
+    agentId: d.Optional(M),
+    sessionId: d.Optional(M),
+    message: d.String(),
+    mentions: d.Optional(uV),
+    workContext: d.Optional(Pde),
+    intent: d.Optional($de),
+    thinking: d.Optional(d.String()),
+    fastMode: d.Optional(
+      d.Union([d.Boolean(), d.Literal("auto"), d.Literal("ultrafast")])
     ),
     // One-turn override for auto fast-mode cutoff seconds.
-    fastAutoOnSeconds: p.Optional(p.Integer({ minimum: 1 })),
+    fastAutoOnSeconds: d.Optional(d.Integer({ minimum: 1 })),
     // One-turn override for active-run queue admission.
-    queueMode: p.Optional(p.String({ enum: [...Ade] })),
-    deliver: p.Optional(p.Boolean()),
-    originatingChannel: p.Optional(p.String()),
-    originatingTo: p.Optional(p.String()),
-    originatingAccountId: p.Optional(p.String()),
-    originatingThreadId: p.Optional(p.String()),
+    queueMode: d.Optional(d.String({ enum: [...Ade] })),
+    deliver: d.Optional(d.Boolean()),
+    originatingChannel: d.Optional(d.String()),
+    originatingTo: d.Optional(d.String()),
+    originatingAccountId: d.Optional(d.String()),
+    originatingThreadId: d.Optional(d.String()),
     // Transcript id of the message this send replies to; the Gateway hydrates
     // channel-agnostic reply context metadata from session history.
-    replyToId: p.Optional(N),
-    attachments: p.Optional(Cde),
-    toolBindings: p.Optional(Rde),
-    timeoutMs: p.Optional(p.Integer({ minimum: 0 })),
-    systemInputProvenance: p.Optional(HG),
-    systemProvenanceReceipt: p.Optional(p.String()),
-    suppressCommandInterpretation: p.Optional(p.Boolean()),
+    replyToId: d.Optional(M),
+    attachments: d.Optional(Cde),
+    toolBindings: d.Optional(Rde),
+    timeoutMs: d.Optional(d.Integer({ minimum: 0 })),
+    systemInputProvenance: d.Optional(HG),
+    systemProvenanceReceipt: d.Optional(d.String()),
+    suppressCommandInterpretation: d.Optional(d.Boolean()),
     // Transcript-branch CAS for non-steer interactive sends: the client's displayed
     // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
     // the Gateway steers the session's direct run or starts a turn when idle.
-    expectedLeafEntryId: p.Optional(p.Union([N, p.Null()])),
-    expectedSessionRoutingContract: p.Optional(N),
-    expectedPermissionMode: p.Optional(p.Union([bR, p.Null()])),
-    expectedToolOverrides: p.Optional(p.Union([xR, p.Null()])),
-    idempotencyKey: N
+    expectedLeafEntryId: d.Optional(d.Union([M, d.Null()])),
+    expectedSessionRoutingContract: d.Optional(M),
+    expectedPermissionMode: d.Optional(d.Union([bR, d.Null()])),
+    expectedToolOverrides: d.Optional(d.Union([xR, d.Null()])),
+    idempotencyKey: M
   }), Ext = L({
-    sessionKey: N,
-    agentId: p.Optional(N),
-    runId: p.Optional(N),
-    preserveSideRuns: p.Optional(p.Boolean()),
-    discardPendingInput: p.Optional(p.Boolean())
+    sessionKey: M,
+    agentId: d.Optional(M),
+    runId: d.Optional(M),
+    preserveSideRuns: d.Optional(d.Boolean()),
+    discardPendingInput: d.Optional(d.Boolean())
   }), Txt = L({
-    sessionKey: N,
-    agentId: p.Optional(N),
-    message: N,
-    label: p.Optional(p.String({ maxLength: 100 }))
+    sessionKey: M,
+    agentId: d.Optional(M),
+    message: M,
+    label: d.Optional(d.String({ maxLength: 100 }))
   }), Gd = {
-    runId: N,
-    sessionKey: N,
-    agentId: p.Optional(N),
-    spawnedBy: p.Optional(N),
-    seq: p.Integer({ minimum: 0 })
-  }, Ode = qi([
+    runId: M,
+    sessionKey: M,
+    agentId: d.Optional(M),
+    spawnedBy: d.Optional(M),
+    seq: d.Integer({ minimum: 0 })
+  }, Ode = ni([
     "refusal",
     "timeout",
     "rate_limit",
     "context_length",
     "state_contention",
     "unknown"
-  ]), Dde = qi([
+  ]), Dde = ni([
     "waiting_for_state",
     "preparing_workspace",
     "naming_worktree",
@@ -14322,65 +14326,68 @@ var fxt, gxt, mb, hxt, Ide, wde, Sde, vR, kde, _de, Ede, yxt, bxt, xxt, vxt, Ixt
     "provisioning_environment",
     "preparing_context",
     "memory_flushing",
-    "starting_model"
+    "starting_model",
+    "waiting_for_model"
   ]), Mde = L({
     ...Gd,
-    state: p.Literal("status"),
+    state: d.Literal("status"),
     phase: Dde,
-    retry: p.Optional(
+    waitReason: d.Optional(ni(["response", "slot"])),
+    retry: d.Optional(
       L({
-        attempt: p.Integer({ minimum: 1, maximum: 10 }),
-        maxAttempts: p.Integer({ minimum: 1, maximum: 10 }),
-        reason: qi([
+        attempt: d.Integer({ minimum: 1, maximum: 10 }),
+        maxAttempts: d.Integer({ minimum: 1, maximum: 10 }),
+        reason: ni([
           "rate_limit",
           "overloaded",
           "server_error",
           "timeout",
           "output_limit"
         ]),
-        retryAt: p.Optional(p.Number({ minimum: 0 }))
+        retryAt: d.Optional(d.Number({ minimum: 0 }))
       })
     )
   }), Nde = L({
     ...Gd,
-    state: p.Literal("delta"),
-    message: p.Optional(p.Unknown()),
-    deltaText: p.String(),
-    replace: p.Optional(p.Boolean()),
-    usage: p.Optional(p.Unknown())
+    state: d.Literal("delta"),
+    message: d.Optional(d.Unknown()),
+    deltaText: d.String(),
+    replace: d.Optional(d.Boolean()),
+    usage: d.Optional(d.Unknown())
   }), Ude = L({
     ...Gd,
-    state: p.Literal("final"),
-    message: p.Optional(p.Unknown()),
-    usage: p.Optional(p.Unknown()),
-    stopReason: p.Optional(p.String()),
-    yielded: p.Optional(p.Literal(!0))
+    state: d.Literal("final"),
+    message: d.Optional(d.Unknown()),
+    usage: d.Optional(d.Unknown()),
+    stopReason: d.Optional(d.String()),
+    yielded: d.Optional(d.Literal(!0))
   }), Lde = L({
     ...Gd,
-    state: p.Literal("aborted"),
-    message: p.Optional(p.Unknown()),
-    errorMessage: p.Optional(p.String()),
-    stopReason: p.Optional(p.String())
-  }), Fde = 300, Qc = p.Optional(
-    p.String({ maxLength: Fde })
+    state: d.Literal("aborted"),
+    message: d.Optional(d.Unknown()),
+    errorMessage: d.Optional(d.String()),
+    stopReason: d.Optional(d.String())
+  }), Fde = 300, Qc = d.Optional(
+    d.String({ maxLength: Fde })
   ), zde = L({
     provider: Qc,
     model: Qc,
     failoverReason: Qc,
     providerRuntimeFailureKind: Qc,
     providerErrorType: Qc,
-    httpStatus: p.Optional(p.Integer({ minimum: 100, maximum: 599 })),
+    httpStatus: d.Optional(d.Integer({ minimum: 100, maximum: 599 })),
     providerErrorMessagePreview: Qc
   }), jde = L({
     ...Gd,
-    state: p.Literal("error"),
-    message: p.Optional(p.Unknown()),
-    errorMessage: p.Optional(p.String()),
-    errorKind: p.Optional(Ode),
-    errorDetail: p.Optional(zde),
-    usage: p.Optional(p.Unknown()),
-    stopReason: p.Optional(p.String())
-  }), Cxt = p.Union([
+    state: d.Literal("error"),
+    message: d.Optional(d.Unknown()),
+    errorMessage: d.Optional(d.String()),
+    errorKind: d.Optional(Ode),
+    suppressErrorNotice: d.Optional(d.Boolean()),
+    errorDetail: d.Optional(zde),
+    usage: d.Optional(d.Unknown()),
+    stopReason: d.Optional(d.String())
+  }), Cxt = d.Union([
     Mde,
     Nde,
     Ude,
@@ -14986,14 +14993,14 @@ var su = {
     stylesFailed: "Styles failed to load, so the page may look broken."
   },
   communityInvite: {
-    title: "Pull up a chair.",
-    body: "There\u2019s a place for you in the AI future. Join the Community on Reddit, Discord, and X.",
-    join: "Join",
-    follow: "Follow",
+    title: "Community",
+    body: "Connect, ask questions, share what you build.",
+    discord: "Chat with the community",
+    reddit: "Discussions and ideas",
+    x: "News and updates",
+    opensNewTab: "Links open in a new tab.",
     joinPlatform: "Join the OpenClaw community on {platform}",
-    followPlatform: "Follow OpenClaw on {platform}",
-    dismissForever: "Dismiss and don't show again",
-    dismissFailed: "Invitation dismissed, but your preference couldn't be saved."
+    followPlatform: "Follow OpenClaw on {platform}"
   },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
@@ -16156,6 +16163,7 @@ Delete without a snapshot?`
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
+    claws: "Claws",
     cloudWorkers: "Cloud environments",
     chat: "Chat",
     dashboards: "Dashboards",
@@ -16204,6 +16212,7 @@ Delete without a snapshot?`
     plugins: "Extend your Claw with tools",
     skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
+    claws: "Explore and add official Claws.",
     cloudWorkers: "Repository snapshots and machines for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
     dashboards: "Tasks with saved dashboards.",
@@ -16427,7 +16436,8 @@ Delete without a snapshot?`
     requestFailed: "OpenClaw could not reply. Try again.",
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     sessionRestarted: "{error} OpenClaw started a fresh session; earlier messages remain for context.",
-    unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    unsupportedGateway: "This Gateway does not offer openclaw.chat. Update the Gateway and reconnect to continue setup.",
+    accessRequired: "Setup requires openclaw.chat with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
     autoSetup: {
       title: "AI setup",
       connecting: "Connecting your AI...",
@@ -17086,11 +17096,28 @@ Delete without a snapshot?`
   login: {},
   chat: {
     sessionDetails: {
+      menu: "Session details",
       title: "Details",
       close: "Close details",
       session: "Session details",
       environment: "Environment",
       context: "Context",
+      contextMessages: "Messages & other",
+      contextFiles: "Workspace memory",
+      contextTools: "Tool schemas",
+      contextSkills: "Skills",
+      contextSystem: "System prompt",
+      contextFree: "Free space",
+      contextUnverified: "Unverified",
+      contextEstimate: "Last saved prompt \xB7 token sizes estimated from characters. Messages include other untracked context.",
+      contextLoading: "Loading context breakdown\u2026",
+      contextError: "Couldn't load the context breakdown. Try refreshing.",
+      contextOffline: "Connect to the Gateway to load the context breakdown.",
+      contextUnavailable: "No matching context report. Send a message to capture one.",
+      contextHeadroom: "{tokens} tokens until the last run's prompt budget",
+      contextReserve: "{tokens} tokens reserved outside this prompt budget",
+      contextCompact: "Compact session",
+      contextCompacting: "Compacting\u2026",
       worktree: "Worktree",
       changes: "Changes",
       backgroundTasks: "Background tasks",
@@ -17197,6 +17224,7 @@ Delete without a snapshot?`
     },
     waitingForApproval: "Waiting for approval\u2026",
     waitingOnSubagents: "Waiting on subagents",
+    waitingForMessage: "Waiting for a message",
     turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",
@@ -17212,8 +17240,11 @@ Delete without a snapshot?`
       preparingCloudEnvironment: "Preparing cloud environment\u2026",
       savingSnapshot: "Saving snapshot\u2026",
       preparingContext: "Preparing this turn\u2026",
+      waitingForTurn: "Waiting for turn to start\u2026",
       memoryFlushing: "Saving conversation memory\u2026",
       startingModel: "Waiting for a response",
+      waitingForLocalModel: "Waiting for the local model to respond",
+      waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy\u2014retrying\u2026"
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
@@ -17632,8 +17663,10 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
     incognitoExpiredTitle: "Incognito session expired",
     incognitoExpiredBody: "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",
     newIncognitoSession: "New Incognito session",
-    restartRecoveryTitle: "This session ended during a restart.",
-    restartRecoveryDisabled: "Its transcript is safe.",
+    restartRecoveryTitle: "This task was interrupted by a restart.",
+    restartRecoveryDisabled: "Your transcript is safe. Resume to continue in this session.",
+    restartRecoveryNewSession: "This provider cannot safely resume tool work here. Your transcript can continue in a new session.",
+    resumeSession: "Resume",
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming\u2026",
     systemNotice: {
@@ -17669,7 +17702,11 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       claudeCliTaskNotification: {
         label: "System \xB7 background task"
       },
-      showContent: "Show content"
+      pluginSteering: {
+        label: "{plugin} guidance"
+      },
+      showContent: "Show content",
+      hideContent: "Hide content"
     },
     skillLearned: {
       label: "Learned",
@@ -17873,6 +17910,8 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       loadFailed: "Could not load this question. Try again."
     },
     imageLightbox: {
+      loadingDetail: "Loading sharper image\u2026",
+      detailFailed: "Preview shown. Sharper image could not load.",
       actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
@@ -17997,6 +18036,8 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       dockRight: "Move side panel right",
       dockBottom: "Move side panel below",
       conversation: "Chat",
+      showChat: "Show this conversation",
+      hideChat: "Hide this conversation",
       conversationEmpty: "The conversation for this task.",
       minimize: "Minimize side panel",
       resize: "Resize side panel",
@@ -18211,6 +18252,7 @@ Reasoning, tool-result text, and private dashboards stay hidden. Image contents 
       dictationProviderUnavailable: "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
+      realtimeTalkRelayUnresponsive: "Talk ended because the Gateway has not acknowledged microphone audio for 30 seconds. Check the connection and start Talk again.",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable: "The selected microphone is unavailable. Choose another input or System default.",
       selectedCameraUnavailable: "The selected camera is unavailable. Choose another camera or System default.",
@@ -19296,7 +19338,7 @@ Pr();
 var ES = {};
 ct(ES, {
   decode: () => Ul,
-  encode: () => Ci,
+  encode: () => Ri,
   format: () => dc,
   parse: () => Ll
 });
@@ -19407,7 +19449,7 @@ function Zg(e, t, n) {
 }
 Zg.defaultChars = ";/?:@&=+$,-_.!~*'()#";
 Zg.componentChars = "-_.!~*'()";
-var Ci = Zg;
+var Ri = Zg;
 
 // openclaw/node_modules/.pnpm/mdurl@2.1.0/node_modules/mdurl/lib/format.mjs
 function dc(e) {
@@ -20260,7 +20302,7 @@ var E9 = Object.defineProperty, L9 = (e, t) => {
   arrayReplaceAt: () => Uoe,
   asciiTrim: () => nh,
   callable: () => F9,
-  escapeHtml: () => Ai,
+  escapeHtml: () => $i,
   escapeRE: () => Voe,
   fromCodePoint: () => zl,
   isMdAsciiPunct: () => ql,
@@ -20320,7 +20362,7 @@ var Boe = /[&<>"]/, qoe = /[&<>"]/g, Goe = {
 function Koe(e) {
   return Goe[e];
 }
-function Ai(e) {
+function $i(e) {
   return Boe.test(e) ? e.replace(qoe, Koe) : e;
 }
 var Hoe = /[.?*+^$[\]\\(){}|-]/g;
@@ -20820,11 +20862,11 @@ var qa = class {
 }, ko = {};
 ko.code_inline = function(e, t, n, o, r) {
   let i = e[t];
-  return `<code${r.renderAttrs(i)}>${Ai(i.content)}</code>`;
+  return `<code${r.renderAttrs(i)}>${$i(i.content)}</code>`;
 };
 ko.code_block = function(e, t, n, o, r) {
   let i = e[t];
-  return `<pre${r.renderAttrs(i)}><code>${Ai(e[t].content)}</code></pre>
+  return `<pre${r.renderAttrs(i)}><code>${$i(e[t].content)}</code></pre>
 `;
 };
 ko.fence = function(e, t, n, o, r) {
@@ -20834,7 +20876,7 @@ ko.fence = function(e, t, n, o, r) {
     s = m[0], u = m.slice(2).join("");
   }
   let l;
-  if (n.highlight ? l = n.highlight(i.content, s, u) || Ai(i.content) : l = Ai(i.content), l.indexOf("<pre") === 0) return l + `
+  if (n.highlight ? l = n.highlight(i.content, s, u) || $i(i.content) : l = $i(i.content), l.indexOf("<pre") === 0) return l + `
 `;
   if (a) {
     let m = i.attrIndex("class"), h = i.attrs ? i.attrs.slice() : [];
@@ -20862,7 +20904,7 @@ ko.softbreak = function(e, t, n) {
 `;
 };
 ko.text = function(e, t) {
-  return Ai(e[t].content);
+  return $i(e[t].content);
 };
 ko.html_block = function(e, t) {
   return e[t].content;
@@ -20909,7 +20951,7 @@ var B9 = class {
   renderAttrs(e) {
     let t, n, o;
     if (!e.attrs) return "";
-    for (o = "", t = 0, n = e.attrs.length; t < n; t++) o += ` ${Ai(e.attrs[t][0])}="${Ai(String(e.attrs[t][1]))}"`;
+    for (o = "", t = 0, n = e.attrs.length; t < n; t++) o += ` ${$i(e.attrs[t][0])}="${$i(String(e.attrs[t][1]))}"`;
     return o;
   }
   /**
@@ -22630,7 +22672,7 @@ var FS = [
         t.hostname = jS.default.toASCII(t.hostname);
       } catch {
       }
-    return t.auth && (t.auth = Ci(t.auth)), t.hostname && (t.hostname = Ci(t.hostname)), t.pathname && (t.pathname = Ci(t.pathname)), t.search && (t.search = Ci(t.search)), t.hash && (t.hash = Ci(t.hash)), dc(t);
+    return t.auth && (t.auth = Ri(t.auth)), t.hostname && (t.hostname = Ri(t.hostname)), t.pathname && (t.pathname = Ri(t.pathname)), t.search && (t.search = Ri(t.search)), t.hash && (t.hash = Ri(t.hash)), dc(t);
   }
   /**
   * Function used to decode link url to a human-readable format`
@@ -22959,10 +23001,10 @@ ct(an, {
   ZodIBAN: () => xC,
   ZodIPv4: () => Jy,
   ZodIPv6: () => Yy,
-  ZodISODate: () => zi,
-  ZodISODateTime: () => Fi,
-  ZodISODuration: () => Bi,
-  ZodISOTime: () => ji,
+  ZodISODate: () => ji,
+  ZodISODateTime: () => zi,
+  ZodISODuration: () => qi,
+  ZodISOTime: () => Bi,
   ZodInstanceOf: () => lR,
   ZodIntersection: () => OC,
   ZodIssueCode: () => Ule,
@@ -23090,13 +23132,13 @@ ct(an, {
   mac: () => q3,
   map: () => k5,
   maxLength: () => ts,
-  maxSize: () => Mi,
+  maxSize: () => Ni,
   memoizer: () => vd,
   meta: () => z5,
   mime: () => Mc,
   minLength: () => ei,
   minSize: () => Co,
-  multipleOf: () => Di,
+  multipleOf: () => Mi,
   nan: () => $5,
   nanoid: () => N3,
   nativeEnum: () => E5,
@@ -23229,7 +23271,7 @@ ct(ti, {
   $ZodE164: () => U_,
   $ZodEmail: () => g_,
   $ZodEmoji: () => x_,
-  $ZodEncodeError: () => Oi,
+  $ZodEncodeError: () => Di,
   $ZodEnum: () => sE,
   $ZodError: () => ak,
   $ZodExactOptional: () => dE,
@@ -23362,12 +23404,12 @@ ct(ti, {
   _map: () => dle,
   _max: () => fr,
   _maxLength: () => ts,
-  _maxSize: () => Mi,
+  _maxSize: () => Ni,
   _mime: () => Mc,
   _min: () => gr,
   _minLength: () => ei,
   _minSize: () => Co,
-  _multipleOf: () => Di,
+  _multipleOf: () => Mi,
   _nan: () => cT,
   _nanoid: () => py,
   _nativeEnum: () => fle,
@@ -23444,15 +23486,15 @@ ct(ti, {
   describe: () => fT,
   encode: () => cse,
   encodeAsync: () => lse,
-  extractDefs: () => Ui,
-  finalize: () => Li,
+  extractDefs: () => Li,
+  finalize: () => Fi,
   flattenError: () => td,
   formatError: () => nd,
   getDiscriminatedOption: () => tE,
   globalConfig: () => dn,
   globalRegistry: () => vn,
   handleUnrepresentable: () => rn,
-  initializeContext: () => Ni,
+  initializeContext: () => Ui,
   isBackEdge: () => Jh,
   isRecursiveSchema: () => Zh,
   isValidBase64: () => pd,
@@ -23554,7 +23596,7 @@ ct($, {
   objectClone: () => kae,
   omit: () => Dae,
   optionalKeys: () => YS,
-  own: () => Pi,
+  own: () => Oi,
   parsedType: () => O,
   partial: () => Lae,
   pick: () => Oae,
@@ -24047,11 +24089,11 @@ function QS(e, t) {
     o.get ? Object.defineProperty(e, n, { ...o, enumerable: !1 }) : Vae(e, n, o.value);
   }
 }
-function Pi(e, t, n, o = !0) {
+function Oi(e, t, n, o = !0) {
   return Object.defineProperty(e, t, { configurable: !0, writable: !0, enumerable: o, value: n }), n;
 }
 function ed(e, t, n) {
-  return Pi(e, t, n, !1);
+  return Oi(e, t, n, !1);
 }
 // @__NO_SIDE_EFFECTS__
 function Hae(e, t) {
@@ -24061,10 +24103,10 @@ function Hae(e, t) {
       configurable: !0,
       enumerable: !0,
       get() {
-        return Pi(this, n, o(this));
+        return Oi(this, n, o(this));
       },
       set(r) {
-        Pi(this, n, r);
+        Oi(this, n, r);
       }
     });
   }
@@ -24074,10 +24116,10 @@ function Vae(e, t, n) {
   Object.defineProperty(e, t, {
     configurable: !0,
     get() {
-      return this == null ? n : Pi(this, t, n.bind(this));
+      return this == null ? n : Oi(this, t, n.bind(this));
     },
     set(o) {
-      Pi(this, t, o);
+      Oi(this, t, o);
     }
   });
 }
@@ -24085,10 +24127,10 @@ function Wae(e, t) {
   let n = Object.getPrototypeOf(e);
   return t in n ? void 0 : n;
 }
-var GS, $i = !1, Zae = {
+var GS, Pi = !1, Zae = {
   configurable: !0,
   get() {
-    $i = !0;
+    Pi = !0;
   }
 };
 function ke(e, t, n) {
@@ -24101,13 +24143,13 @@ function ke(e, t, n) {
     configurable: !0,
     get() {
       Object.defineProperty(this, t, Zae);
-      let r = $i;
-      $i = !1;
+      let r = Pi;
+      Pi = !1;
       try {
         let i = n(this);
-        return $i ? delete this[t] : Object.defineProperty(this, t, { configurable: !0, writable: !0, value: i }), $i = $i || r, i;
+        return Pi ? delete this[t] : Object.defineProperty(this, t, { configurable: !0, writable: !0, value: i }), Pi = Pi || r, i;
       } catch (i) {
-        throw delete this[t], $i = $i || r, i;
+        throw delete this[t], Pi = Pi || r, i;
       }
     },
     set(r) {
@@ -24212,7 +24254,7 @@ var rk = /* @__PURE__ */ Symbol("zod_brand"), rr = class extends Error {
   constructor() {
     super("Encountered Promise during synchronous parse. Use .parseAsync() instead.");
   }
-}, Oi = class extends Error {
+}, Di = class extends Error {
   constructor(t) {
     super(`Encountered unidirectional transform during encode: ${t}`), this.name = "ZodEncodeError";
   }
@@ -25013,7 +25055,7 @@ var pe = /* @__PURE__ */ E("$ZodType", (e, t) => {
     return ed(this, "~standard", Ah(this));
   },
   set "~standard"(e) {
-    Pi(this, "~standard", e);
+    Oi(this, "~standard", e);
   }
 }), OK = (e, t) => e.issues.length ? { issues: e.issues.map((n) => nr(n, t, Ft())) } : { value: e.value };
 async function jse(e, t) {
@@ -26231,7 +26273,7 @@ var sE = /* @__PURE__ */ E("$ZodEnum", (e, t) => {
 }), lE = /* @__PURE__ */ E("$ZodTransform", (e, t) => {
   pe.init(e, t), e._zod.optin = "optional", dn.memoizer?.guard(e), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
-      throw new Oi(e.constructor.name);
+      throw new Di(e.constructor.name);
     let r = t.transform(n.value, n);
     if (o.async)
       return (r instanceof Promise ? r : Promise.resolve(r)).then((a) => (n.value = a, n));
@@ -26301,7 +26343,7 @@ function RK(e, t) {
 var hE = /* @__PURE__ */ E("$ZodSuccess", (e, t) => {
   pe.init(e, t), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
-      throw new Oi("ZodSuccess");
+      throw new Di("ZodSuccess");
     let r = t.innerType._zod.run(n, o);
     return r instanceof Promise ? r.then((i) => (n.value = i.issues.length === 0, n)) : (n.value = r.issues.length === 0, n);
   };
@@ -34526,7 +34568,7 @@ function Ry(e) {
   return /* @__PURE__ */ gr(0, e);
 }
 // @__NO_SIDE_EFFECTS__
-function Di(e, t) {
+function Mi(e, t) {
   return new Hk({
     check: "multiple_of",
     ...U(t),
@@ -34534,7 +34576,7 @@ function Di(e, t) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function Mi(e, t) {
+function Ni(e, t) {
   return new Zk({
     check: "max_size",
     ...U(t),
@@ -34992,7 +35034,7 @@ function Cd(e, ...t) {
       Object.prototype.propertyIsEnumerable.call(n, o) && xn(e, o, n[o]);
   return e;
 }
-function Ni(e) {
+function Ui(e) {
   let t = e?.target ?? "draft-2020-12";
   return t === "draft-4" && (t = "draft-04"), t === "draft-7" && (t = "draft-07"), {
     processors: e.processors ?? {},
@@ -35054,7 +35096,7 @@ function He(e, t, n = { path: [], schemaPath: [] }) {
 function u3(e) {
   return e.replace(/~/g, "~0").replace(/\//g, "~1");
 }
-function Ui(e, t) {
+function Li(e, t) {
   let n = e.seen.get(t);
   if (!n)
     throw new Error("Unprocessed schema. This is a bug in Zod.");
@@ -35213,7 +35255,7 @@ function Cle(e) {
   }
   o && (delete e.allOf, Cd(e, o));
 }
-function Li(e, t) {
+function Fi(e, t) {
   let n = e.seen.get(t);
   if (!n)
     throw new Error("Unprocessed schema. This is a bug in Zod.");
@@ -35346,11 +35388,11 @@ function Gn(e, t) {
   return !1;
 }
 var bT = (e, t = {}) => (n) => {
-  let o = Ni({ ...n, processors: t });
-  return He(e, o), Ui(o, e), Li(o, e);
+  let o = Ui({ ...n, processors: t });
+  return He(e, o), Li(o, e), Fi(o, e);
 }, jc = (e, t, n = {}) => (o) => {
-  let { libraryOptions: r, target: i } = o ?? {}, a = Ni({ ...r ?? {}, target: i, io: t, processors: n });
-  return He(e, a), Ui(a, e), Li(a, e);
+  let { libraryOptions: r, target: i } = o ?? {}, a = Ui({ ...r ?? {}, target: i, io: t, processors: n });
+  return He(e, a), Li(a, e), Fi(a, e);
 };
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/json-schema-processors.js
@@ -35760,7 +35802,7 @@ var XT = (e, t, n, o) => {
 };
 function Dy(e, t) {
   if ("_idmap" in e) {
-    let o = e, r = Ni({ ...t, processors: $y }), i = {};
+    let o = e, r = Ui({ ...t, processors: $y }), i = {};
     for (let u of o._idmap.entries()) {
       let [l, m] = u;
       He(m, r);
@@ -35773,7 +35815,7 @@ function Dy(e, t) {
     r.external = s;
     for (let u of o._idmap.entries()) {
       let [l, m] = u;
-      Ui(r, m), xn(a, l, Li(r, m));
+      Li(r, m), xn(a, l, Fi(r, m));
     }
     if (Object.keys(i).length > 0) {
       let u = r.target === "draft-2020-12" ? "$defs" : "definitions";
@@ -35783,8 +35825,8 @@ function Dy(e, t) {
     }
     return { schemas: a };
   }
-  let n = Ni({ ...t, processors: $y });
-  return He(e, n), Ui(n, e), Li(n, e);
+  let n = Ui({ ...t, processors: $y });
+  return He(e, n), Li(n, e), Fi(n, e);
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/json-schema-generator.js
@@ -35823,7 +35865,7 @@ var My = class {
   }
   constructor(t) {
     let n = t?.target ?? "draft-2020-12";
-    n === "draft-4" && (n = "draft-04"), n === "draft-7" && (n = "draft-07"), this.ctx = Ni({
+    n === "draft-4" && (n = "draft-04"), n === "draft-7" && (n = "draft-07"), this.ctx = Ui({
       processors: $y,
       target: n,
       ...t?.metadata && { metadata: t.metadata },
@@ -35844,8 +35886,8 @@ var My = class {
    * Must call process() first.
    */
   emit(t, n) {
-    n && (n.cycles && (this.ctx.cycles = n.cycles), n.reused && (this.ctx.reused = n.reused), n.external && (this.ctx.external = n.external)), this.ctx.sharedDefsExtractedFor = void 0, this.ctx.sharedEmitDoneFor = void 0, Ui(this.ctx, t);
-    let o = Li(this.ctx, t), { "~standard": r, ...i } = o;
+    n && (n.cycles && (this.ctx.cycles = n.cycles), n.reused && (this.ctx.reused = n.reused), n.external && (this.ctx.external = n.external)), this.ctx.sharedDefsExtractedFor = void 0, this.ctx.sharedEmitDoneFor = void 0, Li(this.ctx, t);
+    let o = Fi(this.ctx, t), { "~standard": r, ...i } = o;
     return i;
   }
 };
@@ -35886,10 +35928,10 @@ ct(Yc, {
   ZodIBAN: () => xC,
   ZodIPv4: () => Jy,
   ZodIPv6: () => Yy,
-  ZodISODate: () => zi,
-  ZodISODateTime: () => Fi,
-  ZodISODuration: () => Bi,
-  ZodISOTime: () => ji,
+  ZodISODate: () => ji,
+  ZodISODateTime: () => zi,
+  ZodISODuration: () => qi,
+  ZodISOTime: () => Bi,
   ZodInstanceOf: () => lR,
   ZodIntersection: () => OC,
   ZodJWT: () => rb,
@@ -36046,11 +36088,11 @@ ct(Ny, {
   lt: () => Eo,
   lte: () => fr,
   maxLength: () => ts,
-  maxSize: () => Mi,
+  maxSize: () => Ni,
   mime: () => Mc,
   minLength: () => ei,
   minSize: () => Co,
-  multipleOf: () => Di,
+  multipleOf: () => Mi,
   negative: () => Ty,
   nonnegative: () => Ry,
   nonpositive: () => Cy,
@@ -36403,16 +36445,16 @@ var we = /* @__PURE__ */ E("ZodType", (e, t) => (Nle(), pe.init(e, t), e.def = t
     return this.check(ky(nb, e));
   },
   datetime(e) {
-    return this.check(kd(Fi, e));
+    return this.check(kd(zi, e));
   },
   date(e) {
-    return this.check(_d(zi, e));
+    return this.check(_d(ji, e));
   },
   time(e) {
-    return this.check(Ed(ji, e));
+    return this.check(Ed(Bi, e));
   },
   duration(e) {
-    return this.check(Td(Bi, e));
+    return this.check(Td(qi, e));
   }
 });
 function Ad(e) {
@@ -36420,13 +36462,13 @@ function Ad(e) {
 }
 var Je = /* @__PURE__ */ E("ZodStringFormat", (e, t) => {
   Ke.init(e, t), zy.init(e, t);
-}), Fi = /* @__PURE__ */ E("ZodISODateTime", (e, t) => {
+}), zi = /* @__PURE__ */ E("ZodISODateTime", (e, t) => {
   E_.init(e, t), Je.init(e, t);
-}), zi = /* @__PURE__ */ E("ZodISODate", (e, t) => {
+}), ji = /* @__PURE__ */ E("ZodISODate", (e, t) => {
   T_.init(e, t), Je.init(e, t);
-}), ji = /* @__PURE__ */ E("ZodISOTime", (e, t) => {
+}), Bi = /* @__PURE__ */ E("ZodISOTime", (e, t) => {
   C_.init(e, t), Je.init(e, t);
-}), Bi = /* @__PURE__ */ E("ZodISODuration", (e, t) => {
+}), qi = /* @__PURE__ */ E("ZodISODuration", (e, t) => {
   R_.init(e, t), Je.init(e, t);
 }), jy = /* @__PURE__ */ E("ZodEmail", (e, t) => {
   g_.init(e, t), Je.init(e, t);
@@ -36654,10 +36696,10 @@ var Vc = /* @__PURE__ */ E(
       return this.check(fr(0, e));
     },
     multipleOf(e, t) {
-      return this.check(Di(e, t));
+      return this.check(Mi(e, t));
     },
     step(e, t) {
-      return this.check(Di(e, t));
+      return this.check(Mi(e, t));
     },
     finite() {
       return this;
@@ -36732,7 +36774,7 @@ var Zc = /* @__PURE__ */ E(
       return this.check(gr(BigInt(0), e));
     },
     multipleOf(e, t) {
-      return this.check(Di(e, t));
+      return this.check(Mi(e, t));
     }
   })
 );
@@ -37010,7 +37052,7 @@ function S5(e, t, n) {
   });
 }
 var LC = /* @__PURE__ */ E("ZodMap", (e, t) => {
-  as(), iE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => BT(e, n, o, r), e.keyType = t.keyType, e.valueType = t.valueType, e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Mi(...n)), e.size = (...n) => e.check(es(...n));
+  as(), iE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => BT(e, n, o, r), e.keyType = t.keyType, e.valueType = t.valueType, e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Ni(...n)), e.size = (...n) => e.check(es(...n));
 });
 function k5(e, t, n) {
   return new LC({
@@ -37021,7 +37063,7 @@ function k5(e, t, n) {
   });
 }
 var FC = /* @__PURE__ */ E("ZodSet", (e, t) => {
-  as(), aE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => qT(e, n, o, r), e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Mi(...n)), e.size = (...n) => e.check(es(...n));
+  as(), aE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => qT(e, n, o, r), e.min = (...n) => e.check(Co(...n)), e.nonempty = (n) => e.check(Co(1, n)), e.max = (...n) => e.check(Ni(...n)), e.size = (...n) => e.check(es(...n));
 });
 function _5(e, t) {
   return new FC({
@@ -37093,7 +37135,7 @@ function T5(e, t) {
   });
 }
 var jC = /* @__PURE__ */ E("ZodFile", (e, t) => {
-  uE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => UT(e, n, o, r), e.min = (n, o) => e.check(Co(n, o)), e.max = (n, o) => e.check(Mi(n, o)), e.mime = (n, o) => e.check(Mc(Array.isArray(n) ? n : [n], o));
+  uE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => UT(e, n, o, r), e.min = (n, o) => e.check(Co(n, o)), e.max = (n, o) => e.check(Ni(n, o)), e.mime = (n, o) => e.check(Mc(Array.isArray(n) ? n : [n], o));
 });
 function C5(e) {
   return lT(jC, e);
@@ -37101,7 +37143,7 @@ function C5(e) {
 var BC = /* @__PURE__ */ E("ZodTransform", (e, t) => {
   as(), lE.init(e, t), we.init(e, t), e._zod.processJSONSchema = (n, o, r) => jT(e, n, o, r), e._zod.parse = (n, o) => {
     if (o.direction === "backward")
-      throw new Oi(e.constructor.name);
+      throw new Di(e.constructor.name);
     n.addIssue = (i) => {
       if (typeof i == "string")
         n.issues.push($.issue(i, n.value, t));
@@ -37380,26 +37422,26 @@ dR || (dR = {});
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/iso.js
 var jd = {};
 ct(jd, {
-  ZodISODate: () => zi,
-  ZodISODateTime: () => Fi,
-  ZodISODuration: () => Bi,
-  ZodISOTime: () => ji,
+  ZodISODate: () => ji,
+  ZodISODateTime: () => zi,
+  ZodISODuration: () => qi,
+  ZodISOTime: () => Bi,
   date: () => jle,
   datetime: () => zle,
   duration: () => qle,
   time: () => Ble
 });
 function zle(e) {
-  return kd(Fi, e);
+  return kd(zi, e);
 }
 function jle(e) {
-  return _d(zi, e);
+  return _d(ji, e);
 }
 function Ble(e) {
-  return Ed(ji, e);
+  return Ed(Bi, e);
 }
 function qle(e) {
-  return Td(Bi, e);
+  return Td(qi, e);
 }
 
 // openclaw/node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/from-json-schema.js

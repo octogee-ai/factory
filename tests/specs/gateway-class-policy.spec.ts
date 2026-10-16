@@ -60,6 +60,15 @@ const disabledCodexPlugin = {
   enabled: false,
 };
 
+it("keeps native Codex available in fresh Builder config without overriding a Builder opt-out", () => {
+  const fresh = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.builder.template.json"), "utf8"));
+  const out = runPolicy("builder", fresh);
+  expect(out.plugins.entries.codex).toEqual({ enabled: true });
+  expect(out.plugins.allow).toContain("codex");
+  fresh.plugins.entries.codex = { enabled: false };
+  expect(runPolicy("builder", fresh).plugins.entries.codex).toEqual({ enabled: false });
+});
+
 function canonicalAgentAuthProfiles(agentId: string) {
   const profile = (provider: string, id: string) => ({
     type: "api_key",
@@ -1877,7 +1886,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
   it("restores platform voice broker wiring from an existing native plugin config", () => {
     const out = runPolicyWithDir("builder", {
-      plugins: { entries: { "octogee-voice-tools": { enabled: true, config: {
+      plugins: { entries: { "octogee-voice-tools": { config: {
         brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/customer-file",
       } } } },
       talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
