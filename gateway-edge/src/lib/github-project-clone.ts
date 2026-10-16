@@ -146,11 +146,41 @@ async function installCheckout(
   );
   try {
     await fs.mkdir(path.dirname(quarantine), { recursive: true, mode: 0o700 });
-    await fs.rename(destination, quarantine);
+    await quarantineCheckout(destination, quarantine);
     await fs.rename(staging, destination);
   } finally {
     lease.release();
   }
+}
+
+async function quarantineCheckout(source: string, target: string): Promise<void> {
+  try {
+    await fs.rename(source, target);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+  }
+  await fs.mkdir(target, { mode: 0o700 });
+  try {
+    for (const entry of await fs.readdir(source)) {
+      await fs.cp(path.join(source, entry), path.join(target, entry), {
+        recursive: true,
+        dereference: false,
+        verbatimSymlinks: true,
+        errorOnExist: true,
+        force: false,
+        preserveTimestamps: true,
+      });
+    }
+  } catch (error) {
+    try {
+      await fs.rm(target, { recursive: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "GitHub project quarantine copy and cleanup failed");
+    }
+    throw error;
+  }
+  await fs.rm(source, { recursive: true });
 }
 
 async function runGit(cwd: string, args: string[], accessToken?: string): Promise<void> {

@@ -20,6 +20,7 @@ const { spawn: realSpawn } = await vi.importActual<typeof import("node:child_pro
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.mocked(spawn).mockReset().mockImplementation(realSpawn);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -52,6 +53,47 @@ function seedProjectPlaceholder() {
 }
 
 describe("GitHub project clone broker", () => {
+  it("quarantines the existing checkout across the Projects and Home volume boundary", async () => {
+    const { root, destination, input } = seedProjectPlaceholder();
+    fs.symlinkSync("../reference", path.join(destination, "reference-link"));
+    const rename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, target) => {
+      if (source === destination) throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" });
+      return rename(source, target);
+    });
+
+    await expect(cloneGithubProjectCheckout(input)).resolves.toBe("cloned");
+
+    expect(fs.readFileSync(path.join(destination, "README.md"), "utf8")).toBe("canonical project\n");
+    expect(fs.statSync(path.join(destination, ".git")).isDirectory()).toBe(true);
+    const quarantine = path.join(root, "git-worktree-quarantine", "alice");
+    const saved = fs.readdirSync(quarantine);
+    expect(saved).toHaveLength(1);
+    expect(fs.readFileSync(path.join(quarantine, saved[0]!, "SOUL.md"), "utf8"))
+      .toBe("preserve this identity\n");
+    expect(fs.readlinkSync(path.join(quarantine, saved[0]!, "reference-link"))).toBe("../reference");
+    expect(fs.existsSync(path.join(destination, "SOUL.md"))).toBe(false);
+  });
+
+  it("retains the existing checkout and removes a partial quarantine when copying fails", async () => {
+    const { root, destination, input } = seedProjectPlaceholder();
+    const rename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, target) => {
+      if (source === destination) throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" });
+      return rename(source, target);
+    });
+    vi.spyOn(fs.promises, "cp").mockImplementationOnce(async (_source, target) => {
+      fs.writeFileSync(path.join(path.dirname(String(target)), "partial"), "incomplete");
+      throw new Error("quarantine copy failed");
+    });
+
+    await expect(cloneGithubProjectCheckout(input)).rejects.toThrow("quarantine copy failed");
+
+    expect(fs.readFileSync(path.join(destination, "SOUL.md"), "utf8")).toBe("preserve this identity\n");
+    expect(fs.readdirSync(path.dirname(destination))).toEqual(["octo"]);
+    expect(fs.readdirSync(path.join(root, "git-worktree-quarantine", "alice"))).toEqual([]);
+  });
+
   it("installs a checkout over a template-only directory and preserves its files in quarantine", async () => {
     const { root, destination, input } = seedProjectPlaceholder();
 
