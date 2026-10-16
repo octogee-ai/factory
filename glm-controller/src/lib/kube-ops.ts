@@ -69,6 +69,9 @@ export interface GatewayReplicaSetSummary {
 
 export interface GatewayPodDiagnostic {
   name: string;
+  gatewayId: string | null;
+  deleting: boolean;
+  gatewayContainerStartedAt: number | null;
   uid: string | null;
   replicaSetUid: string | null;
   phase: string;
@@ -231,6 +234,16 @@ function projectReplicaSetSummary(replicaSet: Record<string, unknown>): GatewayR
   };
 }
 
+function gatewayContainerStartedAt(status: Record<string, unknown>): number | null {
+  const containers = Array.isArray(status.containerStatuses) ? status.containerStatuses : [];
+  const gateway = containers.find((entry) => isRecord(entry) && entry.name === "gateway");
+  const state = isRecord(gateway?.state) ? gateway.state : {};
+  const running = isRecord(state.running) ? state.running : {};
+  const timestamp = stringOrNull(running.startedAt);
+  const startedAt = timestamp === null ? NaN : Date.parse(timestamp);
+  return Number.isFinite(startedAt) ? startedAt : null;
+}
+
 function projectPodDiagnostic(
   pod: Record<string, unknown>,
   now: number,
@@ -243,6 +256,9 @@ function projectPodDiagnostic(
   const createdMs = createdAt ? Date.parse(createdAt) : NaN;
   return {
     name: stringOrNull(metadata.name) ?? "unknown",
+    gatewayId: gatewayIdForRecord(pod),
+    deleting: metadata.deletionTimestamp != null,
+    gatewayContainerStartedAt: gatewayContainerStartedAt(status),
     uid: stringOrNull(metadata.uid),
     replicaSetUid: replicaSetOwnerUid(metadata),
     phase: stringOrNull(status.phase) ?? "Unknown",

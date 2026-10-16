@@ -165,6 +165,10 @@ export interface PlacementPolicyPodDiagnostics {
   totalPods: number;
   readyPods: number;
   pods?: ReadonlyArray<{
+    gatewayId?: string | null;
+    phase?: string;
+    deleting?: boolean;
+    gatewayContainerStartedAt?: number | null;
     uid?: string | null;
     name?: string | null;
     replicaSetUid?: string | null;
@@ -2895,8 +2899,32 @@ function placementAssignmentFromDocument(
   };
 }
 
-function gatewayRuntimeStartedAt(value: unknown): number | null {
-  return isGatewayRuntimeDoc(value) ? millis(value.heartbeat.startedAt) : null;
+function gatewayRuntimeStartedAt(input: {
+  gatewayId: string;
+  gatewayClass: string;
+  runtime: Record<string, unknown> | undefined;
+  diagnostics: PlacementPolicyPodDiagnostics | undefined;
+}): number | null {
+  const heartbeatStartedAt = isGatewayRuntimeDoc(input.runtime)
+    ? millis(input.runtime.heartbeat.startedAt)
+    : null;
+  if (input.gatewayClass !== "builder" || resolveGatewayRuntime(input.runtime?.runtime) !== "cluster") {
+    return heartbeatStartedAt;
+  }
+  return heartbeatStartedAt ?? gatewayPodStartedAt(input.gatewayId, input.diagnostics);
+}
+
+function gatewayPodStartedAt(
+  gatewayId: string,
+  diagnostics: PlacementPolicyPodDiagnostics | undefined,
+): number | null {
+  if (!diagnostics || diagnostics.error || diagnostics.status === "unknown" ||
+      diagnostics.totalPods !== 1 || diagnostics.pods?.length !== 1) return null;
+  const pod = diagnostics.pods[0];
+  if (!pod.uid || pod.gatewayId !== gatewayId || pod.deleting !== false ||
+      pod.phase !== "Running" || !pod.name?.startsWith(`octogee-gateway-${gatewayId}-`) ||
+      !diagnostics.replicaSets?.some(owner => owner.uid === pod.replicaSetUid && owner.desiredReplicas > 0)) return null;
+  return millis(pod.gatewayContainerStartedAt);
 }
 
 function gatewayRuntimeObservation(value: Record<string, unknown> | undefined) {
@@ -2946,7 +2974,12 @@ function placementGatewayFromDocument(input: {
     kubernetesStatus: placementKubernetesStatus(kubernetesByGatewayId[doc.id]),
     serving: runtime?.lifecycle === "serving",
     heartbeatFresh,
-    runtimeStartedAt: gatewayRuntimeStartedAt(runtime),
+    runtimeStartedAt: gatewayRuntimeStartedAt({
+      gatewayId: doc.id,
+      gatewayClass: root.gatewayClass,
+      runtime: runtimeData,
+      diagnostics: kubernetesByGatewayId[doc.id],
+    }),
     liveReleaseReady: [
       runtime !== null,
       root.liveRelease !== null,

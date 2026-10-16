@@ -521,6 +521,24 @@ describe("createKubeSubprocessRunner — readGatewayPodDiagnostics", () => {
   });
 });
 
+describe("gateway container startup observation", () => {
+  it("observes the unready gateway container before the provisioner heartbeat", async () => {
+    const now = Date.parse("2026-10-16T15:03:04Z");
+    const { runKubectl } = mockSubprocess([{ stdout: JSON.stringify({ items: [{
+      metadata: { name: "octogee-gateway-cold-pod", uid: "current-pod", creationTimestamp: "2026-10-16T14:52:49Z", labels: { "gateway-instance": "cold" } },
+      status: { phase: "Running", containerStatuses: [
+        { name: "gateway-edge", ready: true, state: { running: { startedAt: "2026-10-16T14:55:26Z" } } },
+        { name: "gateway", ready: false, state: { running: { startedAt: "2026-10-16T14:56:41Z" } } },
+      ] },
+    }] }) }]);
+    const kube = createKubeSubprocessRunner({ runKubectl, log: vi.fn(), now: () => now });
+
+    const result = await kube.readGatewayPodDiagnosticsBatch({ namespace: "octogee", gatewayIds: ["cold"] });
+
+    expect(result.cold.pods[0]).toMatchObject({ gatewayId: "cold", uid: "current-pod", deleting: false, gatewayContainerStartedAt: Date.parse("2026-10-16T14:56:41Z") });
+  });
+});
+
 describe("createKubeSubprocessRunner — pod identity and ReplicaSet intent", () => {
   const NODE = "gk3-octogee-gateway-nap-1dx2tv8d-3ce41e28-vbsk";
 
