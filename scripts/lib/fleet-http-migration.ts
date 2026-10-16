@@ -9,6 +9,7 @@ import { projectCheckoutEnabled } from "../../shared/types/project.js";
 import { updateVoiceMigration, type VoiceMigrationInput } from './voice-migration.js';
 import { clearMigrationStaging, prepareMigrationStaging, type MigrationStagingIdentity } from "./migration-staging.js";
 import { sourceTransferRsyncArgs } from "./source-transfer-rsync.js";
+import { deferredProjectPlaceholderPaths } from "./deferred-project-workspace.js";
 import { sourcesForPushMode } from "./source-transfer-plan.js";
 import { log as provisionerLog } from "@octogee/core/config";
 import { withLogContext, setLogContext, type LogContext } from "@octogee/shared/server/service-logger";
@@ -2139,10 +2140,12 @@ async function finishTargetPreparation(
   configTransferMode: MigrationConfigTransferMode,
   signal: AbortSignal,
 ): Promise<void> {
-  const sourceEntries = (await listRelativeEntries(session.stageDir)).filter(entry =>
-    entry.startsWith(`customers/${body.slug}/`) || entry.startsWith(`${GIT_METADATA_DIR}/${body.slug}/`));
-  await fs.writeFile(path.join(path.dirname(session.stageDir), "source-entries.json"), JSON.stringify(sourceEntries), { mode: 0o600 });
   const activation = configuredBuilderActivationRequest(deps, body, "pre", configTransferMode);
+  const placeholders = new Set(activation ? deferredProjectPlaceholderPaths(session.stageDir, body.slug) : []);
+  const sourceEntries = (await listRelativeEntries(session.stageDir)).filter(entry =>
+    (entry.startsWith(`customers/${body.slug}/`) || entry.startsWith(`${GIT_METADATA_DIR}/${body.slug}/`)) &&
+    !placeholders.has(entry));
+  await fs.writeFile(path.join(path.dirname(session.stageDir), "source-entries.json"), JSON.stringify(sourceEntries), { mode: 0o600 });
   if (!activation) return;
   if (!deps.prepareSurgeTarget) throw new Error("Builder target preparation is unavailable");
   await deps.prepareSurgeTarget(activation, signal);

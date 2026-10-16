@@ -9,6 +9,7 @@ import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { archiveNativeSharedAgentContext } from "../lib/native-shared-agent-context.js";
 import { gatewayVmPodName } from "../../shared/types/glm.js";
 import { pendingCloneAppliedFingerprint } from "../lib/pending-clone-fingerprint";
+import { deferredProjectPlaceholder } from "../lib/deferred-project-workspace.js";
 import type { Request, Response } from "express";
 import { EventEmitter } from "node:events";
 import * as fsSync from "node:fs";
@@ -4766,6 +4767,77 @@ describe("prepared migration staging", () => {
       const abort = { migrationId, slug: "chris", mode: "pre", rpcPhase: "abort-rsync-import" };
       await createAbortRsyncImportHandler(deps)(mkRequest(abort, { signature: signForPod(migrationId, JSON.stringify(abort)) }), mkResponse().res, vi.fn());
     }
+  });
+
+  it.each(["generated", "authored"] as const)("handles a removed %s AGENTS baseline through final Builder import", async kind => {
+    vi.stubEnv("POD_UID", "placeholder-prepared-pod");
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "placeholder-prepared-import-"));
+    migrationTempRoots.push(importDir);
+    const projectPath = "customers/chris/projects/octogee";
+    const obsoletePath = "customers/chris/projects/obsolete";
+    const prepareSurgeTarget = vi.fn(async () => {
+      for (const relative of [projectPath, obsoletePath]) {
+        const project = path.join(importDir, relative);
+        await fs.rm(path.join(project, "AGENTS.md"));
+        await fs.writeFile(path.join(project, "CLAUDE.md"), "canonical prepared instructions\n");
+        await fs.symlink("CLAUDE.md", path.join(project, "AGENTS.md"));
+      }
+    });
+    const deps = mkDeps({
+      adapter: mkAdapter({ isBuilderGateway: () => true, prepareImportDir: vi.fn(async () => importDir),
+        loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT, agentIds: [...RESTORE_SNAPSHOT.agentIds], channels: [],
+          projects: [{ projectId: "octogee", projectSlug: "octogee", giteaRepoName: null,
+            repoSource: { provider: "github", owner: "octogee-ai", repo: "octogee" } }],
+        })),
+      }),
+      reserveSurgeTarget: vi.fn(async () => undefined), prepareSurgeTarget,
+      releaseSurgeReadiness: vi.fn(async () => undefined),
+      unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
+      waitForRsyncReady: vi.fn(async () => undefined),
+    });
+    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const migrationId = `prepared-placeholder-baseline-${kind}`;
+    const prepare = async (mode: "pre" | "final") => {
+      spawnMock.mockReturnValueOnce(mkFakeChild());
+      const body = { migrationId, slug: "chris", mode, rpcPhase: "prepare-rsync-import", transferUser: "migration", transferKey: "b".repeat(64) };
+      const response = mkResponse();
+      await createPrepareRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(200);
+      const configPath = (spawnMock.mock.calls.at(-1)![1] as string[]).find(arg => arg.startsWith("--config="))!.slice(9);
+      return /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
+    };
+    const finish = async (mode: "pre" | "final") => {
+      spawnMock.mockImplementation(real.spawn);
+      const body = { migrationId, slug: "chris", mode, rpcPhase: "finish-rsync-import" };
+      const response = mkResponse();
+      await createFinishRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(200);
+    };
+    const stageDir = await prepare("pre");
+    for (const relative of [projectPath, obsoletePath]) {
+      await fs.mkdir(path.join(stageDir, relative), { recursive: true });
+      await fs.writeFile(path.join(stageDir, relative, "AGENTS.md"),
+        kind === "generated" ? deferredProjectPlaceholder("chris", path.basename(relative)) : "authored source instructions\n");
+    }
+    await fs.writeFile(path.join(stageDir, projectPath, "SOUL.md"), "retained project context\n");
+    await finish("pre");
+    expect(prepareSurgeTarget).toHaveBeenCalledOnce();
+    expect(await prepare("final")).toBe(stageDir);
+    await fs.rm(path.join(stageDir, projectPath, "AGENTS.md"));
+    await fs.rm(path.join(stageDir, obsoletePath), { recursive: true });
+
+    await finish("final");
+
+    const targetAgents = path.join(importDir, projectPath, "AGENTS.md");
+    if (kind === "generated") {
+      expect((await fs.lstat(targetAgents)).isSymbolicLink()).toBe(true);
+      expect(await fs.readlink(targetAgents)).toBe("CLAUDE.md");
+    } else {
+      await expect(fs.lstat(targetAgents)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(await fs.readFile(path.join(importDir, projectPath, "CLAUDE.md"), "utf8")).toBe("canonical prepared instructions\n");
+    expect(await fs.readFile(path.join(importDir, projectPath, "SOUL.md"), "utf8")).toBe("retained project context\n");
+    await expect(fs.lstat(path.join(importDir, obsoletePath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reuses the prepared file tree for final synchronization and holds Builder startup", async () => {

@@ -2919,12 +2919,14 @@ function gatewayPodStartedAt(
   diagnostics: PlacementPolicyPodDiagnostics | undefined,
 ): number | null {
   if (!diagnostics || diagnostics.error || diagnostics.status === "unknown" ||
-      diagnostics.totalPods !== 1 || diagnostics.pods?.length !== 1) return null;
-  const pod = diagnostics.pods[0];
-  if (!pod.uid || pod.gatewayId !== gatewayId || pod.deleting !== false ||
-      pod.phase !== "Running" || !pod.name?.startsWith(`octogee-gateway-${gatewayId}-`) ||
-      !diagnostics.replicaSets?.some(owner => owner.uid === pod.replicaSetUid && owner.desiredReplicas > 0)) return null;
-  return millis(pod.gatewayContainerStartedAt);
+      !diagnostics.pods || diagnostics.totalPods !== diagnostics.pods.length) return null;
+  const currentPods = diagnostics.pods.filter((pod) => Boolean(
+    pod.uid && pod.gatewayId === gatewayId && pod.deleting === false &&
+    pod.phase === "Running" && pod.name?.startsWith(`octogee-gateway-${gatewayId}-`) &&
+    diagnostics.replicaSets?.some(owner => owner.uid === pod.replicaSetUid && owner.desiredReplicas > 0) &&
+    millis(pod.gatewayContainerStartedAt) !== null,
+  ));
+  return currentPods.length === 1 ? millis(currentPods[0].gatewayContainerStartedAt) : null;
 }
 
 function gatewayRuntimeObservation(value: Record<string, unknown> | undefined) {

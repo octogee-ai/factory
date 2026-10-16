@@ -15,13 +15,14 @@ const stage = `${paths.root}/stage`;
 const target = `${paths.root}/target`;
 const relative = "customers/alice/projects/octogee";
 
-function transfer(mode: "pre" | "final") {
+function transfer(mode: "pre" | "final", preparedArgs?: string[]) {
   fs.mkdirSync(stage, { recursive: true });
-  const args = sourceTransferRsyncArgs(
+  const args = preparedArgs ?? sourceTransferRsyncArgs(
     [{ cwd: source, path: "customers/alice" }], "/unused/local-transfer-password", stage, mode,
   );
   execFileSync("rsync", [
-    "-a", "--relative", ...args.filter((arg) => arg.startsWith("--exclude=")),
+    "-a", "--relative", ...(mode === "final" ? ["--delete-delay"] : []),
+    ...args.filter((arg) => arg.startsWith("--exclude=") || arg.startsWith("--filter=")),
     "customers/alice", `${stage}/`,
   ], { cwd: source });
 }
@@ -35,6 +36,32 @@ beforeEach(() => { fs.rmSync(paths.root, { recursive: true, force: true }); });
 afterEach(() => { fs.rmSync(paths.root, { recursive: true, force: true }); });
 
 describe("deferred project workspace transfer", () => {
+  it("deletes a placeholder staged when its project appeared after pre-copy planning", () => {
+    fs.mkdirSync(path.join(source, "customers/alice/projects"), { recursive: true });
+    const preArgs = sourceTransferRsyncArgs(
+      [{ cwd: source, path: "customers/alice" }], "/unused/local-transfer-password", stage, "pre",
+    );
+    seedDeferredProjectWorkspace("alice", "octogee");
+    fs.writeFileSync(path.join(source, relative, "SOUL.md"), "existing project context\n");
+    transfer("pre", preArgs);
+    expect(fs.lstatSync(path.join(stage, relative, "AGENTS.md")).isFile()).toBe(true);
+    installStage();
+    const project = path.join(target, relative);
+    fs.rmSync(path.join(project, "AGENTS.md"));
+    fs.writeFileSync(path.join(project, "CLAUDE.md"), "canonical project instructions\n");
+    fs.symlinkSync("CLAUDE.md", path.join(project, "AGENTS.md"));
+
+    transfer("final");
+    installStage();
+
+    expect(fs.existsSync(path.join(stage, relative, "AGENTS.md"))).toBe(false);
+    expect(fs.lstatSync(path.join(project, "AGENTS.md")).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(path.join(project, "AGENTS.md"))).toBe("CLAUDE.md");
+    expect(fs.readFileSync(path.join(project, "CLAUDE.md"), "utf8")).toBe("canonical project instructions\n");
+    expect(fs.readFileSync(path.join(project, "SOUL.md"), "utf8")).toBe("existing project context\n");
+    expect(fs.existsSync(path.join(source, relative, "AGENTS.md"))).toBe(true);
+  });
+
   it("keeps the prepared canonical AGENTS symlink through the final Shared placeholder transfer", () => {
     seedDeferredProjectWorkspace("alice", "octogee");
     for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
