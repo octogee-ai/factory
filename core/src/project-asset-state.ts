@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { manifestObjectPath, parseManifest, serializeManifest, type Manifest } from "./workspace-manifest.js";
 
+const PROJECT_MANIFEST = "manifest.json";
+
 async function projectFile<T>(root: string, directory: ".files" | ".octogee-state" | ".git", name: string, use: (file: {
   read(): Promise<string | null>;
   write(contents: string, exclusive?: boolean): Promise<void>;
@@ -53,7 +55,7 @@ async function projectFile<T>(root: string, directory: ".files" | ".octogee-stat
 }
 
 export async function readProjectAssetManifest(root: string, prefix: string): Promise<Manifest | null> {
-  return projectFile(root, ".files", "manifest.json", async file => {
+  return projectFile(root, ".files", PROJECT_MANIFEST, async file => {
     const contents = await file.read();
     return contents === null ? null : parseManifest(manifestObjectPath(prefix), contents);
   });
@@ -62,7 +64,7 @@ export async function readProjectAssetManifest(root: string, prefix: string): Pr
 export async function initializeProjectAssetManifest(root: string, prefix: string, manifest: Manifest): Promise<void> {
   const contents = serializeManifest(manifest);
   parseManifest(manifestObjectPath(prefix), contents);
-  await projectFile(root, ".files", "manifest.json", file => file.write(contents, true));
+  await projectFile(root, ".files", PROJECT_MANIFEST, file => file.write(contents, true));
 }
 
 export async function withProjectAssetManifest<T>(root: string, prefix: string, use: (manifest: Manifest) => Promise<T>): Promise<T> {
@@ -71,9 +73,9 @@ export async function withProjectAssetManifest<T>(root: string, prefix: string, 
     const state = receipt === null ? null : JSON.parse(receipt);
     if (state !== null && (state.version !== 1 || prefix !== `customers/${state.slug}/projects/${state.project}`)) throw new Error("project restore owner differs");
     const checkout = state === null ? null : await projectCheckoutIdentity(root, false);
-    return projectFile(root, ".files", "manifest.json", async file => {
+    return projectFile(root, ".files", PROJECT_MANIFEST, async file => {
       const contents = await file.read();
-      const restored = checkout !== null && state?.identity === projectAssetVersion(checkout, contents);
+      const restored = checkout !== null && state?.checkout === checkout && state.identity === projectAssetVersion(checkout, contents);
       const manifest = contents === null ? {} : parseManifest(manifestObjectPath(prefix), contents);
       const before = serializeManifest(manifest);
       const result = await use(manifest);
@@ -110,27 +112,28 @@ export async function withMaterializedProjectAssets<T>(root: string, prefix: str
 }
 
 export async function writeProjectRestoreReady(root: string, slug: string, project: string): Promise<void> {
-  const identity = await projectAssetIdentity(root, true);
-  await projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, file => file.write(JSON.stringify({ version: 1, slug, project, identity })));
+  const checkout = (await projectCheckoutIdentity(root, true))!;
+  const manifest = await projectFile(root, ".files", PROJECT_MANIFEST, file => file.read(), false);
+  const identity = projectAssetVersion(checkout, manifest);
+  await projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, file => file.write(JSON.stringify({ version: 1, slug, project, checkout, identity })));
 }
 
 export async function readProjectRestoreReady(root: string, slug: string, project: string): Promise<boolean> {
-  const identity = await projectAssetIdentity(root, false);
-  if (identity === null) return false;
-  return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, async file => {
-    const contents = await file.read();
-    if (contents === null) return false;
-    const state = JSON.parse(contents);
-    if (state.version !== 1 || state.slug !== slug || state.project !== project) throw new Error("project restore owner differs");
-    return state.identity === identity;
-  }, false);
+  return await readProjectRestoreState(root, slug, project) === "ready";
 }
 
-async function projectAssetIdentity(root: string, create: boolean): Promise<string | null> {
-  const checkout = await projectCheckoutIdentity(root, create);
-  if (checkout === null) return null;
-  const manifest = await projectFile(root, ".files", "manifest.json", file => file.read(), false);
-  return projectAssetVersion(checkout, manifest);
+export async function readProjectRestoreState(root: string, slug: string, project: string): Promise<"ready" | "manifest-changed" | "unrestored"> {
+  const checkout = await projectCheckoutIdentity(root, false);
+  if (checkout === null) return "unrestored";
+  return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, async file => {
+    const contents = await file.read();
+    if (contents === null) return "unrestored";
+    const state = JSON.parse(contents);
+    if (state.version !== 1 || state.slug !== slug || state.project !== project) throw new Error("project restore owner differs");
+    if (state.checkout !== checkout) return "unrestored";
+    const manifest = await projectFile(root, ".files", PROJECT_MANIFEST, file => file.read(), false);
+    return state.identity === projectAssetVersion(checkout, manifest) ? "ready" : "manifest-changed";
+  }, false);
 }
 
 function projectAssetVersion(checkout: string, manifest: string | null): string {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { gatewayCredentialHeaders, internalFetch, sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type { FleetBrokerBlobSignedUrl } from "@octogee/shared/types/fleet-broker";
+import type { ProjectBlobHydrationClient } from "@octogee/core/project-blob-materialization";
 import type { StoredWorkspaceBlob, WorkspaceBlobTarget } from "./workspace-blob.js";
 
 async function brokerRequest<T>(base: string, route: string, body: object, headers: Record<string, string>): Promise<T> {
@@ -45,4 +46,11 @@ export async function uploadProjectBlobViaBroker(base: string, target: Workspace
     throw new Error("project asset upload checksum mismatch");
   }
   return { gcsPath, sha256, size: contents.length };
+}
+
+export function projectBlobHydrationClient(base: string): ProjectBlobHydrationClient {
+  return {
+    workspaceManifestReadUrl: async input => brokerRequest(base, "materialization/manifest/read-url", input, await gatewayCredentialHeaders()),
+    blobMaterializationReadUrl: async input => brokerRequest(base, "materialization/read-url", input, await gatewayCredentialHeaders()),
+  };
 }

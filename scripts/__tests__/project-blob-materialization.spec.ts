@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readProjectRestoreReady, withMaterializedProjectAssets } from "@octogee/core/project-asset-state";
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 
@@ -50,6 +51,59 @@ describe("verified GCS project cache hydration", () => {
     expect(await h.hydrate({ slug: "owner", project: "app", destination: h.root, maxBytes: 8, preserveExisting: true })).toMatchObject({ files: 0, bytes: 0 });
     expect(await fs.readFile(path.join(h.root, "images/a.png"), "utf8")).toBe("local edits");
   });
+  it.each(["authored edits", "checksum failure"])("retains prior bytes without readiness after a remote version encounters %s", async failure => {
+    const h = await fixture();
+    const sha256 = createHash("sha256").update(h.body).digest("hex");
+    const entry = { ...h.manifest["images/a.png"], sha256, gcsPath: `customers/owner/projects/app/.objects/${sha256}` };
+    await fs.mkdir(path.join(h.root, ".files"));
+    await fs.writeFile(path.join(h.root, ".files/manifest.json"), JSON.stringify({ "images/a.png": entry }));
+    vi.mocked(h.client.blobMaterializationReadUrl).mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==", download: { url: "https://signed.test/blob", method: "GET", gcsPath: entry.gcsPath, expiresAt: "later" } });
+    const input = { slug: "owner", project: "app", destination: h.root, maxBytes: 8, preserveExisting: true, markRestoreReady: true };
+    await h.hydrate(input);
+    if (failure === "authored edits") await fs.writeFile(path.join(h.root, "images/a.png"), "authored local work");
+    const remoteHash = createHash("sha256").update("xyz").digest("hex");
+    await fs.writeFile(path.join(h.root, ".files/manifest.json"), JSON.stringify({ "images/a.png": { ...entry, sha256: remoteHash, gcsPath: `customers/owner/projects/app/.objects/${remoteHash}`, uploadedAt: "second" } }));
+
+    if (failure === "checksum failure") vi.mocked(h.client.blobMaterializationReadUrl).mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==", download: { url: "https://signed.test/blob", method: "GET", gcsPath: `customers/owner/projects/app/.objects/${remoteHash}`, expiresAt: "later" } });
+    await expect(h.hydrate({ ...input, requireRestoredCheckout: true })).rejects.toThrow(failure === "authored edits" ? /conflicts with local/ : /content hash mismatch/);
+
+    expect(await fs.readFile(path.join(h.root, "images/a.png"), "utf8")).toBe(failure === "authored edits" ? "authored local work" : "abc");
+    expect(await readProjectRestoreReady(h.root, "owner", "app")).toBe(false);
+    expect(h.client.blobMaterializationReadUrl).toHaveBeenCalledTimes(failure === "authored edits" ? 1 : 2);
+  });
+
+  it.each(["committed", "missing"].flatMap(manifest => ["unchanged", "authored", "unproven"].map(state => ({ manifest, state }))))("reconciles a remote deletion for a $manifest manifest only when cached bytes are proven unchanged: $state", async ({ manifest, state }) => {
+    const h = await fixture();
+    const prefix = "customers/owner/projects/app", sha256 = createHash("sha256").update(h.body).digest("hex");
+    const entry = { ...h.manifest["images/a.png"], sha256, gcsPath: `${prefix}/.objects/${sha256}` };
+    await fs.mkdir(path.join(h.root, ".files"));
+    await fs.writeFile(path.join(h.root, ".files/manifest.json"), JSON.stringify({ "images/a.png": entry }));
+    vi.mocked(h.client.blobMaterializationReadUrl).mockResolvedValue({ generation: "17", size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==", download: { url: "https://signed.test/blob", method: "GET", gcsPath: entry.gcsPath, expiresAt: "later" } });
+    const input = { slug: "owner", project: "app", destination: h.root, maxBytes: 8, preserveExisting: true, markRestoreReady: true };
+    await h.hydrate(input);
+    if (state === "authored") await fs.writeFile(path.join(h.root, "images/a.png"), "local authored bytes");
+    if (state === "unproven") await withMaterializedProjectAssets(h.root, prefix, async files => {
+      delete files["images/a.png"].sha256;
+      files["images/a.png"].gcsPath = `${prefix}/images/a.png`;
+    });
+    if (manifest === "missing") {
+      await fs.rm(path.join(h.root, ".files/manifest.json"));
+      h.fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+    } else await fs.writeFile(path.join(h.root, ".files/manifest.json"), "{}");
+
+    if (state === "unchanged") {
+      await expect(h.hydrate({ ...input, requireRestoredCheckout: true })).resolves.toMatchObject({ files: 0 });
+      await expect(fs.stat(path.join(h.root, "images/a.png"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await withMaterializedProjectAssets(h.root, prefix, async files => files)).toEqual({});
+      expect(await readProjectRestoreReady(h.root, "owner", "app")).toBe(true);
+    } else {
+      await expect(h.hydrate({ ...input, requireRestoredCheckout: true })).rejects.toThrow(/conflicts with local/);
+      expect(await fs.readFile(path.join(h.root, "images/a.png"), "utf8")).toBe(state === "authored" ? "local authored bytes" : "abc");
+      expect(await readProjectRestoreReady(h.root, "owner", "app")).toBe(false);
+      expect(Object.keys(await withMaterializedProjectAssets(h.root, prefix, async files => files))).toEqual(["images/a.png"]);
+    }
+  });
+
   it("does not resurrect a materialized asset deleted locally during automatic restoration", async () => {
     const h = await fixture();
     await h.hydrate({ slug: "owner", project: "app", destination: h.root, maxBytes: 8, preserveExisting: true });

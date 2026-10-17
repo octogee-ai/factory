@@ -5,3 +5,4 @@ export declare function withProjectAssetManifest<T>(root: string, prefix: string
 export declare function withMaterializedProjectAssets<T>(root: string, prefix: string, use: (manifest: Manifest) => Promise<T>): Promise<T>;
 export declare function writeProjectRestoreReady(root: string, slug: string, project: string): Promise<void>;
 export declare function readProjectRestoreReady(root: string, slug: string, project: string): Promise<boolean>;
+export declare function readProjectRestoreState(root: string, slug: string, project: string): Promise<"ready" | "manifest-changed" | "unrestored">;

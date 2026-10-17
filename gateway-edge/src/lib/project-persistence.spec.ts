@@ -17,6 +17,7 @@ afterEach(async () => { vi.useRealTimers(); await rm(root, { recursive: true, fo
 function deps() {
   return { resolveProject: vi.fn(async (_root, slug, project): Promise<string | null> => path.join(root, slug, "projects", project)),
     githubToken: vi.fn(async () => undefined),
+    prepare: vi.fn(async () => undefined),
     divert: vi.fn(async () => ({ failures: [] as string[], failedPaths: [] as string[], diverted: [] })),
     commit: vi.fn(async (_dir, options) => {
       const prepared = await options.beforeCommit();
@@ -117,6 +118,7 @@ describe("Builder project persistence", () => {
     const d = deps();
     await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow(/restore/);
     expect(d.commit).not.toHaveBeenCalled();
+    expect(d.prepare).not.toHaveBeenCalled();
     await writeProjectRestoreReady(dir, "builder", "demo");
     await expect(persistBuilderProjects({ root, slug: "builder" }, d)).resolves.toEqual({ projects: 1 });
   });
@@ -125,6 +127,7 @@ describe("Builder project persistence", () => {
     const d = deps();
     await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow();
     expect(d.commit).not.toHaveBeenCalled();
+    expect(d.prepare).not.toHaveBeenCalled();
   });
   it("uses the leased commit path and waits for remote binary storage before committing", async () => {
     const d = deps();

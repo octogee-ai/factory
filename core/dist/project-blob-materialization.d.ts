@@ -32,6 +32,15 @@ export type ProjectBlobHydrator = (input: {
     allowDeferred?: boolean;
     paths?: string[];
     markRestoreReady?: boolean;
+    requireRestoredCheckout?: boolean;
 }) => Promise<ProjectBlobHydration>;
 export declare function createBrokeredProjectBlobHydrator(client: ProjectBlobHydrationClient, customersRoot?: string): ProjectBlobHydrator;
+export declare function prepareBuilderProjectAssets(input: {
+    projects: string;
+    slug: string;
+    project: string;
+    hydrate: ProjectBlobHydrator;
+    log?: (message: string) => void;
+    requireRestoredCheckout?: boolean;
+}): Promise<void>;
 export {};

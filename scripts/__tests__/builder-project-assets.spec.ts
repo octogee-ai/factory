@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
+import { readProjectRestoreReady, writeProjectRestoreReady } from "@octogee/core/project-asset-state";
 import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
 import { prepareBuilderProjectAssets } from "../lib/builder-project-assets.js";
@@ -16,6 +16,21 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "linux")("Builder project restore publication", () => {
+  it.each(["missing", "replaced", "unowned"])("refuses source preparation of a %s checkout under its lease", async state => {
+    parent = await fs.mkdtemp(path.join(os.tmpdir(), "builder-source-ready-"));
+    storageRoots.customers = path.join(parent, "customers");
+    const projects = path.join(storageRoots.customers, "owner/projects"), destination = path.join(projects, "app");
+    await fs.mkdir(destination, { recursive: true });
+    await writeProjectRestoreReady(destination, "owner", "app");
+    if (state === "missing") await fs.rm(path.join(projects, ".octogee-state/app.json"));
+    else if (state === "replaced") { await fs.rename(destination, `${destination}-retained`); await fs.mkdir(destination); }
+    else await writeProjectRestoreReady(destination, "another", "app");
+    const read = vi.fn();
+    const hydrate = createBrokeredProjectBlobHydrator({ workspaceManifestReadUrl: read, blobMaterializationReadUrl: vi.fn() });
+    await expect(prepareBuilderProjectAssets({ projects, slug: "owner", project: "app", hydrate, requireRestoredCheckout: true })).rejects.toThrow(/previously restored checkout|owner differs/);
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("does not mark a replacement checkout ready after the hydrated checkout releases its lease", async () => {
     parent = await fs.mkdtemp(path.join(os.tmpdir(), "builder-project-ready-"));
     storageRoots.customers = path.join(parent, "customers");

@@ -4,12 +4,12 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { commitLocalProjectAsset } from "./project-blob-edit.js";
+import { commitLocalProjectAsset, editRemoteProjectAsset } from "./project-blob-edit.js";
 import type { FileTarget } from "./fileTarget.js";
 import { persistBuilderProjects } from "./project-persistence.js";
 import { commitAndPushWorkspace, gitStatus, resolveProjectDir } from "./workspace-git.js";
 import { divertWorktreeBinaries } from "./binary-diversion.js";
-import { createBrokeredProjectBlobHydrator } from "@octogee/core/project-blob-materialization";
+import { createBrokeredProjectBlobHydrator, prepareBuilderProjectAssets } from "@octogee/core/project-blob-materialization";
 import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProjectAssets } from "@octogee/core/project-asset-state";
 let root: string;
 afterEach(async()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();if(root)await rm(root,{recursive:true,force:true});});
@@ -30,7 +30,7 @@ it("restores text and the matching immutable asset after losing the working set,
     const sha256=createHash("sha256").update(body).digest("hex");objects.set(sha256,Buffer.from(body));
     return {sha256,size:body.length,gcsPath:`${target.gcsPrefix}/.objects/${sha256}`};
   });
-  const deps={resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,
+  const deps={resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,prepare:async()=>{throw new Error("unexpected asset preparation");},
     divert:(cwd:string,target:any)=>divertWorktreeBinaries(cwd,target,{gitStatus,storeWorkspaceBlob:store},{retainLocalFiles:true})};
   const versions=[];
   for(const n of [1,2]){
@@ -111,4 +111,85 @@ it("retains restoration and materialized receipts after a local asset upload and
   await commitLocalProjectAsset({target,dir,name:"asset.bin",contents:null,upload:async()=>{throw new Error("delete must not upload");},divert});
   expect(await withMaterializedProjectAssets(dir,target.gcsPrefix,async files=>files)).toEqual({});
   expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(true);
+});
+
+it.each(["available", "unavailable", "replacement", "conflict", "deletion"])("keeps a normal remote project asset upload eligible for source flush when storage is %s",async storage=>{
+  root=await mkdtemp(path.join(tmpdir(),"project-remote-upload-flush-"));
+  const customers=path.join(root,"customers"),dir=path.join(customers,"alice/projects/demo"),remote=path.join(root,"remote.git"),seed=path.join(root,"seed");
+  await mkdir(seed);
+  git(root,"init","--bare","--initial-branch=main",remote);
+  git(seed,"init","--initial-branch=main");git(seed,"config","user.name","Fixture");git(seed,"config","user.email","fixture@example.test");
+  await writeFile(path.join(seed,"README.md"),"initial\n");git(seed,"add",".");git(seed,"commit","-m","initial");git(seed,"remote","add","origin",remote);git(seed,"push","-u","origin","main");
+  await mkdir(path.dirname(dir),{recursive:true});git(root,"clone",remote,dir);
+  await writeProjectRestoreReady(dir,"alice","demo");
+  const transport=path.join(root,"test-ssh");
+  await writeFile(transport,"#!/bin/sh\nshift\nexec /bin/sh -c \"$1\"\n");await chmod(transport,0o755);
+  git(dir,"remote","set-url","origin",`ssh://git@localhost${remote}`);vi.stubEnv("GIT_SSH",transport);
+  const target:FileTarget={slug:"alice",projectSlug:"demo",provider:"gitea",org:"alice",repoName:"demo",gcsPrefix:"customers/alice/projects/demo",sudoUser:"ws-alice"};
+  const sha256="bc8bd51d2be39b728495aed2f94ca02435c6de88f82be92c5f4452e4be6cf3bc";
+  const asset={type:"blob" as const,gcsPath:`${target.gcsPrefix}/.objects/${sha256}`,sha256,size:117,mimeType:"image/png",uploadedAt:"2026-10-16T21:14:41.904Z"};
+  await editRemoteProjectAsset(target,"qa-515b-982-asset.png",asset,{
+    read:async()=>null,readLegacy:async()=>({}),write:async(_target,body)=>{
+      await mkdir(path.join(seed,".files"));
+      await writeFile(path.join(seed,".files/manifest.json"),Buffer.from(body.content,"base64"));
+      git(seed,"add",".files/manifest.json");git(seed,"commit","-m",body.message);git(seed,"push","origin","main");
+      return {content:{sha:git(seed,"rev-parse","HEAD:.files/manifest.json")}};
+    },
+  });
+  const bytes=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAHXRFWHRRQQBRQS01MTVCLTk4Mi1SRVRBSU5FRC1BU1NFVFJ5O88AAAATSURBVHicY/jPwPAfDBkY/oMBAEnICfcUYzKdAAAAAElFTkSuQmCC","base64");
+  const objects=new Map([[sha256,bytes]]);
+  const blobRead=vi.fn(async(input:any)=>{
+    const body=objects.get(input.sha256)!;
+    // eslint-disable-next-line sonarjs/hashing -- emulates the GCS transport checksum
+    return {generation:"1",size:body.length,md5Hash:createHash("md5").update(body).digest("base64"),download:{url:`https://objects.test/${input.sha256}`,method:"GET" as const,gcsPath:`${target.gcsPrefix}/.objects/${input.sha256}`,expiresAt:"later"}};
+  });
+  const hydrate=createBrokeredProjectBlobHydrator({workspaceManifestReadUrl:async()=>{throw new Error("local Git manifest is authoritative");},blobMaterializationReadUrl:blobRead},customers);
+  vi.stubGlobal("fetch",vi.fn(async(url:string)=>storage === "unavailable" ? new Response(null,{status:503}) : new Response(new Uint8Array(objects.get(new URL(url).pathname.slice(1))!),{headers:{"x-goog-generation":"1"}})));
+  const deps={resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,
+    prepare:async()=>prepareBuilderProjectAssets({projects:path.dirname(dir),slug:"alice",project:"demo",hydrate,requireRestoredCheckout:true}),
+    divert:(cwd:string,scope:any)=>divertWorktreeBinaries(cwd,scope,{gitStatus,storeWorkspaceBlob:async(_target,_name,body)=>{
+      const hash=createHash("sha256").update(body).digest("hex");objects.set(hash,Buffer.from(body));
+      return {gcsPath:`${target.gcsPrefix}/.objects/${hash}`,sha256:hash,size:body.length};
+    }},{retainLocalFiles:true})};
+
+  if (storage === "unavailable") {
+    await expect(persistBuilderProjects({root:customers,slug:"alice"},deps)).rejects.toThrow(/503/);
+    expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(false);
+    await expect(readFile(path.join(dir,"qa-515b-982-asset.png"))).rejects.toMatchObject({code:"ENOENT"});
+    return;
+  }
+  await expect(persistBuilderProjects({root:customers,slug:"alice"},deps)).resolves.toEqual({projects:1});
+  expect(JSON.parse(await readFile(path.join(dir,".files/manifest.json"),"utf8"))).toEqual({"qa-515b-982-asset.png":asset});
+  expect(await readFile(path.join(dir,"qa-515b-982-asset.png"))).toEqual(bytes);
+  expect(await readProjectRestoreReady(dir,"alice","demo")).toBe(true);
+  await expect(persistBuilderProjects({root:customers,slug:"alice"},deps)).resolves.toEqual({projects:1});
+  expect(blobRead).toHaveBeenCalledOnce();
+  expect(git(dir,"ls-files")).not.toContain("qa-515b-982-asset.png");
+  if (storage !== "replacement" && storage !== "conflict" && storage !== "deletion") return;
+  const replacement=Buffer.from([0,2,3,4]),replacementHash=createHash("sha256").update(replacement).digest("hex");
+  objects.set(replacementHash,replacement);
+  git(seed,"pull","--ff-only","origin","main");
+  await editRemoteProjectAsset(target,"qa-515b-982-asset.png",storage === "deletion" ? null : {...asset,sha256:replacementHash,gcsPath:`${target.gcsPrefix}/.objects/${replacementHash}`,size:replacement.length,uploadedAt:"2026-10-16T22:00:00Z"},{
+    read:async()=>({sha:git(seed,"rev-parse","HEAD:.files/manifest.json"),encoding:"base64",content:(await readFile(path.join(seed,".files/manifest.json"))).toString("base64")}),
+    readLegacy:async()=>({}),write:async(_target,body)=>{
+      await writeFile(path.join(seed,".files/manifest.json"),Buffer.from(body.content,"base64"));
+      git(seed,"add",".files/manifest.json");git(seed,"commit","-m",body.message);git(seed,"push","origin","main");
+      return {content:{sha:git(seed,"rev-parse","HEAD:.files/manifest.json")}};
+    },
+  });
+  if (storage === "conflict") {
+    const local=Buffer.from([0,9,8,7]);await writeFile(path.join(dir,"qa-515b-982-asset.png"),local);
+    await expect(persistBuilderProjects({root:customers,slug:"alice"},deps)).rejects.toThrow(/project demo/);
+    expect(await readFile(path.join(dir,"qa-515b-982-asset.png"))).toEqual(local);
+  } else {
+    await expect(persistBuilderProjects({root:customers,slug:"alice"},deps)).resolves.toEqual({projects:1});
+    await expect(persistBuilderProjects({root:customers,slug:"alice"},deps)).resolves.toEqual({projects:1});
+    if (storage === "deletion") {
+      expect.soft(await readFile(path.join(dir,"qa-515b-982-asset.png")).then(()=>"present",error=>error.code)).toBe("ENOENT");
+      expect.soft(await withMaterializedProjectAssets(dir,target.gcsPrefix,async files=>files)).toEqual({});
+    } else expect.soft(await readFile(path.join(dir,"qa-515b-982-asset.png"))).toEqual(replacement);
+  }
+  const remoteManifest=JSON.parse(git(root,"--git-dir",remote,"show","main:.files/manifest.json"));
+  if (storage === "deletion") expect.soft(remoteManifest).toEqual({});
+  else expect.soft(remoteManifest["qa-515b-982-asset.png"].sha256).toBe(replacementHash);
 });

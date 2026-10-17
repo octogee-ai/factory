@@ -5,7 +5,7 @@ vi.mock("@octogee/core/internal-fetch", () => ({ internalFetch: h.request,
   sidecarBrokerHeaders: async () => ({ "x-sidecar": "sidecar-purpose" }),
   gatewayCredentialHeaders: async () => ({ "x-credential": "read-purpose" }),
 }));
-import { uploadProjectBlobViaBroker } from "./project-blob-upload.js";
+import { uploadProjectBlobViaBroker, projectBlobHydrationClient } from "./project-blob-upload.js";
 const contents = Buffer.from("abc"), sha256 = createHash("sha256").update(contents).digest("hex"), md5Hash = "kAFQmDzST7DWlj99KOF/cg==";
 const target = { slug: "alice", projectSlug: "demo", gcsPrefix: "customers/alice/projects/demo" };
 const gcsPath = `${target.gcsPrefix}/.objects/${sha256}`;
@@ -46,4 +46,14 @@ it.each([{ gcsPath: "customers/other/private" }, { requiredHeaders: {} }, { url:
 it("refuses a mismatched project prefix before requesting authority", async () => {
   await expect(uploadProjectBlobViaBroker("http://api", { ...target, gcsPrefix: "customers/other/projects/demo" }, contents, "application/octet-stream")).rejects.toThrow(/scope/);
   expect(h.request).not.toHaveBeenCalled();
+});
+
+it("uses the existing gateway credential for source project manifest and immutable object reads", async () => {
+  const client = projectBlobHydrationClient("http://api");
+  await client.workspaceManifestReadUrl({ slug: "alice", projectSlug: "demo" });
+  await client.blobMaterializationReadUrl({ slug: "alice", path: "projects/demo/asset.bin", sha256, size: 3 });
+  expect(h.request.mock.calls.map(call => call[0])).toEqual(["http://api/internal/fleet/blob/materialization/manifest/read-url", "http://api/internal/fleet/blob/materialization/read-url"]);
+  for (const call of h.request.mock.calls) expect(call[1].headers).toMatchObject({ "x-credential": "read-purpose" });
+  expect(JSON.parse(h.request.mock.calls[0][1].body)).toEqual({ gatewayId: "b-alice", slug: "alice", projectSlug: "demo" });
+  expect(JSON.parse(h.request.mock.calls[1][1].body)).toEqual({ gatewayId: "b-alice", slug: "alice", path: "projects/demo/asset.bin", sha256, size: 3 });
 });

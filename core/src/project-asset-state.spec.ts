@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProjectAssets, withProjectAssetManifest } from "./project-asset-state.js";
+import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProjectAssets, withProjectAssetManifest, readProjectRestoreState } from "./project-asset-state.js";
 
 vi.mock("node:fs/promises", async importOriginal => ({ ...await importOriginal<typeof import("node:fs/promises")>() }));
 
@@ -19,6 +19,7 @@ describe.skipIf(process.platform !== "linux")("project checkout restore readines
 
   it("does not create Git or restore-state directories when reading an empty placeholder", async () => {
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    expect(await readProjectRestoreState(root, "alice", "demo")).toBe("unrestored");
     expect(await fs.readdir(root)).toEqual([]);
     expect(await fs.readdir(parent)).toEqual(["demo"]);
   });
@@ -39,6 +40,20 @@ describe.skipIf(process.platform !== "linux")("project checkout restore readines
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
     await writeProjectRestoreReady(root, "alice", "demo");
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(true);
+  });
+
+  it("does not admit an unknown receipt without checkout ownership", async () => {
+    await writeProjectRestoreReady(root, "alice", "demo");
+    const receipt = path.join(parent, ".octogee-state/demo.json");
+    const state = JSON.parse(await fs.readFile(receipt, "utf8"));
+    delete state.checkout;
+    await writeFile(receipt, JSON.stringify(state));
+    expect(await readProjectRestoreState(root, "alice", "demo")).toBe("unrestored");
+    expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    await withProjectAssetManifest(root, "customers/alice/projects/demo", async manifest => {
+      manifest["asset.bin"] = { type: "blob", gcsPath: "customers/alice/projects/demo/asset.bin", size: 3, mimeType: "application/octet-stream", uploadedAt: "first" };
+    });
+    expect(await readProjectRestoreState(root, "alice", "demo")).toBe("unrestored");
   });
 
   it("shares readiness across container-specific inode and device numbers", async () => {
@@ -83,6 +98,7 @@ describe.skipIf(process.platform !== "linux")("project checkout restore readines
     await writeFile(path.join(root, ".files/manifest.json"), JSON.stringify({ "asset.bin": { ...entry, uploadedAt: "second" } }));
 
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(false);
+    expect(await readProjectRestoreState(root, "alice", "demo")).toBe("manifest-changed");
     expect(await withMaterializedProjectAssets(root, prefix, async files => files)).toEqual({ "asset.bin": entry });
     await writeProjectRestoreReady(root, "alice", "demo");
     expect(await readProjectRestoreReady(root, "alice", "demo")).toBe(true);

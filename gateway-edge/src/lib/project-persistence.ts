@@ -1,6 +1,9 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
-import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
+import { readProjectRestoreReady, readProjectRestoreState } from "@octogee/core/project-asset-state";
+import { createBrokeredProjectBlobHydrator, prepareBuilderProjectAssets } from "@octogee/core/project-blob-materialization";
+import { projectBlobHydrationClient } from "./project-blob-upload.js";
+import { logger } from "../middleware/logging.js";
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
 import { commitAndPushWorkspace, isTrustedGithubCustomerCheckout, resolveProjectDir } from "./workspace-git.js";
 import { divertWorktreeBinaries } from "./binary-diversion.js";
@@ -11,9 +14,17 @@ interface ProjectPersistenceDeps {
   commit: typeof commitAndPushWorkspace;
   divert: typeof divertWorktreeBinaries;
   githubToken: (dir: string) => Promise<string | undefined>;
+  prepare: (input: { root: string; slug: string; project: string }) => Promise<void>;
 }
 const defaults: ProjectPersistenceDeps = {
   resolveProject: resolveProjectDir,
+  prepare: async input => {
+    const base = process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL;
+    if (!base) throw new Error("project preparation requires its configured fleet broker");
+    await prepareBuilderProjectAssets({ projects: path.join(input.root, input.slug, "projects"), slug: input.slug, project: input.project,
+      hydrate: createBrokeredProjectBlobHydrator(projectBlobHydrationClient(base), input.root), requireRestoredCheckout: true,
+      log: message => logger.warn(message) });
+  },
   commit: commitAndPushWorkspace,
   divert: (dir, target) => divertWorktreeBinaries(dir, target, undefined, { retainLocalFiles: true }),
   githubToken: async dir => {
@@ -66,9 +77,9 @@ async function persistProjectsOnce(input: { root: string; slug: string }, deps: 
   const entries = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.name !== ".octogee-state");
   for (const entry of entries) {
     if (!entry.isDirectory() || !isValidProjectId(entry.name)) throw new Error(`project is not a valid directory: ${entry.name}`);
-    if (!await readProjectRestoreReady(path.join(directory, entry.name), input.slug, entry.name)) throw new Error(`project restore is incomplete: ${entry.name}`);
     const dir = await deps.resolveProject(input.root, input.slug, entry.name);
     if (!dir) throw new Error(`project repository unavailable: ${entry.name}`);
+    await prepareChangedProjectAssets({ ...input, project: entry.name }, dir, deps);
     const githubToken = await deps.githubToken(dir);
     const saved = await deps.commit(dir, {
       message: "autosave: project changes",
@@ -83,6 +94,16 @@ async function persistProjectsOnce(input: { root: string; slug: string }, deps: 
     });
     if (!saved.ok) throw new Error(`project ${entry.name}: ${saved.error.code}`);
     if (!saved.result.pushed) throw new Error(`project ${entry.name}: ${saved.result.pushError || "remote push unconfirmed"}`);
+    await prepareChangedProjectAssets({ ...input, project: entry.name }, dir, deps);
   }
   return { projects: entries.length };
+}
+
+async function prepareChangedProjectAssets(input: { root: string; slug: string; project: string }, dir: string, deps: ProjectPersistenceDeps): Promise<void> {
+  const state = await readProjectRestoreState(dir, input.slug, input.project);
+  if (state === "unrestored") throw new Error(`project restore is incomplete: ${input.project}`);
+  if (state === "manifest-changed") {
+    await deps.prepare(input);
+    if (!await readProjectRestoreReady(dir, input.slug, input.project)) throw new Error(`project restore is incomplete: ${input.project}`);
+  }
 }
