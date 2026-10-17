@@ -142,25 +142,21 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 Upstream is operator-selected main
 [`515b3c409583b17f942260767bb6be51640fe355`](https://github.com/openclaw/openclaw/commit/515b3c409583b17f942260767bb6be51640fe355),
 frozen for the October 16 recut. Exact native source is
-`8b710792251f25968f737c4c59217f4ea7da46ca`, fork branch
-`codex/openclaw-515b3c4-oct16`. Package `2026.10.4` is a main snapshot, not a
+`600ddf33d647aaf8fe46f6fe5a3c919dd92977e1`, fork branch
+`codex/config-reload-queued-writers`. Package `2026.10.4` is a main snapshot, not a
 released tag. The operator selected independent local qualification; this is not
 a claim that the selected snapshot passed the full upstream CI matrix. No
 external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-a32a69d2.tgz` and
-`openclaw-mattermost-6dfcda0d.tgz`, packed sequentially from this exact clean
+`current.json` selects `openclaw-fork-7083c417.tgz` and
+`openclaw-mattermost-228f48ef.tgz`, packed sequentially from this exact clean
 build. Publication is write-once; complete hashes, not object-name prefixes,
 identify the qualified pair.
 
-Root generation `1792173488583650` and Mattermost generation
-`1792173492169873` were downloaded by exact generation and verified byte-for-byte
-against the locally qualified pair.
-
-Root: **129852686 bytes**, SHA256
-`a32a69d2091a890e2bf5472ddbf0832c6b9cb1e0b6c7ed6338be361b804eb0e1`.
-Mattermost: **1251192 bytes**, SHA256
-`6dfcda0ded52935cee1d73112058af91f949bd986d4827c31750ee711f9b4433`.
+Root: **130036350 bytes**, SHA256
+`7083c417f79672beda360963e0caabb18ecaaf48e9c3c3a5b2e09c5229e27a7e`.
+Mattermost: **1257659 bytes**, SHA256
+`228f48efaebe7535913adee57988770d7a1898d2436320bde4dd97f4f91f43fd`.
 
 Shared-state schema **25**, agent schema **27** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
@@ -233,7 +229,7 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 | Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing exposes equivalent independent grant sources. |
 | Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
 | Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
-| Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. Retain only reproduced lifetime/settlement gaps while preserving native FIFO, cancellation and database owners; upstream now owns catalog retention/retirement and startup publication retry. Drop each remaining hunk when the selected upstream passes its boundary control. |
+| Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. An identical `config.apply` retry blocked the channel reload it awaited during a real Builder import. Reloader-local claimed waiters are excluded only from that reload’s drain; unrelated work and global admission remain counted. Retain these reproduced lifetime/settlement repairs while preserving native FIFO, cancellation and database owners. Drop each hunk when the selected upstream passes its boundary control, including a late identical retry after startup drains. |
 | Memory reindex shadow custody | A creation descriptor can outlive the joined shadow workers and prevent source cleanup after unlink. Retain retirement through the existing descriptor owner; remove when native shadow creation/retirement passes the actual file-descriptor regression. Canonical database and held-file guards remain unchanged. |
 | Queued Mattermost channel identity | A drained follow-up must keep its originating nativeChannelId instead of inferring the current reply destination. Upstream #163685 remains a separate contribution; remove this carry only once the selected upstream includes it and the queued-turn controls pass. |
 | Channel account removal and deleted-agent discovery | Removing one account must join its startup/cleanup without stopping siblings; Doctor must discover journaled deleted identities and restored files. Keep these scoped owner repairs until native removal and maintenance discovery preserve those cases. |
